@@ -638,7 +638,20 @@ describe("Integration — Hardware fingerprint controls", () => {
     ]) {
       expect(manager, `missing launch flag ${flag}`).toContain(flag);
     }
-    expect(manager).toContain("addHardwareFingerprintArgs(args, meta)");
+    expect(manager).toContain("addHardwareFingerprintArgs(requestedArgs, meta)");
+  });
+
+  it("delegates binary, GeoIP, proxy, and launch environment handling to the current wrapper", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
+    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
+    expect(pkg.dependencies.cloakbrowser).toBe("^0.5.2");
+    expect(manager).toContain("buildLaunchOptions({");
+    expect(manager).toContain("geoip: wrapperGeoip");
+    expect(manager).toContain("shouldUseWrapperGeoip()");
+    expect(manager).toContain("buildAuthenticatedProxyUrl(activeProxy)");
+    expect(manager).toContain("env: launchEnv || process.env");
+    expect(manager).not.toContain('"--test-type"');
+    expect(manager).not.toContain('"--disable-blink-features=AutomationControlled"');
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {

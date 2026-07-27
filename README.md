@@ -66,6 +66,17 @@ npm install
 npm start
 ```
 
+### Use the current fingerprint engine
+
+CloakLite uses the `cloakbrowser` 0.5.x wrapper. A keyless macOS install keeps the legacy Chromium 145 binary; sign in once to use the current Chromium 150 fingerprint engine on the free one-session tier (or with a paid plan):
+
+```bash
+npx cloakbrowser login
+npm start
+```
+
+The app delegates binary selection, license injection, proxy capability detection, and version-aware launch defaults to the official wrapper. GeoIP uses CloakLite's bounded proxy detector by default so a first profile launch never waits for the wrapper's approximately 70 MB database download. Set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` to opt into the wrapper-managed GeoIP database.
+
 ### Development checks
 
 ```bash

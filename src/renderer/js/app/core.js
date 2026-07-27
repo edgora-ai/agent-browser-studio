@@ -467,6 +467,8 @@
     return '<div class="profile-card">' +
       '<div class="card-header"><span class="name">CloakBrowser Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
       '<div class="info-row"><span>Version</span><span>' + esc(info.version || "--") + '</span></div>' +
+      '<div class="info-row"><span>Tier</span><span>' + esc(info.tier || "--") + '</span></div>' +
+      '<div class="info-row"><span>Bundled</span><span>' + esc(info.bundledVersion || "--") + '</span></div>' +
       '<div class="info-row"><span>Platform</span><span>' + esc(info.platform || "--") + '</span></div>' +
       '<div class="info-row"><span>Binary</span><span title="' + escAttr(info.path || "") + '">' + esc(shortPath(info.path || "--")) + '</span></div>' +
       '<div class="info-row"><span>Cache</span><span title="' + escAttr(info.cacheDir || "") + '">' + esc(shortPath(info.cacheDir || "--")) + '</span></div>' +

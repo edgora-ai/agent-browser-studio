@@ -66,6 +66,17 @@ npm install
 npm start
 ```
 
+### 使用最新指纹引擎
+
+CloakLite 使用 `cloakbrowser` 0.5.x wrapper。macOS 在未登录时仍使用旧版 Chromium 145；执行一次登录后，可通过免费单会话方案（或付费方案）使用当前 Chromium 150 指纹引擎：
+
+```bash
+npx cloakbrowser login
+npm start
+```
+
+应用会把二进制选择、license 注入、代理能力判断和版本相关启动默认值交给官方 wrapper。GeoIP 默认使用 CloakLite 的有界代理探测，避免首次启动 profile 时等待 wrapper 下载约 70 MB 数据库；如需使用 wrapper 管理的 GeoIP 数据库，可设置 `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true`。
+
 ### 开发检查
 
 ```bash

@@ -90,6 +90,10 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     env: launchEnv,
     timeout: opts.timeoutMs ?? 30000,
   });
+  if (process.env.CLOAK_E2E_TRACE === "1") {
+    app.process().stdout?.on("data", (chunk) => process.stdout.write(`[electron:stdout] ${chunk}`));
+    app.process().stderr?.on("data", (chunk) => process.stderr.write(`[electron:stderr] ${chunk}`));
+  }
 
   const page = await app.firstWindow({ timeout: 20000 });
   page.on("console", (msg) => {

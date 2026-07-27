@@ -10,7 +10,7 @@ import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { BrowserWindow } from "electron";
-import { binaryInfo, ensureBinary, checkForUpdate, clearCache } from "cloakbrowser";
+import { binaryInfo, ensureBinary, checkForUpdate, clearCache, buildLaunchOptions } from "cloakbrowser";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
@@ -95,6 +95,8 @@ export function isCloakInstalled(): boolean {
 export interface CloakBinaryStatus {
   path: string | null;
   version: string | null;
+  bundledVersion: string | null;
+  tier: "free" | "pro" | null;
   installed: boolean;
   platform: string | null;
   cacheDir: string | null;
@@ -107,6 +109,8 @@ export function getCloakBinaryStatus(): CloakBinaryStatus {
   return {
     path: pathValue,
     version: info.installed ? info.version : getCloakVersion(),
+    bundledVersion: info.bundledVersion || null,
+    tier: info.tier || null,
     installed: info.installed || pathValue !== null,
     platform: info.platform || null,
     cacheDir: info.cacheDir || null,
@@ -115,9 +119,6 @@ export function getCloakBinaryStatus(): CloakBinaryStatus {
 }
 
 export async function installCloakBinary(): Promise<CloakBinaryStatus> {
-  const status = getCloakBinaryStatus();
-  if (!status.version || !status.platform) throw new Error("Cannot determine CloakBrowser binary version for this platform");
-  await ensureCloakChecksumAvailable(status.version, status.platform);
   await ensureBinary();
   return getCloakBinaryStatus();
 }
@@ -135,50 +136,20 @@ export async function checkCloakBinaryUpdate(): Promise<{ currentVersion: string
 
 export async function updateCloakBinary(): Promise<{ updated: boolean; latestVersion: string | null; status: CloakBinaryStatus }> {
   const before = getCloakBinaryStatus();
-  const latestVersion = await getLatestCloakChromiumVersion(before.platform);
-  if (!latestVersion || !before.version || !before.platform || !versionNewer(latestVersion, before.version)) {
-    return { updated: false, latestVersion, status: before };
-  }
-  await ensureCloakChecksumAvailable(latestVersion, before.platform);
-  const installedVersion = await checkForUpdate();
+  await ensureBinary();
+  const resolved = getCloakBinaryStatus();
+  const installedVersion = resolved.tier === "free" ? await checkForUpdate() : null;
+  const status = getCloakBinaryStatus();
   return {
-    updated: Boolean(installedVersion),
-    latestVersion: installedVersion || latestVersion,
-    status: getCloakBinaryStatus(),
+    updated: Boolean(installedVersion || status.version !== before.version || status.tier !== before.tier),
+    latestVersion: installedVersion || status.version,
+    status,
   };
 }
 
 export function clearCloakBinaryCache(): CloakBinaryStatus {
   clearCache();
   return getCloakBinaryStatus();
-}
-
-async function ensureCloakChecksumAvailable(version: string, platformTag: string): Promise<void> {
-  if (process.env.CLOAKBROWSER_SKIP_CHECKSUM?.toLowerCase() === "true") {
-    throw new Error("Refusing to install CloakBrowser binary while CLOAKBROWSER_SKIP_CHECKSUM=true");
-  }
-  if (process.env.CLOAKBROWSER_DOWNLOAD_URL) {
-    throw new Error("Refusing UI binary install from custom CLOAKBROWSER_DOWNLOAD_URL; set CLOAKBROWSER_BINARY_PATH to a verified local binary instead");
-  }
-
-  const archiveExt = process.platform === "win32" ? ".zip" : ".tar.gz";
-  const archiveName = `cloakbrowser-${platformTag}${archiveExt}`;
-  const urls = [
-    `https://cloakbrowser.dev/chromium-v${version}/SHA256SUMS`,
-    `https://github.com/CloakHQ/cloakbrowser/releases/download/chromium-v${version}/SHA256SUMS`,
-  ];
-  for (const url of urls) {
-    try {
-      const resp = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(10000) });
-      if (!resp.ok) continue;
-      const text = await resp.text();
-      const pattern = new RegExp(`^[a-f0-9]{64}\\s+\\*?${escapeRegExp(archiveName)}$`, "im");
-      if (pattern.test(text)) return;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error(`Refusing to install CloakBrowser ${version}: verified SHA256SUMS entry not found for ${archiveName}`);
 }
 
 async function getLatestCloakChromiumVersion(platformTag: string | null): Promise<string | null> {
@@ -200,10 +171,6 @@ async function getLatestCloakChromiumVersion(platformTag: string | null): Promis
   } catch {
     return null;
   }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function versionNewer(a: string, b: string): boolean {
@@ -383,14 +350,6 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     throw new Error(`CLOAKBROWSER_BINARY_PATH does not exist: ${envBin}`);
   }
 
-  if (!configuredBin && !envBin) {
-    const status = getCloakBinaryStatus();
-    if (!status.version || !status.platform) throw new Error("Cannot determine CloakBrowser binary version for this platform");
-    await ensureCloakChecksumAvailable(status.version, status.platform);
-  }
-  const bin = configuredBin || envBin || await ensureBinary();
-  if (!bin || !fs.existsSync(bin)) throw new Error("CloakBrowser binary is unavailable after install check");
-
   const profileDir = path.join(getProfilesDir(), dirId);
 
   // Find free CDP port
@@ -403,6 +362,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
   }
   const activeProxy = resolvedProxy.config;
+  console.log(`[cloak] Preparing profile ${dirId.slice(0, 8)} with wrapper-managed launch options`);
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy). Warns
   // by default; blocks only when config.blockOnConsistencyConflict is set.
@@ -419,67 +379,71 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     }
   }
 
-  const validatedProxyUrl = activeProxy ? buildChromiumProxyUrl(activeProxy) : null;
-
-  // Timezone + Locale: user-setting > auto-detect from proxy IP > safe default.
-  // NEVER leave --lang unset — Chrome would fall back to host system locale
-  // (e.g. zh-CN on a Chinese macOS), leaking host language via navigator.languages.
-  let effectiveTimezone = normalizeOptionalTimezone(meta.timezone);
-  let effectiveLocale = normalizeOptionalLocale(meta.locale);
-  if (!effectiveTimezone || !effectiveLocale) {
-    if (activeProxy) {
-      const geo = await resolveGeoFromProxy(activeProxy);
-      if (!effectiveTimezone && geo.timezone) effectiveTimezone = geo.timezone;
-      if (!effectiveLocale && geo.locale) effectiveLocale = geo.locale;
-    }
-  }
-  // Safe fallback: never expose host system locale
-  if (!effectiveLocale) effectiveLocale = "en-US";
-
-  const args = buildCloakLaunchArgs({
+  const requestedArgs = buildCloakLaunchArgs({
     profileDir,
     seed,
     platform,
     cdpPort,
-    disableFeatures: getDisableFeatures(),
   });
+  let effectiveTimezone = normalizeOptionalTimezone(meta.timezone);
+  let effectiveLocale = normalizeOptionalLocale(meta.locale);
+  let webrtcIp = normalizeOptionalIp(meta.webrtcIp);
+  const wrapperGeoip = shouldUseWrapperGeoip();
+  if (!wrapperGeoip) {
+    if (activeProxy && (!effectiveTimezone || !effectiveLocale || !webrtcIp)) {
+      const detected = await resolveGeoFromProxy(activeProxy);
+      if (!effectiveTimezone) effectiveTimezone = detected.timezone;
+      if (!effectiveLocale) effectiveLocale = detected.locale;
+      if (!webrtcIp) webrtcIp = detected.exitIp;
+    }
+    if (!effectiveTimezone) effectiveTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    if (!effectiveLocale) effectiveLocale = normalizeOptionalLocale(Intl.DateTimeFormat().resolvedOptions().locale);
+  }
+  console.log(`[cloak] Identity resolved for ${dirId.slice(0, 8)}: geoip=${wrapperGeoip ? "wrapper" : "bounded"} locale=${effectiveLocale || "auto"} timezone=${effectiveTimezone || "auto"}`);
+  if (webrtcIp) requestedArgs.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
+  if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
+  addHardwareFingerprintArgs(requestedArgs, meta);
 
-  // Apply timezone + locale to args
-  if (effectiveTimezone) args.push(`--fingerprint-timezone=${effectiveTimezone}`);
-  // Always set locale flags: never let Chrome fall back to host system locale
-  args.push(`--lang=${effectiveLocale}`);
-  args.push(`--fingerprint-locale=${effectiveLocale}`);
+  // Let the official wrapper resolve the managed binary, license environment,
+  // GeoIP/WebRTC exit identity, proxy capabilities, and version-aware window
+  // geometry. Explicit profile flags override its generated seed/platform.
+  const launchPlan = await buildLaunchOptions({
+    headless: false,
+    args: requestedArgs,
+    timezone: effectiveTimezone || undefined,
+    locale: effectiveLocale || undefined,
+    geoip: wrapperGeoip,
+    proxy: activeProxy ? buildAuthenticatedProxyUrl(activeProxy) : undefined,
+  });
+  console.log(`[cloak] Wrapper launch plan ready for ${dirId.slice(0, 8)}`);
+  const bin = configuredBin || envBin || launchPlan.executablePath;
+  if (!bin || !fs.existsSync(bin)) throw new Error("CloakBrowser binary is unavailable after install check");
+  const args = [...(launchPlan.args || [])];
 
-  // Write profile Preferences BEFORE launch: --lang flag alone does NOT set
-  // navigator.languages — Chromium reads that from intl.selected_languages in
-  // the Preferences file. Without this, the browser exposes the host OS locale.
-  patchCloakLocale(profileDir, effectiveLocale);
-
-  const runtimeExtensionPaths = activeProxy?.username ? [writeProxyAuthExtension(dirId, activeProxy)] : [];
+  // buildLaunchOptions returns a Playwright proxy option when the selected
+  // binary cannot consume the proxy natively. CloakLite launches the process
+  // directly, so preserve the existing extension-based auth fallback there.
+  const runtimeExtensionPaths: string[] = [];
+  if ((launchPlan as any).proxy && activeProxy) {
+    args.push(`--proxy-server=${buildChromiumProxyUrl(activeProxy)}`);
+    if (activeProxy.username) runtimeExtensionPaths.push(writeProxyAuthExtension(dirId, activeProxy));
+  }
   addExtensionArgs(args, dirId, runtimeExtensionPaths);
 
-  // Proxy
-  if (validatedProxyUrl) {
-    args.push(`--proxy-server=${validatedProxyUrl}`);
-    if (activeProxy?.bypassList?.length) args.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
-    // WebRTC IP: user-specified > auto-detect from proxy
-    const webrtcIp = normalizeOptionalIp(meta.webrtcIp);
-    if (webrtcIp) {
-      args.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
-    } else {
-      args.push(`--fingerprint-webrtc-ip=auto`); // Auto-resolve to proxy exit IP
-    }
-  } else {
-    const webrtcIp = normalizeOptionalIp(meta.webrtcIp);
-    if (webrtcIp) args.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
+  // The wrapper fills locale from the egress IP. If resolution is unavailable,
+  // use a deterministic fallback instead of leaking the host UI language.
+  let launchLocale = getLaunchArgValue(args, "--fingerprint-locale") || getLaunchArgValue(args, "--lang");
+  if (!launchLocale) {
+    launchLocale = "en-US";
+    args.push(`--lang=${launchLocale}`, `--fingerprint-locale=${launchLocale}`);
   }
-
-  addHardwareFingerprintArgs(args, meta);
+  patchCloakLocale(profileDir, launchLocale);
 
   const logFile = getLaunchLogPath(dirId);
   const logFd = fs.openSync(logFile, "a");
   fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
-  const child = spawn(bin, args, { detached: true, stdio: ["ignore", logFd, logFd] });
+  const launchEnv = (launchPlan as any).env as NodeJS.ProcessEnv | undefined;
+  const child = spawn(bin, args, { detached: true, stdio: ["ignore", logFd, logFd], env: launchEnv || process.env });
   child.unref();
 
   child.on("error", (err: Error) => {
@@ -614,19 +578,11 @@ export async function getCdpWebSocketUrl(port: number): Promise<string | null> {
 // Launch helpers
 // ═══════════════════════════════════════════════════════════════
 
-function getDisableFeatures(): string[] {
-  const disableFeatures = ["TranslateUI", "OptimizationHints", "InterestFeedContentSuggestions"];
-  if (process.platform === "darwin") disableFeatures.push("MacAppCodeSignClone");
-  disableFeatures.push("BackForwardCache", "PreloadPages");
-  return disableFeatures;
-}
-
 function buildCloakLaunchArgs(opts: {
   profileDir: string;
   seed: number;
   platform: string;
   cdpPort: number;
-  disableFeatures: string[];
 }): string[] {
   const args = [
     `--user-data-dir=${opts.profileDir}`,
@@ -634,26 +590,10 @@ function buildCloakLaunchArgs(opts: {
     `--fingerprint-platform=${opts.platform}`,
     `--remote-debugging-port=${opts.cdpPort}`,
     "--remote-debugging-address=127.0.0.1",
-    "--test-type",
     "--password-store=basic",
     "--no-first-run",
     "--no-default-browser-check",
-    "--disable-background-mode",
     "--disable-sync",
-    "--disable-default-apps",
-    "--disable-translate",
-    "--disable-blink-features=AutomationControlled",
-    `--disable-features=${opts.disableFeatures.join(",")}`,
-    "--metrics-recording-only",
-    "--no-pings",
-    "--no-service-autorun",
-    "--safebrowsing-disable-auto-update",
-    "--disable-component-update",
-    "--disable-hang-monitor",
-    "--disable-prompt-on-repost",
-    "--disable-client-side-phishing-detection",
-    "--disable-domain-reliability",
-    "--disable-background-networking",
   ];
   return dedupeChromeArgs(args);
 }
@@ -663,6 +603,26 @@ function maskSensitiveLaunchArgs(args: string[]): string[] {
     if (!arg.startsWith("--proxy-server=")) return arg;
     return arg.replace(/(\w+:\/\/)([^@\s]+)@/, "$1***:***@");
   });
+}
+
+function buildAuthenticatedProxyUrl(config: ProxyConfig): string {
+  const raw = buildProxyUrl(config);
+  if (!config.username) return raw;
+  const url = new URL(raw);
+  url.username = config.username;
+  url.password = config.password || "";
+  return url.href.replace(/\/$/, "");
+}
+
+function getLaunchArgValue(args: string[], key: string): string | null {
+  const prefix = `${key}=`;
+  const arg = [...args].reverse().find((item) => item.startsWith(prefix));
+  return arg ? arg.slice(prefix.length) : null;
+}
+
+function shouldUseWrapperGeoip(): boolean {
+  if (process.env.CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD?.toLowerCase() === "true") return true;
+  return fs.existsSync(path.join(os.homedir(), ".cloakbrowser", "geoip", "GeoLite2-City.mmdb"));
 }
 
 function addExtensionArgs(args: string[], dirId: string, runtimeExtensionPaths: string[] = []): void {
@@ -866,41 +826,31 @@ function findCloakByProfile(dirId: string): { pid: number; cdpPort: number } | n
 // Geo-IP: Auto-detect timezone + locale from proxy exit IP
 // ═══════════════════════════════════════════════════════════════
 
-// Country ISO → BCP 47 locale (matches CloakBrowser geoip.py)
-const COUNTRY_LOCALE_MAP: Record<string, string> = {
-  "US": "en-US", "GB": "en-GB", "AU": "en-AU", "CA": "en-CA", "NZ": "en-NZ",
-  "IE": "en-IE", "ZA": "en-ZA", "SG": "en-SG",
-  "DE": "de-DE", "AT": "de-AT", "CH": "de-CH",
-  "FR": "fr-FR", "BE": "fr-BE",
-  "ES": "es-ES", "MX": "es-MX", "AR": "es-AR", "CO": "es-CO", "CL": "es-CL",
-  "BR": "pt-BR", "PT": "pt-PT",
-  "IT": "it-IT", "NL": "nl-NL",
-  "JP": "ja-JP", "KR": "ko-KR", "CN": "zh-CN", "TW": "zh-TW", "HK": "zh-HK",
-  "RU": "ru-RU", "UA": "uk-UA", "PL": "pl-PL", "CZ": "cs-CZ", "RO": "ro-RO",
-  "IL": "he-IL", "TR": "tr-TR", "SA": "ar-SA", "AE": "ar-AE", "EG": "ar-EG",
-  "IN": "hi-IN", "ID": "id-ID", "PH": "en-PH",
-  "TH": "th-TH", "VN": "vi-VN", "MY": "ms-MY",
-  "SE": "sv-SE", "NO": "nb-NO", "DK": "da-DK", "FI": "fi-FI",
-  "GR": "el-GR", "HU": "hu-HU", "BG": "bg-BG",
-};
-
-async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: string | null; locale: string | null }> {
+async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: string | null; locale: string | null; exitIp: string | null }> {
   try {
-    buildProxyUrl(proxy);
     const detection = await proxyDetector.detect(proxy);
     if (!detection.success) {
       console.log(`[cloak] Geo-IP detection skipped: ${detection.error || "proxy may be local or unreachable"}`);
-      return { timezone: null, locale: null };
+      return { timezone: null, locale: null, exitIp: null };
     }
-
-    const locale = detection.countryCode ? COUNTRY_LOCALE_MAP[detection.countryCode] || null : null;
-    if (detection.timezone || locale) {
-      console.log(`[cloak] Geo-IP via ${detection.provider}: country=${detection.countryCode} region=${detection.regionName || detection.region || ""} city=${detection.city || ""} tz=${detection.timezone} locale=${locale}`);
-    }
-    return { timezone: detection.timezone || null, locale };
-  } catch (e) {
+    const locale = localeFromCountry(detection.countryCode);
+    console.log(`[cloak] Geo-IP via ${detection.provider}: country=${detection.countryCode || ""} tz=${detection.timezone || ""} locale=${locale || ""}`);
+    return { timezone: detection.timezone || null, locale, exitIp: detection.exitIp || null };
+  } catch {
     console.log("[cloak] Geo-IP detection skipped (proxy may be local or unreachable)");
-    return { timezone: null, locale: null };
+    return { timezone: null, locale: null, exitIp: null };
+  }
+}
+
+function localeFromCountry(countryCode: string | null): string | null {
+  if (!countryCode || !/^[A-Za-z]{2}$/.test(countryCode)) return null;
+  const region = countryCode.toUpperCase();
+  try {
+    const language = new Intl.Locale(`und-${region}`).maximize().language;
+    if (!language || language === "und") return null;
+    return Intl.getCanonicalLocales(`${language}-${region}`)[0] || null;
+  } catch {
+    return null;
   }
 }
 

@@ -36,7 +36,9 @@
   "author": "ahoo",
   "license": "MIT",
   "dependencies": {
-    "cloakbrowser": "^0.3.31",
+    "cloakbrowser": "^0.5.2",
+    "mmdb-lib": "^3.0.2",
+    "socks-proxy-agent": "^10.1.0",
     "ws": "^8.21.0"
   }
 }
