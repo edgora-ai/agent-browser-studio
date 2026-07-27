@@ -30,6 +30,7 @@ export interface ResolvedProfileProxy {
 }
 
 export type CloakPlatform = "windows" | "macos";
+export type GeolocationMode = "real" | "disable" | "custom";
 
 export interface CloakFingerprintMeta {
   fingerprintSeed?: number;
@@ -37,6 +38,10 @@ export interface CloakFingerprintMeta {
   timezone?: string | null;
   locale?: string | null;
   webrtcIp?: string | null;
+  geolocationMode?: GeolocationMode;
+  geolocationLatitude?: number | null;
+  geolocationLongitude?: number | null;
+  geolocationAccuracy?: number | null;
   gpuVendor?: string | null;
   gpuRenderer?: string | null;
   hardwareConcurrency?: number | null;

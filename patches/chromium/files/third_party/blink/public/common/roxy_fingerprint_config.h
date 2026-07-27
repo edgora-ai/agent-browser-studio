@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cctype>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,6 +62,10 @@ class RoxyFingerprintConfig {
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& timezone() const { return timezone_; }
   const std::vector<std::string>& fonts() const { return fonts_; }
+  const std::string& geolocation_mode() const { return geolocation_mode_; }
+  double geolocation_latitude() const { return geolocation_latitude_; }
+  double geolocation_longitude() const { return geolocation_longitude_; }
+  double geolocation_accuracy() const { return geolocation_accuracy_; }
 
   bool IsFontAllowed(std::string_view family) const {
     if (!enabled_ || fonts_.empty())
@@ -194,6 +199,31 @@ class RoxyFingerprintConfig {
     }
     if (const std::string* timezone = root->FindString("timezone"))
       timezone_ = *timezone;
+    if (const base::Value::Dict* geolocation =
+            root->FindDict("geolocation")) {
+      geolocation_mode_ = ReadString(*geolocation, "mode");
+      if (geolocation_mode_ != "real" && geolocation_mode_ != "disable" &&
+          geolocation_mode_ != "custom") {
+        return;
+      }
+      if (geolocation_mode_ == "custom") {
+        const std::optional<double> latitude =
+            geolocation->FindDouble("latitude");
+        const std::optional<double> longitude =
+            geolocation->FindDouble("longitude");
+        const std::optional<double> accuracy =
+            geolocation->FindDouble("accuracy");
+        if (!latitude || !longitude || !accuracy || *latitude < -90.0 ||
+            *latitude > 90.0 || *longitude < -180.0 ||
+            *longitude > 180.0 || *accuracy < 0.0 ||
+            *accuracy > 100000.0) {
+          return;
+        }
+        geolocation_latitude_ = *latitude;
+        geolocation_longitude_ = *longitude;
+        geolocation_accuracy_ = *accuracy;
+      }
+    }
     if (const base::Value::List* fonts = root->FindList("fonts")) {
       for (const base::Value& font : *fonts) {
         if (font.is_string() && !font.GetString().empty())
@@ -263,6 +293,10 @@ class RoxyFingerprintConfig {
   std::string webgl_renderer_;
   std::string timezone_;
   std::vector<std::string> fonts_;
+  std::string geolocation_mode_ = "real";
+  double geolocation_latitude_ = 0.0;
+  double geolocation_longitude_ = 0.0;
+  double geolocation_accuracy_ = 0.0;
 };
 
 }  // namespace blink

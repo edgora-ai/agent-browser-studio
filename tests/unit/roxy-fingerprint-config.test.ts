@@ -21,6 +21,10 @@ describe("Roxy fingerprint config", () => {
       gpuVendor: "Google Inc. (NVIDIA)",
       gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060)",
       webrtcIp: "203.0.113.9",
+      geolocationMode: "custom" as const,
+      geolocationLatitude: 31.2304,
+      geolocationLongitude: 121.4737,
+      geolocationAccuracy: 25,
     };
     const first = buildRoxyFingerprintConfig(meta, "149.0.7827.22");
     const second = buildRoxyFingerprintConfig(meta, "149.0.7827.22");
@@ -35,6 +39,7 @@ describe("Roxy fingerprint config", () => {
     expect(first.fonts).toEqual([...first.fonts].sort());
     expect(first.fonts.some((font) => /YaHei|Gothic|PingFang|Malgun/.test(font))).toBe(true);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
+    expect(first.geolocation).toEqual({ mode: "custom", latitude: 31.2304, longitude: 121.4737, accuracy: 25 });
   });
 
   it("encodes a versioned config without proprietary lumi.conf data", () => {
@@ -47,5 +52,15 @@ describe("Roxy fingerprint config", () => {
     expect(decoded.userAgent).toContain("Chrome/150.0.7871.114");
     expect(json).not.toContain("license");
     expect(json).not.toContain("lumi.conf");
+  });
+
+  it("emits a native disabled geolocation policy without coordinates", () => {
+    const config = buildRoxyFingerprintConfig({ fingerprintSeed: 8, geolocationMode: "disable" }, "149.0.7827.22");
+    expect(config.geolocation).toEqual({ mode: "disable", latitude: null, longitude: null, accuracy: null });
+  });
+
+  it("rejects incomplete custom geolocation", () => {
+    expect(() => buildRoxyFingerprintConfig({ fingerprintSeed: 9, geolocationMode: "custom", geolocationLatitude: 10 }, "149.0.7827.22"))
+      .toThrow(/latitude|longitude/i);
   });
 });

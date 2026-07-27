@@ -682,6 +682,7 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0011-native-webrtc-visible-identity.patch",
       "0012-native-webrtc-routing-policy.patch",
       "0013-native-font-allowlist.patch",
+      "0014-native-geolocation-policy.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
@@ -692,6 +693,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(agent).not.toContain("RTCPeerConnection.prototype.createOffer");
     expect(agent).not.toContain("DisabledPeerConnection");
     expect(agent).not.toContain("globalThis.queryLocalFonts");
+    expect(agent).not.toContain("navigator.geolocation.getCurrentPosition");
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {
@@ -707,6 +709,10 @@ describe("Integration — Hardware fingerprint controls", () => {
       "storage-quota",
       "taskbar-height",
       "fonts-dir",
+      "geolocation-mode",
+      "geolocation-latitude",
+      "geolocation-longitude",
+      "geolocation-accuracy",
     ]) {
       expect(html, `create dialog missing ${id}`).toContain(`new-cloak-${id}`);
       expect(html, `edit dialog missing ${id}`).toContain(`cloak-meta-${id}`);

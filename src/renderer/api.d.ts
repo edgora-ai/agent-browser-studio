@@ -47,6 +47,10 @@ export interface CloakProfileInfo {
   timezone: string | null;
   locale: string | null;
   webrtcIp: string | null;
+  geolocationMode: "real" | "disable" | "custom";
+  geolocationLatitude: number | null;
+  geolocationLongitude: number | null;
+  geolocationAccuracy: number | null;
   gpuVendor: string | null;
   gpuRenderer: string | null;
   hardwareConcurrency: number | null;

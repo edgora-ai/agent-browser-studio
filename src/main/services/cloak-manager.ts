@@ -22,7 +22,7 @@ import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-det
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
 import { buildRoxyFingerprintArg, buildRoxyFingerprintConfig } from "./roxy-fingerprint-config.js";
-import type { ProxyConfig } from "../types.js";
+import type { GeolocationMode, ProxyConfig } from "../types.js";
 
 export interface CloakProfile {
   dirId: string;
@@ -33,6 +33,10 @@ export interface CloakProfile {
   timezone: string | null;  // IANA timezone (e.g. 'Asia/Shanghai', 'America/New_York')
   locale: string | null;    // BCP 47 locale (e.g. 'zh-CN', 'en-US')
   webrtcIp: string | null;  // WebRTC exit IP override
+  geolocationMode: GeolocationMode;
+  geolocationLatitude: number | null;
+  geolocationLongitude: number | null;
+  geolocationAccuracy: number | null;
   gpuVendor: string | null;
   gpuRenderer: string | null;
   hardwareConcurrency: number | null;
@@ -200,6 +204,10 @@ export function createCloakProfile(opts: {
   timezone?: string;
   locale?: string;
   webrtcIp?: string;
+  geolocationMode?: GeolocationMode;
+  geolocationLatitude?: number | null;
+  geolocationLongitude?: number | null;
+  geolocationAccuracy?: number | null;
   gpuVendor?: string | null;
   gpuRenderer?: string | null;
   hardwareConcurrency?: number | null;
@@ -231,6 +239,7 @@ export function createCloakProfile(opts: {
     timezone: normalizeOptionalTimezone(opts.timezone),
     locale: normalizeOptionalLocale(opts.locale),
     webrtcIp: normalizeOptionalIp(opts.webrtcIp),
+    ...normalizeGeolocationMeta(opts),
     ...normalizeHardwareFingerprintMeta(opts),
     proxyMode,
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
@@ -285,6 +294,10 @@ export function listCloakProfiles(): CloakProfile[] {
       timezone: m.timezone || null,
       locale: m.locale || null,
       webrtcIp: m.webrtcIp || null,
+      geolocationMode: normalizeGeolocationMode(m.geolocationMode),
+      geolocationLatitude: normalizeOptionalNumber(m.geolocationLatitude, -90, 90, "geolocation latitude"),
+      geolocationLongitude: normalizeOptionalNumber(m.geolocationLongitude, -180, 180, "geolocation longitude"),
+      geolocationAccuracy: normalizeOptionalNumber(m.geolocationAccuracy, 0, 100000, "geolocation accuracy"),
       gpuVendor: m.gpuVendor || null,
       gpuRenderer: m.gpuRenderer || null,
       hardwareConcurrency: Number.isInteger(m.hardwareConcurrency) ? m.hardwareConcurrency : null,
@@ -763,6 +776,40 @@ function normalizeOptionalIp(value: unknown): string | null {
   if (!ip) return null;
   if (!net.isIP(ip)) throw new Error(`Invalid WebRTC IP: ${JSON.stringify(value)}`);
   return ip;
+}
+
+function normalizeGeolocationMode(value: unknown): GeolocationMode {
+  if (value === undefined || value === null || value === "") return "real";
+  if (value === "real" || value === "disable" || value === "custom") return value;
+  throw new Error(`Invalid geolocation mode: ${JSON.stringify(value)}`);
+}
+
+function normalizeOptionalNumber(value: unknown, min: number, max: number, label: string): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  }
+  return number;
+}
+
+function normalizeGeolocationMeta(meta: any): {
+  geolocationMode: GeolocationMode;
+  geolocationLatitude: number | null;
+  geolocationLongitude: number | null;
+  geolocationAccuracy: number | null;
+} {
+  const geolocationMode = normalizeGeolocationMode(meta.geolocationMode);
+  const geolocationLatitude = normalizeOptionalNumber(meta.geolocationLatitude, -90, 90, "geolocation latitude");
+  const geolocationLongitude = normalizeOptionalNumber(meta.geolocationLongitude, -180, 180, "geolocation longitude");
+  let geolocationAccuracy = normalizeOptionalNumber(meta.geolocationAccuracy, 0, 100000, "geolocation accuracy");
+  if (geolocationMode === "custom") {
+    if (geolocationLatitude == null || geolocationLongitude == null) {
+      throw new Error("Custom geolocation requires latitude and longitude");
+    }
+    geolocationAccuracy ??= 50;
+  }
+  return { geolocationMode, geolocationLatitude, geolocationLongitude, geolocationAccuracy };
 }
 
 function writeProxyAuthExtension(dirId: string, proxy: ProxyConfig): string {

@@ -137,6 +137,10 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
       timezone: meta?.timezone ?? null,
       locale: meta?.locale ?? null,
       webrtcIp: meta?.webrtcIp ?? null,
+      geolocationMode: meta?.geolocationMode ?? "real",
+      geolocationLatitude: meta?.geolocationLatitude ?? null,
+      geolocationLongitude: meta?.geolocationLongitude ?? null,
+      geolocationAccuracy: meta?.geolocationAccuracy ?? null,
     },
   };
 }

@@ -192,6 +192,10 @@ describe("Sync service hardening", () => {
           timezone: "Asia/Shanghai",
           locale: "zh-CN",
           webrtcIp: "1.2.3.4",
+          geolocationMode: "custom",
+          geolocationLatitude: 31.2304,
+          geolocationLongitude: 121.4737,
+          geolocationAccuracy: 25,
           gpuVendor: "Intel Inc.",
           gpuRenderer: "Intel Iris OpenGL",
           hardwareConcurrency: 8,
@@ -233,6 +237,10 @@ describe("Sync service hardening", () => {
       storageQuota: 120000,
       taskbarHeight: 28,
       fontsDir: null,
+      geolocationMode: "custom",
+      geolocationLatitude: 31.2304,
+      geolocationLongitude: 121.4737,
+      geolocationAccuracy: 25,
     });
     expect(safe.extensionRepository.local_ext).toMatchObject({
       id: "local_ext",

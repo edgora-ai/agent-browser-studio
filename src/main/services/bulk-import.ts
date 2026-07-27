@@ -9,6 +9,10 @@ export interface ProfileSpec {
   fingerprintSeed?: number;
   proxyName?: string;
   webrtcIp?: string;
+  geolocationMode?: "real" | "disable" | "custom";
+  geolocationLatitude?: number;
+  geolocationLongitude?: number;
+  geolocationAccuracy?: number;
   tags?: string[];
 }
 
@@ -20,6 +24,10 @@ const HEADER_ALIASES: Record<string, keyof ProfileSpec> = {
   seed: "fingerprintSeed", fingerprintseed: "fingerprintSeed", fingerprint_seed: "fingerprintSeed",
   proxy: "proxyName", proxyname: "proxyName", proxy_name: "proxyName",
   webrtc: "webrtcIp", webrtcip: "webrtcIp", webrtc_ip: "webrtcIp", ip: "webrtcIp",
+  geolocation: "geolocationMode", geolocationmode: "geolocationMode", geo_mode: "geolocationMode",
+  latitude: "geolocationLatitude", lat: "geolocationLatitude",
+  longitude: "geolocationLongitude", lon: "geolocationLongitude", lng: "geolocationLongitude",
+  accuracy: "geolocationAccuracy", geoaccuracy: "geolocationAccuracy", geo_accuracy: "geolocationAccuracy",
   tag: "tags", tags: "tags",
 };
 
@@ -50,6 +58,11 @@ export function parseBulkCsv(text: string): ProfileSpec[] {
         if (!key || cell === "") return;
         if (key === "fingerprintSeed") {
           const n = Number(cell); if (Number.isInteger(n) && n > 0) spec.fingerprintSeed = n;
+        } else if (key === "geolocationLatitude" || key === "geolocationLongitude" || key === "geolocationAccuracy") {
+          const n = Number(cell); if (Number.isFinite(n)) (spec as any)[key] = n;
+        } else if (key === "geolocationMode") {
+          const mode = cell.toLowerCase();
+          if (mode === "real" || mode === "disable" || mode === "custom") spec.geolocationMode = mode;
         } else if (key === "tags") {
           spec.tags = normalizeTags(cell);
         } else if (key === "platform") {

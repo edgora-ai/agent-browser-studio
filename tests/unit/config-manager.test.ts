@@ -341,6 +341,10 @@ describe("Config Manager (real functions)", () => {
       timezone: "Asia/Shanghai",
       locale: "zh-CN",
       webrtcIp: "10.10.10.10",
+      geolocationMode: "custom",
+      geolocationLatitude: 31.2304,
+      geolocationLongitude: 121.4737,
+      geolocationAccuracy: 25,
       gpuVendor: "Google Inc.",
       gpuRenderer: "ANGLE (AMD Radeon RX 580)",
       hardwareConcurrency: 8,
@@ -360,6 +364,10 @@ describe("Config Manager (real functions)", () => {
     const readBack = getConfig().cloakProfiles["cb_fp_test"];
     expect(readBack.fingerprintSeed).toBe(77777);
     expect(readBack.timezone).toBe("Asia/Shanghai");
+    expect(readBack.geolocationMode).toBe("custom");
+    expect(readBack.geolocationLatitude).toBe(31.2304);
+    expect(readBack.geolocationLongitude).toBe(121.4737);
+    expect(readBack.geolocationAccuracy).toBe(25);
     expect(readBack.gpuVendor).toBe("Google Inc.");
     expect(readBack.hardwareConcurrency).toBe(8);
     expect(readBack.deviceMemory).toBe(16);

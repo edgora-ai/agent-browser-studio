@@ -39,6 +39,8 @@ readbacks apply stable native noise. OffscreenCanvas blob export shares the
 same detached Canvas noise, and storage estimates use the configured native
 quota. The lifecycle agent remains the
 compatibility scaffold for surfaces that have not moved yet. It is not yet
-claimed to be undetectable: font fallback, WebRTC ICE gathering, media devices
-and storage quota still need native subsystem patches. See
+claimed to be undetectable: custom font-directory loading, media devices,
+plugins/MIME types and floating-point Canvas readbacks still need native
+subsystem patches. Geolocation `real`, `disable`, and `custom` policies now run
+in Blink's native request/result path. See
 `CAPABILITY_MATRIX.md` for the acceptance status.

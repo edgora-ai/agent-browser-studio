@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CloakFingerprintMeta, CloakPlatform } from "../types.js";
+import type { CloakFingerprintMeta, CloakPlatform, GeolocationMode } from "../types.js";
 
 export const ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
 export const ROXY_FINGERPRINT_SCHEMA_VERSION = 1;
@@ -47,7 +47,12 @@ export interface RoxyFingerprintConfig {
   webgl: { vendor: string; renderer: string };
   webrtc: { mode: "real" | "altered" | "disable"; publicIp: string | null };
   timezone: string | null;
-  geolocation: { mode: "real" | "disable" };
+  geolocation: {
+    mode: GeolocationMode;
+    latitude: number | null;
+    longitude: number | null;
+    accuracy: number | null;
+  };
   fonts: string[];
   doNotTrack: string | null;
 }
@@ -111,7 +116,7 @@ export function buildRoxyFingerprintConfig(
       ? { mode: "altered", publicIp: meta.webrtcIp }
       : { mode: "real", publicIp: null },
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
-    geolocation: { mode: "real" },
+    geolocation: normalizeGeolocation(meta),
     fonts: selectStableFonts(seed, platform, locale),
     doNotTrack: null,
   };
@@ -156,6 +161,29 @@ function normalizeInteger(value: unknown, min: number, max: number, fallback: nu
 
 function normalizeText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig["geolocation"] {
+  const mode = meta.geolocationMode === "disable" || meta.geolocationMode === "custom"
+    ? meta.geolocationMode
+    : "real";
+  if (mode !== "custom") {
+    return { mode, latitude: null, longitude: null, accuracy: null };
+  }
+  const latitude = normalizeFiniteNumber(meta.geolocationLatitude, -90, 90, "geolocation latitude");
+  const longitude = normalizeFiniteNumber(meta.geolocationLongitude, -180, 180, "geolocation longitude");
+  const accuracy = meta.geolocationAccuracy == null
+    ? 50
+    : normalizeFiniteNumber(meta.geolocationAccuracy, 0, 100000, "geolocation accuracy");
+  return { mode, latitude, longitude, accuracy };
+}
+
+function normalizeFiniteNumber(value: unknown, min: number, max: number, label: string): number {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  }
+  return number;
 }
 
 function seededChoice(seed: number, values: readonly number[]): number {

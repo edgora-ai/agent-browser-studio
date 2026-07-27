@@ -12,7 +12,7 @@ import {
 } from "../services/cloak-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
-import type { ProfileInfo, ProxyMode } from "../types.js";
+import type { GeolocationMode, ProfileInfo, ProxyMode } from "../types.js";
 
 export function registerProfileHandlers(): void {
   ipcMain.handle("profile:list", async (): Promise<ProfileInfo[]> => {
@@ -40,6 +40,10 @@ export function registerProfileHandlers(): void {
     timezone,
     locale,
     webrtcIp,
+    geolocationMode,
+    geolocationLatitude,
+    geolocationLongitude,
+    geolocationAccuracy,
     proxyMode,
     proxyName,
   }: {
@@ -49,6 +53,10 @@ export function registerProfileHandlers(): void {
     timezone?: string;
     locale?: string;
     webrtcIp?: string;
+    geolocationMode?: GeolocationMode;
+    geolocationLatitude?: number | null;
+    geolocationLongitude?: number | null;
+    geolocationAccuracy?: number | null;
     proxyMode?: ProxyMode;
     proxyName?: string | null;
   }): Promise<ProfileInfo> => {
@@ -59,6 +67,10 @@ export function registerProfileHandlers(): void {
       timezone,
       locale,
       webrtcIp,
+      geolocationMode,
+      geolocationLatitude,
+      geolocationLongitude,
+      geolocationAccuracy,
       proxyMode,
       proxyName,
     });

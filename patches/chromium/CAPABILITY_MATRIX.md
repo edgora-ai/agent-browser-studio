@@ -18,7 +18,7 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Fonts | Allow-list | partial native | custom font directory loading |
 | Timezone | Configurable | renderer + Chromium switch | ICU timezone override |
 | ClientRects | Stable noise | native | Blink layout geometry export |
-| Geolocation | Policy | renderer | browser geolocation service |
+| Geolocation | Real/disabled/custom | native | Blink request/result path |
 | Workers | Identity parity | partial native | remaining worker-only surfaces |
 | Plugins/MIME types | Stable | missing | Blink plugin data |
 | Media devices | Stable labels/count | missing | media device enumeration |

@@ -15,6 +15,16 @@ describe("parseBulkCsv", () => {
     expect(specs[0]).toMatchObject({ name: "P1", timezone: "Asia/Tokyo", proxyName: "jp", fingerprintSeed: 99999 });
   });
 
+  it("parses custom geolocation columns", () => {
+    const specs = parseBulkCsv("name,geolocation,lat,lng,accuracy\nShanghai,custom,31.2304,121.4737,25");
+    expect(specs[0]).toMatchObject({
+      geolocationMode: "custom",
+      geolocationLatitude: 31.2304,
+      geolocationLongitude: 121.4737,
+      geolocationAccuracy: 25,
+    });
+  });
+
   it("falls back to legacy positional format when no header", () => {
     const specs = parseBulkCsv("P1,windows,en-US,America/Chicago,12345,5.6.7.8");
     expect(specs[0]).toMatchObject({ name: "P1", platform: "windows", locale: "en-US", timezone: "America/Chicago", fingerprintSeed: 12345, webrtcIp: "5.6.7.8" });

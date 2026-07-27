@@ -1,0 +1,59 @@
+diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_party/blink/renderer/core/geolocation/geolocation.cc
+--- a/third_party/blink/renderer/core/geolocation/geolocation.cc
++++ b/third_party/blink/renderer/core/geolocation/geolocation.cc
+@@ -34,6 +34,7 @@
+ #include "build/build_config.h"
+ #include "services/device/public/mojom/geoposition.mojom-blink.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_accuracy_mode.h"
+@@ -84,6 +85,15 @@ Geoposition* CreateGeoposition(
+       coordinates, ConvertTimeToEpochTimeStamp(position.timestamp));
+ }
+ 
++Geoposition* CreateRoxyGeoposition(const RoxyFingerprintConfig& config) {
++  auto* coordinates = MakeGarbageCollected<GeolocationCoordinates>(
++      config.geolocation_latitude(), config.geolocation_longitude(),
++      std::nullopt, config.geolocation_accuracy(), std::nullopt, std::nullopt,
++      std::nullopt);
++  return MakeGarbageCollected<Geoposition>(
++      coordinates, ConvertTimeToEpochTimeStamp(base::Time::Now()));
++}
++
+ GeolocationPositionError* CreatePositionError(
+     const device::mojom::blink::GeopositionError& error) {
+   GeolocationPositionError::ErrorCode error_code =
+@@ -348,6 +358,16 @@ void Geolocation::StartRequest(GeoNotifier* notifier) {
+     return;
+   }
+ 
++  const RoxyFingerprintConfig& roxy_config =
++      RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() &&
++      roxy_config.geolocation_mode() == "disable") {
++    notifier->SetFatalError(MakeGarbageCollected<GeolocationPositionError>(
++        GeolocationPositionError::kPermissionDenied,
++        "Geolocation is disabled by profile policy"));
++    return;
++  }
++
+   ReportGeolocationViolation(DomWindow());
+ 
+   if (HaveSuitableCachedPosition(notifier->Options())) {
+@@ -614,7 +634,13 @@ void Geolocation::OnPositionUpdated(
+     return;
+   }
+ 
+-  if (result->is_position()) {
++  const RoxyFingerprintConfig& roxy_config =
++      RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() &&
++      roxy_config.geolocation_mode() == "custom") {
++    last_position_ = CreateRoxyGeoposition(roxy_config);
++    PositionChanged();
++  } else if (result->is_position()) {
+     if (!ValidateGeoposition(*result->get_position())) {
+       return;
+     }

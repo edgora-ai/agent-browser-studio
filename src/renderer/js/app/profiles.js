@@ -46,6 +46,29 @@
   var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
   var updateCloakStatus = helpers.updateCloakStatus;
   var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+
+  function readGeolocationFields(prefix) {
+    var mode = document.getElementById(prefix + "geolocation-mode").value;
+    if (mode !== "custom") {
+      return { geolocationMode: mode, geolocationLatitude: null, geolocationLongitude: null, geolocationAccuracy: null };
+    }
+    var latitude = Number(document.getElementById(prefix + "geolocation-latitude").value);
+    var longitude = Number(document.getElementById(prefix + "geolocation-longitude").value);
+    var accuracyRaw = document.getElementById(prefix + "geolocation-accuracy").value.trim();
+    var accuracy = accuracyRaw ? Number(accuracyRaw) : 50;
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) throw new Error("Latitude must be between -90 and 90");
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) throw new Error("Longitude must be between -180 and 180");
+    if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100000) throw new Error("Accuracy must be between 0 and 100000 meters");
+    return { geolocationMode: mode, geolocationLatitude: latitude, geolocationLongitude: longitude, geolocationAccuracy: accuracy };
+  }
+
+  function writeGeolocationFields(prefix, meta) {
+    document.getElementById(prefix + "geolocation-mode").value = meta.geolocationMode || "real";
+    document.getElementById(prefix + "geolocation-latitude").value = meta.geolocationLatitude == null ? "" : meta.geolocationLatitude;
+    document.getElementById(prefix + "geolocation-longitude").value = meta.geolocationLongitude == null ? "" : meta.geolocationLongitude;
+    document.getElementById(prefix + "geolocation-accuracy").value = meta.geolocationAccuracy == null ? "" : meta.geolocationAccuracy;
+  }
+
   Object.assign(cloak, {
   launch: function (dirId) {
         api.cloak.launch(dirId).then(function (r) {
@@ -81,6 +104,10 @@
             timezone: p.timezone || '',
             locale: p.locale || '',
             webrtcIp: p.webrtcIp || '',
+            geolocationMode: p.geolocationMode || 'real',
+            geolocationLatitude: p.geolocationLatitude,
+            geolocationLongitude: p.geolocationLongitude,
+            geolocationAccuracy: p.geolocationAccuracy,
             gpuVendor: p.gpuVendor || '',
             gpuRenderer: p.gpuRenderer || '',
             hardwareConcurrency: p.hardwareConcurrency || '',
@@ -100,6 +127,7 @@
           document.getElementById("cloak-meta-timezone").value = metaData.timezone;
           document.getElementById("cloak-meta-locale").value = metaData.locale;
           document.getElementById("cloak-meta-webrtc").value = metaData.webrtcIp;
+          writeGeolocationFields("cloak-meta-", metaData);
           writeHardwareFields("cloak-meta-", metaData);
           api.proxy.list().then(function(proxies) {
             var sel = document.getElementById("cloak-meta-proxy");
@@ -166,6 +194,7 @@
         document.getElementById("new-cloak-timezone").value = "";
         document.getElementById("new-cloak-locale").value = "";
         document.getElementById("new-cloak-webrtc").value = "";
+        writeGeolocationFields("new-cloak-", {});
         writeHardwareFields("new-cloak-", {});
       },
 
@@ -203,8 +232,8 @@
         var tz = document.getElementById("new-cloak-timezone").value || undefined;
         var loc = document.getElementById("new-cloak-locale").value || undefined;
         var webrtcIp = document.getElementById("new-cloak-webrtc").value.trim() || undefined;
-        var hardware;
-        try { hardware = readHardwareFields("new-cloak-"); }
+        var hardware, geolocation;
+        try { hardware = readHardwareFields("new-cloak-"); geolocation = readGeolocationFields("new-cloak-"); }
         catch (e) { toast(e.message || String(e), "error"); return; }
 
         api.cloak.create(Object.assign({
@@ -216,7 +245,7 @@
           webrtcIp: webrtcIp,
           proxyMode: proxySelection.mode,
           proxyName: proxySelection.name,
-        }, hardware)).then(function(r) {
+        }, geolocation, hardware)).then(function(r) {
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "CloakBrowser profile created!") : "CloakBrowser profile created!"), "success");
           loadProfiles();
@@ -268,6 +297,10 @@
           timezone: s.timezone,
           fingerprintSeed: s.fingerprintSeed,
           webrtcIp: s.webrtcIp,
+          geolocationMode: s.geolocationMode,
+          geolocationLatitude: s.geolocationLatitude,
+          geolocationLongitude: s.geolocationLongitude,
+          geolocationAccuracy: s.geolocationAccuracy,
           proxyMode: proxyMode,
           proxyName: proxyName,
           tags: s.tags || []
@@ -354,8 +387,8 @@
     var locale = document.getElementById("cloak-meta-locale").value || null;
     var webrtcIp = document.getElementById("cloak-meta-webrtc").value.trim() || null;
     var proxySelection = parseProxySelection(document.getElementById("cloak-meta-proxy").value, "none");
-    var hardware;
-    try { hardware = readHardwareFields("cloak-meta-"); }
+    var hardware, geolocation;
+    try { hardware = readHardwareFields("cloak-meta-"); geolocation = readGeolocationFields("cloak-meta-"); }
     catch (e) { toast(e.message || String(e), "error"); return; }
     document.getElementById("dlg-cloak-seed").close();
     if (!Number.isInteger(seed) || seed < 1 || seed > 999999) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
@@ -365,7 +398,7 @@
       name: name, fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcIp: webrtcIp,
       proxyMode: proxySelection.mode, proxyName: proxySelection.name
-    }, hardware)));
+    }, geolocation, hardware)));
     Promise.all(promises).then(function(r) {
       if (r[0] && r[0].success) { toast((window.i18n ? window.i18n.t("toast.profile.saved", "Profile saved") : "Profile saved"), "success"); loadProfiles(); }
       else toast((r[0] && r[0].error) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save"), "error");

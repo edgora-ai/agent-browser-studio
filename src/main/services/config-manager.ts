@@ -4,7 +4,7 @@ import * as net from "node:net";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { encryptSecret, isEncrypted, decryptSecretOr, usingEncryption } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, CloakProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, CloakFingerprintMeta, CloakProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
 let _appDataDir: string | null = null;
@@ -398,6 +398,29 @@ function sanitizeOptionalIp(value: unknown): string | null {
   return ip;
 }
 
+function sanitizeGeolocationMode(value: unknown): "real" | "disable" | "custom" {
+  if (value === undefined || value === null || value === "") return "real";
+  if (value === "real" || value === "disable" || value === "custom") return value;
+  throw new Error(`Invalid geolocation mode: ${JSON.stringify(value)}`);
+}
+
+function sanitizeOptionalNumber(value: unknown, min: number, max: number): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw new Error(`Invalid fingerprint number value: ${JSON.stringify(value)}`);
+  }
+  return number;
+}
+
+function validateGeolocationMeta(meta: CloakFingerprintMeta): void {
+  if (meta.geolocationMode !== "custom") return;
+  if (meta.geolocationLatitude == null || meta.geolocationLongitude == null) {
+    throw new Error("Custom geolocation requires latitude and longitude");
+  }
+  if (meta.geolocationAccuracy == null) meta.geolocationAccuracy = 50;
+}
+
 function sanitizeOptionalInteger(value: unknown, min: number, max: number): number | null {
   if (value === undefined || value === null || value === "") return null;
   const n = Number(value);
@@ -754,6 +777,10 @@ export function getProfileMeta(dirId: string): CloakProfileMeta | null {
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
     webrtcIp: sanitizeOptionalIp(cp.webrtcIp),
+    geolocationMode: sanitizeGeolocationMode(cp.geolocationMode),
+    geolocationLatitude: sanitizeOptionalNumber(cp.geolocationLatitude, -90, 90),
+    geolocationLongitude: sanitizeOptionalNumber(cp.geolocationLongitude, -180, 180),
+    geolocationAccuracy: sanitizeOptionalNumber(cp.geolocationAccuracy, 0, 100000),
     fingerprintSeed: sanitizeFingerprintSeed(cp.fingerprintSeed || 12345),
     gpuVendor: sanitizeOptionalText(cp.gpuVendor, 80),
     gpuRenderer: sanitizeOptionalText(cp.gpuRenderer, 160),
@@ -798,6 +825,10 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
   if (meta.locale !== undefined) next.locale = sanitizeOptionalLocale(meta.locale);
   if (meta.webrtcIp !== undefined) next.webrtcIp = sanitizeOptionalIp(meta.webrtcIp);
+  if (meta.geolocationMode !== undefined) next.geolocationMode = sanitizeGeolocationMode(meta.geolocationMode);
+  if (meta.geolocationLatitude !== undefined) next.geolocationLatitude = sanitizeOptionalNumber(meta.geolocationLatitude, -90, 90);
+  if (meta.geolocationLongitude !== undefined) next.geolocationLongitude = sanitizeOptionalNumber(meta.geolocationLongitude, -180, 180);
+  if (meta.geolocationAccuracy !== undefined) next.geolocationAccuracy = sanitizeOptionalNumber(meta.geolocationAccuracy, 0, 100000);
   if (meta.fingerprintSeed !== undefined) next.fingerprintSeed = sanitizeFingerprintSeed(meta.fingerprintSeed);
   if (meta.gpuVendor !== undefined) next.gpuVendor = sanitizeOptionalText(meta.gpuVendor, 80);
   if (meta.gpuRenderer !== undefined) next.gpuRenderer = sanitizeOptionalText(meta.gpuRenderer, 160);
@@ -809,6 +840,8 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.taskbarHeight !== undefined) next.taskbarHeight = sanitizeOptionalInteger(meta.taskbarHeight, 0, 500);
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
+
+  validateGeolocationMeta(next);
 
   cp[dirId] = next;
   cfg.cloakProfiles = cp;
@@ -1002,6 +1035,11 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.timezone = sanitizeOptionalTimezone(profile.timezone);
       profile.locale = sanitizeOptionalLocale(profile.locale);
       profile.webrtcIp = sanitizeOptionalIp(profile.webrtcIp);
+      profile.geolocationMode = sanitizeGeolocationMode(profile.geolocationMode);
+      profile.geolocationLatitude = sanitizeOptionalNumber(profile.geolocationLatitude, -90, 90);
+      profile.geolocationLongitude = sanitizeOptionalNumber(profile.geolocationLongitude, -180, 180);
+      profile.geolocationAccuracy = sanitizeOptionalNumber(profile.geolocationAccuracy, 0, 100000);
+      validateGeolocationMeta(profile);
       profile.gpuVendor = sanitizeOptionalText(profile.gpuVendor, 80);
       profile.gpuRenderer = sanitizeOptionalText(profile.gpuRenderer, 160);
       profile.hardwareConcurrency = sanitizeOptionalInteger(profile.hardwareConcurrency, 1, 64);

@@ -126,12 +126,6 @@ if(c.timezone&&globalThis.Intl?.DateTimeFormat){
   Intl.DateTimeFormat.prototype.resolvedOptions=markNative(function(){const options=originalResolvedOptions.call(this);return {...options,timeZone:c.timezone};},'resolvedOptions','function');
 }
 
-if(c.geolocation?.mode==='disable'&&navigator.geolocation){
-  const denied=(success,error)=>queueMicrotask(()=>error?.({code:1,message:'User denied Geolocation'}));
-  navigator.geolocation.getCurrentPosition=markNative(denied,'getCurrentPosition','function');
-  navigator.geolocation.watchPosition=markNative(denied,'watchPosition','function');
-}
-
 Object.defineProperty(globalThis,Symbol.for('roxy.fingerprint.configured'),{value:true,enumerable:false,configurable:false});
 })();)ROXY";
 }

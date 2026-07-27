@@ -13,7 +13,7 @@ import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
-import type { CloakPlatform, ProxyMode } from "../types.js";
+import type { CloakPlatform, GeolocationMode, ProxyMode } from "../types.js";
 
 export function registerCloakHandlers(): void {
   // Parse a bulk-import CSV (header or legacy positional) into profile specs.
@@ -69,6 +69,7 @@ export function registerCloakHandlers(): void {
   ipcMain.handle("cloak:create", async (_event, opts: {
     name: string; fingerprintSeed?: number; platform?: CloakPlatform;
     timezone?: string; locale?: string; webrtcIp?: string;
+    geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
@@ -80,6 +81,10 @@ export function registerCloakHandlers(): void {
       timezone: opts.timezone,
       locale: opts.locale,
       webrtcIp: opts.webrtcIp,
+      geolocationMode: opts.geolocationMode,
+      geolocationLatitude: opts.geolocationLatitude,
+      geolocationLongitude: opts.geolocationLongitude,
+      geolocationAccuracy: opts.geolocationAccuracy,
       gpuVendor: opts.gpuVendor,
       gpuRenderer: opts.gpuRenderer,
       hardwareConcurrency: opts.hardwareConcurrency,
@@ -184,6 +189,10 @@ export function registerCloakHandlers(): void {
     timezone?: string;
     locale?: string;
     webrtcIp?: string;
+    geolocationMode?: GeolocationMode;
+    geolocationLatitude?: number | null;
+    geolocationLongitude?: number | null;
+    geolocationAccuracy?: number | null;
     gpuVendor?: string | null;
     gpuRenderer?: string | null;
     hardwareConcurrency?: number | null;
@@ -209,6 +218,10 @@ export function registerCloakHandlers(): void {
         timezone: params.timezone,
         locale: params.locale,
         webrtcIp: params.webrtcIp,
+        geolocationMode: params.geolocationMode,
+        geolocationLatitude: params.geolocationLatitude,
+        geolocationLongitude: params.geolocationLongitude,
+        geolocationAccuracy: params.geolocationAccuracy,
         note: params.note,
         tags: params.tags,
         proxyMode: params.proxyMode,
