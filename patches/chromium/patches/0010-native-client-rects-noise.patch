@@ -1,0 +1,71 @@
+diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
+--- a/third_party/blink/renderer/core/dom/element.cc
++++ b/third_party/blink/renderer/core/dom/element.cc
+@@ -36,6 +36,7 @@
+ #include "base/feature_list.h"
+ #include "cc/input/snap_selection_strategy.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/mojom/scroll/scroll_enums.mojom-blink.h"
+ #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink.h"
+ #include "third_party/blink/public/web/web_autofill_state.h"
+@@ -3418,6 +3419,40 @@ void Element::ClientQuads(Vector<gfx::QuadF>& quads) const {
+   }
+ }
+ 
++namespace {
++
++uint64_t MixRoxyClientRectNoise(uint64_t value) {
++  value ^= value >> 30;
++  value *= 0xbf58476d1ce4e5b9ULL;
++  value ^= value >> 27;
++  value *= 0x94d049bb133111ebULL;
++  return value ^ (value >> 31);
++}
++
++void ApplyRoxyClientRectNoise(gfx::RectF* rect) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled())
++    return;
++  uint64_t hash = static_cast<uint64_t>(config.seed());
++  hash ^= static_cast<uint64_t>(static_cast<int64_t>(rect->x() * 64.0f));
++  hash = MixRoxyClientRectNoise(hash);
++  hash ^= static_cast<uint64_t>(static_cast<int64_t>(rect->y() * 64.0f));
++  hash = MixRoxyClientRectNoise(hash);
++  hash ^= static_cast<uint64_t>(static_cast<int64_t>(rect->width() * 64.0f));
++  hash = MixRoxyClientRectNoise(hash);
++  hash ^= static_cast<uint64_t>(static_cast<int64_t>(rect->height() * 64.0f));
++  hash = MixRoxyClientRectNoise(hash);
++  const float x_noise =
++      (static_cast<float>(hash & 0xffff) / 65535.0f - 0.5f) / 100.0f;
++  const float y_noise =
++      (static_cast<float>((hash >> 16) & 0xffff) / 65535.0f - 0.5f) /
++      100.0f;
++  rect->set_x(rect->x() + x_noise);
++  rect->set_y(rect->y() + y_noise);
++}
++
++}  // namespace
++
+ DOMRectList* Element::getClientRects() {
+   Vector<gfx::RectF> rects = GetClientRectsNoAdjustment();
+   if (rects.empty()) {
+@@ -3428,6 +3463,7 @@ DOMRectList* Element::getClientRects() {
+   for (auto& rect : rects) {
+     GetDocument().AdjustRectForScrollAndAbsoluteZoom(rect,
+                                                      *element_layout_object);
++    ApplyRoxyClientRectNoise(&rect);
+   }
+   return MakeGarbageCollected<DOMRectList>(rects);
+ }
+@@ -3481,7 +3517,9 @@ gfx::RectF Element::GetBoundingClientRectNoLifecycleUpdate() const {
+ DOMRect* Element::GetBoundingClientRect() {
+   GetDocument().EnsurePaintLocationDataValidForNode(
+       this, DocumentUpdateReason::kJavaScript);
+-  return DOMRect::FromRectF(GetBoundingClientRectNoLifecycleUpdate());
++  gfx::RectF rect = GetBoundingClientRectNoLifecycleUpdate();
++  ApplyRoxyClientRectNoise(&rect);
++  return DOMRect::FromRectF(rect);
+ }
+ 
+ DOMRect* Element::GetBoundingClientRectForBinding() {

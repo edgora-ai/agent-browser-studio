@@ -678,12 +678,16 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0007-native-storage-quota.patch",
       "0008-native-analyser-noise.patch",
       "0009-native-offscreen-canvas-noise.patch",
+      "0010-native-client-rects-noise.patch",
+      "0011-native-webrtc-visible-identity.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
     expect(agent).not.toContain("CanvasRenderingContext2D.prototype.getImageData");
     expect(agent).not.toContain("WebGLRenderingContext.prototype.getParameter");
     expect(agent).not.toContain("AudioBuffer.prototype.getChannelData");
+    expect(agent).not.toContain("Element.prototype.getBoundingClientRect");
+    expect(agent).not.toContain("RTCPeerConnection.prototype.createOffer");
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {

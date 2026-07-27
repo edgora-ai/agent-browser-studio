@@ -14,10 +14,10 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Canvas | Stable noise | partial native | float pixel formats |
 | Audio | Stable noise | native | AudioBuffer + analyser readback paths |
 | WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
-| WebRTC | Exit-IP policy | partial renderer | P2P/ICE candidate gathering |
+| WebRTC | Exit-IP policy | partial native | P2P packet path + disable mode |
 | Fonts | Allow-list | partial renderer | font matching and enumeration |
 | Timezone | Configurable | renderer + Chromium switch | ICU timezone override |
-| ClientRects | Stable noise | renderer | Blink layout geometry export |
+| ClientRects | Stable noise | native | Blink layout geometry export |
 | Geolocation | Policy | renderer | browser geolocation service |
 | Workers | Identity parity | partial native | remaining worker-only surfaces |
 | Plugins/MIME types | Stable | missing | Blink plugin data |

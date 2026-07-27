@@ -14,4 +14,5 @@ done
 test -s "$PATCH_ROOT/files/chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.cc"
 test -s "$PATCH_ROOT/files/chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.h"
 test -s "$PATCH_ROOT/files/third_party/blink/public/common/roxy_fingerprint_config.h"
+test -s "$PATCH_ROOT/files/third_party/blink/public/common/roxy_webrtc_rewriter.h"
 echo "source payload: ok"

@@ -1,0 +1,65 @@
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -308,5 +308,6 @@ source_set("headers") {
+     "use_counter/webdx_feature_maps.h",
+     "roxy_fingerprint_config.h",
++    "roxy_webrtc_rewriter.h",
+     "user_agent/user_agent_brand_version_type.h",
+     "user_agent/user_agent_metadata.h",
+     "view_source/rendering_preferences.h",
+diff --git a/third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.cc b/third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.cc
+--- a/third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.cc
++++ b/third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/platform/peerconnection/rtc_ice_candidate_platform.h"
+ 
++#include "third_party/blink/public/common/roxy_webrtc_rewriter.h"
+ #include "third_party/webrtc/api/candidate.h"
+ #include "third_party/webrtc/p2p/base/p2p_constants.h"
+ 
+@@ -47,7 +48,8 @@ RTCIceCandidatePlatform::RTCIceCandidatePlatform(
+     std::optional<uint16_t> sdp_m_line_index,
+     String username_fragment,
+     String url)
+-    : candidate_(std::move(candidate)),
++    : candidate_(String::FromUTF8(
++          RewriteRoxyWebRtcPublicIps(candidate.Utf8()))),
+       sdp_mid_(std::move(sdp_mid)),
+       sdp_m_line_index_(std::move(sdp_m_line_index)),
+       username_fragment_(std::move(username_fragment)),
+diff --git a/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.cc b/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.cc
+--- a/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.cc
++++ b/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.cc
+@@ -4,10 +4,17 @@
+ 
+ #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h"
+ 
++#include "third_party/blink/public/common/roxy_webrtc_rewriter.h"
++
+ namespace blink {
+ 
+ RTCSessionDescriptionPlatform::RTCSessionDescriptionPlatform(const String& type,
+                                                              const String& sdp)
+-    : type_(type), sdp_(sdp) {}
++    : type_(type),
++      sdp_(String::FromUTF8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()))) {}
++
++void RTCSessionDescriptionPlatform::SetSdp(const String& sdp) {
++  sdp_ = String::FromUTF8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()));
++}
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h b/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h
+--- a/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h
++++ b/third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h
+@@ -20,7 +20,7 @@ class PLATFORM_EXPORT RTCSessionDescriptionPlatform final
+   void SetType(const String& type) { type_ = type; }
+ 
+   String Sdp() const { return sdp_; }
+-  void SetSdp(const String& sdp) { sdp_ = sdp; }
++  void SetSdp(const String& sdp);
+ 
+   void Trace(Visitor* visitor) const {}
+ 

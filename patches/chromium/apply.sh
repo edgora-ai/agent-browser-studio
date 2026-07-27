@@ -22,6 +22,7 @@ copy_file() {
 copy_file "chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.cc"
 copy_file "chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.h"
 copy_file "third_party/blink/public/common/roxy_fingerprint_config.h"
+copy_file "third_party/blink/public/common/roxy_webrtc_rewriter.h"
 
 for patch in "$PATCH_ROOT"/patches/*.patch; do
   if git -C "$CHROMIUM_SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then

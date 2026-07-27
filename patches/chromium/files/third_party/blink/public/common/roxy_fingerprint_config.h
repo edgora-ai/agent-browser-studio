@@ -54,6 +54,8 @@ class RoxyFingerprintConfig {
   bool audio_noise_enabled() const { return audio_noise_enabled_; }
   uint64_t audio_noise_seed() const { return audio_noise_seed_; }
   double audio_noise_amplitude() const { return audio_noise_amplitude_; }
+  const std::string& webrtc_mode() const { return webrtc_mode_; }
+  const std::string& webrtc_public_ip() const { return webrtc_public_ip_; }
   const std::string& webgl_vendor() const { return webgl_vendor_; }
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& timezone() const { return timezone_; }
@@ -166,6 +168,11 @@ class RoxyFingerprintConfig {
       audio_noise_amplitude_ =
           audio->FindDouble("amplitude").value_or(0.0);
     }
+    if (const base::Value::Dict* webrtc = root->FindDict("webrtc")) {
+      webrtc_mode_ = ReadString(*webrtc, "mode");
+      if (const std::string* public_ip = webrtc->FindString("publicIp"))
+        webrtc_public_ip_ = *public_ip;
+    }
     if (const std::string* timezone = root->FindString("timezone"))
       timezone_ = *timezone;
 
@@ -216,6 +223,8 @@ class RoxyFingerprintConfig {
   bool audio_noise_enabled_ = false;
   uint64_t audio_noise_seed_ = 0;
   double audio_noise_amplitude_ = 0.0;
+  std::string webrtc_mode_;
+  std::string webrtc_public_ip_;
   std::string webgl_vendor_;
   std::string webgl_renderer_;
   std::string timezone_;

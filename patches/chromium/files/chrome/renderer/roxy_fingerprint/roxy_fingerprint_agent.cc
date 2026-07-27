@@ -121,27 +121,16 @@ const screenProto=Object.getPrototypeOf(screen);
 for(const [name,key] of [['width','width'],['height','height'],['availWidth','availWidth'],['availHeight','availHeight'],['colorDepth','colorDepth'],['pixelDepth','pixelDepth']])getter(screenProto,name,c.screen[key]);
 getter(Window.prototype,'devicePixelRatio',c.screen.devicePixelRatio);
 
-const hash=(text)=>{let h=(c.seed>>>0)^0x9e3779b9;for(let i=0;i<text.length;i++){h=Math.imul(h^text.charCodeAt(i),16777619);}return h>>>0;};
-const signedNoise=(index,salt,amplitude)=>((hash(`${salt}:${index}`)&1)?1:-1)*amplitude;
-
 if(c.webrtc?.mode==='disable'){
   const DisabledPeerConnection=markNative(function RTCPeerConnection(){throw new DOMException('WebRTC disabled','NotSupportedError');},'RTCPeerConnection','function');
   globalThis.RTCPeerConnection=DisabledPeerConnection;
   if('webkitRTCPeerConnection'in globalThis)globalThis.webkitRTCPeerConnection=DisabledPeerConnection;
-}else if(c.webrtc?.mode==='altered'&&c.webrtc.publicIp&&globalThis.RTCPeerConnection){
-  const rewrite=(sdp)=>sdp.replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g,ip=>/^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip)?ip:c.webrtc.publicIp);
-  for(const method of ['createOffer','createAnswer']){const original=RTCPeerConnection.prototype[method];RTCPeerConnection.prototype[method]=markNative(async function(...args){const description=await original.apply(this,args);return new RTCSessionDescription({type:description.type,sdp:rewrite(description.sdp||'')});},method,'function');}
 }
 
 if(Array.isArray(c.fonts)&&c.fonts.length&&globalThis.queryLocalFonts){
   const originalQueryLocalFonts=globalThis.queryLocalFonts;
   globalThis.queryLocalFonts=markNative(async function(...args){const fonts=await originalQueryLocalFonts.apply(this,args);const allowed=new Set(c.fonts);return fonts.filter(font=>allowed.has(font.family)||allowed.has(font.fullName));},'queryLocalFonts','function');
 }
-
-const rectOffsets=new WeakMap();
-const rectNoiseFor=(element)=>{let value=rectOffsets.get(element);if(!value){const n=hash(`${c.seed}:${element.localName||''}:${element.id||''}:${element.className||''}`);value={x:((n&1023)/1023-.5)/100,y:(((n>>>10)&1023)/1023-.5)/100};rectOffsets.set(element,value);}return value;};
-const originalBoundingRect=Element.prototype.getBoundingClientRect;
-Element.prototype.getBoundingClientRect=markNative(function(){const rect=originalBoundingRect.call(this);const n=rectNoiseFor(this);return DOMRectReadOnly.fromRect({x:rect.x+n.x,y:rect.y+n.y,width:rect.width,height:rect.height});},'getBoundingClientRect','function');
 
 if(c.timezone&&globalThis.Intl?.DateTimeFormat){
   const originalResolvedOptions=Intl.DateTimeFormat.prototype.resolvedOptions;
