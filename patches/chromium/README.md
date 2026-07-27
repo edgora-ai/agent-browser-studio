@@ -23,12 +23,12 @@ No profile encryption key is embedded into Chromium.
 
 ## Current implementation
 
-The renderer agent is attached from
-`ChromeContentRendererClient::RenderFrameCreated` and installs configuration in
-every frame during `DidClearWindowObject`, before page scripts run. The first
-milestone covers deterministic Navigator/User-Agent Client Hints, screen/DPR,
-Canvas, AudioBuffer, WebGL, WebRTC policy, font enumeration, ClientRects,
-timezone reporting, and geolocation policy.
+The renderer reads one immutable process-wide configuration directly from
+Blink/public common code. There is no page-script injection or JavaScript
+prototype replacement. The implementation covers deterministic
+Navigator/User-Agent Client Hints, screen/DPR, Canvas, AudioBuffer, WebGL,
+WebRTC policy, font enumeration, ClientRects, timezone reporting, media/plugin
+enumeration, and geolocation policy.
 
 Native patches now apply the same UA, UA Client Hints headers, platform,
 language, CPU, memory, screen and DPR identity in Blink, the network stack and
@@ -37,10 +37,11 @@ stable native pixel noise without modifying the visible backing canvas. WebGL
 1/2 identity now comes from the native parameter path. AudioBuffer and analyser
 readbacks apply stable native noise. OffscreenCanvas blob export shares the
 same detached Canvas noise, and storage estimates use the configured native
-quota. The lifecycle agent remains the
-compatibility scaffold for surfaces that have not moved yet. It is not yet
-claimed to be undetectable: custom font-directory loading, media devices,
-plugins/MIME types and floating-point Canvas readbacks still need native
-subsystem patches. Geolocation `real`, `disable`, and `custom` policies now run
-in Blink's native request/result path. See
+quota. It is not yet claimed to be undetectable: custom font-directory loading and exact-device
+media constraint remapping still need native subsystem patches. Canvas noise
+now covers 8-bit, float16 and float32 readbacks. Media enumeration exposes a
+stable, origin-scoped
+desktop device set, and the standard Chromium PDF plugin/MIME set is enforced
+in Blink. Geolocation `real`, `disable`, and `custom` policies run in Blink's
+native request/result path. See
 `CAPABILITY_MATRIX.md` for the acceptance status.

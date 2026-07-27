@@ -60,3 +60,4 @@ diff --git a/third_party/blink/renderer/platform/p2p/port_allocator.h b/third_pa
    };
  
    P2PPortAllocator(
+       std::unique_ptr<webrtc::NetworkManager> network_manager,

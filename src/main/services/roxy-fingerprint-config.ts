@@ -53,6 +53,12 @@ export interface RoxyFingerprintConfig {
     longitude: number | null;
     accuracy: number | null;
   };
+  mediaDevices: {
+    enabled: boolean;
+    audioInputs: number;
+    videoInputs: number;
+    audioOutputs: number;
+  };
   fonts: string[];
   doNotTrack: string | null;
 }
@@ -117,6 +123,7 @@ export function buildRoxyFingerprintConfig(
       : { mode: "real", publicIp: null },
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
     geolocation: normalizeGeolocation(meta),
+    mediaDevices: { enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 },
     fonts: selectStableFonts(seed, platform, locale),
     doNotTrack: null,
   };

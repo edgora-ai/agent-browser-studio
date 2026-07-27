@@ -19,18 +19,29 @@ copy_file() {
   cp "$source" "$target"
 }
 
-copy_file "chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.cc"
-copy_file "chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.h"
 copy_file "third_party/blink/public/common/roxy_fingerprint_config.h"
 copy_file "third_party/blink/public/common/roxy_webrtc_rewriter.h"
 
+GIT_DIR="$(git -C "$CHROMIUM_SRC" rev-parse --absolute-git-dir)"
+STATE_DIR="$GIT_DIR/roxy-fingerprint-patches"
+mkdir -p "$STATE_DIR"
+
 for patch in "$PATCH_ROOT"/patches/*.patch; do
-  if git -C "$CHROMIUM_SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+  patch_name="$(basename "$patch")"
+  patch_hash="$(git -C "$CHROMIUM_SRC" hash-object "$patch")"
+  marker="$STATE_DIR/$patch_name"
+  if [[ -f "$marker" && "$(<"$marker")" == "$patch_hash" ]]; then
+    echo "already applied: $patch_name"
+  elif git -C "$CHROMIUM_SRC" apply --check "$patch" >/dev/null 2>&1; then
+    git -C "$CHROMIUM_SRC" apply "$patch"
+    printf '%s\n' "$patch_hash" > "$marker"
+    echo "applied: $patch_name"
+  elif git -C "$CHROMIUM_SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+    printf '%s\n' "$patch_hash" > "$marker"
     echo "already applied: $(basename "$patch")"
   else
-    git -C "$CHROMIUM_SRC" apply --check "$patch"
-    git -C "$CHROMIUM_SRC" apply "$patch"
-    echo "applied: $(basename "$patch")"
+    echo "error: $patch_name neither applies nor cleanly reverses; use a clean Chromium checkout or remove the conflicting edits" >&2
+    exit 1
   fi
 done
 

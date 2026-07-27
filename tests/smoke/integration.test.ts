@@ -667,10 +667,6 @@ describe("Integration — Hardware fingerprint controls", () => {
 
   it("moves high-risk fingerprint readbacks into native Chromium patches", () => {
     const patchRoot = path.join(ROOT, "patches/chromium");
-    const agent = fs.readFileSync(
-      path.join(patchRoot, "files/chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.cc"),
-      "utf-8",
-    );
     for (const name of [
       "0004-native-canvas-readback-noise.patch",
       "0005-native-webgl-identity.patch",
@@ -683,17 +679,14 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0012-native-webrtc-routing-policy.patch",
       "0013-native-font-allowlist.patch",
       "0014-native-geolocation-policy.patch",
+      "0015-native-media-plugin-identity.patch",
+      "0016-native-float-canvas-noise.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
-    expect(agent).not.toContain("CanvasRenderingContext2D.prototype.getImageData");
-    expect(agent).not.toContain("WebGLRenderingContext.prototype.getParameter");
-    expect(agent).not.toContain("AudioBuffer.prototype.getChannelData");
-    expect(agent).not.toContain("Element.prototype.getBoundingClientRect");
-    expect(agent).not.toContain("RTCPeerConnection.prototype.createOffer");
-    expect(agent).not.toContain("DisabledPeerConnection");
-    expect(agent).not.toContain("globalThis.queryLocalFonts");
-    expect(agent).not.toContain("navigator.geolocation.getCurrentPosition");
+    expect(fs.existsSync(path.join(patchRoot, "patches", "0001-wire-roxy-fingerprint-agent.patch"))).toBe(false);
+    expect(fs.existsSync(path.join(patchRoot, "files", "chrome", "renderer", "roxy_fingerprint", "roxy_fingerprint_agent.cc"))).toBe(false);
+    expect(fs.readFileSync(path.join(patchRoot, "README.md"), "utf-8")).toContain("no page-script injection");
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {

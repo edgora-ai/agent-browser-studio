@@ -1,0 +1,126 @@
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -19,6 +19,7 @@
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/mediastream/media_devices.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/mojom/media/capture_handle_config.mojom-blink.h"
+ #include "third_party/blink/public/mojom/mediastream/media_devices.mojom-blink.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+@@ -470,6 +471,39 @@ media::MediaPermission::Type ToMediaPermissionType(
+   }
+ }
+ 
++int RoxyMediaDeviceCount(const RoxyFingerprintConfig& config,
++                         mojom::blink::MediaDeviceType type) {
++  switch (type) {
++    case mojom::blink::MediaDeviceType::kMediaAudioInput:
++      return config.media_audio_inputs();
++    case mojom::blink::MediaDeviceType::kMediaVideoInput:
++      return config.media_video_inputs();
++    case mojom::blink::MediaDeviceType::kMediaAudioOutput:
++      return config.media_audio_outputs();
++    case mojom::blink::MediaDeviceType::kNumMediaDeviceTypes:
++      return 0;
++  }
++  NOTREACHED();
++}
++
++String RoxyMediaDeviceLabel(const RoxyFingerprintConfig& config,
++                            mojom::blink::MediaDeviceType type) {
++  const bool is_macos = config.platform() == "MacIntel";
++  switch (type) {
++    case mojom::blink::MediaDeviceType::kMediaAudioInput:
++      return is_macos ? "MacBook Microphone"
++                      : "Microphone (Realtek(R) Audio)";
++    case mojom::blink::MediaDeviceType::kMediaVideoInput:
++      return is_macos ? "FaceTime HD Camera" : "Integrated Camera";
++    case mojom::blink::MediaDeviceType::kMediaAudioOutput:
++      return is_macos ? "MacBook Speakers"
++                      : "Speakers (Realtek(R) Audio)";
++    case mojom::blink::MediaDeviceType::kNumMediaDeviceTypes:
++      return String();
++  }
++  NOTREACHED();
++}
++
+ void RecordUma(EnumerateDevicesGetUserMediaInteraction value) {
+   base::UmaHistogramEnumeration(
+       "Media.MediaDevices.EnumerateDevices.GetUserMediaInteraction", value);
+@@ -1439,6 +1473,54 @@ void MediaDevices::DevicesEnumerated(
+ 
+   MediaDeviceInfoVector media_devices;
+   bool result_contains_nonempty_input_device_ids = false;
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() && roxy_config.media_devices_enabled()) {
++    bool reveal_labels = false;
++    for (const auto& devices_by_type : enumeration) {
++      for (const WebMediaDeviceInfo& device : devices_by_type)
++        reveal_labels |= !device.label.empty();
++    }
++    ExecutionContext* context = ExecutionContext::From(script_state);
++    const std::string origin =
++        context->GetSecurityOrigin()->ToString().Utf8().c_str();
++    for (wtf_size_t i = 0;
++         i < static_cast<wtf_size_t>(
++                 mojom::blink::MediaDeviceType::kNumMediaDeviceTypes);
++         ++i) {
++      const auto device_type = static_cast<mojom::blink::MediaDeviceType>(i);
++      const int count = RoxyMediaDeviceCount(roxy_config, device_type);
++      for (int j = 0; j < count; ++j) {
++        const std::string device_scope = base::StringPrintf(
++            "%s:%d:%d", origin.c_str(), static_cast<int>(device_type), j);
++        const std::string group_scope = base::StringPrintf(
++            "%s:%s:%d", origin.c_str(),
++            device_type == mojom::blink::MediaDeviceType::kMediaVideoInput
++                ? "video"
++                : "audio",
++            j);
++        const String device_id = String::FromUtf8(
++            roxy_config.StableToken("media-device", device_scope));
++        const String group_id = String::FromUtf8(
++            roxy_config.StableToken("media-group", group_scope));
++        const String label = reveal_labels
++                                 ? RoxyMediaDeviceLabel(roxy_config, device_type)
++                                 : String();
++        if (device_type == mojom::blink::MediaDeviceType::kMediaAudioInput ||
++            device_type == mojom::blink::MediaDeviceType::kMediaVideoInput) {
++          media_devices.push_back(MakeGarbageCollected<InputDeviceInfo>(
++              device_id, label, group_id, device_type));
++          result_contains_nonempty_input_device_ids = true;
++        } else {
++          media_devices.push_back(MakeGarbageCollected<MediaDeviceInfo>(
++              device_id, label, group_id, device_type));
++        }
++      }
++    }
++    ReportCompletedEnumerateDevices(result_contains_nonempty_input_device_ids);
++    result_tracker->Resolve(media_devices);
++    tracer->End();
++    return;
++  }
+   for (wtf_size_t i = 0;
+        i < static_cast<wtf_size_t>(
+                mojom::blink::MediaDeviceType::kNumMediaDeviceTypes);
+diff --git a/third_party/blink/renderer/modules/plugins/dom_plugin_array.cc b/third_party/blink/renderer/modules/plugins/dom_plugin_array.cc
+--- a/third_party/blink/renderer/modules/plugins/dom_plugin_array.cc
++++ b/third_party/blink/renderer/modules/plugins/dom_plugin_array.cc
+@@ -21,6 +21,7 @@
+ #include "third_party/blink/renderer/modules/plugins/dom_plugin_array.h"
+ 
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/navigator.h"
+@@ -135,6 +136,8 @@ HeapVector<Member<DOMMimeType>> DOMPluginArray::GetFixedMimeTypeArray() {
+ }
+ 
+ bool DOMPluginArray::IsPdfViewerAvailable() {
++  if (RoxyFingerprintConfig::Get().enabled())
++    return true;
+   auto* data = GetPluginData();
+   if (!data)
+     return false;

@@ -66,6 +66,34 @@ class RoxyFingerprintConfig {
   double geolocation_latitude() const { return geolocation_latitude_; }
   double geolocation_longitude() const { return geolocation_longitude_; }
   double geolocation_accuracy() const { return geolocation_accuracy_; }
+  bool media_devices_enabled() const { return media_devices_enabled_; }
+  int media_audio_inputs() const { return media_audio_inputs_; }
+  int media_video_inputs() const { return media_video_inputs_; }
+  int media_audio_outputs() const { return media_audio_outputs_; }
+
+  std::string StableToken(std::string_view name_space,
+                          std::string_view scope) const {
+    constexpr char kHex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (uint64_t block = 0; block < 4; ++block) {
+      uint64_t hash = 1469598103934665603ULL ^
+                      (static_cast<uint64_t>(seed_) << 32) ^
+                      (0x9e3779b97f4a7c15ULL * (block + 1));
+      for (const char character : name_space) {
+        hash ^= static_cast<uint8_t>(character);
+        hash *= 1099511628211ULL;
+      }
+      hash ^= 0xff;
+      for (const char character : scope) {
+        hash ^= static_cast<uint8_t>(character);
+        hash *= 1099511628211ULL;
+      }
+      for (int shift = 60; shift >= 0; shift -= 4)
+        result.push_back(kHex[(hash >> shift) & 0xf]);
+    }
+    return result;
+  }
 
   bool IsFontAllowed(std::string_view family) const {
     if (!enabled_ || fonts_.empty())
@@ -230,6 +258,22 @@ class RoxyFingerprintConfig {
           fonts_.push_back(font.GetString());
       }
     }
+    if (const base::Value::Dict* media_devices =
+            root->FindDict("mediaDevices")) {
+      media_devices_enabled_ =
+          media_devices->FindBool("enabled").value_or(false);
+      media_audio_inputs_ =
+          media_devices->FindInt("audioInputs").value_or(0);
+      media_video_inputs_ =
+          media_devices->FindInt("videoInputs").value_or(0);
+      media_audio_outputs_ =
+          media_devices->FindInt("audioOutputs").value_or(0);
+      if (media_audio_inputs_ < 0 || media_audio_inputs_ > 8 ||
+          media_video_inputs_ < 0 || media_video_inputs_ > 8 ||
+          media_audio_outputs_ < 0 || media_audio_outputs_ > 8) {
+        return;
+      }
+    }
 
     enabled_ = seed_ > 0 &&
                (platform_ == "Win32" || platform_ == "MacIntel") &&
@@ -297,6 +341,10 @@ class RoxyFingerprintConfig {
   double geolocation_latitude_ = 0.0;
   double geolocation_longitude_ = 0.0;
   double geolocation_accuracy_ = 0.0;
+  bool media_devices_enabled_ = false;
+  int media_audio_inputs_ = 0;
+  int media_video_inputs_ = 0;
+  int media_audio_outputs_ = 0;
 };
 
 }  // namespace blink
