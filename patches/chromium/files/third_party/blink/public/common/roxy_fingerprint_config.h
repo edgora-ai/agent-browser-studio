@@ -47,6 +47,7 @@ class RoxyFingerprintConfig {
   int hardware_concurrency() const { return hardware_concurrency_; }
   int device_memory() const { return device_memory_; }
   int max_touch_points() const { return max_touch_points_; }
+  int64_t storage_quota_bytes() const { return storage_quota_bytes_; }
   const Screen& screen() const { return screen_; }
   bool canvas_noise_enabled() const { return canvas_noise_enabled_; }
   uint64_t canvas_noise_seed() const { return canvas_noise_seed_; }
@@ -132,6 +133,8 @@ class RoxyFingerprintConfig {
         root->FindInt("hardwareConcurrency").value_or(0);
     device_memory_ = root->FindInt("deviceMemory").value_or(0);
     max_touch_points_ = root->FindInt("maxTouchPoints").value_or(0);
+    storage_quota_bytes_ = static_cast<int64_t>(
+        root->FindDouble("storageQuotaBytes").value_or(0));
 
     if (const base::Value::List* languages = root->FindList("languages")) {
       for (const base::Value& language : *languages) {
@@ -206,6 +209,7 @@ class RoxyFingerprintConfig {
   int hardware_concurrency_ = 0;
   int device_memory_ = 0;
   int max_touch_points_ = 0;
+  int64_t storage_quota_bytes_ = 0;
   Screen screen_;
   bool canvas_noise_enabled_ = false;
   uint64_t canvas_noise_seed_ = 0;

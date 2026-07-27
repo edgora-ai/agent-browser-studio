@@ -1,0 +1,84 @@
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
+--- a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
++++ b/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
+@@ -33,6 +33,7 @@
+ 
+ #include "base/compiler_specific.h"
+ #include "media/base/audio_bus.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+ #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+ #include "third_party/blink/renderer/platform/audio/vector_math.h"
+@@ -69,6 +70,40 @@ float EnsureFinite(float x, float default_value) {
+   return std::isfinite(x) ? x : default_value;
+ }
+ 
++uint64_t MixRoxyAnalyserNoise(uint64_t value) {
++  value ^= value >> 30;
++  value *= 0xbf58476d1ce4e5b9ULL;
++  value ^= value >> 27;
++  value *= 0x94d049bb133111ebULL;
++  return value ^ (value >> 31);
++}
++
++void ApplyRoxyFloatNoise(base::span<float> values, uint64_t salt) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled() || !config.audio_noise_enabled())
++    return;
++  const double amplitude = config.audio_noise_amplitude() * 1000.0;
++  uint64_t state = config.audio_noise_seed() ^ salt;
++  for (size_t index = 0; index < values.size(); ++index) {
++    state = MixRoxyAnalyserNoise(state ^ index);
++    const double unit = static_cast<double>(state & 0xffff) / 65535.0;
++    values[index] += static_cast<float>((unit * 2.0 - 1.0) * amplitude);
++  }
++}
++
++void ApplyRoxyByteNoise(base::span<unsigned char> values, uint64_t salt) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled() || !config.audio_noise_enabled())
++    return;
++  uint64_t state = config.audio_noise_seed() ^ salt;
++  for (size_t index = 0; index < values.size(); ++index) {
++    state = MixRoxyAnalyserNoise(state ^ index);
++    const int delta = (state & 1) ? 1 : -1;
++    values[index] = static_cast<unsigned char>(
++        std::clamp(static_cast<int>(values[index]) + delta, 0, UCHAR_MAX));
++  }
++}
++
+ }  // namespace
+ 
+ RealtimeAnalyser::RealtimeAnalyser(unsigned render_quantum_frames)
+@@ -119,6 +154,7 @@ void RealtimeAnalyser::GetFloatFrequencyData(
+       const double db_mag = audio_utilities::LinearToDecibels(linear_value);
+       destination[i] = static_cast<float>(db_mag);
+     }
++    ApplyRoxyFloatNoise(destination.first(len), 0x46524551ULL);
+   }
+ }
+ 
+@@ -160,6 +196,7 @@ void RealtimeAnalyser::GetByteFrequencyData(
+       destination[i] =
+           static_cast<unsigned char>(ClampTo(scaled_value, 0, UCHAR_MAX));
+     }
++    ApplyRoxyByteNoise(destination.first(len), 0x42524551ULL);
+   }
+ }
+ 
+@@ -186,6 +223,7 @@ void RealtimeAnalyser::GetFloatTimeDomainData(
+ 
+       destination[i] = value;
+     }
++    ApplyRoxyFloatNoise(destination.first(len), 0x4654494dULL);
+   }
+ }
+ 
+@@ -216,6 +254,7 @@ void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array) {
+       destination[i] =
+           static_cast<unsigned char>(ClampTo(scaled_value, 0, UCHAR_MAX));
+     }
++    ApplyRoxyByteNoise(destination.first(len), 0x4254494dULL);
+   }
+ }
+ 

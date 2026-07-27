@@ -11,8 +11,8 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Platform/language | Configurable | native | Window/Worker Navigator + network headers |
 | CPU/device memory | Configurable | native | Window/Worker Navigator |
 | Screen/DPR/depth | Configurable | native | Blink Screen + LocalDOMWindow |
-| Canvas | Stable noise | partial native | OffscreenCanvas + float pixel formats |
-| Audio | Stable noise | partial native | analyser readbacks + offline consistency |
+| Canvas | Stable noise | partial native | float pixel formats |
+| Audio | Stable noise | native | AudioBuffer + analyser readback paths |
 | WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
 | WebRTC | Exit-IP policy | partial renderer | P2P/ICE candidate gathering |
 | Fonts | Allow-list | partial renderer | font matching and enumeration |
@@ -22,7 +22,7 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Workers | Identity parity | partial native | remaining worker-only surfaces |
 | Plugins/MIME types | Stable | missing | Blink plugin data |
 | Media devices | Stable labels/count | missing | media device enumeration |
-| Storage quota | Configurable | config only | quota estimate plumbing |
+| Storage quota | Configurable | native | StorageManager estimate callback |
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,

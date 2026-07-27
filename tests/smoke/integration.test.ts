@@ -675,6 +675,9 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0004-native-canvas-readback-noise.patch",
       "0005-native-webgl-identity.patch",
       "0006-native-audio-buffer-noise.patch",
+      "0007-native-storage-quota.patch",
+      "0008-native-analyser-noise.patch",
+      "0009-native-offscreen-canvas-noise.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

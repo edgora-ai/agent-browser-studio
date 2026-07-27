@@ -15,6 +15,7 @@ describe("Roxy fingerprint config", () => {
       screenWidth: 1920,
       screenHeight: 1080,
       taskbarHeight: 48,
+      storageQuota: 120000,
       hardwareConcurrency: 8,
       deviceMemory: 16,
       gpuVendor: "Google Inc. (NVIDIA)",
@@ -29,6 +30,7 @@ describe("Roxy fingerprint config", () => {
     expect(first.languages).toEqual(["zh-CN", "zh"]);
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
     expect(first.screen.availHeight).toBe(1032);
+    expect(first.storageQuotaBytes).toBe(120000 * 1024 * 1024);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
   });
 

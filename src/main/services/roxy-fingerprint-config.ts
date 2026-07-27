@@ -25,6 +25,7 @@ export interface RoxyFingerprintConfig {
     pixelDepth: number;
     devicePixelRatio: number;
   };
+  storageQuotaBytes: number;
   canvas: { enabled: boolean; seed: string };
   audio: { enabled: boolean; seed: string; amplitude: number };
   webgl: { vendor: string; renderer: string };
@@ -78,6 +79,7 @@ export function buildRoxyFingerprintConfig(
       pixelDepth: 24,
       devicePixelRatio,
     },
+    storageQuotaBytes: normalizeInteger(meta.storageQuota, 1, 1048576, 120000) * 1024 * 1024,
     canvas: { enabled: true, seed: deriveSeed(seed, "canvas") },
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
     webgl: {

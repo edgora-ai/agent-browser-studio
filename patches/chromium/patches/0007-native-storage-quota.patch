@@ -1,0 +1,26 @@
+diff --git a/third_party/blink/renderer/modules/quota/storage_manager.cc b/third_party/blink/renderer/modules/quota/storage_manager.cc
+--- a/third_party/blink/renderer/modules/quota/storage_manager.cc
++++ b/third_party/blink/renderer/modules/quota/storage_manager.cc
+@@ -4,7 +4,10 @@
+ 
+ #include "third_party/blink/renderer/modules/quota/storage_manager.h"
+ 
++#include <algorithm>
++
+ #include "mojo/public/cpp/bindings/callback_helpers.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
+ #include "third_party/blink/public/mojom/quota/quota_types.mojom-blink.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -66,6 +69,11 @@ void QueryStorageUsageAndQuotaCallback(
+     resolver->Reject(V8ThrowException::CreateTypeError(
+         resolver->GetScriptState()->GetIsolate(), error_message));
+     return;
++  }
++
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.storage_quota_bytes() > 0) {
++    quota_in_bytes = std::max(usage_in_bytes, config.storage_quota_bytes());
+   }
+ 
+   StorageEstimate* estimate = StorageEstimate::Create();
