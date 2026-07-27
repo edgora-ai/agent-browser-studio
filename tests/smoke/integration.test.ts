@@ -641,10 +641,12 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).toContain("addHardwareFingerprintArgs(requestedArgs, meta)");
   });
 
-  it("delegates binary, GeoIP, proxy, and launch environment handling to the current wrapper", () => {
+  it("delegates binary, GeoIP, proxy, and launch handling to the community wrapper", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
-    expect(pkg.dependencies.cloakbrowser).toBe("^0.5.2");
+    expect(pkg.dependencies.cloakbrowser).toBe(
+      "https://github.com/edgora-ai/CloakBrowser/archive/18180fad1600b4f3c57a0efa3c175961ac01fb8e.tar.gz",
+    );
     expect(manager).toContain("buildLaunchOptions({");
     expect(manager).toContain("geoip: wrapperGeoip");
     expect(manager).toContain("shouldUseWrapperGeoip()");

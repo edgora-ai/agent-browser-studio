@@ -36,7 +36,7 @@
   "author": "ahoo",
   "license": "MIT",
   "dependencies": {
-    "cloakbrowser": "^0.5.2",
+    "cloakbrowser": "https://github.com/edgora-ai/CloakBrowser/archive/18180fad1600b4f3c57a0efa3c175961ac01fb8e.tar.gz",
     "mmdb-lib": "^3.0.2",
     "socks-proxy-agent": "^10.1.0",
     "ws": "^8.21.0"

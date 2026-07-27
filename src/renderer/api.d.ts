@@ -72,7 +72,7 @@ export interface CloakBinaryStatus {
   path: string | null;
   version: string | null;
   bundledVersion: string | null;
-  tier: "free" | "pro" | null;
+  tier: "community" | "free" | "pro" | null;
   installed: boolean;
   platform: string | null;
   cacheDir: string | null;

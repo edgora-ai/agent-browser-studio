@@ -96,7 +96,7 @@ export interface CloakBinaryStatus {
   path: string | null;
   version: string | null;
   bundledVersion: string | null;
-  tier: "free" | "pro" | null;
+  tier: "community" | "free" | "pro" | null;
   installed: boolean;
   platform: string | null;
   cacheDir: string | null;
@@ -138,7 +138,9 @@ export async function updateCloakBinary(): Promise<{ updated: boolean; latestVer
   const before = getCloakBinaryStatus();
   await ensureBinary();
   const resolved = getCloakBinaryStatus();
-  const installedVersion = resolved.tier === "free" ? await checkForUpdate() : null;
+  const installedVersion = resolved.tier === "community" || resolved.tier === "free"
+    ? await checkForUpdate()
+    : null;
   const status = getCloakBinaryStatus();
   return {
     updated: Boolean(installedVersion || status.version !== before.version || status.tier !== before.tier),
@@ -163,7 +165,7 @@ async function getLatestCloakChromiumVersion(platformTag: string | null): Promis
     const archiveExt = process.platform === "win32" ? ".zip" : ".tar.gz";
     const archiveName = `cloakbrowser-${platformTag}${archiveExt}`;
     for (const release of releases) {
-      if (!release.tag_name?.startsWith("chromium-v") || release.draft) continue;
+      if (!release.tag_name || !/^chromium-v\d+(?:\.\d+)+$/.test(release.tag_name) || release.draft) continue;
       const assetNames = new Set((release.assets || []).map((asset) => asset.name));
       if (assetNames.has(archiveName)) return release.tag_name.replace(/^chromium-v/, "");
     }
@@ -404,9 +406,9 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
   addHardwareFingerprintArgs(requestedArgs, meta);
 
-  // Let the official wrapper resolve the managed binary, license environment,
-  // GeoIP/WebRTC exit identity, proxy capabilities, and version-aware window
-  // geometry. Explicit profile flags override its generated seed/platform.
+  // Let the community wrapper resolve the managed binary, GeoIP/WebRTC exit
+  // identity, proxy capabilities, and version-aware window geometry. Explicit
+  // profile flags override its generated seed/platform.
   const launchPlan = await buildLaunchOptions({
     headless: false,
     args: requestedArgs,
