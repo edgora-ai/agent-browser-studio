@@ -1,0 +1,116 @@
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+@@ -32,6 +32,7 @@
+ 
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_buffer_options.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+ #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+@@ -52,6 +53,14 @@ DOMFloat32Array* CreateFloat32ArrayOrNull(
+              : DOMFloat32Array::CreateUninitializedOrNull(length);
+ }
+ 
++uint64_t MixAudioNoise(uint64_t value) {
++  value ^= value >> 30;
++  value *= 0xbf58476d1ce4e5b9ULL;
++  value ^= value >> 27;
++  value *= 0x94d049bb133111ebULL;
++  return value ^ (value >> 31);
++}
++
+ }  // namespace
+ 
+ AudioBuffer* AudioBuffer::Create(unsigned number_of_channels,
+@@ -180,6 +189,7 @@ AudioBuffer::AudioBuffer(unsigned number_of_channels,
+     }
+ 
+     channels_.push_back(channel_data_array);
++    roxy_noised_channels_.push_back(0);
+   }
+ }
+ 
+@@ -198,6 +208,7 @@ AudioBuffer::AudioBuffer(AudioBus* bus)
+     }
+     channel_data_array->AsSpan().copy_from(bus->Channel(i)->Span());
+     channels_.push_back(channel_data_array);
++    roxy_noised_channels_.push_back(0);
+   }
+ }
+ 
+@@ -221,9 +232,31 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(
+     return NotShared<DOMFloat32Array>(nullptr);
+   }
+ 
++  ApplyRoxyFingerprintNoise(channel_index);
+   return NotShared<DOMFloat32Array>(channels_[channel_index].Get());
+ }
+ 
++void AudioBuffer::ApplyRoxyFingerprintNoise(unsigned channel_index) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled() || !config.audio_noise_enabled() ||
++      config.audio_noise_amplitude() <= 0 ||
++      channel_index >= channels_.size() ||
++      roxy_noised_channels_[channel_index]) {
++    return;
++  }
++
++  base::span<float> samples = channels_[channel_index].Get()->AsSpan();
++  uint64_t state = config.audio_noise_seed() ^
++                   (static_cast<uint64_t>(channel_index) << 32);
++  const double amplitude = config.audio_noise_amplitude();
++  for (size_t index = 0; index < samples.size(); ++index) {
++    state = MixAudioNoise(state ^ index);
++    const double unit = static_cast<double>(state & 0xffff) / 65535.0;
++    samples[index] += static_cast<float>((unit * 2.0 - 1.0) * amplitude);
++  }
++  roxy_noised_channels_[channel_index] = 1;
++}
++
+ void AudioBuffer::copyFromChannel(NotShared<DOMFloat32Array> destination,
+                                   int32_t channel_number,
+                                   ExceptionState& exception_state) {
+@@ -251,6 +284,7 @@ void AudioBuffer::copyFromChannel(
+     return;
+   }
+ 
++  ApplyRoxyFingerprintNoise(channel_number);
+   base::span<const float> src = channels_[channel_number].Get()->AsSpan();
+   base::span<float> dst = destination->AsSpan();
+ 
+@@ -311,12 +345,15 @@ void AudioBuffer::copyToChannel(
+   DCHECK(dst.data());
+ 
+   dst.subspan(buffer_offset, count).copy_from(src.first(count));
++  roxy_noised_channels_[channel_number] = 0;
+ }
+ 
+ void AudioBuffer::Zero() {
+   for (unsigned i = 0; i < channels_.size(); ++i) {
+-    if (NotShared<DOMFloat32Array> array = getChannelData(i)) {
++    NotShared<DOMFloat32Array> array(channels_[i].Get());
++    if (array) {
+       std::ranges::fill(array->AsSpan(), 0.0f);
++      roxy_noised_channels_[i] = 0;
+     }
+   }
+ }
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.h b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
+@@ -117,11 +117,13 @@ class MODULES_EXPORT AudioBuffer final : public ScriptWrappable {
+ 
+  private:
+   bool CreatedSuccessfully(unsigned desired_number_of_channels) const;
++  void ApplyRoxyFingerprintNoise(unsigned channel_index);
+ 
+   float sample_rate_;
+   uint32_t length_;
+ 
+   HeapVector<Member<DOMFloat32Array>> channels_;
++  Vector<uint8_t> roxy_noised_channels_;
+ };
+ 
+ // Shared data that audio threads can hold onto.

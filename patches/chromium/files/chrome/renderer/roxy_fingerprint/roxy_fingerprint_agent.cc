@@ -124,36 +124,6 @@ getter(Window.prototype,'devicePixelRatio',c.screen.devicePixelRatio);
 const hash=(text)=>{let h=(c.seed>>>0)^0x9e3779b9;for(let i=0;i<text.length;i++){h=Math.imul(h^text.charCodeAt(i),16777619);}return h>>>0;};
 const signedNoise=(index,salt,amplitude)=>((hash(`${salt}:${index}`)&1)?1:-1)*amplitude;
 
-if(c.canvas?.enabled&&globalThis.CanvasRenderingContext2D){
-  const originalGetImageData=CanvasRenderingContext2D.prototype.getImageData;
-  CanvasRenderingContext2D.prototype.getImageData=markNative(function(...args){
-    const image=originalGetImageData.apply(this,args);
-    for(let i=0;i<image.data.length;i+=4){const channel=hash(`${c.canvas.seed}:${i}`)%3;image.data[i+channel]=Math.max(0,Math.min(255,image.data[i+channel]+signedNoise(i,c.canvas.seed,1)));}
-    return image;
-  },'getImageData','function');
-}
-
-if(c.audio?.enabled&&globalThis.AudioBuffer){
-  const originalGetChannelData=AudioBuffer.prototype.getChannelData;
-  const processed=new WeakMap();
-  AudioBuffer.prototype.getChannelData=markNative(function(channel){
-    const data=originalGetChannelData.call(this,channel);
-    let channels=processed.get(this);if(!channels){channels=new Set();processed.set(this,channels);}
-    if(!channels.has(channel)){for(let i=0;i<data.length;i+=97)data[i]+=signedNoise(i,c.audio.seed,c.audio.amplitude);channels.add(channel);}
-    return data;
-  },'getChannelData','function');
-}
-
-for(const Context of [globalThis.WebGLRenderingContext,globalThis.WebGL2RenderingContext]){
-  if(!Context)continue;
-  const originalGetParameter=Context.prototype.getParameter;
-  Context.prototype.getParameter=markNative(function(parameter){
-    if(parameter===0x9245)return c.webgl.vendor;
-    if(parameter===0x9246)return c.webgl.renderer;
-    return originalGetParameter.call(this,parameter);
-  },'getParameter','function');
-}
-
 if(c.webrtc?.mode==='disable'){
   const DisabledPeerConnection=markNative(function RTCPeerConnection(){throw new DOMException('WebRTC disabled','NotSupportedError');},'RTCPeerConnection','function');
   globalThis.RTCPeerConnection=DisabledPeerConnection;

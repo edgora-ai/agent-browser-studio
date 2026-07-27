@@ -32,8 +32,11 @@ timezone reporting, and geolocation policy.
 
 Native patches now apply the same UA, UA Client Hints headers, platform,
 language, CPU, memory, screen and DPR identity in Blink, the network stack and
-workers. The lifecycle agent remains the compatibility scaffold for surfaces
-that have not moved yet. It is not yet claimed to be undetectable: font
-fallback, canvas/Skia, audio DSP, WebRTC ICE gathering, media devices and
-storage quota still need native subsystem patches. See `CAPABILITY_MATRIX.md`
-for the acceptance status.
+workers. Canvas `toDataURL`, `toBlob` and `getImageData` readbacks use detached,
+stable native pixel noise without modifying the visible backing canvas. WebGL
+1/2 identity now comes from the native parameter path, and AudioBuffer applies
+stable noise on its native readback/copy path. The lifecycle agent remains the
+compatibility scaffold for surfaces that have not moved yet. It is not yet
+claimed to be undetectable: font fallback, WebRTC ICE gathering, media devices
+and storage quota still need native subsystem patches. See
+`CAPABILITY_MATRIX.md` for the acceptance status.

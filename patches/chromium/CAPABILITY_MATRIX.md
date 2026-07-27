@@ -11,9 +11,9 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Platform/language | Configurable | native | Window/Worker Navigator + network headers |
 | CPU/device memory | Configurable | native | Window/Worker Navigator |
 | Screen/DPR/depth | Configurable | native | Blink Screen + LocalDOMWindow |
-| Canvas | Stable noise | renderer | Blink canvas + Skia readback |
-| Audio | Stable noise | renderer | Blink WebAudio buffers |
-| WebGL vendor/renderer | Configurable | renderer | ANGLE/WebGL parameter path |
+| Canvas | Stable noise | partial native | OffscreenCanvas + float pixel formats |
+| Audio | Stable noise | partial native | analyser readbacks + offline consistency |
+| WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
 | WebRTC | Exit-IP policy | partial renderer | P2P/ICE candidate gathering |
 | Fonts | Allow-list | partial renderer | font matching and enumeration |
 | Timezone | Configurable | renderer + Chromium switch | ICU timezone override |

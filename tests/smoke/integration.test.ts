@@ -665,6 +665,24 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(config).toContain("schemaVersion: 1");
   });
 
+  it("moves high-risk fingerprint readbacks into native Chromium patches", () => {
+    const patchRoot = path.join(ROOT, "patches/chromium");
+    const agent = fs.readFileSync(
+      path.join(patchRoot, "files/chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.cc"),
+      "utf-8",
+    );
+    for (const name of [
+      "0004-native-canvas-readback-noise.patch",
+      "0005-native-webgl-identity.patch",
+      "0006-native-audio-buffer-noise.patch",
+    ]) {
+      expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
+    }
+    expect(agent).not.toContain("CanvasRenderingContext2D.prototype.getImageData");
+    expect(agent).not.toContain("WebGLRenderingContext.prototype.getParameter");
+    expect(agent).not.toContain("AudioBuffer.prototype.getChannelData");
+  });
+
   it("renderer create/edit dialogs include hardware controls", () => {
     const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
     const renderer = readRendererModules();

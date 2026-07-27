@@ -48,6 +48,11 @@ class RoxyFingerprintConfig {
   int device_memory() const { return device_memory_; }
   int max_touch_points() const { return max_touch_points_; }
   const Screen& screen() const { return screen_; }
+  bool canvas_noise_enabled() const { return canvas_noise_enabled_; }
+  uint64_t canvas_noise_seed() const { return canvas_noise_seed_; }
+  bool audio_noise_enabled() const { return audio_noise_enabled_; }
+  uint64_t audio_noise_seed() const { return audio_noise_seed_; }
+  double audio_noise_amplitude() const { return audio_noise_amplitude_; }
   const std::string& webgl_vendor() const { return webgl_vendor_; }
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& timezone() const { return timezone_; }
@@ -148,6 +153,16 @@ class RoxyFingerprintConfig {
       webgl_vendor_ = ReadString(*webgl, "vendor");
       webgl_renderer_ = ReadString(*webgl, "renderer");
     }
+    if (const base::Value::Dict* canvas = root->FindDict("canvas")) {
+      canvas_noise_enabled_ = canvas->FindBool("enabled").value_or(false);
+      canvas_noise_seed_ = HashSeed(ReadString(*canvas, "seed"));
+    }
+    if (const base::Value::Dict* audio = root->FindDict("audio")) {
+      audio_noise_enabled_ = audio->FindBool("enabled").value_or(false);
+      audio_noise_seed_ = HashSeed(ReadString(*audio, "seed"));
+      audio_noise_amplitude_ =
+          audio->FindDouble("amplitude").value_or(0.0);
+    }
     if (const std::string* timezone = root->FindString("timezone"))
       timezone_ = *timezone;
 
@@ -161,6 +176,15 @@ class RoxyFingerprintConfig {
                                 std::string_view key) {
     const std::string* value = dict.FindString(key);
     return value ? *value : std::string();
+  }
+
+  static uint64_t HashSeed(std::string_view value) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const char character : value) {
+      hash ^= static_cast<uint8_t>(character);
+      hash *= 1099511628211ULL;
+    }
+    return hash;
   }
 
   std::string ChromeVersion() const {
@@ -183,6 +207,11 @@ class RoxyFingerprintConfig {
   int device_memory_ = 0;
   int max_touch_points_ = 0;
   Screen screen_;
+  bool canvas_noise_enabled_ = false;
+  uint64_t canvas_noise_seed_ = 0;
+  bool audio_noise_enabled_ = false;
+  uint64_t audio_noise_seed_ = 0;
+  double audio_noise_amplitude_ = 0.0;
   std::string webgl_vendor_;
   std::string webgl_renderer_;
   std::string timezone_;
