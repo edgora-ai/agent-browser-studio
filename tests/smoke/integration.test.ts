@@ -656,6 +656,15 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).not.toContain('"--disable-blink-features=AutomationControlled"');
   });
 
+  it("passes a versioned identity to the self-built Chromium 149+ renderer", () => {
+    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
+    const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
+    expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, getCloakVersion())");
+    expect(manager).toContain("--time-zone-for-testing=");
+    expect(config).toContain('ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
+    expect(config).toContain("schemaVersion: 1");
+  });
+
   it("renderer create/edit dialogs include hardware controls", () => {
     const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
     const renderer = readRendererModules();

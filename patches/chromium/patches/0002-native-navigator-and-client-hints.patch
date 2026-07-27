@@ -1,0 +1,170 @@
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index 66cf6ce5..5da3cdb3 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -33,6 +33,7 @@
+ #include "components/version_info/version_info.h"
+ #include "net/http/http_util.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -463,6 +464,11 @@ std::optional<std::string> GetUserAgentFromCommandLine() {
+ }
+ 
+ std::string GetUserAgent() {
++  const blink::RoxyFingerprintConfig& roxy_config =
++      blink::RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled()) {
++    return roxy_config.user_agent();
++  }
+   std::optional<std::string> custom_ua = GetUserAgentFromCommandLine();
+   if (custom_ua.has_value()) {
+     return custom_ua.value();
+@@ -643,6 +649,11 @@ std::string GetPlatformForUAMetadata() {
+ }
+ 
+ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
++  const blink::RoxyFingerprintConfig& roxy_config =
++      blink::RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled()) {
++    return roxy_config.GetUserAgentMetadata(only_low_entropy_ch);
++  }
+   blink::UserAgentMetadata metadata;
+ 
+   // Low entropy client hints.
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -305,6 +305,7 @@ source_set("headers") {
+     "use_counter/use_counter_feature.h",
+     "use_counter/use_counter_feature_tracker.h",
+     "use_counter/webdx_feature_maps.h",
++    "roxy_fingerprint_config.h",
+     "user_agent/user_agent_brand_version_type.h",
+     "user_agent/user_agent_metadata.h",
+     "view_source/rendering_preferences.h",
+diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+index cccfafe8..f58b52f0 100644
+--- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
++++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+@@ -7,6 +7,7 @@
+ #include "base/feature_list.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ #include "third_party/blink/renderer/core/probe/core_probes.h"
+@@ -47,11 +48,19 @@ NavigatorBase::NavigatorBase(ExecutionContext* context)
+     : NavigatorLanguage(context), ExecutionContextClient(context) {}
+ 
+ String NavigatorBase::userAgent() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return String::FromUTF8(config.user_agent());
++  }
+   ExecutionContext* execution_context = GetExecutionContext();
+   return execution_context ? execution_context->UserAgent() : String();
+ }
+ 
+ String NavigatorBase::platform() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return String::FromUTF8(config.platform());
++  }
+ #if BUILDFLAG(IS_ANDROID)
+   // We need to check the ReduceUserAgentMinorVersion feature flag for
+   // Android WebView, which does not currently ship a reduced User-Agent.
+@@ -70,6 +79,10 @@ void NavigatorBase::Trace(Visitor* visitor) const {
+ }
+ 
+ unsigned int NavigatorBase::hardwareConcurrency() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return static_cast<unsigned int>(config.hardware_concurrency());
++  }
+   unsigned int hardware_concurrency =
+       NavigatorConcurrentHardware::hardwareConcurrency();
+ 
+@@ -83,6 +96,10 @@ ExecutionContext* NavigatorBase::GetUAExecutionContext() const {
+ }
+ 
+ UserAgentMetadata NavigatorBase::GetUserAgentMetadata() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return config.GetUserAgentMetadata(false);
++  }
+   ExecutionContext* execution_context = GetExecutionContext();
+   return execution_context ? execution_context->GetUserAgentMetadata()
+                            : blink::UserAgentMetadata();
+diff --git a/third_party/blink/renderer/core/frame/navigator.cc b/third_party/blink/renderer/core/frame/navigator.cc
+index 583f05f8..d0551fd0 100644
+--- a/third_party/blink/renderer/core/frame/navigator.cc
++++ b/third_party/blink/renderer/core/frame/navigator.cc
+@@ -23,6 +23,7 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator.h"
+ 
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+ #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
+@@ -107,6 +108,10 @@ bool Navigator::webdriver() const {
+ }
+ 
+ String Navigator::GetAcceptLanguages() {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return String::FromUTF8(config.accept_languages());
++  }
+   if (!DomWindow())
+     return DefaultLanguage();
+ 
+diff --git a/third_party/blink/renderer/core/frame/navigator_device_memory.cc b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+index 05fa33e4..01c451ba 100644
+--- a/third_party/blink/renderer/core/frame/navigator_device_memory.cc
++++ b/third_party/blink/renderer/core/frame/navigator_device_memory.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "third_party/blink/renderer/core/frame/navigator_device_memory.h"
+ 
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/device_memory/approximated_device_memory.h"
+ #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -12,6 +13,10 @@
+ namespace blink {
+ 
+ float NavigatorDeviceMemory::deviceMemory() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return static_cast<float>(config.device_memory());
++  }
+   return ApproximatedDeviceMemory::GetApproximatedDeviceMemory();
+ }
+ 
+diff --git a/third_party/blink/renderer/core/workers/worker_navigator.cc b/third_party/blink/renderer/core/workers/worker_navigator.cc
+index db1a55d0..3396c923 100644
+--- a/third_party/blink/renderer/core/workers/worker_navigator.cc
++++ b/third_party/blink/renderer/core/workers/worker_navigator.cc
+@@ -25,6 +25,7 @@
+  */
+ 
+ #include "third_party/blink/renderer/core/workers/worker_navigator.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/web_worker_fetch_context.h"
+ #include "third_party/blink/renderer/core/dom/events/event.h"
+ #include "third_party/blink/renderer/core/dom/events/event_target.h"
+@@ -41,6 +42,10 @@ WorkerNavigator::WorkerNavigator(ExecutionContext* execution_context)
+ WorkerNavigator::~WorkerNavigator() = default;
+ 
+ String WorkerNavigator::GetAcceptLanguages() {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled()) {
++    return String::FromUTF8(config.accept_languages());
++  }
+   auto* global_scope = To<WorkerOrWorkletGlobalScope>(GetExecutionContext());
+   if (!global_scope) {
+     // Prospective fix for crbug.com/40945292 and crbug.com/40827704

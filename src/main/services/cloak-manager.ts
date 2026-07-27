@@ -21,6 +21,7 @@ import { acquireRestoreLock } from "./profile-restore-lock.js";
 import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
+import { buildRoxyFingerprintArg, buildRoxyFingerprintConfig } from "./roxy-fingerprint-config.js";
 import type { ProxyConfig } from "../types.js";
 
 export interface CloakProfile {
@@ -405,6 +406,24 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   if (webrtcIp) requestedArgs.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
   if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
   addHardwareFingerprintArgs(requestedArgs, meta);
+
+  // Our Chromium fork consumes one versioned, base64url JSON identity. Keep
+  // the existing Cloak flags during the transition so the community Chromium
+  // 145 binary and the self-built 149+ binary can launch the same profiles.
+  const nativeFingerprintMeta = {
+    ...meta,
+    fingerprintSeed: seed,
+    platform,
+    timezone: effectiveTimezone,
+    locale: effectiveLocale,
+    webrtcIp,
+  };
+  const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, getCloakVersion());
+  requestedArgs.push(buildRoxyFingerprintArg(nativeFingerprintMeta, getCloakVersion()));
+  requestedArgs.push(`--user-agent=${nativeFingerprint.userAgent}`);
+  if (nativeFingerprint.timezone) {
+    requestedArgs.push(`--time-zone-for-testing=${nativeFingerprint.timezone}`);
+  }
 
   // Let the community wrapper resolve the managed binary, GeoIP/WebRTC exit
   // identity, proxy capabilities, and version-aware window geometry. Explicit

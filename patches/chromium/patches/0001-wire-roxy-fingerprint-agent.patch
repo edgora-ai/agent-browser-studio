@@ -1,0 +1,32 @@
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+index 4a47d05b85ed7..1111111111111 100644
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -78,6 +78,8 @@ static_library("renderer") {
+     "chrome_render_frame_observer.h",
+     "chrome_render_thread_observer.cc",
+     "chrome_render_thread_observer.h",
++    "roxy_fingerprint/roxy_fingerprint_agent.cc",
++    "roxy_fingerprint/roxy_fingerprint_agent.h",
+     "custom_menu_commands.h",
+     "google_accounts_private_api_extension.cc",
+     "google_accounts_private_api_extension.h",
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+index 3c86287835879..2222222222222 100644
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -67,4 +67,5 @@
+ #include "chrome/renderer/process_state.h"
++#include "chrome/renderer/roxy_fingerprint/roxy_fingerprint_agent.h"
+ #include "chrome/renderer/supervised_user/supervised_user_error_page_controller_delegate_impl.h"
+ #include "chrome/renderer/trusted_vault_encryption_keys_extension.h"
+ #include "chrome/renderer/url_loader_throttle_provider_impl.h"
+@@ -608,6 +609,8 @@ void ChromeContentRendererClient::RenderFrameCreated(
+   ChromeRenderFrameObserver* render_frame_observer =
+       new ChromeRenderFrameObserver(render_frame, web_cache_impl_.get());
+   service_manager::BinderRegistry* registry = render_frame_observer->registry();
++
++  RoxyFingerprintAgent::MaybeCreate(render_frame);
+ 
+   new prerender::NoStatePrefetchRenderFrameObserver(render_frame);
+ 

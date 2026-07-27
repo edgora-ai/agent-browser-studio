@@ -1,0 +1,83 @@
+diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
+index f442c8d8..e77bbe73 100644
+--- a/third_party/blink/renderer/core/frame/local_dom_window.cc
++++ b/third_party/blink/renderer/core/frame/local_dom_window.cc
+@@ -41,6 +41,7 @@
+ #include "net/storage_access_api/status.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/navigation/impression.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
+ #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
+@@ -1800,6 +1801,10 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
+ }
+ 
+ double LocalDOMWindow::devicePixelRatio() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.screen().device_pixel_ratio > 0) {
++    return config.screen().device_pixel_ratio;
++  }
+   if (!GetFrame())
+     return 0.0;
+ 
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+index 69ffc2b0..56ec3872 100644
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -30,6 +30,7 @@
+ 
+ #include "base/numerics/safe_conversions.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/core/event_target_names.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+@@ -79,18 +80,28 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+ }
+ 
+ int Screen::height() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().height;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/false).height();
+ }
+ 
+ int Screen::width() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().width;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/false).width();
+ }
+ 
+ unsigned Screen::colorDepth() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.screen().color_depth > 0) {
++    return static_cast<unsigned>(config.screen().color_depth);
++  }
+   // "If the user agent does not know the color depth or does not want to
+   // return it for privacy considerations, it should return 24."
+   //
+@@ -122,12 +133,18 @@ int Screen::availTop() const {
+ }
+ 
+ int Screen::availHeight() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().avail_height;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).height();
+ }
+ 
+ int Screen::availWidth() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().avail_width;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).width();
