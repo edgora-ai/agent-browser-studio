@@ -422,43 +422,54 @@ export function normalizeProfileExtensionMap(value: Record<string, boolean> | un
   return normalizeExtensionMap(value);
 }
 
-function normalizeExtensionRepository(value: Record<string, ExtensionRepositoryEntry> | undefined): Record<string, ExtensionRepositoryEntry> {
+function normalizeExtensionRepository(
+  value: Record<string, ExtensionRepositoryEntry> | undefined,
+  options: { relocateStoredPaths?: boolean; skipInvalidEntries?: boolean } = {},
+): Record<string, ExtensionRepositoryEntry> {
   const normalized: Record<string, ExtensionRepositoryEntry> = Object.create(null);
   if (!value) return normalized;
   const appDataDir = getAppDataDir();
   const repoRoot = path.resolve(appDataDir, "extension-repository");
   for (const [extId, rawEntry] of Object.entries(value)) {
-    if (!/^(?:[a-p]{32}|local_[a-z0-9]{8,40})$/.test(extId) || extId !== rawEntry?.id) {
-      throw new Error(`Invalid extension repository ID: ${JSON.stringify(extId)}`);
-    }
-    const unpackedPath = sanitizeOptionalText(rawEntry.unpackedPath, 700);
-    if (!unpackedPath) throw new Error(`Extension repository entry missing unpackedPath: ${extId}`);
-    const resolvedPath = path.resolve(unpackedPath);
-    const expectedPath = path.join(repoRoot, extId, "current");
-    if (resolvedPath !== expectedPath) throw new Error(`Extension repository path is not canonical: ${extId}`);
-    if (fs.existsSync(resolvedPath)) {
-      if (!isRealDirectoryInside(repoRoot, getAppDataDir()) || !isRealDirectoryInside(path.dirname(resolvedPath), repoRoot) || !isRealDirectoryInside(resolvedPath, path.dirname(resolvedPath))) {
-        throw new Error(`Extension repository path is not a real directory: ${extId}`);
+    try {
+      if (!/^(?:[a-p]{32}|local_[a-z0-9]{8,40})$/.test(extId) || extId !== rawEntry?.id) {
+        throw new Error(`Invalid extension repository ID: ${JSON.stringify(extId)}`);
       }
+      const unpackedPath = sanitizeOptionalText(rawEntry.unpackedPath, 700);
+      if (!unpackedPath) throw new Error(`Extension repository entry missing unpackedPath: ${extId}`);
+      const storedPath = path.resolve(unpackedPath);
+      const expectedPath = path.join(repoRoot, extId, "current");
+      const resolvedPath = options.relocateStoredPaths ? expectedPath : storedPath;
+      if (storedPath !== expectedPath && !options.relocateStoredPaths) {
+        throw new Error(`Extension repository path is not canonical: ${extId}`);
+      }
+      if (fs.existsSync(resolvedPath)) {
+        if (!isRealDirectoryInside(repoRoot, getAppDataDir()) || !isRealDirectoryInside(path.dirname(resolvedPath), repoRoot) || !isRealDirectoryInside(resolvedPath, path.dirname(resolvedPath))) {
+          throw new Error(`Extension repository path is not a real directory: ${extId}`);
+        }
+      }
+      const source = rawEntry.source === "chrome-web-store" || rawEntry.source === "local" ? rawEntry.source : null;
+      if (!source) throw new Error(`Invalid extension repository source: ${extId}`);
+      normalized[extId] = {
+        id: extId,
+        name: sanitizeOptionalText(rawEntry.name, 120) || extId,
+        version: sanitizeOptionalText(rawEntry.version, 80) || "?",
+        description: sanitizeOptionalText(rawEntry.description, 500) || "",
+        source,
+        chromeStoreUrl: source === "local" ? undefined : sanitizeChromeStoreUrl(rawEntry.chromeStoreUrl, extId),
+        updateUrl: source === "local" ? undefined : sanitizeChromeUpdateUrl(rawEntry.updateUrl, extId),
+        unpackedPath: resolvedPath,
+        packageHash: sanitizeHexHash(rawEntry.packageHash),
+        manifestHash: sanitizeHexHash(rawEntry.manifestHash),
+        shared: Boolean(rawEntry.shared),
+        tags: normalizeExtensionTags(rawEntry.tags),
+        addedAt: sanitizeTimestamp(rawEntry.addedAt),
+        updatedAt: sanitizeTimestamp(rawEntry.updatedAt),
+      };
+    } catch (error) {
+      if (!options.skipInvalidEntries) throw error;
+      console.error(`Invalid extension repository entry ignored while loading config: ${extId}`, error);
     }
-    const source = rawEntry.source === "chrome-web-store" || rawEntry.source === "local" ? rawEntry.source : null;
-    if (!source) throw new Error(`Invalid extension repository source: ${extId}`);
-    normalized[extId] = {
-      id: extId,
-      name: sanitizeOptionalText(rawEntry.name, 120) || extId,
-      version: sanitizeOptionalText(rawEntry.version, 80) || "?",
-      description: sanitizeOptionalText(rawEntry.description, 500) || "",
-      source,
-      chromeStoreUrl: source === "local" ? undefined : sanitizeChromeStoreUrl(rawEntry.chromeStoreUrl, extId),
-      updateUrl: source === "local" ? undefined : sanitizeChromeUpdateUrl(rawEntry.updateUrl, extId),
-      unpackedPath: resolvedPath,
-      packageHash: sanitizeHexHash(rawEntry.packageHash),
-      manifestHash: sanitizeHexHash(rawEntry.manifestHash),
-      shared: Boolean(rawEntry.shared),
-      tags: normalizeExtensionTags(rawEntry.tags),
-      addedAt: sanitizeTimestamp(rawEntry.addedAt),
-      updatedAt: sanitizeTimestamp(rawEntry.updatedAt),
-    };
   }
   return normalized;
 }
@@ -888,7 +899,7 @@ function loadConfig(): MgmtConfig {
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<MgmtConfig>;
-    return mergeConfig(DefaultConfig, parsed);
+    return mergeConfig(DefaultConfig, parsed, "load");
   } catch (e) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backupPath = `${configPath}.${timestamp}.bak`;
@@ -905,7 +916,7 @@ function loadConfig(): MgmtConfig {
 export function saveConfig(cfg: MgmtConfig): void {
   ensureAppDir();
   const configPath = getConfigPath();
-  const normalized = mergeConfig(DefaultConfig, cfg);
+  const normalized = mergeConfig(DefaultConfig, cfg, "save");
   const tmp = configPath + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 0o600 });
   fs.renameSync(tmp, configPath);
@@ -922,7 +933,7 @@ function ensureAppDir(): void {
   }
 }
 
-function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any): MgmtConfig {
+function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mode: "load" | "save"): MgmtConfig {
   const merged = structuredClone(defaults);
   if (parsed.version) merged.version = Math.max(3, parsed.version);
   if (parsed.cloakBin) merged.cloakBin = parsed.cloakBin;
@@ -952,7 +963,10 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any): M
     }
   }
   if (parsed.extensionRepository) {
-    merged.extensionRepository = normalizeExtensionRepository(parsed.extensionRepository);
+    merged.extensionRepository = normalizeExtensionRepository(parsed.extensionRepository, {
+      relocateStoredPaths: mode === "load",
+      skipInvalidEntries: mode === "load",
+    });
   }
   if (parsed.skillRepository) {
     merged.skillRepository = normalizeSkillRepository(parsed.skillRepository);
@@ -1222,4 +1236,3 @@ function normalizeAgentFs(raw: any): AgentFsConfig {
   }
   return { mode, allowlist };
 }
-

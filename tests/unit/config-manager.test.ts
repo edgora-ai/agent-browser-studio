@@ -271,6 +271,52 @@ describe("Config Manager (real functions)", () => {
     expect(bakFiles.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("relocates extension repository paths without discarding profiles or proxies", () => {
+    const configPath = getConfigPath();
+    const extId = "local_abcdefgh";
+    const expectedPath = path.join(TEST_USER_DATA, "extension-repository", extId, "current");
+    fs.mkdirSync(expectedPath, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      version: 3,
+      defaultProxy: "migrated-proxy",
+      proxies: {
+        "migrated-proxy": { type: "http", host: "127.0.0.1", port: 8080 },
+      },
+      cloakProfiles: {
+        cb_migrated_profile: {
+          name: "Migrated Profile",
+          fingerprintSeed: 12345,
+          platform: "windows",
+          proxyMode: "named",
+          proxyName: "migrated-proxy",
+        },
+      },
+      extensionRepository: {
+        [extId]: {
+          id: extId,
+          name: "Migrated Extension",
+          version: "1.0.0",
+          description: "",
+          source: "local",
+          unpackedPath: `/old/app-data/extension-repository/${extId}/current`,
+          packageHash: "a".repeat(128),
+          manifestHash: "b".repeat(128),
+          shared: false,
+          tags: [],
+          addedAt: 1,
+          updatedAt: 1,
+        },
+      },
+    }), "utf-8");
+
+    reloadConfig();
+    const cfg = getConfig();
+    expect(cfg.cloakProfiles.cb_migrated_profile.name).toBe("Migrated Profile");
+    expect(cfg.proxies["migrated-proxy"].port).toBe(8080);
+    expect(cfg.extensionRepository[extId].unpackedPath).toBe(expectedPath);
+    expect(fs.readdirSync(TEST_USER_DATA).filter((f) => f.endsWith(".bak"))).toEqual([]);
+  });
+
   it("cross-platform directories point to userData", () => {
     reloadConfig();
     expect(getAppDataDir()).toBe(TEST_USER_DATA);
