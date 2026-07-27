@@ -1,0 +1,70 @@
+diff --git a/third_party/blink/renderer/modules/font_access/font_access.cc b/third_party/blink/renderer/modules/font_access/font_access.cc
+--- a/third_party/blink/renderer/modules/font_access/font_access.cc
++++ b/third_party/blink/renderer/modules/font_access/font_access.cc
+@@ -10,6 +10,7 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/font_access/font_enumeration_table.pb.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -153,6 +154,7 @@ void FontAccess::DidGetEnumerationResponse(
+   base::span<const uint8_t> mapped_mem(mapping);
+   table.ParseFromArray(mapped_mem.data(),
+                        base::checked_cast<int>(mapped_mem.size()));
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
+   for (const auto& element : table.fonts()) {
+     // If the optional postscript name filter is set in QueryOptions,
+     // only allow items that match.
+@@ -160,6 +162,8 @@ void FontAccess::DidGetEnumerationResponse(
+         !selection_utf8.contains(element.postscript_name().c_str())) {
+       continue;
+     }
++    if (!roxy_config.IsFontAllowed(element.family()))
++      continue;
+ 
+     auto entry = FontEnumerationEntry{
+         .postscript_name = String::FromUtf8(element.postscript_name()),
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -43,6 +43,7 @@
+ #include "build/build_config.h"
+ #include "skia/ext/font_utils.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/font_family_names.h"
+ #include "third_party/blink/renderer/platform/fonts/alternate_font_family.h"
+@@ -153,6 +154,9 @@ const SimpleFontData* FontCache::GetFontData(
+     const FontDescription& font_description,
+     const AtomicString& family,
+     AlternateFontName altername_font_name) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.IsFontAllowed(family.GetString().Utf8()))
++    return nullptr;
+   if (const FontPlatformData* platform_data = GetFontPlatformData(
+           font_description,
+           FontFaceCreationParams(
+@@ -174,6 +178,9 @@ const SimpleFontData* FontCache::FontDataFromFontPlatformData(
+ bool FontCache::IsPlatformFamilyMatchAvailable(
+     const FontDescription& font_description,
+     const AtomicString& family) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.IsFontAllowed(family.GetString().Utf8()))
++    return false;
+   return GetFontPlatformData(
+       font_description,
+       FontFaceCreationParams(AdjustFamilyNameToAvoidUnsupportedFonts(family)),
+@@ -187,6 +194,10 @@ bool FontCache::IsPlatformFontUniqueNameMatchAvailable(
+   if (unique_font_name.empty()) {
+     return false;
+   }
++
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.IsFontAllowed(unique_font_name.GetString().Utf8()))
++    return false;
+ 
+   return GetFontPlatformData(font_description,
+                              FontFaceCreationParams(unique_font_name),

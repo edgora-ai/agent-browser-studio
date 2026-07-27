@@ -14,8 +14,8 @@ subsystem, and `verified` has passed the cross-browser E2E harness.
 | Canvas | Stable noise | partial native | float pixel formats |
 | Audio | Stable noise | native | AudioBuffer + analyser readback paths |
 | WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
-| WebRTC | Exit-IP policy | partial native | P2P packet path + disable mode |
-| Fonts | Allow-list | partial renderer | font matching and enumeration |
+| WebRTC | Exit-IP policy | native | allocator + candidate + SDP paths |
+| Fonts | Allow-list | partial native | custom font directory loading |
 | Timezone | Configurable | renderer + Chromium switch | ICU timezone override |
 | ClientRects | Stable noise | native | Blink layout geometry export |
 | Geolocation | Policy | renderer | browser geolocation service |

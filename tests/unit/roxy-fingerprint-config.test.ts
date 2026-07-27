@@ -31,6 +31,9 @@ describe("Roxy fingerprint config", () => {
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
     expect(first.screen.availHeight).toBe(1032);
     expect(first.storageQuotaBytes).toBe(120000 * 1024 * 1024);
+    expect(first.fonts).toHaveLength(15);
+    expect(first.fonts).toEqual([...first.fonts].sort());
+    expect(first.fonts.some((font) => /YaHei|Gothic|PingFang|Malgun/.test(font))).toBe(true);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
   });
 

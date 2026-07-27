@@ -4,6 +4,22 @@ import type { CloakFingerprintMeta, CloakPlatform } from "../types.js";
 export const ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
 export const ROXY_FINGERPRINT_SCHEMA_VERSION = 1;
 
+const WINDOWS_FONT_POOL = [
+  "Arial", "Calibri", "Cambria", "Candara", "Comic Sans MS", "Consolas",
+  "Constantia", "Corbel", "Courier New", "Ebrima", "Georgia", "Impact",
+  "Microsoft Sans Serif", "Palatino Linotype", "Segoe UI", "Tahoma",
+  "Times New Roman", "Trebuchet MS", "Verdana",
+];
+const MAC_FONT_POOL = [
+  "Arial", "Avenir", "Courier New", "Georgia", "Helvetica", "Helvetica Neue",
+  "Hoefler Text", "Menlo", "Monaco", "Optima", "Palatino", "San Francisco",
+  "Times", "Times New Roman", "Trebuchet MS", "Verdana",
+];
+const CJK_FONT_POOL = [
+  "Microsoft YaHei", "Microsoft JhengHei", "MS Gothic", "Yu Gothic",
+  "PingFang SC", "PingFang TC", "Hiragino Kaku Gothic ProN", "Malgun Gothic",
+];
+
 export interface RoxyFingerprintConfig {
   schemaVersion: 1;
   seed: number;
@@ -96,7 +112,7 @@ export function buildRoxyFingerprintConfig(
       : { mode: "real", publicIp: null },
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
     geolocation: { mode: "real" },
-    fonts: [],
+    fonts: selectStableFonts(seed, platform, locale),
     doNotTrack: null,
   };
 }
@@ -148,4 +164,23 @@ function seededChoice(seed: number, values: readonly number[]): number {
 
 function deriveSeed(seed: number, surface: string): string {
   return createHash("sha256").update(`${seed}:${surface}`).digest("hex").slice(0, 16);
+}
+
+function selectStableFonts(seed: number, platform: "Win32" | "MacIntel", locale: string): string[] {
+  const pool = stableShuffle(platform === "MacIntel" ? MAC_FONT_POOL : WINDOWS_FONT_POOL, seed);
+  const selected = /^(zh|ja|ko)(-|$)/i.test(locale)
+    ? [...pool.slice(0, 12), ...stableShuffle(CJK_FONT_POOL, seed ^ 0x7f4a7c15).slice(0, 3)]
+    : pool.slice(0, 15);
+  return [...new Set(selected)].sort();
+}
+
+function stableShuffle(values: readonly string[], seed: number): string[] {
+  const pool = [...values];
+  let state = seed >>> 0;
+  for (let index = pool.length - 1; index > 0; index--) {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    const target = (state >>> 0) % (index + 1);
+    [pool[index], pool[target]] = [pool[target], pool[index]];
+  }
+  return pool;
 }

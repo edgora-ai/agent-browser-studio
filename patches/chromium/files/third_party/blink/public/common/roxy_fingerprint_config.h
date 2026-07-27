@@ -5,6 +5,7 @@
 #define THIRD_PARTY_BLINK_PUBLIC_COMMON_ROXY_FINGERPRINT_CONFIG_H_
 
 #include <cstdint>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -59,6 +60,24 @@ class RoxyFingerprintConfig {
   const std::string& webgl_vendor() const { return webgl_vendor_; }
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& timezone() const { return timezone_; }
+  const std::vector<std::string>& fonts() const { return fonts_; }
+
+  bool IsFontAllowed(std::string_view family) const {
+    if (!enabled_ || fonts_.empty())
+      return true;
+    const std::string normalized = LowerAscii(family);
+    if (normalized == "serif" || normalized == "sans-serif" ||
+        normalized == "monospace" || normalized == "cursive" ||
+        normalized == "fantasy" || normalized == "system-ui" ||
+        normalized.starts_with("ui-")) {
+      return true;
+    }
+    for (const std::string& allowed : fonts_) {
+      if (LowerAscii(allowed) == normalized)
+        return true;
+    }
+    return false;
+  }
 
   std::string accept_languages() const {
     std::string result;
@@ -175,6 +194,12 @@ class RoxyFingerprintConfig {
     }
     if (const std::string* timezone = root->FindString("timezone"))
       timezone_ = *timezone;
+    if (const base::Value::List* fonts = root->FindList("fonts")) {
+      for (const base::Value& font : *fonts) {
+        if (font.is_string() && !font.GetString().empty())
+          fonts_.push_back(font.GetString());
+      }
+    }
 
     enabled_ = seed_ > 0 &&
                (platform_ == "Win32" || platform_ == "MacIntel") &&
@@ -195,6 +220,15 @@ class RoxyFingerprintConfig {
       hash *= 1099511628211ULL;
     }
     return hash;
+  }
+
+  static std::string LowerAscii(std::string_view value) {
+    std::string result(value);
+    for (char& character : result) {
+      character = static_cast<char>(
+          std::tolower(static_cast<unsigned char>(character)));
+    }
+    return result;
   }
 
   std::string ChromeVersion() const {
@@ -228,6 +262,7 @@ class RoxyFingerprintConfig {
   std::string webgl_vendor_;
   std::string webgl_renderer_;
   std::string timezone_;
+  std::vector<std::string> fonts_;
 };
 
 }  // namespace blink

@@ -121,17 +121,6 @@ const screenProto=Object.getPrototypeOf(screen);
 for(const [name,key] of [['width','width'],['height','height'],['availWidth','availWidth'],['availHeight','availHeight'],['colorDepth','colorDepth'],['pixelDepth','pixelDepth']])getter(screenProto,name,c.screen[key]);
 getter(Window.prototype,'devicePixelRatio',c.screen.devicePixelRatio);
 
-if(c.webrtc?.mode==='disable'){
-  const DisabledPeerConnection=markNative(function RTCPeerConnection(){throw new DOMException('WebRTC disabled','NotSupportedError');},'RTCPeerConnection','function');
-  globalThis.RTCPeerConnection=DisabledPeerConnection;
-  if('webkitRTCPeerConnection'in globalThis)globalThis.webkitRTCPeerConnection=DisabledPeerConnection;
-}
-
-if(Array.isArray(c.fonts)&&c.fonts.length&&globalThis.queryLocalFonts){
-  const originalQueryLocalFonts=globalThis.queryLocalFonts;
-  globalThis.queryLocalFonts=markNative(async function(...args){const fonts=await originalQueryLocalFonts.apply(this,args);const allowed=new Set(c.fonts);return fonts.filter(font=>allowed.has(font.family)||allowed.has(font.fullName));},'queryLocalFonts','function');
-}
-
 if(c.timezone&&globalThis.Intl?.DateTimeFormat){
   const originalResolvedOptions=Intl.DateTimeFormat.prototype.resolvedOptions;
   Intl.DateTimeFormat.prototype.resolvedOptions=markNative(function(){const options=originalResolvedOptions.call(this);return {...options,timeZone:c.timezone};},'resolvedOptions','function');

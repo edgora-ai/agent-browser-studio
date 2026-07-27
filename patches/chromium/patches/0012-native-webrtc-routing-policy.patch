@@ -1,0 +1,62 @@
+diff --git a/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc b/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
+--- a/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
++++ b/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
+@@ -41,6 +41,7 @@
+ #include "services/network/public/cpp/ip_address_space_util.h"
+ #include "services/network/public/mojom/ip_address_space.mojom-shared.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
+ #include "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom-blink.h"
+ #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+@@ -1106,6 +1107,19 @@ PeerConnectionDependencyFactory::CreatePortAllocator(
+       media_permission =
+           blink::Platform::Current()->GetWebRTCMediaPermission(web_frame);
+     }
++  }
++
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() && roxy_config.webrtc_mode() == "altered") {
++    port_config.enable_multiple_routes = false;
++    port_config.enable_nonproxied_udp = false;
++    port_config.enable_default_local_candidate = false;
++  } else if (roxy_config.enabled() &&
++             roxy_config.webrtc_mode() == "disable") {
++    port_config.enable_multiple_routes = false;
++    port_config.enable_nonproxied_udp = false;
++    port_config.enable_default_local_candidate = false;
++    port_config.disable_all_ports = true;
+   }
+ 
+   std::unique_ptr<webrtc::NetworkManager> network_manager;
+diff --git a/third_party/blink/renderer/platform/p2p/port_allocator.cc b/third_party/blink/renderer/platform/p2p/port_allocator.cc
+--- a/third_party/blink/renderer/platform/p2p/port_allocator.cc
++++ b/third_party/blink/renderer/platform/p2p/port_allocator.cc
+@@ -44,6 +44,15 @@ P2PPortAllocator::P2PPortAllocator(
+              webrtc::PORTALLOCATOR_DISABLE_STUN |
+              webrtc::PORTALLOCATOR_DISABLE_UDP_RELAY;
+   }
++  if (config_.disable_all_ports) {
++    flags |= webrtc::PORTALLOCATOR_DISABLE_UDP |
++             webrtc::PORTALLOCATOR_DISABLE_STUN |
++             webrtc::PORTALLOCATOR_DISABLE_RELAY |
++             webrtc::PORTALLOCATOR_DISABLE_TCP |
++             webrtc::PORTALLOCATOR_DISABLE_UDP_RELAY |
++             webrtc::PORTALLOCATOR_DISABLE_ADAPTER_ENUMERATION |
++             webrtc::PORTALLOCATOR_DISABLE_DEFAULT_LOCAL_CANDIDATE;
++  }
+   set_flags(flags);
+   set_allow_tcp_listen(false);
+ }
+diff --git a/third_party/blink/renderer/platform/p2p/port_allocator.h b/third_party/blink/renderer/platform/p2p/port_allocator.h
+--- a/third_party/blink/renderer/platform/p2p/port_allocator.h
++++ b/third_party/blink/renderer/platform/p2p/port_allocator.h
+@@ -35,6 +35,9 @@ class PLATFORM_EXPORT P2PPortAllocator : public webrtc::BasicPortAllocator {
+     // permission check of mic/camera is denied.
+     bool enable_default_local_candidate = true;
++
++    // Disable host, server-reflexive and relay candidates entirely.
++    bool disable_all_ports = false;
+   };
+ 
+   P2PPortAllocator(
