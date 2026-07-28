@@ -15,7 +15,7 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | Audio | Stable noise | native | AudioBuffer + analyser readback paths |
 | WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
 | WebRTC | Exit-IP policy | native | allocator + candidate + SDP paths |
-| Fonts | Allow-list | partial native | custom font directory loading |
+| Fonts | Allow-list + profile directory | native on macOS | CoreText registration before renderer sandbox |
 | Timezone | Configurable | native Chromium switch | ICU/V8 process timezone |
 | ClientRects | Stable noise | native | Blink layout geometry export |
 | Geolocation | Real/disabled/custom | native | Blink request/result path |

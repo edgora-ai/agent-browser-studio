@@ -681,6 +681,8 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0014-native-geolocation-policy.patch",
       "0015-native-media-plugin-identity.patch",
       "0016-native-float-canvas-noise.patch",
+      "0017-native-custom-font-directory.patch",
+      "0018-forward-profile-config-to-renderer.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

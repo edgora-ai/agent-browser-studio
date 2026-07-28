@@ -1,0 +1,231 @@
+diff --git a/content/renderer/BUILD.gn b/content/renderer/BUILD.gn
+--- a/content/renderer/BUILD.gn
++++ b/content/renderer/BUILD.gn
+@@ -196,10 +196,16 @@ target(link_target_type, "renderer") {
+ 
+   if (is_mac) {
+     sources += [
++      "roxy_font_loader_mac.h",
++      "roxy_font_loader_mac.mm",
+       "renderer_main_platform_delegate_mac.mm",
+       "theme_helper_mac.h",
+       "theme_helper_mac.mm",
+     ]
++    frameworks = [
++      "CoreText.framework",
++      "Foundation.framework",
++    ]
+   }
+ 
+   if (is_ios) {
+diff --git a/content/renderer/renderer_main.cc b/content/renderer/renderer_main.cc
+--- a/content/renderer/renderer_main.cc
++++ b/content/renderer/renderer_main.cc
+@@ -74,6 +74,7 @@
+ 
+ #include "base/apple/scoped_nsautorelease_pool.h"
+ #include "base/message_loop/message_pump_apple.h"
++#include "content/renderer/roxy_font_loader_mac.h"
+ #include "third_party/blink/public/web/web_view.h"
+ #endif  // BUILDFLAG(IS_MAC)
+ 
+@@ -177,6 +178,10 @@ int RendererMain(MainFunctionParams parameters) {
+   chromeos::system::EnableCoreSchedulingIfAvailable();
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
++#if BUILDFLAG(IS_MAC)
++  RegisterRoxyFingerprintFontsBeforeSandbox(command_line);
++#endif
++
+   InitializeSkia();
+ 
+ #if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS)
+diff --git a/content/renderer/roxy_font_loader_mac.h b/content/renderer/roxy_font_loader_mac.h
+new file mode 100644
+--- /dev/null
++++ b/content/renderer/roxy_font_loader_mac.h
+@@ -0,0 +1,20 @@
++// Copyright 2026 The RoxyLite Authors
++// Use of this source code is governed by a BSD-style license.
++
++#ifndef CONTENT_RENDERER_ROXY_FONT_LOADER_MAC_H_
++#define CONTENT_RENDERER_ROXY_FONT_LOADER_MAC_H_
++
++namespace base {
++class CommandLine;
++}
++
++namespace content {
++
++// Activates profile-scoped fonts before the renderer sandbox and before Skia
++// creates its process font manager.
++void RegisterRoxyFingerprintFontsBeforeSandbox(
++    const base::CommandLine& command_line);
++
++}  // namespace content
++
++#endif  // CONTENT_RENDERER_ROXY_FONT_LOADER_MAC_H_
+diff --git a/content/renderer/roxy_font_loader_mac.mm b/content/renderer/roxy_font_loader_mac.mm
+new file mode 100644
+--- /dev/null
++++ b/content/renderer/roxy_font_loader_mac.mm
+@@ -0,0 +1,125 @@
++// Copyright 2026 The RoxyLite Authors
++// Use of this source code is governed by a BSD-style license.
++
++#include "content/renderer/roxy_font_loader_mac.h"
++
++#include <CoreText/CoreText.h>
++#include <Foundation/Foundation.h>
++
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/apple/bridging.h"
++#include "base/apple/foundation_util.h"
++#include "base/apple/scoped_cftyperef.h"
++#include "base/command_line.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/strings/string_util.h"
++#include "base/strings/sys_string_conversions.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
++
++namespace content {
++namespace {
++
++constexpr char kFontsDirectorySwitch[] = "fingerprint-fonts-dir";
++constexpr int kMaximumFontFiles = 256;
++constexpr int64_t kMaximumFontFileBytes = 128 * 1024 * 1024;
++constexpr int64_t kMaximumTotalFontBytes = 256 * 1024 * 1024;
++
++bool IsSupportedFontFile(const base::FilePath& path) {
++  const std::string extension = base::ToLowerASCII(path.Extension());
++  return extension == ".ttf" || extension == ".otf" || extension == ".ttc";
++}
++
++std::string CopyFontStringAttribute(CTFontDescriptorRef descriptor,
++                                    CFStringRef attribute) {
++  base::apple::ScopedCFTypeRef<CFTypeRef> value(
++      CTFontDescriptorCopyAttribute(descriptor, attribute));
++  if (!value || CFGetTypeID(value.get()) != CFStringGetTypeID())
++    return std::string();
++  return base::SysCFStringRefToUTF8(
++      reinterpret_cast<CFStringRef>(value.get()));
++}
++
++void RecordFontDescriptors(CFURLRef url) {
++  base::apple::ScopedCFTypeRef<CFArrayRef> descriptors(
++      CTFontManagerCreateFontDescriptorsFromURL(url));
++  if (!descriptors)
++    return;
++  const CFIndex count = CFArrayGetCount(descriptors.get());
++  for (CFIndex index = 0; index < count; ++index) {
++    CTFontDescriptorRef descriptor = reinterpret_cast<CTFontDescriptorRef>(
++        const_cast<void*>(CFArrayGetValueAtIndex(descriptors.get(), index)));
++    std::string family =
++        CopyFontStringAttribute(descriptor, kCTFontFamilyNameAttribute);
++    std::string postscript_name =
++        CopyFontStringAttribute(descriptor, kCTFontNameAttribute);
++    if (family.empty() || postscript_name.empty())
++      continue;
++    std::string full_name =
++        CopyFontStringAttribute(descriptor, kCTFontDisplayNameAttribute);
++    std::string style =
++        CopyFontStringAttribute(descriptor, kCTFontStyleNameAttribute);
++    blink::RoxyFingerprintConfig::RegisterRuntimeFont({
++        .postscript_name = std::move(postscript_name),
++        .full_name = full_name.empty() ? family : std::move(full_name),
++        .family = std::move(family),
++        .style = style.empty() ? "Regular" : std::move(style),
++    });
++  }
++}
++
++}  // namespace
++
++void RegisterRoxyFingerprintFontsBeforeSandbox(
++    const base::CommandLine& command_line) {
++  if (!blink::RoxyFingerprintConfig::Get().enabled() ||
++      !command_line.HasSwitch(kFontsDirectorySwitch)) {
++    return;
++  }
++
++  const base::FilePath fonts_directory =
++      command_line.GetSwitchValuePath(kFontsDirectorySwitch);
++  if (!fonts_directory.IsAbsolute() ||
++      !base::DirectoryExists(fonts_directory)) {
++    return;
++  }
++
++  @autoreleasepool {
++    base::FileEnumerator enumerator(fonts_directory, /*recursive=*/false,
++                                    base::FileEnumerator::FILES);
++    int registered_fonts = 0;
++    int64_t total_bytes = 0;
++    for (base::FilePath path = enumerator.Next(); !path.empty();
++         path = enumerator.Next()) {
++      if (registered_fonts >= kMaximumFontFiles || !IsSupportedFontFile(path))
++        continue;
++      const std::optional<int64_t> file_bytes = base::GetFileSize(path);
++      if (!file_bytes || *file_bytes <= 0 ||
++          *file_bytes > kMaximumFontFileBytes ||
++          total_bytes + *file_bytes > kMaximumTotalFontBytes) {
++        continue;
++      }
++      NSURL* url = base::apple::FilePathToNSURL(path).absoluteURL;
++      if (!url)
++        continue;
++      base::apple::ScopedCFTypeRef<CFErrorRef> error;
++      const CFURLRef font_url = base::apple::NSToCFPtrCast(url);
++      if (!CTFontManagerRegisterFontsForURL(
++              font_url, kCTFontManagerScopeProcess, error.InitializeInto())) {
++        DLOG(WARNING) << "Could not activate profile font " << path.value();
++        continue;
++      }
++      ++registered_fonts;
++      total_bytes += *file_bytes;
++      RecordFontDescriptors(font_url);
++    }
++  }
++}
++
++}  // namespace content
+diff --git a/third_party/blink/renderer/modules/font_access/font_access.cc b/third_party/blink/renderer/modules/font_access/font_access.cc
+--- a/third_party/blink/renderer/modules/font_access/font_access.cc
++++ b/third_party/blink/renderer/modules/font_access/font_access.cc
+@@ -154,6 +154,7 @@ void FontAccess::DidGetEnumerationResponse(
+   table.ParseFromArray(mapped_mem.data(),
+                        base::checked_cast<int>(mapped_mem.size()));
+   const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  std::set<std::string> emitted_postscript_names;
+   for (const auto& element : table.fonts()) {
+     // If the optional postscript name filter is set in QueryOptions,
+     // only allow items that match.
+@@ -170,6 +171,22 @@ void FontAccess::DidGetEnumerationResponse(
+         .style = String::FromUtf8(element.style()),
+     };
+     entries.push_back(FontMetadata::Create(std::move(entry)));
++    emitted_postscript_names.insert(element.postscript_name());
++  }
++
++  for (const auto& runtime_font : roxy_config.runtime_fonts()) {
++    if ((hasPostscriptNameFilter &&
++         !selection_utf8.contains(runtime_font.postscript_name)) ||
++        emitted_postscript_names.contains(runtime_font.postscript_name)) {
++      continue;
++    }
++    auto entry = FontEnumerationEntry{
++        .postscript_name = String::FromUtf8(runtime_font.postscript_name),
++        .full_name = String::FromUtf8(runtime_font.full_name),
++        .family = String::FromUtf8(runtime_font.family),
++        .style = String::FromUtf8(runtime_font.style),
++    };
++    entries.push_back(FontMetadata::Create(std::move(entry)));
+   }
+ 
+   resolver->Resolve(std::move(entries));

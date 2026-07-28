@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2852,6 +2852,17 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+ #endif
+ 
+   if (process_type == switches::kRendererProcess) {
++    // These profile-scoped switches are consumed only by Blink in renderer
++    // processes. Chromium does not forward unknown browser switches by
++    // default, so copy them explicitly instead of exposing them to every
++    // child-process type.
++    static constexpr const char* kRoxyRendererSwitchNames[] = {
++        "roxy-fingerprint-config",
++        "fingerprint-fonts-dir",
++    };
++    command_line->CopySwitchesFrom(browser_command_line,
++                                   kRoxyRendererSwitchNames);
++
+     content::RenderProcessHost* process =
+         content::RenderProcessHost::FromID(child_process_id);
+     if (process) {

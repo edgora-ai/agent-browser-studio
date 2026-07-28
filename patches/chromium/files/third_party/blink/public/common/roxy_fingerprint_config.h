@@ -9,12 +9,14 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/base64url.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/no_destructor.h"
+#include "base/values.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 
 namespace blink {
@@ -32,6 +34,13 @@ class RoxyFingerprintConfig {
     int color_depth = 0;
     int pixel_depth = 0;
     double device_pixel_ratio = 0;
+  };
+
+  struct RuntimeFont {
+    std::string postscript_name;
+    std::string full_name;
+    std::string family;
+    std::string style;
   };
 
   static const RoxyFingerprintConfig& Get() {
@@ -62,6 +71,9 @@ class RoxyFingerprintConfig {
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& timezone() const { return timezone_; }
   const std::vector<std::string>& fonts() const { return fonts_; }
+  const std::vector<RuntimeFont>& runtime_fonts() const {
+    return runtime_fonts_;
+  }
   const std::string& geolocation_mode() const { return geolocation_mode_; }
   double geolocation_latitude() const { return geolocation_latitude_; }
   double geolocation_longitude() const { return geolocation_longitude_; }
@@ -109,7 +121,33 @@ class RoxyFingerprintConfig {
       if (LowerAscii(allowed) == normalized)
         return true;
     }
+    for (const RuntimeFont& runtime_font : runtime_fonts_) {
+      if (LowerAscii(runtime_font.family) == normalized ||
+          LowerAscii(runtime_font.full_name) == normalized ||
+          LowerAscii(runtime_font.postscript_name) == normalized) {
+        return true;
+      }
+    }
     return false;
+  }
+
+  // Called on the renderer main thread before the sandbox is engaged and
+  // before Blink initializes its font manager. Runtime fonts are immutable
+  // after that startup phase, so later reads do not require synchronization.
+  static void RegisterRuntimeFont(RuntimeFont font) {
+    RoxyFingerprintConfig& config =
+        const_cast<RoxyFingerprintConfig&>(Get());
+    if (!config.enabled_ || font.family.empty() ||
+        font.postscript_name.empty() || config.runtime_fonts_.size() >= 256) {
+      return;
+    }
+    const std::string normalized_postscript =
+        LowerAscii(font.postscript_name);
+    for (const RuntimeFont& existing : config.runtime_fonts_) {
+      if (LowerAscii(existing.postscript_name) == normalized_postscript)
+        return;
+    }
+    config.runtime_fonts_.push_back(std::move(font));
   }
 
   std::string accept_languages() const {
@@ -174,7 +212,7 @@ class RoxyFingerprintConfig {
         decoded.size() > kMaxConfigBytes) {
       return;
     }
-    auto root = base::JSONReader::ReadDict(decoded);
+    auto root = base::JSONReader::ReadDict(decoded, base::JSON_PARSE_RFC);
     if (!root || root->FindInt("schemaVersion").value_or(0) != 1)
       return;
 
@@ -190,13 +228,13 @@ class RoxyFingerprintConfig {
     storage_quota_bytes_ = static_cast<int64_t>(
         root->FindDouble("storageQuotaBytes").value_or(0));
 
-    if (const base::Value::List* languages = root->FindList("languages")) {
+    if (const base::ListValue* languages = root->FindList("languages")) {
       for (const base::Value& language : *languages) {
         if (language.is_string() && !language.GetString().empty())
           languages_.push_back(language.GetString());
       }
     }
-    if (const base::Value::Dict* screen = root->FindDict("screen")) {
+    if (const base::DictValue* screen = root->FindDict("screen")) {
       screen_.width = screen->FindInt("width").value_or(0);
       screen_.height = screen->FindInt("height").value_or(0);
       screen_.avail_width = screen->FindInt("availWidth").value_or(0);
@@ -206,28 +244,28 @@ class RoxyFingerprintConfig {
       screen_.device_pixel_ratio =
           screen->FindDouble("devicePixelRatio").value_or(0);
     }
-    if (const base::Value::Dict* webgl = root->FindDict("webgl")) {
+    if (const base::DictValue* webgl = root->FindDict("webgl")) {
       webgl_vendor_ = ReadString(*webgl, "vendor");
       webgl_renderer_ = ReadString(*webgl, "renderer");
     }
-    if (const base::Value::Dict* canvas = root->FindDict("canvas")) {
+    if (const base::DictValue* canvas = root->FindDict("canvas")) {
       canvas_noise_enabled_ = canvas->FindBool("enabled").value_or(false);
       canvas_noise_seed_ = HashSeed(ReadString(*canvas, "seed"));
     }
-    if (const base::Value::Dict* audio = root->FindDict("audio")) {
+    if (const base::DictValue* audio = root->FindDict("audio")) {
       audio_noise_enabled_ = audio->FindBool("enabled").value_or(false);
       audio_noise_seed_ = HashSeed(ReadString(*audio, "seed"));
       audio_noise_amplitude_ =
           audio->FindDouble("amplitude").value_or(0.0);
     }
-    if (const base::Value::Dict* webrtc = root->FindDict("webrtc")) {
+    if (const base::DictValue* webrtc = root->FindDict("webrtc")) {
       webrtc_mode_ = ReadString(*webrtc, "mode");
       if (const std::string* public_ip = webrtc->FindString("publicIp"))
         webrtc_public_ip_ = *public_ip;
     }
     if (const std::string* timezone = root->FindString("timezone"))
       timezone_ = *timezone;
-    if (const base::Value::Dict* geolocation =
+    if (const base::DictValue* geolocation =
             root->FindDict("geolocation")) {
       geolocation_mode_ = ReadString(*geolocation, "mode");
       if (geolocation_mode_ != "real" && geolocation_mode_ != "disable" &&
@@ -252,13 +290,13 @@ class RoxyFingerprintConfig {
         geolocation_accuracy_ = *accuracy;
       }
     }
-    if (const base::Value::List* fonts = root->FindList("fonts")) {
+    if (const base::ListValue* fonts = root->FindList("fonts")) {
       for (const base::Value& font : *fonts) {
         if (font.is_string() && !font.GetString().empty())
           fonts_.push_back(font.GetString());
       }
     }
-    if (const base::Value::Dict* media_devices =
+    if (const base::DictValue* media_devices =
             root->FindDict("mediaDevices")) {
       media_devices_enabled_ =
           media_devices->FindBool("enabled").value_or(false);
@@ -281,7 +319,7 @@ class RoxyFingerprintConfig {
                hardware_concurrency_ > 0 && device_memory_ > 0;
   }
 
-  static std::string ReadString(const base::Value::Dict& dict,
+  static std::string ReadString(const base::DictValue& dict,
                                 std::string_view key) {
     const std::string* value = dict.FindString(key);
     return value ? *value : std::string();
@@ -337,6 +375,7 @@ class RoxyFingerprintConfig {
   std::string webgl_renderer_;
   std::string timezone_;
   std::vector<std::string> fonts_;
+  std::vector<RuntimeFont> runtime_fonts_;
   std::string geolocation_mode_ = "real";
   double geolocation_latitude_ = 0.0;
   double geolocation_longitude_ = 0.0;
