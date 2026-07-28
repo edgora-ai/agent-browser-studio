@@ -21,7 +21,7 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | Geolocation | Real/disabled/custom | native | Blink request/result path |
 | Workers | Identity parity | partial native | remaining worker-only surfaces |
 | Plugins/MIME types | Stable 5 PDF / 2 MIME | native | Blink DOMPluginArray |
-| Media devices | Stable labels/count/IDs | partial native | exact-device constraint remapping |
+| Media devices | Stable labels/count/IDs | native | enumeration, constraints, settings and output routing |
 | Storage quota | Configurable | native | StorageManager estimate callback |
 
 Alignment is complete only when the required rows are `native` and the same

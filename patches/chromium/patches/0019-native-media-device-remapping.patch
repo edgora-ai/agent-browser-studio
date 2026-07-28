@@ -1,0 +1,171 @@
+diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+--- a/third_party/blink/renderer/modules/mediastream/media_devices.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_devices.cc
+@@ -884,7 +884,11 @@ ScriptPromise<MediaDeviceInfo> MediaDevices::selectAudioOutput(
+ 
+   GetDispatcherHost(window->GetFrame())
+       .SelectAudioOutput(
+-          options->hasDeviceId() ? options->deviceId() : String(),
++          options->hasDeviceId()
++              ? String::FromUtf8(
++                    RoxyFingerprintConfig::Get().MapMediaConstraintToActual(
++                        options->deviceId().Utf8().c_str()))
++              : String(),
+           BindOnce(&MediaDevices::OnSelectAudioOutputResult,
+                    WrapPersistent(this), WrapPersistent(resolver)));
+ 
+@@ -896,10 +900,13 @@ void MediaDevices::OnSelectAudioOutputResult(
+                                      MediaDeviceInfo>* resolver,
+     mojom::blink::SelectAudioOutputResultPtr result) {
+   if (result->status == mojom::blink::AudioOutputStatus::kSuccess) {
++    const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
+     MediaDeviceInfo* media_device_info = MakeGarbageCollected<MediaDeviceInfo>(
+-        String::FromUtf8(result->device_info.device_id),
++        String::FromUtf8(roxy_config.MapMediaConstraintToSynthetic(
++            result->device_info.device_id)),
+         String::FromUtf8(result->device_info.label),
+-        String::FromUtf8(result->device_info.group_id),
++        String::FromUtf8(roxy_config.MapMediaConstraintToSynthetic(
++            result->device_info.group_id)),
+         mojom::MediaDeviceType::kMediaAudioOutput);
+     resolver->Resolve(media_device_info, AudioOutputSelectionResult::kSuccess);
+     return;
+@@ -1024,8 +1031,11 @@ ScriptPromise<IDLUndefined> MediaDevices::setPreferredSinkId(
+   auto promise = resolver->Promise();
+ 
+   LocalFrame* frame = LocalDOMWindow::From(script_state)->GetFrame();
++  const String actual_sink_id = String::FromUtf8(
++      RoxyFingerprintConfig::Get().MapMediaConstraintToActual(
++          sink_id.Utf8().c_str()));
+   GetDispatcherHost(frame).SetPreferredSinkId(
+-      sink_id,
++      actual_sink_id,
+       BindOnce(&MediaDevices::SetPreferredSinkIdResultReceived,
+                WrapWeakPersistent(this), sink_id, WrapPersistent(resolver)));
+ 
+@@ -1510,5 +1520,15 @@ void MediaDevices::DevicesEnumerated(
+         const String group_id = String::FromUtf8(
+             roxy_config.StableToken("media-group", group_scope));
++        const auto& actual_devices = enumeration[i];
++        if (static_cast<wtf_size_t>(j) < actual_devices.size()) {
++          const WebMediaDeviceInfo& actual_device = actual_devices[j];
++          RoxyFingerprintConfig::RegisterRuntimeMediaMapping(
++              device_id.Utf8().c_str(), actual_device.device_id);
++          if (!actual_device.group_id.empty()) {
++            RoxyFingerprintConfig::RegisterRuntimeMediaMapping(
++                group_id.Utf8().c_str(), actual_device.group_id);
++          }
++        }
+         const String label = reveal_labels
+                                  ? RoxyMediaDeviceLabel(roxy_config, device_type)
+                                  : String();
+diff --git a/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc b/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
+--- a/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
++++ b/third_party/blink/renderer/modules/mediastream/media_stream_track_impl.cc
+@@ -33,6 +33,7 @@
+ #include "build/build_config.h"
+ #include "media/base/media_switches.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+ #include "third_party/blink/public/platform/modules/mediastream/web_media_stream_track.h"
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+@@ -481,9 +482,14 @@ MediaTrackCapabilities* MediaStreamTrackImpl::getCapabilities() const {
+   }
+   auto platform_capabilities = component_->Source()->GetCapabilities();
+ 
+-  capabilities->setDeviceId(platform_capabilities.device_id);
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  capabilities->setDeviceId(String::FromUtf8(
++      roxy_config.MapMediaConstraintToSynthetic(
++          platform_capabilities.device_id.Utf8().c_str())));
+   if (!platform_capabilities.group_id.IsNull()) {
+-    capabilities->setGroupId(platform_capabilities.group_id);
++    capabilities->setGroupId(String::FromUtf8(
++        roxy_config.MapMediaConstraintToSynthetic(
++            platform_capabilities.group_id.Utf8().c_str())));
+   }
+ 
+   if (component_->GetSourceType() == MediaStreamSource::kTypeAudio) {
+@@ -630,9 +636,14 @@ MediaTrackSettings* MediaStreamTrackImpl::getSettings() const {
+   if (platform_settings.HasAspectRatio()) {
+     settings->setAspectRatio(platform_settings.aspect_ratio);
+   }
+-  settings->setDeviceId(platform_settings.device_id);
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  settings->setDeviceId(String::FromUtf8(
++      roxy_config.MapMediaConstraintToSynthetic(
++          platform_settings.device_id.Utf8().c_str())));
+   if (!platform_settings.group_id.IsNull()) {
+-    settings->setGroupId(platform_settings.group_id);
++    settings->setGroupId(String::FromUtf8(
++        roxy_config.MapMediaConstraintToSynthetic(
++            platform_settings.group_id.Utf8().c_str())));
+   }
+   if (platform_settings.HasFacingMode()) {
+     switch (platform_settings.facing_mode) {
+diff --git a/third_party/blink/renderer/modules/mediastream/user_media_request.cc b/third_party/blink/renderer/modules/mediastream/user_media_request.cc
+--- a/third_party/blink/renderer/modules/mediastream/user_media_request.cc
++++ b/third_party/blink/renderer/modules/mediastream/user_media_request.cc
+@@ -37,6 +37,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "media/base/media_switches.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+ #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_constraints.h"
+@@ -384,6 +385,43 @@ MediaConstraints ParseOptions(
+   NOTREACHED();
+ }
+ 
++void RemapRoxyStringConstraint(StringConstraint& constraint) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (constraint.HasExact()) {
++    Vector<String> remapped;
++    for (const String& value : constraint.Exact()) {
++      remapped.push_back(String::FromUtf8(config.MapMediaConstraintToActual(
++          value.Utf8().c_str())));
++    }
++    constraint.SetExact(remapped);
++  }
++  if (constraint.HasIdeal()) {
++    Vector<String> remapped;
++    for (const String& value : constraint.Ideal()) {
++      remapped.push_back(String::FromUtf8(config.MapMediaConstraintToActual(
++          value.Utf8().c_str())));
++    }
++    constraint.SetIdeal(remapped);
++  }
++}
++
++void RemapRoxyMediaConstraints(MediaConstraints& constraints) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled() || !config.media_devices_enabled() ||
++      constraints.IsNull()) {
++    return;
++  }
++  MediaTrackConstraintSetPlatform basic = constraints.Basic();
++  Vector<MediaTrackConstraintSetPlatform> advanced = constraints.Advanced();
++  RemapRoxyStringConstraint(basic.device_id);
++  RemapRoxyStringConstraint(basic.group_id);
++  for (MediaTrackConstraintSetPlatform& constraint_set : advanced) {
++    RemapRoxyStringConstraint(constraint_set.device_id);
++    RemapRoxyStringConstraint(constraint_set.group_id);
++  }
++  constraints.Initialize(basic, advanced);
++}
++
+ }  // namespace
+ 
+ UserMediaRequest* UserMediaRequest::Create(
+@@ -405,6 +443,9 @@ UserMediaRequest* UserMediaRequest::Create(
+     return nullptr;
+   }
+ 
++  RemapRoxyMediaConstraints(audio);
++  RemapRoxyMediaConstraints(video);
++
+   std::string display_surface_constraint;
+   std::optional<bool> suppress_local_audio_playback;
+   std::optional<bool> restrict_own_audio;

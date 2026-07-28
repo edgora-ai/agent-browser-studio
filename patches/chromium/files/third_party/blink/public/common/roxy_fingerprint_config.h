@@ -43,6 +43,11 @@ class RoxyFingerprintConfig {
     std::string style;
   };
 
+  struct RuntimeMediaMapping {
+    std::string synthetic_id;
+    std::string actual_id;
+  };
+
   static const RoxyFingerprintConfig& Get() {
     static const base::NoDestructor<RoxyFingerprintConfig> config;
     return *config;
@@ -148,6 +153,43 @@ class RoxyFingerprintConfig {
         return;
     }
     config.runtime_fonts_.push_back(std::move(font));
+  }
+
+  // Media device identifiers are salted per origin by Chromium. Enumeration
+  // records the synthetic-to-actual relationship on the renderer main thread
+  // so exact constraints and track settings can use one consistent identity.
+  static void RegisterRuntimeMediaMapping(std::string synthetic_id,
+                                          std::string actual_id) {
+    RoxyFingerprintConfig& config =
+        const_cast<RoxyFingerprintConfig&>(Get());
+    if (!config.enabled_ || synthetic_id.empty() || actual_id.empty())
+      return;
+    for (RuntimeMediaMapping& mapping : config.runtime_media_mappings_) {
+      if (mapping.synthetic_id == synthetic_id) {
+        mapping.actual_id = std::move(actual_id);
+        return;
+      }
+    }
+    if (config.runtime_media_mappings_.size() >= 512)
+      return;
+    config.runtime_media_mappings_.push_back(
+        {std::move(synthetic_id), std::move(actual_id)});
+  }
+
+  std::string MapMediaConstraintToActual(std::string_view id) const {
+    for (const RuntimeMediaMapping& mapping : runtime_media_mappings_) {
+      if (mapping.synthetic_id == id)
+        return mapping.actual_id;
+    }
+    return std::string(id);
+  }
+
+  std::string MapMediaConstraintToSynthetic(std::string_view id) const {
+    for (const RuntimeMediaMapping& mapping : runtime_media_mappings_) {
+      if (mapping.actual_id == id)
+        return mapping.synthetic_id;
+    }
+    return std::string(id);
   }
 
   std::string accept_languages() const {
@@ -376,6 +418,7 @@ class RoxyFingerprintConfig {
   std::string timezone_;
   std::vector<std::string> fonts_;
   std::vector<RuntimeFont> runtime_fonts_;
+  std::vector<RuntimeMediaMapping> runtime_media_mappings_;
   std::string geolocation_mode_ = "real";
   double geolocation_latitude_ = 0.0;
   double geolocation_longitude_ = 0.0;
