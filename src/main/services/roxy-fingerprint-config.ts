@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import type { CloakFingerprintMeta, CloakPlatform, GeolocationMode } from "../types.js";
+import type { CloakFingerprintMeta, CloakPlatform, GeolocationMode, WebRtcMode } from "../types.js";
 
 export const ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
 export const ROXY_FINGERPRINT_SCHEMA_VERSION = 1;
 
-const WINDOWS_FONT_POOL = [
-  "Arial", "Calibri", "Cambria", "Candara", "Comic Sans MS", "Consolas",
-  "Constantia", "Corbel", "Courier New", "Ebrima", "Georgia", "Impact",
-  "Microsoft Sans Serif", "Palatino Linotype", "Segoe UI", "Tahoma",
+const PORTABLE_WINDOWS_FONT_POOL = [
+  "Arial", "Comic Sans MS", "Courier New", "Georgia", "Impact",
   "Times New Roman", "Trebuchet MS", "Verdana",
 ];
 const MAC_FONT_POOL = [
@@ -15,9 +13,8 @@ const MAC_FONT_POOL = [
   "Hoefler Text", "Menlo", "Monaco", "Optima", "Palatino", "San Francisco",
   "Times", "Times New Roman", "Trebuchet MS", "Verdana",
 ];
-const CJK_FONT_POOL = [
-  "Microsoft YaHei", "Microsoft JhengHei", "MS Gothic", "Yu Gothic",
-  "PingFang SC", "PingFang TC", "Hiragino Kaku Gothic ProN", "Malgun Gothic",
+const MAC_CJK_FONT_POOL = [
+  "PingFang SC", "PingFang TC", "Hiragino Kaku Gothic ProN",
 ];
 
 export interface RoxyFingerprintConfig {
@@ -126,9 +123,7 @@ export function buildRoxyFingerprintConfig(
     webgl,
     webgpu: { mode: "webgl", vendor: deriveWebGpuVendor(webgl.vendor, webgl.renderer) },
     speechSynthesis: { enabled: true, voices: selectSpeechVoices(platform, locale) },
-    webrtc: meta.webrtcIp
-      ? { mode: "altered", publicIp: meta.webrtcIp }
-      : { mode: "real", publicIp: null },
+    webrtc: normalizeWebRtc(meta.webrtcMode, meta.webrtcIp),
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
     geolocation: normalizeGeolocation(meta),
     mediaDevices: { enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 },
@@ -239,6 +234,19 @@ function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig
   return { mode, latitude, longitude, accuracy };
 }
 
+function normalizeWebRtc(
+  requestedMode: WebRtcMode | undefined,
+  publicIp: string | null | undefined,
+): RoxyFingerprintConfig["webrtc"] {
+  const mode = requestedMode || (publicIp ? "altered" : "auto");
+  if (mode === "disable") return { mode: "disable", publicIp: null };
+  if (mode === "real") return { mode: "real", publicIp: null };
+  if (publicIp) return { mode: "altered", publicIp };
+  return mode === "altered"
+    ? { mode: "altered", publicIp: null }
+    : { mode: "real", publicIp: null };
+}
+
 function normalizeFiniteNumber(value: unknown, min: number, max: number, label: string): number {
   const number = Number(value);
   if (!Number.isFinite(number) || number < min || number > max) {
@@ -256,9 +264,14 @@ function deriveSeed(seed: number, surface: string): string {
 }
 
 function selectStableFonts(seed: number, platform: "Win32" | "MacIntel", locale: string): string[] {
-  const pool = stableShuffle(platform === "MacIntel" ? MAC_FONT_POOL : WINDOWS_FONT_POOL, seed);
+  if (platform === "Win32") {
+    const selected = stableShuffle(PORTABLE_WINDOWS_FONT_POOL, seed);
+    if (/^(zh|ja|ko)(-|$)/i.test(locale)) selected.push("Arial Unicode MS");
+    return [...new Set(selected)].sort();
+  }
+  const pool = stableShuffle(MAC_FONT_POOL, seed);
   const selected = /^(zh|ja|ko)(-|$)/i.test(locale)
-    ? [...pool.slice(0, 12), ...stableShuffle(CJK_FONT_POOL, seed ^ 0x7f4a7c15).slice(0, 3)]
+    ? [...pool.slice(0, 12), ...stableShuffle(MAC_CJK_FONT_POOL, seed ^ 0x7f4a7c15)]
     : pool.slice(0, 15);
   return [...new Set(selected)].sort();
 }

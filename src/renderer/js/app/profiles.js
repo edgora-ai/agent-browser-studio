@@ -103,6 +103,7 @@
             platform: p.platform || 'windows',
             timezone: p.timezone || '',
             locale: p.locale || '',
+            webrtcMode: p.webrtcMode || (p.webrtcIp ? 'altered' : 'auto'),
             webrtcIp: p.webrtcIp || '',
             geolocationMode: p.geolocationMode || 'real',
             geolocationLatitude: p.geolocationLatitude,
@@ -126,6 +127,7 @@
           document.getElementById("cloak-meta-platform").value = metaData.platform;
           document.getElementById("cloak-meta-timezone").value = metaData.timezone;
           document.getElementById("cloak-meta-locale").value = metaData.locale;
+          document.getElementById("cloak-meta-webrtc-mode").value = metaData.webrtcMode;
           document.getElementById("cloak-meta-webrtc").value = metaData.webrtcIp;
           writeGeolocationFields("cloak-meta-", metaData);
           writeHardwareFields("cloak-meta-", metaData);
@@ -231,7 +233,9 @@
         if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
         var tz = document.getElementById("new-cloak-timezone").value || undefined;
         var loc = document.getElementById("new-cloak-locale").value || undefined;
+        var webrtcMode = document.getElementById("new-cloak-webrtc-mode").value || "auto";
         var webrtcIp = document.getElementById("new-cloak-webrtc").value.trim() || undefined;
+        if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
         var hardware, geolocation;
         try { hardware = readHardwareFields("new-cloak-"); geolocation = readGeolocationFields("new-cloak-"); }
         catch (e) { toast(e.message || String(e), "error"); return; }
@@ -242,6 +246,7 @@
           platform: cloakPlatform,
           timezone: tz,
           locale: loc,
+          webrtcMode: webrtcMode,
           webrtcIp: webrtcIp,
           proxyMode: proxySelection.mode,
           proxyName: proxySelection.name,
@@ -296,6 +301,7 @@
           locale: s.locale,
           timezone: s.timezone,
           fingerprintSeed: s.fingerprintSeed,
+          webrtcMode: s.webrtcMode,
           webrtcIp: s.webrtcIp,
           geolocationMode: s.geolocationMode,
           geolocationLatitude: s.geolocationLatitude,
@@ -385,7 +391,9 @@
     var platform = document.getElementById("cloak-meta-platform").value;
     var timezone = document.getElementById("cloak-meta-timezone").value || null;
     var locale = document.getElementById("cloak-meta-locale").value || null;
+    var webrtcMode = document.getElementById("cloak-meta-webrtc-mode").value || "auto";
     var webrtcIp = document.getElementById("cloak-meta-webrtc").value.trim() || null;
+    if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = null;
     var proxySelection = parseProxySelection(document.getElementById("cloak-meta-proxy").value, "none");
     var hardware, geolocation;
     try { hardware = readHardwareFields("cloak-meta-"); geolocation = readGeolocationFields("cloak-meta-"); }
@@ -396,7 +404,7 @@
     var promises = [];
     promises.push(api.cloak.setMeta(dirId, Object.assign({
       name: name, fingerprintSeed: seed, platform: platform,
-      timezone: timezone, locale: locale, webrtcIp: webrtcIp,
+      timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
       proxyMode: proxySelection.mode, proxyName: proxySelection.name
     }, geolocation, hardware)));
     Promise.all(promises).then(function(r) {
@@ -437,7 +445,7 @@
           proxyName: cp.proxyName || null,
           syncedAt: cp.syncedAt || null,
           syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
-          fingerprint: { browser: "cloak", version: cp.version, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcIp: cp.webrtcIp },
+          fingerprint: { browser: "cloak", version: cp.version, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
           hardwareConcurrency: cp.hardwareConcurrency || null,
@@ -496,6 +504,7 @@
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
         var identityStr = (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale");
+        identityStr += " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
         if (fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
         var fingerprintTitle = "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%";
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';

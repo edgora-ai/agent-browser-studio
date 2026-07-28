@@ -659,10 +659,29 @@ describe("Integration — Hardware fingerprint controls", () => {
   it("passes a versioned identity to the self-built Chromium 149+ renderer", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
     const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
-    expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, getCloakVersion())");
+    expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion)");
+    expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).toContain("--time-zone-for-testing=");
     expect(config).toContain('ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
     expect(config).toContain("schemaVersion: 1");
+    const verifier = fs.readFileSync(path.join(ROOT, "src/tools/verify-native-chromium.ts"), "utf-8");
+    expect(verifier).toContain("sameSeedStable");
+    expect(verifier).toContain("differentSeedsDistinct");
+    expect(verifier).toContain("captureDisabledWebRtc");
+    expect(verifier).toContain("audioTrackDeviceId");
+  });
+
+  it("exposes all WebRTC policy modes from UI through the native config", () => {
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
+    const renderer = readRendererModules();
+    const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
+    expect(html).toContain('id="new-cloak-webrtc-mode"');
+    expect(html).toContain('id="cloak-meta-webrtc-mode"');
+    for (const mode of ["auto", "real", "altered", "disable"]) {
+      expect(html).toContain(`value="${mode}"`);
+    }
+    expect(renderer).toContain("webrtcMode: webrtcMode");
+    expect(config).toContain("normalizeWebRtc(meta.webrtcMode, meta.webrtcIp)");
   });
 
   it("moves high-risk fingerprint readbacks into native Chromium patches", () => {
@@ -688,12 +707,17 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0021-native-do-not-track.patch",
       "0022-native-speech-voice-identity.patch",
       "0023-native-touch-identity.patch",
+      "0024-idempotent-canvas-noise.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
     expect(fs.existsSync(path.join(patchRoot, "patches", "0001-wire-roxy-fingerprint-agent.patch"))).toBe(false);
     expect(fs.existsSync(path.join(patchRoot, "files", "chrome", "renderer", "roxy_fingerprint", "roxy_fingerprint_agent.cc"))).toBe(false);
     expect(fs.readFileSync(path.join(patchRoot, "README.md"), "utf-8")).toContain("no page-script injection");
+    const canvasPatch = fs.readFileSync(path.join(patchRoot, "patches", "0024-idempotent-canvas-noise.patch"), "utf-8");
+    expect(canvasPatch).toContain("0xfffffffeU");
+    expect(canvasPatch).toContain("0xfffeU");
+    expect(canvasPatch).not.toMatch(/^\+.*nextafter/m);
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {

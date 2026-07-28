@@ -22,7 +22,7 @@ import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-det
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
 import { buildRoxyFingerprintArg, buildRoxyFingerprintConfig } from "./roxy-fingerprint-config.js";
-import type { GeolocationMode, ProxyConfig } from "../types.js";
+import type { GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
 
 export interface CloakProfile {
   dirId: string;
@@ -32,6 +32,7 @@ export interface CloakProfile {
   platform: "windows" | "macos";
   timezone: string | null;  // IANA timezone (e.g. 'Asia/Shanghai', 'America/New_York')
   locale: string | null;    // BCP 47 locale (e.g. 'zh-CN', 'en-US')
+  webrtcMode: WebRtcMode;
   webrtcIp: string | null;  // WebRTC exit IP override
   geolocationMode: GeolocationMode;
   geolocationLatitude: number | null;
@@ -76,12 +77,24 @@ export function findCloakBinary(): string | null {
 }
 
 export function getCloakVersion(): string | null {
+  const cfg = getConfig() as any;
+  const explicitBin = cfg.cloakBin && cfg.cloakBin !== "auto"
+    ? cfg.cloakBin
+    : process.env.CLOAKBROWSER_BINARY_PATH;
+  if (explicitBin && fs.existsSync(explicitBin)) {
+    const explicitVersion = detectBinaryVersion(explicitBin);
+    if (explicitVersion) return explicitVersion;
+  }
   const info = binaryInfo();
   if (info.installed) return info.version;
 
   const bin = findCloakBinary();
   if (!bin) return null;
 
+  return detectBinaryVersion(bin) || "?";
+}
+
+function detectBinaryVersion(bin: string): string | null {
   const m = bin.match(/chromium-([\d.]+)/);
   if (m) return m[1];
 
@@ -90,7 +103,7 @@ export function getCloakVersion(): string | null {
     const vm = out.match(/(\d+\.\d+\.\d+\.\d+)/);
     if (vm) return vm[1];
   } catch { /* can't detect */ }
-  return "?";
+  return null;
 }
 
 export function isCloakInstalled(): boolean {
@@ -203,6 +216,7 @@ export function createCloakProfile(opts: {
   platform?: "windows" | "macos";
   timezone?: string;
   locale?: string;
+  webrtcMode?: WebRtcMode;
   webrtcIp?: string;
   geolocationMode?: GeolocationMode;
   geolocationLatitude?: number | null;
@@ -226,6 +240,7 @@ export function createCloakProfile(opts: {
   const cfg = structuredClone(getConfig());
   cfg.cloakProfiles = cfg.cloakProfiles || {};
   const proxyMode = opts.proxyMode || (opts.proxyName ? "named" : "default");
+  const webrtcMode = normalizeWebRtcMode(opts.webrtcMode, opts.webrtcIp);
   if (proxyMode !== "none" && proxyMode !== "default" && proxyMode !== "named") {
     throw new Error(`Invalid proxy mode: ${JSON.stringify(proxyMode)}`);
   }
@@ -238,7 +253,8 @@ export function createCloakProfile(opts: {
     platform: normalizePlatform(opts.platform || (process.platform === "darwin" ? "macos" : "windows")),
     timezone: normalizeOptionalTimezone(opts.timezone),
     locale: normalizeOptionalLocale(opts.locale),
-    webrtcIp: normalizeOptionalIp(opts.webrtcIp),
+    webrtcMode,
+    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : normalizeOptionalIp(opts.webrtcIp),
     ...normalizeGeolocationMeta(opts),
     ...normalizeHardwareFingerprintMeta(opts),
     proxyMode,
@@ -293,6 +309,7 @@ export function listCloakProfiles(): CloakProfile[] {
       platform: m.platform || "windows",
       timezone: m.timezone || null,
       locale: m.locale || null,
+      webrtcMode: normalizeWebRtcMode(m.webrtcMode, m.webrtcIp),
       webrtcIp: m.webrtcIp || null,
       geolocationMode: normalizeGeolocationMode(m.geolocationMode),
       geolocationLatitude: normalizeOptionalNumber(m.geolocationLatitude, -90, 90, "geolocation latitude"),
@@ -378,12 +395,16 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
   }
   const activeProxy = resolvedProxy.config;
+  const requestedWebRtcMode = normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  const shouldResolveWebRtc = requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered";
   console.log(`[cloak] Preparing profile ${dirId.slice(0, 8)} with wrapper-managed launch options`);
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy). Warns
   // by default; blocks only when config.blockOnConsistencyConflict is set.
   const consistency = checkProfileConsistency({
-    timezone: meta.timezone, locale: meta.locale, webrtcIp: meta.webrtcIp, platform: meta.platform,
+    timezone: meta.timezone, locale: meta.locale,
+    webrtcIp: shouldResolveWebRtc ? meta.webrtcIp : null,
+    platform: meta.platform,
     proxyMode: resolvedProxy.mode,
     proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
   });
@@ -403,14 +424,16 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   });
   let effectiveTimezone = normalizeOptionalTimezone(meta.timezone);
   let effectiveLocale = normalizeOptionalLocale(meta.locale);
-  let webrtcIp = normalizeOptionalIp(meta.webrtcIp);
+  let webrtcIp = shouldResolveWebRtc ? normalizeOptionalIp(meta.webrtcIp) : null;
   const wrapperGeoip = shouldUseWrapperGeoip();
   if (!wrapperGeoip) {
-    if (activeProxy && (!effectiveTimezone || !effectiveLocale || !webrtcIp)) {
+    if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
       const detected = await resolveGeoFromProxy(activeProxy);
       if (!effectiveTimezone) effectiveTimezone = detected.timezone;
       if (!effectiveLocale) effectiveLocale = detected.locale;
-      if (!webrtcIp) webrtcIp = detected.exitIp;
+      if (shouldResolveWebRtc && !webrtcIp) {
+        webrtcIp = detected.exitIp;
+      }
     }
     if (!effectiveTimezone) effectiveTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
     if (!effectiveLocale) effectiveLocale = normalizeOptionalLocale(Intl.DateTimeFormat().resolvedOptions().locale);
@@ -419,24 +442,6 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   if (webrtcIp) requestedArgs.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
   if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
   addHardwareFingerprintArgs(requestedArgs, meta);
-
-  // Our Chromium fork consumes one versioned, base64url JSON identity. Keep
-  // the existing Cloak flags during the transition so the community Chromium
-  // 145 binary and the self-built 149+ binary can launch the same profiles.
-  const nativeFingerprintMeta = {
-    ...meta,
-    fingerprintSeed: seed,
-    platform,
-    timezone: effectiveTimezone,
-    locale: effectiveLocale,
-    webrtcIp,
-  };
-  const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, getCloakVersion());
-  requestedArgs.push(buildRoxyFingerprintArg(nativeFingerprintMeta, getCloakVersion()));
-  requestedArgs.push(`--user-agent=${nativeFingerprint.userAgent}`);
-  if (nativeFingerprint.timezone) {
-    requestedArgs.push(`--time-zone-for-testing=${nativeFingerprint.timezone}`);
-  }
 
   // Let the community wrapper resolve the managed binary, GeoIP/WebRTC exit
   // identity, proxy capabilities, and version-aware window geometry. Explicit
@@ -452,7 +457,42 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   console.log(`[cloak] Wrapper launch plan ready for ${dirId.slice(0, 8)}`);
   const bin = configuredBin || envBin || launchPlan.executablePath;
   if (!bin || !fs.existsSync(bin)) throw new Error("CloakBrowser binary is unavailable after install check");
+  const nativeChromiumVersion = detectBinaryVersion(bin) || getCloakVersion();
   const args = [...(launchPlan.args || [])];
+
+  // Prefer the wrapper's resolved exit identity, then perform a bounded proxy
+  // lookup for our native altered mode. Explicit altered mode must never
+  // silently degrade to real-IP WebRTC.
+  if (shouldResolveWebRtc && !webrtcIp) {
+    webrtcIp = normalizeOptionalIp(getLaunchArgValue(args, "--fingerprint-webrtc-ip"));
+    if (!webrtcIp && activeProxy) {
+      webrtcIp = (await resolveGeoFromProxy(activeProxy)).exitIp;
+    }
+  }
+  if (requestedWebRtcMode === "altered" && !webrtcIp) {
+    throw new Error("WebRTC altered mode requires a custom IP or a proxy with a detectable exit IP");
+  }
+  const effectiveWebRtcMode = requestedWebRtcMode === "auto"
+    ? (webrtcIp ? "altered" : "real")
+    : requestedWebRtcMode;
+
+  // Our Chromium fork consumes one versioned, base64url JSON identity. Add it
+  // after wrapper resolution so native WebRTC uses the final proxy exit IP.
+  const nativeFingerprintMeta = {
+    ...meta,
+    fingerprintSeed: seed,
+    platform,
+    timezone: effectiveTimezone,
+    locale: effectiveLocale,
+    webrtcMode: effectiveWebRtcMode,
+    webrtcIp,
+  };
+  const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, nativeChromiumVersion);
+  args.push(buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion));
+  args.push(`--user-agent=${nativeFingerprint.userAgent}`);
+  if (nativeFingerprint.timezone) {
+    args.push(`--time-zone-for-testing=${nativeFingerprint.timezone}`);
+  }
 
   // buildLaunchOptions returns a Playwright proxy option when the selected
   // binary cannot consume the proxy natively. CloakLite launches the process
@@ -776,6 +816,14 @@ function normalizeOptionalIp(value: unknown): string | null {
   if (!ip) return null;
   if (!net.isIP(ip)) throw new Error(`Invalid WebRTC IP: ${JSON.stringify(value)}`);
   return ip;
+}
+
+function normalizeWebRtcMode(value: unknown, legacyIp?: unknown): WebRtcMode {
+  if (value === undefined || value === null || value === "") {
+    return normalizeOptionalIp(legacyIp) ? "altered" : "auto";
+  }
+  if (value === "auto" || value === "real" || value === "altered" || value === "disable") return value;
+  throw new Error(`Invalid WebRTC mode: ${JSON.stringify(value)}`);
 }
 
 function normalizeGeolocationMode(value: unknown): GeolocationMode {

@@ -4,8 +4,6 @@
 // timezone / WebGL / canvas), store it as the profile's baseline, and diff
 // subsequent captures so drift is visible/auditable before it causes account
 // loss. Pure logic for capture/diff (testable); CDP connection injected.
-import { cdpConnect, cdpEvaluate } from "./local-agent.js";
-
 /** The in-page expression that collects the fingerprint signature. */
 export const CAPTURE_EXPRESSION = `(async function(){
   var o = {};
@@ -152,6 +150,9 @@ export type Fingerprint = Record<string, string | number | null | boolean>;
 
 /** Capture the live fingerprint from a running profile via CDP. */
 export async function captureFingerprint(cdpPort: number): Promise<Fingerprint> {
+  // Keep the probe importable by the standalone Chromium verifier without
+  // loading Electron-only local-agent dependencies.
+  const { cdpConnect, cdpEvaluate } = await import("./local-agent.js");
   const client = await cdpConnect(cdpPort);
   try {
     const raw = await cdpEvaluate(client, CAPTURE_EXPRESSION);

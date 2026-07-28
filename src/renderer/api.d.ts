@@ -46,6 +46,7 @@ export interface CloakProfileInfo {
   platform: "windows" | "macos" | string;
   timezone: string | null;
   locale: string | null;
+  webrtcMode: "auto" | "real" | "altered" | "disable";
   webrtcIp: string | null;
   geolocationMode: "real" | "disable" | "custom";
   geolocationLatitude: number | null;

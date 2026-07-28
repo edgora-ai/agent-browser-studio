@@ -47,19 +47,38 @@ profile identity as Window. Speech synthesis exposes a stable locale/platform
 voice list while mapping selected voices to an available system voice for
 playback. Media device IDs are remapped natively across
 enumeration, exact/ideal constraints, track settings/capabilities and
-audio-output routing. On macOS,
-profile font
-directories are registered with CoreText before the renderer sandbox, and the
-registered font metadata participates in Blink's native allow-list. Canvas noise
-now covers 8-bit, float16 and float32 readbacks. Media enumeration exposes a
-stable, origin-scoped
-desktop device set, and the standard Chromium PDF plugin/MIME set is enforced
-in Blink. Geolocation `real`, `disable`, and `custom` policies run in Blink's
+audio-output routing. On macOS, profile font directories are registered with
+CoreText before the renderer sandbox, and the
+registered font metadata participates in Blink's native allow-list. Windows
+profiles without an external font pack use only core fonts present on both
+macOS and Windows, avoiding claims for unavailable Segoe/Calibri families.
+Canvas noise now covers 8-bit, float16 and float32 readbacks with an idempotent
+per-profile least-significant-bit transform. Media enumeration exposes a
+stable, origin-scoped desktop device set, and the standard Chromium PDF
+plugin/MIME set is enforced in Blink. Geolocation `real`, `disable`, and
+`custom` policies run in Blink's
 native request/result path. See
-`CAPABILITY_MATRIX.md` for the acceptance status.
+`CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
+the field-by-field native consumer audit.
 
 The application baseline capture records Window and Worker Navigator identity,
 UA high-entropy values, Canvas, Audio, ClientRects, WebGL/WebGPU, fonts,
 plugins, speech voices, media-device counts, storage quota, DNT and touch state.
 It is intended for same-profile restart stability and cross-seed distinction
 checks once a patched Chromium binary is available.
+
+## Runtime verification
+
+After building Chromium, run the strict native verifier against the executable
+or macOS application bundle:
+
+```bash
+npm run verify:chromium -- /path/to/Chromium.app
+```
+
+It launches two fresh profiles with the same seed and one with a different
+seed on one fixed localhost origin. The verifier checks Window/Worker identity,
+UA-CH, screen, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
+geolocation, storage, media-device constraint remapping, DNT headers in Window
+and Dedicated/Shared/Service Workers, disabled WebRTC candidates, restart
+stability and cross-seed distinction. Missing WebGPU is a failure.

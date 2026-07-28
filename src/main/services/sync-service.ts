@@ -876,7 +876,9 @@ async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: 
     secretKey: decryptSecretOr(sync.secretKey),
   });
   try {
-    const resp = await fetch(url, { method: "PUT", headers: h, body, signal: combineAbortSignals(signal, 30000) });
+    // Node's fetch accepts Buffer at runtime; DOM and Node declarations do not
+    // currently agree on Buffer<ArrayBufferLike> as a BodyInit.
+    const resp = await fetch(url, { method: "PUT", headers: h, body: body as any, signal: combineAbortSignals(signal, 30000) });
     if (!resp.ok) {
       const detail = await readS3ErrorDetail(resp);
       console.error(`[sync] PUT ${key} failed: HTTP ${resp.status} ${detail}`);
@@ -1112,6 +1114,9 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       platform: profile.platform === "macos" ? "macos" : "windows",
       timezone: profile.timezone || null,
       locale: profile.locale || null,
+      webrtcMode: profile.webrtcMode === "real" || profile.webrtcMode === "altered" || profile.webrtcMode === "disable"
+        ? profile.webrtcMode
+        : "auto",
       webrtcIp: profile.webrtcIp || null,
       geolocationMode: profile.geolocationMode === "disable" || profile.geolocationMode === "custom" ? profile.geolocationMode : "real",
       geolocationLatitude: Number.isFinite(profile.geolocationLatitude) ? profile.geolocationLatitude : null,

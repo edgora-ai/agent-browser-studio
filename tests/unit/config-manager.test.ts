@@ -340,6 +340,7 @@ describe("Config Manager (real functions)", () => {
       platform: "windows",
       timezone: "Asia/Shanghai",
       locale: "zh-CN",
+      webrtcMode: "altered",
       webrtcIp: "10.10.10.10",
       geolocationMode: "custom",
       geolocationLatitude: 31.2304,
@@ -364,6 +365,7 @@ describe("Config Manager (real functions)", () => {
     const readBack = getConfig().cloakProfiles["cb_fp_test"];
     expect(readBack.fingerprintSeed).toBe(77777);
     expect(readBack.timezone).toBe("Asia/Shanghai");
+    expect(readBack.webrtcMode).toBe("altered");
     expect(readBack.geolocationMode).toBe("custom");
     expect(readBack.geolocationLatitude).toBe(31.2304);
     expect(readBack.geolocationLongitude).toBe(121.4737);

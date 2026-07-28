@@ -13,7 +13,7 @@ import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
-import type { CloakPlatform, GeolocationMode, ProxyMode } from "../types.js";
+import type { CloakPlatform, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerCloakHandlers(): void {
   // Parse a bulk-import CSV (header or legacy positional) into profile specs.
@@ -68,7 +68,7 @@ export function registerCloakHandlers(): void {
 
   ipcMain.handle("cloak:create", async (_event, opts: {
     name: string; fingerprintSeed?: number; platform?: CloakPlatform;
-    timezone?: string; locale?: string; webrtcIp?: string;
+    timezone?: string; locale?: string; webrtcMode?: WebRtcMode; webrtcIp?: string;
     geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
@@ -80,6 +80,7 @@ export function registerCloakHandlers(): void {
       platform: opts.platform,
       timezone: opts.timezone,
       locale: opts.locale,
+      webrtcMode: opts.webrtcMode,
       webrtcIp: opts.webrtcIp,
       geolocationMode: opts.geolocationMode,
       geolocationLatitude: opts.geolocationLatitude,
@@ -188,6 +189,7 @@ export function registerCloakHandlers(): void {
     platform?: CloakPlatform;
     timezone?: string;
     locale?: string;
+    webrtcMode?: WebRtcMode;
     webrtcIp?: string;
     geolocationMode?: GeolocationMode;
     geolocationLatitude?: number | null;
@@ -217,6 +219,7 @@ export function registerCloakHandlers(): void {
         platform: params.platform,
         timezone: params.timezone,
         locale: params.locale,
+        webrtcMode: params.webrtcMode,
         webrtcIp: params.webrtcIp,
         geolocationMode: params.geolocationMode,
         geolocationLatitude: params.geolocationLatitude,

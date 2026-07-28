@@ -136,6 +136,7 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
       platform: meta?.platform ?? "windows",
       timezone: meta?.timezone ?? null,
       locale: meta?.locale ?? null,
+      webrtcMode: meta?.webrtcMode ?? (meta?.webrtcIp ? "altered" : "auto"),
       webrtcIp: meta?.webrtcIp ?? null,
       geolocationMode: meta?.geolocationMode ?? "real",
       geolocationLatitude: meta?.geolocationLatitude ?? null,

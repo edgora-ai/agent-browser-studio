@@ -505,9 +505,17 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="vi-VN">vi-VN (Vietnamese)</option>
  </select>
  </div>
- <div class="form-row"><label>WebRTC IP</label>
- <input id="new-cloak-webrtc" placeholder="Auto (proxy exit IP) - or custom IP">
+ <div class="form-row"><label>WebRTC Mode</label>
+ <select id="new-cloak-webrtc-mode">
+ <option value="auto">Auto (alter to proxy exit IP)</option>
+ <option value="real">Real network</option>
+ <option value="altered">Altered / custom exit IP</option>
+ <option value="disable">Disabled</option>
+ </select>
  </div>
+ </div>
+ <div class="form-row"><label>WebRTC IP</label>
+ <input id="new-cloak-webrtc" placeholder="Proxy exit IP or explicit override for altered mode">
  </div>
  <div class="form-row"><label>Geolocation</label>
  <select id="new-cloak-geolocation-mode">
@@ -888,8 +896,18 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+ <div class="form-row"><label>WebRTC Mode</label>
+ <select id="cloak-meta-webrtc-mode">
+ <option value="auto">Auto (alter to proxy exit IP)</option>
+ <option value="real">Real network</option>
+ <option value="altered">Altered / custom exit IP</option>
+ <option value="disable">Disabled</option>
+ </select>
+ </div>
  <div class="form-row"><label>WebRTC IP</label>
- <input id="cloak-meta-webrtc" placeholder="Leave empty for auto (proxy exit IP). Enter custom IP to override.">
+ <input id="cloak-meta-webrtc" placeholder="Proxy exit IP or explicit override">
+ </div>
  </div>
  <div class="form-row"><label>Geolocation</label>
  <select id="cloak-meta-geolocation-mode">

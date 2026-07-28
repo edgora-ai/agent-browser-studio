@@ -30,15 +30,23 @@ describe("Roxy fingerprint config", () => {
     const second = buildRoxyFingerprintConfig(meta, "149.0.7827.22");
 
     expect(second).toEqual(first);
+    expect(Object.keys(first).sort()).toEqual([
+      "appVersion", "audio", "canvas", "deviceMemory", "doNotTrack", "fonts",
+      "geolocation", "hardwareConcurrency", "languages", "maxTouchPoints",
+      "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen",
+      "seed", "speechSynthesis", "storageQuotaBytes", "timezone", "userAgent",
+      "vendor", "webgl", "webgpu", "webrtc",
+    ]);
     expect(first.platform).toBe("Win32");
     expect(first.maxTouchPoints).toBe(0);
     expect(first.languages).toEqual(["zh-CN", "zh"]);
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
     expect(first.screen.availHeight).toBe(1032);
     expect(first.storageQuotaBytes).toBe(120000 * 1024 * 1024);
-    expect(first.fonts).toHaveLength(15);
+    expect(first.fonts).toHaveLength(9);
     expect(first.fonts).toEqual([...first.fonts].sort());
-    expect(first.fonts.some((font) => /YaHei|Gothic|PingFang|Malgun/.test(font))).toBe(true);
+    expect(first.fonts).toContain("Arial Unicode MS");
+    expect(first.fonts.some((font) => /Calibri|Segoe UI|PingFang/.test(font))).toBe(false);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
     expect(first.webgpu).toEqual({ mode: "webgl", vendor: "NVIDIA" });
     expect(first.doNotTrack).toBe("1");
@@ -68,6 +76,17 @@ describe("Roxy fingerprint config", () => {
   it("emits a native disabled geolocation policy without coordinates", () => {
     const config = buildRoxyFingerprintConfig({ fingerprintSeed: 8, geolocationMode: "disable" }, "149.0.7827.22");
     expect(config.geolocation).toEqual({ mode: "disable", latitude: null, longitude: null, accuracy: null });
+  });
+
+  it("preserves all native WebRTC policy modes", () => {
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 10, webrtcMode: "disable" }, "149.0.7827.22").webrtc)
+      .toEqual({ mode: "disable", publicIp: null });
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 11, webrtcMode: "real", webrtcIp: "203.0.113.2" }, "149.0.7827.22").webrtc)
+      .toEqual({ mode: "real", publicIp: null });
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 12, webrtcMode: "altered", webrtcIp: "203.0.113.3" }, "149.0.7827.22").webrtc)
+      .toEqual({ mode: "altered", publicIp: "203.0.113.3" });
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 13, webrtcMode: "altered" }, "149.0.7827.22").webrtc)
+      .toEqual({ mode: "altered", publicIp: null });
   });
 
   it("rejects incomplete custom geolocation", () => {

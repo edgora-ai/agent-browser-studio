@@ -1,0 +1,83 @@
+diff --git a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+--- a/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
++++ b/third_party/blink/renderer/platform/graphics/image_data_buffer.cc
+@@ -33,10 +33,7 @@
+ #include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
+ 
+-#include <algorithm>
+ #include <bit>
+-#include <cmath>
+ #include <cstring>
+-#include <limits>
+ 
+ #include "base/compiler_specific.h"
+ #include "base/memory/ptr_util.h"
+@@ -159,59 +156,32 @@ void ImageDataBuffer::ApplyRoxyFingerprintNoise(SkPixmap pixmap) {
+     for (int x = 0; x < pixmap.width(); ++x) {
+       uint64_t hash = config.canvas_noise_seed();
+       hash ^= static_cast<uint64_t>(y) << 32 | static_cast<uint32_t>(x);
++      hash = MixCanvasNoise(hash);
++      const int channel = static_cast<int>(hash % 3);
++      const uint32_t desired_bit = static_cast<uint32_t>((hash >> 8) & 1);
+       if (bytes_per_pixel == 4) {
+         uint8_t* pixel = row + x * 4;
+         if (pixel[3] == 0)
+           continue;
+-        hash ^= static_cast<uint64_t>(pixel[0]) << 24 |
+-                static_cast<uint64_t>(pixel[1]) << 16 |
+-                static_cast<uint64_t>(pixel[2]) << 8 | pixel[3];
+-        hash = MixCanvasNoise(hash);
+-        const int channel = static_cast<int>(hash % 3);
+-        const int delta = (hash & 0x8) ? 1 : -1;
+         pixel[channel] = static_cast<uint8_t>(
+-            std::clamp(static_cast<int>(pixel[channel]) + delta, 0, 255));
++            (pixel[channel] & 0xfeU) | desired_bit);
+       } else if (bytes_per_pixel == 8) {
+         auto* pixel = reinterpret_cast<uint16_t*>(row + x * 8);
+         if ((pixel[3] & 0x7fff) == 0)
+           continue;
+-        hash ^= static_cast<uint64_t>(pixel[0]) << 48 |
+-                static_cast<uint64_t>(pixel[1]) << 32 |
+-                static_cast<uint64_t>(pixel[2]) << 16 | pixel[3];
+-        hash = MixCanvasNoise(hash);
+-        const int channel = static_cast<int>(hash % 3);
+         uint16_t& value = pixel[channel];
+         if ((value & 0x7c00) == 0x7c00)
+           continue;
+-        const bool increase = hash & 0x8;
+-        if (value & 0x8000) {
+-          if (increase)
+-            value = value == 0x8000 ? 0x0001 : value - 1;
+-          else if (value < 0xfbff)
+-            ++value;
+-        } else if (increase) {
+-          if (value < 0x7bff)
+-            ++value;
+-        } else {
+-          value = value == 0 ? 0x8001 : value - 1;
+-        }
++        value = static_cast<uint16_t>((value & 0xfffeU) | desired_bit);
+       } else {
+         auto* pixel = reinterpret_cast<float*>(row + x * 16);
+         if (pixel[3] == 0.0f)
+           continue;
+-        for (int channel = 0; channel < 4; ++channel) {
+-          hash ^= std::bit_cast<uint32_t>(pixel[channel]);
+-          hash = MixCanvasNoise(hash);
+-        }
+-        const int channel = static_cast<int>(hash % 3);
+-        if (!std::isfinite(pixel[channel]))
++        uint32_t value = std::bit_cast<uint32_t>(pixel[channel]);
++        if ((value & 0x7f800000U) == 0x7f800000U)
+           continue;
+-        const float direction = (hash & 0x8)
+-                                    ? std::numeric_limits<float>::infinity()
+-                                    : -std::numeric_limits<float>::infinity();
+-        const float next = std::nextafter(pixel[channel], direction);
+-        if (std::isfinite(next))
+-          pixel[channel] = next;
++        value = (value & 0xfffffffeU) | desired_bit;
++        pixel[channel] = std::bit_cast<float>(value);
+       }
+     }
+   }

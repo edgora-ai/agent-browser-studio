@@ -8,6 +8,7 @@ export interface ProfileSpec {
   timezone?: string;
   fingerprintSeed?: number;
   proxyName?: string;
+  webrtcMode?: "auto" | "real" | "altered" | "disable";
   webrtcIp?: string;
   geolocationMode?: "real" | "disable" | "custom";
   geolocationLatitude?: number;
@@ -23,6 +24,7 @@ const HEADER_ALIASES: Record<string, keyof ProfileSpec> = {
   timezone: "timezone", tz: "timezone",
   seed: "fingerprintSeed", fingerprintseed: "fingerprintSeed", fingerprint_seed: "fingerprintSeed",
   proxy: "proxyName", proxyname: "proxyName", proxy_name: "proxyName",
+  webrtcmode: "webrtcMode", webrtc_mode: "webrtcMode",
   webrtc: "webrtcIp", webrtcip: "webrtcIp", webrtc_ip: "webrtcIp", ip: "webrtcIp",
   geolocation: "geolocationMode", geolocationmode: "geolocationMode", geo_mode: "geolocationMode",
   latitude: "geolocationLatitude", lat: "geolocationLatitude",
@@ -63,6 +65,9 @@ export function parseBulkCsv(text: string): ProfileSpec[] {
         } else if (key === "geolocationMode") {
           const mode = cell.toLowerCase();
           if (mode === "real" || mode === "disable" || mode === "custom") spec.geolocationMode = mode;
+        } else if (key === "webrtcMode") {
+          const mode = cell.toLowerCase();
+          if (mode === "auto" || mode === "real" || mode === "altered" || mode === "disable") spec.webrtcMode = mode;
         } else if (key === "tags") {
           spec.tags = normalizeTags(cell);
         } else if (key === "platform") {

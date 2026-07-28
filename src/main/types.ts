@@ -31,12 +31,14 @@ export interface ResolvedProfileProxy {
 
 export type CloakPlatform = "windows" | "macos";
 export type GeolocationMode = "real" | "disable" | "custom";
+export type WebRtcMode = "auto" | "real" | "altered" | "disable";
 
 export interface CloakFingerprintMeta {
   fingerprintSeed?: number;
   platform?: CloakPlatform;
   timezone?: string | null;
   locale?: string | null;
+  webrtcMode?: WebRtcMode;
   webrtcIp?: string | null;
   geolocationMode?: GeolocationMode;
   geolocationLatitude?: number | null;

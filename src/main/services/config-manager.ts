@@ -398,6 +398,14 @@ function sanitizeOptionalIp(value: unknown): string | null {
   return ip;
 }
 
+function sanitizeWebRtcMode(value: unknown, legacyIp?: unknown): "auto" | "real" | "altered" | "disable" {
+  if (value === undefined || value === null || value === "") {
+    return sanitizeOptionalIp(legacyIp) ? "altered" : "auto";
+  }
+  if (value === "auto" || value === "real" || value === "altered" || value === "disable") return value;
+  throw new Error(`Invalid WebRTC mode: ${JSON.stringify(value)}`);
+}
+
 function sanitizeGeolocationMode(value: unknown): "real" | "disable" | "custom" {
   if (value === undefined || value === null || value === "") return "real";
   if (value === "real" || value === "disable" || value === "custom") return value;
@@ -776,6 +784,7 @@ export function getProfileMeta(dirId: string): CloakProfileMeta | null {
     platform: cp.platform === "macos" ? "macos" : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
+    webrtcMode: sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp),
     webrtcIp: sanitizeOptionalIp(cp.webrtcIp),
     geolocationMode: sanitizeGeolocationMode(cp.geolocationMode),
     geolocationLatitude: sanitizeOptionalNumber(cp.geolocationLatitude, -90, 90),
@@ -824,7 +833,9 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.platform !== undefined) next.platform = sanitizeCloakPlatform(meta.platform);
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
   if (meta.locale !== undefined) next.locale = sanitizeOptionalLocale(meta.locale);
+  if (meta.webrtcMode !== undefined) next.webrtcMode = sanitizeWebRtcMode(meta.webrtcMode, next.webrtcIp);
   if (meta.webrtcIp !== undefined) next.webrtcIp = sanitizeOptionalIp(meta.webrtcIp);
+  if (next.webrtcMode === "real" || next.webrtcMode === "disable") next.webrtcIp = null;
   if (meta.geolocationMode !== undefined) next.geolocationMode = sanitizeGeolocationMode(meta.geolocationMode);
   if (meta.geolocationLatitude !== undefined) next.geolocationLatitude = sanitizeOptionalNumber(meta.geolocationLatitude, -90, 90);
   if (meta.geolocationLongitude !== undefined) next.geolocationLongitude = sanitizeOptionalNumber(meta.geolocationLongitude, -180, 180);
@@ -1034,7 +1045,9 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.fingerprintSeed = sanitizeFingerprintSeed(profile.fingerprintSeed || 12345);
       profile.timezone = sanitizeOptionalTimezone(profile.timezone);
       profile.locale = sanitizeOptionalLocale(profile.locale);
+      profile.webrtcMode = sanitizeWebRtcMode(profile.webrtcMode, profile.webrtcIp);
       profile.webrtcIp = sanitizeOptionalIp(profile.webrtcIp);
+      if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
       profile.geolocationMode = sanitizeGeolocationMode(profile.geolocationMode);
       profile.geolocationLatitude = sanitizeOptionalNumber(profile.geolocationLatitude, -90, 90);
       profile.geolocationLongitude = sanitizeOptionalNumber(profile.geolocationLongitude, -180, 180);

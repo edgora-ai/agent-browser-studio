@@ -12,11 +12,11 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | Platform/language | Configurable | native | Window/Worker Navigator + network headers |
 | CPU/memory/touch | Configurable | native | Window/Worker Navigator + touch identity |
 | Screen/DPR/depth | Configurable | native | Blink Screen + LocalDOMWindow |
-| Canvas | Stable noise | native | 8-bit, float16 and float32 readbacks |
+| Canvas | Stable noise | native | idempotent 8-bit, float16 and float32 readbacks |
 | Audio | Stable noise | native | AudioBuffer + analyser readback paths |
 | WebGL vendor/renderer | Configurable | native | WebGL 1/2 parameter path |
 | WebGPU vendor | Configurable | native | GPUAdapter info in Window/Worker |
-| WebRTC | Exit-IP policy | native | allocator + candidate + SDP paths |
+| WebRTC | Real/altered/disabled | native + app config | allocator + candidate + SDP paths |
 | Fonts | Allow-list + profile directory | native on macOS | CoreText registration before renderer sandbox |
 | Timezone | Configurable | native Chromium switch | ICU/V8 process timezone |
 | ClientRects | Stable noise | native | Blink layout geometry export |
