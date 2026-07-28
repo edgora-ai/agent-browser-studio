@@ -38,9 +38,12 @@ readbacks use detached, stable native pixel noise without modifying the visible
 backing canvas. WebGL
 1/2 identity now comes from the native parameter path. AudioBuffer and analyser
 readbacks apply stable native noise. OffscreenCanvas blob export shares the
-same detached Canvas noise, and storage estimates use the configured native
-quota. Media device IDs are remapped natively across enumeration, exact/ideal
-constraints, track settings/capabilities and audio-output routing. On macOS,
+same detached Canvas noise, WebGPU adapter vendor identity is native in both
+Window and Worker, and storage estimates use the configured native quota.
+Dedicated, Shared, and Service Worker Navigator values use the same immutable
+profile identity as Window. Media device IDs are remapped natively across
+enumeration, exact/ideal constraints, track settings/capabilities and
+audio-output routing. On macOS,
 profile font
 directories are registered with CoreText before the renderer sandbox, and the
 registered font metadata participates in Blink's native allow-list. Canvas noise

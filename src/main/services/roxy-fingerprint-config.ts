@@ -45,6 +45,7 @@ export interface RoxyFingerprintConfig {
   canvas: { enabled: boolean; seed: string };
   audio: { enabled: boolean; seed: string; amplitude: number };
   webgl: { vendor: string; renderer: string };
+  webgpu: { mode: "webgl"; vendor: string };
   webrtc: { mode: "real" | "altered" | "disable"; publicIp: string | null };
   timezone: string | null;
   geolocation: {
@@ -84,6 +85,15 @@ export function buildRoxyFingerprintConfig(
     ? "Macintosh; Intel Mac OS X 10_15_7"
     : "Windows NT 10.0; Win64; x64";
   const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
+  const webgl = {
+    vendor: normalizeText(meta.gpuVendor, platform === "MacIntel" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)"),
+    renderer: normalizeText(
+      meta.gpuRenderer,
+      platform === "MacIntel"
+        ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
+        : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    ),
+  };
 
   return {
     schemaVersion: ROXY_FINGERPRINT_SCHEMA_VERSION,
@@ -109,15 +119,8 @@ export function buildRoxyFingerprintConfig(
     storageQuotaBytes: normalizeInteger(meta.storageQuota, 1, 1048576, 120000) * 1024 * 1024,
     canvas: { enabled: true, seed: deriveSeed(seed, "canvas") },
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
-    webgl: {
-      vendor: normalizeText(meta.gpuVendor, platform === "MacIntel" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)"),
-      renderer: normalizeText(
-        meta.gpuRenderer,
-        platform === "MacIntel"
-          ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
-          : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-      ),
-    },
+    webgl,
+    webgpu: { mode: "webgl", vendor: deriveWebGpuVendor(webgl.vendor, webgl.renderer) },
     webrtc: meta.webrtcIp
       ? { mode: "altered", publicIp: meta.webrtcIp }
       : { mode: "real", publicIp: null },
@@ -168,6 +171,14 @@ function normalizeInteger(value: unknown, min: number, max: number, fallback: nu
 
 function normalizeText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function deriveWebGpuVendor(webglVendor: string, webglRenderer: string): string {
+  const identity = `${webglVendor} ${webglRenderer}`;
+  for (const vendor of ["NVIDIA", "AMD", "Apple", "Intel", "Qualcomm", "ARM", "Imagination", "Microsoft", "Google"]) {
+    if (new RegExp(`\\b${vendor}\\b`, "i").test(identity)) return vendor;
+  }
+  return "Google";
 }
 
 function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig["geolocation"] {
