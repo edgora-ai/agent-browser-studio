@@ -1,0 +1,22 @@
+diff --git a/third_party/blink/renderer/core/events/navigator_events.cc b/third_party/blink/renderer/core/events/navigator_events.cc
+index a57561775c..153eec8703 100644
+--- a/third_party/blink/renderer/core/events/navigator_events.cc
++++ b/third_party/blink/renderer/core/events/navigator_events.cc
+@@ -30,6 +30,7 @@
+ 
+ #include "third_party/blink/renderer/core/events/navigator_events.h"
+ 
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/navigator.h"
+@@ -38,6 +39,9 @@
+ namespace blink {
+ 
+ int32_t NavigatorEvents::maxTouchPoints(Navigator& navigator) {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.max_touch_points();
+   LocalDOMWindow* window = navigator.DomWindow();
+   return window ? window->GetFrame()->GetSettings()->GetMaxTouchPoints() : 0;
+ }

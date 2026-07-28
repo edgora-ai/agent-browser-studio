@@ -10,7 +10,7 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | UA Client Hints | Configurable | native | Blink + Sec-CH-UA headers |
 | Do Not Track | Enabled identity/header | native | renderer preferences + Worker requests |
 | Platform/language | Configurable | native | Window/Worker Navigator + network headers |
-| CPU/device memory | Configurable | native | Window/Worker Navigator |
+| CPU/memory/touch | Configurable | native | Window/Worker Navigator + touch identity |
 | Screen/DPR/depth | Configurable | native | Blink Screen + LocalDOMWindow |
 | Canvas | Stable noise | native | 8-bit, float16 and float32 readbacks |
 | Audio | Stable noise | native | AudioBuffer + analyser readback paths |

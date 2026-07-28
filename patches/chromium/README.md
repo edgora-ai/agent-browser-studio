@@ -31,10 +31,10 @@ WebRTC policy, font enumeration, ClientRects, timezone reporting, media/plugin
 enumeration, and geolocation policy.
 
 Native patches now apply the same UA, UA Client Hints headers, platform,
-language, CPU, memory, screen and DPR identity in Blink, the network stack and
-workers. Do Not Track is also applied through renderer preferences so the DOM
-value and Window/Dedicated/Shared/Service Worker request headers remain
-consistent. Chrome explicitly forwards the versioned profile configuration
+language, CPU, memory, touch, screen and DPR identity in Blink, the network
+stack and workers. Do Not Track is also applied through renderer preferences
+so the DOM value and Window/Dedicated/Shared/Service Worker request headers
+remain consistent. Chrome explicitly forwards the versioned profile configuration
 only to renderer processes. Canvas `toDataURL`, `toBlob` and `getImageData`
 readbacks use detached, stable native pixel noise without modifying the visible
 backing canvas. WebGL

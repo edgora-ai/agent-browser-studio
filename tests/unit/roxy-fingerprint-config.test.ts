@@ -31,6 +31,7 @@ describe("Roxy fingerprint config", () => {
 
     expect(second).toEqual(first);
     expect(first.platform).toBe("Win32");
+    expect(first.maxTouchPoints).toBe(0);
     expect(first.languages).toEqual(["zh-CN", "zh"]);
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
     expect(first.screen.availHeight).toBe(1032);
