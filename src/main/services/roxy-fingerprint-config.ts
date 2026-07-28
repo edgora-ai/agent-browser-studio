@@ -46,6 +46,10 @@ export interface RoxyFingerprintConfig {
   audio: { enabled: boolean; seed: string; amplitude: number };
   webgl: { vendor: string; renderer: string };
   webgpu: { mode: "webgl"; vendor: string };
+  speechSynthesis: {
+    enabled: boolean;
+    voices: Array<{ name: string; lang: string; localService: boolean }>;
+  };
   webrtc: { mode: "real" | "altered" | "disable"; publicIp: string | null };
   timezone: string | null;
   geolocation: {
@@ -121,6 +125,7 @@ export function buildRoxyFingerprintConfig(
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
     webgl,
     webgpu: { mode: "webgl", vendor: deriveWebGpuVendor(webgl.vendor, webgl.renderer) },
+    speechSynthesis: { enabled: true, voices: selectSpeechVoices(platform, locale) },
     webrtc: meta.webrtcIp
       ? { mode: "altered", publicIp: meta.webrtcIp }
       : { mode: "real", publicIp: null },
@@ -179,6 +184,44 @@ function deriveWebGpuVendor(webglVendor: string, webglRenderer: string): string 
     if (new RegExp(`\\b${vendor}\\b`, "i").test(identity)) return vendor;
   }
   return "Google";
+}
+
+function selectSpeechVoices(
+  platform: "Win32" | "MacIntel",
+  locale: string,
+): Array<{ name: string; lang: string; localService: boolean }> {
+  const language = locale.split("-")[0].toLowerCase();
+  const windows: Record<string, string[]> = {
+    en: [
+      "Microsoft David - English (United States)",
+      "Microsoft Mark - English (United States)",
+      "Microsoft Zira - English (United States)",
+    ],
+    de: ["Microsoft Katja - German (Germany)"],
+    es: ["Microsoft Helena - Spanish (Spain)"],
+    fr: ["Microsoft Hortense - French (France)"],
+    it: ["Microsoft Elsa - Italian (Italy)"],
+    ja: ["Microsoft Haruka - Japanese (Japan)"],
+    ko: ["Microsoft Heami - Korean (Korea)"],
+    pt: ["Microsoft Maria - Portuguese (Brazil)"],
+    ru: ["Microsoft Irina - Russian (Russia)"],
+    zh: ["Microsoft Huihui - Chinese (Simplified, PRC)"],
+  };
+  const mac: Record<string, string[]> = {
+    en: ["Samantha", "Alex"],
+    de: ["Anna"],
+    es: ["Monica"],
+    fr: ["Thomas"],
+    it: ["Alice"],
+    ja: ["Kyoko"],
+    ko: ["Yuna"],
+    pt: ["Joana"],
+    ru: ["Milena"],
+    zh: ["Tingting"],
+  };
+  const names = (platform === "Win32" ? windows : mac)[language]
+    || (platform === "Win32" ? windows.en : mac.en);
+  return names.map((name) => ({ name, lang: locale, localService: true }));
 }
 
 function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig["geolocation"] {

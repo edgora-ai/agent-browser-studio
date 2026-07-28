@@ -23,6 +23,7 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | Geolocation | Real/disabled/custom | native | Blink request/result path |
 | Workers | Identity parity | native | shared Navigator/Canvas/WebGL/WebGPU/storage paths |
 | Plugins/MIME types | Stable 5 PDF / 2 MIME | native | Blink DOMPluginArray |
+| Speech voices | Locale/platform identity | native | browser TTS list + playback mapping |
 | Media devices | Stable labels/count/IDs | native | enumeration, constraints, settings and output routing |
 | Storage quota | Configurable | native | StorageManager estimate callback |
 

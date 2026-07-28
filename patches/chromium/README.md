@@ -43,7 +43,9 @@ readbacks apply stable native noise. OffscreenCanvas blob export shares the
 same detached Canvas noise, WebGPU adapter vendor identity is native in both
 Window and Worker, and storage estimates use the configured native quota.
 Dedicated, Shared, and Service Worker Navigator values use the same immutable
-profile identity as Window. Media device IDs are remapped natively across
+profile identity as Window. Speech synthesis exposes a stable locale/platform
+voice list while mapping selected voices to an available system voice for
+playback. Media device IDs are remapped natively across
 enumeration, exact/ideal constraints, track settings/capabilities and
 audio-output routing. On macOS,
 profile font

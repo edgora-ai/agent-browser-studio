@@ -41,6 +41,10 @@ describe("Roxy fingerprint config", () => {
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
     expect(first.webgpu).toEqual({ mode: "webgl", vendor: "NVIDIA" });
     expect(first.doNotTrack).toBe("1");
+    expect(first.speechSynthesis).toEqual({
+      enabled: true,
+      voices: [{ name: "Microsoft Huihui - Chinese (Simplified, PRC)", lang: "zh-CN", localService: true }],
+    });
     expect(first.geolocation).toEqual({ mode: "custom", latitude: 31.2304, longitude: 121.4737, accuracy: 25 });
     expect(first.mediaDevices).toEqual({ enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 });
   });
@@ -54,6 +58,8 @@ describe("Roxy fingerprint config", () => {
     expect(decoded.platform).toBe("MacIntel");
     expect(decoded.userAgent).toContain("Chrome/150.0.7871.114");
     expect(decoded.webgpu).toEqual({ mode: "webgl", vendor: "Apple" });
+    expect(decoded.speechSynthesis.voices.map((voice: { name: string }) => voice.name))
+      .toEqual(["Samantha", "Alex"]);
     expect(json).not.toContain("license");
     expect(json).not.toContain("lumi.conf");
   });

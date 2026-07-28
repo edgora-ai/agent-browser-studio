@@ -48,6 +48,17 @@ class RoxyFingerprintConfig {
     std::string actual_id;
   };
 
+  struct SpeechVoice {
+    std::string name;
+    std::string lang;
+    bool local_service = true;
+  };
+
+  struct RuntimeSpeechMapping {
+    std::string synthetic_name;
+    std::string actual_name;
+  };
+
   static const RoxyFingerprintConfig& Get() {
     static const base::NoDestructor<RoxyFingerprintConfig> config;
     return *config;
@@ -76,6 +87,12 @@ class RoxyFingerprintConfig {
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& webgpu_vendor() const { return webgpu_vendor_; }
   bool do_not_track_enabled() const { return do_not_track_enabled_; }
+  bool speech_synthesis_enabled() const {
+    return speech_synthesis_enabled_;
+  }
+  const std::vector<SpeechVoice>& speech_voices() const {
+    return speech_voices_;
+  }
   const std::string& timezone() const { return timezone_; }
   const std::vector<std::string>& fonts() const { return fonts_; }
   const std::vector<RuntimeFont>& runtime_fonts() const {
@@ -194,6 +211,32 @@ class RoxyFingerprintConfig {
     return std::string(id);
   }
 
+  static void RegisterRuntimeSpeechMapping(std::string synthetic_name,
+                                           std::string actual_name) {
+    RoxyFingerprintConfig& config =
+        const_cast<RoxyFingerprintConfig&>(Get());
+    if (!config.enabled_ || synthetic_name.empty() || actual_name.empty())
+      return;
+    for (RuntimeSpeechMapping& mapping : config.runtime_speech_mappings_) {
+      if (mapping.synthetic_name == synthetic_name) {
+        mapping.actual_name = std::move(actual_name);
+        return;
+      }
+    }
+    if (config.runtime_speech_mappings_.size() >= 64)
+      return;
+    config.runtime_speech_mappings_.push_back(
+        {std::move(synthetic_name), std::move(actual_name)});
+  }
+
+  std::string MapSpeechVoiceToActual(std::string_view name) const {
+    for (const RuntimeSpeechMapping& mapping : runtime_speech_mappings_) {
+      if (mapping.synthetic_name == name)
+        return mapping.actual_name;
+    }
+    return std::string(name);
+  }
+
   std::string accept_languages() const {
     std::string result;
     for (const std::string& language : languages_) {
@@ -296,6 +339,26 @@ class RoxyFingerprintConfig {
       webgpu_vendor_ = ReadString(*webgpu, "vendor");
     if (const std::string* do_not_track = root->FindString("doNotTrack"))
       do_not_track_enabled_ = *do_not_track == "1";
+    if (const base::DictValue* speech = root->FindDict("speechSynthesis")) {
+      speech_synthesis_enabled_ =
+          speech->FindBool("enabled").value_or(false);
+      if (const base::ListValue* voices = speech->FindList("voices")) {
+        for (const base::Value& value : *voices) {
+          if (!value.is_dict() || speech_voices_.size() >= 32)
+            continue;
+          const base::DictValue& voice = value.GetDict();
+          std::string name = ReadString(voice, "name");
+          std::string lang = ReadString(voice, "lang");
+          if (name.empty() || name.size() > 160 || lang.empty() ||
+              lang.size() > 35) {
+            continue;
+          }
+          speech_voices_.push_back(
+              {std::move(name), std::move(lang),
+               voice.FindBool("localService").value_or(true)});
+        }
+      }
+    }
     if (const base::DictValue* canvas = root->FindDict("canvas")) {
       canvas_noise_enabled_ = canvas->FindBool("enabled").value_or(false);
       canvas_noise_seed_ = HashSeed(ReadString(*canvas, "seed"));
@@ -423,6 +486,9 @@ class RoxyFingerprintConfig {
   std::string webgl_renderer_;
   std::string webgpu_vendor_;
   bool do_not_track_enabled_ = false;
+  bool speech_synthesis_enabled_ = false;
+  std::vector<SpeechVoice> speech_voices_;
+  std::vector<RuntimeSpeechMapping> runtime_speech_mappings_;
   std::string timezone_;
   std::vector<std::string> fonts_;
   std::vector<RuntimeFont> runtime_fonts_;
