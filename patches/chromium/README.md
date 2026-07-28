@@ -57,3 +57,9 @@ desktop device set, and the standard Chromium PDF plugin/MIME set is enforced
 in Blink. Geolocation `real`, `disable`, and `custom` policies run in Blink's
 native request/result path. See
 `CAPABILITY_MATRIX.md` for the acceptance status.
+
+The application baseline capture records Window and Worker Navigator identity,
+UA high-entropy values, Canvas, Audio, ClientRects, WebGL/WebGPU, fonts,
+plugins, speech voices, media-device counts, storage quota, DNT and touch state.
+It is intended for same-profile restart stability and cross-seed distinction
+checks once a patched Chromium binary is available.
