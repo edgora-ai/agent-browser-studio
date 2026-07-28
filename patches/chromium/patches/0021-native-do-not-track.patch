@@ -1,0 +1,27 @@
+diff --git a/chrome/browser/renderer_preferences_util.cc b/chrome/browser/renderer_preferences_util.cc
+index 254a3b5a0c..990cd8fd6e 100644
+--- a/chrome/browser/renderer_preferences_util.cc
++++ b/chrome/browser/renderer_preferences_util.cc
+@@ -28,6 +28,7 @@
+ #include "content/public/browser/renderer_preferences_util.h"
+ #include "content/public/common/content_features.h"
+ #include "media/media_buildflags.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
+ #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+ #include "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom.h"
+@@ -150,8 +151,12 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
+   prefs->caret_blink_interval =
+       ui::NativeTheme::GetInstanceForNativeUi()->caret_blink_interval();
+   prefs->enable_referrers = pref_service->GetBoolean(prefs::kEnableReferrers);
+-  prefs->enable_do_not_track =
+-      pref_service->GetBoolean(prefs::kEnableDoNotTrack);
++  const blink::RoxyFingerprintConfig& roxy_config =
++      blink::RoxyFingerprintConfig::Get();
++  prefs->enable_do_not_track = roxy_config.enabled()
++                                   ? roxy_config.do_not_track_enabled()
++                                   : pref_service->GetBoolean(
++                                         prefs::kEnableDoNotTrack);
+   prefs->enable_encrypted_media =
+       pref_service->GetBoolean(prefs::kEnableEncryptedMedia);
+ 

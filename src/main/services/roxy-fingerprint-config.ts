@@ -128,7 +128,7 @@ export function buildRoxyFingerprintConfig(
     geolocation: normalizeGeolocation(meta),
     mediaDevices: { enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 },
     fonts: selectStableFonts(seed, platform, locale),
-    doNotTrack: null,
+    doNotTrack: "1",
   };
 }
 

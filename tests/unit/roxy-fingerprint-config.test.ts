@@ -40,6 +40,7 @@ describe("Roxy fingerprint config", () => {
     expect(first.fonts.some((font) => /YaHei|Gothic|PingFang|Malgun/.test(font))).toBe(true);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
     expect(first.webgpu).toEqual({ mode: "webgl", vendor: "NVIDIA" });
+    expect(first.doNotTrack).toBe("1");
     expect(first.geolocation).toEqual({ mode: "custom", latitude: 31.2304, longitude: 121.4737, accuracy: 25 });
     expect(first.mediaDevices).toEqual({ enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 });
   });

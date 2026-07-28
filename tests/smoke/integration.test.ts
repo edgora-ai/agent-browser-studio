@@ -685,6 +685,7 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0018-forward-profile-config-to-renderer.patch",
       "0019-native-media-device-remapping.patch",
       "0020-native-webgpu-identity.patch",
+      "0021-native-do-not-track.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

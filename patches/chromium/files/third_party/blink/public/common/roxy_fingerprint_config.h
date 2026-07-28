@@ -75,6 +75,7 @@ class RoxyFingerprintConfig {
   const std::string& webgl_vendor() const { return webgl_vendor_; }
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& webgpu_vendor() const { return webgpu_vendor_; }
+  bool do_not_track_enabled() const { return do_not_track_enabled_; }
   const std::string& timezone() const { return timezone_; }
   const std::vector<std::string>& fonts() const { return fonts_; }
   const std::vector<RuntimeFont>& runtime_fonts() const {
@@ -293,6 +294,8 @@ class RoxyFingerprintConfig {
     }
     if (const base::DictValue* webgpu = root->FindDict("webgpu"))
       webgpu_vendor_ = ReadString(*webgpu, "vendor");
+    if (const std::string* do_not_track = root->FindString("doNotTrack"))
+      do_not_track_enabled_ = *do_not_track == "1";
     if (const base::DictValue* canvas = root->FindDict("canvas")) {
       canvas_noise_enabled_ = canvas->FindBool("enabled").value_or(false);
       canvas_noise_seed_ = HashSeed(ReadString(*canvas, "seed"));
@@ -419,6 +422,7 @@ class RoxyFingerprintConfig {
   std::string webgl_vendor_;
   std::string webgl_renderer_;
   std::string webgpu_vendor_;
+  bool do_not_track_enabled_ = false;
   std::string timezone_;
   std::vector<std::string> fonts_;
   std::vector<RuntimeFont> runtime_fonts_;
