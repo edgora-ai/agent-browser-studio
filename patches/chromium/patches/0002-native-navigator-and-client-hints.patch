@@ -63,7 +63,7 @@ index cccfafe8..f58b52f0 100644
  String NavigatorBase::userAgent() const {
 +  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +  if (config.enabled()) {
-+    return String::FromUTF8(config.user_agent());
++    return String::FromUtf8(config.user_agent());
 +  }
    ExecutionContext* execution_context = GetExecutionContext();
    return execution_context ? execution_context->UserAgent() : String();
@@ -72,7 +72,7 @@ index cccfafe8..f58b52f0 100644
  String NavigatorBase::platform() const {
 +  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +  if (config.enabled()) {
-+    return String::FromUTF8(config.platform());
++    return String::FromUtf8(config.platform());
 +  }
  #if BUILDFLAG(IS_ANDROID)
    // We need to check the ReduceUserAgentMinorVersion feature flag for
@@ -117,7 +117,7 @@ index 583f05f8..d0551fd0 100644
  String Navigator::GetAcceptLanguages() {
 +  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +  if (config.enabled()) {
-+    return String::FromUTF8(config.accept_languages());
++    return String::FromUtf8(config.accept_languages());
 +  }
    if (!DomWindow())
      return DefaultLanguage();
@@ -163,7 +163,7 @@ index db1a55d0..3396c923 100644
  String WorkerNavigator::GetAcceptLanguages() {
 +  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +  if (config.enabled()) {
-+    return String::FromUTF8(config.accept_languages());
++    return String::FromUtf8(config.accept_languages());
 +  }
    auto* global_scope = To<WorkerOrWorkletGlobalScope>(GetExecutionContext());
    if (!global_scope) {

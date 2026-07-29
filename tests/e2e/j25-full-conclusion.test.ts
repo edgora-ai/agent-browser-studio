@@ -123,10 +123,12 @@ describe("J25 — full task finishes done with a conclusion", () => {
     expect(tools).toContain("browser_evaluate");
     expect(tools).toContain("set_var");
     expect(tools).toContain("get_var");
-    // Variable persisted + get_var read it back.
-    expect(run.variables.last_query).toBe("最新新闻");
+    // The raw value round-tripped internally, while public run traces retain
+    // only byte-length markers so variables cannot leak through IPC/history.
+    expect(run.variables.last_query).toBe("[REDACTED:12B]");
     const gv = run.steps.find((s: any) => s.tool === "get_var");
-    expect(JSON.stringify(gv.result)).toContain("最新新闻");
+    expect(JSON.stringify(gv.result)).toContain("[REDACTED_VALUE:12B]");
+    expect(JSON.stringify(gv.result)).not.toContain("最新新闻");
     // News row landed.
     const stored = await h.page.evaluate(async () => {
       const r = await (window as any).cloak.api.agentDb.query("SELECT title FROM news");

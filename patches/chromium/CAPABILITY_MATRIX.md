@@ -18,7 +18,7 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | WebGPU vendor | Configurable | native | GPUAdapter info in Window/Worker |
 | WebRTC | Real/altered/disabled | native + app config | allocator + candidate + SDP paths |
 | Fonts | Allow-list + profile directory | native on macOS | CoreText registration before renderer sandbox |
-| Timezone | Configurable | native Chromium switch | ICU/V8 process timezone |
+| Timezone | Configurable | native | Blink `TimeZoneController` + ICU/V8 process timezone |
 | ClientRects | Stable noise | native | Blink layout geometry export |
 | Geolocation | Real/disabled/custom | native | Blink request/result path |
 | Workers | Identity parity | native | shared Navigator/Canvas/WebGL/WebGPU/storage paths |

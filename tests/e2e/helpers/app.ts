@@ -16,21 +16,39 @@ function resolveCloakBinaryPath(): string | null {
     return process.env.CLOAKBROWSER_BINARY_PATH;
   }
   const home = os.homedir();
+  const managed = newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
+  if (managed) return managed;
+
   const cacheDir = path.join(home, ".cloakbrowser");
+  return newestCachedBinary(cacheDir);
+}
+
+function newestCachedBinary(cacheDir: string): string | null {
   if (!fs.existsSync(cacheDir)) return null;
+  const candidates: Array<{ version: number[]; path: string }> = [];
   try {
     for (const entry of fs.readdirSync(cacheDir)) {
-      if (!entry.startsWith("chromium-")) continue;
+      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})(?:\..*)?$/);
+      if (!match) continue;
       const cand =
         process.platform === "win32"
           ? path.join(cacheDir, entry, "chrome.exe")
-          : path.join(cacheDir, entry, "Chromium.app", "Contents", "MacOS", "Chromium");
-      if (fs.existsSync(cand)) return cand;
+          : process.platform === "darwin"
+            ? path.join(cacheDir, entry, "Chromium.app", "Contents", "MacOS", "Chromium")
+            : path.join(cacheDir, entry, "chromium");
+      if (fs.existsSync(cand)) candidates.push({ version: match[1].split(".").map(Number), path: cand });
     }
   } catch (_) {
     /* ignore */
   }
-  return null;
+  candidates.sort((a, b) => {
+    for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
+      const delta = (b.version[i] || 0) - (a.version[i] || 0);
+      if (delta) return delta;
+    }
+    return 0;
+  });
+  return candidates[0]?.path || null;
 }
 
 const REPO = path.resolve(__dirname, "..", "..", "..");

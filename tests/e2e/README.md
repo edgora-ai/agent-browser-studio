@@ -51,23 +51,24 @@ npm run test:e2e:j4
 
 ## Prerequisites
 
-- **CloakBrowser binary** cached at `~/.cloakbrowser/chromium-<ver>/` (or set
-  `CLOAKBROWSER_BINARY_PATH`). `setupTestApp` auto-detects it so launches don't
-  re-download or re-verify checksums (which need network to cloakbrowser.dev).
+- **Chromium binary** installed under `~/.roxy-lite-cloak/chromium-<ver>/`,
+  cached at the legacy `~/.cloakbrowser/chromium-<ver>/`, or selected with
+  `CLOAKBROWSER_BINARY_PATH`. `setupTestApp` prefers the independent cache and
+  chooses its newest version without a network lookup.
 - **J3 only**: needs to reach `clients2.google.com`. Either:
   - `E2E_EXTENSION_NETWORK=1` — host has direct internet, OR
   - `E2E_TEST_PROXY=http://host:port` (or `socks5://...`) — host can't reach
     Google directly but a proxy can. The app's default proxy is configured via
     IPC so the CRX download routes through it (the real product path).
   - Otherwise J3 is skipped.
-- Runs **serially** (no file parallelism) — only one Electron app at a time, or
-  the CDP port allocator and MCP port 26581 collide.
+- Runs **serially** (no file parallelism) — only one test Electron app at a
+  time. MCP prefers port 26581 and falls back to an ephemeral loopback port if
+  another installed instance already owns it.
 
 ## Troubleshooting
 
-- **`EADDRINUSE 26581`** / **`launch success: false`**: orphaned Electron from a
-  previous run. Kill with `pkill -9 -f Chromium; pkill -9 -f "MacOS/Electron"`,
-  then rerun.
+- **`launch success: false`**: an orphaned browser may still own a profile or
+  CDP port. Stop the matching test app/profile and rerun.
 - **J2 `launched.length === 0`**: same cause — orphaned Chromium holds the CDP
   ports. Clean and rerun.
 - Flaky failures usually mean a process leaked; `closeApp` SIGKILLs orphans via

@@ -19,6 +19,7 @@
     "test:e2e:j3": "vitest run -c vitest.config.e2e.ts tests/e2e/j3-extensions.test.ts",
     "test:e2e:j4": "vitest run -c vitest.config.e2e.ts tests/e2e/j4-agent-stream.test.ts",
     "verify:chromium": "npm run build && node dist/tools/verify-native-chromium.js",
+    "install:chromium": "npm run build && node dist/tools/install-native-chromium.js",
     "pretest": "npm run build",
     "postinstall": "electron-builder install-app-deps"
   },

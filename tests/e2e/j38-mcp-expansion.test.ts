@@ -1,7 +1,8 @@
 // J38: MCP expansion (P1). The MCP server now exposes browser_* / db / http
 // agent tools (prefixed cloak_) plus automation/runs/jobs, so external AI can
 // drive a launched profile and the agent DB over MCP. Connects to the running
-// app's MCP server (127.0.0.1:26581) with the revealed token.
+// app's loopback MCP server with the revealed token. The preferred port is
+// 26581, with an ephemeral fallback when another local instance owns it.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import * as http from "node:http";
@@ -40,7 +41,7 @@ describe("J38 — MCP exposes browser/db/http + automation/runs/jobs", () => {
     const start = Date.now();
     while (Date.now() - start < 15000) {
       const st = await h.page.evaluate(() => (window as any).cloak.api.mcp.status());
-      if (st.running) { port = st.port || 26581; break; }
+      if (st.running) { port = st.port; break; }
       await h.page.waitForTimeout(300);
     }
     expect(port, "MCP server must be running").toBeGreaterThan(0);

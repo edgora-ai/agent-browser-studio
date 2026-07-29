@@ -40,11 +40,15 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third
    }
  }
  
-@@ -221,9 +232,31 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(
+@@ -213,6 +224,7 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(
      return NotShared<DOMFloat32Array>(nullptr);
    }
  
 +  ApplyRoxyFingerprintNoise(channel_index);
+   return getChannelData(channel_index);
+ }
+ 
+@@ -224,6 +236,27 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(unsigned channel_index) {
    return NotShared<DOMFloat32Array>(channels_[channel_index].Get());
  }
  

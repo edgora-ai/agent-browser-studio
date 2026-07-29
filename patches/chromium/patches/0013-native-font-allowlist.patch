@@ -37,17 +37,7 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/renderer/platform/font_family_names.h"
  #include "third_party/blink/renderer/platform/fonts/alternate_font_family.h"
-@@ -153,6 +154,9 @@ const SimpleFontData* FontCache::GetFontData(
-     const FontDescription& font_description,
-     const AtomicString& family,
-     AlternateFontName altername_font_name) {
-+  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
-+  if (!config.IsFontAllowed(family.GetString().Utf8()))
-+    return nullptr;
-   if (const FontPlatformData* platform_data = GetFontPlatformData(
-           font_description,
-           FontFaceCreationParams(
-@@ -174,6 +178,9 @@ const SimpleFontData* FontCache::FontDataFromFontPlatformData(
+@@ -174,6 +175,9 @@ const SimpleFontData* FontCache::FontDataFromFontPlatformData(
  bool FontCache::IsPlatformFamilyMatchAvailable(
      const FontDescription& font_description,
      const AtomicString& family) {
@@ -57,7 +47,7 @@ diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_par
    return GetFontPlatformData(
        font_description,
        FontFaceCreationParams(AdjustFamilyNameToAvoidUnsupportedFonts(family)),
-@@ -187,6 +194,10 @@ bool FontCache::IsPlatformFontUniqueNameMatchAvailable(
+@@ -187,6 +191,10 @@ bool FontCache::IsPlatformFontUniqueNameMatchAvailable(
    if (unique_font_name.empty()) {
      return false;
    }

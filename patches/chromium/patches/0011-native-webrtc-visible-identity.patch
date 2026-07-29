@@ -24,7 +24,7 @@ diff --git a/third_party/blink/renderer/platform/peerconnection/rtc_ice_candidat
      String username_fragment,
      String url)
 -    : candidate_(std::move(candidate)),
-+    : candidate_(String::FromUTF8(
++    : candidate_(String::FromUtf8(
 +          RewriteRoxyWebRtcPublicIps(candidate.Utf8()))),
        sdp_mid_(std::move(sdp_mid)),
        sdp_m_line_index_(std::move(sdp_m_line_index)),
@@ -44,10 +44,10 @@ diff --git a/third_party/blink/renderer/platform/peerconnection/rtc_session_desc
                                                               const String& sdp)
 -    : type_(type), sdp_(sdp) {}
 +    : type_(type),
-+      sdp_(String::FromUTF8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()))) {}
++      sdp_(String::FromUtf8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()))) {}
 +
 +void RTCSessionDescriptionPlatform::SetSdp(const String& sdp) {
-+  sdp_ = String::FromUTF8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()));
++  sdp_ = String::FromUtf8(RewriteRoxyWebRtcPublicIps(sdp.Utf8()));
 +}
  
  }  // namespace blink

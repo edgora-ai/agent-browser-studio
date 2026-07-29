@@ -66,16 +66,25 @@ npm install
 npm start
 ```
 
-### Use the current fingerprint engine
+### Use the independent Chromium 149+ engine
 
-CloakLite uses the `cloakbrowser` 0.5.x wrapper. A keyless macOS install keeps the legacy Chromium 145 binary; sign in once to use the current Chromium 150 fingerprint engine on the free one-session tier (or with a paid plan):
+Build Chromium with the independently maintained patch set under
+[`patches/chromium`](patches/chromium/README.md), verify it, and install it into
+the local OSS engine cache:
 
 ```bash
-npx cloakbrowser login
+npm run verify:chromium -- /path/to/Chromium.app
+npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-The app delegates binary selection, license injection, proxy capability detection, and version-aware launch defaults to the official wrapper. GeoIP uses CloakLite's bounded proxy detector by default so a first profile launch never waits for the wrapper's approximately 70 MB database download. Set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` to opt into the wrapper-managed GeoIP database.
+The installer stores versioned builds under `~/.roxy-lite-cloak/`, and the app
+automatically selects the newest installed build. No CloakBrowser license key
+or login is used. `CLOAKBROWSER_BINARY_PATH` remains an explicit override, and
+the pinned license-free community wrapper is retained only as a legacy fallback
+when no independent build is installed. GeoIP defaults to CloakLite's bounded
+proxy detector; set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` only to opt into the
+wrapper-managed GeoIP database.
 
 ### Development checks
 
@@ -97,7 +106,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 
 ## First-Run Workflow
 
-1. Open **CloakBrowser** and install/configure the CloakBrowser binary.
+1. Install or configure the independently built Chromium 149+ binary.
 2. Open **Profiles** and create a profile.
 3. Optional: open **Proxies**, add a proxy, and assign it to the profile.
 4. Launch the profile and run **Check Risk** / consistency checks.

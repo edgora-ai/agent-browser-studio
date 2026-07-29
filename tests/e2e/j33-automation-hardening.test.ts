@@ -1,8 +1,6 @@
 // J33: Automation execution hardening (Slice 1 / quick-win #1). Proves the
-// JobGuard wired into the real automation engine:
-//   (1) a failing action increments failureCount + sets lastError;
-//   (2) after the failure threshold, cooldownUntil is set and surfaced;
-//   (3) a slow action is killed by runTimeoutMs with a timeout error.
+// Manual test runs are bounded by JobGuard timeouts/re-entry protection but do
+// not poison the production scheduler's failure/cooldown counters.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
@@ -31,7 +29,7 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
     return list.find((r: any) => r.id === id);
   }
 
-  it("a failing action increments failureCount and records lastError", async () => {
+  it("a failing manual action reports its error without poisoning scheduler state", async () => {
     const id = await createRule({
       name: "j33-fail",
       trigger: { type: "cron", cron: FAR_CRON },
@@ -41,21 +39,22 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
     expect(res.ok).toBe(false);
     expect(res.result).toContain("fail-j33-sentinel");
     const rule = await getRule(id);
-    expect(rule.failureCount).toBeGreaterThanOrEqual(1);
-    expect(rule.lastError).toContain("fail-j33-sentinel");
+    expect(rule.failureCount ?? 0).toBe(0);
+    expect(rule.lastError).toBeUndefined();
   }, 30000);
 
-  it("after the failure threshold, cooldown is set and surfaced", async () => {
+  it("repeated manual failures do not put scheduled execution into cooldown", async () => {
     const id = await createRule({
       name: "j33-cooldown",
       trigger: { type: "cron", cron: FAR_CRON },
       action: { type: "custom-js", jsCode: "throw new Error('cd-fail')" },
     });
-    // The default cooldown threshold is 3 consecutive failures.
+    // Production scheduler failures enter cooldown after three attempts, but
+    // explicit diagnostics must remain repeatable.
     for (let i = 0; i < 3; i++) await testRun(id);
     const rule = await getRule(id);
-    expect(rule.failureCount).toBeGreaterThanOrEqual(3);
-    expect(rule.cooldownUntil, "cooldownUntil must be set after threshold").toBeGreaterThan(Date.now() - 1000);
+    expect(rule.failureCount ?? 0).toBe(0);
+    expect(rule.cooldownUntil).toBeUndefined();
   }, 40000);
 
   it("a slow action is killed by runTimeoutMs with a timeout error", async () => {
@@ -73,10 +72,10 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
     expect(elapsed, `took ${elapsed}ms, should have timed out near 200ms`).toBeLessThan(10000);
     expect(res.result.toLowerCase()).toMatch(/timed out|timeout/);
     const rule = await getRule(id);
-    expect(rule.failureCount).toBeGreaterThanOrEqual(1);
+    expect(rule.failureCount ?? 0).toBe(0);
   }, 30000);
 
-  it("a successful action resets failureCount", async () => {
+  it("a successful manual action also leaves scheduler state untouched", async () => {
     const id = await createRule({
       name: "j33-recover",
       trigger: { type: "cron", cron: FAR_CRON },
@@ -84,17 +83,19 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
     });
     await testRun(id); // fail once
     let rule = await getRule(id);
-    expect(rule.failureCount).toBeGreaterThanOrEqual(1);
+    expect(rule.failureCount ?? 0).toBe(0);
     // Flip the action to succeed.
     await h.page.evaluate(({ rid, cron }) => (window as any).cloak.api.automation.update({
       id: rid, name: "j33-recover", enabled: true,
       trigger: { type: "cron", cron },
       action: { type: "custom-js", jsCode: "return 'ok'" },
     }), { rid: id, cron: FAR_CRON });
-    await testRun(id); // succeed
+    const success = await testRun(id); // succeed
+    expect(success.ok).toBe(true);
+    expect(success.result).toContain("ok");
     rule = await getRule(id);
-    expect(rule.failureCount).toBe(0);
-    expect(rule.lastResult).toContain("ok");
+    expect(rule.failureCount ?? 0).toBe(0);
+    expect(rule.lastResult).toBeUndefined();
   }, 30000);
 
   it("no unexpected console errors", () => {

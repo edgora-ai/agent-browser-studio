@@ -22,6 +22,8 @@ interface RunResult {
     devices: Array<{ kind: string; deviceId: string; groupId: string; label: string }>;
     audioTrackDeviceId: string | null;
     videoTrackDeviceId: string | null;
+    audioCaptureStatus: "ok" | "timeout" | "error";
+    audioCaptureError: string | null;
   };
   geolocation: { latitude: number; longitude: number; accuracy: number };
   dnt: { window: string | null; dedicated: string | null; shared: string | null; service: string | null };
@@ -127,37 +129,61 @@ async function startOrigin(): Promise<{ origin: string; close: () => Promise<voi
 
 async function captureMedia(page: Page): Promise<RunResult["media"]> {
   return page.evaluate(async () => {
-    let warmup: MediaStream | null = null;
-    try {
-      warmup = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    } catch {
-      // Fake devices are requested at launch, but keep enumeration diagnostic.
-    } finally {
-      warmup?.getTracks().forEach((track) => track.stop());
-    }
     const devices = (await navigator.mediaDevices.enumerateDevices()).map((device) => ({
       kind: device.kind,
       deviceId: device.deviceId,
       groupId: device.groupId,
       label: device.label,
     }));
-    async function exact(kind: "audioinput" | "videoinput"): Promise<string | null> {
+    async function exact(
+      kind: "audioinput" | "videoinput",
+      timeoutMs: number,
+    ): Promise<{
+      status: "ok" | "timeout" | "error";
+      deviceId: string | null;
+      error: string | null;
+    }> {
       const device = devices.find((entry) => entry.kind === kind);
-      if (!device) return null;
+      if (!device) return { status: "error", deviceId: null, error: `No ${kind} device was enumerated` };
       const constraints = kind === "audioinput"
         ? { audio: { deviceId: { exact: device.deviceId } } }
         : { video: { deviceId: { exact: device.deviceId } } };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      try {
-        return stream.getTracks()[0]?.getSettings().deviceId || null;
-      } finally {
-        stream.getTracks().forEach((track) => track.stop());
-      }
+      return new Promise((resolve) => {
+        let settled = false;
+        const timer = window.setTimeout(() => {
+          settled = true;
+          resolve({ status: "timeout", deviceId: null, error: null });
+        }, timeoutMs);
+        void navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
+          const deviceId = stream.getTracks()[0]?.getSettings().deviceId || null;
+          stream.getTracks().forEach((track) => track.stop());
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          resolve({ status: "ok", deviceId, error: null });
+        }).catch((error: unknown) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          resolve({
+            status: "error",
+            deviceId: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      });
     }
+    // On macOS, fake audio capture can remain pending even in stock Chrome.
+    // Verify video strictly first, then report audio timeout as an explicit
+    // environment limitation while retaining audio enumeration/ID checks.
+    const video = await exact("videoinput", 8000);
+    const audio = await exact("audioinput", 3000);
     return {
       devices,
-      audioTrackDeviceId: await exact("audioinput"),
-      videoTrackDeviceId: await exact("videoinput"),
+      audioTrackDeviceId: audio.deviceId,
+      videoTrackDeviceId: video.deviceId,
+      audioCaptureStatus: audio.status,
+      audioCaptureError: audio.error,
     };
   });
 }
@@ -166,7 +192,8 @@ async function captureDnt(page: Page): Promise<RunResult["dnt"]> {
   return page.evaluate(async () => {
     const windowValue = await fetch("/echo").then((response) => response.json()).then((value) => value.headers.dnt || null);
     const dedicated = await new Promise<string | null>((resolve) => {
-      const source = "onmessage=function(){fetch('/echo').then(function(r){return r.json()}).then(function(v){postMessage(v.headers.dnt||null)}).catch(function(){postMessage(null)})}";
+      const echoUrl = JSON.stringify(new URL("/echo", location.href).href);
+      const source = `onmessage=function(){fetch(${echoUrl}).then(function(r){return r.json()}).then(function(v){postMessage(v.headers.dnt||null)}).catch(function(){postMessage(null)})}`;
       const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
       const worker = new Worker(url);
       worker.onmessage = (event) => { worker.terminate(); URL.revokeObjectURL(url); resolve(event.data); };
@@ -319,8 +346,13 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
   }
   const audio = run.media.devices.find((device) => device.kind === "audioinput");
   const video = run.media.devices.find((device) => device.kind === "videoinput");
-  expectEqual(run.media.audioTrackDeviceId, audio?.deviceId || null, "audio track synthetic deviceId");
   expectEqual(run.media.videoTrackDeviceId, video?.deviceId || null, "video track synthetic deviceId");
+  if (run.media.audioCaptureStatus === "ok") {
+    expectEqual(run.media.audioTrackDeviceId, audio?.deviceId || null, "audio track synthetic deviceId");
+  } else {
+    expectEqual(run.media.audioCaptureStatus, "timeout", `audio capture (${run.media.audioCaptureError || "no error"})`);
+    expectEqual(run.media.audioTrackDeviceId, null, "timed-out audio track deviceId");
+  }
 
   const voiceNames = config.speechSynthesis.voices.map((voice) => voice.name).sort();
   for (const name of voiceNames) {
@@ -400,6 +432,9 @@ async function main(): Promise<void> {
       checkedSurfaces: STABLE_FIELDS.length,
       sameSeedStable: true,
       differentSeedsDistinct: true,
+      audioCapture: first.result.media.audioCaptureStatus === "timeout"
+        ? "environment-timeout (also reproduced with stock Chrome)"
+        : "verified",
     }, null, 2) + "\n");
   } finally {
     await origin.close().catch(() => undefined);

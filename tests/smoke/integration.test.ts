@@ -661,7 +661,8 @@ describe("Integration — Hardware fingerprint controls", () => {
     const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
     expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion)");
     expect(manager).toContain("detectBinaryVersion(bin)");
-    expect(manager).toContain("--time-zone-for-testing=");
+    expect(manager).not.toContain("--time-zone-for-testing=");
+    expect(manager).toContain("findManagedRoxyBinary()");
     expect(config).toContain('ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
     expect(config).toContain("schemaVersion: 1");
     const verifier = fs.readFileSync(path.join(ROOT, "src/tools/verify-native-chromium.ts"), "utf-8");

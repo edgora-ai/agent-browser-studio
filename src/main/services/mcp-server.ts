@@ -18,8 +18,14 @@ import { listCloakProfiles, launchCloak, stopCloak, statusCloak, findCloakBinary
 
 let server: http.Server | null = null;
 let serverListening = false;
-const MCP_PORT = 26581;
+const MCP_DEFAULT_PORT = 26581;
+let mcpPort = configuredMcpPort();
 const MCP_TOKEN = process.env.CLOAK_MCP_TOKEN || createLocalToken();
+
+function configuredMcpPort(): number {
+  const value = Number(process.env.CLOAK_MCP_PORT ?? MCP_DEFAULT_PORT);
+  return Number.isInteger(value) && value >= 0 && value <= 65535 ? value : MCP_DEFAULT_PORT;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MCP Tool Definitions
@@ -340,7 +346,9 @@ async function processMcpRequest(json: any, sessionId: string): Promise<void> {
 }
 
 export function startMcpServer(): { port: number; ready: Promise<void> } {
-  if (server) return { port: MCP_PORT, ready: serverListening ? Promise.resolve() : waitForMcpReady() };
+  if (server) return { port: mcpPort, ready: serverListening ? Promise.resolve() : waitForMcpReady() };
+
+  mcpPort = configuredMcpPort();
 
   let markReady: () => void;
   let markFailed: (error: Error) => void;
@@ -362,7 +370,7 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
       return;
     }
 
-    const url = new URL(req.url || "/", `http://127.0.0.1:${MCP_PORT}`);
+    const url = new URL(req.url || "/", `http://127.0.0.1:${mcpPort}`);
     const sessionId = url.searchParams.get("sessionId") || "default";
 
     if (url.pathname !== "/health" && !isAuthorized(req, url)) {
@@ -393,7 +401,7 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     // Health check
     if (url.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", service: "cloak-lite-mcp", port: MCP_PORT }));
+      res.end(JSON.stringify({ status: "ok", service: "cloak-lite-mcp", port: mcpPort }));
       return;
     }
 
@@ -445,23 +453,30 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     res.end(JSON.stringify({ error: "Not found" }));
   });
 
-  server.on("error", (err: any) => {
-    serverListening = false;
-    server = null;
-    markFailed(err instanceof Error ? err : new Error(String(err)));
-    if (err.code === "EADDRINUSE") {
-      console.error(`[mcp] Port ${MCP_PORT} in use. MCP server not started.`);
-    } else {
-      console.error(`[mcp] Server error:`, err.message);
-    }
-  });
-  server.listen(MCP_PORT, "127.0.0.1", () => {
+  let fallbackAttempted = false;
+  const onListening = () => {
+    const address = server?.address();
+    if (address && typeof address !== "string") mcpPort = address.port;
     serverListening = true;
     markReady();
-    console.log(`[mcp] MCP server listening on http://127.0.0.1:${MCP_PORT}`);
+    console.log(`[mcp] MCP server listening on http://127.0.0.1:${mcpPort}`);
+  };
+  server.on("error", (err: any) => {
+    serverListening = false;
+    if (err.code === "EADDRINUSE" && !fallbackAttempted && mcpPort !== 0 && server) {
+      fallbackAttempted = true;
+      console.warn(`[mcp] Port ${mcpPort} is in use; retrying on an ephemeral loopback port.`);
+      mcpPort = 0;
+      server.listen(0, "127.0.0.1", onListening);
+      return;
+    }
+    server = null;
+    markFailed(err instanceof Error ? err : new Error(String(err)));
+    console.error(`[mcp] Server error:`, err.message);
   });
+  server.listen(mcpPort, "127.0.0.1", onListening);
 
-  return { port: MCP_PORT, ready };
+  return { port: mcpPort, ready };
 }
 
 export function stopMcpServer(): Promise<void> {
@@ -490,7 +505,7 @@ export function stopMcpServer(): Promise<void> {
 }
 
 export function getMcpPort(): number {
-  return MCP_PORT;
+  return mcpPort;
 }
 
 export function isMcpServerRunning(): boolean {

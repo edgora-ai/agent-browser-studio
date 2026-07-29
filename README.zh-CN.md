@@ -66,16 +66,22 @@ npm install
 npm start
 ```
 
-### 使用最新指纹引擎
+### 使用独立 Chromium 149+ 指纹引擎
 
-CloakLite 使用 `cloakbrowser` 0.5.x wrapper。macOS 在未登录时仍使用旧版 Chromium 145；执行一次登录后，可通过免费单会话方案（或付费方案）使用当前 Chromium 150 指纹引擎：
+使用 [`patches/chromium`](patches/chromium/README.md) 下独立维护的补丁集构建
+Chromium，完成验证后安装到本地 OSS 引擎缓存：
 
 ```bash
-npx cloakbrowser login
+npm run verify:chromium -- /path/to/Chromium.app
+npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-应用会把二进制选择、license 注入、代理能力判断和版本相关启动默认值交给官方 wrapper。GeoIP 默认使用 CloakLite 的有界代理探测，避免首次启动 profile 时等待 wrapper 下载约 70 MB 数据库；如需使用 wrapper 管理的 GeoIP 数据库，可设置 `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true`。
+安装器会将版本化构建保存到 `~/.roxy-lite-cloak/`，应用自动选择其中的最新版本，
+不使用 CloakBrowser license key 或登录。`CLOAKBROWSER_BINARY_PATH` 仍可用于显式
+覆盖；固定在 license 机制之前的社区 wrapper 只在没有独立构建时作为兼容回退。
+GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
+`CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` 时才使用 wrapper 管理的 GeoIP 数据库。
 
 ### 开发检查
 
@@ -97,7 +103,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 
 ## 首次使用流程
 
-1. 打开 **CloakBrowser**，安装或配置 CloakBrowser 二进制文件。
+1. 安装或配置独立构建的 Chromium 149+ 二进制文件。
 2. 打开 **Profiles** 并创建 profile。
 3. 可选：打开 **Proxies**，添加代理并分配给 profile。
 4. 启动 profile，运行 **Check Risk** / consistency check。

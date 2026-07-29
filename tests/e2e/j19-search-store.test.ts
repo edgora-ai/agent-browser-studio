@@ -107,8 +107,10 @@ describe("J19 — search → extract → store to DB", () => {
     await page.waitForTimeout(500);
 
     // 3. type the query + click search (real input)
-    await page.fill("#kw", "最新新闻");
-    await page.click("#search-btn");
+    // The profile is a separately spawned headful browser, so Playwright can
+    // consider its window occluded even though CDP input is available.
+    await page.fill("#kw", "最新新闻", { force: true });
+    await page.click("#search-btn", { force: true });
     await page.waitForTimeout(500);
 
     // 4. extract the 10 results from the DOM (what the agent would read via get_text/snapshot)

@@ -24,7 +24,7 @@ serialize it.
 | `webgl.*` | WebGL 1/2 debug renderer parameter path in Window/Worker |
 | `webgpu.*` | `GPUAdapter.info` / `GPUDevice.adapterInfo` vendor in Window/Worker |
 | `webrtc.*` | native allocator routing plus ICE candidate and SDP rewriting |
-| `timezone` | Chromium ICU/V8 `--time-zone-for-testing` process setting |
+| `timezone` | Blink `TimeZoneController` authoritative ICU/V8 process override for Window and Workers |
 | `geolocation.*` | Blink native request/result policy |
 | `mediaDevices.*` | enumeration, constraints, track settings/capabilities and output routing |
 | `fonts` | Blink platform font cache and Local Font Access allow-list |

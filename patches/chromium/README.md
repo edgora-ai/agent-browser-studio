@@ -61,6 +61,10 @@ native request/result path. See
 `CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
 the field-by-field native consumer audit.
 
+The profile timezone is owned by Blink's native `TimeZoneController`, so the
+same ICU/V8 timezone is used by Window and Workers and cannot be reset by a
+later host-timezone monitor notification.
+
 The application baseline capture records Window and Worker Navigator identity,
 UA high-entropy values, Canvas, Audio, ClientRects, WebGL/WebGPU, fonts,
 plugins, speech voices, media-device counts, storage quota, DNT and touch state.
@@ -82,3 +86,7 @@ UA-CH, screen, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
 geolocation, storage, media-device constraint remapping, DNT headers in Window
 and Dedicated/Shared/Service Workers, disabled WebRTC candidates, restart
 stability and cross-seed distinction. Missing WebGPU is a failure.
+On macOS, fake audio capture can remain pending in stock Chrome as well as the
+patched build; the verifier reports that limitation explicitly while still
+strictly checking audio-device enumeration and seed behavior, plus exact video
+device remapping.

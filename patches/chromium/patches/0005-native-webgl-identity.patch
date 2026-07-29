@@ -17,7 +17,7 @@ index 17275939..a807b65d 100644
 +        const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +        if (config.enabled() && !config.webgl_renderer().empty()) {
 +          return WebGLAny(script_state,
-+                          String::FromUTF8(config.webgl_renderer()));
++                          String::FromUtf8(config.webgl_renderer()));
 +        }
          return WebGLAny(script_state,
                          String(ContextGL()->GetString(GL_RENDERER)));
@@ -29,7 +29,7 @@ index 17275939..a807b65d 100644
 +        const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
 +        if (config.enabled() && !config.webgl_vendor().empty()) {
 +          return WebGLAny(script_state,
-+                          String::FromUTF8(config.webgl_vendor()));
++                          String::FromUtf8(config.webgl_vendor()));
 +        }
          return WebGLAny(script_state,
                          String(ContextGL()->GetString(GL_VENDOR)));

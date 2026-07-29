@@ -115,7 +115,7 @@ diff --git a/third_party/blink/renderer/modules/mediastream/user_media_request.c
  #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
  #include "third_party/blink/renderer/bindings/core/v8/dictionary.h"
  #include "third_party/blink/renderer/bindings/modules/v8/v8_media_stream_constraints.h"
-@@ -384,6 +385,43 @@ MediaConstraints ParseOptions(
+@@ -384,6 +385,45 @@ MediaConstraints ParseOptions(
    NOTREACHED();
  }
  
@@ -153,13 +153,15 @@ diff --git a/third_party/blink/renderer/modules/mediastream/user_media_request.c
 +    RemapRoxyStringConstraint(constraint_set.device_id);
 +    RemapRoxyStringConstraint(constraint_set.group_id);
 +  }
-+  constraints.Initialize(basic, advanced);
++  MediaConstraints remapped_constraints;
++  remapped_constraints.Initialize(basic, advanced);
++  constraints.Assign(remapped_constraints);
 +}
 +
  }  // namespace
  
  UserMediaRequest* UserMediaRequest::Create(
-@@ -405,6 +443,9 @@ UserMediaRequest* UserMediaRequest::Create(
+@@ -405,6 +445,9 @@ UserMediaRequest* UserMediaRequest::Create(
      return nullptr;
    }
  

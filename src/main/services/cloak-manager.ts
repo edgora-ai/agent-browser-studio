@@ -10,7 +10,7 @@ import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { BrowserWindow } from "electron";
-import { binaryInfo, ensureBinary, checkForUpdate, clearCache, buildLaunchOptions } from "cloakbrowser";
+import { binaryInfo, ensureBinary, checkForUpdate, clearCache, buildLaunchOptions, getDefaultStealthArgs } from "cloakbrowser";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
@@ -65,6 +65,37 @@ const runningProcesses = new Map<string, { pid: number; process: any; port: numb
 // Binary Discovery
 // ═══════════════════════════════════════════════════════════════
 
+export function getManagedRoxyChromiumRoot(): string {
+  const override = process.env.ROXY_CHROMIUM_CACHE_DIR;
+  return override ? path.resolve(override) : path.join(os.homedir(), ".roxy-lite-cloak");
+}
+
+export function findManagedRoxyBinary(): string | null {
+  const root = getManagedRoxyChromiumRoot();
+  if (!fs.existsSync(root)) return null;
+
+  const candidates: Array<{ version: string; binaryPath: string }> = [];
+  try {
+    for (const entry of fs.readdirSync(root)) {
+      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
+      if (!match) continue;
+      const base = path.join(root, entry);
+      const binaryPath = process.platform === "darwin"
+        ? path.join(base, "Chromium.app", "Contents", "MacOS", "Chromium")
+        : process.platform === "win32"
+          ? path.join(base, "chrome.exe")
+          : path.join(base, "chromium");
+      if (fs.existsSync(binaryPath) && fs.statSync(binaryPath).isFile()) {
+        candidates.push({ version: match[1], binaryPath });
+      }
+    }
+  } catch {
+    return null;
+  }
+  candidates.sort((a, b) => versionNewer(a.version, b.version) ? -1 : versionNewer(b.version, a.version) ? 1 : 0);
+  return candidates[0]?.binaryPath || null;
+}
+
 export function findCloakBinary(): string | null {
   const cfg = getConfig() as any;
   if (cfg.cloakBin && cfg.cloakBin !== "auto" && fs.existsSync(cfg.cloakBin)) return cfg.cloakBin;
@@ -72,26 +103,22 @@ export function findCloakBinary(): string | null {
   const envBin = process.env.CLOAKBROWSER_BINARY_PATH;
   if (envBin && fs.existsSync(envBin)) return envBin;
 
+  const managedBin = findManagedRoxyBinary();
+  if (managedBin) return managedBin;
+
   const info = binaryInfo();
   return info.installed && fs.existsSync(info.binaryPath) ? info.binaryPath : null;
 }
 
 export function getCloakVersion(): string | null {
-  const cfg = getConfig() as any;
-  const explicitBin = cfg.cloakBin && cfg.cloakBin !== "auto"
-    ? cfg.cloakBin
-    : process.env.CLOAKBROWSER_BINARY_PATH;
-  if (explicitBin && fs.existsSync(explicitBin)) {
-    const explicitVersion = detectBinaryVersion(explicitBin);
-    if (explicitVersion) return explicitVersion;
-  }
-  const info = binaryInfo();
-  if (info.installed) return info.version;
-
   const bin = findCloakBinary();
   if (!bin) return null;
-
-  return detectBinaryVersion(bin) || "?";
+  const detected = detectBinaryVersion(bin);
+  if (detected) return detected;
+  const info = binaryInfo();
+  return fs.existsSync(info.binaryPath) && path.resolve(bin) === path.resolve(info.binaryPath)
+    ? info.version
+    : "?";
 }
 
 function detectBinaryVersion(bin: string): string | null {
@@ -107,7 +134,7 @@ function detectBinaryVersion(bin: string): string | null {
 }
 
 export function isCloakInstalled(): boolean {
-  return binaryInfo().installed || findCloakBinary() !== null;
+  return findCloakBinary() !== null;
 }
 
 export interface CloakBinaryStatus {
@@ -124,15 +151,20 @@ export interface CloakBinaryStatus {
 export function getCloakBinaryStatus(): CloakBinaryStatus {
   const info = binaryInfo();
   const pathValue = findCloakBinary();
+  const managedPath = findManagedRoxyBinary();
+  const isManaged = Boolean(pathValue && managedPath && path.resolve(pathValue) === path.resolve(managedPath));
+  const detectedVersion = pathValue ? detectBinaryVersion(pathValue) : null;
   return {
     path: pathValue,
-    version: info.installed ? info.version : getCloakVersion(),
-    bundledVersion: info.bundledVersion || null,
-    tier: info.tier || null,
-    installed: info.installed || pathValue !== null,
+    version: detectedVersion || (pathValue ? getCloakVersion() : null),
+    bundledVersion: isManaged ? detectedVersion : info.bundledVersion || null,
+    tier: pathValue ? "community" : null,
+    installed: pathValue !== null,
     platform: info.platform || null,
-    cacheDir: info.cacheDir || null,
-    downloadUrl: info.downloadUrl || null,
+    cacheDir: isManaged && pathValue
+      ? path.join(getManagedRoxyChromiumRoot(), path.relative(getManagedRoxyChromiumRoot(), pathValue).split(path.sep)[0])
+      : info.cacheDir || null,
+    downloadUrl: isManaged ? null : info.downloadUrl || null,
   };
 }
 
@@ -376,6 +408,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
 
   const configuredBin = cfg.cloakBin && cfg.cloakBin !== "auto" ? cfg.cloakBin : null;
   const envBin = process.env.CLOAKBROWSER_BINARY_PATH || null;
+  const managedBin = findManagedRoxyBinary();
   if (configuredBin && !fs.existsSync(configuredBin)) {
     throw new Error(`Configured CloakBrowser binary does not exist: ${configuredBin}`);
   }
@@ -443,22 +476,34 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
   addHardwareFingerprintArgs(requestedArgs, meta);
 
-  // Let the community wrapper resolve the managed binary, GeoIP/WebRTC exit
-  // identity, proxy capabilities, and version-aware window geometry. Explicit
-  // profile flags override its generated seed/platform.
-  const launchPlan = await buildLaunchOptions({
-    headless: false,
-    args: requestedArgs,
-    timezone: effectiveTimezone || undefined,
-    locale: effectiveLocale || undefined,
-    geoip: wrapperGeoip,
-    proxy: activeProxy ? buildAuthenticatedProxyUrl(activeProxy) : undefined,
-  });
-  console.log(`[cloak] Wrapper launch plan ready for ${dirId.slice(0, 8)}`);
-  const bin = configuredBin || envBin || launchPlan.executablePath;
+  const preferredBin = configuredBin || envBin || managedBin;
+  // A self-built/configured Chromium is launched from our own deterministic
+  // plan. The license-free community wrapper remains only as a compatibility
+  // fallback when no independent binary has been installed.
+  const launchPlan = preferredBin
+    ? {
+        executablePath: preferredBin,
+        args: dedupeChromeArgs([
+          ...getDefaultStealthArgs(),
+          ...requestedArgs,
+          ...(effectiveTimezone ? [`--fingerprint-timezone=${effectiveTimezone}`] : []),
+          ...(effectiveLocale ? [`--lang=${effectiveLocale}`, `--fingerprint-locale=${effectiveLocale}`] : []),
+        ]),
+        env: process.env,
+      }
+    : await buildLaunchOptions({
+        headless: false,
+        args: requestedArgs,
+        timezone: effectiveTimezone || undefined,
+        locale: effectiveLocale || undefined,
+        geoip: wrapperGeoip,
+        proxy: activeProxy ? buildAuthenticatedProxyUrl(activeProxy) : undefined,
+      });
+  console.log(`[cloak] ${preferredBin ? "Native" : "Wrapper"} launch plan ready for ${dirId.slice(0, 8)}`);
+  const bin = preferredBin || launchPlan.executablePath;
   if (!bin || !fs.existsSync(bin)) throw new Error("CloakBrowser binary is unavailable after install check");
   const nativeChromiumVersion = detectBinaryVersion(bin) || getCloakVersion();
-  const args = [...(launchPlan.args || [])];
+  let args = [...(launchPlan.args || [])];
 
   // Prefer the wrapper's resolved exit identity, then perform a bounded proxy
   // lookup for our native altered mode. Explicit altered mode must never
@@ -490,16 +535,12 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, nativeChromiumVersion);
   args.push(buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion));
   args.push(`--user-agent=${nativeFingerprint.userAgent}`);
-  if (nativeFingerprint.timezone) {
-    args.push(`--time-zone-for-testing=${nativeFingerprint.timezone}`);
-  }
 
-  // buildLaunchOptions returns a Playwright proxy option when the selected
-  // binary cannot consume the proxy natively. CloakLite launches the process
-  // directly, so preserve the existing extension-based auth fallback there.
+  // CloakLite launches Chromium directly, so express proxy routing as a native
+  // switch and use the existing extension only for proxy authentication.
   const runtimeExtensionPaths: string[] = [];
-  if ((launchPlan as any).proxy && activeProxy) {
-    args.push(`--proxy-server=${buildChromiumProxyUrl(activeProxy)}`);
+  if (activeProxy) {
+    args = dedupeChromeArgs([...args, `--proxy-server=${buildChromiumProxyUrl(activeProxy)}`]);
     if (activeProxy.username) runtimeExtensionPaths.push(writeProxyAuthExtension(dirId, activeProxy));
   }
   addExtensionArgs(args, dirId, runtimeExtensionPaths);
@@ -669,6 +710,10 @@ function buildCloakLaunchArgs(opts: {
     "--no-default-browser-check",
     "--disable-sync",
   ];
+  // Direct Chromium launches on macOS can block page navigation while the
+  // real Keychain backend waits for OS authorization. Automation profiles do
+  // not need that backend; use Chromium's deterministic in-memory keychain.
+  if (process.platform === "darwin") args.push("--use-mock-keychain");
   return dedupeChromeArgs(args);
 }
 

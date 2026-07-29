@@ -1,7 +1,12 @@
 diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_party/blink/renderer/core/geolocation/geolocation.cc
 --- a/third_party/blink/renderer/core/geolocation/geolocation.cc
 +++ b/third_party/blink/renderer/core/geolocation/geolocation.cc
-@@ -34,6 +34,7 @@
+@@ -30,10 +30,12 @@
+ #include <algorithm>
+ #include <optional>
+ 
++#include "base/location.h"
+ #include "base/task/single_thread_task_runner.h"
  #include "build/build_config.h"
  #include "services/device/public/mojom/geoposition.mojom-blink.h"
  #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
@@ -9,7 +14,7 @@ diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_
  #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_accuracy_mode.h"
-@@ -84,6 +85,15 @@ Geoposition* CreateGeoposition(
+@@ -84,6 +86,15 @@ Geoposition* CreateGeoposition(
        coordinates, ConvertTimeToEpochTimeStamp(position.timestamp));
  }
  
@@ -25,7 +30,7 @@ diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_
  GeolocationPositionError* CreatePositionError(
      const device::mojom::blink::GeopositionError& error) {
    GeolocationPositionError::ErrorCode error_code =
-@@ -348,6 +358,16 @@ void Geolocation::StartRequest(GeoNotifier* notifier) {
+@@ -348,6 +359,16 @@ void Geolocation::StartRequest(GeoNotifier* notifier) {
      return;
    }
  
@@ -42,7 +47,27 @@ diff --git a/third_party/blink/renderer/core/geolocation/geolocation.cc b/third_
    ReportGeolocationViolation(DomWindow());
  
    if (HaveSuitableCachedPosition(notifier->Options())) {
-@@ -614,7 +634,13 @@ void Geolocation::OnPositionUpdated(
+@@ -603,6 +624,19 @@ void Geolocation::ResetGeolocationConnection() {
+ }
+ 
+ void Geolocation::QueryNextPosition() {
++  const RoxyFingerprintConfig& roxy_config =
++      RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() &&
++      roxy_config.geolocation_mode() == "custom") {
++    GetExecutionContext()
++        ->GetTaskRunner(TaskType::kMiscPlatformAPI)
++        ->PostTask(
++            FROM_HERE,
++            blink::BindOnce(
++                &Geolocation::OnPositionUpdated, WrapPersistent(this),
++                device::mojom::blink::GeopositionResultPtr()));
++    return;
++  }
+   geolocation_->QueryNextPosition(
+       blink::BindOnce(&Geolocation::OnPositionUpdated, WrapPersistent(this)));
+ }
+@@ -614,7 +648,13 @@ void Geolocation::OnPositionUpdated(
      return;
    }
  
