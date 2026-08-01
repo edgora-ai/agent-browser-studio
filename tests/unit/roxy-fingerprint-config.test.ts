@@ -35,7 +35,7 @@ describe("Roxy fingerprint config", () => {
       "geolocation", "hardwareConcurrency", "languages", "maxTouchPoints",
       "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen",
       "seed", "speechSynthesis", "storageQuotaBytes", "timezone", "userAgent",
-      "vendor", "webgl", "webgpu", "webrtc",
+      "vendor", "webauthn", "webgl", "webgpu", "webrtc",
     ]);
     expect(first.platform).toBe("Win32");
     expect(first.maxTouchPoints).toBe(0);
@@ -49,6 +49,14 @@ describe("Roxy fingerprint config", () => {
     expect(first.fonts.some((font) => /Calibri|Segoe UI|PingFang/.test(font))).toBe(false);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
     expect(first.webgpu).toEqual({ mode: "webgl", vendor: "NVIDIA" });
+    expect(first.webauthn).toEqual({
+      enabled: true,
+      conditionalGet: true,
+      conditionalCreate: true,
+      hybridTransport: true,
+      passkeyPlatformAuthenticator: true,
+      userVerifyingPlatformAuthenticator: true,
+    });
     expect(first.doNotTrack).toBe("1");
     expect(first.speechSynthesis).toEqual({
       enabled: true,

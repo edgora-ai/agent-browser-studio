@@ -16,8 +16,33 @@ import type { CloakFingerprintMeta } from "../main/types.js";
 
 type Probe = Record<string, string | number | boolean | null | undefined>;
 
+interface RequestIdentityHeaders {
+  userAgent: string | null;
+  acceptLanguage: string | null;
+  doNotTrack: string | null;
+  uaPlatform: string | null;
+}
+
 interface RunResult {
   probe: Probe;
+  codecs: {
+    aacCanPlay: string;
+    h264CanPlay: string;
+    mediaSourceAAC: boolean | null;
+    mediaSourceH264: boolean | null;
+    audioDecoding: {
+      supported: boolean;
+      smooth: boolean;
+      powerEfficient: boolean;
+    } | null;
+    videoDecoding: {
+      supported: boolean;
+      smooth: boolean;
+      powerEfficient: boolean;
+    } | null;
+    aacEncoder: boolean | null;
+    h264Encoder: boolean | null;
+  };
   media: {
     devices: Array<{ kind: string; deviceId: string; groupId: string; label: string }>;
     audioTrackDeviceId: string | null;
@@ -25,8 +50,19 @@ interface RunResult {
     audioCaptureStatus: "ok" | "timeout" | "error";
     audioCaptureError: string | null;
   };
+  storageBucketQuota: number | null;
+  webauthn: {
+    capabilities: Record<string, boolean>;
+    userVerifyingPlatformAuthenticator: boolean;
+    conditionalMediation: boolean;
+  };
   geolocation: { latitude: number; longitude: number; accuracy: number };
-  dnt: { window: string | null; dedicated: string | null; shared: string | null; service: string | null };
+  requestHeaders: {
+    window: RequestIdentityHeaders;
+    dedicated: RequestIdentityHeaders;
+    shared: RequestIdentityHeaders;
+    service: RequestIdentityHeaders;
+  };
   webrtcCandidates: string[];
 }
 
@@ -104,12 +140,12 @@ async function startOrigin(): Promise<{ origin: string; close: () => Promise<voi
     }
     if (pathname === "/shared-worker.js") {
       response.setHeader("content-type", "text/javascript");
-      response.end("onconnect=function(e){var p=e.ports[0];fetch('/echo').then(function(r){return r.json()}).then(function(v){p.postMessage(v.headers.dnt||null)}).catch(function(){p.postMessage(null)})}");
+      response.end("onconnect=function(e){var p=e.ports[0];fetch('/echo').then(function(r){return r.json()}).then(function(v){p.postMessage(v.headers)}).catch(function(){p.postMessage({})})}");
       return;
     }
     if (pathname === "/service-worker.js") {
       response.setHeader("content-type", "text/javascript");
-      response.end("self.onmessage=function(e){var p=e.ports[0];e.waitUntil(fetch('/echo').then(function(r){return r.json()}).then(function(v){p.postMessage(v.headers.dnt||null)}).catch(function(){p.postMessage(null)}))}");
+      response.end("self.onmessage=function(e){var p=e.ports[0];e.waitUntil(fetch('/echo').then(function(r){return r.json()}).then(function(v){p.postMessage(v.headers)}).catch(function(){p.postMessage({})}))}");
       return;
     }
     response.setHeader("content-type", "text/html; charset=utf-8");
@@ -188,33 +224,187 @@ async function captureMedia(page: Page): Promise<RunResult["media"]> {
   });
 }
 
-async function captureDnt(page: Page): Promise<RunResult["dnt"]> {
+async function captureCodecs(page: Page): Promise<RunResult["codecs"]> {
   return page.evaluate(async () => {
-    const windowValue = await fetch("/echo").then((response) => response.json()).then((value) => value.headers.dnt || null);
-    const dedicated = await new Promise<string | null>((resolve) => {
+    interface DecodingSupport {
+      supported: boolean;
+      smooth: boolean;
+      powerEfficient: boolean;
+    }
+    interface EncoderSupport {
+      supported: boolean;
+    }
+    interface CodecGlobals {
+      AudioEncoder?: {
+        isConfigSupported(config: Record<string, unknown>): Promise<EncoderSupport>;
+      };
+      VideoEncoder?: {
+        isConfigSupported(config: Record<string, unknown>): Promise<EncoderSupport>;
+      };
+    }
+    const mediaCapabilities = (navigator as Navigator & {
+      mediaCapabilities?: {
+        decodingInfo(config: Record<string, unknown>): Promise<DecodingSupport>;
+      };
+    }).mediaCapabilities;
+    const globals = globalThis as unknown as CodecGlobals;
+    const supported = async (operation: (() => Promise<EncoderSupport>) | undefined): Promise<boolean | null> => {
+      if (!operation) return null;
+      try {
+        return (await operation()).supported;
+      } catch {
+        return null;
+      }
+    };
+    const decoding = async (
+      config: Record<string, unknown>,
+    ): Promise<DecodingSupport | null> => {
+      if (!mediaCapabilities) return null;
+      try {
+        const result = await mediaCapabilities.decodingInfo(config);
+        return {
+          supported: result.supported,
+          smooth: result.smooth,
+          powerEfficient: result.powerEfficient,
+        };
+      } catch {
+        return null;
+      }
+    };
+    const audio = document.createElement("audio");
+    const video = document.createElement("video");
+    const aacMime = 'audio/mp4; codecs="mp4a.40.2"';
+    const h264Mime = 'video/mp4; codecs="avc1.42E01E"';
+    const audioConfig = {
+      codec: "mp4a.40.2",
+      sampleRate: 48000,
+      numberOfChannels: 2,
+      bitrate: 128000,
+    };
+    const videoConfig = {
+      codec: "avc1.42001f",
+      width: 640,
+      height: 360,
+      bitrate: 1000000,
+      framerate: 30,
+    };
+    const [audioDecoding, videoDecoding, aacEncoder, h264Encoder] = await Promise.all([
+      decoding({
+        type: "file",
+        audio: {
+          contentType: aacMime,
+          channels: "2",
+          bitrate: 128000,
+          samplerate: 48000,
+        },
+      }),
+      decoding({
+        type: "file",
+        video: {
+          contentType: h264Mime,
+          width: 640,
+          height: 360,
+          bitrate: 1000000,
+          framerate: 30,
+        },
+      }),
+      supported(globals.AudioEncoder
+        ? () => globals.AudioEncoder!.isConfigSupported(audioConfig)
+        : undefined),
+      supported(globals.VideoEncoder
+        ? () => globals.VideoEncoder!.isConfigSupported(videoConfig)
+        : undefined),
+    ]);
+    return {
+      aacCanPlay: audio.canPlayType(aacMime),
+      h264CanPlay: video.canPlayType(h264Mime),
+      mediaSourceAAC: typeof MediaSource === "undefined" ? null : MediaSource.isTypeSupported(aacMime),
+      mediaSourceH264: typeof MediaSource === "undefined" ? null : MediaSource.isTypeSupported(h264Mime),
+      audioDecoding,
+      videoDecoding,
+      aacEncoder,
+      h264Encoder,
+    };
+  });
+}
+
+async function captureStorageBucketQuota(page: Page): Promise<number | null> {
+  return page.evaluate(async () => {
+    const manager = (navigator as Navigator & {
+      storageBuckets?: {
+        open(name: string): Promise<{ estimate(): Promise<{ quota?: number }> }>;
+        delete(name: string): Promise<void>;
+      };
+    }).storageBuckets;
+    if (!manager) return null;
+    const name = "roxy-native-verifier";
+    const bucket = await manager.open(name);
+    const estimate = await bucket.estimate();
+    await manager.delete(name);
+    return estimate.quota ?? null;
+  });
+}
+
+async function captureWebAuthn(page: Page): Promise<RunResult["webauthn"]> {
+  return page.evaluate(async () => {
+    const credential = PublicKeyCredential as typeof PublicKeyCredential & {
+      getClientCapabilities(): Promise<Record<string, boolean>>;
+    };
+    const [capabilities, userVerifyingPlatformAuthenticator, conditionalMediation] =
+      await Promise.all([
+        credential.getClientCapabilities(),
+        credential.isUserVerifyingPlatformAuthenticatorAvailable(),
+        credential.isConditionalMediationAvailable(),
+      ]);
+    return {
+      capabilities,
+      userVerifyingPlatformAuthenticator,
+      conditionalMediation,
+    };
+  });
+}
+
+async function captureRequestHeaders(page: Page): Promise<RunResult["requestHeaders"]> {
+  return page.evaluate(async () => {
+    type RawHeaders = Record<string, string | undefined>;
+    const select = (headers: RawHeaders): RequestIdentityHeaders => ({
+      userAgent: headers["user-agent"] || null,
+      acceptLanguage: headers["accept-language"] || null,
+      doNotTrack: headers.dnt || null,
+      uaPlatform: headers["sec-ch-ua-platform"] || null,
+    });
+    const windowHeaders = await fetch("/echo")
+      .then((response) => response.json())
+      .then((value) => value.headers as RawHeaders);
+    const dedicatedHeaders = await new Promise<RawHeaders>((resolve) => {
       const echoUrl = JSON.stringify(new URL("/echo", location.href).href);
-      const source = `onmessage=function(){fetch(${echoUrl}).then(function(r){return r.json()}).then(function(v){postMessage(v.headers.dnt||null)}).catch(function(){postMessage(null)})}`;
+      const source = `onmessage=function(){fetch(${echoUrl}).then(function(r){return r.json()}).then(function(v){postMessage(v.headers)}).catch(function(){postMessage({})})}`;
       const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
       const worker = new Worker(url);
       worker.onmessage = (event) => { worker.terminate(); URL.revokeObjectURL(url); resolve(event.data); };
-      worker.onerror = () => { worker.terminate(); URL.revokeObjectURL(url); resolve(null); };
+      worker.onerror = () => { worker.terminate(); URL.revokeObjectURL(url); resolve({}); };
       worker.postMessage(1);
     });
-    const shared = await new Promise<string | null>((resolve) => {
+    const sharedHeaders = await new Promise<RawHeaders>((resolve) => {
       const worker = new SharedWorker("/shared-worker.js");
       worker.port.onmessage = (event) => resolve(event.data);
       worker.port.start();
     });
     await navigator.serviceWorker.register("/service-worker.js");
     const registration = await navigator.serviceWorker.ready;
-    const service = await new Promise<string | null>((resolve) => {
+    const serviceHeaders = await new Promise<RawHeaders>((resolve) => {
       const channel = new MessageChannel();
       channel.port1.onmessage = (event) => resolve(event.data);
       registration.active?.postMessage(1, [channel.port2]);
-      if (!registration.active) resolve(null);
+      if (!registration.active) resolve({});
     });
     await registration.unregister();
-    return { window: windowValue, dedicated, shared, service };
+    return {
+      window: select(windowHeaders),
+      dedicated: select(dedicatedHeaders),
+      shared: select(sharedHeaders),
+      service: select(serviceHeaders),
+    };
   });
 }
 
@@ -222,15 +412,36 @@ async function captureDisabledWebRtc(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
     const connection = new RTCPeerConnection({ iceServers: [] });
     const candidates: string[] = [];
-    connection.createDataChannel("verify");
-    connection.onicecandidate = (event) => {
-      if (event.candidate?.candidate) candidates.push(event.candidate.candidate);
-    };
-    const offer = await connection.createOffer();
-    await connection.setLocalDescription(offer);
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    connection.close();
-    return candidates;
+    let stage = "createDataChannel";
+    try {
+      return await new Promise<string[]>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          connection.close();
+          reject(new Error(`WebRTC disabled-mode probe stalled during ${stage}`));
+        }, 6000);
+        void (async () => {
+          connection.createDataChannel("verify");
+          connection.onicecandidate = (event) => {
+            if (event.candidate?.candidate) candidates.push(event.candidate.candidate);
+          };
+          stage = "createOffer";
+          const offer = await connection.createOffer();
+          stage = "setLocalDescription";
+          await connection.setLocalDescription(offer);
+          stage = "candidate settling";
+          await new Promise((settle) => setTimeout(settle, 1200));
+          window.clearTimeout(timer);
+          connection.close();
+          resolve(candidates);
+        })().catch((error) => {
+          window.clearTimeout(timer);
+          connection.close();
+          reject(error);
+        });
+      });
+    } finally {
+      connection.close();
+    }
   });
 }
 
@@ -253,9 +464,6 @@ async function runOnce(
       viewport: null,
       args: [
         buildRoxyFingerprintArg(meta, version),
-        `--user-agent=${config.userAgent}`,
-        `--lang=${config.languages[0]}`,
-        ...(config.timezone ? [`--time-zone-for-testing=${config.timezone}`] : []),
         "--enable-unsafe-webgpu",
         "--ignore-gpu-blocklist",
         "--use-fake-device-for-media-stream",
@@ -272,6 +480,8 @@ async function runOnce(
       `${label} fingerprint probe`,
     );
     const probe = JSON.parse(String(raw)) as Probe;
+    process.stderr.write(`[verify:chromium] ${label}: AAC/H.264 codecs\n`);
+    const codecs = await withTimeout(captureCodecs(page), 12_000, `${label} codecs`);
     process.stderr.write(`[verify:chromium] ${label}: geolocation\n`);
     const geolocation = await withTimeout(
       page.evaluate(() => new Promise<{ latitude: number; longitude: number; accuracy: number }>((resolve, reject) => {
@@ -290,17 +500,36 @@ async function runOnce(
     );
     process.stderr.write(`[verify:chromium] ${label}: media devices\n`);
     const media = await withTimeout(captureMedia(page), 15_000, `${label} media devices`);
-    process.stderr.write(`[verify:chromium] ${label}: DNT workers\n`);
-    const dnt = await withTimeout(captureDnt(page), 12_000, `${label} DNT workers`);
+    process.stderr.write(`[verify:chromium] ${label}: Storage Buckets quota\n`);
+    const storageBucketQuota = await withTimeout(
+      captureStorageBucketQuota(page),
+      6000,
+      `${label} Storage Buckets quota`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: WebAuthn capabilities\n`);
+    const webauthn = await withTimeout(
+      captureWebAuthn(page),
+      6000,
+      `${label} WebAuthn capabilities`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: request headers across workers\n`);
+    const requestHeaders = await withTimeout(
+      captureRequestHeaders(page),
+      12_000,
+      `${label} request headers`,
+    );
     process.stderr.write(`[verify:chromium] ${label}: WebRTC disable\n`);
-    const webrtcCandidates = await withTimeout(captureDisabledWebRtc(page), 5000, `${label} WebRTC`);
+    const webrtcCandidates = await withTimeout(captureDisabledWebRtc(page), 12_000, `${label} WebRTC`);
     return {
       config,
       result: {
         probe,
+        codecs,
         media,
+        storageBucketQuota,
+        webauthn,
         geolocation,
-        dnt,
+        requestHeaders,
         webrtcCandidates,
       },
     };
@@ -333,8 +562,32 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
   expectEqual(run.geolocation.latitude, config.geolocation.latitude, "geolocation latitude");
   expectEqual(run.geolocation.longitude, config.geolocation.longitude, "geolocation longitude");
   expectEqual(run.geolocation.accuracy, config.geolocation.accuracy, "geolocation accuracy");
-  expectEqual(run.dnt, { window: "1", dedicated: "1", shared: "1", service: "1" }, "DNT request headers");
+  const expectedAcceptLanguage = config.languages
+    .map((language, index) => index === 0 ? language : `${language};q=${(1 - index / 10).toFixed(1)}`)
+    .join(",");
+  const expectedUaPlatform = config.platform === "Win32" ? '"Windows"' : '"macOS"';
+  for (const [context, headers] of Object.entries(run.requestHeaders)) {
+    expectEqual(headers.userAgent, config.userAgent, `${context} request User-Agent`);
+    expectEqual(headers.acceptLanguage, expectedAcceptLanguage, `${context} request Accept-Language`);
+    expectEqual(headers.doNotTrack, "1", `${context} request DNT`);
+    // Chromium sends low-entropy UA-CH on document navigation but omits it
+    // from Worker fetches. Preserve that stock request shape.
+    expectEqual(
+      headers.uaPlatform,
+      context === "window" ? expectedUaPlatform : null,
+      `${context} request Sec-CH-UA-Platform`,
+    );
+  }
   expectEqual(run.webrtcCandidates, [], "disabled WebRTC candidates");
+
+  expectEqual(run.codecs.aacCanPlay, "probably", "AAC canPlayType");
+  expectEqual(run.codecs.h264CanPlay, "probably", "H.264 canPlayType");
+  expectEqual(run.codecs.mediaSourceAAC, true, "MediaSource AAC support");
+  expectEqual(run.codecs.mediaSourceH264, true, "MediaSource H.264 support");
+  expectEqual(run.codecs.audioDecoding?.supported, true, "MediaCapabilities AAC decoding");
+  expectEqual(run.codecs.videoDecoding?.supported, true, "MediaCapabilities H.264 decoding");
+  expectEqual(run.codecs.aacEncoder, true, "WebCodecs AAC encoder");
+  expectEqual(run.codecs.h264Encoder, true, "WebCodecs H.264 encoder");
 
   const expectedCounts: Record<string, number> = {
     audioinput: config.mediaDevices.audioInputs,
@@ -359,15 +612,43 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
     expect(String(probe.speechVoices || "").includes(name), `Missing configured speech voice: ${name}`);
   }
   expectEqual(probe.storageQuota, config.storageQuotaBytes, "storage quota");
+  expectEqual(run.storageBucketQuota, config.storageQuotaBytes, "Storage Buckets quota");
+  const expectedWebAuthn = config.webauthn;
+  for (const [name, expected] of Object.entries({
+    conditionalGet: expectedWebAuthn.conditionalGet,
+    conditionalCreate: expectedWebAuthn.conditionalCreate,
+    hybridTransport: expectedWebAuthn.hybridTransport,
+    passkeyPlatformAuthenticator: expectedWebAuthn.passkeyPlatformAuthenticator,
+    userVerifyingPlatformAuthenticator: expectedWebAuthn.userVerifyingPlatformAuthenticator,
+    relatedOrigins: true,
+    signalAllAcceptedCredentials: true,
+    signalCurrentUserDetails: true,
+    signalUnknownCredential: true,
+  })) {
+    expectEqual(run.webauthn.capabilities[name], expected, `WebAuthn capability ${name}`);
+  }
+  expectEqual(
+    run.webauthn.userVerifyingPlatformAuthenticator,
+    expectedWebAuthn.userVerifyingPlatformAuthenticator,
+    "WebAuthn UVPAA",
+  );
+  expectEqual(
+    run.webauthn.conditionalMediation,
+    expectedWebAuthn.conditionalGet,
+    "WebAuthn conditional mediation",
+  );
 }
 
 function verifyStable(first: RunResult, second: RunResult): void {
   for (const field of STABLE_FIELDS) {
     expectEqual(first.probe[field], second.probe[field], `same-seed stability ${field}`);
   }
+  expectEqual(first.codecs, second.codecs, "same-seed codec capabilities");
   expectEqual(first.media, second.media, "same-seed media mapping");
+  expectEqual(first.storageBucketQuota, second.storageBucketQuota, "same-seed Storage Buckets quota");
+  expectEqual(first.webauthn, second.webauthn, "same-seed WebAuthn capabilities");
   expectEqual(first.geolocation, second.geolocation, "same-seed geolocation");
-  expectEqual(first.dnt, second.dnt, "same-seed DNT");
+  expectEqual(first.requestHeaders, second.requestHeaders, "same-seed request headers");
   expectEqual(first.webrtcCandidates, second.webrtcCandidates, "same-seed WebRTC");
 }
 
@@ -430,6 +711,9 @@ async function main(): Promise<void> {
       executablePath,
       version,
       checkedSurfaces: STABLE_FIELDS.length,
+      codecs: "aac-h264-verified",
+      storageBuckets: "verified",
+      webauthn: "verified",
       sameSeedStable: true,
       differentSeedsDistinct: true,
       audioCapture: first.result.media.audioCaptureStatus === "timeout"

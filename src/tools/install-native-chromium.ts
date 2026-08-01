@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,6 +34,53 @@ function detectVersion(executable: string): string {
     || fail(`Could not detect Chromium version from: ${output.trim()}`);
 }
 
+function updateHashFromFile(hash: ReturnType<typeof createHash>, filePath: string): void {
+  hash.update(path.basename(filePath));
+  hash.update("\0");
+  const fd = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  hash.update("\0");
+}
+
+function bundleBuildHash(app: string): string {
+  const executable = executableFor(app);
+  const frameworkRoot = path.join(
+    app,
+    "Contents",
+    "Frameworks",
+    "Chromium Framework.framework",
+    "Versions",
+    "Current",
+  );
+  const framework = path.join(frameworkRoot, "Chromium Framework");
+  if (!fs.existsSync(framework) || !fs.statSync(framework).isFile()) {
+    fail(`Chromium Framework binary not found inside ${app}`);
+  }
+
+  const hash = createHash("sha256");
+  for (const filePath of [
+    executable,
+    framework,
+    path.join(frameworkRoot, "Resources", "resources.pak"),
+    path.join(frameworkRoot, "Resources", "v8_context_snapshot.arm64.bin"),
+    path.join(frameworkRoot, "Resources", "v8_context_snapshot.x86_64.bin"),
+  ]) {
+    if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      updateHashFromFile(hash, filePath);
+    }
+  }
+  return hash.digest("hex");
+}
+
 function main(): void {
   if (process.platform !== "darwin") fail("The current native installer supports macOS application bundles only");
   const input = process.argv[2];
@@ -49,31 +97,72 @@ function main(): void {
   const targetDir = path.join(cacheRoot, `chromium-${version}`);
   const targetApp = path.join(targetDir, "Chromium.app");
   const targetExecutable = path.join(targetApp, "Contents", "MacOS", "Chromium");
+  const sourceHash = bundleBuildHash(sourceApp);
+  let installedHash: string | null = null;
 
   if (fs.existsSync(targetExecutable)) {
     const installedVersion = detectVersion(targetExecutable);
     if (installedVersion === version) {
-      process.stdout.write(JSON.stringify({ installed: true, unchanged: true, version, executablePath: targetExecutable }, null, 2) + "\n");
-      return;
+      installedHash = bundleBuildHash(targetApp);
+      if (installedHash === sourceHash) {
+        process.stdout.write(JSON.stringify({
+          installed: true,
+          unchanged: true,
+          version,
+          buildHash: sourceHash,
+          executablePath: targetExecutable,
+        }, null, 2) + "\n");
+        return;
+      }
+    } else {
+      fail(`Install target already exists with version ${installedVersion}: ${targetDir}`);
     }
-    fail(`Install target already exists with version ${installedVersion}: ${targetDir}`);
   }
-  if (fs.existsSync(targetDir)) fail(`Install target already exists and is incomplete: ${targetDir}`);
+  if (fs.existsSync(targetDir) && installedHash === null) {
+    fail(`Install target already exists and is incomplete: ${targetDir}`);
+  }
 
   fs.mkdirSync(cacheRoot, { recursive: true });
   const stageDir = fs.mkdtempSync(path.join(cacheRoot, ".chromium-install-"));
   const stageApp = path.join(stageDir, "Chromium.app");
+  let previousDir: string | null = null;
   try {
     execFileSync("ditto", [sourceApp, stageApp], { stdio: "inherit" });
     const stagedExecutable = executableFor(stageApp);
     const stagedVersion = detectVersion(stagedExecutable);
     if (stagedVersion !== version) fail(`Staged Chromium version changed from ${version} to ${stagedVersion}`);
-    fs.renameSync(stageDir, targetDir);
+    const stagedHash = bundleBuildHash(stageApp);
+    if (stagedHash !== sourceHash) fail("Staged Chromium executable hash does not match the source build");
+
+    if (installedHash !== null) {
+      previousDir = path.join(
+        cacheRoot,
+        `.chromium-${version}-previous-${installedHash.slice(0, 12)}-${Date.now()}`,
+      );
+      fs.renameSync(targetDir, previousDir);
+    }
+    try {
+      fs.renameSync(stageDir, targetDir);
+    } catch (error) {
+      if (previousDir && fs.existsSync(previousDir) && !fs.existsSync(targetDir)) {
+        fs.renameSync(previousDir, targetDir);
+        previousDir = null;
+      }
+      throw error;
+    }
   } finally {
     if (fs.existsSync(stageDir)) fs.rmSync(stageDir, { recursive: true, force: true });
   }
 
-  process.stdout.write(JSON.stringify({ installed: true, unchanged: false, version, executablePath: targetExecutable }, null, 2) + "\n");
+  process.stdout.write(JSON.stringify({
+    installed: true,
+    unchanged: false,
+    replaced: installedHash !== null,
+    version,
+    buildHash: sourceHash,
+    executablePath: targetExecutable,
+    previousPath: previousDir,
+  }, null, 2) + "\n");
 }
 
 try {

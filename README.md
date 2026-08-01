@@ -84,7 +84,9 @@ or login is used. `CLOAKBROWSER_BINARY_PATH` remains an explicit override, and
 the pinned license-free community wrapper is retained only as a legacy fallback
 when no independent build is installed. GeoIP defaults to CloakLite's bounded
 proxy detector; set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` only to opt into the
-wrapper-managed GeoIP database.
+wrapper-managed GeoIP database. Reinstalling a rebuilt binary with the same
+Chromium version compares the executable SHA-256, atomically replaces a changed
+build, and retains the prior bundle in a hidden recovery directory.
 
 ### Development checks
 

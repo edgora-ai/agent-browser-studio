@@ -1,0 +1,26 @@
+diff --git a/third_party/blink/renderer/modules/buckets/storage_bucket.cc b/third_party/blink/renderer/modules/buckets/storage_bucket.cc
+--- a/third_party/blink/renderer/modules/buckets/storage_bucket.cc
++++ b/third_party/blink/renderer/modules/buckets/storage_bucket.cc
+@@ -4,7 +4,10 @@
+ 
+ #include "third_party/blink/renderer/modules/buckets/storage_bucket.h"
+ 
++#include <algorithm>
++
+ #include "base/time/time.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/task_type.h"
+ #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable_creation_key.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+@@ -267,6 +270,11 @@ void StorageBucket::DidGetEstimate(
+     return;
+   }
+ 
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.storage_quota_bytes() > 0) {
++    current_quota = std::max(current_usage, config.storage_quota_bytes());
++  }
++
+   StorageEstimate* estimate = StorageEstimate::Create();
+   estimate->setUsage(current_usage);
+   estimate->setQuota(current_quota);

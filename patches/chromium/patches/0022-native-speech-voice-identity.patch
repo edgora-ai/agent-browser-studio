@@ -1,75 +1,96 @@
-diff --git a/content/browser/speech/speech_synthesis_impl.cc b/content/browser/speech/speech_synthesis_impl.cc
-index 1f07dd1fc6..6d7b33613e 100644
---- a/content/browser/speech/speech_synthesis_impl.cc
-+++ b/content/browser/speech/speech_synthesis_impl.cc
-@@ -9,6 +9,7 @@
- #include "content/browser/speech/tts_utterance_impl.h"
- #include "content/browser/web_contents/web_contents_impl.h"
- #include "content/public/browser/web_contents.h"
-+#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+diff --git a/third_party/blink/renderer/modules/speech/speech_synthesis.cc b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+--- a/third_party/blink/renderer/modules/speech/speech_synthesis.cc
++++ b/third_party/blink/renderer/modules/speech/speech_synthesis.cc
+@@ -28,6 +28,7 @@
+ #include <tuple>
  
- namespace content {
- namespace {
-@@ -91,6 +92,51 @@ class EventThunk : public UtteranceEventDelegate {
- void SendVoiceListToObserver(
-     blink::mojom::SpeechSynthesisVoiceListObserver* observer,
-     const std::vector<VoiceData>& voices) {
-+  const blink::RoxyFingerprintConfig& roxy_config =
-+      blink::RoxyFingerprintConfig::Get();
+ #include "build/build_config.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -85,6 +86,51 @@ SpeechSynthesis::SpeechSynthesis(LocalDOMWindow& window)
+ void SpeechSynthesis::OnSetVoiceList(
+     Vector<mojom::blink::SpeechSynthesisVoicePtr> mojom_voices) {
+   voice_list_.clear();
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
 +  if (roxy_config.enabled() && roxy_config.speech_synthesis_enabled()) {
-+    std::vector<blink::mojom::SpeechSynthesisVoicePtr> out_voices;
 +    const auto& configured_voices = roxy_config.speech_voices();
-+    out_voices.reserve(configured_voices.size());
-+    for (size_t i = 0; i < configured_voices.size(); ++i) {
++    for (wtf_size_t i = 0; i < configured_voices.size(); ++i) {
 +      const auto& configured = configured_voices[i];
-+      const VoiceData* actual = nullptr;
-+      for (const VoiceData& candidate : voices) {
-+        if (candidate.lang == configured.lang) {
-+          actual = &candidate;
++      const mojom::blink::SpeechSynthesisVoice* actual = nullptr;
++      for (const auto& candidate : mojom_voices) {
++        if (candidate->lang.Utf8() == configured.lang) {
++          actual = candidate.get();
 +          break;
 +        }
 +      }
 +      if (!actual) {
 +        const std::string configured_language =
 +            configured.lang.substr(0, configured.lang.find('-'));
-+        for (const VoiceData& candidate : voices) {
-+          if (candidate.lang.substr(0, candidate.lang.find('-')) ==
++        for (const auto& candidate : mojom_voices) {
++          const std::string candidate_language_tag =
++              candidate->lang.Utf8().c_str();
++          if (candidate_language_tag.substr(
++                  0, candidate_language_tag.find('-')) ==
 +              configured_language) {
-+            actual = &candidate;
++            actual = candidate.get();
 +            break;
 +          }
 +        }
 +      }
-+      if (!actual && !voices.empty())
-+        actual = &voices.front();
-+      if (actual) {
-+        blink::RoxyFingerprintConfig::RegisterRuntimeSpeechMapping(
-+            configured.name, actual->name);
-+      }
++      if (!actual && !mojom_voices.empty())
++        actual = mojom_voices.front().get();
 +
-+      auto out_voice = blink::mojom::SpeechSynthesisVoice::New();
-+      out_voice->voice_uri = configured.name;
-+      out_voice->name = configured.name;
-+      out_voice->lang = configured.lang;
-+      out_voice->is_local_service = configured.local_service;
-+      out_voice->is_default = i == 0;
-+      out_voices.push_back(std::move(out_voice));
++      auto exposed = mojom::blink::SpeechSynthesisVoice::New();
++      // Keep the system voice name private in voiceURI so selecting the
++      // exposed synthetic voice still reaches a real playback backend.
++      exposed->voice_uri =
++          actual ? actual->name : String::FromUtf8(configured.name);
++      exposed->name = String::FromUtf8(configured.name);
++      exposed->lang = String::FromUtf8(configured.lang);
++      exposed->is_local_service = configured.local_service;
++      exposed->is_default = i == 0;
++      voice_list_.push_back(MakeGarbageCollected<SpeechSynthesisVoice>(
++          std::move(exposed)));
 +    }
-+    observer->OnSetVoiceList(std::move(out_voices));
++    VoicesDidChange();
 +    return;
 +  }
 +
-   std::vector<blink::mojom::SpeechSynthesisVoicePtr> out_voices;
-   out_voices.resize(voices.size());
-   for (size_t i = 0; i < voices.size(); ++i) {
-@@ -153,7 +199,9 @@ void SpeechSynthesisImpl::Speak(
-       std::make_unique<TtsUtteranceImpl>(browser_context_, web_contents_);
-   tts_utterance->SetText(utterance->text);
-   tts_utterance->SetLang(utterance->lang);
--  tts_utterance->SetVoiceName(utterance->voice);
-+  tts_utterance->SetVoiceName(
-+      blink::RoxyFingerprintConfig::Get().MapSpeechVoiceToActual(
-+          utterance->voice));
-   tts_utterance->SetShouldClearQueue(false);
-   tts_utterance->SetContinuousParameters(utterance->rate, utterance->pitch,
-                                          utterance->volume);
+   for (auto& mojom_voice : mojom_voices) {
+     voice_list_.push_back(
+         MakeGarbageCollected<SpeechSynthesisVoice>(std::move(mojom_voice)));
+@@ -96,4 +142,20 @@ const HeapVector<Member<SpeechSynthesisVoice>>& SpeechSynthesis::getVoices() {
+   // Kick off initialization here to ensure voice list gets populated.
+   std::ignore = TryEnsureMojomSynthesis();
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (voice_list_.empty() && roxy_config.enabled() &&
++      roxy_config.speech_synthesis_enabled()) {
++    const auto& configured_voices = roxy_config.speech_voices();
++    for (wtf_size_t i = 0; i < configured_voices.size(); ++i) {
++      const auto& configured = configured_voices[i];
++      auto exposed = mojom::blink::SpeechSynthesisVoice::New();
++      exposed->voice_uri = String::FromUtf8(configured.name);
++      exposed->name = String::FromUtf8(configured.name);
++      exposed->lang = String::FromUtf8(configured.lang);
++      exposed->is_local_service = configured.local_service;
++      exposed->is_default = i == 0;
++      voice_list_.push_back(MakeGarbageCollected<SpeechSynthesisVoice>(
++          std::move(exposed)));
++    }
++  }
+   return voice_list_;
+ }
+diff --git a/third_party/blink/renderer/modules/speech/speech_synthesis_utterance.cc b/third_party/blink/renderer/modules/speech/speech_synthesis_utterance.cc
+--- a/third_party/blink/renderer/modules/speech/speech_synthesis_utterance.cc
++++ b/third_party/blink/renderer/modules/speech/speech_synthesis_utterance.cc
+@@ -72,7 +72,7 @@ void SpeechSynthesisUtterance::setVoice(SpeechSynthesisVoice* voice) {
+   // voice in the read property.
+   voice_ = voice;
+ 
+-  mojom_utterance_->voice = voice_ ? voice_->name() : String();
++  mojom_utterance_->voice = voice_ ? voice_->voiceURI() : String();
+ }
+ 
+ float SpeechSynthesisUtterance::volume() const {

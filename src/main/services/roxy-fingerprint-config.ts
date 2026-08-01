@@ -43,6 +43,14 @@ export interface RoxyFingerprintConfig {
   audio: { enabled: boolean; seed: string; amplitude: number };
   webgl: { vendor: string; renderer: string };
   webgpu: { mode: "webgl"; vendor: string };
+  webauthn: {
+    enabled: boolean;
+    conditionalGet: boolean;
+    conditionalCreate: boolean;
+    hybridTransport: boolean;
+    passkeyPlatformAuthenticator: boolean;
+    userVerifyingPlatformAuthenticator: boolean;
+  };
   speechSynthesis: {
     enabled: boolean;
     voices: Array<{ name: string; lang: string; localService: boolean }>;
@@ -122,6 +130,14 @@ export function buildRoxyFingerprintConfig(
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
     webgl,
     webgpu: { mode: "webgl", vendor: deriveWebGpuVendor(webgl.vendor, webgl.renderer) },
+    webauthn: {
+      enabled: true,
+      conditionalGet: true,
+      conditionalCreate: true,
+      hybridTransport: true,
+      passkeyPlatformAuthenticator: true,
+      userVerifyingPlatformAuthenticator: true,
+    },
     speechSynthesis: { enabled: true, voices: selectSpeechVoices(platform, locale) },
     webrtc: normalizeWebRtc(meta.webrtcMode, meta.webrtcIp),
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,

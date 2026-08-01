@@ -30,10 +30,7 @@ diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/t
          mojom::MediaDeviceType::kMediaAudioOutput);
      resolver->Resolve(media_device_info, AudioOutputSelectionResult::kSuccess);
      return;
-@@ -1024,8 +1031,11 @@ ScriptPromise<IDLUndefined> MediaDevices::setPreferredSinkId(
-   auto promise = resolver->Promise();
- 
-   LocalFrame* frame = LocalDOMWindow::From(script_state)->GetFrame();
+@@ -1031,4 +1038,7 @@ ScriptPromise<IDLUndefined> MediaDevices::setPreferredSinkId(
 +  const String actual_sink_id = String::FromUtf8(
 +      RoxyFingerprintConfig::Get().MapMediaConstraintToActual(
 +          sink_id.Utf8().c_str()));
@@ -42,7 +39,6 @@ diff --git a/third_party/blink/renderer/modules/mediastream/media_devices.cc b/t
 +      actual_sink_id,
        BindOnce(&MediaDevices::SetPreferredSinkIdResultReceived,
                 WrapWeakPersistent(this), sink_id, WrapPersistent(resolver)));
- 
 @@ -1510,5 +1520,15 @@ void MediaDevices::DevicesEnumerated(
          const String group_id = String::FromUtf8(
              roxy_config.StableToken("media-group", group_scope));

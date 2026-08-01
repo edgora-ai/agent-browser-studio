@@ -87,6 +87,22 @@ class RoxyFingerprintConfig {
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& webgpu_vendor() const { return webgpu_vendor_; }
   bool do_not_track_enabled() const { return do_not_track_enabled_; }
+  bool webauthn_enabled() const { return webauthn_enabled_; }
+  bool webauthn_conditional_get() const {
+    return webauthn_conditional_get_;
+  }
+  bool webauthn_conditional_create() const {
+    return webauthn_conditional_create_;
+  }
+  bool webauthn_hybrid_transport() const {
+    return webauthn_hybrid_transport_;
+  }
+  bool webauthn_passkey_platform_authenticator() const {
+    return webauthn_passkey_platform_authenticator_;
+  }
+  bool webauthn_user_verifying_platform_authenticator() const {
+    return webauthn_user_verifying_platform_authenticator_;
+  }
   bool speech_synthesis_enabled() const {
     return speech_synthesis_enabled_;
   }
@@ -339,6 +355,20 @@ class RoxyFingerprintConfig {
       webgpu_vendor_ = ReadString(*webgpu, "vendor");
     if (const std::string* do_not_track = root->FindString("doNotTrack"))
       do_not_track_enabled_ = *do_not_track == "1";
+    if (const base::DictValue* webauthn = root->FindDict("webauthn")) {
+      webauthn_enabled_ = webauthn->FindBool("enabled").value_or(false);
+      webauthn_conditional_get_ =
+          webauthn->FindBool("conditionalGet").value_or(false);
+      webauthn_conditional_create_ =
+          webauthn->FindBool("conditionalCreate").value_or(false);
+      webauthn_hybrid_transport_ =
+          webauthn->FindBool("hybridTransport").value_or(false);
+      webauthn_passkey_platform_authenticator_ =
+          webauthn->FindBool("passkeyPlatformAuthenticator").value_or(false);
+      webauthn_user_verifying_platform_authenticator_ =
+          webauthn->FindBool("userVerifyingPlatformAuthenticator")
+              .value_or(false);
+    }
     if (const base::DictValue* speech = root->FindDict("speechSynthesis")) {
       speech_synthesis_enabled_ =
           speech->FindBool("enabled").value_or(false);
@@ -486,6 +516,12 @@ class RoxyFingerprintConfig {
   std::string webgl_renderer_;
   std::string webgpu_vendor_;
   bool do_not_track_enabled_ = false;
+  bool webauthn_enabled_ = false;
+  bool webauthn_conditional_get_ = false;
+  bool webauthn_conditional_create_ = false;
+  bool webauthn_hybrid_transport_ = false;
+  bool webauthn_passkey_platform_authenticator_ = false;
+  bool webauthn_user_verifying_platform_authenticator_ = false;
   bool speech_synthesis_enabled_ = false;
   std::vector<SpeechVoice> speech_voices_;
   std::vector<RuntimeSpeechMapping> runtime_speech_mappings_;

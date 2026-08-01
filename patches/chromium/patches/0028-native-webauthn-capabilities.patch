@@ -1,0 +1,81 @@
+diff --git a/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc b/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
+--- a/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
++++ b/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
+@@ -8,6 +8,7 @@
+ #include <variant>
+ 
+ #include "third_party/abseil-cpp/absl/functional/overload.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/mojom/webauthn/authenticator.mojom-shared.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+@@ -38,6 +39,29 @@ namespace {
+ // https://www.w3.org/TR/webauthn/#dom-publickeycredential-type-slot:
+ constexpr char kPublicKeyCredentialType[] = "public-key";
+ 
++Vector<mojom::blink::WebAuthnClientCapabilityPtr>
++RoxyWebAuthnClientCapabilities(const RoxyFingerprintConfig& config) {
++  Vector<mojom::blink::WebAuthnClientCapabilityPtr> capabilities;
++  auto append = [&capabilities](const char* name, bool supported) {
++    auto capability = mojom::blink::WebAuthnClientCapability::New();
++    capability->name = name;
++    capability->supported = supported;
++    capabilities.push_back(std::move(capability));
++  };
++  append("conditionalGet", config.webauthn_conditional_get());
++  append("hybridTransport", config.webauthn_hybrid_transport());
++  append("passkeyPlatformAuthenticator",
++         config.webauthn_passkey_platform_authenticator());
++  append("userVerifyingPlatformAuthenticator",
++         config.webauthn_user_verifying_platform_authenticator());
++  append("relatedOrigins", true);
++  append("conditionalCreate", config.webauthn_conditional_create());
++  append("signalAllAcceptedCredentials", true);
++  append("signalCurrentUserDetails", true);
++  append("signalUnknownCredential", true);
++  return capabilities;
++}
++
+ void OnIsUserVerifyingComplete(ScriptPromiseResolver<IDLBoolean>* resolver,
+                                bool available) {
+   resolver->Resolve(available);
+@@ -156,6 +180,13 @@ PublicKeyCredential::getClientCapabilities(ScriptState* script_state) {
+   UseCounter::Count(resolver->GetExecutionContext(),
+                     WebFeature::kWebAuthnGetClientCapabilities);
+ 
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() && roxy_config.webauthn_enabled()) {
++    OnGetClientCapabilitiesComplete(
++        resolver, RoxyWebAuthnClientCapabilities(roxy_config));
++    return promise;
++  }
++
+   auto* authenticator =
+       CredentialManagerProxy::From(script_state)->Authenticator();
+   authenticator->GetClientCapabilities(
+@@ -185,6 +216,13 @@ PublicKeyCredential::isUserVerifyingPlatformAuthenticatorAvailable(
+       WebFeature::
+           kCredentialManagerIsUserVerifyingPlatformAuthenticatorAvailable);
+ 
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() && roxy_config.webauthn_enabled()) {
++    resolver->Resolve(
++        roxy_config.webauthn_user_verifying_platform_authenticator());
++    return promise;
++  }
++
+   auto* authenticator =
+       CredentialManagerProxy::From(script_state)->Authenticator();
+   authenticator->IsUserVerifyingPlatformAuthenticatorAvailable(
+@@ -216,6 +254,11 @@ ScriptPromise<IDLBoolean> PublicKeyCredential::isConditionalMediationAvailable(
+   UseCounter::Count(
+       resolver->GetExecutionContext(),
+       WebFeature::kCredentialManagerIsConditionalMediationAvailable);
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled() && roxy_config.webauthn_enabled()) {
++    resolver->Resolve(roxy_config.webauthn_conditional_get());
++    return promise;
++  }
+   auto* authenticator =
+       CredentialManagerProxy::From(script_state)->Authenticator();
+   authenticator->IsConditionalMediationAvailable(

@@ -670,6 +670,12 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(verifier).toContain("differentSeedsDistinct");
     expect(verifier).toContain("captureDisabledWebRtc");
     expect(verifier).toContain("audioTrackDeviceId");
+    expect(verifier).toContain("captureCodecs");
+    expect(verifier).toContain("WebCodecs AAC encoder");
+    const installer = fs.readFileSync(path.join(ROOT, "src/tools/install-native-chromium.ts"), "utf-8");
+    expect(installer).toContain("bundleBuildHash");
+    expect(installer).toContain("Chromium Framework");
+    expect(installer).toContain("previousPath");
   });
 
   it("exposes all WebRTC policy modes from UI through the native config", () => {
@@ -709,6 +715,10 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0022-native-speech-voice-identity.patch",
       "0023-native-touch-identity.patch",
       "0024-idempotent-canvas-noise.patch",
+      "0025-native-timezone-identity.patch",
+      "0026-native-accept-language.patch",
+      "0027-native-storage-buckets-quota.patch",
+      "0028-native-webauthn-capabilities.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
@@ -719,6 +729,9 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(canvasPatch).toContain("0xfffffffeU");
     expect(canvasPatch).toContain("0xfffeU");
     expect(canvasPatch).not.toMatch(/^\+.*nextafter/m);
+    const buildArgs = fs.readFileSync(path.join(patchRoot, "args.gn"), "utf-8");
+    expect(buildArgs).toContain("proprietary_codecs = true");
+    expect(buildArgs).toContain('ffmpeg_branding = "Chrome"');
   });
 
   it("renderer create/edit dialogs include hardware controls", () => {

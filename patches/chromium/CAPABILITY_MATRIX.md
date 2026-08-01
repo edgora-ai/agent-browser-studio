@@ -1,8 +1,9 @@
 # Chromium capability alignment matrix
 
 Status meanings: `config` is available to the application, `native` is
-implemented in the owning Chromium subsystem, and `verified` has passed the
-cross-browser E2E harness. This fork does not inject JavaScript into pages.
+implemented in the owning Chromium subsystem, and `verified` has passed an
+explicit comparative/runtime acceptance harness. This fork does not inject
+JavaScript into pages.
 
 | Surface | RoxyChrome 149 baseline | Community 149+ status | Native target |
 |---|---|---|---|
@@ -25,7 +26,9 @@ cross-browser E2E harness. This fork does not inject JavaScript into pages.
 | Plugins/MIME types | Stable 5 PDF / 2 MIME | native | Blink DOMPluginArray |
 | Speech voices | Locale/platform identity | native | browser TTS list + playback mapping |
 | Media devices | Stable labels/count/IDs | native | enumeration, constraints, settings and output routing |
-| Storage quota | Configurable | native | StorageManager estimate callback |
+| Storage quota | Configurable | native | StorageManager and StorageBucket estimate callbacks |
+| WebAuthn capabilities | Platform-shaped | native | PublicKeyCredential capability and availability paths |
+| AAC/H.264 codecs | Chrome codec surface | verified | media MIME, MSE, MediaCapabilities and WebCodecs paths |
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,

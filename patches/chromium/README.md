@@ -18,6 +18,22 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ./patches/chromium/apply.sh /path/to/chromium/src
 ```
 
+## Build configuration
+
+Use the checked-in release arguments so the binary exposes the same public
+AAC/H.264 codec surface as a normal Chrome installation:
+
+```bash
+cp ./patches/chromium/args.gn /path/to/chromium/src/out/RoxyRelease/args.gn
+cd /path/to/chromium/src
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer gn gen out/RoxyRelease
+autoninja -C out/RoxyRelease chrome
+```
+
+The template enables `proprietary_codecs` and uses the Chrome FFmpeg branding.
+Anyone distributing a binary built this way is responsible for the applicable
+codec patent and distribution requirements in their jurisdictions.
+
 The application creates the encoded configuration from normal profile fields.
 No profile encryption key is embedded into Chromium.
 
@@ -57,7 +73,9 @@ per-profile least-significant-bit transform. Media enumeration exposes a
 stable, origin-scoped desktop device set, and the standard Chromium PDF
 plugin/MIME set is enforced in Blink. Geolocation `real`, `disable`, and
 `custom` policies run in Blink's
-native request/result path. See
+native request/result path. Storage Buckets use the same configured quota as
+`navigator.storage.estimate()`, and WebAuthn capability probes use the
+profile's declared platform-authenticator identity. See
 `CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
 the field-by-field native consumer audit.
 
@@ -83,7 +101,9 @@ npm run verify:chromium -- /path/to/Chromium.app
 It launches two fresh profiles with the same seed and one with a different
 seed on one fixed localhost origin. The verifier checks Window/Worker identity,
 UA-CH, screen, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
-geolocation, storage, media-device constraint remapping, DNT headers in Window
+geolocation, StorageManager/Storage Buckets, WebAuthn, AAC/H.264 playback,
+MediaSource, MediaCapabilities and WebCodecs encode support, media-device
+constraint remapping, identity request headers in Window
 and Dedicated/Shared/Service Workers, disabled WebRTC candidates, restart
 stability and cross-seed distinction. Missing WebGPU is a failure.
 On macOS, fake audio capture can remain pending in stock Chrome as well as the

@@ -1,0 +1,24 @@
+diff --git a/chrome/browser/prefs/chrome_command_line_pref_store.cc b/chrome/browser/prefs/chrome_command_line_pref_store.cc
+--- a/chrome/browser/prefs/chrome_command_line_pref_store.cc
++++ b/chrome/browser/prefs/chrome_command_line_pref_store.cc
+@@ -27,5 +27,6 @@
+ #include "net/base/port_util.h"
+ #include "services/network/public/cpp/network_switches.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "ui/base/ui_base_switches.h"
+ #include "ui/display/display_switches.h"
+ #include "ui/gl/gl_switches.h"
+@@ -105,6 +106,13 @@ ChromeCommandLinePrefStore::ChromeCommandLinePrefStore(
+     const base::CommandLine* command_line)
+     : CommandLinePrefStore(command_line) {
+   ApplySimpleSwitches();
++  const blink::RoxyFingerprintConfig& roxy_config =
++      blink::RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled()) {
++    SetValue(language::prefs::kSelectedLanguages,
++             base::Value(roxy_config.accept_languages()),
++             WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
++  }
+   ApplyProxyMode();
+   ValidateProxySwitches();
+   ApplySSLSwitches();

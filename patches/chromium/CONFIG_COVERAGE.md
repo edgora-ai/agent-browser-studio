@@ -18,11 +18,12 @@ serialize it.
 | `deviceMemory` | shared Window/Worker `NavigatorDeviceMemory` |
 | `maxTouchPoints` | Blink `NavigatorEvents` |
 | `screen.*` | Blink `Screen` and `LocalDOMWindow`; `pixelDepth` delegates to configured `colorDepth` |
-| `storageQuotaBytes` | Blink `StorageManager::estimate()` callback |
+| `storageQuotaBytes` | Blink `StorageManager::estimate()` and `StorageBucket::estimate()` callbacks |
 | `canvas.*` | detached 8-bit, float16 and float32 Canvas/OffscreenCanvas readbacks |
 | `audio.*` | `AudioBuffer` and all analyser readback variants |
 | `webgl.*` | WebGL 1/2 debug renderer parameter path in Window/Worker |
 | `webgpu.*` | `GPUAdapter.info` / `GPUDevice.adapterInfo` vendor in Window/Worker |
+| `webauthn.*` | `PublicKeyCredential` client capabilities, conditional mediation and platform-authenticator availability |
 | `webrtc.*` | native allocator routing plus ICE candidate and SDP rewriting |
 | `timezone` | Blink `TimeZoneController` authoritative ICU/V8 process override for Window and Workers |
 | `geolocation.*` | Blink native request/result policy |
@@ -35,3 +36,8 @@ Fields such as search engine, image/audio blocking, password prompts, domain
 blocking, port-scan policy and an empty TLS cipher blacklist are browser product
 policies rather than fingerprint schema fields. They require separate product
 requirements and are not evidence of a native identity mismatch.
+
+AAC/H.264 support is a build invariant rather than a profile field. The checked
+in `args.gn` enables Chrome FFmpeg branding and proprietary codecs, while the
+runtime verifier checks MIME playback, MediaSource, MediaCapabilities and the
+AAC/H.264 WebCodecs encoders.
