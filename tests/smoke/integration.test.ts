@@ -686,6 +686,9 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(installer).toContain("bundleBuildHash");
     expect(installer).toContain("Chromium Framework");
     expect(installer).toContain("previousPath");
+    const builder = fs.readFileSync(path.join(ROOT, "electron-builder.yml"), "utf-8");
+    expect(builder).toContain("dist/tools/webgl-corpus.js");
+    expect(builder).toContain("dist/tools/webgpu-corpus.js");
   });
 
   it("exposes all WebRTC policy modes from UI through the native config", () => {
