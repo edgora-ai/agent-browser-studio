@@ -682,6 +682,10 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(verifier).toContain("verifyHeadedHeadlessParity");
     expect(verifier).toContain("captureStockWindowMode");
     expect(verifier).toContain("persistentProfileRestart");
+    const networkVerifier = fs.readFileSync(path.join(ROOT, "src/tools/verify-network-fingerprint.ts"), "utf-8");
+    expect(networkVerifier).toContain("tls.peet.ws/api/all");
+    expect(networkVerifier).toContain("quic.tlsfingerprint.io/api/client-fingerprint-quic");
+    expect(networkVerifier).toContain("diffNetworkFingerprint");
     const installer = fs.readFileSync(path.join(ROOT, "src/tools/install-native-chromium.ts"), "utf-8");
     expect(installer).toContain("bundleBuildHash");
     expect(installer).toContain("Chromium Framework");

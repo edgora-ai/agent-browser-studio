@@ -30,6 +30,8 @@ describe("Smoke — Project Structure", () => {
     "src/main/services/launch-args.ts",
     "src/main/services/cloak-manager.ts",
     "src/main/types.ts",
+    "src/tools/network-fingerprint-corpus.ts",
+    "src/tools/verify-network-fingerprint.ts",
     "src/renderer/index.html",
     "src/renderer/css/style.css",
     "src/renderer/js/app/core.js",
@@ -76,6 +78,7 @@ describe("Smoke — TypeScript", () => {
     expect(pkg.name).toBe("cloak-lite");
     expect(pkg.version).toBeDefined();
     expect(pkg.main).toBe("dist/main/index.js");
+    expect(pkg.scripts["verify:network"]).toContain("verify-network-fingerprint.js");
   });
 
   it("electron-builder.yml exists and has mac config", () => {
