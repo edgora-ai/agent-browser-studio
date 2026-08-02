@@ -62,7 +62,7 @@ Status meanings:
 | CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
 | Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests, compositor-paced pointer points and installed Chromium 150 E2E; no page injection |
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |
-| SOCKS5 TCP | partial | Add authenticated routing; unauthenticated TCP already uses remote DNS | controlled domain-target and authenticated routing tests |
+| SOCKS5 TCP | verified | Preserve authenticated routing and proxy-side name resolution through the loopback bridge | unit rejection/echo corpus plus real Electron/Profile remote-domain E2E and bridge lifecycle check |
 | SOCKS5 UDP / QUIC / HTTP3 | missing | Managed proxies currently fail closed with QUIC disabled; add UDP-capable proxy transport | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
 | Proxy timing, cache and header signals | partial | Extend the passing HTTP corpus to HTTPS, WebSocket and Service Worker paths | direct-vs-HTTP/SOCKS Window/Worker/frame headers, Resource Timing, cache and revalidation corpus |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
@@ -116,12 +116,13 @@ build-version coherence.
 
 The installed-cache journey retains Chromium `149.0.7827.22` alongside 150 and
 passes exact selection, rollback, pass-through, trusted humanized input and
-third-party-cookie compatibility/restoration (`13/13` targeted E2E) with the
+third-party-cookie compatibility/restoration and authenticated HTTP/SOCKS
+proxy routing (`15/15` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 24 of 36 engine/network/lifecycle rows
-are currently `verified`, 9 are `partial`, 2 are `missing`, and 1 stock-network
+Using the stage labels in this matrix, 25 of 36 engine/network/lifecycle rows
+are currently `verified`, 8 are `partial`, 2 are `missing`, and 1 stock-network
 row remains unverified. The two hard missing rows are SOCKS5 UDP/QUIC/HTTP3 and
 signed multi-platform distribution. The proxy timing/cache/header row is now
 partial after its controlled HTTP corpus passed.

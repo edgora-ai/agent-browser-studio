@@ -18,6 +18,10 @@ import { recordAudit } from "./audit-log.js";
 import { checkProfileConsistency } from "./consistency-check.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
+import {
+  startAuthenticatedSocksBridge,
+  type AuthenticatedSocksBridge,
+} from "./authenticated-socks-bridge.js";
 import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
@@ -74,7 +78,13 @@ export interface CloakProfile {
   cdpPort: number | null;
 }
 
-const runningProcesses = new Map<string, { pid: number; process: any; port: number; killTimer?: ReturnType<typeof setTimeout> }>();
+const runningProcesses = new Map<string, {
+  pid: number;
+  process: any;
+  port: number;
+  killTimer?: ReturnType<typeof setTimeout>;
+  proxyBridge?: AuthenticatedSocksBridge;
+}>();
 
 // ═══════════════════════════════════════════════════════════════
 // Binary Discovery
@@ -395,6 +405,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   }
   let releaseLaunchLock: (() => void) | null = null;
   let pendingNativeProxyAuth: NativeProxyAuthFile | null = null;
+  let pendingSocksBridge: AuthenticatedSocksBridge | null = null;
   try {
     releaseLaunchLock = acquireRestoreLock(dirId);
   } catch {
@@ -586,9 +597,21 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   // third-party binaries retain the extension compatibility fallback.
   const runtimeExtensionPaths: string[] = [];
   if (activeProxy) {
+    let chromiumProxy = activeProxy;
+    if (activeProxy.username && (activeProxy.type === "socks5" || activeProxy.type === "socks5h")) {
+      pendingSocksBridge = await startAuthenticatedSocksBridge(activeProxy);
+      chromiumProxy = {
+        ...activeProxy,
+        type: "socks5",
+        host: pendingSocksBridge.host,
+        port: pendingSocksBridge.port,
+        username: undefined,
+        password: undefined,
+      };
+    }
     args = dedupeChromeArgs([
       ...args,
-      `--proxy-server=${buildChromiumProxyUrl(activeProxy)}`,
+      `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
       "--disable-quic",
     ]);
     if (activeProxy.username && activeProxy.type === "http" && supportsNativeProxyAuth(bin)) {
@@ -602,7 +625,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
         ...args,
         `${NATIVE_PROXY_AUTH_SWITCH}=${pendingNativeProxyAuth.filePath}`,
       ]);
-    } else if (activeProxy.username) {
+    } else if (activeProxy.username && activeProxy.type === "http") {
       runtimeExtensionPaths.push(writeProxyAuthExtension(dirId, activeProxy));
     }
   }
@@ -631,6 +654,8 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   child.unref();
 
   child.on("error", (err: Error) => {
+    const failedEntry = runningProcesses.get(dirId);
+    void failedEntry?.proxyBridge?.close().catch(() => undefined);
     runningProcesses.delete(dirId);
     console.error(`[cloak] spawn error for ${dirId.slice(0, 8)}:`, err.message);
   });
@@ -638,7 +663,13 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   if (!child.pid) throw new Error(`CloakBrowser failed to start (no PID returned) for ${dirId.slice(0, 8)}`);
   const pid = child.pid;
 
-  runningProcesses.set(dirId, { pid, process: child, port: cdpPort });
+  runningProcesses.set(dirId, {
+    pid,
+    process: child,
+    port: cdpPort,
+    ...(pendingSocksBridge ? { proxyBridge: pendingSocksBridge } : {}),
+  });
+  pendingSocksBridge = null;
   if (releaseLaunchLock) {
     releaseLaunchLock();
     releaseLaunchLock = null;
@@ -649,7 +680,9 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     const queuedCookies = await cdpCookieService.applyQueuedImports(dirId);
     if (queuedCookies > 0) console.log(`[cloak] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
   } catch (e) {
+    const failedEntry = runningProcesses.get(dirId);
     runningProcesses.delete(dirId);
+    await failedEntry?.proxyBridge?.close().catch(() => undefined);
     try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error(`[cloak] failed to terminate unready process ${pid}:`, killError); }
     try { fs.closeSync(logFd); } catch (closeError) { console.error(`[cloak] failed to close launch log:`, closeError); }
     throw e;
@@ -659,6 +692,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     // Cancel pending SIGKILL timer if any — process exited naturally
     const entry = runningProcesses.get(dirId);
     if (entry?.killTimer) { clearTimeout(entry.killTimer); }
+    void entry?.proxyBridge?.close().catch(() => undefined);
     runningProcesses.delete(dirId);
     try { fs.closeSync(logFd); } catch (closeError) { console.error(`[cloak] failed to close launch log:`, closeError); }
     for (const win of BrowserWindow.getAllWindows()) {
@@ -672,6 +706,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   return { pid, cdpPort };
   } finally {
     pendingNativeProxyAuth?.cleanup();
+    await pendingSocksBridge?.close().catch(() => undefined);
     if (releaseLaunchLock) releaseLaunchLock();
   }
 }
@@ -699,6 +734,7 @@ export function stopCloak(dirId: string): boolean {
       for (const p of pids) {
         try { process.kill(p, "SIGKILL"); } catch {}
       }
+      void current.proxyBridge?.close().catch(() => undefined);
       runningProcesses.delete(dirId);
     }
   }, 3000);
@@ -722,6 +758,7 @@ export function statusCloak(dirId: string): { running: boolean; pid: number | nu
       process.kill(entry.pid, 0);
       return { running: true, pid: entry.pid, cdpPort: entry.port };
     } catch {
+      void entry.proxyBridge?.close().catch(() => undefined);
       runningProcesses.delete(dirId);
     }
   }

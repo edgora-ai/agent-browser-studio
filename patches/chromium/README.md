@@ -104,6 +104,11 @@ browser reads and deletes before child processes start; credentials no longer
 require an observable extension on the verified build. Managed HTTP/SOCKS
 launches disable QUIC until an authenticated UDP-capable proxy transport is
 implemented, preventing an unproxied UDP fallback.
+Authenticated SOCKS5 TCP profiles use an ephemeral loopback bridge: Chromium
+speaks its supported no-auth SOCKS5 dialect to loopback, while the bridge
+authenticates to the configured upstream and forwards the unresolved target
+domain. The bridge is owned by the profile process lifecycle and never loads a
+page-visible extension.
 Blink system colors, list selection and painted text selection now use fixed
 Windows/macOS light and dark palettes from the declared platform rather than
 the host theme. The seed also owns `prefers-color-scheme`; an unconfigured
@@ -146,4 +151,5 @@ mixed pass-through identity/theme is a failure.
 The verified macOS arm64 build reports `150.0.7871.114` and passes all 50
 surfaces plus the 61 theme cases. Installed-app acceptance additionally passes
 exact 150/149 rollback, trusted humanized input and third-party-cookie
-compatibility (`13/13` targeted E2E) without a CloakBrowser license key or login.
+compatibility and authenticated HTTP/SOCKS proxy routing (`15/15` targeted E2E)
+without a CloakBrowser license key or login.

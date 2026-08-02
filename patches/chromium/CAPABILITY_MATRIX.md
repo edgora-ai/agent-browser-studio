@@ -36,7 +36,7 @@ seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
 rollback, native-host pass-through, and explicit third-party-cookie
 compatibility with exact preference restoration. The strict verifier checks 50
 surfaces plus 61 preferred/light/dark system-theme and selection-pixel cases;
-the targeted installed-app journeys pass `13/13` without a license environment.
+the targeted installed-app journeys pass `15/15` without a license environment.
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,

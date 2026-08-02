@@ -93,10 +93,10 @@ build, and retains the prior bundle in a hidden recovery directory.
 
 The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
 the strict native harness passes all 50 checked surfaces plus 61 system-theme
-checks, and the installed version/input/cookie journeys pass `13/13`, with
+checks, and the installed version/input/cookie/proxy journeys pass `15/15`, with
 Chromium 149 retained for
 rollback. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
-engine/network/lifecycle gates, 24 are verified, 9 remain partial, 2 are
+engine/network/lifecycle gates, 25 are verified, 8 remain partial, 2 are
 missing, and 1 stock-network row is unverified. The hard missing rows are
 SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution; proxy
 timing/cache/header coverage is now partial after the controlled HTTP corpus;

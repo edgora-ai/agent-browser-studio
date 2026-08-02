@@ -74,6 +74,11 @@ Recommended flow:
 Notes:
 
 - Proxy credentials are redacted in IPC/UI/export paths.
+- The verified Chromium build handles HTTP 407 credentials in the browser
+  process; authenticated SOCKS5 TCP uses an ephemeral loopback bridge and
+  keeps target DNS resolution at the upstream proxy.
+- Managed proxies disable QUIC until a UDP-capable authenticated transport is
+  available, so traffic fails closed instead of bypassing the proxy.
 - Proxy geo detection results are cached and used for consistency warnings.
 - Avoid hard-coding local/private endpoints for production use.
 
