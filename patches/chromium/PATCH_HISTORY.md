@@ -80,3 +80,7 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
 - Acceptance: clean upstream `0002–0038` application, incremental Chromium
   build, native 407 challenge corpus, real Electron/Profile E2E, `419/419`
   tests, and the 50-surface plus 61-theme strict verifier.
+- Application follow-up `ac193a40a39022626a4be82e404b6c05733f50de`
+  adds authenticated SOCKS5 TCP through an ephemeral loopback bridge without
+  altering patch `0038`; the expanded acceptance is `421/421` tests and
+  `15/15` installed version/input/cookie/proxy journeys.
