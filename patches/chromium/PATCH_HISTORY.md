@@ -84,3 +84,7 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
   adds authenticated SOCKS5 TCP through an ephemeral loopback bridge without
   altering patch `0038`; the expanded acceptance is `421/421` tests and
   `15/15` installed version/input/cookie/proxy journeys.
+- Verification follow-up `9195ce5066e96e18817967aeb9ec235cbf7342d0`
+  adds the HTTP/HTTPS/WSS direct-vs-HTTP-vs-SOCKS corpus for Window, Workers,
+  frames, Navigation/Resource Timing, cache and ETag revalidation. It changes
+  no Chromium source or released patch bytes.
