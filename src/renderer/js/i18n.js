@@ -543,7 +543,7 @@
       "profile.new.field.webrtc": "WebRTC IP",
       "profile.new.field.webrtc.placeholder": "自动（代理出口 IP）— 或自定义 IP",
       "profile.new.advanced": "高级硬件指纹",
-      "profile.new.advanced.help": "留空让种子生成连贯的硬件。仅在风险检查器报告特定不匹配时覆盖。",
+      "profile.new.advanced.help": "留空让种子生成整套连贯硬件。显式值会作为整套画像约束；无法匹配 CPU/RAM/GPU/屏幕/DPR 的组合会被拒绝。",
       "profile.new.field.gpu-vendor": "GPU 厂商",
       "profile.new.field.gpu-renderer": "GPU 渲染器",
       "profile.new.field.cpu": "CPU 核心",
@@ -564,7 +564,7 @@
       "profile.edit.help": "<strong>--fingerprint=&lt;seed&gt;</strong> 确定性生成 GPU、屏幕、硬件、Canvas、音频、字体。<br>同种子 + 平台 + 时区 + 区域 = 100% 相同指纹。",
       "profile.edit.field.name": "配置名称 *",
       "profile.edit.field.seed": "指纹种子 *",
-      "profile.edit.advanced.help": "留空使用种子生成的硬件。显式值会传给 CloakBrowser 启动参数，可帮助调整 ping0.cc/env 风险项。",
+      "profile.edit.advanced.help": "留空使用种子生成的整套硬件。显式值必须共同匹配受支持画像，避免只改 GPU 或 CPU 造成跨字段泄漏。",
 
       // ── Bulk import ──
       "bulk.title": "📥 批量导入配置",
@@ -1197,7 +1197,7 @@
       "profile.new.field.webrtc": "WebRTC IP",
       "profile.new.field.webrtc.placeholder": "Auto (proxy exit IP) - or custom IP",
       "profile.new.advanced": "Advanced hardware fingerprint",
-      "profile.new.advanced.help": "Leave empty to let the seed generate coherent hardware. Override only when a risk checker reports a specific mismatch.",
+      "profile.new.advanced.help": "Leave empty for a coherent joint hardware persona. Explicit values constrain the whole persona; impossible CPU/RAM/GPU/screen/DPR combinations are rejected.",
       "profile.new.field.gpu-vendor": "GPU Vendor",
       "profile.new.field.gpu-renderer": "GPU Renderer",
       "profile.new.field.cpu": "CPU Cores",
@@ -1217,7 +1217,7 @@
       "profile.edit.help": "<strong>--fingerprint=&lt;seed&gt;</strong> deterministically generates GPU, screen, hardware, canvas, audio, fonts.<br>Same seed + platform + timezone + locale = 100% identical fingerprint.",
       "profile.edit.field.name": "Profile Name *",
       "profile.edit.field.seed": "Fingerprint Seed *",
-      "profile.edit.advanced.help": "Leave empty to use seed-generated hardware. Explicit values are passed to CloakBrowser launch flags and help tune ping0.cc/env risk items.",
+      "profile.edit.advanced.help": "Leave empty for the seed-owned joint persona. Explicit values must match one supported persona so a one-field override cannot leak cross-field inconsistency.",
 
       "bulk.title": "📥 Bulk Import Profiles",
       "bulk.description": "One Cloak profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code>",

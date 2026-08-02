@@ -25,7 +25,11 @@ import {
 import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
-import { buildRoxyFingerprintArg, buildRoxyFingerprintConfig } from "./roxy-fingerprint-config.js";
+import {
+  buildRoxyFingerprintArg,
+  buildRoxyFingerprintConfig,
+  validateRoxyHardwareProfile,
+} from "./roxy-fingerprint-config.js";
 import {
   findManagedChromiumBinary,
   getManagedChromiumRoot,
@@ -296,7 +300,7 @@ export function createCloakProfile(opts: {
   if (proxyMode === "named" && (!opts.proxyName || !Object.hasOwn(cfg.proxies, opts.proxyName))) {
     throw new Error(`Proxy not found: ${opts.proxyName || ""}`);
   }
-  cfg.cloakProfiles[dirId] = {
+  const profile = {
     name: opts.name,
     fingerprintMode: normalizeFingerprintMode(opts.fingerprintMode),
     browserVersion: normalizeManagedChromiumVersion(opts.browserVersion),
@@ -314,6 +318,8 @@ export function createCloakProfile(opts: {
     note: null,
     tags: normalizeTags(opts.tags),
   };
+  if (profile.fingerprintMode !== "off") validateRoxyHardwareProfile(profile);
+  cfg.cloakProfiles[dirId] = profile;
 
   const profileDir = path.join(getProfilesDir(), dirId);
   try {

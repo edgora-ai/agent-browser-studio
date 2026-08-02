@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as net from "node:net";
+import { validateRoxyHardwareProfile } from "./roxy-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { encryptSecret, isEncrypted, decryptSecretOr, usingEncryption } from "./secrets.js";
@@ -872,6 +873,7 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
 
   validateGeolocationMeta(next);
+  if (next.fingerprintMode !== "off") validateRoxyHardwareProfile(next);
 
   cp[dirId] = next;
   cfg.cloakProfiles = cp;

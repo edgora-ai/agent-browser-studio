@@ -1,11 +1,12 @@
 /// <reference lib="dom" />
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { chromium, type BrowserContext, type Frame, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
 import { CAPTURE_EXPRESSION } from "../main/services/fingerprint-baseline.js";
 import {
   buildRoxyFingerprintArg,
@@ -13,6 +14,13 @@ import {
   type RoxyFingerprintConfig,
 } from "../main/services/roxy-fingerprint-config.js";
 import type { CloakFingerprintMeta } from "../main/types.js";
+import { captureWebGlCorpusInPage, type WebGlCorpus } from "./webgl-corpus.js";
+import {
+  captureWebGpuCorpusInPage,
+  type WebGpuContextCorpus,
+  type WebGpuCorpus,
+} from "./webgpu-corpus.js";
+import { captureStorageCorpusInPage, type StorageCorpus } from "./storage-corpus.js";
 
 type Probe = Record<string, string | number | boolean | null | undefined>;
 
@@ -22,6 +30,14 @@ const SYSTEM_COLOR_KEYWORDS = [
   "GrayText", "Highlight", "HighlightText", "LinkText", "Mark", "MarkText",
   "SelectedItem", "SelectedItemText", "VisitedText",
 ] as const;
+
+// Observed from six valid local RoxyChrome 149 Profiles spanning Win32/macOS
+// and Apple/AMD identities. All six had this exact WebGL 1/2 capability shape
+// while retaining distinct unmasked vendor/renderer strings.
+const ROXYCHROME_149_WEBGL_CAPABILITY_SHA256 =
+  "8f97b97709c5c782ef0b5751e8c2217826721af0bfb8daeba76d29694d040bc2";
+const STOCK_CHROME_150_WEBGPU_CAPABILITY_SHA256 =
+  "ad30297f9dce978014dd2ab257051036bc2a0a551f9b594478c5000e3eb88ebc";
 
 type SystemColorKeyword = typeof SYSTEM_COLOR_KEYWORDS[number];
 type Pixel = [number, number, number, number];
@@ -93,6 +109,9 @@ interface StockWindowModeIdentity {
 
 interface RunResult {
   probe: Probe;
+  webgl: WebGlCorpus;
+  webgpu: WebGpuCorpus;
+  storage: StorageCorpus;
   codecs: {
     aacCanPlay: string;
     h264CanPlay: string;
@@ -140,10 +159,10 @@ const STABLE_FIELDS = [
   "innerWidth", "innerHeight",
   "devicePixelRatio", "tz", "tzOffset", "uaPlatform", "uaHighEntropy",
   "plugins", "mimeTypes", "glVendor", "glUnmaskedVendor", "glRenderer",
-  "canvasHash", "audioHash", "clientRect", "fontAvailability",
+  "webglCapabilityHash", "canvasHash", "audioHash", "clientRect", "fontAvailability",
   "speechVoices", "mediaDevices", "storageQuota", "webgpuVendor",
   "webgpuArchitecture", "webgpuDevice", "webgpuDescription", "webgpuSubgroupMinSize",
-  "webgpuSubgroupMaxSize", "webgpuIsFallbackAdapter", "workerIdentity",
+  "webgpuSubgroupMaxSize", "webgpuIsFallbackAdapter", "webgpuCapabilityHash", "workerIdentity",
   "systemColors", "preferredColorScheme",
 ] as const;
 
@@ -159,6 +178,41 @@ function expectEqual(actual: unknown, expected: unknown, label: string): void {
 
 function expect(condition: unknown, message: string): asserts condition {
   if (!condition) fail(message);
+}
+
+function webGlCapabilitySha256(contexts: WebGlCorpus["window"]): string {
+  const normalize = (context: WebGlCorpus["window"]["webgl1"]) => {
+    expect(context !== null, "WebGL capability hash received a null context");
+    return {
+      vendor: context.vendor,
+      renderer: context.renderer,
+      contextAttributes: context.contextAttributes,
+      extensions: context.extensions,
+      parameters: context.parameters,
+      shaderPrecision: context.shaderPrecision,
+    };
+  };
+  return createHash("sha256").update(JSON.stringify({
+    webgl1: normalize(contexts.webgl1),
+    webgl2: normalize(contexts.webgl2),
+  })).digest("hex");
+}
+
+function webGpuCapabilitySha256(context: WebGpuContextCorpus): string {
+  return createHash("sha256").update(JSON.stringify({
+    available: context.available,
+    adapter: context.adapter ? {
+      features: context.adapter.features,
+      limits: context.adapter.limits,
+    } : null,
+    device: context.device ? {
+      features: context.device.features,
+      limits: context.device.limits,
+    } : null,
+    preferredCanvasFormat: context.preferredCanvasFormat,
+    wgslLanguageFeatures: context.wgslLanguageFeatures,
+    error: context.error,
+  })).digest("hex");
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -757,6 +811,38 @@ async function captureDisabledWebRtc(page: Page): Promise<string[]> {
   });
 }
 
+async function captureIncognitoStorage(
+  executablePath: string,
+  version: string,
+  meta: CloakFingerprintMeta,
+  origin: string,
+): Promise<{ storage: StorageCorpus; config: RoxyFingerprintConfig }> {
+  const config = buildRoxyFingerprintConfig(meta, version);
+  let browser: Browser | null = null;
+  try {
+    process.stderr.write("[verify:chromium] incognito storage: launch\n");
+    browser = await chromium.launch({
+      executablePath,
+      headless: true,
+      timeout: 20_000,
+      args: [buildRoxyFingerprintArg(meta, version)],
+    });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(origin, { waitUntil: "load", timeout: 15_000 });
+    return {
+      config,
+      storage: await withTimeout(
+        page.evaluate(captureStorageCorpusInPage, config.storageQuotaBytes * 2),
+        30_000,
+        "incognito Storage corpus",
+      ),
+    };
+  } finally {
+    if (browser) await withTimeout(browser.close(), 10_000, "incognito storage browser close").catch(() => undefined);
+  }
+}
+
 async function runOnce(
   executablePath: string,
   version: string,
@@ -800,6 +886,24 @@ async function runOnce(
       `${label} fingerprint probe`,
     );
     const probe = JSON.parse(String(raw)) as Probe;
+    process.stderr.write(`[verify:chromium] ${label}: WebGL 1/2 capability corpus\n`);
+    const webgl = await withTimeout(
+      page.evaluate(captureWebGlCorpusInPage),
+      25_000,
+      `${label} WebGL capability corpus`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: WebGPU adapter/device capability corpus\n`);
+    const webgpu = await withTimeout(
+      page.evaluate(captureWebGpuCorpusInPage),
+      30_000,
+      `${label} WebGPU capability corpus`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: Storage modern/legacy/OPFS corpus\n`);
+    const storage = await withTimeout(
+      page.evaluate(captureStorageCorpusInPage, config.storageQuotaBytes * 2),
+      30_000,
+      `${label} Storage corpus`,
+    );
     process.stderr.write(`[verify:chromium] ${label}: AAC/H.264 codecs\n`);
     const codecs = await withTimeout(captureCodecs(page), 12_000, `${label} codecs`);
     process.stderr.write(`[verify:chromium] ${label}: geolocation\n`);
@@ -862,6 +966,9 @@ async function runOnce(
       config,
       result: {
         probe,
+        webgl,
+        webgpu,
+        storage,
         codecs,
         media,
         storageBucketQuota,
@@ -1119,11 +1226,50 @@ function verifyExpected(
   expectEqual(probe.tz, config.timezone, "Intl timezone");
   expectEqual(probe.glUnmaskedVendor, config.webgl.vendor, "WebGL unmasked vendor");
   expectEqual(probe.glRenderer, config.webgl.renderer, "WebGL unmasked renderer");
+  for (const version of ["webgl1", "webgl2"] as const) {
+    const windowContext = run.webgl.window[version];
+    const workerContext = run.webgl.worker[version];
+    expect(windowContext !== null, `Window ${version} was unavailable`);
+    expect(workerContext !== null, `Worker ${version} was unavailable`);
+    expectEqual(windowContext.unmaskedVendor, config.webgl.vendor, `Window ${version} unmasked vendor`);
+    expectEqual(windowContext.unmaskedRenderer, config.webgl.renderer, `Window ${version} unmasked renderer`);
+    expectEqual(workerContext.unmaskedVendor, config.webgl.vendor, `Worker ${version} unmasked vendor`);
+    expectEqual(workerContext.unmaskedRenderer, config.webgl.renderer, `Worker ${version} unmasked renderer`);
+    expectEqual(windowContext, workerContext, `${version} Window/Worker capability corpus`);
+  }
+  expectEqual(
+    webGlCapabilitySha256(run.webgl.window),
+    ROXYCHROME_149_WEBGL_CAPABILITY_SHA256,
+    "WebGL 1/2 capability corpus vs observed RoxyChrome 149",
+  );
   expectEqual(probe.webgpuVendor, config.webgpu.vendor, "WebGPU vendor");
   expectEqual(probe.webgpuArchitecture, config.webgpu.architecture, "WebGPU architecture");
   expectEqual(probe.webgpuSubgroupMinSize, config.webgpu.subgroupMinSize, "WebGPU subgroupMinSize");
   expectEqual(probe.webgpuSubgroupMaxSize, config.webgpu.subgroupMaxSize, "WebGPU subgroupMaxSize");
   expectEqual(probe.webgpuIsFallbackAdapter, false, "WebGPU isFallbackAdapter");
+  expectEqual(run.webgpu.window, run.webgpu.worker, "WebGPU Window/Worker capability corpus");
+  for (const [contextName, context] of Object.entries(run.webgpu)) {
+    expectEqual(context.available, true, `${contextName} WebGPU availability`);
+    expectEqual(context.error, null, `${contextName} WebGPU corpus error`);
+    expect(context.adapter !== null, `${contextName} WebGPU adapter was unavailable`);
+    expect(context.device !== null, `${contextName} WebGPU device was unavailable`);
+    for (const [identityName, identity] of Object.entries({
+      adapter: context.adapter.info,
+      device: context.device.adapterInfo,
+    })) {
+      expect(identity !== null, `${contextName} ${identityName} WebGPU info was unavailable`);
+      expectEqual(identity.vendor, config.webgpu.vendor, `${contextName} ${identityName} WebGPU vendor`);
+      expectEqual(identity.architecture, config.webgpu.architecture, `${contextName} ${identityName} WebGPU architecture`);
+      expectEqual(identity.subgroupMinSize, config.webgpu.subgroupMinSize, `${contextName} ${identityName} subgroupMinSize`);
+      expectEqual(identity.subgroupMaxSize, config.webgpu.subgroupMaxSize, `${contextName} ${identityName} subgroupMaxSize`);
+      expectEqual(identity.isFallbackAdapter, false, `${contextName} ${identityName} isFallbackAdapter`);
+    }
+  }
+  expectEqual(
+    webGpuCapabilitySha256(run.webgpu.window),
+    STOCK_CHROME_150_WEBGPU_CAPABILITY_SHA256,
+    "WebGPU adapter/device corpus vs Stock Chrome 150",
+  );
   expect(String(probe.workerIdentity || "").includes(config.userAgent), "Worker user agent did not match Window");
   expect(String(probe.workerIdentity || "").includes(config.platform), "Worker platform did not match Window");
   expectEqual(run.geolocation.latitude, config.geolocation.latitude, "geolocation latitude");
@@ -1217,6 +1363,7 @@ function verifyExpected(
   }
   expectEqual(probe.storageQuota, config.storageQuotaBytes, "storage quota");
   expectEqual(run.storageBucketQuota, config.storageQuotaBytes, "Storage Buckets quota");
+  verifyStorageCorpus(run.storage, config.storageQuotaBytes, "persistent");
   const expectedWebAuthn = config.webauthn;
   for (const [name, expected] of Object.entries({
     conditionalGet: expectedWebAuthn.conditionalGet,
@@ -1243,6 +1390,41 @@ function verifyExpected(
   );
 }
 
+function verifyStorageCorpus(storage: StorageCorpus, expectedQuota: number, label: string): void {
+  for (const [contextName, context] of Object.entries(storage)) {
+    expectEqual(context.modern.available, true, `${label} ${contextName} StorageManager availability`);
+    expectEqual(context.modern.quota, expectedQuota, `${label} ${contextName} StorageManager quota`);
+    expectEqual(context.modern.error, null, `${label} ${contextName} StorageManager error`);
+    expectEqual(context.bucket.available, true, `${label} ${contextName} Storage Bucket availability`);
+    expectEqual(context.bucket.quota, expectedQuota, `${label} ${contextName} Storage Bucket quota`);
+    expectEqual(context.bucket.directoryAvailable, true, `${label} ${contextName} Bucket OPFS availability`);
+    expectEqual(context.bucket.error, null, `${label} ${contextName} Storage Bucket error`);
+    expectEqual(context.opfs, { available: true, roundTrip: true, error: null }, `${label} ${contextName} OPFS`);
+    expectEqual(
+      context.webkitFileSystem,
+      { available: true, opened: true, error: null },
+      `${label} ${contextName} webkitRequestFileSystem`,
+    );
+    for (const [legacyName, legacy] of Object.entries({
+      temporary: context.legacyTemporary,
+      persistent: context.legacyPersistent,
+    })) {
+      if (contextName === "window") {
+        expectEqual(legacy.available, true, `${label} Window legacy ${legacyName} availability`);
+        expectEqual(legacy.quota, expectedQuota, `${label} Window legacy ${legacyName} quota`);
+        expectEqual(legacy.grantedQuota, expectedQuota, `${label} Window legacy ${legacyName} grant`);
+        expectEqual(legacy.error, null, `${label} Window legacy ${legacyName} error`);
+      } else {
+        expectEqual(
+          legacy,
+          { available: false, quota: null, grantedQuota: null, usageDetailKeys: [], error: null },
+          `${label} Worker legacy ${legacyName} stock exposure`,
+        );
+      }
+    }
+  }
+}
+
 function verifyStable(
   first: RunResult,
   second: RunResult,
@@ -1261,6 +1443,9 @@ function verifyStable(
     if (allowedProbeDifferences.has(field)) continue;
     compare(first.probe[field], second.probe[field], field);
   }
+  compare(first.webgl, second.webgl, "WebGL 1/2 capability corpus");
+  compare(first.webgpu, second.webgpu, "WebGPU adapter/device capability corpus");
+  compare(first.storage, second.storage, "Storage modern/legacy/OPFS corpus");
   compare(first.codecs, second.codecs, "codec capabilities");
   compare(first.media, second.media, "media mapping");
   compare(first.storageBucketQuota, second.storageBucketQuota, "Storage Buckets quota");
@@ -1362,11 +1547,11 @@ async function main(): Promise<void> {
     gpuRenderer: managedPlatform === "macos"
       ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
       : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-    hardwareConcurrency: 8,
+    hardwareConcurrency: managedPlatform === "macos" ? 8 : 12,
     deviceMemory: 16,
-    screenWidth: 1920,
-    screenHeight: 1080,
-    taskbarHeight: 48,
+    screenWidth: managedPlatform === "macos" ? 1512 : 1920,
+    screenHeight: managedPlatform === "macos" ? 982 : 1080,
+    taskbarHeight: managedPlatform === "macos" ? 25 : 48,
     storageQuota: 120000,
   };
 
@@ -1431,7 +1616,7 @@ async function main(): Promise<void> {
         gpuRenderer: alternatePlatform === "macos"
           ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
           : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-        hardwareConcurrency: 8,
+        hardwareConcurrency: alternatePlatform === "macos" ? 8 : 12,
         deviceMemory: 16,
         screenWidth: alternatePlatform === "macos" ? 1512 : 1920,
         screenHeight: alternatePlatform === "macos" ? 982 : 1080,
@@ -1464,6 +1649,12 @@ async function main(): Promise<void> {
       path.join(tempRoot, "stock-window-headed"),
       false,
     );
+    const incognitoStorage = await captureIncognitoStorage(
+      executablePath,
+      version,
+      baseMeta,
+      origin.origin,
+    );
     const passThrough = await capturePassThrough(
       executablePath,
       origin.origin,
@@ -1485,6 +1676,8 @@ async function main(): Promise<void> {
     verifyExpected(greekGreece.result, greekGreece.config);
     verifyExpected(greekCyprus.result, greekCyprus.config);
     verifyExpected(headed.result, headed.config, stockHeadedWindowMode);
+    verifyStorageCorpus(incognitoStorage.storage, incognitoStorage.config.storageQuotaBytes, "incognito");
+    expectEqual(first.result.storage, incognitoStorage.storage, "persistent/incognito Storage corpus parity");
     verifyDistinct(first.result, distinct.result);
     const windowsTheme = first.config.platform === "Win32"
       ? first.result.systemTheme
@@ -1499,9 +1692,26 @@ async function main(): Promise<void> {
       executablePath,
       version,
       checkedSurfaces: STABLE_FIELDS.length,
+      webglCapabilityCorpus: {
+        contexts: 4,
+        roxyChrome149Sha256: webGlCapabilitySha256(first.result.webgl.window),
+        webgl1Parameters: Object.keys(first.result.webgl.window.webgl1?.parameters || {}).length,
+        webgl2Parameters: Object.keys(first.result.webgl.window.webgl2?.parameters || {}).length,
+        shaderPrecisionCases: Object.keys(first.result.webgl.window.webgl1?.shaderPrecision || {}).length * 2,
+      },
+      webgpuCapabilityCorpus: {
+        contexts: 2,
+        stockChrome150Sha256: webGpuCapabilitySha256(first.result.webgpu.window),
+        adapterFeatures: first.result.webgpu.window.adapter?.features.length || 0,
+        adapterLimits: Object.keys(first.result.webgpu.window.adapter?.limits || {}).length,
+        deviceFeatures: first.result.webgpu.window.device?.features.length || 0,
+        deviceLimits: Object.keys(first.result.webgpu.window.device?.limits || {}).length,
+        wgslLanguageFeatures: first.result.webgpu.window.wgslLanguageFeatures.length,
+      },
       systemThemeChecks: SYSTEM_COLOR_KEYWORDS.length * 3 + 4,
       codecs: "aac-h264-verified",
       storageBuckets: "verified",
+      storageCorpus: "modern-legacy-buckets-opfs-persistent-incognito-verified",
       webauthn: "verified",
       cdpIdentityCoherence: "verified",
       buildVersionCoherence: "verified",

@@ -1,0 +1,36 @@
+diff --git a/third_party/blink/renderer/modules/quota/deprecated_storage_quota.cc b/third_party/blink/renderer/modules/quota/deprecated_storage_quota.cc
+index f40ebb4511f6810f8e85a1f219d6272013897df0..27958e9016db73060283482b634beb3f7a49db6d 100644
+--- a/third_party/blink/renderer/modules/quota/deprecated_storage_quota.cc
++++ b/third_party/blink/renderer/modules/quota/deprecated_storage_quota.cc
+@@ -35,6 +35,7 @@
+ #include "base/location.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "mojo/public/cpp/bindings/callback_helpers.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/public/platform/task_type.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_storage_error_callback.h"
+@@ -72,6 +73,11 @@ void DeprecatedQueryStorageUsageAndQuotaCallback(
+     return;
+   }
+ 
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.storage_quota_bytes() > 0) {
++    quota_in_bytes = std::max(usage_in_bytes, config.storage_quota_bytes());
++  }
++
+   if (success_callback) {
+     success_callback->InvokeAndReportException(nullptr, usage_in_bytes,
+                                                quota_in_bytes);
+@@ -93,6 +99,11 @@ void RequestStorageQuotaCallback(V8StorageQuotaCallback* success_callback,
+     return;
+   }
+ 
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled() && config.storage_quota_bytes() > 0) {
++    quota_in_bytes = std::max(usage_in_bytes, config.storage_quota_bytes());
++  }
++
+   if (success_callback) {
+     success_callback->InvokeAndReportException(
+         nullptr,

@@ -18,6 +18,7 @@ const MAC_CJK_FONT_POOL = [
 ];
 
 interface HardwarePersona {
+  id: string;
   hardwareConcurrency: number;
   deviceMemory: number;
   screenWidth: number;
@@ -34,6 +35,7 @@ interface HardwarePersona {
 // still override individual values for controlled testing and migration.
 const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
+    id: "win-intel-uhd620-8c-8gb-1080p",
     hardwareConcurrency: 8,
     deviceMemory: 8,
     screenWidth: 1920,
@@ -44,6 +46,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)",
   },
   {
+    id: "win-intel-irisxe-8c-16gb-1080p",
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -54,6 +57,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
   },
   {
+    id: "win-nvidia-rtx3060-12c-16gb-1080p",
     hardwareConcurrency: 12,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -64,6 +68,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
   },
   {
+    id: "win-nvidia-rtx4060-16c-16gb-1440p",
     hardwareConcurrency: 16,
     deviceMemory: 16,
     screenWidth: 2560,
@@ -74,6 +79,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
   },
   {
+    id: "win-amd-radeon-16c-16gb-1080p",
     hardwareConcurrency: 16,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -87,6 +93,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
 
 const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
+    id: "mac-apple-m1-8c-8gb-1440x900",
     hardwareConcurrency: 8,
     deviceMemory: 8,
     screenWidth: 1440,
@@ -97,6 +104,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
   },
   {
+    id: "mac-apple-m2-8c-16gb-1512x982",
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1512,
@@ -107,6 +115,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)",
   },
   {
+    id: "mac-apple-m3-8c-16gb-1710x1107",
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1710,
@@ -117,6 +126,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
   },
   {
+    id: "mac-apple-m2pro-12c-16gb-1728x1117",
     hardwareConcurrency: 12,
     deviceMemory: 16,
     screenWidth: 1728,
@@ -140,6 +150,12 @@ export interface RoxyFingerprintConfig {
   hardwareConcurrency: number;
   deviceMemory: number;
   maxTouchPoints: number;
+  hardwareProfile: {
+    id: string;
+    source: "seeded" | "validated-override";
+    fontProfile: "windows-portable" | "macos-system";
+    audioProfile: "chromium-desktop";
+  };
   screen: {
     width: number;
     height: number;
@@ -209,10 +225,10 @@ export function buildRoxyFingerprintConfig(
   const version = normalizeChromiumVersion(chromiumVersion);
   const locale = normalizeLocale(meta.locale);
   const languages = locale.includes("-") ? [locale, locale.split("-")[0]] : [locale];
-  const persona = selectHardwarePersona(seed, platform);
-  const screenWidth = normalizeInteger(meta.screenWidth, 320, 10000, persona.screenWidth);
-  const screenHeight = normalizeInteger(meta.screenHeight, 240, 10000, persona.screenHeight);
-  const taskbarHeight = normalizeInteger(meta.taskbarHeight, 0, 500, persona.taskbarHeight);
+  const { persona, source: personaSource } = selectHardwarePersona(seed, platform, meta);
+  const screenWidth = persona.screenWidth;
+  const screenHeight = persona.screenHeight;
+  const taskbarHeight = persona.taskbarHeight;
   const availLeft = 0;
   const availTop = platform === "MacIntel" ? Math.min(taskbarHeight, Math.max(0, screenHeight - 1)) : 0;
   const availWidth = screenWidth;
@@ -227,8 +243,8 @@ export function buildRoxyFingerprintConfig(
     : "Windows NT 10.0; Win64; x64";
   const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
   const webgl = {
-    vendor: normalizeText(meta.gpuVendor, persona.gpuVendor),
-    renderer: normalizeText(meta.gpuRenderer, persona.gpuRenderer),
+    vendor: persona.gpuVendor,
+    renderer: persona.gpuRenderer,
   };
 
   return {
@@ -240,9 +256,15 @@ export function buildRoxyFingerprintConfig(
     appVersion: ua.replace(/^Mozilla\//, ""),
     vendor: "Google Inc.",
     languages,
-    hardwareConcurrency: normalizeInteger(meta.hardwareConcurrency, 1, 64, persona.hardwareConcurrency),
-    deviceMemory: normalizeInteger(meta.deviceMemory, 1, 128, persona.deviceMemory),
+    hardwareConcurrency: persona.hardwareConcurrency,
+    deviceMemory: persona.deviceMemory,
     maxTouchPoints: 0,
+    hardwareProfile: {
+      id: persona.id,
+      source: personaSource,
+      fontProfile: platform === "MacIntel" ? "macos-system" : "windows-portable",
+      audioProfile: "chromium-desktop",
+    },
     screen: {
       width: screenWidth,
       height: screenHeight,
@@ -292,6 +314,11 @@ export function buildRoxyFingerprintArg(
   return ROXY_FINGERPRINT_SWITCH + encodeRoxyFingerprintConfig(buildRoxyFingerprintConfig(meta, chromiumVersion));
 }
 
+/** Validate that advanced fields can resolve to one complete hardware tuple. */
+export function validateRoxyHardwareProfile(meta: CloakFingerprintMeta): void {
+  selectHardwarePersona(normalizeSeed(meta.fingerprintSeed), normalizePlatform(meta.platform), meta);
+}
+
 function normalizeSeed(value: unknown): number {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : 12345;
 }
@@ -316,10 +343,6 @@ function normalizeLocale(value: unknown): string {
 
 function normalizeInteger(value: unknown, min: number, max: number, fallback: number): number {
   return Number.isInteger(value) && Number(value) >= min && Number(value) <= max ? Number(value) : fallback;
-}
-
-function normalizeText(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
 function deriveWebGpuIdentity(
@@ -448,9 +471,53 @@ function normalizeFiniteNumber(value: unknown, min: number, max: number, label: 
   return number;
 }
 
-function selectHardwarePersona(seed: number, platform: "Win32" | "MacIntel"): HardwarePersona {
+function selectHardwarePersona(
+  seed: number,
+  platform: "Win32" | "MacIntel",
+  meta: CloakFingerprintMeta,
+): { persona: HardwarePersona; source: "seeded" | "validated-override" } {
   const personas = platform === "MacIntel" ? MAC_HARDWARE_PERSONAS : WINDOWS_HARDWARE_PERSONAS;
-  return personas[Math.abs(seed) % personas.length];
+  const numericConstraints = [
+    ["hardwareConcurrency", "hardwareConcurrency"],
+    ["deviceMemory", "deviceMemory"],
+    ["screenWidth", "screenWidth"],
+    ["screenHeight", "screenHeight"],
+    ["taskbarHeight", "taskbarHeight"],
+  ] as const;
+  const hasValue = (value: unknown): boolean => value !== undefined && value !== null && value !== "";
+  const hasOverrides = numericConstraints.some(([metaKey]) => hasValue(meta[metaKey])) ||
+    hasValue(meta.gpuVendor) || hasValue(meta.gpuRenderer);
+  if (!hasOverrides) {
+    return { persona: personas[Math.abs(seed) % personas.length], source: "seeded" };
+  }
+
+  const candidates = personas.filter((persona) => {
+    for (const [metaKey, personaKey] of numericConstraints) {
+      const requested = meta[metaKey];
+      if (!hasValue(requested)) continue;
+      if (!Number.isInteger(requested) || Number(requested) !== persona[personaKey]) return false;
+    }
+    if (hasValue(meta.gpuVendor) && String(meta.gpuVendor).trim() !== persona.gpuVendor) return false;
+    if (hasValue(meta.gpuRenderer) && String(meta.gpuRenderer).trim() !== persona.gpuRenderer) return false;
+    return true;
+  });
+  if (candidates.length === 0) {
+    const requested = [
+      ...numericConstraints
+        .filter(([metaKey]) => hasValue(meta[metaKey]))
+        .map(([metaKey]) => `${metaKey}=${JSON.stringify(meta[metaKey])}`),
+      ...(hasValue(meta.gpuVendor) ? [`gpuVendor=${JSON.stringify(meta.gpuVendor)}`] : []),
+      ...(hasValue(meta.gpuRenderer) ? [`gpuRenderer=${JSON.stringify(meta.gpuRenderer)}`] : []),
+    ];
+    throw new Error(
+      `Incoherent advanced hardware overrides for ${platform}: ${requested.join(", ")}. ` +
+      `Use one supported joint profile (${personas.map((persona) => persona.id).join(", ")}) or clear the overrides.`,
+    );
+  }
+  return {
+    persona: candidates[Math.abs(seed) % candidates.length],
+    source: "validated-override",
+  };
 }
 
 function deriveSeed(seed: number, surface: string): string {

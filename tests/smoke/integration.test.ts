@@ -733,6 +733,13 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0030-native-window-geometry-coherence.patch",
       "0031-native-webgpu-adapter-coherence.patch",
       "0032-native-cdp-input-routing.patch",
+      "0033-native-system-theme-coherence.patch",
+      "0034-native-cdp-wheel-routing.patch",
+      "0035-native-cdp-occluded-input-completion.patch",
+      "0036-native-cdp-scroll-delta-deduplication.patch",
+      "0037-native-cdp-scroll-offset-reconciliation.patch",
+      "0038-native-managed-proxy-auth.patch",
+      "0039-native-legacy-storage-quota.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

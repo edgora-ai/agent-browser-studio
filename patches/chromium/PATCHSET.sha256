@@ -38,3 +38,4 @@ cb6858e9a3e30c3160760a1c10c6ce10a050a98271befecf59ed165f5c496eaa  patches/0033-n
 c546dd580fa9b6b5a4bb8d034655150f2e01571abcb6b45bb2710222bb4e34d8  patches/0036-native-cdp-scroll-delta-deduplication.patch
 44ef1d8ce4d88b07960acf2c31b41660aac0dde150faa268e8dc79d306e75f27  patches/0037-native-cdp-scroll-offset-reconciliation.patch
 e23fb1c02e2336339118e61ff4f66955e921582dca6d8e23a36c31133bb358de  patches/0038-native-managed-proxy-auth.patch
+a111080791715db1fc6886e0b2607cc72ead8949e3343f4873a68d2102107d39  patches/0039-native-legacy-storage-quota.patch

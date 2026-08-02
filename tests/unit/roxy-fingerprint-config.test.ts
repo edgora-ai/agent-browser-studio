@@ -16,10 +16,10 @@ describe("Roxy fingerprint config", () => {
       screenHeight: 1080,
       taskbarHeight: 48,
       storageQuota: 120000,
-      hardwareConcurrency: 8,
+      hardwareConcurrency: 12,
       deviceMemory: 16,
       gpuVendor: "Google Inc. (NVIDIA)",
-      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060)",
+      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
       webrtcIp: "203.0.113.9",
       geolocationMode: "custom" as const,
       geolocationLatitude: 31.2304,
@@ -32,13 +32,19 @@ describe("Roxy fingerprint config", () => {
     expect(second).toEqual(first);
     expect(Object.keys(first).sort()).toEqual([
       "appVersion", "audio", "canvas", "deviceMemory", "doNotTrack", "fonts",
-      "geolocation", "hardwareConcurrency", "languages", "maxTouchPoints",
+      "geolocation", "hardwareConcurrency", "hardwareProfile", "languages", "maxTouchPoints",
       "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen",
       "seed", "speechSynthesis", "storageQuotaBytes", "timezone", "userAgent",
       "vendor", "webauthn", "webgl", "webgpu", "webrtc",
     ]);
     expect(first.platform).toBe("Win32");
     expect(first.maxTouchPoints).toBe(0);
+    expect(first.hardwareProfile).toEqual({
+      id: "win-nvidia-rtx3060-12c-16gb-1080p",
+      source: "validated-override",
+      fontProfile: "windows-portable",
+      audioProfile: "chromium-desktop",
+    });
     expect(first.languages).toEqual(["zh-CN", "zh"]);
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
     expect(first.screen.availLeft).toBe(0);
@@ -129,6 +135,74 @@ describe("Roxy fingerprint config", () => {
 
     expect(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"))
       .toEqual(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
+  });
+
+  it("treats advanced hardware fields as constraints on a complete persona", () => {
+    const config = buildRoxyFingerprintConfig({
+      fingerprintSeed: 99,
+      platform: "windows",
+      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    }, "150.0.7871.114");
+    expect(config.hardwareProfile).toEqual({
+      id: "win-nvidia-rtx4060-16c-16gb-1440p",
+      source: "validated-override",
+      fontProfile: "windows-portable",
+      audioProfile: "chromium-desktop",
+    });
+    expect(config).toMatchObject({
+      hardwareConcurrency: 16,
+      deviceMemory: 16,
+      screen: { width: 2560, height: 1440, devicePixelRatio: 1 },
+      webgl: { vendor: "Google Inc. (NVIDIA)" },
+      webgpu: { vendor: "NVIDIA", architecture: "Lovelace" },
+    });
+  });
+
+  it("rejects advanced overrides that cannot belong to one supported persona", () => {
+    expect(() => buildRoxyFingerprintConfig({
+      fingerprintSeed: 100,
+      platform: "windows",
+      hardwareConcurrency: 8,
+      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    }, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
+    expect(() => buildRoxyFingerprintConfig({
+      fingerprintSeed: 101,
+      platform: "macos",
+      gpuVendor: "Google Inc. (NVIDIA)",
+    }, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
+  });
+
+  it("keeps a large seed corpus inside the versioned joint-profile catalog", () => {
+    const windowsIds = new Set<string>();
+    const macIds = new Set<string>();
+    for (let fingerprintSeed = 1; fingerprintSeed <= 500; fingerprintSeed++) {
+      const windows = buildRoxyFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114");
+      const mac = buildRoxyFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114");
+      windowsIds.add(windows.hardwareProfile.id);
+      macIds.add(mac.hardwareProfile.id);
+      expect(windows.hardwareProfile).toMatchObject({ source: "seeded", fontProfile: "windows-portable", audioProfile: "chromium-desktop" });
+      expect(mac.hardwareProfile).toMatchObject({ source: "seeded", fontProfile: "macos-system", audioProfile: "chromium-desktop" });
+      expect(windows.webgl.renderer).toContain(windows.webgpu.vendor);
+      expect(mac.webgl.renderer).toContain("Apple");
+      expect(mac.webgpu.vendor).toBe("Apple");
+      expect(windows.screen.devicePixelRatio).toBe(1);
+      expect(mac.screen.devicePixelRatio).toBe(2);
+      expect(windows.audio).toMatchObject({ enabled: true, amplitude: 0.0000001 });
+      expect(mac.audio).toMatchObject({ enabled: true, amplitude: 0.0000001 });
+    }
+    expect([...windowsIds].sort()).toEqual([
+      "win-amd-radeon-16c-16gb-1080p",
+      "win-intel-irisxe-8c-16gb-1080p",
+      "win-intel-uhd620-8c-8gb-1080p",
+      "win-nvidia-rtx3060-12c-16gb-1080p",
+      "win-nvidia-rtx4060-16c-16gb-1440p",
+    ]);
+    expect([...macIds].sort()).toEqual([
+      "mac-apple-m1-8c-8gb-1440x900",
+      "mac-apple-m2-8c-16gb-1512x982",
+      "mac-apple-m2pro-12c-16gb-1728x1117",
+      "mac-apple-m3-8c-16gb-1710x1107",
+    ]);
   });
 
   it("emits a native disabled geolocation policy without coordinates", () => {

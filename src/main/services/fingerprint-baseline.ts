@@ -4,6 +4,12 @@
 // timezone / WebGL / canvas), store it as the profile's baseline, and diff
 // subsequent captures so drift is visible/auditable before it causes account
 // loss. Pure logic for capture/diff (testable); CDP connection injected.
+import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
+import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
+
+const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
+const WEBGPU_CORPUS_CAPTURE_SOURCE = captureWebGpuCorpusInPage.toString();
+
 /** The in-page expression that collects the fingerprint signature. */
 export const CAPTURE_EXPRESSION = `(async function(){
   var o = {};
@@ -57,6 +63,10 @@ export const CAPTURE_EXPRESSION = `(async function(){
       var ua = await navigator.userAgentData.getHighEntropyValues(["architecture", "bitness", "fullVersionList", "platformVersion", "wow64"]);
       o.uaHighEntropy = JSON.stringify(ua);
     }
+  } catch(e){}
+  try {
+    var webglCorpus = await (${WEBGL_CORPUS_CAPTURE_SOURCE})();
+    o.webglCapabilityHash = hash(JSON.stringify(webglCorpus));
   } catch(e){}
   try {
     o.plugins = Array.from(navigator.plugins || []).map(function(p){ return [p.name, p.filename, p.description].join("|"); }).sort().join(";");
@@ -135,18 +145,18 @@ export const CAPTURE_EXPRESSION = `(async function(){
     }
   } catch(e){}
   try {
-    if (navigator.gpu && navigator.gpu.requestAdapter) {
-      var adapter = await navigator.gpu.requestAdapter();
-      if (adapter && adapter.info) {
-        o.webgpuVendor = adapter.info.vendor;
-        o.webgpuArchitecture = adapter.info.architecture;
-        o.webgpuDevice = adapter.info.device;
-        o.webgpuDescription = adapter.info.description;
-        o.webgpuSubgroupMinSize = adapter.info.subgroupMinSize;
-        o.webgpuSubgroupMaxSize = adapter.info.subgroupMaxSize;
-        o.webgpuIsFallbackAdapter = adapter.info.isFallbackAdapter;
+    var webgpuCorpus = await (${WEBGPU_CORPUS_CAPTURE_SOURCE})();
+    var webgpuInfo = webgpuCorpus.window.adapter ? webgpuCorpus.window.adapter.info : null;
+    if (webgpuInfo) {
+        o.webgpuVendor = webgpuInfo.vendor;
+        o.webgpuArchitecture = webgpuInfo.architecture;
+        o.webgpuDevice = webgpuInfo.device;
+        o.webgpuDescription = webgpuInfo.description;
+        o.webgpuSubgroupMinSize = webgpuInfo.subgroupMinSize;
+        o.webgpuSubgroupMaxSize = webgpuInfo.subgroupMaxSize;
+        o.webgpuIsFallbackAdapter = webgpuInfo.isFallbackAdapter;
       }
-    }
+    o.webgpuCapabilityHash = hash(JSON.stringify(webgpuCorpus));
   } catch(e){}
   try {
     var workerSource = [
@@ -213,8 +223,8 @@ export function diffFingerprints(baseline: Fingerprint | null | undefined, curre
 export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
   const risky = new Set([
     "userAgent", "platform", "uaPlatform", "uaHighEntropy", "tz", "tzOffset",
-    "glVendor", "glUnmaskedVendor", "glRenderer", "webgpuVendor", "webgpuArchitecture",
-    "webgpuDevice", "webgpuDescription", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
+    "glVendor", "glUnmaskedVendor", "glRenderer", "webglCapabilityHash", "webgpuVendor", "webgpuArchitecture",
+    "webgpuDevice", "webgpuDescription", "webgpuCapabilityHash", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
     "webgpuIsFallbackAdapter", "hardwareConcurrency", "deviceMemory",
     "maxTouchPoints", "screenW", "screenH", "availLeft", "availTop",
     "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight",
