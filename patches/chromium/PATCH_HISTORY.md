@@ -88,3 +88,9 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
   adds the HTTP/HTTPS/WSS direct-vs-HTTP-vs-SOCKS corpus for Window, Workers,
   frames, Navigation/Resource Timing, cache and ETag revalidation. It changes
   no Chromium source or released patch bytes.
+- Lifecycle verification follow-up
+  `d82faf9c2551cccf11bad7484f045f48e9a011f6` expands the strict verifier to
+  compare all 50 surfaces across a same-Profile close/reopen and a full headed
+  run. The only headed/headless differences are the dynamically matched Stock
+  macOS window-decoration values for `screenY` and `innerHeight`; this follow-up
+  changes no Chromium source or released patch bytes.

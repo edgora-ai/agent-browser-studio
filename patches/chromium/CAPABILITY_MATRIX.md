@@ -36,6 +36,9 @@ seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
 rollback, native-host pass-through, and explicit third-party-cookie
 compatibility with exact preference restoration. The strict verifier checks 50
 surfaces plus 61 preferred/light/dark system-theme and selection-pixel cases;
+the same 50 surfaces are stable after reopening one persistent Profile and
+across headed/headless runs apart from dynamically verified Stock macOS window
+decoration differences in `screenY` and `innerHeight`;
 the targeted installed-app journeys pass `15/15` without a license environment.
 
 Alignment is complete only when the required rows are `native` and the same

@@ -38,7 +38,7 @@ Status meanings:
 | UA, Navigator and UA-CH | verified | Preserve in top frame, subframes and all Worker types, including after CDP UA operations | DOM + request headers + high-entropy UA-CH across contexts |
 | Platform, language and DNT | verified | Preserve across Window, frames and Worker requests | DOM and loopback request-header comparison |
 | CPU, memory and touch | verified | Values must belong to one plausible hardware profile | repeated reads, Worker parity and joint-profile validation |
-| Screen and DPR | verified | Add window/screen geometry coherence | screen, avail, outer/inner, screenX/Y and headed/headless checks |
+| Screen and DPR | verified | Preserve window/screen geometry coherence and stock window-mode behavior | screen, avail, outer/inner, screenX/Y and headed/headless checks |
 | Canvas and OffscreenCanvas | verified | Preserve idempotence for integer and float readbacks | visible backing-store invariance, restart stability, cross-seed distinction |
 | AudioBuffer and analyser | verified | Add codec/audio-capability coherence | offline/realtime reads plus codec capability comparison |
 | ClientRects | verified | Preserve across zoom/DPR and repeated layout reads | repeat-read, zoom and cross-context checks |
@@ -76,8 +76,8 @@ Status meanings:
 | Same-seed restart stability | verified | Preserve on Chromium 150 | at least two fresh user-data directories and one restart |
 | Cross-seed distinction | verified | Extend to all seeded deep surfaces | pairwise diff with required-distinct field set |
 | Joint hardware profiles | partial | Generate CPU/RAM/GPU/screen/DPR/font/audio as one plausible profile | profile corpus constraints and cross-field invariant tests |
-| Headed/headless parity | partial | Same declared identity with only unavoidable stock differences | paired headed/headless capture and allow-listed diff |
-| Persistent-context parity | partial | No incognito/storage/window geometry drift | fresh vs persistent comparative capture |
+| Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 50-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS |
+| Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 50-surface fresh-directory, same-directory restart and independent-directory comparison |
 | Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 50-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
 | Signed multi-platform distribution | missing | macOS arm64/x64, Windows x64, Linux x64/arm64 | reproducible build metadata, checksums/signatures and platform E2E |
@@ -105,10 +105,13 @@ waive any engine row above.
 
 The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
 commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 50-surface
-verifier across same-seed restarts, a different seed, `el-GR`/`el-CY` locale
-coherence, headed geometry and native-host pass-through. A further 61 checks
-cover preferred/light/dark CSS system colors and actual selection screenshot
-pixels for both declared platforms. Verified runtime surfaces include
+verifier across a same-Profile close/reopen, an independent same-seed Profile,
+a different seed, `el-GR`/`el-CY` locale coherence, a full headed run and
+native-host pass-through. Headed/headless results are identical except for the
+same macOS window-decoration `screenY` and `innerHeight` differences measured
+from Stock Chrome 150 and the managed binary's no-config path. A further 61
+checks cover preferred/light/dark CSS system colors and actual selection
+screenshot pixels for both declared platforms. Verified runtime surfaces include
 Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
 audio capture, native Storage Buckets quota, WebAuthn, media-device remapping,
 WebRTC disable mode, CDP identity, system-theme coherence and exact
@@ -121,8 +124,8 @@ proxy routing (`15/15` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 26 of 36 engine/network/lifecycle rows
-are currently `verified`, 7 are `partial`, 2 are `missing`, and 1 stock-network
+Using the stage labels in this matrix, 28 of 36 engine/network/lifecycle rows
+are currently `verified`, 5 are `partial`, 2 are `missing`, and 1 stock-network
 row remains unverified. The two hard missing rows are SOCKS5 UDP/QUIC/HTTP3 and
 signed multi-platform distribution.
 These counts are workflow gates, not a browser quality percentage.

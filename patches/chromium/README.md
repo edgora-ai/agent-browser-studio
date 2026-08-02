@@ -140,15 +140,19 @@ or macOS application bundle:
 npm run verify:chromium -- /path/to/Chromium.app
 ```
 
-It launches fresh same-seed and different-seed profiles on fixed loopback
-origins, then adds adversarial locale, headed-geometry and pass-through runs.
+It launches same-seed and different-seed profiles on fixed loopback origins,
+reopens the same persistent Profile, then adds adversarial locale, a full
+headed run, paired no-config Stock window-mode captures and pass-through.
 The 50 checked surfaces include Window/Worker identity, UA-CH, screen/window
 geometry, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
 geolocation, StorageManager/Storage Buckets, WebAuthn, AAC/H.264 playback,
 MediaSource, MediaCapabilities and WebCodecs encode support, media-device
 constraint remapping, audio capture, request headers in Window and
 Dedicated/Shared/Service Workers, disabled WebRTC candidates, CDP identity,
-exact build-version coherence, restart stability and cross-seed distinction.
+exact build-version coherence, same-Profile restart stability, cross-seed
+distinction and full headed/headless parity. On macOS, the only permitted
+window-mode differences are `screenY` and `innerHeight`, and both values must
+exactly match the dynamically captured no-config Stock path.
 An additional 61-case theme corpus checks 19 CSS system colors in preferred,
 explicit light and explicit dark schemes, Windows/macOS differences, real
 selection screenshot pixels and native-host pass-through. Missing WebGPU or a
