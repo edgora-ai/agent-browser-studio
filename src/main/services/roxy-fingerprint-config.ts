@@ -5,8 +5,12 @@ export const ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
 export const ROXY_FINGERPRINT_SCHEMA_VERSION = 1;
 
 const PORTABLE_WINDOWS_FONT_POOL = [
-  "Arial", "Comic Sans MS", "Courier New", "Georgia", "Impact",
-  "Times New Roman", "Trebuchet MS", "Verdana",
+  "Arial", "Arial Unicode MS", "Comic Sans MS", "Courier New", "Georgia",
+  "Impact", "Tahoma", "Times New Roman", "Trebuchet MS", "Verdana",
+];
+const REQUIRED_MAC_FONT_POOL = [
+  "Apple Chancery", "Apple Color Emoji", "Helvetica", "Menlo", "Papyrus",
+  "STIX Two Math", "Times",
 ];
 const MAC_FONT_POOL = [
   "Arial", "Avenir", "Courier New", "Georgia", "Helvetica", "Helvetica Neue",
@@ -526,14 +530,12 @@ function deriveSeed(seed: number, surface: string): string {
 
 function selectStableFonts(seed: number, platform: "Win32" | "MacIntel", locale: string): string[] {
   if (platform === "Win32") {
-    const selected = stableShuffle(PORTABLE_WINDOWS_FONT_POOL, seed);
-    if (/^(zh|ja|ko)(-|$)/i.test(locale)) selected.push("Arial Unicode MS");
-    return [...new Set(selected)].sort();
+    return [...new Set(stableShuffle(PORTABLE_WINDOWS_FONT_POOL, seed))].sort();
   }
   const pool = stableShuffle(MAC_FONT_POOL, seed);
   const selected = /^(zh|ja|ko)(-|$)/i.test(locale)
-    ? [...pool.slice(0, 12), ...stableShuffle(MAC_CJK_FONT_POOL, seed ^ 0x7f4a7c15)]
-    : pool.slice(0, 15);
+    ? [...REQUIRED_MAC_FONT_POOL, ...pool.slice(0, 12), ...stableShuffle(MAC_CJK_FONT_POOL, seed ^ 0x7f4a7c15)]
+    : [...REQUIRED_MAC_FONT_POOL, ...pool.slice(0, 15)];
   return [...new Set(selected)].sort();
 }
 

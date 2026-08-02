@@ -6,9 +6,11 @@
 // loss. Pure logic for capture/diff (testable); CDP connection injected.
 import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
 import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
+import { captureFontCorpusInPage } from "../../tools/font-corpus.js";
 
 const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
 const WEBGPU_CORPUS_CAPTURE_SOURCE = captureWebGpuCorpusInPage.toString();
+const FONT_CORPUS_CAPTURE_SOURCE = captureFontCorpusInPage.toString();
 
 /** The in-page expression that collects the fingerprint signature. */
 export const CAPTURE_EXPRESSION = `(async function(){
@@ -83,8 +85,20 @@ export const CAPTURE_EXPRESSION = `(async function(){
     }
   } catch(e){}
   try {
-    var fontCandidates = ["Arial", "Calibri", "Segoe UI", "Helvetica", "Avenir", "Times New Roman", "Microsoft YaHei", "PingFang SC"];
-    o.fontAvailability = fontCandidates.map(function(name){ return name + "|" + document.fonts.check("12px '" + name + "'"); }).join(";");
+    var fontCorpus = await (${FONT_CORPUS_CAPTURE_SOURCE})();
+    o.fontAvailability = Object.keys(fontCorpus.window.availability).sort().map(function(name){
+      return name + "|" + fontCorpus.window.availability[name];
+    }).join(";");
+    o.fontCapabilityHash = hash(JSON.stringify({
+      window: {
+        fontSetAvailable: fontCorpus.window.fontSetAvailable,
+        availability: fontCorpus.window.availability,
+        genericMetrics: fontCorpus.window.genericMetrics,
+        namedMetrics: fontCorpus.window.namedMetrics,
+        raster: fontCorpus.window.raster
+      },
+      worker: fontCorpus.worker
+    }));
   } catch(e){}
   try {
     var OfflineAudio = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -230,7 +244,7 @@ export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
     "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight",
     "devicePixelRatio", "canvasHash",
     "clientRect", "workerIdentity", "plugins", "mimeTypes", "speechVoices",
-    "fontAvailability", "audioHash",
+    "fontAvailability", "fontCapabilityHash", "audioHash",
     "mediaDevices", "storageQuota", "doNotTrack", "systemColors", "preferredColorScheme",
   ]);
   return drift.some((d) => risky.has(d.field));

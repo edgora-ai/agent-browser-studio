@@ -21,6 +21,7 @@ import {
   type WebGpuCorpus,
 } from "./webgpu-corpus.js";
 import { captureStorageCorpusInPage, type StorageCorpus } from "./storage-corpus.js";
+import { captureFontCorpusInPage, type FontCorpus } from "./font-corpus.js";
 
 type Probe = Record<string, string | number | boolean | null | undefined>;
 
@@ -112,6 +113,7 @@ interface RunResult {
   webgl: WebGlCorpus;
   webgpu: WebGpuCorpus;
   storage: StorageCorpus;
+  fonts: FontCorpus;
   codecs: {
     aacCanPlay: string;
     h264CanPlay: string;
@@ -160,6 +162,7 @@ const STABLE_FIELDS = [
   "devicePixelRatio", "tz", "tzOffset", "uaPlatform", "uaHighEntropy",
   "plugins", "mimeTypes", "glVendor", "glUnmaskedVendor", "glRenderer",
   "webglCapabilityHash", "canvasHash", "audioHash", "clientRect", "fontAvailability",
+  "fontCapabilityHash",
   "speechVoices", "mediaDevices", "storageQuota", "webgpuVendor",
   "webgpuArchitecture", "webgpuDevice", "webgpuDescription", "webgpuSubgroupMinSize",
   "webgpuSubgroupMaxSize", "webgpuIsFallbackAdapter", "webgpuCapabilityHash", "workerIdentity",
@@ -213,6 +216,10 @@ function webGpuCapabilitySha256(context: WebGpuContextCorpus): string {
     wgslLanguageFeatures: context.wgslLanguageFeatures,
     error: context.error,
   })).digest("hex");
+}
+
+function fontCapabilitySha256(corpus: FontCorpus): string {
+  return createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -293,17 +300,29 @@ async function captureSelectionPaint(
     context.drawImage(image, 0, 0);
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
     const histogram: Record<string, number> = {};
+    let blackPixels = 0;
+    let whitePixels = 0;
     for (let index = 0; index < pixels.length; index += 4) {
-      const key = `${pixels[index]},${pixels[index + 1]},${pixels[index + 2]},${pixels[index + 3]}`;
+      const red = pixels[index];
+      const green = pixels[index + 1];
+      const blue = pixels[index + 2];
+      const alpha = pixels[index + 3];
+      const key = `${red},${green},${blue},${alpha}`;
       histogram[key] = (histogram[key] || 0) + 1;
+      // Font antialiasing means a thin glyph may contain fewer than 100
+      // mathematically pure black/white pixels even when the requested text
+      // color is correct. Count the near-endpoint pixels while the exact
+      // histogram continues to identify the selection background.
+      if (alpha === 255 && red <= 31 && green <= 31 && blue <= 31) blackPixels++;
+      if (alpha === 255 && red >= 224 && green >= 224 && blue >= 224) whitePixels++;
     }
     const dominant = Object.entries(histogram).sort((left, right) => right[1] - left[1])[0];
     if (!dominant) throw new Error("Selection screenshot contained no pixels");
     return {
       background: dominant[0].split(",").map(Number) as Pixel,
       dominantPixels: dominant[1],
-      blackPixels: histogram["0,0,0,255"] || 0,
-      whitePixels: histogram["255,255,255,255"] || 0,
+      blackPixels,
+      whitePixels,
     };
   }, screenshot.toString("base64"));
 }
@@ -876,7 +895,7 @@ async function runOnce(
         `--unsafely-treat-insecure-origin-as-secure=${crossOrigin}`,
       ],
     });
-    await context.grantPermissions(["geolocation"], { origin });
+    await context.grantPermissions(["geolocation", "local-fonts"], { origin });
     const page = context.pages()[0] || await context.newPage();
     await page.goto(origin, { waitUntil: "load", timeout: 15_000 });
     process.stderr.write(`[verify:chromium] ${label}: fingerprint probe\n`);
@@ -903,6 +922,12 @@ async function runOnce(
       page.evaluate(captureStorageCorpusInPage, config.storageQuotaBytes * 2),
       30_000,
       `${label} Storage corpus`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: Font Window/Worker/DOM/Local Access corpus\n`);
+    const fonts = await withTimeout(
+      page.evaluate(captureFontCorpusInPage),
+      90_000,
+      `${label} Font corpus`,
     );
     process.stderr.write(`[verify:chromium] ${label}: AAC/H.264 codecs\n`);
     const codecs = await withTimeout(captureCodecs(page), 12_000, `${label} codecs`);
@@ -969,6 +994,7 @@ async function runOnce(
         webgl,
         webgpu,
         storage,
+        fonts,
         codecs,
         media,
         storageBucketQuota,
@@ -1364,6 +1390,7 @@ function verifyExpected(
   expectEqual(probe.storageQuota, config.storageQuotaBytes, "storage quota");
   expectEqual(run.storageBucketQuota, config.storageQuotaBytes, "Storage Buckets quota");
   verifyStorageCorpus(run.storage, config.storageQuotaBytes, "persistent");
+  verifyFontCorpus(run.fonts, config);
   const expectedWebAuthn = config.webauthn;
   for (const [name, expected] of Object.entries({
     conditionalGet: expectedWebAuthn.conditionalGet,
@@ -1388,6 +1415,68 @@ function verifyExpected(
     expectedWebAuthn.conditionalGet,
     "WebAuthn conditional mediation",
   );
+}
+
+function verifyFontCorpus(fonts: FontCorpus, config: RoxyFingerprintConfig): void {
+  const label = config.platform === "Win32" ? "Windows" : "macOS";
+  expectEqual(fonts.window.fontSetAvailable, true, `${label} Window FontFaceSet availability`);
+  expectEqual(fonts.worker.fontSetAvailable, true, `${label} Worker FontFaceSet availability`);
+  for (const [surface, windowValue, workerValue] of [
+    ["availability", fonts.window.availability, fonts.worker.availability],
+    ["generic metrics", fonts.window.genericMetrics, fonts.worker.genericMetrics],
+    ["named metrics", fonts.window.namedMetrics, fonts.worker.namedMetrics],
+    ["glyph raster", fonts.window.raster, fonts.worker.raster],
+  ] as const) {
+    expectEqual(windowValue, workerValue, `${label} Window/Worker font ${surface}`);
+  }
+
+  const missingFont = "Roxy Definitely Missing Font";
+  expectEqual(fonts.window.availability[missingFont], false, `${label} missing font Window availability`);
+  expectEqual(fonts.worker.availability[missingFont], false, `${label} missing font Worker availability`);
+
+  expectEqual(fonts.localAccess.available, true, `${label} Local Font Access availability`);
+  expectEqual(fonts.localAccess.error, null, `${label} Local Font Access error`);
+  expect(fonts.localAccess.entries.length > 0, `${label} Local Font Access returned no managed fonts`);
+  const allowedFamilies = new Set(config.fonts.map((family) => family.toLocaleLowerCase("en-US")));
+  const leakedFamilies = [...new Set(fonts.localAccess.entries
+    .map((entry) => entry.family)
+    .filter((family) => !allowedFamilies.has(family.toLocaleLowerCase("en-US"))))].sort();
+  expect(
+    leakedFamilies.length === 0,
+    `${label} Local Font Access leaked families outside the managed profile: ${leakedFamilies.join(", ")}`,
+  );
+
+  let maximumWidthDifference = 0;
+  let maximumWidthCase = "";
+  for (const [domCase, domMetric] of Object.entries(fonts.window.domGenericMetrics)) {
+    const separator = domCase.indexOf("|");
+    const canvasCase = `${domCase.slice(0, separator)}|normal|${domCase.slice(separator + 1)}`;
+    const canvasMetric = fonts.window.genericMetrics[canvasCase];
+    expect(canvasMetric, `${label} Canvas metric missing for DOM case ${domCase}`);
+    const difference = Math.abs(domMetric.width - canvasMetric.width);
+    if (difference > maximumWidthDifference) {
+      maximumWidthDifference = difference;
+      maximumWidthCase = domCase;
+    }
+  }
+  expect(
+    maximumWidthDifference <= 2,
+    `${label} Canvas/DOM generic font width diverged by ${maximumWidthDifference}px at ${maximumWidthCase}`,
+  );
+}
+
+function verifyFontPlatformDistinction(windows: FontCorpus, mac: FontCorpus): void {
+  for (const [surface, windowsValue, macValue] of [
+    ["availability", windows.window.availability, mac.window.availability],
+    ["generic metrics", windows.window.genericMetrics, mac.window.genericMetrics],
+    ["named metrics", windows.window.namedMetrics, mac.window.namedMetrics],
+    ["glyph raster", windows.window.raster, mac.window.raster],
+  ] as const) {
+    expect(
+      JSON.stringify(windowsValue) !== JSON.stringify(macValue),
+      `Windows and macOS font ${surface} were identical`,
+    );
+  }
 }
 
 function verifyStorageCorpus(storage: StorageCorpus, expectedQuota: number, label: string): void {
@@ -1446,6 +1535,7 @@ function verifyStable(
   compare(first.webgl, second.webgl, "WebGL 1/2 capability corpus");
   compare(first.webgpu, second.webgpu, "WebGPU adapter/device capability corpus");
   compare(first.storage, second.storage, "Storage modern/legacy/OPFS corpus");
+  compare(first.fonts, second.fonts, "Font Window/Worker/DOM/Local Access corpus");
   compare(first.codecs, second.codecs, "codec capabilities");
   compare(first.media, second.media, "media mapping");
   compare(first.storageBucketQuota, second.storageBucketQuota, "Storage Buckets quota");
@@ -1686,6 +1776,13 @@ async function main(): Promise<void> {
       ? first.result.systemTheme
       : greekCyprus.result.systemTheme;
     verifyPlatformThemeDistinction(windowsTheme, macTheme);
+    const windowsFonts = first.config.platform === "Win32"
+      ? first.result.fonts
+      : greekCyprus.result.fonts;
+    const macFonts = first.config.platform === "MacIntel"
+      ? first.result.fonts
+      : greekCyprus.result.fonts;
+    verifyFontPlatformDistinction(windowsFonts, macFonts);
     verifyPassThrough(passThrough, first.result);
     process.stdout.write(JSON.stringify({
       ok: true,
@@ -1707,6 +1804,17 @@ async function main(): Promise<void> {
         deviceFeatures: first.result.webgpu.window.device?.features.length || 0,
         deviceLimits: Object.keys(first.result.webgpu.window.device?.limits || {}).length,
         wgslLanguageFeatures: first.result.webgpu.window.wgslLanguageFeatures.length,
+      },
+      fontCapabilityCorpus: {
+        contexts: 2,
+        candidates: Object.keys(first.result.fonts.window.availability).length,
+        genericMetricCases: Object.keys(first.result.fonts.window.genericMetrics).length,
+        namedMetricCases: Object.keys(first.result.fonts.window.namedMetrics).length,
+        rasterCases: Object.keys(first.result.fonts.window.raster).length,
+        windowsSha256: fontCapabilitySha256(windowsFonts),
+        macSha256: fontCapabilitySha256(macFonts),
+        localAccess: "managed-family-allowlist-verified",
+        canvasDomParity: "maximum-generic-width-difference-2px",
       },
       systemThemeChecks: SYSTEM_COLOR_KEYWORDS.length * 3 + 4,
       codecs: "aac-h264-verified",

@@ -1,0 +1,128 @@
+diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
+index e6508f946235375bcf5a3824aa156a2249f8c26f..ed9d0b8b0f2ba3b11b597e792be0428527c8dade 100644
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -161,7 +161,8 @@ class RoxyFingerprintConfig {
+     if (normalized == "serif" || normalized == "sans-serif" ||
+         normalized == "monospace" || normalized == "cursive" ||
+         normalized == "fantasy" || normalized == "system-ui" ||
+-        normalized.starts_with("ui-")) {
++        normalized == "emoji" || normalized == "math" ||
++        normalized == "fangsong" || normalized.starts_with("ui-")) {
+       return true;
+     }
+     for (const std::string& allowed : fonts_) {
+@@ -178,6 +179,43 @@ class RoxyFingerprintConfig {
+     return false;
+   }
+ 
++  // Resolve CSS generic families to fonts that belong to the declared
++  // platform rather than the host OS. The Windows choices are deliberately
++  // limited to the portable Microsoft families present on supported macOS
++  // builders; profile-scoped runtime fonts can later provide exact Segoe and
++  // regional families without exposing unrelated host fonts.
++  std::optional<std::string> ManagedGenericFontFamily(
++      std::string_view family) const {
++    if (!enabled_ || platform_ != "Win32")
++      return std::nullopt;
++    const std::string normalized = LowerAscii(family);
++    if (normalized == "serif" || normalized == "ui-serif" ||
++        normalized == "math" || normalized == "times") {
++      return "Times New Roman";
++    }
++    if (normalized == "sans-serif" || normalized == "ui-sans-serif" ||
++        normalized == "helvetica" || normalized == "helvetica neue") {
++      return "Arial";
++    }
++    if (normalized == "monospace" || normalized == "ui-monospace" ||
++        normalized == "courier" || normalized == "menlo" ||
++        normalized == "monaco") {
++      return "Courier New";
++    }
++    if (normalized == "cursive" || normalized == "apple chancery")
++      return "Comic Sans MS";
++    if (normalized == "fantasy" || normalized == "papyrus")
++      return "Impact";
++    if (normalized == "system-ui" || normalized == "ui-rounded" ||
++        normalized == "lucida grande" ||
++        normalized == ".applesystemuifont") {
++      return "Tahoma";
++    }
++    if (normalized == "emoji" || normalized == "fangsong")
++      return "Arial Unicode MS";
++    return std::nullopt;
++  }
++
+   // Called on the renderer main thread before the sandbox is engaged and
+   // before Blink initializes its font manager. Runtime fonts are immutable
+   // after that startup phase, so later reads do not require synchronization.
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index 152e5b6458eb276d40908413f0879f51621903d5..328914bc15a823046b9be960830a625f96276097 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -31,6 +31,7 @@
+ 
+ #include <limits>
+ #include <memory>
++#include <optional>
+ 
+ #include "base/byte_size.h"
+ #include "base/debug/alias.h"
+@@ -132,15 +133,29 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+     AlternateFontName alternate_font_name) {
+   TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
+ 
++  const FontFaceCreationParams* effective_creation_params = &creation_params;
++  std::optional<FontFaceCreationParams> managed_creation_params;
++  if (creation_params.CreationType() == kCreateFontByFamily) {
++    const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++    const std::string family = creation_params.Family().GetString().Utf8();
++    if (std::optional<std::string> managed_family =
++            config.ManagedGenericFontFamily(family)) {
++      managed_creation_params.emplace(AtomicString(managed_family->c_str()));
++      effective_creation_params = &*managed_creation_params;
++    } else if (!config.IsFontAllowed(family)) {
++      return nullptr;
++    }
++  }
++
+ #if !BUILDFLAG(IS_MAC)
+-  if (creation_params.CreationType() == kCreateFontByFamily &&
+-      creation_params.Family() == font_family_names::kSystemUi) {
++  if (effective_creation_params->CreationType() == kCreateFontByFamily &&
++      effective_creation_params->Family() == font_family_names::kSystemUi) {
+     return SystemFontPlatformData(font_description);
+   }
+ #endif
+ 
+   return font_platform_data_cache_.GetOrCreateFontPlatformData(
+-      this, font_description, creation_params, alternate_font_name);
++      this, font_description, *effective_creation_params, alternate_font_name);
+ }
+ 
+ void FontCache::AcceptLanguagesChanged(const String& accept_languages) {
+diff --git a/third_party/blink/renderer/platform/fonts/font_selector.cc b/third_party/blink/renderer/platform/fonts/font_selector.cc
+index 9b0055dd231b10b41b5010dab0702374589d330f..7bb977d99967b6f2decf14ea7b44de5993c577ca 100644
+--- a/third_party/blink/renderer/platform/fonts/font_selector.cc
++++ b/third_party/blink/renderer/platform/fonts/font_selector.cc
+@@ -5,6 +5,7 @@
+ #include "third_party/blink/renderer/platform/fonts/font_selector.h"
+ 
+ #include "build/build_config.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/platform/fonts/alternate_font_family.h"
+ #include "third_party/blink/renderer/platform/fonts/font_cache.h"
+@@ -25,6 +26,12 @@ AtomicString FontSelector::FamilyNameFromSettings(
+   // Quoted <font-family> values corresponding to a <generic-family> keyword
+   // should not be converted to a family name via user settings.
+   auto& generic_family_name = generic_family.FamilyName();
++  const RoxyFingerprintConfig& roxy_config = RoxyFingerprintConfig::Get();
++  if (std::optional<std::string> managed_family =
++          roxy_config.ManagedGenericFontFamily(
++              generic_family_name.GetString().Utf8())) {
++    return AtomicString(managed_family->c_str());
++  }
+   if (font_description.GenericFamily() != FontDescription::kStandardFamily &&
+       font_description.GenericFamily() != FontDescription::kWebkitBodyFamily &&
+       !generic_family.FamilyIsGeneric() &&

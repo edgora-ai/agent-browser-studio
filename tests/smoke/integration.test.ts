@@ -689,6 +689,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     const builder = fs.readFileSync(path.join(ROOT, "electron-builder.yml"), "utf-8");
     expect(builder).toContain("dist/tools/webgl-corpus.js");
     expect(builder).toContain("dist/tools/webgpu-corpus.js");
+    expect(builder).toContain("dist/tools/font-corpus.js");
   });
 
   it("exposes all WebRTC policy modes from UI through the native config", () => {
@@ -743,6 +744,7 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0037-native-cdp-scroll-offset-reconciliation.patch",
       "0038-native-managed-proxy-auth.patch",
       "0039-native-legacy-storage-quota.patch",
+      "0040-native-managed-font-resolution.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

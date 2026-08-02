@@ -52,9 +52,10 @@ describe("Roxy fingerprint config", () => {
     expect(first.screen.availHeight).toBe(1032);
     expect(first.screen).toMatchObject({ windowX: 32, windowY: 32, outerWidth: 1280, outerHeight: 800 });
     expect(first.storageQuotaBytes).toBe(120000 * 1024 * 1024);
-    expect(first.fonts).toHaveLength(9);
+    expect(first.fonts).toHaveLength(10);
     expect(first.fonts).toEqual([...first.fonts].sort());
     expect(first.fonts).toContain("Arial Unicode MS");
+    expect(first.fonts).toContain("Tahoma");
     expect(first.fonts.some((font) => /Calibri|Segoe UI|PingFang/.test(font))).toBe(false);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
     expect(first.webgpu).toEqual({

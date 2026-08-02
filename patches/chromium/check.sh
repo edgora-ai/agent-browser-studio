@@ -39,6 +39,16 @@ rm -f "$TEMP_INDEX"
 trap 'rm -f "$TEMP_INDEX"' EXIT
 GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" read-tree HEAD
 
+# apply.sh copies immutable source payloads before applying the numbered patch
+# chain. Mirror that order in the temporary index so a later append-only patch
+# can evolve a payload without rewriting its original bytes.
+while IFS= read -r payload; do
+  relative="${payload#files/}"
+  blob="$(git -C "$CHROMIUM_SRC" hash-object -w "$PATCH_ROOT/$payload")"
+  GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" update-index \
+    --add --cacheinfo "100644,$blob,$relative"
+done < <(cd "$PATCH_ROOT" && find files -type f | LC_ALL=C sort)
+
 for patch in "$PATCH_ROOT"/patches/*.patch; do
   GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" apply --cached --check "$patch"
   GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" apply --cached "$patch"

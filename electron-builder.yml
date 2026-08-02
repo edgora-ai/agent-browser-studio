@@ -33,6 +33,7 @@ files:
   - dist/resources/**/*
   - dist/tools/webgl-corpus.js
   - dist/tools/webgpu-corpus.js
+  - dist/tools/font-corpus.js
 
 asar: true
 compression: maximum

@@ -39,6 +39,7 @@ describe("fingerprint baseline diff", () => {
     expect(CAPTURE_EXPRESSION).toContain("workerIdentity");
     expect(CAPTURE_EXPRESSION).toContain("webgpuVendor");
     expect(CAPTURE_EXPRESSION).toContain("webgpuCapabilityHash");
+    expect(CAPTURE_EXPRESSION).toContain("fontCapabilityHash");
     expect(CAPTURE_EXPRESSION).toContain("speechVoices");
     expect(CAPTURE_EXPRESSION).toContain("systemColors");
     expect(CAPTURE_EXPRESSION).toContain("preferredColorScheme");
@@ -49,7 +50,7 @@ describe("fingerprint baseline diff", () => {
   });
 
   it("flags newly aligned native surfaces as risky drift", () => {
-    for (const field of ["workerIdentity", "webglCapabilityHash", "webgpuVendor", "webgpuCapabilityHash", "speechVoices", "mediaDevices", "doNotTrack", "maxTouchPoints", "screenX", "outerWidth", "availTop", "systemColors", "preferredColorScheme"]) {
+    for (const field of ["workerIdentity", "webglCapabilityHash", "webgpuVendor", "webgpuCapabilityHash", "fontCapabilityHash", "speechVoices", "mediaDevices", "doNotTrack", "maxTouchPoints", "screenX", "outerWidth", "availTop", "systemColors", "preferredColorScheme"]) {
       expect(hasRiskyDrift([{ field, baseline: "a", current: "b" }]), field).toBe(true);
     }
   });
