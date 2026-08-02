@@ -1,0 +1,318 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index df8f9455d224f7c15ac89075b37edde07df8ea2e..7ec4330ef191ca9d7b7ecd9d2d7aaf2b6cbfb4e8 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -45,6 +45,7 @@
+ #include "chrome/browser/headless/headless_mode_util.h"
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/metrics/chrome_feature_list_creator.h"
++#include "chrome/browser/net/roxy_proxy_auth.h"
+ #include "chrome/browser/startup_data.h"
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/channel_info.h"
+@@ -370,6 +371,11 @@ bool HandleCreditsSwitch(const base::CommandLine& command_line) {
+ // Check for --version and --product-version; return true if we encountered
+ // one of these switches and should exit now.
+ bool HandleVersionSwitches(const base::CommandLine& command_line) {
++  if (command_line.HasSwitch(roxy::kCapabilitiesSwitch)) {
++    UNSAFE_TODO(printf("%s\n", roxy::kProxyAuthCapability));
++    return true;
++  }
++
+ #if !BUILDFLAG(IS_MAC)
+   if (command_line.HasSwitch(switches::kProductVersion)) {
+     UNSAFE_TODO(printf("%s\n", version_info::GetVersionNumber().data()));
+@@ -1102,6 +1108,9 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+     return CHROME_RESULT_CODE_UNSUPPORTED_PARAM;
+   }
+ 
++  if (is_browser)
++    roxy::InitializeManagedProxyAuth();
++
+ #if BUILDFLAG(IS_WIN)
+   // Browser should not be sandboxed.
+   if (is_browser && IsSandboxedProcess()) {
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index 311a3dfebc076092e33ff29c502ed77f1b0836c3..5e1c3f9f03447f22d83a50a53c8080c50b764009 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -631,6 +631,8 @@ source_set("core") {
+     "global_features.cc",
+     "icon_manager.cc",
+     "memory_details.cc",
++    "net/roxy_proxy_auth.cc",
++    "net/roxy_proxy_auth.h",
+     "net_benchmarking.cc",
+     "platform_util_internal.cc",
+     "platform_util_internal.h",
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 51c145d19fb22557a5c4685964cba07c03b80c8b..b58403c84b5b532460a6f7c89e8efee670d2a717 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -119,6 +119,7 @@
+ #include "chrome/browser/net/chrome_network_delegate.h"
+ #include "chrome/browser/net/profile_network_context_service.h"
+ #include "chrome/browser/net/profile_network_context_service_factory.h"
++#include "chrome/browser/net/roxy_proxy_auth.h"
+ #include "chrome/browser/net/system_network_context_manager.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+@@ -7203,6 +7204,12 @@ ChromeContentBrowserClient::CreateLoginDelegate(
+     bool first_auth_attempt,
+     content::GuestPageHolder* guest,
+     content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
++  if (std::unique_ptr<content::LoginDelegate> managed_proxy_login =
++          roxy::MaybeCreateManagedProxyLoginDelegate(
++              auth_info, first_auth_attempt, &auth_required_callback)) {
++    return managed_proxy_login;
++  }
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   // Negotiate challenge is handled via GSSAPI library, which can not receive
+   // external credentials. However, on ChromeOS we can suggest the user to
+diff --git a/chrome/browser/net/roxy_proxy_auth.cc b/chrome/browser/net/roxy_proxy_auth.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..74d31413662119716ed0625fcad8d4be6caf3d44
+--- /dev/null
++++ b/chrome/browser/net/roxy_proxy_auth.cc
+@@ -0,0 +1,198 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/net/roxy_proxy_auth.h"
++
++#include <algorithm>
++#include <optional>
++#include <string>
++#include <utility>
++
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/logging.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/values.h"
++#include "build/build_config.h"
++#include "net/base/auth.h"
++
++namespace roxy {
++namespace {
++
++constexpr int64_t kMaximumCredentialFileSize = 64 * 1024;
++constexpr size_t kMaximumHostLength = 253;
++constexpr size_t kMaximumUsernameLength = 1024;
++constexpr size_t kMaximumPasswordLength = 4096;
++
++class ManagedProxyLoginDelegate final : public content::LoginDelegate {
++ public:
++  ManagedProxyLoginDelegate(net::AuthCredentials credentials,
++                            LoginAuthRequiredCallback callback)
++      : credentials_(std::move(credentials)), callback_(std::move(callback)) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&ManagedProxyLoginDelegate::Respond,
++                                  weak_factory_.GetWeakPtr()));
++  }
++
++  ManagedProxyLoginDelegate(const ManagedProxyLoginDelegate&) = delete;
++  ManagedProxyLoginDelegate& operator=(const ManagedProxyLoginDelegate&) =
++      delete;
++  ~ManagedProxyLoginDelegate() override = default;
++
++ private:
++  void Respond() {
++    if (callback_) {
++      std::move(callback_).Run(credentials_);
++    }
++  }
++
++  const std::optional<net::AuthCredentials> credentials_;
++  LoginAuthRequiredCallback callback_;
++  base::WeakPtrFactory<ManagedProxyLoginDelegate> weak_factory_{this};
++};
++
++class ManagedProxyAuthState {
++ public:
++  static ManagedProxyAuthState& Get() {
++    static base::NoDestructor<ManagedProxyAuthState> state;
++    return *state;
++  }
++
++  ManagedProxyAuthState(const ManagedProxyAuthState&) = delete;
++  ManagedProxyAuthState& operator=(const ManagedProxyAuthState&) = delete;
++
++  void Initialize() {
++    if (initialized_) {
++      return;
++    }
++    initialized_ = true;
++
++    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++    const base::FilePath credential_path =
++        command_line->GetSwitchValuePath(kProxyAuthFileSwitch);
++    command_line->RemoveSwitch(kProxyAuthFileSwitch);
++    if (credential_path.empty()) {
++      return;
++    }
++
++    if (!credential_path.IsAbsolute() || base::IsLink(credential_path)) {
++      LOG(ERROR) << "Managed proxy credential file path is unsafe";
++      return;
++    }
++
++#if BUILDFLAG(IS_POSIX)
++    int permissions = 0;
++    if (!base::GetPosixFilePermissions(credential_path, &permissions) ||
++        (permissions & base::FILE_PERMISSION_MASK) !=
++            (base::FILE_PERMISSION_READ_BY_USER |
++             base::FILE_PERMISSION_WRITE_BY_USER)) {
++      LOG(ERROR) << "Managed proxy credential file must have mode 0600";
++      base::DeleteFile(credential_path);
++      return;
++    }
++#endif
++
++    const std::optional<int64_t> file_size = base::GetFileSize(credential_path);
++    if (!file_size || *file_size <= 0 ||
++        *file_size > kMaximumCredentialFileSize) {
++      LOG(ERROR) << "Managed proxy credential file has an invalid size";
++      base::DeleteFile(credential_path);
++      return;
++    }
++
++    std::string json;
++    const bool read = base::ReadFileToString(credential_path, &json);
++    const bool deleted = base::DeleteFile(credential_path);
++    if (!deleted) {
++      LOG(ERROR) << "Managed proxy credential file could not be deleted";
++    }
++    if (!read) {
++      LOG(ERROR) << "Managed proxy credential file could not be read";
++      return;
++    }
++
++    std::optional<base::Value> parsed =
++        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
++    std::fill(json.begin(), json.end(), '\0');
++    if (!parsed || !parsed->is_dict()) {
++      LOG(ERROR) << "Managed proxy credential file is not valid JSON";
++      return;
++    }
++
++    const base::DictValue& dict = parsed->GetDict();
++    const std::optional<int> version = dict.FindInt("version");
++    const std::string* host = dict.FindString("host");
++    const std::optional<int> port = dict.FindInt("port");
++    const std::string* username = dict.FindString("username");
++    const std::string* password = dict.FindString("password");
++    if (version != 1 || !host || !port || !username || !password ||
++        host->empty() || host->size() > kMaximumHostLength || *port < 1 ||
++        *port > 65535 || username->empty() ||
++        username->size() > kMaximumUsernameLength ||
++        password->size() > kMaximumPasswordLength ||
++        host->find_first_of("\r\n\t /@") != std::string::npos) {
++      LOG(ERROR) << "Managed proxy credential fields are invalid";
++      return;
++    }
++
++    host_ = base::ToLowerASCII(*host);
++    port_ = *port;
++    credentials_.emplace(base::UTF8ToUTF16(*username),
++                         base::UTF8ToUTF16(*password));
++  }
++
++  std::optional<net::AuthCredentials> CredentialsFor(
++      const net::AuthChallengeInfo& auth_info,
++      bool first_auth_attempt) const {
++    if (!initialized_ || !credentials_ || !first_auth_attempt ||
++        !auth_info.is_proxy ||
++        !base::EqualsCaseInsensitiveASCII(auth_info.challenger.host(), host_) ||
++        auth_info.challenger.port() != port_ ||
++        (!base::EqualsCaseInsensitiveASCII(auth_info.scheme, "basic") &&
++         !base::EqualsCaseInsensitiveASCII(auth_info.scheme, "digest"))) {
++      return std::nullopt;
++    }
++    return credentials_;
++  }
++
++ private:
++  friend class base::NoDestructor<ManagedProxyAuthState>;
++
++  ManagedProxyAuthState() = default;
++  ~ManagedProxyAuthState() = default;
++
++  bool initialized_ = false;
++  std::string host_;
++  int port_ = 0;
++  std::optional<net::AuthCredentials> credentials_;
++};
++
++}  // namespace
++
++void InitializeManagedProxyAuth() {
++  ManagedProxyAuthState::Get().Initialize();
++}
++
++std::unique_ptr<content::LoginDelegate> MaybeCreateManagedProxyLoginDelegate(
++    const net::AuthChallengeInfo& auth_info,
++    bool first_auth_attempt,
++    content::LoginDelegate::LoginAuthRequiredCallback* callback) {
++  std::optional<net::AuthCredentials> credentials =
++      ManagedProxyAuthState::Get().CredentialsFor(auth_info,
++                                                  first_auth_attempt);
++  if (!credentials) {
++    return nullptr;
++  }
++  return std::make_unique<ManagedProxyLoginDelegate>(std::move(*credentials),
++                                                     std::move(*callback));
++}
++
++}  // namespace roxy
+diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9dbd74af68169741f4ca6612996b566b517f2a8
+--- /dev/null
++++ b/chrome/browser/net/roxy_proxy_auth.h
+@@ -0,0 +1,36 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_NET_ROXY_PROXY_AUTH_H_
++#define CHROME_BROWSER_NET_ROXY_PROXY_AUTH_H_
++
++#include <memory>
++
++#include "content/public/browser/login_delegate.h"
++
++namespace net {
++class AuthChallengeInfo;
++}
++
++namespace roxy {
++
++inline constexpr char kProxyAuthFileSwitch[] = "roxy-proxy-auth-file";
++inline constexpr char kCapabilitiesSwitch[] = "roxy-capabilities";
++inline constexpr char kProxyAuthCapability[] = "roxy-proxy-auth-file-v1";
++
++// Loads and deletes the one-shot credential file before child processes are
++// started. Calling this more than once has no effect.
++void InitializeManagedProxyAuth();
++
++// Returns a delegate only for a first-attempt proxy challenge matching the
++// configured host and port. Server authentication continues through Chrome's
++// stock UI/extension path.
++std::unique_ptr<content::LoginDelegate> MaybeCreateManagedProxyLoginDelegate(
++    const net::AuthChallengeInfo& auth_info,
++    bool first_auth_attempt,
++    content::LoginDelegate::LoginAuthRequiredCallback* callback);
++
++}  // namespace roxy
++
++#endif  // CHROME_BROWSER_NET_ROXY_PROXY_AUTH_H_

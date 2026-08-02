@@ -28,6 +28,12 @@ import {
   listManagedChromiumBinaries,
   normalizeManagedChromiumVersion,
 } from "./native-chromium-manager.js";
+import {
+  NATIVE_PROXY_AUTH_SWITCH,
+  type NativeProxyAuthFile,
+  supportsNativeProxyAuth,
+  writeNativeProxyAuthFile,
+} from "./native-proxy-auth.js";
 import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
 
 export interface CloakProfile {
@@ -388,6 +394,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a CloakBrowser profile`);
   }
   let releaseLaunchLock: (() => void) | null = null;
+  let pendingNativeProxyAuth: NativeProxyAuthFile | null = null;
   try {
     releaseLaunchLock = acquireRestoreLock(dirId);
   } catch {
@@ -573,12 +580,31 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     }
   }
 
-  // CloakLite launches Chromium directly, so express proxy routing as a native
-  // switch and use the existing extension only for proxy authentication.
+  // Ordinary HTTP/SOCKS proxies cannot carry Chromium QUIC traffic. Fail
+  // closed instead of allowing a UDP path outside the managed proxy. HTTP 407
+  // credentials use the browser-only native channel when available; older or
+  // third-party binaries retain the extension compatibility fallback.
   const runtimeExtensionPaths: string[] = [];
   if (activeProxy) {
-    args = dedupeChromeArgs([...args, `--proxy-server=${buildChromiumProxyUrl(activeProxy)}`]);
-    if (activeProxy.username) runtimeExtensionPaths.push(writeProxyAuthExtension(dirId, activeProxy));
+    args = dedupeChromeArgs([
+      ...args,
+      `--proxy-server=${buildChromiumProxyUrl(activeProxy)}`,
+      "--disable-quic",
+    ]);
+    if (activeProxy.username && activeProxy.type === "http" && supportsNativeProxyAuth(bin)) {
+      pendingNativeProxyAuth = writeNativeProxyAuthFile({
+        host: activeProxy.host,
+        port: activeProxy.port,
+        username: activeProxy.username,
+        password: activeProxy.password || "",
+      });
+      args = dedupeChromeArgs([
+        ...args,
+        `${NATIVE_PROXY_AUTH_SWITCH}=${pendingNativeProxyAuth.filePath}`,
+      ]);
+    } else if (activeProxy.username) {
+      runtimeExtensionPaths.push(writeProxyAuthExtension(dirId, activeProxy));
+    }
   }
   addExtensionArgs(args, dirId, runtimeExtensionPaths);
 
@@ -645,6 +671,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
   return { pid, cdpPort };
   } finally {
+    pendingNativeProxyAuth?.cleanup();
     if (releaseLaunchLock) releaseLaunchLock();
   }
 }
@@ -778,6 +805,9 @@ export function stripManagedFingerprintArgs(args: string[]): string[] {
 
 function maskSensitiveLaunchArgs(args: string[]): string[] {
   return args.map((arg) => {
+    if (arg.startsWith(`${NATIVE_PROXY_AUTH_SWITCH}=`)) {
+      return `${NATIVE_PROXY_AUTH_SWITCH}=<ephemeral>`;
+    }
     if (!arg.startsWith("--proxy-server=")) return arg;
     return arg.replace(/(\w+:\/\/)([^@\s]+)@/, "$1***:***@");
   });

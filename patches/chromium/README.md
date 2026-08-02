@@ -19,12 +19,12 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0037` chain therefore keeps
+of rewriting an earlier patch. The current `0002`–`0038` chain therefore keeps
 the system-theme and occluded-input fixes independently reviewable and
 revertible, while `check.sh` validates the complete order against a clean
 upstream index. `PATCHSET.sha256` detects any rewrite of an already released
 patch or source payload, and `PATCH_HISTORY.md` records the OSS and Chromium
-source provenance. The next Chromium change must start at `0038`.
+source provenance. The next Chromium change must start at `0039`.
 
 ## Build configuration
 
@@ -98,6 +98,12 @@ paces seeded pointer points across compositor frames and adds exact
 installed-version pins with 149 rollback retention, a native-host pass-through
 mode, and explicit third-party-cookie compatibility with exact preference
 restoration.
+Managed HTTP proxy authentication now uses a browser-only 407 challenge path.
+The application passes credentials through a mode-0600 one-shot file that the
+browser reads and deletes before child processes start; credentials no longer
+require an observable extension on the verified build. Managed HTTP/SOCKS
+launches disable QUIC until an authenticated UDP-capable proxy transport is
+implemented, preventing an unproxied UDP fallback.
 Blink system colors, list selection and painted text selection now use fixed
 Windows/macOS light and dark palettes from the declared platform rather than
 the host theme. The seed also owns `prefers-color-scheme`; an unconfigured

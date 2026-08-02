@@ -9,8 +9,8 @@ before the patch applicability check runs.
 
 1. Keep experimental, diagnostic, cleanup and final-fix commits in the
    Chromium source branch. Do not amend, squash or rebase that branch.
-2. Export a released source change as the next numbered patch. After `0037`,
-   the next file is `0038-*`.
+2. Export a released source change as the next numbered patch. After `0038`,
+   the next file is `0039-*`.
 3. Append its digest to `PATCHSET.sha256` and its provenance to this ledger in
    the same OSS commit. Do not alter prior digest or history rows.
 4. Run `check.sh` against the pinned clean upstream commit before release.
@@ -37,6 +37,7 @@ before the patch applicability check runs.
 | `0026–0028` | `75ed0c0d5793f7af6026789952d255e96b11896f` | Language, Storage Buckets and WebAuthn |
 | `0029–0032` | `57e73755f5cdbe4cf148ee5e19ae289776305ed6` | CDP identity, geometry, WebGPU and input routing |
 | `0033–0037` | `462a28857088403f926d759eac340b4b9fa2f152` | Theme coherence and occluded CDP input/scroll fixes |
+| `0038` | See the append-only `0038` release entry below | Native managed HTTP proxy authentication |
 
 ## Chromium 150 source checkpoint
 
@@ -63,4 +64,5 @@ fbd64dd810e3cb9d888247fe5e204dcbefac5359 experiment: request urgent main frame f
 eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input delivery without frames
 582137b30be4492ac43885130f64f3a4c61f83ab fix: deduplicate synchronized debugger scroll commits
 4cce113972524faf9fe01d502fe391a0671a74e2 fix: reconcile debugger scrolls against absolute offsets
+0198524b77609cfe0f898ac1b6f56f5932b1ae21 feat: add native managed proxy authentication
 ```
