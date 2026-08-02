@@ -18,7 +18,7 @@ JavaScript into pages.
 | WebGL vendor/renderer | Configurable | verified | Window/Worker WebGL 1/2 identity plus RoxyChrome-matched full capability corpus |
 | WebGPU adapter | Configurable | verified | native Window/Worker adapter/device identity plus exact Stock 150 features/limits/WGSL corpus |
 | WebRTC | Real/altered/disabled | verified | allocator + candidate + SDP paths |
-| Fonts | Allow-list + profile directory | partial | CoreText registration is native; cross-platform metrics/fallback/emoji remain |
+| Fonts | Allow-list + profile directory | verified | native platform lookup allow-list, managed Windows generic mapping, Window/Worker/DOM metrics, glyph/emoji raster and Local Font Access corpus |
 | System theme/selection | Platform-shaped light/dark | verified | Blink `LayoutTheme`, preferred color scheme and native selection paint |
 | Timezone | Configurable | verified | Blink `TimeZoneController` + ICU/V8 process timezone |
 | ClientRects | Stable noise | verified | Blink layout geometry export |
@@ -34,10 +34,11 @@ JavaScript into pages.
 Installed Chromium `150.0.7871.114` also verifies native trusted CDP input,
 seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
 rollback, native-host pass-through, and explicit third-party-cookie
-compatibility with exact preference restoration. The strict verifier checks 52
+compatibility with exact preference restoration. The strict verifier checks 53
 surfaces, a modern/legacy/Buckets/OPFS persistent/incognito Storage corpus, and
-61 preferred/light/dark system-theme and selection-pixel cases;
-the same 52 surfaces are stable after reopening one persistent Profile and
+61 preferred/light/dark system-theme and selection-pixel cases, plus the
+39-candidate/390-generic/468-named/247-raster font corpus;
+the same 53 surfaces are stable after reopening one persistent Profile and
 across headed/headless runs apart from dynamically verified Stock macOS window
 decoration differences in `screenY` and `innerHeight`;
 the targeted installed-app journeys pass `15/15` without a license environment.

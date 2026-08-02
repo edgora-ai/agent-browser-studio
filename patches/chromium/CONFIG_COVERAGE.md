@@ -29,7 +29,7 @@ serialize it.
 | `timezone` | Blink `TimeZoneController` authoritative ICU/V8 process override for Window and Workers |
 | `geolocation.*` | Blink native request/result policy |
 | `mediaDevices.*` | enumeration, constraints, track settings/capabilities and output routing |
-| `fonts` | Blink platform font cache and Local Font Access allow-list |
+| `fonts` | Blink platform-font lookup and Local Font Access allow-list; declared Windows generics map to portable managed families before host fallback |
 | `doNotTrack` | renderer preferences, DOM value and Window/Worker request headers |
 | `speechSynthesis.*` | browser TTS voice list plus synthetic-to-actual playback mapping |
 

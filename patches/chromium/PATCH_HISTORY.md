@@ -116,3 +116,30 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
   tests; and clean-upstream-index application of patches `0002–0039`.
 - The next Chromium source change must be exported as `0040-*`; do not amend,
   squash, rebase or replace this source commit, tag, patch or digest row.
+
+### `0040` — 2026-08-03
+
+- First preserved in OSS commit:
+  `0922ab130a2268d12862e30cca6e282507f721ec`.
+- Chromium source commit:
+  `e7fc69f9ac673fd3f85f74438efa22154efaf1d7`
+  (`feat: enforce managed font resolution`).
+- Annotated Chromium source tag:
+  `roxy-chromium-150-patchset-0040`.
+- Patch SHA-256:
+  `76d717fbff25f48d75ffdef84b491968a113e08ec2ec0d77583e2ebe3845f8bc`.
+- Scope: enforce the managed font allow-list at Blink's platform-font lookup,
+  map Windows CSS generic and host-alias families to portable managed fonts,
+  and prevent undeclared host fonts from entering Canvas/DOM fallback. The
+  immutable header payload remains unchanged; patch `0040` evolves it after
+  payload installation.
+- Acceptance: successful incremental Chromium 150 build; six observable
+  RoxyChrome Profiles and controlled Windows/macOS comparison; strict native
+  verification of 53 baseline surfaces plus 39 candidate fonts, 390 generic
+  metrics, 468 named metrics, 247 glyph/emoji rasters, DOM parity and Local
+  Font Access across Window/Worker, same-Profile restart and headed/headless;
+  `424/424` tests; and clean-upstream-index application of patches
+  `0002–0040` with immutable payload hashes verified.
+- No byte in patch `0039`, any earlier patch, or either source payload changed.
+  The next Chromium source change must be exported as `0041-*`; do not amend,
+  squash, rebase or replace this source commit, tag, patch or digest row.

@@ -44,7 +44,7 @@ Status meanings:
 | ClientRects | verified | Preserve across zoom/DPR and repeated layout reads | repeat-read, zoom and cross-context checks |
 | WebGL identity | verified | Preserve the observable deep capability surface as Chromium evolves | Window/Worker WebGL 1/2: 39/36 extensions, 26/53 parameters and shader precision exactly match six observable RoxyChrome Profiles (`WEBGL_CORPUS.md`) |
 | WebGPU identity | verified | Preserve version-matched adapter/device capabilities and cross-API GPU identity | Window/Worker adapter/device info, 23 features, 36 limits and 11 WGSL features match Stock Chrome 150; Windows identity is more coherent than the observable RoxyChrome reference (`WEBGPU_CORPUS.md`) |
-| Fonts | partial | Add target-platform metrics, fallback, emoji and system rendering coherence | availability + measured glyph corpus + canvas emoji/reference metrics |
+| Fonts | verified | Preserve target-platform metrics, fallback, emoji and system rendering coherence | Window/Worker equality across 39 candidates, 390 generic metrics, 468 named metrics and 247 rasters; Local Font Access has no configuration-external family and Canvas/DOM stays within 2 px (`FONT_CORPUS.md`) |
 | System colors and selection rendering | verified | Preserve the declared platform and seeded light/dark preference | 19 CSS system colors in preferred/light/dark schemes plus screenshot pixel evidence for Windows/macOS selection paint |
 | Speech voices | verified | Maintain locale/platform coherence and playable mapping | enumeration, repeat reads and successful playback selection |
 | Plugins and MIME types | verified | Preserve stock version-appropriate plugin identity | Window/Worker exposure and descriptor checks |
@@ -76,9 +76,9 @@ Status meanings:
 | Same-seed restart stability | verified | Preserve on Chromium 150 | at least two fresh user-data directories and one restart |
 | Cross-seed distinction | verified | Extend to all seeded deep surfaces | pairwise diff with required-distinct field set |
 | Joint hardware profiles | verified | Preserve versioned CPU/RAM/GPU/screen/DPR/font/audio tuples and reject incoherent overrides | 1,000-config Windows/macOS seed corpus, partial-constraint resolution, conflict rejection and native runtime checks |
-| Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 52-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS |
-| Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 52-surface fresh-directory, same-directory restart and independent-directory comparison |
-| Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 52-surface native-host comparison, including host theme, with all managed profile consumers disabled |
+| Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 53-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS |
+| Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 53-surface fresh-directory, same-directory restart and independent-directory comparison |
+| Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 53-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
 | Signed multi-platform distribution | missing | macOS arm64/x64, Windows x64, Linux x64/arm64 | reproducible build metadata, checksums/signatures and platform E2E |
 
@@ -104,7 +104,7 @@ waive any engine row above.
 ## Current verified build
 
 The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
-commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 52-surface
+commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 53-surface
 verifier across a same-Profile close/reopen, an independent same-seed Profile,
 a different seed, `el-GR`/`el-CY` locale coherence, a full headed run and
 native-host pass-through. Headed/headless results are identical except for the
@@ -116,7 +116,8 @@ Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
 audio capture, native modern/Buckets/legacy storage quota and OPFS/FileSystem
 persistent/incognito parity, WebAuthn, media-device remapping,
 WebRTC disable mode, the RoxyChrome-matched WebGL 1/2 capability hash, the
-Stock-150 WebGPU adapter/device capability hash, CDP identity, system-theme
+Stock-150 WebGPU adapter/device capability hash, the Window/Worker/DOM/Local
+Access font corpus, CDP identity, system-theme
 coherence and exact
 build-version coherence.
 
@@ -127,8 +128,8 @@ proxy routing (`15/15` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 32 of 36 engine/network/lifecycle rows
-are currently `verified`, 1 is `partial`, 2 are `missing`, and 1 stock-network
+Using the stage labels in this matrix, 33 of 36 engine/network/lifecycle rows
+are currently `verified`, none is `partial`, 2 are `missing`, and 1 stock-network
 row remains unverified. The two hard missing rows are SOCKS5 UDP/QUIC/HTTP3 and
 signed multi-platform distribution.
 These counts are workflow gates, not a browser quality percentage.
