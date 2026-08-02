@@ -22,7 +22,9 @@ Released Chromium changes are append-only: add the next numbered patch instead
 of rewriting an earlier patch. The current `0002`–`0037` chain therefore keeps
 the system-theme and occluded-input fixes independently reviewable and
 revertible, while `check.sh` validates the complete order against a clean
-upstream index.
+upstream index. `PATCHSET.sha256` detects any rewrite of an already released
+patch or source payload, and `PATCH_HISTORY.md` records the OSS and Chromium
+source provenance. The next Chromium change must start at `0038`.
 
 ## Build configuration
 
