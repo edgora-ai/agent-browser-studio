@@ -679,7 +679,9 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(verifier).toContain("crossOriginFrame");
     expect(verifier).toContain("captureVersionIdentity");
     expect(verifier).toContain("chrome://version/");
-    expect(verifier).toContain("captureHeadedGeometry");
+    expect(verifier).toContain("verifyHeadedHeadlessParity");
+    expect(verifier).toContain("captureStockWindowMode");
+    expect(verifier).toContain("persistentProfileRestart");
     const installer = fs.readFileSync(path.join(ROOT, "src/tools/install-native-chromium.ts"), "utf-8");
     expect(installer).toContain("bundleBuildHash");
     expect(installer).toContain("Chromium Framework");

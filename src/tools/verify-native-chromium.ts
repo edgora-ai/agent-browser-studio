@@ -86,22 +86,9 @@ interface VersionIdentity {
   chromeVersionText: string;
 }
 
-interface GeometryIdentity {
-  userAgent: string;
-  platform: string;
-  screenWidth: number;
-  screenHeight: number;
-  availLeft: number;
-  availTop: number;
-  availWidth: number;
-  availHeight: number;
-  screenX: number;
+interface StockWindowModeIdentity {
   screenY: number;
-  outerWidth: number;
-  outerHeight: number;
-  innerWidth: number;
   innerHeight: number;
-  devicePixelRatio: number;
 }
 
 interface RunResult {
@@ -703,57 +690,33 @@ async function captureVersionIdentity(context: BrowserContext, page: Page): Prom
   }
 }
 
-async function captureGeometry(page: Page): Promise<GeometryIdentity> {
-  return page.evaluate(() => {
-    const availableScreen = screen as Screen & { availLeft: number; availTop: number };
-    return {
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      screenWidth: screen.width,
-      screenHeight: screen.height,
-      availLeft: availableScreen.availLeft,
-      availTop: availableScreen.availTop,
-      availWidth: screen.availWidth,
-      availHeight: screen.availHeight,
-      screenX: window.screenX,
-      screenY: window.screenY,
-      outerWidth: window.outerWidth,
-      outerHeight: window.outerHeight,
-      innerWidth: window.innerWidth,
-      innerHeight: window.innerHeight,
-      devicePixelRatio: window.devicePixelRatio,
-    };
-  });
-}
-
-async function captureHeadedGeometry(
+async function captureStockWindowMode(
   executablePath: string,
-  version: string,
-  meta: CloakFingerprintMeta,
+  config: RoxyFingerprintConfig,
   userDataDir: string,
-): Promise<{ geometry: GeometryIdentity; config: RoxyFingerprintConfig }> {
-  const config = buildRoxyFingerprintConfig(meta, version);
+  headless: boolean,
+): Promise<StockWindowModeIdentity> {
   let context: BrowserContext | null = null;
+  const label = headless ? "stock headless window mode" : "stock headed window mode";
   try {
-    process.stderr.write("[verify:chromium] headed geometry: launch\n");
+    process.stderr.write(`[verify:chromium] ${label}: launch without managed identity\n`);
     context = await chromium.launchPersistentContext(userDataDir, {
       executablePath,
-      headless: false,
+      headless,
       colorScheme: null,
       timeout: 20_000,
       viewport: null,
       args: [
-        buildRoxyFingerprintArg(meta, version),
         `--window-size=${config.screen.outerWidth},${config.screen.outerHeight}`,
         `--window-position=${config.screen.windowX},${config.screen.windowY}`,
         `--force-device-scale-factor=${config.screen.devicePixelRatio}`,
       ],
     });
     const page = context.pages()[0] || await context.newPage();
-    await page.goto("data:text/html,<title>Roxy headed geometry</title>", { waitUntil: "load", timeout: 10_000 });
-    return { geometry: await captureGeometry(page), config };
+    await page.goto("data:text/html,<title>Stock window mode</title>", { waitUntil: "load", timeout: 10_000 });
+    return await page.evaluate(() => ({ screenY: window.screenY, innerHeight: window.innerHeight }));
   } finally {
-    if (context) await withTimeout(context.close(), 10_000, "headed geometry browser close").catch(() => undefined);
+    if (context) await withTimeout(context.close(), 10_000, `${label} browser close`).catch(() => undefined);
   }
 }
 
@@ -802,6 +765,7 @@ async function runOnce(
   crossOrigin: string,
   userDataDir: string,
   label: string,
+  headless = true,
 ): Promise<{ result: RunResult; config: RoxyFingerprintConfig }> {
   const config = buildRoxyFingerprintConfig(meta, version);
   let context: BrowserContext | null = null;
@@ -809,7 +773,7 @@ async function runOnce(
     process.stderr.write(`[verify:chromium] ${label}: launch\n`);
     context = await chromium.launchPersistentContext(userDataDir, {
       executablePath,
-      headless: true,
+      headless,
       colorScheme: null,
       timeout: 20_000,
       viewport: null,
@@ -982,24 +946,6 @@ function verifyPassThrough(passThrough: PassThroughIdentity, managed: RunResult)
   }
 }
 
-function verifyGeometry(identity: GeometryIdentity, config: RoxyFingerprintConfig, label: string): void {
-  expectEqual(identity.userAgent, config.userAgent, `${label} navigator.userAgent`);
-  expectEqual(identity.platform, config.platform, `${label} navigator.platform`);
-  expectEqual(identity.screenWidth, config.screen.width, `${label} screen.width`);
-  expectEqual(identity.screenHeight, config.screen.height, `${label} screen.height`);
-  expectEqual(identity.availLeft, config.screen.availLeft, `${label} screen.availLeft`);
-  expectEqual(identity.availTop, config.screen.availTop, `${label} screen.availTop`);
-  expectEqual(identity.availWidth, config.screen.availWidth, `${label} screen.availWidth`);
-  expectEqual(identity.availHeight, config.screen.availHeight, `${label} screen.availHeight`);
-  expectEqual(identity.outerWidth, config.screen.outerWidth, `${label} window.outerWidth`);
-  expectEqual(identity.outerHeight, config.screen.outerHeight, `${label} window.outerHeight`);
-  expect(identity.innerWidth > 0 && identity.innerWidth <= identity.outerWidth, `${label} innerWidth was outside outerWidth`);
-  expect(identity.innerHeight > 0 && identity.innerHeight <= identity.outerHeight, `${label} innerHeight was outside outerHeight`);
-  expect(identity.screenX + identity.outerWidth <= identity.availLeft + identity.availWidth, `${label} window exceeded available width`);
-  expect(identity.screenY + identity.outerHeight <= identity.availTop + identity.availHeight, `${label} window exceeded available height`);
-  expectEqual(identity.devicePixelRatio, config.screen.devicePixelRatio, `${label} devicePixelRatio`);
-}
-
 function expectedSystemColors(
   platform: RoxyFingerprintConfig["platform"],
   scheme: "light" | "dark",
@@ -1114,7 +1060,11 @@ function verifyPlatformThemeDistinction(
   );
 }
 
-function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
+function verifyExpected(
+  run: RunResult,
+  config: RoxyFingerprintConfig,
+  stockWindowMode?: StockWindowModeIdentity,
+): void {
   const probe = run.probe;
   expectEqual(probe.userAgent, config.userAgent, "navigator.userAgent");
   expectEqual(probe.appVersion, config.appVersion, "navigator.appVersion");
@@ -1145,11 +1095,26 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
   expectEqual(probe.availW, config.screen.availWidth, "screen.availWidth");
   expectEqual(probe.availH, config.screen.availHeight, "screen.availHeight");
   expectEqual(probe.screenX, config.screen.windowX, "window.screenX");
-  expectEqual(probe.screenY, config.screen.windowY, "window.screenY");
+  expectEqual(
+    probe.screenY,
+    stockWindowMode?.screenY ?? config.screen.windowY,
+    "window.screenY",
+  );
   expectEqual(probe.outerWidth, config.screen.outerWidth, "window.outerWidth");
   expectEqual(probe.outerHeight, config.screen.outerHeight, "window.outerHeight");
   expect(Number(probe.innerWidth) > 0 && Number(probe.innerWidth) <= config.screen.outerWidth, "window.innerWidth was outside outerWidth");
   expect(Number(probe.innerHeight) > 0 && Number(probe.innerHeight) <= config.screen.outerHeight, "window.innerHeight was outside outerHeight");
+  if (stockWindowMode) {
+    expectEqual(probe.innerHeight, stockWindowMode.innerHeight, "stock-mode window.innerHeight");
+  }
+  expect(
+    Number(probe.screenX) + Number(probe.outerWidth) <= Number(probe.availLeft) + Number(probe.availW),
+    "window exceeded available screen width",
+  );
+  expect(
+    Number(probe.screenY) + Number(probe.outerHeight) <= Number(probe.availTop) + Number(probe.availH),
+    "window exceeded available screen height",
+  );
   expectEqual(probe.devicePixelRatio, config.screen.devicePixelRatio, "devicePixelRatio");
   expectEqual(probe.tz, config.timezone, "Intl timezone");
   expectEqual(probe.glUnmaskedVendor, config.webgl.vendor, "WebGL unmasked vendor");
@@ -1278,20 +1243,66 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
   );
 }
 
-function verifyStable(first: RunResult, second: RunResult): void {
+function verifyStable(
+  first: RunResult,
+  second: RunResult,
+  label = "same-seed stability",
+  allowedProbeDifferences: ReadonlySet<string> = new Set(),
+): void {
+  const differences: string[] = [];
+  const compare = (firstValue: unknown, secondValue: unknown, surface: string): void => {
+    if (JSON.stringify(firstValue) !== JSON.stringify(secondValue)) {
+      differences.push(
+        `${surface}: first=${JSON.stringify(firstValue)}, second=${JSON.stringify(secondValue)}`,
+      );
+    }
+  };
   for (const field of STABLE_FIELDS) {
-    expectEqual(first.probe[field], second.probe[field], `same-seed stability ${field}`);
+    if (allowedProbeDifferences.has(field)) continue;
+    compare(first.probe[field], second.probe[field], field);
   }
-  expectEqual(first.codecs, second.codecs, "same-seed codec capabilities");
-  expectEqual(first.media, second.media, "same-seed media mapping");
-  expectEqual(first.storageBucketQuota, second.storageBucketQuota, "same-seed Storage Buckets quota");
-  expectEqual(first.webauthn, second.webauthn, "same-seed WebAuthn capabilities");
-  expectEqual(first.geolocation, second.geolocation, "same-seed geolocation");
-  expectEqual(first.requestHeaders, second.requestHeaders, "same-seed request headers");
-  expectEqual(first.cdpOverride, second.cdpOverride, "same-seed CDP identity coherence");
-  expectEqual(first.versionIdentity, second.versionIdentity, "same-seed build version coherence");
-  expectEqual(first.webrtcCandidates, second.webrtcCandidates, "same-seed WebRTC");
-  expectEqual(first.systemTheme, second.systemTheme, "same-seed system theme and selection paint");
+  compare(first.codecs, second.codecs, "codec capabilities");
+  compare(first.media, second.media, "media mapping");
+  compare(first.storageBucketQuota, second.storageBucketQuota, "Storage Buckets quota");
+  compare(first.webauthn, second.webauthn, "WebAuthn capabilities");
+  compare(first.geolocation, second.geolocation, "geolocation");
+  compare(first.requestHeaders, second.requestHeaders, "request headers");
+  compare(first.cdpOverride, second.cdpOverride, "CDP identity coherence");
+  compare(first.versionIdentity, second.versionIdentity, "build version coherence");
+  compare(first.webrtcCandidates, second.webrtcCandidates, "WebRTC");
+  compare(first.systemTheme, second.systemTheme, "system theme and selection paint");
+  if (differences.length > 0) {
+    fail(`${label} differed on ${differences.length} surface(s):\n- ${differences.join("\n- ")}`);
+  }
+}
+
+function verifyHeadedHeadlessParity(
+  managedHeadless: RunResult,
+  managedHeaded: RunResult,
+  stockHeadless: StockWindowModeIdentity,
+  stockHeaded: StockWindowModeIdentity,
+): void {
+  const stockDifferenceCandidates = ["screenY", "innerHeight"] as const;
+  const allowedDifferences = new Set<string>();
+  for (const field of stockDifferenceCandidates) {
+    expectEqual(
+      managedHeadless.probe[field],
+      stockHeadless[field],
+      `managed headless ${field} vs stock window mode`,
+    );
+    expectEqual(
+      managedHeaded.probe[field],
+      stockHeaded[field],
+      `managed headed ${field} vs stock window mode`,
+    );
+    if (stockHeadless[field] !== stockHeaded[field]) allowedDifferences.add(field);
+  }
+  verifyStable(
+    managedHeadless,
+    managedHeaded,
+    "headless/headed full-surface parity",
+    allowedDifferences,
+  );
 }
 
 function verifyDistinct(first: RunResult, second: RunResult): void {
@@ -1360,7 +1371,25 @@ async function main(): Promise<void> {
   };
 
   try {
-    const first = await runOnce(executablePath, version, baseMeta, origin.origin, origin.crossOrigin, path.join(tempRoot, "same-a"), "same-seed A");
+    const persistentProfileDir = path.join(tempRoot, "persistent-profile");
+    const first = await runOnce(
+      executablePath,
+      version,
+      baseMeta,
+      origin.origin,
+      origin.crossOrigin,
+      persistentProfileDir,
+      "same Profile initial headless run",
+    );
+    const persistentRestart = await runOnce(
+      executablePath,
+      version,
+      baseMeta,
+      origin.origin,
+      origin.crossOrigin,
+      persistentProfileDir,
+      "same Profile headless restart",
+    );
     const repeat = await runOnce(executablePath, version, baseMeta, origin.origin, origin.crossOrigin, path.join(tempRoot, "same-b"), "same-seed B");
     const distinct = await runOnce(
       executablePath,
@@ -1413,17 +1442,27 @@ async function main(): Promise<void> {
       path.join(tempRoot, "locale-el-cy"),
       "locale el-CY",
     );
-    const headed = await captureHeadedGeometry(
+    const headed = await runOnce(
       executablePath,
       version,
       baseMeta,
-      path.join(tempRoot, "headed-geometry"),
+      origin.origin,
+      origin.crossOrigin,
+      path.join(tempRoot, "headed-full-surface"),
+      "full headed run",
+      false,
     );
-    const headedRepeat = await captureHeadedGeometry(
+    const stockHeadlessWindowMode = await captureStockWindowMode(
       executablePath,
-      version,
-      baseMeta,
-      path.join(tempRoot, "headed-geometry-repeat"),
+      first.config,
+      path.join(tempRoot, "stock-window-headless"),
+      true,
+    );
+    const stockHeadedWindowMode = await captureStockWindowMode(
+      executablePath,
+      first.config,
+      path.join(tempRoot, "stock-window-headed"),
+      false,
     );
     const passThrough = await capturePassThrough(
       executablePath,
@@ -1431,15 +1470,21 @@ async function main(): Promise<void> {
       origin.crossOrigin,
       path.join(tempRoot, "pass-through"),
     );
+    verifyStable(first.result, repeat.result, "same seed across independent Profiles");
+    verifyStable(first.result, persistentRestart.result, "same persistent Profile after restart");
+    verifyHeadedHeadlessParity(
+      first.result,
+      headed.result,
+      stockHeadlessWindowMode,
+      stockHeadedWindowMode,
+    );
     verifyExpected(first.result, first.config);
+    verifyExpected(persistentRestart.result, persistentRestart.config);
     verifyExpected(repeat.result, repeat.config);
     verifyExpected(distinct.result, distinct.config);
     verifyExpected(greekGreece.result, greekGreece.config);
     verifyExpected(greekCyprus.result, greekCyprus.config);
-    verifyGeometry(headed.geometry, headed.config, "headed geometry");
-    verifyGeometry(headedRepeat.geometry, headedRepeat.config, "headed geometry repeat");
-    expectEqual(headed.geometry, headedRepeat.geometry, "same-seed headed geometry stability");
-    verifyStable(first.result, repeat.result);
+    verifyExpected(headed.result, headed.config, stockHeadedWindowMode);
     verifyDistinct(first.result, distinct.result);
     const windowsTheme = first.config.platform === "Win32"
       ? first.result.systemTheme
@@ -1460,7 +1505,13 @@ async function main(): Promise<void> {
       webauthn: "verified",
       cdpIdentityCoherence: "verified",
       buildVersionCoherence: "verified",
-      headedGeometry: "verified",
+      headedHeadlessParity: {
+        status: "full-surface-verified",
+        stockWindowDifferences: (["screenY", "innerHeight"] as const).filter(
+          (field) => stockHeadlessWindowMode[field] !== stockHeadedWindowMode[field],
+        ),
+      },
+      persistentProfileRestart: "full-surface-verified",
       localeCoherence: ["el-GR", "el-CY"],
       systemTheme: "windows-macos-light-dark-selection-paint-verified",
       passThrough: "verified-native-host-identity-and-theme",
