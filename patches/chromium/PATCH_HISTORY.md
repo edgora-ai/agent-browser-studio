@@ -66,3 +66,17 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
 4cce113972524faf9fe01d502fe391a0671a74e2 fix: reconcile debugger scrolls against absolute offsets
 0198524b77609cfe0f898ac1b6f56f5932b1ae21 feat: add native managed proxy authentication
 ```
+
+## Append-only release entries
+
+### `0038` — 2026-08-02
+
+- First preserved in OSS commit:
+  `0003435bc4e2307f4cd23d49ed38a2663d8268c5`.
+- Chromium source commit:
+  `0198524b77609cfe0f898ac1b6f56f5932b1ae21`.
+- Patch SHA-256:
+  `e23fb1c02e2336339118e61ff4f66955e921582dca6d8e23a36c31133bb358de`.
+- Acceptance: clean upstream `0002–0038` application, incremental Chromium
+  build, native 407 challenge corpus, real Electron/Profile E2E, `419/419`
+  tests, and the 50-surface plus 61-theme strict verifier.
