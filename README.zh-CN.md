@@ -90,10 +90,10 @@ GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
 版本/输入/Cookie/代理旅程为 `15/15`，并保留 Chromium 149 用于回滚。
 这不代表已经完全等同
 RoxyChrome/CloakBrowser：
-36 项引擎/网络/生命周期门禁中，25 项 verified、8 项 partial、2 项 missing，
+36 项引擎/网络/生命周期门禁中，26 项 verified、7 项 partial、2 项 missing，
 另有 1 项 stock 网络行为尚未验证。两项硬缺失是 SOCKS5 UDP/QUIC/HTTP3
-和签名的多平台发行包；代理 timing/cache/header 已通过受控 HTTP 语料，
-当前由 missing 提升为 partial；详见
+和签名的多平台发行包；代理 timing/cache/header 已通过受控
+HTTP/HTTPS/WSS 语料并标记为 verified；详见
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查

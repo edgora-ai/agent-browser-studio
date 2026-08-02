@@ -4,10 +4,13 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
+import * as https from "node:https";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { WebSocketServer } from "ws";
+import { PROXY_CORPUS_CERT, PROXY_CORPUS_KEY } from "./proxy-corpus-tls.js";
 
 type RouteMode = "direct" | "http" | "socks5";
 
@@ -40,9 +43,12 @@ interface ContextProbe {
 }
 
 interface BrowserProbe {
+  navigation: TimingRecord;
   window: ContextProbe;
   worker: ContextProbe;
   frame: ContextProbe;
+  serviceWorker: ContextProbe | null;
+  webSocketMessage: string | null;
   cache: {
     responseCounts: string[];
     timings: TimingRecord[];
@@ -75,11 +81,17 @@ interface RouteResult {
   ok: boolean;
   error: string | null;
   probe: BrowserProbe | null;
+  secureProbe: BrowserProbe | null;
   originRequestCount: number;
   cacheOriginRequests: number;
   revalidateOriginRequests: number;
   revalidateConditionalRequests: number;
   leakedProxyHeaders: string[];
+  secureOriginRequestCount: number;
+  secureCacheOriginRequests: number;
+  secureRevalidateOriginRequests: number;
+  secureRevalidateConditionalRequests: number;
+  secureLeakedProxyHeaders: string[];
   httpProxyRequests: HttpProxyRecord[];
   socksConnections: SocksRecord[];
 }
@@ -93,6 +105,8 @@ interface BinaryResult {
   comparisons: {
     headerParity: boolean;
     cacheParity: boolean;
+    secureContexts: boolean;
+    timingShape: boolean;
     remoteDns: boolean;
     nativeHttpAuth: boolean | null;
     failures: string[];
@@ -170,15 +184,15 @@ function queryRecord(url: URL): Record<string, string> {
   return Object.fromEntries(url.searchParams.entries());
 }
 
-async function startOrigin(): Promise<{
+async function startOrigin(secure = false): Promise<{
   port: number;
   requests: RequestRecord[];
   close: () => Promise<void>;
 }> {
   const requests: RequestRecord[] = [];
   const cacheCounts = new Map<string, number>();
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url || "/", `http://${request.headers.host || "probe.test"}`);
+  const requestHandler: http.RequestListener = (request, response) => {
+    const url = new URL(request.url || "/", `${secure ? "https" : "http"}://${request.headers.host || "probe.test"}`);
     const record: RequestRecord = {
       path: url.pathname,
       query: queryRecord(url),
@@ -219,16 +233,56 @@ async function startOrigin(): Promise<{
       return;
     }
 
+    if (url.pathname === "/sw.js") {
+      response.setHeader("content-type", "text/javascript; charset=utf-8");
+      response.setHeader("cache-control", "no-store");
+      response.end(`self.onmessage=function(event){var port=event.ports[0];event.waitUntil(fetch('/echo?run='+encodeURIComponent(event.data)+'&kind=service-worker',{cache:'no-store'}).then(function(response){return response.json()}).then(function(value){port.postMessage(value)}).catch(function(error){port.postMessage({error:String(error)})}))}`);
+      return;
+    }
+
     response.setHeader("content-type", "text/html; charset=utf-8");
     response.setHeader("cache-control", "no-store");
     response.end("<!doctype html><meta charset=utf-8><title>proxy corpus</title>");
+  };
+  const server = secure
+    ? https.createServer({ key: PROXY_CORPUS_KEY, cert: PROXY_CORPUS_CERT }, requestHandler)
+    : http.createServer(requestHandler);
+  const webSockets = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    socket.on("error", () => socket.destroy());
+    const url = new URL(request.url || "/", `${secure ? "https" : "http"}://${request.headers.host || "probe.test"}`);
+    requests.push({
+      path: url.pathname,
+      query: queryRecord(url),
+      headers: { ...request.headers },
+      httpVersion: request.httpVersion,
+    });
+    if (url.pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+    webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+      webSocket.send("ws-ok", () => webSocket.close());
+    });
   });
   const sockets = trackSockets(server);
   const port = await listen(server);
-  return { port, requests, close: () => closeServer(server, sockets) };
+  return {
+    port,
+    requests,
+    close: async () => {
+      for (const webSocket of webSockets.clients) webSocket.terminate();
+      await closeServer(server, sockets);
+      webSockets.close();
+    },
+  };
 }
 
-async function startHttpProxy(originPort: number, credentials?: { username: string; password: string }): Promise<{
+async function startHttpProxy(
+  originPort: number,
+  credentials?: { username: string; password: string },
+  secureOriginPort?: number,
+): Promise<{
   port: number;
   requests: HttpProxyRecord[];
   close: () => Promise<void>;
@@ -285,9 +339,61 @@ async function startHttpProxy(originPort: number, credentials?: { username: stri
     });
     clientRequest.pipe(upstream);
   });
+  const upstreamSockets = new Set<net.Socket>();
+  server.on("connect", (request, clientSocket, head) => {
+    clientSocket.on("error", () => clientSocket.destroy());
+    const authenticated = !expectedAuth || request.headers["proxy-authorization"] === expectedAuth;
+    requests.push({
+      method: "CONNECT",
+      target: `https://${request.url || "invalid"}/`,
+      headers: { ...request.headers },
+      authenticated,
+    });
+    if (!authenticated) {
+      clientSocket.end([
+        "HTTP/1.1 407 Proxy Authentication Required",
+        "Proxy-Authenticate: Basic realm=\"Roxy proxy corpus\"",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"));
+      return;
+    }
+    let target: URL;
+    try {
+      target = new URL(`http://${request.url || ""}`);
+    } catch {
+      clientSocket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    if (target.hostname !== "probe.test" || !secureOriginPort || Number(target.port) !== secureOriginPort) {
+      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const upstream = net.createConnection({ host: "127.0.0.1", port: secureOriginPort });
+    upstreamSockets.add(upstream);
+    upstream.on("error", () => {
+      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      upstream.destroy();
+    });
+    upstream.once("close", () => upstreamSockets.delete(upstream));
+    upstream.once("connect", () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) upstream.write(head);
+      clientSocket.pipe(upstream);
+      upstream.pipe(clientSocket);
+    });
+  });
   const sockets = trackSockets(server);
   const port = await listen(server);
-  return { port, requests, close: () => closeServer(server, sockets) };
+  return {
+    port,
+    requests,
+    close: async () => {
+      for (const socket of upstreamSockets) socket.destroy();
+      await closeServer(server, sockets);
+    },
+  };
 }
 
 function readSocksAddress(buffer: Buffer, offset: number, addressType: number): { host: string; nextOffset: number } | null {
@@ -310,7 +416,11 @@ function readSocksAddress(buffer: Buffer, offset: number, addressType: number): 
   return null;
 }
 
-async function startSocksProxy(originPort: number, credentials?: { username: string; password: string }): Promise<{
+async function startSocksProxy(
+  originPort: number,
+  credentials?: { username: string; password: string },
+  secureOriginPort?: number,
+): Promise<{
   port: number;
   connections: SocksRecord[];
   close: () => Promise<void>;
@@ -406,9 +516,17 @@ async function startSocksProxy(originPort: number, credentials?: { username: str
             client.end();
             return;
           }
+          const upstreamPort = targetPort === originPort || targetPort === secureOriginPort
+            ? targetPort
+            : null;
+          if (!upstreamPort) {
+            client.write(Buffer.from([5, 4, 0, 1, 0, 0, 0, 0, 0, 0]));
+            client.end();
+            return;
+          }
 
           state = "connecting";
-          const upstream = net.createConnection({ host: "127.0.0.1", port: originPort });
+          const upstream = net.createConnection({ host: "127.0.0.1", port: upstreamPort });
           upstreamSockets.add(upstream);
           upstream.once("close", () => upstreamSockets.delete(upstream));
           upstream.on("error", () => {
@@ -422,7 +540,7 @@ async function startSocksProxy(originPort: number, credentials?: { username: str
               upstream.destroy();
               return;
             }
-            client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, originPort >> 8, originPort & 255]));
+            client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, upstreamPort >> 8, upstreamPort & 255]));
             state = "piping";
             client.removeListener("data", onData);
             if (buffered.length) upstream.write(buffered);
@@ -455,30 +573,25 @@ async function startSocksProxy(originPort: number, credentials?: { username: str
   };
 }
 
-function timingRecords(page: Page, names: string[]): Promise<TimingRecord[]> {
-  return page.evaluate((resourceNames) => resourceNames.flatMap((name) =>
-    performance.getEntriesByName(name).map((entry) => {
-      const timing = entry as PerformanceResourceTiming;
-      return {
-        name: timing.name,
-        nextHopProtocol: timing.nextHopProtocol,
-        domainLookupStart: timing.domainLookupStart,
-        domainLookupEnd: timing.domainLookupEnd,
-        connectStart: timing.connectStart,
-        secureConnectionStart: timing.secureConnectionStart,
-        connectEnd: timing.connectEnd,
-        requestStart: timing.requestStart,
-        responseStart: timing.responseStart,
-        responseEnd: timing.responseEnd,
-        transferSize: timing.transferSize,
-        encodedBodySize: timing.encodedBodySize,
-        decodedBodySize: timing.decodedBodySize,
-      };
-    })), names);
-}
-
-async function captureBrowserProbe(page: Page, runId: string): Promise<BrowserProbe> {
-  return page.evaluate(async (id) => {
+async function captureBrowserProbe(page: Page, runId: string, includeSecureContexts = false): Promise<BrowserProbe> {
+  return page.evaluate(async ({ id, secureContexts }) => {
+    const navigationEntry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming;
+    if (!navigationEntry) throw new Error("navigation timing is unavailable");
+    const navigation = {
+      name: navigationEntry.name,
+      nextHopProtocol: navigationEntry.nextHopProtocol,
+      domainLookupStart: navigationEntry.domainLookupStart,
+      domainLookupEnd: navigationEntry.domainLookupEnd,
+      connectStart: navigationEntry.connectStart,
+      secureConnectionStart: navigationEntry.secureConnectionStart,
+      connectEnd: navigationEntry.connectEnd,
+      requestStart: navigationEntry.requestStart,
+      responseStart: navigationEntry.responseStart,
+      responseEnd: navigationEntry.responseEnd,
+      transferSize: navigationEntry.transferSize,
+      encodedBodySize: navigationEntry.encodedBodySize,
+      decodedBodySize: navigationEntry.decodedBodySize,
+    };
     const fetchEcho = async (kind: string): Promise<ContextProbe> => {
       const response = await fetch(`/echo?run=${encodeURIComponent(id)}&kind=${kind}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`${kind} echo failed: ${response.status}`);
@@ -511,6 +624,40 @@ async function captureBrowserProbe(page: Page, runId: string): Promise<BrowserPr
     const frameResponse = await frame.contentWindow!.fetch(`/echo?run=${encodeURIComponent(id)}&kind=frame`, { cache: "no-store" });
     const frameProbe = await frameResponse.json() as ContextProbe;
     frame.remove();
+
+    let serviceWorkerProbe: ContextProbe | null = null;
+    let webSocketMessage: string | null = null;
+    if (secureContexts) {
+      const registration = await navigator.serviceWorker.register(`/sw.js?run=${encodeURIComponent(id)}`, { scope: "/" });
+      const ready = await navigator.serviceWorker.ready;
+      serviceWorkerProbe = await new Promise<ContextProbe>((resolve, reject) => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(() => reject(new Error("service worker echo timed out")), 5000);
+        channel.port1.onmessage = (event) => {
+          clearTimeout(timer);
+          if (event.data?.error) reject(new Error(event.data.error));
+          else resolve(event.data);
+        };
+        ready.active!.postMessage(id, [channel.port2]);
+      });
+      await registration.unregister();
+      webSocketMessage = await new Promise<string>((resolve, reject) => {
+        const socket = new WebSocket(`${location.origin.replace(/^https:/, "wss:")}/ws?run=${encodeURIComponent(id)}`);
+        const timer = setTimeout(() => {
+          socket.close();
+          reject(new Error("secure WebSocket timed out"));
+        }, 5000);
+        socket.onmessage = (event) => {
+          clearTimeout(timer);
+          resolve(String(event.data));
+          socket.close();
+        };
+        socket.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("secure WebSocket failed"));
+        };
+      });
+    }
 
     const sampleCache = async (pathname: string): Promise<{ responseCounts: string[]; names: string[] }> => {
       const resource = `${location.origin}${pathname}?run=${encodeURIComponent(id)}`;
@@ -563,13 +710,16 @@ async function captureBrowserProbe(page: Page, runId: string): Promise<BrowserPr
       };
     }));
     return {
+      navigation,
       window: windowProbe,
       worker: workerProbe,
       frame: frameProbe,
+      serviceWorker: serviceWorkerProbe,
+      webSocketMessage,
       cache: { responseCounts: cache.responseCounts, timings: cacheTimings },
       revalidate: { responseCounts: revalidate.responseCounts, timings: revalidateTimings },
     };
-  }, runId);
+  }, { id: runId, secureContexts: includeSecureContexts });
 }
 
 function selectedHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string | null> {
@@ -584,6 +734,22 @@ function detectProxySignalHeaders(requests: RequestRecord[]): string[] {
     PROXY_SIGNAL_HEADERS.filter((header) => request.headers[header] !== undefined)))].sort();
 }
 
+function timingShape(probe: BrowserProbe): object {
+  const shape = (timing: TimingRecord) => ({
+    protocol: timing.nextHopProtocol,
+    dns: timing.domainLookupEnd > timing.domainLookupStart,
+    connect: timing.connectEnd > timing.connectStart,
+    tls: timing.secureConnectionStart > 0,
+    transfer: timing.transferSize === 0 ? "cached" : "network",
+    body: timing.decodedBodySize > 0,
+  });
+  return {
+    navigation: shape(probe.navigation),
+    cache: probe.cache.timings.map(shape),
+    revalidate: probe.revalidate.timings.map(shape),
+  };
+}
+
 function routeArgs(mode: RouteMode, httpProxyPort: number, socksProxyPort: number): string[] {
   const common = [
     "--no-first-run",
@@ -591,6 +757,7 @@ function routeArgs(mode: RouteMode, httpProxyPort: number, socksProxyPort: numbe
     "--disable-background-networking",
     "--disable-component-update",
     "--disable-sync",
+    "--ignore-certificate-errors-spki-list=BVj+BNtsNlxWajvLW80wH2ME6X5Rox4Fk1lidFPPunE=",
     "--password-store=basic",
     "--use-mock-keychain",
   ];
@@ -607,19 +774,23 @@ async function runRoute(
   executablePath: string,
   bootstrapFile: string | null,
   originPort: number,
+  secureOriginPort: number,
   httpProxy: { port: number; requests: HttpProxyRecord[] },
   socksProxy: { port: number; connections: SocksRecord[] },
   originRequests: RequestRecord[],
+  secureOriginRequests: RequestRecord[],
   mode: RouteMode,
 ): Promise<RouteResult> {
   const runId = `${mode}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const originStart = originRequests.length;
+  const secureOriginStart = secureOriginRequests.length;
   const httpStart = httpProxy.requests.length;
   const socksStart = socksProxy.connections.length;
   let browser: Browser | null = null;
   let persistentContext: BrowserContext | null = null;
   let temporaryProfile: string | null = null;
   let probe: BrowserProbe | null = null;
+  let secureProbe: BrowserProbe | null = null;
   let error: string | null = null;
   try {
     let page: Page;
@@ -629,6 +800,7 @@ async function runRoute(
       persistentContext = await chromium.launchPersistentContext(temporaryProfile, {
         executablePath,
         headless: true,
+        ignoreHTTPSErrors: true,
         args: routeArgs(mode, httpProxy.port, socksProxy.port),
         timeout: 20_000,
       });
@@ -640,13 +812,19 @@ async function runRoute(
         args: routeArgs(mode, httpProxy.port, socksProxy.port),
         timeout: 20_000,
       });
-      page = await browser.newPage();
+      const context = await browser.newContext({ ignoreHTTPSErrors: true });
+      page = await context.newPage();
     }
     await page.goto(`http://probe.test:${originPort}/?run=${encodeURIComponent(runId)}`, {
       waitUntil: "domcontentloaded",
       timeout: 15_000,
     });
     probe = await captureBrowserProbe(page, runId);
+    await page.goto(`https://probe.test:${secureOriginPort}/?run=${encodeURIComponent(runId)}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 15_000,
+    });
+    secureProbe = await captureBrowserProbe(page, runId, true);
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
   } finally {
@@ -660,16 +838,27 @@ async function runRoute(
   const routeOriginRequests = originRequests.slice(originStart).filter((request) => request.query.run === runId);
   const cacheRequests = routeOriginRequests.filter((request) => request.path === "/cache");
   const revalidateRequests = routeOriginRequests.filter((request) => request.path === "/revalidate");
+  const routeSecureOriginRequests = secureOriginRequests.slice(secureOriginStart)
+    .filter((request) => request.query.run === runId);
+  const secureCacheRequests = routeSecureOriginRequests.filter((request) => request.path === "/cache");
+  const secureRevalidateRequests = routeSecureOriginRequests.filter((request) => request.path === "/revalidate");
   return {
     mode,
-    ok: !error && Boolean(probe),
+    ok: !error && Boolean(probe) && Boolean(secureProbe),
     error,
     probe,
+    secureProbe,
     originRequestCount: routeOriginRequests.length,
     cacheOriginRequests: cacheRequests.length,
     revalidateOriginRequests: revalidateRequests.length,
     revalidateConditionalRequests: revalidateRequests.filter((request) => Boolean(request.headers["if-none-match"])).length,
     leakedProxyHeaders: detectProxySignalHeaders(routeOriginRequests),
+    secureOriginRequestCount: routeSecureOriginRequests.length,
+    secureCacheOriginRequests: secureCacheRequests.length,
+    secureRevalidateOriginRequests: secureRevalidateRequests.length,
+    secureRevalidateConditionalRequests: secureRevalidateRequests
+      .filter((request) => Boolean(request.headers["if-none-match"])).length,
+    secureLeakedProxyHeaders: detectProxySignalHeaders(routeSecureOriginRequests),
     httpProxyRequests: httpProxy.requests.slice(httpStart).filter((request) => {
       try {
         return new URL(request.target).searchParams.get("run") === runId;
@@ -687,25 +876,52 @@ function compareRoutes(routes: RouteResult[]): BinaryResult["comparisons"] {
   if (successful.length !== 3) {
     failures.push(`expected 3 successful routes, got ${successful.length}`);
   }
-  const directHeaders = successful.find((route) => route.mode === "direct")?.probe?.window.headers;
-  const headerParity = Boolean(directHeaders) && successful.every((route) =>
-    JSON.stringify(selectedHeaders(route.probe!.window.headers)) === JSON.stringify(selectedHeaders(directHeaders!)) &&
-    JSON.stringify(selectedHeaders(route.probe!.worker.headers)) === JSON.stringify(selectedHeaders(successful.find((item) => item.mode === "direct")!.probe!.worker.headers)) &&
-    JSON.stringify(selectedHeaders(route.probe!.frame.headers)) === JSON.stringify(selectedHeaders(successful.find((item) => item.mode === "direct")!.probe!.frame.headers)));
+  const direct = successful.find((route) => route.mode === "direct");
+  const headerParity = Boolean(direct?.probe && direct.secureProbe) && successful.every((route) =>
+    JSON.stringify(selectedHeaders(route.probe!.window.headers)) === JSON.stringify(selectedHeaders(direct!.probe!.window.headers)) &&
+    JSON.stringify(selectedHeaders(route.probe!.worker.headers)) === JSON.stringify(selectedHeaders(direct!.probe!.worker.headers)) &&
+    JSON.stringify(selectedHeaders(route.probe!.frame.headers)) === JSON.stringify(selectedHeaders(direct!.probe!.frame.headers)) &&
+    JSON.stringify(selectedHeaders(route.secureProbe!.window.headers)) === JSON.stringify(selectedHeaders(direct!.secureProbe!.window.headers)) &&
+    JSON.stringify(selectedHeaders(route.secureProbe!.worker.headers)) === JSON.stringify(selectedHeaders(direct!.secureProbe!.worker.headers)) &&
+    JSON.stringify(selectedHeaders(route.secureProbe!.frame.headers)) === JSON.stringify(selectedHeaders(direct!.secureProbe!.frame.headers)) &&
+    JSON.stringify(selectedHeaders(route.secureProbe!.serviceWorker!.headers)) === JSON.stringify(selectedHeaders(direct!.secureProbe!.serviceWorker!.headers)));
   if (!headerParity) failures.push("end-to-end request headers differ between direct, HTTP and SOCKS routes");
 
   const cacheParity = successful.length === 3 && successful.every((route) =>
     route.cacheOriginRequests === 1 &&
     route.revalidateOriginRequests === 2 &&
     route.revalidateConditionalRequests === 1 &&
-    route.leakedProxyHeaders.length === 0);
+    route.leakedProxyHeaders.length === 0 &&
+    route.secureCacheOriginRequests === 1 &&
+    route.secureRevalidateOriginRequests === 2 &&
+    route.secureRevalidateConditionalRequests === 1 &&
+    route.secureLeakedProxyHeaders.length === 0);
   if (!cacheParity) failures.push("cache/revalidation counts or proxy-header isolation differ between routes");
+
+  const secureContexts = successful.length === 3 && successful.every((route) =>
+    Boolean(route.secureProbe?.serviceWorker) &&
+    route.secureProbe?.webSocketMessage === "ws-ok" &&
+    route.secureOriginRequestCount >= 10);
+  if (!secureContexts) failures.push("HTTPS, secure WebSocket or Service Worker proxy corpus failed");
+
+  const timingShapeParity = Boolean(direct?.probe && direct.secureProbe) && successful.every((route) =>
+    JSON.stringify(timingShape(route.probe!)) === JSON.stringify(timingShape(direct!.probe!)) &&
+    JSON.stringify(timingShape(route.secureProbe!)) === JSON.stringify(timingShape(direct!.secureProbe!)));
+  if (!timingShapeParity) failures.push("Resource/Navigation Timing structure differs between routes");
 
   const socks = routes.find((route) => route.mode === "socks5");
   const remoteDns = Boolean(socks?.socksConnections.some((connection) =>
     connection.command === 1 && connection.addressType === 3 && connection.host === "probe.test"));
   if (!remoteDns) failures.push("SOCKS5 route did not send probe.test as a domain to the proxy");
-  return { headerParity, cacheParity, remoteDns, nativeHttpAuth: null, failures };
+  return {
+    headerParity,
+    cacheParity,
+    secureContexts,
+    timingShape: timingShapeParity,
+    remoteDns,
+    nativeHttpAuth: null,
+    failures,
+  };
 }
 
 async function runNativeHttpAuth(
@@ -840,8 +1056,9 @@ async function main(): Promise<void> {
   }
   const binaries = binaryArgs.map(parseBinaryArg);
   const origin = await startOrigin();
-  const httpProxy = await startHttpProxy(origin.port);
-  const socksProxy = await startSocksProxy(origin.port);
+  const secureOrigin = await startOrigin(true);
+  const httpProxy = await startHttpProxy(origin.port, undefined, secureOrigin.port);
+  const socksProxy = await startSocksProxy(origin.port, undefined, secureOrigin.port);
   const authProxy = await startHttpProxy(origin.port, {
     username: "corpus-user",
     password: "corpus-password",
@@ -856,9 +1073,11 @@ async function main(): Promise<void> {
           binary.executablePath,
           binary.bootstrapFile,
           origin.port,
+          secureOrigin.port,
           httpProxy,
           socksProxy,
           origin.requests,
+          secureOrigin.requests,
           mode,
         ));
       }
@@ -885,7 +1104,13 @@ async function main(): Promise<void> {
       });
     }
   } finally {
-    await Promise.all([origin.close(), httpProxy.close(), socksProxy.close(), authProxy.close()]);
+    await Promise.all([
+      origin.close(),
+      secureOrigin.close(),
+      httpProxy.close(),
+      socksProxy.close(),
+      authProxy.close(),
+    ]);
   }
   process.stdout.write(`${JSON.stringify({ schema: 1, generatedAt: new Date().toISOString(), results }, null, 2)}\n`);
   const failures = results.flatMap((result) => result.comparisons.failures.map((failure) => `${result.label}: ${failure}`));

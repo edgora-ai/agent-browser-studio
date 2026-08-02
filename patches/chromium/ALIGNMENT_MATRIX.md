@@ -64,7 +64,7 @@ Status meanings:
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |
 | SOCKS5 TCP | verified | Preserve authenticated routing and proxy-side name resolution through the loopback bridge | unit rejection/echo corpus plus real Electron/Profile remote-domain E2E and bridge lifecycle check |
 | SOCKS5 UDP / QUIC / HTTP3 | missing | Managed proxies currently fail closed with QUIC disabled; add UDP-capable proxy transport | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
-| Proxy timing, cache and header signals | partial | Extend the passing HTTP corpus to HTTPS, WebSocket and Service Worker paths | direct-vs-HTTP/SOCKS Window/Worker/frame headers, Resource Timing, cache and revalidation corpus |
+| Proxy timing, cache and header signals | verified | Preserve direct/HTTP/SOCKS structural parity as Chromium evolves | HTTP/HTTPS Window/Worker/frame/Service Worker headers, WSS, Navigation/Resource Timing, cache and ETag revalidation corpus against stock Chrome and Cloak |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
 | TLS, HTTP/2 and HTTP/3 stock parity | stock, unverified | Do not diverge from the same stock Chromium build | JA4/HTTP2 settings/HTTP3 comparative harness; no spoofed claims |
 | Third-party-cookie compatibility mode | verified | Preserve explicit opt-in for embedded auth/payment/challenge flows | real cross-site iframe cookie E2E, opt-in isolation and exact preference restoration |
@@ -121,11 +121,10 @@ proxy routing (`15/15` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 25 of 36 engine/network/lifecycle rows
-are currently `verified`, 8 are `partial`, 2 are `missing`, and 1 stock-network
+Using the stage labels in this matrix, 26 of 36 engine/network/lifecycle rows
+are currently `verified`, 7 are `partial`, 2 are `missing`, and 1 stock-network
 row remains unverified. The two hard missing rows are SOCKS5 UDP/QUIC/HTTP3 and
-signed multi-platform distribution. The proxy timing/cache/header row is now
-partial after its controlled HTTP corpus passed.
+signed multi-platform distribution.
 These counts are workflow gates, not a browser quality percentage.
 
 ## Completion gates

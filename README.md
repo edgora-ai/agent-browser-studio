@@ -96,11 +96,10 @@ the strict native harness passes all 50 checked surfaces plus 61 system-theme
 checks, and the installed version/input/cookie/proxy journeys pass `15/15`, with
 Chromium 149 retained for
 rollback. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
-engine/network/lifecycle gates, 25 are verified, 8 remain partial, 2 are
+engine/network/lifecycle gates, 26 are verified, 7 remain partial, 2 are
 missing, and 1 stock-network row is unverified. The hard missing rows are
-SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution; proxy
-timing/cache/header coverage is now partial after the controlled HTTP corpus;
-see
+SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution; the controlled
+HTTP/HTTPS/WSS proxy timing, cache and header corpus is verified; see
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 
 ### Development checks

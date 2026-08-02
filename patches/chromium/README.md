@@ -125,6 +125,12 @@ preferred color scheme and light/dark system colors.
 It is intended for same-profile restart stability and cross-seed distinction
 checks once a patched Chromium binary is available.
 
+The local proxy corpus compares direct, HTTP-proxy and SOCKS5 routes across
+HTTP and HTTPS Window/Worker/frame/Service Worker requests, WSS, Navigation
+and Resource Timing, cache hits and ETag revalidation. The installed 150 build,
+stock Chrome 150 and Cloak Chromium 145 share the same structural result; proxy
+credentials and proxy-only headers never reach the controlled target origin.
+
 ## Runtime verification
 
 After building Chromium, run the strict native verifier against the executable
