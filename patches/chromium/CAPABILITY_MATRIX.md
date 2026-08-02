@@ -41,6 +41,9 @@ surfaces, a modern/legacy/Buckets/OPFS persistent/incognito Storage corpus, and
 the same 53 surfaces are stable after reopening one persistent Profile and
 across headed/headless runs apart from dynamically verified Stock macOS window
 decoration differences in `screenY` and `innerHeight`;
+the separate cold-process wire gate exactly matches same-major Stock Chrome
+for normalized TLS ClientHello/JA4, HTTP/2 settings/frame/header order and
+HTTP/3 QUIC Client Initial/ClientHello/transport parameters;
 the targeted installed-app journeys pass `15/15` without a license environment.
 
 Alignment is complete only when the required rows are `native` and the same

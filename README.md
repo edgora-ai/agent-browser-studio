@@ -98,11 +98,11 @@ Access font corpus, including full WebGL 1/2 and WebGPU adapter/device
 capability corpora, same-Profile restart and headed/headless comparison, and
 the installed version/input/cookie/proxy journeys pass `15/15`, with Chromium
 149 retained for rollback. This is not a claim of complete
-RoxyChrome/CloakBrowser parity. Of 36 engine/network/lifecycle gates, 33 are
-verified, none remains partial, 2 are
-missing, and 1 stock-network row is unverified. The hard missing rows are
+RoxyChrome/CloakBrowser parity. Of 36 engine/network/lifecycle gates, 34 are
+verified, none remains partial, and 2 are missing. The hard missing rows are
 SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution; the controlled
-HTTP/HTTPS/WSS proxy timing, cache and header corpus is verified; see
+HTTP/HTTPS/WSS proxy timing/cache/header corpus and the Stock-150-exact
+TLS/HTTP2/HTTP3 fingerprint corpus are verified; see
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 
 ### Development checks

@@ -42,3 +42,9 @@ AAC/H.264 support is a build invariant rather than a profile field. The checked
 in `args.gn` enables Chrome FFmpeg branding and proprietary codecs, while the
 runtime verifier checks MIME playback, MediaSource, MediaCapabilities and the
 AAC/H.264 WebCodecs encoders.
+
+TLS, HTTP/2 and HTTP/3 are also stock build invariants rather than profile
+fields. The network-fingerprint verifier compares normalized TLS ClientHello,
+HTTP/2 settings/frame/header order and HTTP/3 QUIC Client Initial/ClientHello/
+transport parameters against a same-major Stock Chrome process. No profile
+schema value spoofs these protocol surfaces.

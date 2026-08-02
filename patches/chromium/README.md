@@ -137,6 +137,11 @@ HTTP and HTTPS Window/Worker/frame/Service Worker requests, WSS, Navigation
 and Resource Timing, cache hits and ETag revalidation. The installed 150 build,
 stock Chrome 150 and Cloak Chromium 145 share the same structural result; proxy
 credentials and proxy-only headers never reach the controlled target origin.
+The external wire corpus compares two cold processes against same-major Stock
+Chrome and verifies normalized TLS ClientHello/JA4, HTTP/2 SETTINGS and frame/
+header order, plus a real HTTP/3 QUIC Client Initial, normalized ClientHello and
+transport parameters. The Chromium 150 results are exact Stock; see
+`NETWORK_FINGERPRINT_CORPUS.md`.
 
 ## Runtime verification
 
@@ -184,6 +189,9 @@ An additional 61-case theme corpus checks 19 CSS system colors in preferred,
 explicit light and explicit dark schemes, Windows/macOS differences, real
 selection screenshot pixels and native-host pass-through. Missing WebGPU or a
 mixed pass-through identity/theme is a failure.
+The separate network-fingerprint gate dynamically fails on any same-major
+Stock mismatch in TLS, HTTP/2 or HTTP/3. It does not run through an HTTP/SOCKS
+proxy and therefore does not waive the missing UDP-capable managed transport.
 
 The verified macOS arm64 build reports `150.0.7871.114` and passes all 53
 surfaces, the deep Font and Storage corpora, and the 61 theme cases. Installed-app acceptance additionally passes

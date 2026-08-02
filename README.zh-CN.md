@@ -93,10 +93,10 @@ Profile 重启及 headed/headless 全能力面对照；安装版的
 版本/输入/Cookie/代理旅程为 `15/15`，并保留 Chromium 149 用于回滚。
 这不代表已经完全等同
 RoxyChrome/CloakBrowser：
-36 项引擎/网络/生命周期门禁中，33 项 verified、已无 partial、2 项 missing，
-另有 1 项 stock 网络行为尚未验证。两项硬缺失是 SOCKS5 UDP/QUIC/HTTP3
-和签名的多平台发行包；代理 timing/cache/header 已通过受控
-HTTP/HTTPS/WSS 语料并标记为 verified；详见
+36 项引擎/网络/生命周期门禁中，34 项 verified、已无 partial、2 项 missing。
+两项硬缺失是 SOCKS5 UDP/QUIC/HTTP3 和签名的多平台发行包；代理
+timing/cache/header 已通过受控 HTTP/HTTPS/WSS 语料，TLS/HTTP2/HTTP3
+深层指纹也与 Stock Chrome 150 完全一致并标记为 verified；详见
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查

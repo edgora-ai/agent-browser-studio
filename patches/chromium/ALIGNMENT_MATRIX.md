@@ -66,7 +66,7 @@ Status meanings:
 | SOCKS5 UDP / QUIC / HTTP3 | missing | Managed proxies currently fail closed with QUIC disabled; add UDP-capable proxy transport | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
 | Proxy timing, cache and header signals | verified | Preserve direct/HTTP/SOCKS structural parity as Chromium evolves | HTTP/HTTPS Window/Worker/frame/Service Worker headers, WSS, Navigation/Resource Timing, cache and ETag revalidation corpus against stock Chrome and Cloak |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
-| TLS, HTTP/2 and HTTP/3 stock parity | stock, unverified | Do not diverge from the same stock Chromium build | JA4/HTTP2 settings/HTTP3 comparative harness; no spoofed claims |
+| TLS, HTTP/2 and HTTP/3 stock parity | verified | Preserve the same-major Stock Chromium wire identity without spoofing | two cold-process samples: normalized TLS ClientHello/JA4, H2 SETTINGS/WINDOW_UPDATE/frame/header order and H3 QUIC Client Initial/ClientHello/transport parameters exactly match Stock Chrome 150 (`NETWORK_FINGERPRINT_CORPUS.md`) |
 | Third-party-cookie compatibility mode | verified | Preserve explicit opt-in for embedded auth/payment/challenge flows | real cross-site iframe cookie E2E, opt-in isolation and exact preference restoration |
 
 ## Profile coherence and lifecycle
@@ -128,10 +128,9 @@ proxy routing (`15/15` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 33 of 36 engine/network/lifecycle rows
-are currently `verified`, none is `partial`, 2 are `missing`, and 1 stock-network
-row remains unverified. The two hard missing rows are SOCKS5 UDP/QUIC/HTTP3 and
-signed multi-platform distribution.
+Using the stage labels in this matrix, 34 of 36 engine/network/lifecycle rows
+are currently `verified`, none is `partial`, and 2 are `missing`. The two hard
+missing rows are SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution.
 These counts are workflow gates, not a browser quality percentage.
 
 ## Completion gates
