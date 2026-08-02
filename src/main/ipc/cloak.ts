@@ -13,7 +13,7 @@ import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
-import type { CloakPlatform, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
+import type { CloakPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerCloakHandlers(): void {
   // Parse a bulk-import CSV (header or legacy positional) into profile specs.
@@ -26,7 +26,7 @@ export function registerCloakHandlers(): void {
     return listCloakProfiles().map(p => ({
       ...p,
       installed: isCloakInstalled(),
-      version: getCloakVersion() || p.version || "?",
+      version: p.version || getCloakVersion() || "?",
     }));
   });
 
@@ -68,6 +68,8 @@ export function registerCloakHandlers(): void {
 
   ipcMain.handle("cloak:create", async (_event, opts: {
     name: string; fingerprintSeed?: number; platform?: CloakPlatform;
+    fingerprintMode?: FingerprintMode; browserVersion?: string | null;
+    allowThirdPartyCookies?: boolean;
     timezone?: string; locale?: string; webrtcMode?: WebRtcMode; webrtcIp?: string;
     geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
@@ -76,6 +78,9 @@ export function registerCloakHandlers(): void {
   }) => {
     const r = createCloakProfile({
       name: opts.name,
+      fingerprintMode: opts.fingerprintMode,
+      browserVersion: opts.browserVersion,
+      allowThirdPartyCookies: opts.allowThirdPartyCookies,
       fingerprintSeed: opts.fingerprintSeed,
       platform: opts.platform,
       timezone: opts.timezone,
@@ -135,6 +140,7 @@ export function registerCloakHandlers(): void {
     const cfg = getConfig() as any;
     const meta = cfg.cloakProfiles?.[dirId];
     if (!meta) return { ok: false, warnings: [], blockers: [{ severity: "blocker", code: "no-profile", message: "Profile not found" }] };
+    if (meta.fingerprintMode === "off") return { ok: true, warnings: [], blockers: [] };
     const resolved = resolveProfileProxy(dirId);
     const proxyGeo = resolved.name ? getProxyDetection(resolved.name) : null;
     return checkProfileConsistency({
@@ -185,6 +191,9 @@ export function registerCloakHandlers(): void {
   ipcMain.handle("cloak:set-meta", async (_event, params: {
     dirId: string;
     name?: string;
+    fingerprintMode?: FingerprintMode;
+    browserVersion?: string | null;
+    allowThirdPartyCookies?: boolean;
     fingerprintSeed?: number;
     platform?: CloakPlatform;
     timezone?: string;
@@ -215,6 +224,9 @@ export function registerCloakHandlers(): void {
     try {
       setProfileMeta(params.dirId, {
         name: params.name,
+        fingerprintMode: params.fingerprintMode,
+        browserVersion: params.browserVersion,
+        allowThirdPartyCookies: params.allowThirdPartyCookies,
         fingerprintSeed: params.fingerprintSeed,
         platform: params.platform,
         timezone: params.timezone,

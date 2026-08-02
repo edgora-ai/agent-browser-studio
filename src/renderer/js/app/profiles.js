@@ -69,6 +69,26 @@
     document.getElementById(prefix + "geolocation-accuracy").value = meta.geolocationAccuracy == null ? "" : meta.geolocationAccuracy;
   }
 
+  function populateChromiumVersionSelect(id, selectedVersion) {
+    var select = document.getElementById(id);
+    if (!select) return Promise.resolve();
+    var selected = selectedVersion || "";
+    return api.cloak.binary().then(function(info) {
+      var versions = (info && info.installedVersions) || [];
+      select.innerHTML = "";
+      select.appendChild(new Option("Auto (newest installed)", ""));
+      versions.forEach(function(item) {
+        select.appendChild(new Option(item.version, item.version));
+      });
+      if (selected && !versions.some(function(item) { return item.version === selected; })) {
+        select.appendChild(new Option(selected + " (not installed)", selected));
+      }
+      select.value = selected;
+    }).catch(function() {
+      select.value = selected;
+    });
+  }
+
   Object.assign(cloak, {
   launch: function (dirId) {
         api.cloak.launch(dirId).then(function (r) {
@@ -99,6 +119,9 @@
           if (!p) { toast((window.i18n ? window.i18n.t("toast.profile.not-found", "Profile not found") : "Profile not found"), "error"); return; }
           var metaData = {
             name: p.name || "",
+            fingerprintMode: p.fingerprintMode || "managed",
+            browserVersion: p.browserVersion || "",
+            allowThirdPartyCookies: p.allowThirdPartyCookies === true,
             seed: p.fingerprintSeed || 12345,
             platform: p.platform || 'windows',
             timezone: p.timezone || '',
@@ -122,6 +145,9 @@
             proxyName: p.proxyName || null
           };
           document.getElementById("cloak-meta-dir-id").value = dirId;
+          document.getElementById("cloak-meta-fingerprint-mode").value = metaData.fingerprintMode;
+          populateChromiumVersionSelect("cloak-meta-browser-version", metaData.browserVersion);
+          document.getElementById("cloak-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
           document.getElementById("cloak-meta-name").value = metaData.name;
           document.getElementById("cloak-meta-seed").value = metaData.seed;
           document.getElementById("cloak-meta-platform").value = metaData.platform;
@@ -191,6 +217,9 @@
           document.getElementById("new-profile-browser").value = browser;
         }
         document.getElementById("new-profile-proxy").value = "default";
+        document.getElementById("new-cloak-fingerprint-mode").value = "managed";
+        populateChromiumVersionSelect("new-cloak-browser-version", "");
+        document.getElementById("new-cloak-allow-third-party-cookies").checked = false;
         document.getElementById("new-cloak-seed").value = "";
         document.getElementById("new-cloak-platform").value = "windows";
         document.getElementById("new-cloak-timezone").value = "";
@@ -228,6 +257,9 @@
         if (!name) { toast((window.i18n ? window.i18n.t("toast.profile.name-prompt", "Please enter a name") : "Please enter a name"), "error"); return; }
 
         var cloakPlatform = document.getElementById("new-cloak-platform").value;
+        var fingerprintMode = document.getElementById("new-cloak-fingerprint-mode").value || "managed";
+        var browserVersion = document.getElementById("new-cloak-browser-version").value || null;
+        var allowThirdPartyCookies = document.getElementById("new-cloak-allow-third-party-cookies").checked;
         var seedRaw = document.getElementById("new-cloak-seed").value.trim();
         var seed = seedRaw ? Number(seedRaw) : undefined;
         if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
@@ -242,6 +274,9 @@
 
         api.cloak.create(Object.assign({
           name: name,
+          fingerprintMode: fingerprintMode,
+          browserVersion: browserVersion,
+          allowThirdPartyCookies: allowThirdPartyCookies,
           fingerprintSeed: seed,
           platform: cloakPlatform,
           timezone: tz,
@@ -387,6 +422,9 @@
   cloak.saveCloakMeta = function() {
     var dirId = document.getElementById("cloak-meta-dir-id").value;
     var name = document.getElementById("cloak-meta-name").value.trim();
+    var fingerprintMode = document.getElementById("cloak-meta-fingerprint-mode").value || "managed";
+    var browserVersion = document.getElementById("cloak-meta-browser-version").value || null;
+    var allowThirdPartyCookies = document.getElementById("cloak-meta-allow-third-party-cookies").checked;
     var seed = Number(document.getElementById("cloak-meta-seed").value);
     var platform = document.getElementById("cloak-meta-platform").value;
     var timezone = document.getElementById("cloak-meta-timezone").value || null;
@@ -403,7 +441,9 @@
     if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
     var promises = [];
     promises.push(api.cloak.setMeta(dirId, Object.assign({
-      name: name, fingerprintSeed: seed, platform: platform,
+      name: name, fingerprintMode: fingerprintMode, browserVersion: browserVersion,
+      allowThirdPartyCookies: allowThirdPartyCookies,
+      fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
       proxyMode: proxySelection.mode, proxyName: proxySelection.name
     }, geolocation, hardware)));
@@ -445,7 +485,7 @@
           proxyName: cp.proxyName || null,
           syncedAt: cp.syncedAt || null,
           syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
-          fingerprint: { browser: "cloak", version: cp.version, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
+          fingerprint: { browser: "cloak", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
           hardwareConcurrency: cp.hardwareConcurrency || null,
@@ -455,6 +495,7 @@
           storageQuota: cp.storageQuota || null,
           taskbarHeight: cp.taskbarHeight === 0 ? 0 : (cp.taskbarHeight || null),
           fontsDir: cp.fontsDir || null,
+          allowThirdPartyCookies: cp.allowThirdPartyCookies === true,
           tags: cp.tags || [],
         };
       });
@@ -500,13 +541,16 @@
         var osName = platform === "macos" ? "macOS" : "Windows";
 
         var browserIcon = "🥷", browserName = "CloakBrowser";
-        var fingerprintLabel = platformIcon(platform) + " 🎲#" + (fp.seed || "?");
+        var fingerprintLabel = fp.mode === "off"
+          ? "↪ Pass-through"
+          : platformIcon(platform) + " 🎲#" + (fp.seed || "?");
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
-        var identityStr = (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale");
-        identityStr += " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
-        if (fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
-        var fingerprintTitle = "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%";
+        var identityStr = fp.mode === "off"
+          ? "Native host identity"
+          : (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale") + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
+        if (fp.mode !== "off" && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
+        var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · Chromium " + (fp.browserVersion || fp.version || "auto");
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';

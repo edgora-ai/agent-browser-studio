@@ -1,4 +1,4 @@
-# RoxyLite Chromium 149+ community patch
+# RoxyLite Chromium 150 community patch
 
 This directory is the independent Chromium implementation used by
 `roxy-lite-cloak-oss`. It does not contain CloakBrowser Pro binaries, recovered
@@ -6,8 +6,8 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 
 ## Baseline
 
-- Chromium tag: `149.0.7827.22`
-- Commit: `e44bf5d2837ae8a8b51feb6025022cfc81bf3865`
+- Chromium tag: `150.0.7871.114`
+- Commit: `f405107495a07cb1bfcf687d4af8d91117098db6`
 - Config switch: `--roxy-fingerprint-config=<base64url-json>`
 - Config schema: `1`
 
@@ -79,6 +79,14 @@ profile's declared platform-authenticator identity. See
 `CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
 the field-by-field native consumer audit.
 
+Chromium 150 additions preserve the managed identity across CDP user-agent
+operations, bind browser-window bounds to the declared screen geometry, extend
+WebGPU adapter architecture/subgroup coherence, and keep trusted native input
+routing for CDP-driven mouse, keyboard and wheel events. The application layer
+adds seeded bounded interaction timing, exact installed-version pins with 149
+rollback retention, a native-host pass-through mode, and explicit
+third-party-cookie compatibility with exact preference restoration.
+
 The profile timezone is owned by Blink's native `TimeZoneController`, so the
 same ICU/V8 timezone is used by Window and Workers and cannot be reset by a
 later host-timezone monitor notification.
@@ -98,15 +106,18 @@ or macOS application bundle:
 npm run verify:chromium -- /path/to/Chromium.app
 ```
 
-It launches two fresh profiles with the same seed and one with a different
-seed on one fixed localhost origin. The verifier checks Window/Worker identity,
-UA-CH, screen, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
+It launches fresh same-seed and different-seed profiles on fixed loopback
+origins, then adds adversarial locale, headed-geometry and pass-through runs.
+The 48 checked surfaces include Window/Worker identity, UA-CH, screen/window
+geometry, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
 geolocation, StorageManager/Storage Buckets, WebAuthn, AAC/H.264 playback,
 MediaSource, MediaCapabilities and WebCodecs encode support, media-device
-constraint remapping, identity request headers in Window
-and Dedicated/Shared/Service Workers, disabled WebRTC candidates, restart
-stability and cross-seed distinction. Missing WebGPU is a failure.
-On macOS, fake audio capture can remain pending in stock Chrome as well as the
-patched build; the verifier reports that limitation explicitly while still
-strictly checking audio-device enumeration and seed behavior, plus exact video
-device remapping.
+constraint remapping, audio capture, request headers in Window and
+Dedicated/Shared/Service Workers, disabled WebRTC candidates, CDP identity,
+exact build-version coherence, restart stability and cross-seed distinction.
+Missing WebGPU or a mixed pass-through identity is a failure.
+
+The verified macOS arm64 build reports `150.0.7871.114` and passes all 48
+surfaces. Installed-app acceptance additionally passes exact 150/149 rollback,
+trusted humanized input and third-party-cookie compatibility (`8/8` targeted
+E2E) without a CloakBrowser license key or login.

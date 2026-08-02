@@ -21,8 +21,8 @@ Do **not** use CloakLite for fraud, spam, credential attacks, unauthorized scrap
 
 | Area | Capabilities |
 |---|---|
-| CloakBrowser profiles | Install/configure CloakBrowser, create/launch/stop profiles, deterministic fingerprint seeds, profile tags |
-| Fingerprint settings | Platform, timezone, locale, WebRTC, GPU, screen, CPU, memory, storage quota, fonts |
+| CloakBrowser profiles | Install/configure Chromium, create/launch/stop profiles, exact installed-version pins and retained rollback builds, profile tags |
+| Fingerprint settings | Managed deterministic identity or native-host pass-through; platform, timezone, locale, WebRTC, GPU, screen, CPU, memory, storage quota, fonts |
 | Proxy management | Named HTTP/SOCKS proxies, credentials redaction, per-profile assignment, proxy geo detection |
 | Browser state | Cookies, localStorage, preferences, bookmarks, extension state, storage inspection |
 | Extension repository | Local ZIP/CRX import, Chrome Web Store package cache, safe extraction, sync hash verification |
@@ -66,9 +66,9 @@ npm install
 npm start
 ```
 
-### Use the independent Chromium 149+ engine
+### Use the independent Chromium 150 engine
 
-Build Chromium with the independently maintained patch set under
+Build Chromium 150 with the independently maintained patch set under
 [`patches/chromium`](patches/chromium/README.md), verify it, and install it into
 the local OSS engine cache:
 
@@ -78,15 +78,28 @@ npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-The installer stores versioned builds under `~/.roxy-lite-cloak/`, and the app
-automatically selects the newest installed build. No CloakBrowser license key
-or login is used. `CLOAKBROWSER_BINARY_PATH` remains an explicit override, and
+The installer stores versioned builds under `~/.roxy-lite-cloak/`. Profiles use
+the newest installed build by default or can pin any exact retained version for
+rollback. The profile editor also offers a pass-through mode that disables all
+managed identity consumers and exposes the native host fingerprint for stock
+comparison. No CloakBrowser license key or login is used.
+`CLOAKBROWSER_BINARY_PATH` remains an explicit override, and
 the pinned license-free community wrapper is retained only as a legacy fallback
 when no independent build is installed. GeoIP defaults to CloakLite's bounded
 proxy detector; set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` only to opt into the
 wrapper-managed GeoIP database. Reinstalling a rebuilt binary with the same
 Chromium version compares the executable SHA-256, atomically replaces a changed
 build, and retains the prior bundle in a hidden recovery directory.
+
+The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
+the strict native harness passes all 48 checked surfaces and the installed
+version/input/cookie journeys pass `8/8`, with Chromium 149 retained for
+rollback. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
+engine/network/lifecycle gates, 22 are verified, 9 remain partial, 4 are
+missing, and 1 stock-network row is unverified. The hard missing rows are
+system-color/selection rendering, SOCKS5 UDP/QUIC/HTTP3, proxy
+timing/cache/header signals, and signed multi-platform distribution; see
+[`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 
 ### Development checks
 
@@ -100,6 +113,7 @@ Targeted E2E examples:
 ```bash
 npm run build
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
+npx vitest run -c vitest.config.e2e.ts tests/e2e/j45-version-pin-pass-through.test.ts
 ```
 
 > E2E runs generate local browser data under `tests/e2e/userdata/`; this directory is ignored and must not be committed.
@@ -108,7 +122,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 
 ## First-Run Workflow
 
-1. Install or configure the independently built Chromium 149+ binary.
+1. Install or configure the independently built Chromium 150 binary (149 can remain installed for rollback).
 2. Open **Profiles** and create a profile.
 3. Optional: open **Proxies**, add a proxy, and assign it to the profile.
 4. Launch the profile and run **Check Risk** / consistency checks.
@@ -139,7 +153,7 @@ tests/
   e2e/                    Playwright Electron journeys
   smoke/                  structural checks
 docs/                     user guides and roadmap
-patches/                  reserved (Chromium patches are not included in this repo)
+patches/chromium/         independent Chromium source patches and acceptance matrices
 resources/                app icons
 ```
 
@@ -179,7 +193,7 @@ Read before use:
 | Agent chat streaming | Live token streaming is supported for OpenAI-compatible and Claude providers. Tool-call metadata is emitted after each tool-call block completes; tool execution blocks the next streaming round. |
 | Onboarding wizard | A 4-step first-run wizard (install binary → create profile → launch + risk check → optional AI config) appears when no binary or profiles exist. |
 | Renderer architecture | The renderer is modular vanilla JS loaded by script tags; it is not bundled. Some modules remain large and rely on a shared global namespace. |
-| E2E tests | Unit/smoke tests run in CI. E2E (Playwright Electron) journeys require a real Electron environment and a CloakBrowser binary, so they are not all run in CI yet. |
+| E2E tests | Unit/smoke tests run in CI. E2E (Playwright Electron) journeys require a real Electron environment and an independent Chromium binary, so they are not all run in CI yet. |
 
 ---
 

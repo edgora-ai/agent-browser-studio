@@ -71,6 +71,8 @@ export interface SetupTestAppOptions {
   /** Wipe userDataDir before launch. Default true. Set false when relaunching to
    *  preserve state (e.g. persistence tests). */
   resetUserData?: boolean;
+  /** Do not force the newest binary through the environment; allows profile pins. */
+  allowProfileVersionSelection?: boolean;
 }
 
 export interface TestAppHandle {
@@ -100,7 +102,7 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     ELECTRON_ENABLE_LOGGING: "1",
     ...opts.env,
   };
-  if (cloakBin) launchEnv.CLOAKBROWSER_BINARY_PATH = cloakBin;
+  if (cloakBin && !opts.allowProfileVersionSelection) launchEnv.CLOAKBROWSER_BINARY_PATH = cloakBin;
 
   const app = await electron.launch({
     args: [REPO, `--user-data-dir=${opts.userDataDir}`, ...(opts.args ?? [])],

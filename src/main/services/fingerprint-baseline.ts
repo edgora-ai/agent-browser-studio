@@ -26,6 +26,10 @@ export const CAPTURE_EXPRESSION = `(async function(){
   try { o.doNotTrack = navigator.doNotTrack; } catch(e){}
   try { o.screenW = screen.width; o.screenH = screen.height; } catch(e){}
   try { o.availW = screen.availWidth; o.availH = screen.availHeight; } catch(e){}
+  try { o.availLeft = screen.availLeft; o.availTop = screen.availTop; } catch(e){}
+  try { o.screenX = window.screenX; o.screenY = window.screenY; } catch(e){}
+  try { o.outerWidth = window.outerWidth; o.outerHeight = window.outerHeight; } catch(e){}
+  try { o.innerWidth = window.innerWidth; o.innerHeight = window.innerHeight; } catch(e){}
   try { o.colorDepth = screen.colorDepth; o.pixelDepth = screen.pixelDepth; } catch(e){}
   try { o.devicePixelRatio = devicePixelRatio; } catch(e){}
   try { o.tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){}
@@ -121,6 +125,9 @@ export const CAPTURE_EXPRESSION = `(async function(){
         o.webgpuArchitecture = adapter.info.architecture;
         o.webgpuDevice = adapter.info.device;
         o.webgpuDescription = adapter.info.description;
+        o.webgpuSubgroupMinSize = adapter.info.subgroupMinSize;
+        o.webgpuSubgroupMaxSize = adapter.info.subgroupMaxSize;
+        o.webgpuIsFallbackAdapter = adapter.info.isFallbackAdapter;
       }
     }
   } catch(e){}
@@ -190,8 +197,11 @@ export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
   const risky = new Set([
     "userAgent", "platform", "uaPlatform", "uaHighEntropy", "tz", "tzOffset",
     "glVendor", "glUnmaskedVendor", "glRenderer", "webgpuVendor", "webgpuArchitecture",
-    "webgpuDevice", "webgpuDescription", "hardwareConcurrency", "deviceMemory",
-    "maxTouchPoints", "screenW", "screenH", "devicePixelRatio", "canvasHash",
+    "webgpuDevice", "webgpuDescription", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
+    "webgpuIsFallbackAdapter", "hardwareConcurrency", "deviceMemory",
+    "maxTouchPoints", "screenW", "screenH", "availLeft", "availTop",
+    "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight",
+    "devicePixelRatio", "canvasHash",
     "clientRect", "workerIdentity", "plugins", "mimeTypes", "speechVoices",
     "fontAvailability", "audioHash",
     "mediaDevices", "storageQuota", "doNotTrack",

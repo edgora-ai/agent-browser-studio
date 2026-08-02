@@ -336,6 +336,9 @@ describe("Config Manager (real functions)", () => {
       name: "Fingerprint Test",
       tags: [" ecommerce ", "ai", "ecommerce", ""],
       proxyMode: "default",
+      fingerprintMode: "off",
+      browserVersion: "149.0.7827.22",
+      allowThirdPartyCookies: true,
       fingerprintSeed: 77777,
       platform: "windows",
       timezone: "Asia/Shanghai",
@@ -363,6 +366,9 @@ describe("Config Manager (real functions)", () => {
     reloadConfig();
 
     const readBack = getConfig().cloakProfiles["cb_fp_test"];
+    expect(readBack.fingerprintMode).toBe("off");
+    expect(readBack.browserVersion).toBe("149.0.7827.22");
+    expect(readBack.allowThirdPartyCookies).toBe(true);
     expect(readBack.fingerprintSeed).toBe(77777);
     expect(readBack.timezone).toBe("Asia/Shanghai");
     expect(readBack.webrtcMode).toBe("altered");

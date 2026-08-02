@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Frame, type Page } from "playwright";
 import { CAPTURE_EXPRESSION } from "../main/services/fingerprint-baseline.js";
 import {
   buildRoxyFingerprintArg,
@@ -21,6 +21,53 @@ interface RequestIdentityHeaders {
   acceptLanguage: string | null;
   doNotTrack: string | null;
   uaPlatform: string | null;
+}
+
+interface RequestIdentityByContext {
+  window: RequestIdentityHeaders;
+  dedicated: RequestIdentityHeaders;
+  shared: RequestIdentityHeaders;
+  service: RequestIdentityHeaders;
+}
+
+interface FrameIdentity {
+  userAgent: string;
+  platform: string;
+  languages: string[];
+  uaPlatform: string | null;
+  uaFullVersion: string | null;
+  request: RequestIdentityHeaders;
+}
+
+interface CdpOverrideIdentity {
+  top: FrameIdentity;
+  sameOriginFrame: FrameIdentity;
+  crossOriginFrame: FrameIdentity;
+  requestHeaders: RequestIdentityByContext;
+}
+
+interface VersionIdentity {
+  product: string;
+  userAgent: string;
+  chromeVersionText: string;
+}
+
+interface GeometryIdentity {
+  userAgent: string;
+  platform: string;
+  screenWidth: number;
+  screenHeight: number;
+  availLeft: number;
+  availTop: number;
+  availWidth: number;
+  availHeight: number;
+  screenX: number;
+  screenY: number;
+  outerWidth: number;
+  outerHeight: number;
+  innerWidth: number;
+  innerHeight: number;
+  devicePixelRatio: number;
 }
 
 interface RunResult {
@@ -57,12 +104,9 @@ interface RunResult {
     conditionalMediation: boolean;
   };
   geolocation: { latitude: number; longitude: number; accuracy: number };
-  requestHeaders: {
-    window: RequestIdentityHeaders;
-    dedicated: RequestIdentityHeaders;
-    shared: RequestIdentityHeaders;
-    service: RequestIdentityHeaders;
-  };
+  requestHeaders: RequestIdentityByContext;
+  cdpOverride: CdpOverrideIdentity;
+  versionIdentity: VersionIdentity;
   webrtcCandidates: string[];
 }
 
@@ -70,11 +114,14 @@ const STABLE_FIELDS = [
   "userAgent", "appVersion", "platform", "language", "languages",
   "hardwareConcurrency", "deviceMemory", "maxTouchPoints", "doNotTrack",
   "screenW", "screenH", "availW", "availH", "colorDepth", "pixelDepth",
+  "availLeft", "availTop", "screenX", "screenY", "outerWidth", "outerHeight",
+  "innerWidth", "innerHeight",
   "devicePixelRatio", "tz", "tzOffset", "uaPlatform", "uaHighEntropy",
   "plugins", "mimeTypes", "glVendor", "glUnmaskedVendor", "glRenderer",
   "canvasHash", "audioHash", "clientRect", "fontAvailability",
   "speechVoices", "mediaDevices", "storageQuota", "webgpuVendor",
-  "webgpuArchitecture", "webgpuDevice", "webgpuDescription", "workerIdentity",
+  "webgpuArchitecture", "webgpuDevice", "webgpuDescription", "webgpuSubgroupMinSize",
+  "webgpuSubgroupMaxSize", "webgpuIsFallbackAdapter", "workerIdentity",
 ] as const;
 
 function fail(message: string): never {
@@ -130,7 +177,7 @@ function detectVersion(executablePath: string): string {
   }
 }
 
-async function startOrigin(): Promise<{ origin: string; close: () => Promise<void> }> {
+async function startOrigin(): Promise<{ origin: string; crossOrigin: string; close: () => Promise<void> }> {
   const server = http.createServer((request, response) => {
     const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
     if (pathname === "/echo") {
@@ -159,6 +206,7 @@ async function startOrigin(): Promise<{ origin: string; close: () => Promise<voi
   if (!address || typeof address === "string") fail("Failed to bind verification origin");
   return {
     origin: `http://127.0.0.1:${address.port}`,
+    crossOrigin: `http://roxy-cross.test:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
   };
 }
@@ -364,20 +412,21 @@ async function captureWebAuthn(page: Page): Promise<RunResult["webauthn"]> {
   });
 }
 
-async function captureRequestHeaders(page: Page): Promise<RunResult["requestHeaders"]> {
-  return page.evaluate(async () => {
+async function captureRequestHeaders(page: Page, scope = "baseline"): Promise<RequestIdentityByContext> {
+  return page.evaluate(async (scopeToken) => {
     type RawHeaders = Record<string, string | undefined>;
+    const query = `?verify=${encodeURIComponent(scopeToken)}`;
     const select = (headers: RawHeaders): RequestIdentityHeaders => ({
       userAgent: headers["user-agent"] || null,
       acceptLanguage: headers["accept-language"] || null,
       doNotTrack: headers.dnt || null,
       uaPlatform: headers["sec-ch-ua-platform"] || null,
     });
-    const windowHeaders = await fetch("/echo")
+    const windowHeaders = await fetch(`/echo${query}`)
       .then((response) => response.json())
       .then((value) => value.headers as RawHeaders);
     const dedicatedHeaders = await new Promise<RawHeaders>((resolve) => {
-      const echoUrl = JSON.stringify(new URL("/echo", location.href).href);
+      const echoUrl = JSON.stringify(new URL(`/echo${query}`, location.href).href);
       const source = `onmessage=function(){fetch(${echoUrl}).then(function(r){return r.json()}).then(function(v){postMessage(v.headers)}).catch(function(){postMessage({})})}`;
       const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
       const worker = new Worker(url);
@@ -386,11 +435,11 @@ async function captureRequestHeaders(page: Page): Promise<RunResult["requestHead
       worker.postMessage(1);
     });
     const sharedHeaders = await new Promise<RawHeaders>((resolve) => {
-      const worker = new SharedWorker("/shared-worker.js");
+      const worker = new SharedWorker(`/shared-worker.js${query}`);
       worker.port.onmessage = (event) => resolve(event.data);
       worker.port.start();
     });
-    await navigator.serviceWorker.register("/service-worker.js");
+    await navigator.serviceWorker.register(`/service-worker.js${query}`);
     const registration = await navigator.serviceWorker.ready;
     const serviceHeaders = await new Promise<RawHeaders>((resolve) => {
       const channel = new MessageChannel();
@@ -405,7 +454,175 @@ async function captureRequestHeaders(page: Page): Promise<RunResult["requestHead
       shared: select(sharedHeaders),
       service: select(serviceHeaders),
     };
+  }, scope);
+}
+
+async function captureFrameIdentity(frame: Frame, scope: string): Promise<FrameIdentity> {
+  return frame.evaluate(async (scopeToken) => {
+    type RawHeaders = Record<string, string | undefined>;
+    type NavigatorWithUaData = Navigator & {
+      userAgentData?: {
+        platform: string;
+        getHighEntropyValues(hints: string[]): Promise<Record<string, unknown>>;
+      };
+    };
+    const headers = await fetch(`/echo?verify=${encodeURIComponent(scopeToken)}`)
+      .then((response) => response.json())
+      .then((value) => value.headers as RawHeaders);
+    const uaData = (navigator as NavigatorWithUaData).userAgentData;
+    const highEntropy = uaData
+      ? await uaData.getHighEntropyValues(["platformVersion", "uaFullVersion"])
+      : {};
+    return {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      languages: [...navigator.languages],
+      uaPlatform: uaData?.platform || null,
+      uaFullVersion: typeof highEntropy.uaFullVersion === "string" ? highEntropy.uaFullVersion : null,
+      request: {
+        userAgent: headers["user-agent"] || null,
+        acceptLanguage: headers["accept-language"] || null,
+        doNotTrack: headers.dnt || null,
+        uaPlatform: headers["sec-ch-ua-platform"] || null,
+      },
+    };
+  }, scope);
+}
+
+async function captureCdpOverrideIdentity(
+  context: BrowserContext,
+  page: Page,
+  origin: string,
+  crossOrigin: string,
+): Promise<CdpOverrideIdentity> {
+  const session = await context.newCDPSession(page);
+  try {
+    await session.send("Emulation.setUserAgentOverride", {
+      userAgent: "RoxyVerifierConflict/1.0",
+      acceptLanguage: "zz-ZZ",
+      platform: "ConflictOS",
+      userAgentMetadata: {
+        brands: [{ brand: "Conflict Browser", version: "1" }],
+        fullVersionList: [{ brand: "Conflict Browser", version: "1.0.0.0" }],
+        fullVersion: "1.0.0.0",
+        platform: "ConflictOS",
+        platformVersion: "1.0.0",
+        architecture: "arm",
+        model: "Conflict Device",
+        mobile: false,
+        bitness: "32",
+        wow64: false,
+      },
+    });
+    await page.goto(`${origin}/cdp-override`, { waitUntil: "load", timeout: 15_000 });
+    await page.evaluate(async ({ sameOrigin, otherOrigin }) => {
+      const addFrame = (name: string, src: string): Promise<void> => new Promise((resolve, reject) => {
+        const frame = document.createElement("iframe");
+        frame.name = name;
+        frame.src = src;
+        frame.onload = () => resolve();
+        frame.onerror = () => reject(new Error(`Failed to load ${name}`));
+        document.body.appendChild(frame);
+      });
+      await Promise.all([
+        addFrame("roxy-same-origin", `${sameOrigin}/frame?kind=same`),
+        addFrame("roxy-cross-origin", `${otherOrigin}/frame?kind=cross`),
+      ]);
+    }, { sameOrigin: origin, otherOrigin: crossOrigin });
+
+    const sameOriginFrame = page.frame({ name: "roxy-same-origin" });
+    const crossOriginFrame = page.frame({ name: "roxy-cross-origin" });
+    expect(sameOriginFrame, "CDP override same-origin frame was not attached");
+    expect(crossOriginFrame, "CDP override cross-origin frame was not attached");
+
+    const [top, same, cross, requestHeaders] = await Promise.all([
+      captureFrameIdentity(page.mainFrame(), "cdp-top"),
+      captureFrameIdentity(sameOriginFrame, "cdp-same-frame"),
+      captureFrameIdentity(crossOriginFrame, "cdp-cross-frame"),
+      captureRequestHeaders(page, "cdp-override"),
+    ]);
+    return {
+      top,
+      sameOriginFrame: same,
+      crossOriginFrame: cross,
+      requestHeaders,
+    };
+  } finally {
+    await session.detach().catch(() => undefined);
+  }
+}
+
+async function captureVersionIdentity(context: BrowserContext, page: Page): Promise<VersionIdentity> {
+  const session = await context.newCDPSession(page);
+  const versionPage = await context.newPage();
+  try {
+    const browserVersion = await session.send("Browser.getVersion");
+    await versionPage.goto("chrome://version/", { waitUntil: "domcontentloaded", timeout: 10_000 });
+    const chromeVersionText = await versionPage.evaluate(() =>
+      document.querySelector("#version")?.textContent?.trim() || document.body.innerText,
+    );
+    return {
+      product: browserVersion.product,
+      userAgent: browserVersion.userAgent,
+      chromeVersionText,
+    };
+  } finally {
+    await versionPage.close().catch(() => undefined);
+    await session.detach().catch(() => undefined);
+  }
+}
+
+async function captureGeometry(page: Page): Promise<GeometryIdentity> {
+  return page.evaluate(() => {
+    const availableScreen = screen as Screen & { availLeft: number; availTop: number };
+    return {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      screenWidth: screen.width,
+      screenHeight: screen.height,
+      availLeft: availableScreen.availLeft,
+      availTop: availableScreen.availTop,
+      availWidth: screen.availWidth,
+      availHeight: screen.availHeight,
+      screenX: window.screenX,
+      screenY: window.screenY,
+      outerWidth: window.outerWidth,
+      outerHeight: window.outerHeight,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio,
+    };
   });
+}
+
+async function captureHeadedGeometry(
+  executablePath: string,
+  version: string,
+  meta: CloakFingerprintMeta,
+  userDataDir: string,
+): Promise<{ geometry: GeometryIdentity; config: RoxyFingerprintConfig }> {
+  const config = buildRoxyFingerprintConfig(meta, version);
+  let context: BrowserContext | null = null;
+  try {
+    process.stderr.write("[verify:chromium] headed geometry: launch\n");
+    context = await chromium.launchPersistentContext(userDataDir, {
+      executablePath,
+      headless: false,
+      timeout: 20_000,
+      viewport: null,
+      args: [
+        buildRoxyFingerprintArg(meta, version),
+        `--window-size=${config.screen.outerWidth},${config.screen.outerHeight}`,
+        `--window-position=${config.screen.windowX},${config.screen.windowY}`,
+        `--force-device-scale-factor=${config.screen.devicePixelRatio}`,
+      ],
+    });
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto("data:text/html,<title>Roxy headed geometry</title>", { waitUntil: "load", timeout: 10_000 });
+    return { geometry: await captureGeometry(page), config };
+  } finally {
+    if (context) await withTimeout(context.close(), 10_000, "headed geometry browser close").catch(() => undefined);
+  }
 }
 
 async function captureDisabledWebRtc(page: Page): Promise<string[]> {
@@ -450,6 +667,7 @@ async function runOnce(
   version: string,
   meta: CloakFingerprintMeta,
   origin: string,
+  crossOrigin: string,
   userDataDir: string,
   label: string,
 ): Promise<{ result: RunResult; config: RoxyFingerprintConfig }> {
@@ -468,6 +686,11 @@ async function runOnce(
         "--ignore-gpu-blocklist",
         "--use-fake-device-for-media-stream",
         "--use-fake-ui-for-media-stream",
+        `--window-size=${config.screen.outerWidth},${config.screen.outerHeight}`,
+        `--window-position=${config.screen.windowX},${config.screen.windowY}`,
+        `--force-device-scale-factor=${config.screen.devicePixelRatio}`,
+        "--host-resolver-rules=MAP roxy-cross.test 127.0.0.1",
+        `--unsafely-treat-insecure-origin-as-secure=${crossOrigin}`,
       ],
     });
     await context.grantPermissions(["geolocation"], { origin });
@@ -520,6 +743,18 @@ async function runOnce(
     );
     process.stderr.write(`[verify:chromium] ${label}: WebRTC disable\n`);
     const webrtcCandidates = await withTimeout(captureDisabledWebRtc(page), 12_000, `${label} WebRTC`);
+    process.stderr.write(`[verify:chromium] ${label}: CDP identity coherence\n`);
+    const cdpOverride = await withTimeout(
+      captureCdpOverrideIdentity(context, page, origin, crossOrigin),
+      25_000,
+      `${label} CDP identity coherence`,
+    );
+    process.stderr.write(`[verify:chromium] ${label}: build version coherence\n`);
+    const versionIdentity = await withTimeout(
+      captureVersionIdentity(context, page),
+      12_000,
+      `${label} build version coherence`,
+    );
     return {
       config,
       result: {
@@ -530,12 +765,80 @@ async function runOnce(
         webauthn,
         geolocation,
         requestHeaders,
+        cdpOverride,
+        versionIdentity,
         webrtcCandidates,
       },
     };
   } finally {
     if (context) await withTimeout(context.close(), 10_000, `${label} browser close`).catch(() => undefined);
   }
+}
+
+async function capturePassThrough(
+  executablePath: string,
+  origin: string,
+  crossOrigin: string,
+  userDataDir: string,
+): Promise<Probe> {
+  let context: BrowserContext | null = null;
+  try {
+    process.stderr.write("[verify:chromium] pass-through: launch without managed identity\n");
+    context = await chromium.launchPersistentContext(userDataDir, {
+      executablePath,
+      headless: true,
+      timeout: 20_000,
+      viewport: null,
+      args: [
+        "--enable-unsafe-webgpu",
+        "--ignore-gpu-blocklist",
+        "--host-resolver-rules=MAP roxy-cross.test 127.0.0.1",
+        `--unsafely-treat-insecure-origin-as-secure=${crossOrigin}`,
+      ],
+    });
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto(origin, { waitUntil: "load", timeout: 15_000 });
+    const raw = await withTimeout(
+      page.evaluate(async (expression) => await (0, eval)(expression), CAPTURE_EXPRESSION),
+      20_000,
+      "pass-through fingerprint probe",
+    );
+    return JSON.parse(String(raw)) as Probe;
+  } finally {
+    if (context) await withTimeout(context.close(), 10_000, "pass-through browser close").catch(() => undefined);
+  }
+}
+
+function verifyPassThrough(probe: Probe, managed: Probe): void {
+  const nativePlatform = process.platform === "darwin"
+    ? "MacIntel"
+    : process.platform === "win32" ? "Win32" : "Linux x86_64";
+  expectEqual(probe.platform, nativePlatform, "pass-through native navigator.platform");
+  expect(String(probe.workerIdentity || "").includes(nativePlatform), "pass-through Worker platform was not native");
+  if (process.platform === "darwin") {
+    expect(!String(probe.userAgent || "").includes("Windows NT"), "pass-through leaked the managed Windows UA");
+  }
+  expect(probe.platform !== managed.platform, "pass-through retained the managed platform");
+  expect(probe.userAgent !== managed.userAgent, "pass-through retained the managed User-Agent");
+  expect(probe.tz !== managed.tz, "pass-through retained the managed timezone");
+}
+
+function verifyGeometry(identity: GeometryIdentity, config: RoxyFingerprintConfig, label: string): void {
+  expectEqual(identity.userAgent, config.userAgent, `${label} navigator.userAgent`);
+  expectEqual(identity.platform, config.platform, `${label} navigator.platform`);
+  expectEqual(identity.screenWidth, config.screen.width, `${label} screen.width`);
+  expectEqual(identity.screenHeight, config.screen.height, `${label} screen.height`);
+  expectEqual(identity.availLeft, config.screen.availLeft, `${label} screen.availLeft`);
+  expectEqual(identity.availTop, config.screen.availTop, `${label} screen.availTop`);
+  expectEqual(identity.availWidth, config.screen.availWidth, `${label} screen.availWidth`);
+  expectEqual(identity.availHeight, config.screen.availHeight, `${label} screen.availHeight`);
+  expectEqual(identity.outerWidth, config.screen.outerWidth, `${label} window.outerWidth`);
+  expectEqual(identity.outerHeight, config.screen.outerHeight, `${label} window.outerHeight`);
+  expect(identity.innerWidth > 0 && identity.innerWidth <= identity.outerWidth, `${label} innerWidth was outside outerWidth`);
+  expect(identity.innerHeight > 0 && identity.innerHeight <= identity.outerHeight, `${label} innerHeight was outside outerHeight`);
+  expect(identity.screenX + identity.outerWidth <= identity.availLeft + identity.availWidth, `${label} window exceeded available width`);
+  expect(identity.screenY + identity.outerHeight <= identity.availTop + identity.availHeight, `${label} window exceeded available height`);
+  expectEqual(identity.devicePixelRatio, config.screen.devicePixelRatio, `${label} devicePixelRatio`);
 }
 
 function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
@@ -550,13 +853,25 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
   expectEqual(probe.doNotTrack, config.doNotTrack, "navigator.doNotTrack");
   expectEqual(probe.screenW, config.screen.width, "screen.width");
   expectEqual(probe.screenH, config.screen.height, "screen.height");
+  expectEqual(probe.availLeft, config.screen.availLeft, "screen.availLeft");
+  expectEqual(probe.availTop, config.screen.availTop, "screen.availTop");
   expectEqual(probe.availW, config.screen.availWidth, "screen.availWidth");
   expectEqual(probe.availH, config.screen.availHeight, "screen.availHeight");
+  expectEqual(probe.screenX, config.screen.windowX, "window.screenX");
+  expectEqual(probe.screenY, config.screen.windowY, "window.screenY");
+  expectEqual(probe.outerWidth, config.screen.outerWidth, "window.outerWidth");
+  expectEqual(probe.outerHeight, config.screen.outerHeight, "window.outerHeight");
+  expect(Number(probe.innerWidth) > 0 && Number(probe.innerWidth) <= config.screen.outerWidth, "window.innerWidth was outside outerWidth");
+  expect(Number(probe.innerHeight) > 0 && Number(probe.innerHeight) <= config.screen.outerHeight, "window.innerHeight was outside outerHeight");
   expectEqual(probe.devicePixelRatio, config.screen.devicePixelRatio, "devicePixelRatio");
   expectEqual(probe.tz, config.timezone, "Intl timezone");
   expectEqual(probe.glUnmaskedVendor, config.webgl.vendor, "WebGL unmasked vendor");
   expectEqual(probe.glRenderer, config.webgl.renderer, "WebGL unmasked renderer");
   expectEqual(probe.webgpuVendor, config.webgpu.vendor, "WebGPU vendor");
+  expectEqual(probe.webgpuArchitecture, config.webgpu.architecture, "WebGPU architecture");
+  expectEqual(probe.webgpuSubgroupMinSize, config.webgpu.subgroupMinSize, "WebGPU subgroupMinSize");
+  expectEqual(probe.webgpuSubgroupMaxSize, config.webgpu.subgroupMaxSize, "WebGPU subgroupMaxSize");
+  expectEqual(probe.webgpuIsFallbackAdapter, false, "WebGPU isFallbackAdapter");
   expect(String(probe.workerIdentity || "").includes(config.userAgent), "Worker user agent did not match Window");
   expect(String(probe.workerIdentity || "").includes(config.platform), "Worker platform did not match Window");
   expectEqual(run.geolocation.latitude, config.geolocation.latitude, "geolocation latitude");
@@ -578,6 +893,42 @@ function verifyExpected(run: RunResult, config: RoxyFingerprintConfig): void {
       `${context} request Sec-CH-UA-Platform`,
     );
   }
+  const expectedUaDataPlatform = config.platform === "Win32" ? "Windows" : "macOS";
+  const expectedFullVersion = config.userAgent.match(/Chrome\/(\d+\.\d+\.\d+\.\d+)/)?.[1] || null;
+  for (const [context, identity] of Object.entries({
+    top: run.cdpOverride.top,
+    sameOriginFrame: run.cdpOverride.sameOriginFrame,
+    crossOriginFrame: run.cdpOverride.crossOriginFrame,
+  })) {
+    expectEqual(identity.userAgent, config.userAgent, `${context} CDP navigator.userAgent`);
+    expectEqual(identity.platform, config.platform, `${context} CDP navigator.platform`);
+    expectEqual(identity.languages, config.languages, `${context} CDP navigator.languages`);
+    expectEqual(identity.uaPlatform, expectedUaDataPlatform, `${context} CDP UA-CH platform`);
+    expectEqual(identity.uaFullVersion, expectedFullVersion, `${context} CDP UA-CH full version`);
+    expectEqual(identity.request.userAgent, config.userAgent, `${context} CDP request User-Agent`);
+    expectEqual(identity.request.acceptLanguage, expectedAcceptLanguage, `${context} CDP request Accept-Language`);
+    expectEqual(identity.request.doNotTrack, "1", `${context} CDP request DNT`);
+    expectEqual(identity.request.uaPlatform, expectedUaPlatform, `${context} CDP request Sec-CH-UA-Platform`);
+  }
+  for (const [context, headers] of Object.entries(run.cdpOverride.requestHeaders)) {
+    expectEqual(headers.userAgent, config.userAgent, `${context} CDP Worker request User-Agent`);
+    expectEqual(headers.acceptLanguage, expectedAcceptLanguage, `${context} CDP Worker request Accept-Language`);
+    expectEqual(headers.doNotTrack, "1", `${context} CDP Worker request DNT`);
+    expectEqual(
+      headers.uaPlatform,
+      context === "window" ? expectedUaPlatform : null,
+      `${context} CDP Worker request Sec-CH-UA-Platform`,
+    );
+  }
+  expect(
+    expectedFullVersion !== null && run.versionIdentity.product.includes(expectedFullVersion),
+    `Browser.getVersion product did not include ${expectedFullVersion}: ${run.versionIdentity.product}`,
+  );
+  expectEqual(run.versionIdentity.userAgent, config.userAgent, "Browser.getVersion User-Agent");
+  expect(
+    expectedFullVersion !== null && run.versionIdentity.chromeVersionText.includes(expectedFullVersion),
+    `chrome://version did not include ${expectedFullVersion}: ${run.versionIdentity.chromeVersionText}`,
+  );
   expectEqual(run.webrtcCandidates, [], "disabled WebRTC candidates");
 
   expectEqual(run.codecs.aacCanPlay, "probably", "AAC canPlayType");
@@ -649,6 +1000,8 @@ function verifyStable(first: RunResult, second: RunResult): void {
   expectEqual(first.webauthn, second.webauthn, "same-seed WebAuthn capabilities");
   expectEqual(first.geolocation, second.geolocation, "same-seed geolocation");
   expectEqual(first.requestHeaders, second.requestHeaders, "same-seed request headers");
+  expectEqual(first.cdpOverride, second.cdpOverride, "same-seed CDP identity coherence");
+  expectEqual(first.versionIdentity, second.versionIdentity, "same-seed build version coherence");
   expectEqual(first.webrtcCandidates, second.webrtcCandidates, "same-seed WebRTC");
 }
 
@@ -670,18 +1023,22 @@ async function main(): Promise<void> {
 
   const origin = await startOrigin();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-native-verify-"));
+  const managedPlatform = process.platform === "win32" ? "macos" : "windows";
+  const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const baseMeta: CloakFingerprintMeta = {
     fingerprintSeed: 424242,
-    platform: "windows",
+    platform: managedPlatform,
     locale: "en-US",
-    timezone: "America/New_York",
+    timezone: hostTimezone === "America/New_York" ? "Asia/Tokyo" : "America/New_York",
     webrtcMode: "disable",
     geolocationMode: "custom",
     geolocationLatitude: 40.7128,
     geolocationLongitude: -74.006,
     geolocationAccuracy: 25,
-    gpuVendor: "Google Inc. (NVIDIA)",
-    gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuVendor: managedPlatform === "macos" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)",
+    gpuRenderer: managedPlatform === "macos"
+      ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
+      : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -691,21 +1048,78 @@ async function main(): Promise<void> {
   };
 
   try {
-    const first = await runOnce(executablePath, version, baseMeta, origin.origin, path.join(tempRoot, "same-a"), "same-seed A");
-    const repeat = await runOnce(executablePath, version, baseMeta, origin.origin, path.join(tempRoot, "same-b"), "same-seed B");
+    const first = await runOnce(executablePath, version, baseMeta, origin.origin, origin.crossOrigin, path.join(tempRoot, "same-a"), "same-seed A");
+    const repeat = await runOnce(executablePath, version, baseMeta, origin.origin, origin.crossOrigin, path.join(tempRoot, "same-b"), "same-seed B");
     const distinct = await runOnce(
       executablePath,
       version,
       { ...baseMeta, fingerprintSeed: 424243 },
       origin.origin,
+      origin.crossOrigin,
       path.join(tempRoot, "distinct"),
       "different-seed",
+    );
+    const greekGreece = await runOnce(
+      executablePath,
+      version,
+      {
+        ...baseMeta,
+        fingerprintSeed: 424244,
+        locale: "el-GR",
+        timezone: "Europe/Athens",
+        geolocationLatitude: 37.9838,
+        geolocationLongitude: 23.7275,
+      },
+      origin.origin,
+      origin.crossOrigin,
+      path.join(tempRoot, "locale-el-gr"),
+      "locale el-GR",
+    );
+    const greekCyprus = await runOnce(
+      executablePath,
+      version,
+      {
+        ...baseMeta,
+        fingerprintSeed: 424245,
+        locale: "el-CY",
+        timezone: "Asia/Nicosia",
+        geolocationLatitude: 35.1856,
+        geolocationLongitude: 33.3823,
+      },
+      origin.origin,
+      origin.crossOrigin,
+      path.join(tempRoot, "locale-el-cy"),
+      "locale el-CY",
+    );
+    const headed = await captureHeadedGeometry(
+      executablePath,
+      version,
+      baseMeta,
+      path.join(tempRoot, "headed-geometry"),
+    );
+    const headedRepeat = await captureHeadedGeometry(
+      executablePath,
+      version,
+      baseMeta,
+      path.join(tempRoot, "headed-geometry-repeat"),
+    );
+    const passThrough = await capturePassThrough(
+      executablePath,
+      origin.origin,
+      origin.crossOrigin,
+      path.join(tempRoot, "pass-through"),
     );
     verifyExpected(first.result, first.config);
     verifyExpected(repeat.result, repeat.config);
     verifyExpected(distinct.result, distinct.config);
+    verifyExpected(greekGreece.result, greekGreece.config);
+    verifyExpected(greekCyprus.result, greekCyprus.config);
+    verifyGeometry(headed.geometry, headed.config, "headed geometry");
+    verifyGeometry(headedRepeat.geometry, headedRepeat.config, "headed geometry repeat");
+    expectEqual(headed.geometry, headedRepeat.geometry, "same-seed headed geometry stability");
     verifyStable(first.result, repeat.result);
     verifyDistinct(first.result, distinct.result);
+    verifyPassThrough(passThrough, first.result.probe);
     process.stdout.write(JSON.stringify({
       ok: true,
       executablePath,
@@ -714,6 +1128,11 @@ async function main(): Promise<void> {
       codecs: "aac-h264-verified",
       storageBuckets: "verified",
       webauthn: "verified",
+      cdpIdentityCoherence: "verified",
+      buildVersionCoherence: "verified",
+      headedGeometry: "verified",
+      localeCoherence: ["el-GR", "el-CY"],
+      passThrough: "verified-native-host-identity",
       sameSeedStable: true,
       differentSeedsDistinct: true,
       audioCapture: first.result.media.audioCaptureStatus === "timeout"

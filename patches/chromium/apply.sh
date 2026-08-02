@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply the RoxyLite community fingerprint patch to a Chromium 149+ checkout.
+# Apply the RoxyLite community fingerprint patch to the pinned Chromium 150 checkout.
 
 set -euo pipefail
 

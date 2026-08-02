@@ -47,6 +47,8 @@ Profile 保存浏览器状态和指纹配置。
 
 - **Launch / Stop**：启动或停止 CloakBrowser profile。
 - **Edit**：修改 profile 元数据和指纹字段。
+- **Chromium build**：使用最新安装的独立构建，或 pin 保留的精确版本用于回滚。
+- **Pass-through**：关闭托管的 UA/平台/语言/时区/WebRTC/GPU/屏幕/noise 消费者，以宿主原生身份进行对照。
 - **Clone / Batch create**：用确定性 seed 创建多个 profile。
 - **Consistency check**：检查 profile 的时区、语言、WebRTC、代理检测信息是否一致。
 - **Tags**：用标签组织批量操作和导出。

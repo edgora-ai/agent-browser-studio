@@ -1,0 +1,28 @@
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+index e579480714..0f4a9b86a8 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+@@ -98,6 +98,9 @@ GPUAdapter::GPUAdapter(
+   if (roxy_config.enabled() && !roxy_config.webgpu_vendor().empty())
+     vendor_ = String::FromUtf8(roxy_config.webgpu_vendor());
+   architecture_ = String::FromUtf8(info.architecture);
++  if (roxy_config.enabled() && !roxy_config.webgpu_architecture().empty())
++    architecture_ =
++        String::FromUtf8(roxy_config.webgpu_architecture());
+   if (info.deviceID <= 0xffff) {
+     device_ = String::Format("0x%04x", info.deviceID);
+   } else {
+@@ -114,6 +117,13 @@ GPUAdapter::GPUAdapter(
+   }
+   subgroup_min_size_ = info.subgroupMinSize;
+   subgroup_max_size_ = info.subgroupMaxSize;
++  if (roxy_config.enabled() &&
++      roxy_config.webgpu_subgroup_min_size() > 0 &&
++      roxy_config.webgpu_subgroup_max_size() >=
++          roxy_config.webgpu_subgroup_min_size()) {
++    subgroup_min_size_ = roxy_config.webgpu_subgroup_min_size();
++    subgroup_max_size_ = roxy_config.webgpu_subgroup_max_size();
++  }
+   power_preference_ = powerProperties.powerPreference;
+ 
+   features_ = MakeFeatureNameSet(GetHandle());

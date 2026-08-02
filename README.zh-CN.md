@@ -21,8 +21,8 @@ CloakLite 是具有双用途属性的本地自动化工具。请仅用于合法�
 
 | 模块 | 能力 |
 |---|---|
-| CloakBrowser Profiles | 安装/配置 CloakBrowser，创建/启动/停止 profiles，确定性指纹 seeds，profile tags |
-| 指纹设置 | 平台、时区、语言、WebRTC、GPU、屏幕、CPU、内存、存储额度、字体 |
+| CloakBrowser Profiles | 安装/配置 Chromium，创建/启动/停止 profiles，精确版本 pin、保留旧版本回滚，profile tags |
+| 指纹设置 | 确定性托管身份或宿主原生 pass-through；平台、时区、语言、WebRTC、GPU、屏幕、CPU、内存、存储额度、字体 |
 | 代理管理 | 命名 HTTP/SOCKS 代理，凭证脱敏，按 profile 分配，代理地理检测 |
 | 浏览器状态 | Cookies、localStorage、preferences、bookmarks、extension state、存储检查 |
 | 扩展仓库 | 本地 ZIP/CRX 导入，Chrome Web Store 包缓存，安全解包，同步 hash 校验 |
@@ -66,10 +66,10 @@ npm install
 npm start
 ```
 
-### 使用独立 Chromium 149+ 指纹引擎
+### 使用独立 Chromium 150 指纹引擎
 
 使用 [`patches/chromium`](patches/chromium/README.md) 下独立维护的补丁集构建
-Chromium，完成验证后安装到本地 OSS 引擎缓存：
+Chromium 150，完成验证后安装到本地 OSS 引擎缓存：
 
 ```bash
 npm run verify:chromium -- /path/to/Chromium.app
@@ -77,11 +77,21 @@ npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-安装器会将版本化构建保存到 `~/.roxy-lite-cloak/`，应用自动选择其中的最新版本，
-不使用 CloakBrowser license key 或登录。`CLOAKBROWSER_BINARY_PATH` 仍可用于显式
+安装器会将版本化构建保存到 `~/.roxy-lite-cloak/`。Profile 默认选择最新安装版本，
+也可以 pin 任一保留的精确版本用于回滚。Profile 编辑器还提供 pass-through 模式，
+关闭所有托管身份消费者，以宿主原生指纹进行 stock 对照。不使用 CloakBrowser
+license key 或登录。`CLOAKBROWSER_BINARY_PATH` 仍可用于显式
 覆盖；固定在 license 机制之前的社区 wrapper 只在没有独立构建时作为兼容回退。
 GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
 `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` 时才使用 wrapper 管理的 GeoIP 数据库。
+
+当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
+原生严格校验 48 项全部通过，安装版的版本/输入/Cookie 旅程为 `8/8`，并保留
+Chromium 149 用于回滚。这不代表已经完全等同 RoxyChrome/CloakBrowser：
+36 项引擎/网络/生命周期门禁中，22 项 verified、9 项 partial、4 项 missing，
+另有 1 项 stock 网络行为尚未验证。四项硬缺失是系统颜色/选区渲染、
+SOCKS5 UDP/QUIC/HTTP3、代理 timing/cache/header 信号和签名的多平台发行包；
+详见 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查
 
@@ -95,6 +105,7 @@ npm test
 ```bash
 npm run build
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
+npx vitest run -c vitest.config.e2e.ts tests/e2e/j45-version-pin-pass-through.test.ts
 ```
 
 > E2E 会在 `tests/e2e/userdata/` 生成本地浏览器数据；该目录已被忽略，不能提交。
@@ -103,7 +114,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 
 ## 首次使用流程
 
-1. 安装或配置独立构建的 Chromium 149+ 二进制文件。
+1. 安装或配置独立构建的 Chromium 150 二进制文件（可保留 149 用于回滚）。
 2. 打开 **Profiles** 并创建 profile。
 3. 可选：打开 **Proxies**，添加代理并分配给 profile。
 4. 启动 profile，运行 **Check Risk** / consistency check。
@@ -134,7 +145,7 @@ tests/
   e2e/                    Playwright Electron journeys
   smoke/                  结构检查
 docs/                     使用手册和 roadmap
-patches/                  保留目录（本仓库不包含 Chromium 补丁）
+patches/chromium/         独立 Chromium 源码补丁和验收矩阵
 resources/                应用图标
 ```
 
@@ -174,7 +185,7 @@ CloakLite 会处理敏感本地数据，包括浏览器 profile 状态、Cookies
 | Agent 聊天流式 | OpenAI 兼容和 Claude provider 支持逐 token 流式。工具调用元数据在工具调用块完成后发出；工具执行会阻塞下一轮流式。 |
 | 新手引导向导 | 首次运行（无二进制或无 profile 时）显示 4 步向导：安装二进制 → 创建 profile → 启动并检测 → 可选 AI 配置。 |
 | Renderer 架构 | Renderer 为按 script 加载的模块化 vanilla JS，未做打包。部分模块仍较大并依赖共享全局命名空间。 |
-| E2E 测试 | 单元/冒烟测试在 CI 中运行。E2E（Playwright Electron）需要真实 Electron 环境和 CloakBrowser 二进制，因此尚未在 CI 中全部运行。 |
+| E2E 测试 | 单元/冒烟测试在 CI 中运行。E2E（Playwright Electron）需要真实 Electron 环境和独立 Chromium 二进制，因此尚未在 CI 中全部运行。 |
 
 ---
 

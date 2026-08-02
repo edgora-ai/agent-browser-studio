@@ -41,14 +41,23 @@ describe("Roxy fingerprint config", () => {
     expect(first.maxTouchPoints).toBe(0);
     expect(first.languages).toEqual(["zh-CN", "zh"]);
     expect(first.userAgent).toContain("Chrome/149.0.7827.22");
+    expect(first.screen.availLeft).toBe(0);
+    expect(first.screen.availTop).toBe(0);
     expect(first.screen.availHeight).toBe(1032);
+    expect(first.screen).toMatchObject({ windowX: 32, windowY: 32, outerWidth: 1280, outerHeight: 800 });
     expect(first.storageQuotaBytes).toBe(120000 * 1024 * 1024);
     expect(first.fonts).toHaveLength(9);
     expect(first.fonts).toEqual([...first.fonts].sort());
     expect(first.fonts).toContain("Arial Unicode MS");
     expect(first.fonts.some((font) => /Calibri|Segoe UI|PingFang/.test(font))).toBe(false);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
-    expect(first.webgpu).toEqual({ mode: "webgl", vendor: "NVIDIA" });
+    expect(first.webgpu).toEqual({
+      mode: "webgl",
+      vendor: "NVIDIA",
+      architecture: "Ampere",
+      subgroupMinSize: 32,
+      subgroupMaxSize: 32,
+    });
     expect(first.webauthn).toEqual({
       enabled: true,
       conditionalGet: true,
@@ -74,11 +83,52 @@ describe("Roxy fingerprint config", () => {
     expect(decoded.schemaVersion).toBe(1);
     expect(decoded.platform).toBe("MacIntel");
     expect(decoded.userAgent).toContain("Chrome/150.0.7871.114");
-    expect(decoded.webgpu).toEqual({ mode: "webgl", vendor: "Apple" });
+    expect(decoded.screen).toMatchObject({ availLeft: 0, availTop: 25, windowX: 32, windowY: 57, outerWidth: 1280, outerHeight: 800 });
+    expect(decoded.webgpu).toEqual({
+      mode: "webgl",
+      vendor: "Apple",
+      architecture: "metal-3",
+      subgroupMinSize: 32,
+      subgroupMaxSize: 32,
+    });
     expect(decoded.speechSynthesis.voices.map((voice: { name: string }) => voice.name))
       .toEqual(["Samantha", "Alex"]);
     expect(json).not.toContain("license");
     expect(json).not.toContain("lumi.conf");
+  });
+
+  it("selects default hardware as coherent seed-owned personas", () => {
+    const windows = [1, 2, 3, 4, 5].map((fingerprintSeed) =>
+      buildRoxyFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114"));
+    expect(windows.map((config) => ({
+      cpu: config.hardwareConcurrency,
+      memory: config.deviceMemory,
+      screen: `${config.screen.width}x${config.screen.height}@${config.screen.devicePixelRatio}`,
+      gpu: config.webgpu.vendor,
+    }))).toEqual([
+      { cpu: 8, memory: 16, screen: "1920x1080@1", gpu: "Intel" },
+      { cpu: 12, memory: 16, screen: "1920x1080@1", gpu: "NVIDIA" },
+      { cpu: 16, memory: 16, screen: "2560x1440@1", gpu: "NVIDIA" },
+      { cpu: 16, memory: 16, screen: "1920x1080@1", gpu: "AMD" },
+      { cpu: 8, memory: 8, screen: "1920x1080@1", gpu: "Intel" },
+    ]);
+
+    const mac = [1, 2, 3, 4].map((fingerprintSeed) =>
+      buildRoxyFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114"));
+    expect(mac.map((config) => ({
+      cpu: config.hardwareConcurrency,
+      memory: config.deviceMemory,
+      screen: `${config.screen.width}x${config.screen.height}@${config.screen.devicePixelRatio}`,
+      renderer: config.webgl.renderer,
+    }))).toEqual([
+      { cpu: 8, memory: 16, screen: "1512x982@2", renderer: expect.stringContaining("Apple M2,") },
+      { cpu: 8, memory: 16, screen: "1710x1107@2", renderer: expect.stringContaining("Apple M3,") },
+      { cpu: 12, memory: 16, screen: "1728x1117@2", renderer: expect.stringContaining("Apple M2 Pro,") },
+      { cpu: 8, memory: 8, screen: "1440x900@2", renderer: expect.stringContaining("Apple M1,") },
+    ]);
+
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"))
+      .toEqual(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
   });
 
   it("emits a native disabled geolocation policy without coordinates", () => {
@@ -95,6 +145,28 @@ describe("Roxy fingerprint config", () => {
       .toEqual({ mode: "altered", publicIp: "203.0.113.3" });
     expect(buildRoxyFingerprintConfig({ fingerprintSeed: 13, webrtcMode: "altered" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "altered", publicIp: null });
+  });
+
+  it("keeps every supported locale on a locale-shaped speech identity", () => {
+    const windowsCases = [
+      ["en-GB", "Microsoft George - English (United Kingdom)"],
+      ["zh-TW", "Microsoft Hanhan - Chinese (Traditional, Taiwan)"],
+      ["ar-SA", "Microsoft Naayf - Arabic (Saudi Arabia)"],
+      ["th-TH", "Microsoft Pattara - Thai (Thailand)"],
+      ["vi-VN", "Microsoft An - Vietnamese (Vietnam)"],
+      ["el-GR", "Microsoft Stefanos - Greek (Greece)"],
+      ["el-CY", "Microsoft Stefanos - Greek (Greece)"],
+    ] as const;
+    for (const [locale, expectedVoice] of windowsCases) {
+      const config = buildRoxyFingerprintConfig({ fingerprintSeed: 21, platform: "windows", locale }, "150.0.7871.114");
+      expect(config.languages).toEqual([locale, locale.split("-")[0]]);
+      expect(config.speechSynthesis.voices[0]).toEqual({ name: expectedVoice, lang: locale, localService: true });
+    }
+
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 22, platform: "macos", locale: "el-GR" }, "150.0.7871.114")
+      .speechSynthesis.voices[0].name).toBe("Melina");
+    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 23, platform: "macos", locale: "zh-TW" }, "150.0.7871.114")
+      .speechSynthesis.voices[0].name).toBe("Mei-Jia");
   });
 
   it("rejects incomplete custom geolocation", () => {

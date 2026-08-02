@@ -32,8 +32,15 @@ export interface ResolvedProfileProxy {
 export type CloakPlatform = "windows" | "macos";
 export type GeolocationMode = "real" | "disable" | "custom";
 export type WebRtcMode = "auto" | "real" | "altered" | "disable";
+export type FingerprintMode = "managed" | "off";
 
 export interface CloakFingerprintMeta {
+  /** `off` launches the selected build with all managed identity consumers disabled. */
+  fingerprintMode?: FingerprintMode;
+  /** Exact installed independent Chromium build, or null for newest installed. */
+  browserVersion?: string | null;
+  /** Opt-in stock preference mode for embedded auth/payment/challenge flows. */
+  allowThirdPartyCookies?: boolean;
   fingerprintSeed?: number;
   platform?: CloakPlatform;
   timezone?: string | null;

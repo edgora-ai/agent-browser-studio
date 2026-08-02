@@ -5,6 +5,7 @@ import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { encryptSecret, isEncrypted, decryptSecretOr, usingEncryption } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, CloakFingerprintMeta, CloakProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
+import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
 let _appDataDir: string | null = null;
@@ -363,6 +364,18 @@ function sanitizeFingerprintSeed(value: unknown): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > 999999) throw new Error(`Invalid fingerprint seed: ${JSON.stringify(value)}`);
   return n;
+}
+
+function sanitizeFingerprintMode(value: unknown): "managed" | "off" {
+  if (value === undefined || value === null || value === "" || value === "managed") return "managed";
+  if (value === "off") return "off";
+  throw new Error(`Invalid fingerprint mode: ${JSON.stringify(value)}`);
+}
+
+function sanitizeBoolean(value: unknown, label: string, fallback = false): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  return value;
 }
 
 function sanitizeCloakPlatform(value: unknown): "windows" | "macos" {
@@ -775,6 +788,9 @@ export function getProfileMeta(dirId: string): CloakProfileMeta | null {
   if (!cp) return null;
   return {
     name: cp.name,
+    fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
+    browserVersion: normalizeManagedChromiumVersion(cp.browserVersion),
+    allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
     proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
     proxyName: cp.proxyName || null,
     syncedAt: cp.syncedAt,
@@ -830,6 +846,9 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
+  if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
+  if (meta.browserVersion !== undefined) next.browserVersion = normalizeManagedChromiumVersion(meta.browserVersion);
+  if (meta.allowThirdPartyCookies !== undefined) next.allowThirdPartyCookies = sanitizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility");
   if (meta.platform !== undefined) next.platform = sanitizeCloakPlatform(meta.platform);
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
   if (meta.locale !== undefined) next.locale = sanitizeOptionalLocale(meta.locale);
@@ -1041,6 +1060,9 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       } else {
         profile.proxyName = null;
       }
+      profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
+      profile.browserVersion = normalizeManagedChromiumVersion(profile.browserVersion);
+      profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
       profile.platform = profile.platform === "macos" ? "macos" : "windows";
       profile.fingerprintSeed = sanitizeFingerprintSeed(profile.fingerprintSeed || 12345);
       profile.timezone = sanitizeOptionalTimezone(profile.timezone);

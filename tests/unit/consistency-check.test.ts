@@ -6,6 +6,8 @@ describe("consistency-check helpers", () => {
     expect(tzToCountry("America/New_York")).toBe("US");
     expect(tzToCountry("asia/shanghai")).toBe("CN");
     expect(tzToCountry("Europe/London")).toBe("GB");
+    expect(tzToCountry("Europe/Athens")).toBe("GR");
+    expect(tzToCountry("Asia/Nicosia")).toBe("CY");
     expect(tzToCountry("Asia/Tokyo")).toBe("JP");
     expect(tzToCountry("Mars/Olympus")).toBeNull();
     expect(tzToCountry(null)).toBeNull();
@@ -26,6 +28,13 @@ describe("checkProfileConsistency", () => {
     expect(r.ok).toBe(true);
     expect(r.warnings).toHaveLength(0);
     expect(r.blockers).toHaveLength(0);
+  });
+
+  it("accepts the Greek Greece and Cyprus locale/timezone pairs", () => {
+    const greece = checkProfileConsistency({ timezone: "Europe/Athens", locale: "el-GR", proxyMode: "named", proxyGeo: { countryCode: "GR" } });
+    const cyprus = checkProfileConsistency({ timezone: "Asia/Nicosia", locale: "el-CY", proxyMode: "named", proxyGeo: { countryCode: "CY" } });
+    expect(greece.warnings).toHaveLength(0);
+    expect(cyprus.warnings).toHaveLength(0);
   });
 
   it("blocks when a WebRTC IP is set but there is no proxy", () => {

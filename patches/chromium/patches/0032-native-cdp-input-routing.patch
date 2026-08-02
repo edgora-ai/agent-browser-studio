@@ -1,0 +1,43 @@
+diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+--- a/content/browser/devtools/protocol/input_handler.cc
++++ b/content/browser/devtools/protocol/input_handler.cc
+@@ -39,6 +39,7 @@
+ #include "content/public/common/content_features.h"
+ #include "content/public/common/url_constants.h"
+ #include "third_party/blink/public/common/input/web_input_event.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/page/page_zoom.h"
+ #include "ui/base/clipboard/clipboard_constants.h"
+ #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
+@@ -1410,6 +1411,31 @@ void InputHandler::HandleMouseEvent(
+         if (!self || !widget_host)
+           return;
+         gfx::PointF position = event->PositionInWidget();
++        // A managed browser may receive CDP input while its window is occluded.
++        // Chromium's asynchronous renderer-verification hit test can then
++        // wait for a fresh compositor frame for roughly five seconds per
++        // mouse event. Use the current aggregated compositor hit-test data;
++        // this still resolves out-of-process frame targets and transformed
++        // points while keeping a seeded multi-point path bounded.
++        if (blink::RoxyFingerprintConfig::Get().enabled()) {
++          auto* input_event_router =
++              widget_host->delegate()->GetInputEventRouter();
++          gfx::PointF transformed_point;
++          input::RenderWidgetHostViewInput* target_input =
++              input_event_router->GetRenderWidgetHostViewInputAtPoint(
++                  widget_host->GetView(), position, &transformed_point);
++          if (!target_input) {
++            callback->sendFailure(Response::InternalError());
++            return;
++          }
++          auto* target_view =
++              static_cast<RenderWidgetHostViewBase*>(target_input);
++          self->OnWidgetForDispatchMouseEvent(
++              std::move(callback), std::move(event), target_view->GetWeakPtr(),
++              transformed_point);
++          return;
++        }
++
+         widget_host->delegate()
+             ->GetRenderWidgetHostAtPointAsynchronously(
+                 widget_host->GetView(), position,

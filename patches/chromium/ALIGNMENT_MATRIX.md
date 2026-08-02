@@ -13,9 +13,10 @@ are out of scope.
   `150.0.7871.114.3` on macOS and
   Windows (71 publicly reported source-level patches); Linux also has
   `150.0.7871.114.4` (73 publicly reported patches).
-- RoxyChrome baseline: public/observable Chromium 149 behavior previously
-  captured by the cross-browser harness. Exact proprietary implementation
-  details are not an acceptance input.
+- RoxyBrowser product baseline: public release `4.0.0` with Chromium 150.
+  Deep comparison evidence still comes from the observable Chromium 149 corpus
+  captured locally; exact proprietary implementation details are not an
+  acceptance input.
 
 Patch counts are not comparable units of functionality. A row is complete only
 when its owning Chromium subsystem consumes the profile identity and the stated
@@ -32,7 +33,7 @@ Status meanings:
 
 ## Identity and rendering
 
-| Capability | Current 149 state | Chromium 150 target | Completion evidence |
+| Capability | Current 150 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
 | UA, Navigator and UA-CH | verified | Preserve in top frame, subframes and all Worker types, including after CDP UA operations | DOM + request headers + high-entropy UA-CH across contexts |
 | Platform, language and DNT | verified | Preserve across Window, frames and Worker requests | DOM and loopback request-header comparison |
@@ -55,18 +56,18 @@ Status meanings:
 
 ## Automation and network behavior
 
-| Capability | Current 149 state | Chromium 150 target | Completion evidence |
+| Capability | Current 150 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
 | `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks |
-| CDP-generated input behavior | missing | Remove synthetic input distinctions while preserving normal input semantics | trusted mouse/keyboard/touch event corpus against stock Chrome |
-| Humanized interaction policy | missing | Seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic tests plus distribution/range checks; no page injection |
+| CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus with no untrusted events |
+| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests plus installed Chromium 150 E2E; no page injection |
 | HTTP proxy authentication | partial | Prefer native version-aware authentication; extension fallback must not alter observable state | authenticated HTTP/HTTPS proxy E2E and extension-surface audit |
 | SOCKS5 TCP | partial | Native authenticated routing with remote DNS | DNS-leak and authenticated routing tests |
 | SOCKS5 UDP / QUIC / HTTP3 | missing | Preserve UDP/QUIC where the proxy supports it | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
 | Proxy timing, cache and header signals | missing | Avoid proxy-only timing/header/cache identity drift | direct-vs-proxy controlled origin corpus |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
 | TLS, HTTP/2 and HTTP/3 stock parity | stock, unverified | Do not diverge from the same stock Chromium build | JA4/HTTP2 settings/HTTP3 comparative harness; no spoofed claims |
-| Third-party-cookie compatibility mode | missing | Explicit opt-in for embedded auth/payment/challenge flows | partitioned/unpartitioned cookie E2E |
+| Third-party-cookie compatibility mode | verified | Preserve explicit opt-in for embedded auth/payment/challenge flows | real cross-site iframe cookie E2E, opt-in isolation and exact preference restoration |
 
 ## Profile coherence and lifecycle
 
@@ -77,8 +78,8 @@ Status meanings:
 | Joint hardware profiles | partial | Generate CPU/RAM/GPU/screen/DPR/font/audio as one plausible profile | profile corpus constraints and cross-field invariant tests |
 | Headed/headless parity | partial | Same declared identity with only unavoidable stock differences | paired headed/headless capture and allow-listed diff |
 | Persistent-context parity | partial | No incognito/storage/window geometry drift | fresh vs persistent comparative capture |
-| Pass-through/debug mode | missing | Explicitly disable spoofing without leaving a mixed identity | stock comparison with all profile consumers disabled |
-| Version pin and rollback | missing | Select an installed exact build and retain previous known-good build | install/select/rollback integration tests |
+| Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 48-surface native-host comparison with all managed profile consumers disabled |
+| Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
 | Signed multi-platform distribution | missing | macOS arm64/x64, Windows x64, Linux x64/arm64 | reproducible build metadata, checksums/signatures and platform E2E |
 
 ## Product-level capabilities
@@ -102,22 +103,26 @@ waive any engine row above.
 
 ## Current verified build
 
-The Chromium `149.0.7827.22` macOS arm64 build passes three fresh launches with
-37 stable fingerprint fields, same-seed restart stability, cross-seed
-distinction, Window/Dedicated/Shared/Service Worker request identity, native
-Storage Buckets quota, WebAuthn capabilities, media-device remapping and
-AAC/H.264 playback, decoding and encoding. The Chromium 150 patch sequence
-applies to a clean `150.0.7871.114` index, but a Chromium 150 binary has not yet
-been built and runtime-verified. The installed-cache application journey also
-passes profile creation, native launch, CDP Chrome/Windows identity checks and
-shutdown without using a CloakBrowser license.
+The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
+commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 48-surface
+verifier across same-seed restarts, a different seed, `el-GR`/`el-CY` locale
+coherence, headed geometry and native-host pass-through. Verified runtime
+surfaces include Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
+audio capture, native Storage Buckets quota, WebAuthn, media-device remapping,
+WebRTC disable mode, CDP identity and exact build-version coherence.
 
-Using the stage labels in this matrix, 17 of 36 engine/network/lifecycle rows
-are currently `verified`, 9 are `partial`, 9 are `missing`, and 1 stock-network
-row remains unverified. These counts are workflow gates, not a browser quality
-percentage: several missing rows are packaging or network operations, while
-several verified surface rows still have a deeper Chromium 150 target stated
-in their target column.
+The installed-cache journey retains Chromium `149.0.7827.22` alongside 150 and
+passes exact selection, rollback, pass-through, trusted humanized input and
+third-party-cookie compatibility/restoration (`8/8` targeted E2E) with the
+license environment explicitly absent. Installing 150 leaves the existing
+CloakLite config and six-profile tree byte-for-byte unchanged.
+
+Using the stage labels in this matrix, 22 of 36 engine/network/lifecycle rows
+are currently `verified`, 9 are `partial`, 4 are `missing`, and 1 stock-network
+row remains unverified. The four hard missing rows are system-color/selection
+rendering, SOCKS5 UDP/QUIC/HTTP3, proxy timing/cache/header signals, and signed
+multi-platform distribution. These counts are workflow gates, not a browser
+quality percentage.
 
 ## Completion gates
 

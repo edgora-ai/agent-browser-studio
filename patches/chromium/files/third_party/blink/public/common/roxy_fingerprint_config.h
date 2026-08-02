@@ -29,6 +29,8 @@ class RoxyFingerprintConfig {
   struct Screen {
     int width = 0;
     int height = 0;
+    int avail_left = 0;
+    int avail_top = 0;
     int avail_width = 0;
     int avail_height = 0;
     int color_depth = 0;
@@ -86,6 +88,11 @@ class RoxyFingerprintConfig {
   const std::string& webgl_vendor() const { return webgl_vendor_; }
   const std::string& webgl_renderer() const { return webgl_renderer_; }
   const std::string& webgpu_vendor() const { return webgpu_vendor_; }
+  const std::string& webgpu_architecture() const {
+    return webgpu_architecture_;
+  }
+  int webgpu_subgroup_min_size() const { return webgpu_subgroup_min_size_; }
+  int webgpu_subgroup_max_size() const { return webgpu_subgroup_max_size_; }
   bool do_not_track_enabled() const { return do_not_track_enabled_; }
   bool webauthn_enabled() const { return webauthn_enabled_; }
   bool webauthn_conditional_get() const {
@@ -340,6 +347,8 @@ class RoxyFingerprintConfig {
     if (const base::DictValue* screen = root->FindDict("screen")) {
       screen_.width = screen->FindInt("width").value_or(0);
       screen_.height = screen->FindInt("height").value_or(0);
+      screen_.avail_left = screen->FindInt("availLeft").value_or(0);
+      screen_.avail_top = screen->FindInt("availTop").value_or(0);
       screen_.avail_width = screen->FindInt("availWidth").value_or(0);
       screen_.avail_height = screen->FindInt("availHeight").value_or(0);
       screen_.color_depth = screen->FindInt("colorDepth").value_or(0);
@@ -351,8 +360,20 @@ class RoxyFingerprintConfig {
       webgl_vendor_ = ReadString(*webgl, "vendor");
       webgl_renderer_ = ReadString(*webgl, "renderer");
     }
-    if (const base::DictValue* webgpu = root->FindDict("webgpu"))
+    if (const base::DictValue* webgpu = root->FindDict("webgpu")) {
       webgpu_vendor_ = ReadString(*webgpu, "vendor");
+      webgpu_architecture_ = ReadString(*webgpu, "architecture");
+      webgpu_subgroup_min_size_ =
+          webgpu->FindInt("subgroupMinSize").value_or(0);
+      webgpu_subgroup_max_size_ =
+          webgpu->FindInt("subgroupMaxSize").value_or(0);
+      if (webgpu_subgroup_min_size_ < 0 || webgpu_subgroup_min_size_ > 128)
+        webgpu_subgroup_min_size_ = 0;
+      if (webgpu_subgroup_max_size_ < webgpu_subgroup_min_size_ ||
+          webgpu_subgroup_max_size_ > 128) {
+        webgpu_subgroup_max_size_ = 0;
+      }
+    }
     if (const std::string* do_not_track = root->FindString("doNotTrack"))
       do_not_track_enabled_ = *do_not_track == "1";
     if (const base::DictValue* webauthn = root->FindDict("webauthn")) {
@@ -515,6 +536,9 @@ class RoxyFingerprintConfig {
   std::string webgl_vendor_;
   std::string webgl_renderer_;
   std::string webgpu_vendor_;
+  std::string webgpu_architecture_;
+  int webgpu_subgroup_min_size_ = 0;
+  int webgpu_subgroup_max_size_ = 0;
   bool do_not_track_enabled_ = false;
   bool webauthn_enabled_ = false;
   bool webauthn_conditional_get_ = false;

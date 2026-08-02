@@ -639,6 +639,9 @@ describe("Integration — Hardware fingerprint controls", () => {
       expect(manager, `missing launch flag ${flag}`).toContain(flag);
     }
     expect(manager).toContain("addHardwareFingerprintArgs(requestedArgs, meta)");
+    expect(manager).toContain("--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}");
+    expect(manager).toContain("--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}");
+    expect(manager).toContain("--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}");
   });
 
   it("delegates binary, GeoIP, proxy, and launch handling to the community wrapper", () => {
@@ -672,6 +675,11 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(verifier).toContain("audioTrackDeviceId");
     expect(verifier).toContain("captureCodecs");
     expect(verifier).toContain("WebCodecs AAC encoder");
+    expect(verifier).toContain("captureCdpOverrideIdentity");
+    expect(verifier).toContain("crossOriginFrame");
+    expect(verifier).toContain("captureVersionIdentity");
+    expect(verifier).toContain("chrome://version/");
+    expect(verifier).toContain("captureHeadedGeometry");
     const installer = fs.readFileSync(path.join(ROOT, "src/tools/install-native-chromium.ts"), "utf-8");
     expect(installer).toContain("bundleBuildHash");
     expect(installer).toContain("Chromium Framework");
@@ -719,6 +727,10 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0026-native-accept-language.patch",
       "0027-native-storage-buckets-quota.patch",
       "0028-native-webauthn-capabilities.patch",
+      "0029-native-cdp-identity-coherence.patch",
+      "0030-native-window-geometry-coherence.patch",
+      "0031-native-webgpu-adapter-coherence.patch",
+      "0032-native-cdp-input-routing.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
@@ -729,6 +741,9 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(canvasPatch).toContain("0xfffffffeU");
     expect(canvasPatch).toContain("0xfffeU");
     expect(canvasPatch).not.toMatch(/^\+.*nextafter/m);
+    const inputPatch = fs.readFileSync(path.join(patchRoot, "patches", "0032-native-cdp-input-routing.patch"), "utf-8");
+    expect(inputPatch).toContain("GetRenderWidgetHostViewInputAtPoint");
+    expect(inputPatch).toContain("RoxyFingerprintConfig::Get().enabled()");
     const buildArgs = fs.readFileSync(path.join(patchRoot, "args.gn"), "utf-8");
     expect(buildArgs).toContain("proprietary_codecs = true");
     expect(buildArgs).toContain('ffmpeg_branding = "Chrome"');
@@ -757,6 +772,26 @@ describe("Integration — Hardware fingerprint controls", () => {
     }
     expect(renderer).toContain("readHardwareFields");
     expect(renderer).toContain("writeHardwareFields");
+  });
+
+  it("offers coherent Greek locale and timezone pairs in create/edit dialogs", () => {
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
+    for (const value of ["el-GR", "el-CY", "Europe/Athens", "Asia/Nicosia"]) {
+      expect(html.match(new RegExp(`value="${value}"`, "g"))?.length).toBe(2);
+    }
+  });
+});
+
+describe("Integration — Seeded native interaction policy", () => {
+  it("routes pointer, wheel, keyboard and typing through bounded native CDP input", () => {
+    const agent = fs.readFileSync(path.join(ROOT, "src/main/services/local-agent.ts"), "utf-8");
+    expect(agent).toContain("buildHumanizedPointerPath");
+    expect(agent).toContain("jitterInteractionTarget");
+    expect(agent).toContain("buildHumanizedScrollDeltas");
+    expect(agent).toContain('type: "mouseWheel"');
+    expect(agent).toContain('commands: ["SelectAll"]');
+    expect(agent).toContain("if (!nativeSent)");
+    expect(agent).not.toContain("window.scrollBy({top:");
   });
 });
 

@@ -47,6 +47,8 @@ Common actions:
 
 - **Launch / Stop**: start or stop a CloakBrowser profile.
 - **Edit**: update profile metadata and fingerprint fields.
+- **Chromium build**: use the newest installed independent build or pin an exact retained version for rollback.
+- **Pass-through**: disable managed UA/platform/locale/timezone/WebRTC/GPU/screen/noise consumers for a native-host comparison.
 - **Clone / Batch create**: create multiple profiles with deterministic seeds.
 - **Consistency check**: compare profile timezone, locale, WebRTC, and proxy detection data.
 - **Tags**: organize profiles for batch operations and exports.

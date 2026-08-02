@@ -22,12 +22,21 @@ import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-det
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
 import { buildRoxyFingerprintArg, buildRoxyFingerprintConfig } from "./roxy-fingerprint-config.js";
-import type { GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
+import {
+  findManagedChromiumBinary,
+  getManagedChromiumRoot,
+  listManagedChromiumBinaries,
+  normalizeManagedChromiumVersion,
+} from "./native-chromium-manager.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
 
 export interface CloakProfile {
   dirId: string;
   name: string;
   version: string;       // Chromium version
+  browserVersion: string | null; // exact installed version pin, or auto
+  fingerprintMode: FingerprintMode;
+  allowThirdPartyCookies: boolean;
   fingerprintSeed: number; // integer seed for deterministic fingerprint
   platform: "windows" | "macos";
   timezone: string | null;  // IANA timezone (e.g. 'Asia/Shanghai', 'America/New_York')
@@ -66,48 +75,31 @@ const runningProcesses = new Map<string, { pid: number; process: any; port: numb
 // ═══════════════════════════════════════════════════════════════
 
 export function getManagedRoxyChromiumRoot(): string {
-  const override = process.env.ROXY_CHROMIUM_CACHE_DIR;
-  return override ? path.resolve(override) : path.join(os.homedir(), ".roxy-lite-cloak");
+  return getManagedChromiumRoot();
 }
 
-export function findManagedRoxyBinary(): string | null {
-  const root = getManagedRoxyChromiumRoot();
-  if (!fs.existsSync(root)) return null;
-
-  const candidates: Array<{ version: string; binaryPath: string }> = [];
-  try {
-    for (const entry of fs.readdirSync(root)) {
-      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
-      if (!match) continue;
-      const base = path.join(root, entry);
-      const binaryPath = process.platform === "darwin"
-        ? path.join(base, "Chromium.app", "Contents", "MacOS", "Chromium")
-        : process.platform === "win32"
-          ? path.join(base, "chrome.exe")
-          : path.join(base, "chromium");
-      if (fs.existsSync(binaryPath) && fs.statSync(binaryPath).isFile()) {
-        candidates.push({ version: match[1], binaryPath });
-      }
-    }
-  } catch {
-    return null;
-  }
-  candidates.sort((a, b) => versionNewer(a.version, b.version) ? -1 : versionNewer(b.version, a.version) ? 1 : 0);
-  return candidates[0]?.binaryPath || null;
+export function findManagedRoxyBinary(requestedVersion?: string | null): string | null {
+  return findManagedChromiumBinary(requestedVersion)?.binaryPath || null;
 }
 
-export function findCloakBinary(): string | null {
+export function findCloakBinary(requestedVersion?: string | null): string | null {
+  const version = normalizeManagedChromiumVersion(requestedVersion);
   const cfg = getConfig() as any;
-  if (cfg.cloakBin && cfg.cloakBin !== "auto" && fs.existsSync(cfg.cloakBin)) return cfg.cloakBin;
+  if (cfg.cloakBin && cfg.cloakBin !== "auto" && fs.existsSync(cfg.cloakBin)) {
+    return !version || detectBinaryVersion(cfg.cloakBin) === version ? cfg.cloakBin : null;
+  }
 
   const envBin = process.env.CLOAKBROWSER_BINARY_PATH;
-  if (envBin && fs.existsSync(envBin)) return envBin;
+  if (envBin && fs.existsSync(envBin)) {
+    return !version || detectBinaryVersion(envBin) === version ? envBin : null;
+  }
 
-  const managedBin = findManagedRoxyBinary();
+  const managedBin = findManagedRoxyBinary(version);
   if (managedBin) return managedBin;
 
   const info = binaryInfo();
-  return info.installed && fs.existsSync(info.binaryPath) ? info.binaryPath : null;
+  if (!info.installed || !fs.existsSync(info.binaryPath)) return null;
+  return !version || detectBinaryVersion(info.binaryPath) === version ? info.binaryPath : null;
 }
 
 export function getCloakVersion(): string | null {
@@ -146,12 +138,17 @@ export interface CloakBinaryStatus {
   platform: string | null;
   cacheDir: string | null;
   downloadUrl: string | null;
+  installedVersions: Array<{ version: string; path: string }>;
 }
 
 export function getCloakBinaryStatus(): CloakBinaryStatus {
   const info = binaryInfo();
   const pathValue = findCloakBinary();
   const managedPath = findManagedRoxyBinary();
+  const installedVersions = listManagedChromiumBinaries().map((candidate) => ({
+    version: candidate.version,
+    path: candidate.binaryPath,
+  }));
   const isManaged = Boolean(pathValue && managedPath && path.resolve(pathValue) === path.resolve(managedPath));
   const detectedVersion = pathValue ? detectBinaryVersion(pathValue) : null;
   return {
@@ -165,6 +162,7 @@ export function getCloakBinaryStatus(): CloakBinaryStatus {
       ? path.join(getManagedRoxyChromiumRoot(), path.relative(getManagedRoxyChromiumRoot(), pathValue).split(path.sep)[0])
       : info.cacheDir || null,
     downloadUrl: isManaged ? null : info.downloadUrl || null,
+    installedVersions,
   };
 }
 
@@ -244,6 +242,9 @@ function versionNewer(a: string, b: string): boolean {
 /** Create a CloakBrowser profile using --fingerprint=<seed>. */
 export function createCloakProfile(opts: {
   name: string;
+  fingerprintMode?: FingerprintMode;
+  browserVersion?: string | null;
+  allowThirdPartyCookies?: boolean;
   fingerprintSeed?: number;
   platform?: "windows" | "macos";
   timezone?: string;
@@ -281,6 +282,9 @@ export function createCloakProfile(opts: {
   }
   cfg.cloakProfiles[dirId] = {
     name: opts.name,
+    fingerprintMode: normalizeFingerprintMode(opts.fingerprintMode),
+    browserVersion: normalizeManagedChromiumVersion(opts.browserVersion),
+    allowThirdPartyCookies: normalizeBoolean(opts.allowThirdPartyCookies, "third-party cookie compatibility"),
     fingerprintSeed: normalizeFingerprintSeed(opts.fingerprintSeed || Math.floor(Math.random() * 90000) + 10000),
     platform: normalizePlatform(opts.platform || (process.platform === "darwin" ? "macos" : "windows")),
     timezone: normalizeOptionalTimezone(opts.timezone),
@@ -336,7 +340,10 @@ export function listCloakProfiles(): CloakProfile[] {
     result.push({
       dirId,
       name: m.name || dirId.slice(0, 8),
-      version: getCloakVersion() || "?",
+      version: normalizeManagedChromiumVersion(m.browserVersion) || getCloakVersion() || "?",
+      browserVersion: normalizeManagedChromiumVersion(m.browserVersion),
+      fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
+      allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
       fingerprintSeed: m.fingerprintSeed || 12345,
       platform: m.platform || "windows",
       timezone: m.timezone || null,
@@ -408,12 +415,23 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
 
   const configuredBin = cfg.cloakBin && cfg.cloakBin !== "auto" ? cfg.cloakBin : null;
   const envBin = process.env.CLOAKBROWSER_BINARY_PATH || null;
-  const managedBin = findManagedRoxyBinary();
+  const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
+  const passThrough = fingerprintMode === "off";
+  const requestedVersion = normalizeManagedChromiumVersion(meta.browserVersion);
+  const managedBin = findManagedRoxyBinary(requestedVersion);
   if (configuredBin && !fs.existsSync(configuredBin)) {
     throw new Error(`Configured CloakBrowser binary does not exist: ${configuredBin}`);
   }
   if (envBin && !fs.existsSync(envBin)) {
     throw new Error(`CLOAKBROWSER_BINARY_PATH does not exist: ${envBin}`);
+  }
+  const overrideBin = configuredBin || envBin;
+  if (requestedVersion && overrideBin && detectBinaryVersion(overrideBin) !== requestedVersion) {
+    throw new Error(`Profile requires Chromium ${requestedVersion}, but the configured binary is ${detectBinaryVersion(overrideBin) || "unknown"}`);
+  }
+  if (requestedVersion && !overrideBin && !managedBin) {
+    const available = listManagedChromiumBinaries().map((candidate) => candidate.version).join(", ") || "none";
+    throw new Error(`Chromium ${requestedVersion} is not installed; available managed versions: ${available}`);
   }
 
   const profileDir = path.join(getProfilesDir(), dirId);
@@ -428,13 +446,13 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
   }
   const activeProxy = resolvedProxy.config;
-  const requestedWebRtcMode = normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  const requestedWebRtcMode = passThrough ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
   const shouldResolveWebRtc = requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered";
-  console.log(`[cloak] Preparing profile ${dirId.slice(0, 8)} with wrapper-managed launch options`);
+  console.log(`[cloak] Preparing profile ${dirId.slice(0, 8)} mode=${fingerprintMode} browser=${requestedVersion || "auto"}`);
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy). Warns
   // by default; blocks only when config.blockOnConsistencyConflict is set.
-  const consistency = checkProfileConsistency({
+  const consistency = passThrough ? { ok: true, warnings: [], blockers: [] } : checkProfileConsistency({
     timezone: meta.timezone, locale: meta.locale,
     webrtcIp: shouldResolveWebRtc ? meta.webrtcIp : null,
     platform: meta.platform,
@@ -454,12 +472,13 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     seed,
     platform,
     cdpPort,
+    fingerprintMode,
   });
-  let effectiveTimezone = normalizeOptionalTimezone(meta.timezone);
-  let effectiveLocale = normalizeOptionalLocale(meta.locale);
+  let effectiveTimezone = passThrough ? null : normalizeOptionalTimezone(meta.timezone);
+  let effectiveLocale = passThrough ? null : normalizeOptionalLocale(meta.locale);
   let webrtcIp = shouldResolveWebRtc ? normalizeOptionalIp(meta.webrtcIp) : null;
-  const wrapperGeoip = shouldUseWrapperGeoip();
-  if (!wrapperGeoip) {
+  const wrapperGeoip = !passThrough && shouldUseWrapperGeoip();
+  if (!passThrough && !wrapperGeoip) {
     if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
       const detected = await resolveGeoFromProxy(activeProxy);
       if (!effectiveTimezone) effectiveTimezone = detected.timezone;
@@ -472,11 +491,14 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     if (!effectiveLocale) effectiveLocale = normalizeOptionalLocale(Intl.DateTimeFormat().resolvedOptions().locale);
   }
   console.log(`[cloak] Identity resolved for ${dirId.slice(0, 8)}: geoip=${wrapperGeoip ? "wrapper" : "bounded"} locale=${effectiveLocale || "auto"} timezone=${effectiveTimezone || "auto"}`);
-  if (webrtcIp) requestedArgs.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
+  if (!passThrough && webrtcIp) requestedArgs.push(`--fingerprint-webrtc-ip=${webrtcIp}`);
   if (activeProxy?.bypassList?.length) requestedArgs.push(`--proxy-bypass-list=${activeProxy.bypassList.join(";")}`);
-  addHardwareFingerprintArgs(requestedArgs, meta);
+  if (!passThrough) addHardwareFingerprintArgs(requestedArgs, meta);
 
   const preferredBin = configuredBin || envBin || managedBin;
+  if (passThrough && !preferredBin) {
+    throw new Error("Pass-through mode requires an installed independent Chromium build");
+  }
   // A self-built/configured Chromium is launched from our own deterministic
   // plan. The license-free community wrapper remains only as a compatibility
   // fallback when no independent binary has been installed.
@@ -484,10 +506,10 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     ? {
         executablePath: preferredBin,
         args: dedupeChromeArgs([
-          ...getDefaultStealthArgs(),
+          ...(passThrough ? [] : getDefaultStealthArgs()),
           ...requestedArgs,
-          ...(effectiveTimezone ? [`--fingerprint-timezone=${effectiveTimezone}`] : []),
-          ...(effectiveLocale ? [`--lang=${effectiveLocale}`, `--fingerprint-locale=${effectiveLocale}`] : []),
+          ...(!passThrough && effectiveTimezone ? [`--fingerprint-timezone=${effectiveTimezone}`] : []),
+          ...(!passThrough && effectiveLocale ? [`--lang=${effectiveLocale}`, `--fingerprint-locale=${effectiveLocale}`] : []),
         ]),
         env: process.env,
       }
@@ -497,13 +519,18 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
         timezone: effectiveTimezone || undefined,
         locale: effectiveLocale || undefined,
         geoip: wrapperGeoip,
+        stealthArgs: !passThrough,
         proxy: activeProxy ? buildAuthenticatedProxyUrl(activeProxy) : undefined,
       });
   console.log(`[cloak] ${preferredBin ? "Native" : "Wrapper"} launch plan ready for ${dirId.slice(0, 8)}`);
   const bin = preferredBin || launchPlan.executablePath;
   if (!bin || !fs.existsSync(bin)) throw new Error("CloakBrowser binary is unavailable after install check");
   const nativeChromiumVersion = detectBinaryVersion(bin) || getCloakVersion();
+  if (requestedVersion && nativeChromiumVersion !== requestedVersion) {
+    throw new Error(`Profile requires Chromium ${requestedVersion}, resolved ${nativeChromiumVersion || "unknown"}`);
+  }
   let args = [...(launchPlan.args || [])];
+  if (passThrough) args = stripManagedFingerprintArgs(args);
 
   // Prefer the wrapper's resolved exit identity, then perform a bounded proxy
   // lookup for our native altered mode. Explicit altered mode must never
@@ -523,18 +550,28 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
 
   // Our Chromium fork consumes one versioned, base64url JSON identity. Add it
   // after wrapper resolution so native WebRTC uses the final proxy exit IP.
-  const nativeFingerprintMeta = {
-    ...meta,
-    fingerprintSeed: seed,
-    platform,
-    timezone: effectiveTimezone,
-    locale: effectiveLocale,
-    webrtcMode: effectiveWebRtcMode,
-    webrtcIp,
-  };
-  const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, nativeChromiumVersion);
-  args.push(buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion));
-  args.push(`--user-agent=${nativeFingerprint.userAgent}`);
+  if (!passThrough) {
+    const nativeFingerprintMeta = {
+      ...meta,
+      fingerprintSeed: seed,
+      platform,
+      timezone: effectiveTimezone,
+      locale: effectiveLocale,
+      webrtcMode: effectiveWebRtcMode,
+      webrtcIp,
+    };
+    const nativeFingerprint = buildRoxyFingerprintConfig(nativeFingerprintMeta, nativeChromiumVersion);
+    args.push(buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion));
+    args.push(`--user-agent=${nativeFingerprint.userAgent}`);
+    if (preferredBin) {
+      args = dedupeChromeArgs([
+        ...args,
+        `--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}`,
+        `--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}`,
+        `--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}`,
+      ]);
+    }
+  }
 
   // CloakLite launches Chromium directly, so express proxy routing as a native
   // switch and use the existing extension only for proxy authentication.
@@ -547,12 +584,18 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
 
   // The wrapper fills locale from the egress IP. If resolution is unavailable,
   // use a deterministic fallback instead of leaking the host UI language.
-  let launchLocale = getLaunchArgValue(args, "--fingerprint-locale") || getLaunchArgValue(args, "--lang");
-  if (!launchLocale) {
-    launchLocale = "en-US";
-    args.push(`--lang=${launchLocale}`, `--fingerprint-locale=${launchLocale}`);
+  if (!passThrough) {
+    let launchLocale = getLaunchArgValue(args, "--fingerprint-locale") || getLaunchArgValue(args, "--lang");
+    if (!launchLocale) {
+      launchLocale = "en-US";
+      args.push(`--lang=${launchLocale}`, `--fingerprint-locale=${launchLocale}`);
+    }
+    patchCloakLocale(profileDir, launchLocale);
   }
-  patchCloakLocale(profileDir, launchLocale);
+  patchThirdPartyCookieCompatibility(
+    profileDir,
+    !passThrough && normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility"),
+  );
 
   const logFile = getLaunchLogPath(dirId);
   const logFd = fs.openSync(logFile, "a");
@@ -599,7 +642,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   });
 
   emitEvent("profile:launched", { dirId, pid, cdpPort });
-  recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort}` });
+  recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
   return { pid, cdpPort };
   } finally {
     if (releaseLaunchLock) releaseLaunchLock();
@@ -698,11 +741,10 @@ function buildCloakLaunchArgs(opts: {
   seed: number;
   platform: string;
   cdpPort: number;
+  fingerprintMode: FingerprintMode;
 }): string[] {
   const args = [
     `--user-data-dir=${opts.profileDir}`,
-    `--fingerprint=${opts.seed}`,
-    `--fingerprint-platform=${opts.platform}`,
     `--remote-debugging-port=${opts.cdpPort}`,
     "--remote-debugging-address=127.0.0.1",
     "--password-store=basic",
@@ -710,11 +752,28 @@ function buildCloakLaunchArgs(opts: {
     "--no-default-browser-check",
     "--disable-sync",
   ];
+  if (opts.fingerprintMode === "managed") {
+    args.push(`--fingerprint=${opts.seed}`, `--fingerprint-platform=${opts.platform}`);
+  }
   // Direct Chromium launches on macOS can block page navigation while the
   // real Keychain backend waits for OS authorization. Automation profiles do
   // not need that backend; use Chromium's deterministic in-memory keychain.
   if (process.platform === "darwin") args.push("--use-mock-keychain");
   return dedupeChromeArgs(args);
+}
+
+const MANAGED_FINGERPRINT_ARG_PREFIXES = [
+  "--fingerprint",
+  "--roxy-fingerprint-config=",
+  "--user-agent=",
+  "--lang=",
+  "--window-size=",
+  "--window-position=",
+  "--force-device-scale-factor=",
+];
+
+export function stripManagedFingerprintArgs(args: string[]): string[] {
+  return args.filter((arg) => !MANAGED_FINGERPRINT_ARG_PREFIXES.some((prefix) => arg.startsWith(prefix)));
 }
 
 function maskSensitiveLaunchArgs(args: string[]): string[] {
@@ -828,6 +887,18 @@ function normalizeFingerprintSeed(value: unknown): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 1 || n > 999999) throw new Error(`Invalid fingerprint seed: ${JSON.stringify(value)}`);
   return n;
+}
+
+function normalizeFingerprintMode(value: unknown): FingerprintMode {
+  if (value === undefined || value === null || value === "" || value === "managed") return "managed";
+  if (value === "off") return "off";
+  throw new Error(`Invalid fingerprint mode: ${JSON.stringify(value)}`);
+}
+
+function normalizeBoolean(value: unknown, label: string, fallback = false): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`Invalid ${label}: ${JSON.stringify(value)}`);
+  return value;
 }
 
 function normalizePlatform(value: unknown): "windows" | "macos" {
@@ -961,21 +1032,33 @@ function dedupeChromeArgs(args: string[]): string[] {
 // Internal: ps-based process discovery (survives app restarts)
 // ═══════════════════════════════════════════════════════════════
 
+export function parseCloakProcessLine(
+  line: string,
+  expectedProfileDir: string,
+): { pid: number; cdpPort: number } | null {
+  const pid = parseInt(line.trim().split(/\s+/, 1)[0], 10);
+  if (!Number.isInteger(pid) || pid < 1) return null;
+  const profileMatch = line.match(/--user-data-dir=("[^"]+"|'[^']+'|\S+)/);
+  if (!profileMatch) return null;
+  const profileArg = profileMatch[1].replace(/^['\"]|['\"]$/g, "");
+  if (path.resolve(profileArg) !== path.resolve(expectedProfileDir)) return null;
+  const portMatch = line.match(/--remote-debugging-port=(\d+)/);
+  // Renderer/helper processes can briefly outlive the browser process and
+  // retain the profile path, but they do not own its CDP endpoint.
+  if (!portMatch) return null;
+  const cdpPort = parseInt(portMatch[1], 10);
+  if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65535) return null;
+  return { pid, cdpPort };
+}
+
 function findCloakByProfile(dirId: string): { pid: number; cdpPort: number } | null {
   validateDirId(dirId);
   const expectedProfileDir = path.resolve(getProfilesDir(), dirId);
   try {
     const output = execFileSync("ps", ["-eo", "pid,args"], { encoding: "utf-8", timeout: 2000 });
     for (const line of output.split("\n")) {
-      const pid = parseInt(line.trim().split(/\s+/, 1)[0], 10);
-      if (isNaN(pid)) continue;
-      const profileMatch = line.match(/--user-data-dir=("[^"]+"|'[^']+'|\S+)/);
-      if (!profileMatch) continue;
-      const profileArg = profileMatch[1].replace(/^['"]|['"]$/g, "");
-      if (path.resolve(profileArg) !== expectedProfileDir) continue;
-      const portMatch = line.match(/--remote-debugging-port=(\d+)/);
-      const cdpPort = portMatch ? parseInt(portMatch[1], 10) : 0;
-      return { pid, cdpPort: Number.isFinite(cdpPort) ? cdpPort : 0 };
+      const processInfo = parseCloakProcessLine(line, expectedProfileDir);
+      if (processInfo) return processInfo;
     }
     return null;
   } catch {
@@ -1038,6 +1121,83 @@ function patchCloakLocale(profileDir: string, locale: string): void {
     console.log(`[cloak] Patched locale in Preferences: ${locale}`);
   } catch (e: any) {
     console.error(`[cloak] Failed to patch locale in Preferences: ${e.message}`);
+  }
+}
+
+interface PreferenceBackupValue {
+  present: boolean;
+  value?: unknown;
+}
+
+interface ThirdPartyCookiePreferenceBackup {
+  schemaVersion: 1;
+  cookieControlsMode: PreferenceBackupValue;
+  trackingProtection3pcdEnabled: PreferenceBackupValue;
+  blockAll3pcToggleEnabled: PreferenceBackupValue;
+}
+
+function backupValue(object: Record<string, unknown>, key: string): PreferenceBackupValue {
+  return Object.hasOwn(object, key) ? { present: true, value: object[key] } : { present: false };
+}
+
+function restoreValue(object: Record<string, unknown>, key: string, backup: PreferenceBackupValue): void {
+  if (backup.present) object[key] = backup.value;
+  else delete object[key];
+}
+
+function writeJsonAtomic(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tempPath, JSON.stringify(value), { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+}
+
+export function patchThirdPartyCookieCompatibility(profileDir: string, enabled: boolean): void {
+  const prefsPath = path.join(profileDir, "Default", "Preferences");
+  const backupPath = path.join(profileDir, ".roxy-third-party-cookie-backup.json");
+  try {
+    let prefs: Record<string, any> = {};
+    if (fs.existsSync(prefsPath)) {
+      prefs = JSON.parse(fs.readFileSync(prefsPath, "utf-8"));
+    }
+    if (!prefs.profile || typeof prefs.profile !== "object") prefs.profile = {};
+    if (!prefs.tracking_protection || typeof prefs.tracking_protection !== "object") prefs.tracking_protection = {};
+
+    if (enabled) {
+      if (!fs.existsSync(backupPath)) {
+        const backup: ThirdPartyCookiePreferenceBackup = {
+          schemaVersion: 1,
+          cookieControlsMode: backupValue(prefs.profile, "cookie_controls_mode"),
+          trackingProtection3pcdEnabled: backupValue(prefs.tracking_protection, "tracking_protection_3pcd_enabled"),
+          blockAll3pcToggleEnabled: backupValue(prefs.tracking_protection, "block_all_3pc_toggle_enabled"),
+        };
+        writeJsonAtomic(backupPath, backup);
+      }
+      // These are Chromium's stock user preferences. kOff is 0; both tracking
+      // protection toggles must also be off for a true opt-in compatibility
+      // mode in current Chrome rather than a feature-flag approximation.
+      prefs.profile.cookie_controls_mode = 0;
+      prefs.tracking_protection.tracking_protection_3pcd_enabled = false;
+      prefs.tracking_protection.block_all_3pc_toggle_enabled = false;
+      writeJsonAtomic(prefsPath, prefs);
+      return;
+    }
+
+    if (!fs.existsSync(backupPath)) return;
+    const backup = JSON.parse(fs.readFileSync(backupPath, "utf-8")) as ThirdPartyCookiePreferenceBackup;
+    if (backup.schemaVersion !== 1 || !backup.cookieControlsMode ||
+        !backup.trackingProtection3pcdEnabled || !backup.blockAll3pcToggleEnabled) {
+      throw new Error("invalid third-party cookie preference backup");
+    }
+    restoreValue(prefs.profile, "cookie_controls_mode", backup.cookieControlsMode);
+    restoreValue(prefs.tracking_protection, "tracking_protection_3pcd_enabled", backup.trackingProtection3pcdEnabled);
+    restoreValue(prefs.tracking_protection, "block_all_3pc_toggle_enabled", backup.blockAll3pcToggleEnabled);
+    if (Object.keys(prefs.profile).length === 0) delete prefs.profile;
+    if (Object.keys(prefs.tracking_protection).length === 0) delete prefs.tracking_protection;
+    writeJsonAtomic(prefsPath, prefs);
+    fs.unlinkSync(backupPath);
+  } catch (error) {
+    throw new Error(`Failed to apply third-party cookie compatibility: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

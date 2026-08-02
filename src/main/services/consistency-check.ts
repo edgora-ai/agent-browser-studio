@@ -35,8 +35,8 @@ export interface ConsistencyResult {
 // A pragmatic subset of IANA tz → ISO-3166 alpha-2 country. Unknown → null.
 const TZ_TO_COUNTRY: Record<string, string> = {
   "america/new_york": "US", "america/chicago": "US", "america/denver": "US", "america/los_angeles": "US", "america/toronto": "CA", "america/vancouver": "CA", "america/sao_paulo": "BR", "america/mexico_city": "MX",
-  "europe/london": "GB", "europe/dublin": "IE", "europe/paris": "FR", "europe/berlin": "DE", "europe/madrid": "ES", "europe/rome": "IT", "europe/amsterdam": "NL", "europe/brussels": "BE", "europe/warsaw": "PL", "europe/stockholm": "SE", "europe/moscow": "RU", "europe/istanbul": "TR",
-  "asia/tokyo": "JP", "asia/seoul": "KR", "asia/shanghai": "CN", "asia/hong_kong": "HK", "asia/taipei": "TW", "asia/singapore": "SG", "asia/kuala_lumpur": "MY", "asia/bangkok": "TH", "asia/jakarta": "ID", "asia/manila": "PH", "asia/kolkata": "IN", "asia/dubai": "AE", "asia/riyadh": "SA",
+  "europe/london": "GB", "europe/dublin": "IE", "europe/paris": "FR", "europe/berlin": "DE", "europe/madrid": "ES", "europe/rome": "IT", "europe/amsterdam": "NL", "europe/brussels": "BE", "europe/warsaw": "PL", "europe/stockholm": "SE", "europe/athens": "GR", "europe/moscow": "RU", "europe/istanbul": "TR",
+  "asia/tokyo": "JP", "asia/seoul": "KR", "asia/shanghai": "CN", "asia/hong_kong": "HK", "asia/taipei": "TW", "asia/singapore": "SG", "asia/kuala_lumpur": "MY", "asia/bangkok": "TH", "asia/jakarta": "ID", "asia/manila": "PH", "asia/kolkata": "IN", "asia/dubai": "AE", "asia/riyadh": "SA", "asia/nicosia": "CY",
   "australia/sydney": "AU", "australia/melbourne": "AU", "pacific/auckland": "NZ",
 };
 

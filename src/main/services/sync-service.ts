@@ -1110,6 +1110,9 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
     validateDirId(dirId);
     profiles[dirId] = {
       name: String(profile.name || dirId.slice(0, 8)),
+      fingerprintMode: profile.fingerprintMode === "off" ? "off" : "managed",
+      browserVersion: typeof profile.browserVersion === "string" ? profile.browserVersion : null,
+      allowThirdPartyCookies: profile.allowThirdPartyCookies === true,
       fingerprintSeed: Number.isInteger(profile.fingerprintSeed) ? profile.fingerprintSeed : 12345,
       platform: profile.platform === "macos" ? "macos" : "windows",
       timezone: profile.timezone || null,

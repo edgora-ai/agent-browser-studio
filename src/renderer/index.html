@@ -447,6 +447,19 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div class="form-row" id="new-profile-proxy-row"><label>Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
  <!-- CloakBrowser-specific options -->
  <div id="new-profile-cloak-opts" style="display:block;">
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+ <div class="form-row"><label>Fingerprint Mode</label>
+ <select id="new-cloak-fingerprint-mode">
+ <option value="managed">Managed identity</option>
+ <option value="off">Pass-through (real machine)</option>
+ </select>
+ </div>
+ <div class="form-row"><label>Chromium Build</label>
+ <select id="new-cloak-browser-version"><option value="">Auto (newest installed)</option></select>
+ </div>
+ </div>
+ <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.</p>
+ <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-cloak-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded auth/payment/challenge compatibility</label>
  <div class="form-row"><label>Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="new-cloak-seed" type="number" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
@@ -479,6 +492,8 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="Europe/London">Europe/London (UTC+0)</option>
  <option value="Europe/Paris">Europe/Paris (UTC+1)</option>
  <option value="Europe/Berlin">Europe/Berlin (UTC+1)</option>
+ <option value="Europe/Athens">Europe/Athens (UTC+2)</option>
+ <option value="Asia/Nicosia">Asia/Nicosia (UTC+2)</option>
  <option value="Europe/Moscow">Europe/Moscow (UTC+3)</option>
  <option value="Pacific/Auckland">Pacific/Auckland (UTC+12)</option>
  <option value="Australia/Sydney">Australia/Sydney (UTC+10)</option>
@@ -500,6 +515,8 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="es-ES">es-ES (Spanish)</option>
  <option value="pt-BR">pt-BR (Portuguese Brazil)</option>
  <option value="ru-RU">ru-RU (Russian)</option>
+ <option value="el-GR">el-GR (Greek Greece)</option>
+ <option value="el-CY">el-CY (Greek Cyprus)</option>
  <option value="ar-SA">ar-SA (Arabic)</option>
  <option value="th-TH">th-TH (Thai)</option>
  <option value="vi-VN">vi-VN (Vietnamese)</option>
@@ -832,6 +849,19 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  Same seed + platform + timezone + locale = 100% identical fingerprint.
  </p>
  <input type="hidden" id="cloak-meta-dir-id">
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+ <div class="form-row"><label>Fingerprint Mode</label>
+ <select id="cloak-meta-fingerprint-mode">
+ <option value="managed">Managed identity</option>
+ <option value="off">Pass-through (real machine)</option>
+ </select>
+ </div>
+ <div class="form-row"><label>Chromium Build</label>
+ <select id="cloak-meta-browser-version"><option value="">Auto (newest installed)</option></select>
+ </div>
+ </div>
+ <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.</p>
+ <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="cloak-meta-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded compatibility</label>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
  <div class="form-row"><label>Profile Name *</label><input id="cloak-meta-name" placeholder="My Profile" required></div>
@@ -871,6 +901,8 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="Europe/London">Europe/London (UTC+0)</option>
  <option value="Europe/Paris">Europe/Paris (UTC+1)</option>
  <option value="Europe/Berlin">Europe/Berlin (UTC+1)</option>
+ <option value="Europe/Athens">Europe/Athens (UTC+2)</option>
+ <option value="Asia/Nicosia">Asia/Nicosia (UTC+2)</option>
  <option value="Europe/Moscow">Europe/Moscow (UTC+3)</option>
  <option value="Pacific/Auckland">Pacific/Auckland (UTC+12)</option>
  <option value="Australia/Sydney">Australia/Sydney (UTC+10)</option>
@@ -890,6 +922,8 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="es-ES">es-ES (Spanish)</option>
  <option value="pt-BR">pt-BR (Portuguese Brazil)</option>
  <option value="ru-RU">ru-RU (Russian)</option>
+ <option value="el-GR">el-GR (Greek Greece)</option>
+ <option value="el-CY">el-CY (Greek Cyprus)</option>
  <option value="ar-SA">ar-SA (Arabic)</option>
  <option value="th-TH">th-TH (Thai)</option>
  <option value="vi-VN">vi-VN (Vietnamese)</option>

@@ -55,12 +55,21 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
     await h.page.waitForSelector("#dlg-cloak-seed[open]", { timeout: 5000 });
     await h.page.locator("#cloak-meta-name").fill("J32-renamed");
     await h.page.locator("#cloak-meta-seed").fill("55555");
+    await h.page.locator("#cloak-meta-fingerprint-mode").selectOption("off");
+    await h.page.locator("#cloak-meta-allow-third-party-cookies").check();
+    await h.page.waitForFunction(() => (document.getElementById("cloak-meta-browser-version") as HTMLSelectElement).options.length > 1);
+    const pinnedVersion = await h.page.locator("#cloak-meta-browser-version option").nth(1).getAttribute("value");
+    expect(pinnedVersion).toBeTruthy();
+    await h.page.locator("#cloak-meta-browser-version").selectOption(pinnedVersion!);
     await h.page.evaluate(() => (window as any).cloak.saveCloakMeta());
     await h.page.waitForTimeout(500);
     const profiles = await h.page.evaluate(() => (window as any).cloak.api.cloak.list());
     const p = profiles.find((x: any) => x.dirId === dirId);
     expect(p.name).toBe("J32-renamed");
     expect(p.fingerprintSeed).toBe(55555);
+    expect(p.fingerprintMode).toBe("off");
+    expect(p.browserVersion).toBe(pinnedVersion);
+    expect(p.allowThirdPartyCookies).toBe(true);
   }, 20000);
 
   it("deletes the profile via the card Delete button + the confirm dialog", async () => {

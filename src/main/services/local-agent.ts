@@ -11,6 +11,12 @@ import * as https from "node:https";
 import * as dns from "node:dns/promises";
 import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
 import { BUILTIN_SKILLS, getEnabledSkillPrompts } from "./skill-repository.js";
+import {
+  buildHumanizedPointerPath,
+  buildHumanizedScrollDeltas,
+  interactionDelay,
+  jitterInteractionTarget,
+} from "./interaction-policy.js";
 import type { CookieInfo, LlmConfig, PlatformAccount, MgmtConfig, AutomationRule } from "../types.js";
 
 export type { LlmConfig, PlatformAccount } from "../types.js";
@@ -285,8 +291,12 @@ export interface CdpClient {
   ws: any;
   port: number;
   msgId: number;
-  callbacks: Map<number, { resolve: Function; reject: Function }>;
+  callbacks: Map<number, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>;
   pendingMessages: Promise<any>[];
+  interactionSeed: number;
+  interactionCounter: number;
+  pointerX: number | null;
+  pointerY: number | null;
 }
 
 function normalizeCdpWebSocketUrl(value: string, port: number): string {
@@ -299,7 +309,7 @@ function normalizeCdpWebSocketUrl(value: string, port: number): string {
 }
 
 /** Connect to a running CloakBrowser profile via CDP */
-export async function cdpConnect(port: number): Promise<CdpClient> {
+export async function cdpConnect(port: number, interactionSeed = port): Promise<CdpClient> {
   const wsPkg = await getWs();
   if (!wsPkg) throw new Error("ws module not available");
   const Ws = wsPkg;
@@ -310,7 +320,17 @@ export async function cdpConnect(port: number): Promise<CdpClient> {
 
   return new Promise((resolve, reject) => {
     const ws = new Ws(normalizeCdpWebSocketUrl(page.webSocketDebuggerUrl, port));
-    const client: CdpClient = { ws, port, msgId: 0, callbacks: new Map(), pendingMessages: [] };
+    const client: CdpClient = {
+      ws,
+      port,
+      msgId: 0,
+      callbacks: new Map(),
+      pendingMessages: [],
+      interactionSeed: Number.isInteger(interactionSeed) ? interactionSeed : port,
+      interactionCounter: 0,
+      pointerX: null,
+      pointerY: null,
+    };
 
     ws.on("open", () => {
       // Enable required domains. Some custom Chromium builds (CloakBrowser)
@@ -331,6 +351,7 @@ export async function cdpConnect(port: number): Promise<CdpClient> {
       if (msg.id && client.callbacks.has(msg.id)) {
         const cb = client.callbacks.get(msg.id)!;
         client.callbacks.delete(msg.id);
+        clearTimeout(cb.timer);
         if (msg.error) cb.reject(new Error(msg.error.message));
         else cb.resolve(msg.result);
       }
@@ -343,14 +364,20 @@ export async function cdpConnect(port: number): Promise<CdpClient> {
 function cdpSendRaw(client: CdpClient, method: string, params?: any): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = ++client.msgId;
-    client.callbacks.set(id, { resolve, reject });
-    client.ws.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (client.callbacks.has(id)) {
         client.callbacks.delete(id);
         reject(new Error(`CDP ${method} timeout`));
       }
     }, 15000);
+    client.callbacks.set(id, { resolve, reject, timer });
+    try {
+      client.ws.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
+    } catch (error) {
+      clearTimeout(timer);
+      client.callbacks.delete(id);
+      reject(error);
+    }
   });
 }
 
@@ -444,6 +471,33 @@ export async function cdpTextSnapshot(client: CdpClient): Promise<string> {
 
 // ── Click, Type, Scroll ──
 
+function beginInteraction(client: CdpClient): number {
+  client.interactionCounter += 1;
+  return client.interactionCounter;
+}
+
+async function movePointerHumanized(
+  client: CdpClient,
+  target: { x: number; y: number },
+  action: number,
+): Promise<void> {
+  const start = client.pointerX == null || client.pointerY == null
+    ? { x: Math.max(0, target.x - 96), y: Math.max(0, target.y + 54) }
+    : { x: client.pointerX, y: client.pointerY };
+  const path = buildHumanizedPointerPath(client.interactionSeed, action, start, target);
+  for (const point of path) {
+    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+      button: "none",
+    });
+    await sleep(point.delayMs);
+  }
+  client.pointerX = target.x;
+  client.pointerY = target.y;
+}
+
 export async function cdpClick(client: CdpClient, selector: string): Promise<any> {
   const evaluateExpr = `(() => {
     function querySelectorDeep(selector, root = document) {
@@ -517,7 +571,9 @@ export async function cdpClick(client: CdpClient, selector: string): Promise<any
     }
     return {
       x: Math.round(left + rect.width / 2),
-      y: Math.round(top + rect.height / 2)
+      y: Math.round(top + rect.height / 2),
+      width: rect.width,
+      height: rect.height
     };
   })()`;
 
@@ -526,12 +582,18 @@ export async function cdpClick(client: CdpClient, selector: string): Promise<any
 
   await sleep(100); // Wait for scroll stabilization
 
-  const cx = coords.x;
-  const cy = coords.y;
-
-  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mousePressed", x: cx, y: cy, button: "left", clickCount: 1 });
-  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mouseReleased", x: cx, y: cy, button: "left", clickCount: 1 });
-  return { success: true, x: cx, y: cy, selector };
+  const action = beginInteraction(client);
+  const target = jitterInteractionTarget(
+    client.interactionSeed,
+    action,
+    { x: coords.x, y: coords.y },
+    { width: Number(coords.width) || 1, height: Number(coords.height) || 1 },
+  );
+  await movePointerHumanized(client, target, action);
+  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mousePressed", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  await sleep(interactionDelay(client.interactionSeed, action, 90, 42, 118));
+  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1 });
+  return { success: true, x: target.x, y: target.y, selector };
 }
 
 export async function cdpHover(client: CdpClient, selector: string): Promise<any> {
@@ -606,18 +668,24 @@ export async function cdpHover(client: CdpClient, selector: string): Promise<any
     }
     return {
       x: Math.round(left + rect.width / 2),
-      y: Math.round(top + rect.height / 2)
+      y: Math.round(top + rect.height / 2),
+      width: rect.width,
+      height: rect.height
     };
   })()`;
 
   const coords = await cdpEvaluate(client, evaluateExpr);
   if (!coords) throw new Error(`Element not found: ${selector}`);
 
-  const x = coords.x;
-  const y = coords.y;
-
-  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-  return { success: true, x, y, selector };
+  const action = beginInteraction(client);
+  const target = jitterInteractionTarget(
+    client.interactionSeed,
+    action,
+    { x: coords.x, y: coords.y },
+    { width: Number(coords.width) || 1, height: Number(coords.height) || 1 },
+  );
+  await movePointerHumanized(client, target, action);
+  return { success: true, x: target.x, y: target.y, selector };
 }
 
 export async function cdpType(client: CdpClient, selector: string, text: string): Promise<any> {
@@ -627,21 +695,7 @@ export async function cdpType(client: CdpClient, selector: string, text: string)
     var e=qs(${JSON.stringify(selector)});
     if(!e)return'__NOT_FOUND__';
     e.focus(); e.scrollIntoView({block:'center'});
-    // Select-all + clear (Ctrl+A, Delete)
-    if(document.activeElement===e||e===document.body.querySelector(':focus')){
-      try{
-        var sel=window.getSelection(); sel.selectAllChildren(e); sel.collapseToStart();
-      }catch(x){}
-    }
     var tag=e.tagName;
-    if(tag==='INPUT'||tag==='TEXTAREA'){
-      var p=tag==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;
-      var d=Object.getOwnPropertyDescriptor(p,'value');
-      if(d&&d.set)d.set.call(e,'');else e.value='';
-    }else if(e.getAttribute('contenteditable')!==null||e.isContentEditable){
-      e.textContent='';
-    }
-    e.dispatchEvent(new Event('input',{bubbles:true}));
     return tag + (e.getAttribute('contenteditable')!==null?'[contenteditable]':'') + (e.isContentEditable?'[isCE]':'');
   })()`;
 
@@ -650,15 +704,49 @@ export async function cdpType(client: CdpClient, selector: string, text: string)
     throw new Error(`Element not found: ${selector}`);
   }
 
-  // Phase 2: Type text
-  await sleep(100);
+  // Phase 2: select/clear through the native Input domain, then insert text in
+  // bounded profile-seeded chunks. This keeps input events trusted while
+  // avoiding the single zero-duration insert that automation detectors flag.
+  const action = beginInteraction(client);
+  await sleep(interactionDelay(client.interactionSeed, action, 100, 55, 135));
 
-  // Try Input.insertText first (fast, real IME events)
   let typed = false;
   try {
-    await cdpSendRaw(client, "Input.insertText", { text });
+    await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      key: "a",
+      code: "KeyA",
+      modifiers: 2,
+      windowsVirtualKeyCode: 65,
+      commands: ["SelectAll"],
+    });
+    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 });
+    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
+
+    const characters = Array.from(text);
+    const chunkSize = characters.length <= 160 ? 1 : Math.max(2, Math.ceil(characters.length / 80));
+    for (let index = 0; index < characters.length; index += chunkSize) {
+      const chunk = characters.slice(index, index + chunkSize).join("");
+      if (chunkSize === 1 && /^[A-Za-z0-9 ]$/.test(chunk)) {
+        const isSpace = chunk === " ";
+        const code = isSpace ? "Space" : /[0-9]/.test(chunk) ? `Digit${chunk}` : `Key${chunk.toUpperCase()}`;
+        const virtualKey = isSpace ? 32 : chunk.toUpperCase().charCodeAt(0);
+        await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+          type: "rawKeyDown", key: chunk, code, windowsVirtualKeyCode: virtualKey, unmodifiedText: chunk,
+        });
+        await sleep(interactionDelay(client.interactionSeed, action, 300 + index, 3, 12));
+        await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "char", key: chunk, code, text: chunk, unmodifiedText: chunk, windowsVirtualKeyCode: virtualKey });
+        await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: chunk, code, windowsVirtualKeyCode: virtualKey });
+      } else {
+        await cdpSendRaw(client, "Input.insertText", { text: chunk });
+      }
+      const minDelay = chunkSize === 1 ? 12 : 5;
+      const maxDelay = chunkSize === 1 ? 42 : 16;
+      await sleep(interactionDelay(client.interactionSeed, action, 110 + index, minDelay, maxDelay));
+    }
     // Verify it worked
-    await sleep(50);
+    await sleep(interactionDelay(client.interactionSeed, action, 190, 35, 75));
     const verify = await cdpEvaluate(client, `(function(){
       function qs(s){return document.querySelector(s);}
       var e=qs(${JSON.stringify(selector)});
@@ -697,44 +785,53 @@ export async function cdpType(client: CdpClient, selector: string, text: string)
 }
 
 export async function cdpPressKey(client: CdpClient, key: string): Promise<any> {
-  // Use Runtime.evaluate to dispatch native KeyboardEvent on active element.
-  // Input.dispatchKeyEvent doesn't trigger React's synthetic events reliably.
   const codeMap: Record<string, number> = {
     Enter: 13, Tab: 9, Escape: 27,
     ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39,
     Backspace: 8, Delete: 46, Space: 32, Home: 36, End: 35,
     PageDown: 34, PageUp: 33,
   };
-  const keyCode = codeMap[key] || 0;
+  const keyCode = codeMap[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
   const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
+  const action = beginInteraction(client);
 
-  // Send via CDP Input domain first (some pages need the OS-level event)
+  let nativeSent = false;
+  let nativeError: string | null = null;
   try {
     await cdpSendRaw(client, "Input.dispatchKeyEvent", {
       type: "rawKeyDown", key: key, code: code,
-      windowsVirtualKeyCode: keyToVK(key), unmodifiedText: key,
+      windowsVirtualKeyCode: keyToVK(key),
+      ...(key.length === 1 ? { text: key, unmodifiedText: key } : {}),
     });
-    await cdpSendRaw(client, "Input.dispatchKeyEvent", {
-      type: "char", text: key === "Enter" ? "\r" : key,
-      unmodifiedText: key === "Enter" ? "\r" : key,
-    });
+    await sleep(interactionDelay(client.interactionSeed, action, 200, 28, 92));
+    if (key.length === 1 || key === "Enter" || key === "Space") {
+      const text = key === "Enter" ? "\r" : key === "Space" ? " " : key;
+      await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+        type: "char", text, unmodifiedText: text,
+      });
+    }
     await cdpSendRaw(client, "Input.dispatchKeyEvent", {
       type: "keyUp", key: key, code: code,
       windowsVirtualKeyCode: keyToVK(key),
     });
-  } catch {}
+    nativeSent = true;
+  } catch (error) {
+    nativeError = error instanceof Error ? error.message : String(error);
+  }
 
-  // Also dispatch via DOM KeyboardEvent (works with React)
-  await cdpEvaluate(client, `(() => {
-    var el = document.activeElement || document.body;
-    var opts = {key:${JSON.stringify(key)},code:${JSON.stringify(code)},keyCode:${keyCode},which:${keyCode},bubbles:true,cancelable:true,composed:true};
-    el.dispatchEvent(new KeyboardEvent('keydown', opts));
-    el.dispatchEvent(new KeyboardEvent('keypress', opts));
-    el.dispatchEvent(new KeyboardEvent('keyup', opts));
-    return 'pressed ${key}';
-  })()`);
+  // Compatibility fallback only when the native Input domain is unavailable.
+  if (!nativeSent) {
+    await cdpEvaluate(client, `(() => {
+      var el = document.activeElement || document.body;
+      var opts = {key:${JSON.stringify(key)},code:${JSON.stringify(code)},keyCode:${keyCode},which:${keyCode},bubbles:true,cancelable:true,composed:true};
+      el.dispatchEvent(new KeyboardEvent('keydown', opts));
+      el.dispatchEvent(new KeyboardEvent('keypress', opts));
+      el.dispatchEvent(new KeyboardEvent('keyup', opts));
+      return 'pressed ${key}';
+    })()`);
+  }
 
-  return { success: true, key };
+  return { success: true, key, native: nativeSent, nativeError };
 }
 
 function keyToVK(key: string): number {
@@ -743,18 +840,28 @@ function keyToVK(key: string): number {
     Space: 32, ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39,
     Home: 36, End: 35, PageDown: 34, PageUp: 33,
   };
-  return map[key] || 0;
+  return map[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
 }
 
 export async function cdpScroll(client: CdpClient, direction: "up" | "down", amount = 500): Promise<any> {
   if (direction !== "up" && direction !== "down") throw new Error("Invalid scroll direction");
   const normalizedAmount = normalizeToolNumber(amount, 500, 1, 5000, "scroll amount");
   const deltaY = direction === "down" ? normalizedAmount : -normalizedAmount;
-  const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: "window.scrollBy({top:" + deltaY + ",behavior:'smooth'});\"scrolled " + direction + " " + normalizedAmount + "px\"",
-    returnByValue: true,
-  });
-  return { success: true, direction, amount: normalizedAmount, result: r.result?.value };
+  const action = beginInteraction(client);
+  const deltas = buildHumanizedScrollDeltas(client.interactionSeed, action, deltaY);
+  const x = client.pointerX ?? 640;
+  const y = client.pointerY ?? 360;
+  for (let index = 0; index < deltas.length; index++) {
+    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x,
+      y,
+      deltaX: 0,
+      deltaY: deltas[index],
+    });
+    await sleep(interactionDelay(client.interactionSeed, action, 230 + index, 12, 34));
+  }
+  return { success: true, direction, amount: normalizedAmount, native: true, steps: deltas.length };
 }
 
 export async function cdpSelect(client: CdpClient, selector: string, value: string): Promise<any> {
@@ -1384,7 +1491,8 @@ async function getOrConnectCdp(port: number): Promise<CdpClient> {
     try { await cdpEvaluate(client, "1"); return client; } // Test connection
     catch { cdpClients.delete(port); /* reconnect */ }
   }
-  client = await cdpConnect(port);
+  const managedProfile = listCloakProfiles().find((profile) => profile.running && profile.cdpPort === port);
+  client = await cdpConnect(port, managedProfile?.fingerprintSeed || port);
   cdpClients.set(port, client);
   return client;
 }

@@ -38,12 +38,14 @@ describe("fingerprint baseline diff", () => {
     expect(CAPTURE_EXPRESSION).toContain("workerIdentity");
     expect(CAPTURE_EXPRESSION).toContain("webgpuVendor");
     expect(CAPTURE_EXPRESSION).toContain("speechVoices");
+    expect(CAPTURE_EXPRESSION).toContain("outerWidth");
+    expect(CAPTURE_EXPRESSION).toContain("availTop");
     expect(CAPTURE_EXPRESSION).toContain("return JSON.stringify");
     expect(() => new Function(`return ${CAPTURE_EXPRESSION}`)).not.toThrow();
   });
 
   it("flags newly aligned native surfaces as risky drift", () => {
-    for (const field of ["workerIdentity", "webgpuVendor", "speechVoices", "mediaDevices", "doNotTrack", "maxTouchPoints"]) {
+    for (const field of ["workerIdentity", "webgpuVendor", "speechVoices", "mediaDevices", "doNotTrack", "maxTouchPoints", "screenX", "outerWidth", "availTop"]) {
       expect(hasRiskyDrift([{ field, baseline: "a", current: "b" }]), field).toBe(true);
     }
   });

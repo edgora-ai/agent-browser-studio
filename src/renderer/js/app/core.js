@@ -470,6 +470,7 @@
       '<div class="info-row"><span>Tier</span><span>' + esc(info.tier || "--") + '</span></div>' +
       '<div class="info-row"><span>Bundled</span><span>' + esc(info.bundledVersion || "--") + '</span></div>' +
       '<div class="info-row"><span>Platform</span><span>' + esc(info.platform || "--") + '</span></div>' +
+      '<div class="info-row"><span>Installed builds</span><span>' + esc(((info.installedVersions || []).map(function(item) { return item.version; }).join(", ")) || "--") + '</span></div>' +
       '<div class="info-row"><span>Binary</span><span title="' + escAttr(info.path || "") + '">' + esc(shortPath(info.path || "--")) + '</span></div>' +
       '<div class="info-row"><span>Cache</span><span title="' + escAttr(info.cacheDir || "") + '">' + esc(shortPath(info.cacheDir || "--")) + '</span></div>' +
       '</div>';

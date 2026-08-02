@@ -1,0 +1,22 @@
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -112,12 +112,18 @@ unsigned Screen::pixelDepth() const {
+ }
+ 
+ int Screen::availLeft() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().avail_left;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).x();
+ }
+ 
+ int Screen::availTop() const {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.screen().avail_top;
+   if (!DomWindow())
+     return 0;
+   return GetRect(/*available=*/true).y();
