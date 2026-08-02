@@ -1,0 +1,134 @@
+diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+index 644cd8bc49..ebe2679e89 100644
+--- a/content/browser/devtools/protocol/input_handler.cc
++++ b/content/browser/devtools/protocol/input_handler.cc
+@@ -474,7 +474,9 @@ CreateWebMouseEvent(const std::string& event_type,
+     if (wheel_event->delta_y != 0.0f) {
+       wheel_event->wheel_ticks_y = wheel_event->delta_y > 0.0f ? 1.0f : -1.0f;
+     }
+-    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
++    wheel_event->phase = blink::RoxyFingerprintConfig::Get().enabled()
++                             ? blink::WebMouseWheelEvent::kPhaseNone
++                             : blink::WebMouseWheelEvent::kPhaseBegan;
+     wheel_event->delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
+     wheel_event->dispatch_type = blink::WebInputEvent::DispatchType::kBlocking;
+     mouse_event = std::move(wheel_event);
+@@ -687,8 +689,10 @@ class InputHandler::InputInjector
+     for (auto& callback : pending_key_callbacks_)
+       callback->sendSuccess();
+     pending_key_callbacks_.clear();
+-    for (auto& callback : pending_mouse_callbacks_)
+-      callback->sendSuccess();
++    for (auto& callback : pending_mouse_callbacks_) {
++      if (callback)
++        callback->sendSuccess();
++    }
+     pending_mouse_callbacks_.clear();
+     MaybeSelfDestruct();
+   }
+@@ -706,6 +710,7 @@ class InputHandler::InputInjector
+ 
+     widget_host_->Focus();
+     input_queued_ = false;
++    input_events_queued_ = 0;
+     pending_mouse_callbacks_.push_back(std::move(callback));
+     // This may destroy the injector if the events get discarded.
+     base::WeakPtr<InputHandler::InputInjector> weak_this =
+@@ -721,6 +726,17 @@ class InputHandler::InputInjector
+       return;
+     }
+ 
++    // Managed multi-step wheel input uses the host phase handler, just like a
++    // physical mouse wheel. Complete the command once its unphased event is
++    // queued and retain a FIFO ack marker to keep the injector alive.
++    if (blink::RoxyFingerprintConfig::Get().enabled()) {
++      pending_mouse_callbacks_.back()->sendSuccess();
++      pending_mouse_callbacks_.back().reset();
++      for (size_t i = 1; i < input_events_queued_; ++i)
++        pending_mouse_callbacks_.push_back(nullptr);
++      return;
++    }
++
+     // Send a synthetic wheel event with phaseEnded to finish scrolling.
+     wheel_event->delta_x = 0;
+     wheel_event->delta_y = 0;
+@@ -746,6 +762,7 @@ class InputHandler::InputInjector
+ 
+     widget_host_->Focus();
+     input_queued_ = false;
++    input_events_queued_ = 0;
+     pending_mouse_callbacks_.push_back(std::move(callback));
+     // This may destroy the injector if the events get discarded.
+     base::WeakPtr<InputHandler::InputInjector> weak_this =
+@@ -754,10 +771,18 @@ class InputHandler::InputInjector
+     if (!weak_this) {
+       return;
+     }
++    // Managed mouse delivery is already queued at this point. Complete every
++    // command consistently so delayed move acks cannot consume the callback
++    // for a later press or release.
+     if (!input_queued_) {
+       pending_mouse_callbacks_.back()->sendSuccess();
+       pending_mouse_callbacks_.pop_back();
+       MaybeSelfDestruct();
++    } else if (blink::RoxyFingerprintConfig::Get().enabled()) {
++      pending_mouse_callbacks_.back()->sendSuccess();
++      pending_mouse_callbacks_.back().reset();
++      for (size_t i = 1; i < input_events_queued_; ++i)
++        pending_mouse_callbacks_.push_back(nullptr);
+     }
+   }
+ 
+@@ -771,6 +796,7 @@ class InputHandler::InputInjector
+ 
+     widget_host_->Focus();
+     input_queued_ = false;
++    input_events_queued_ = 0;
+     pending_key_callbacks_.push_back(std::move(callback));
+     ui::LatencyInfo latency;
+     std::vector<blink::mojom::EditCommandPtr> edit_commands;
+@@ -826,6 +852,7 @@ class InputHandler::InputInjector
+                     const blink::WebInputEvent& event,
+                     InputEventSource source) override {
+     input_queued_ = true;
++    ++input_events_queued_;
+   }
+ 
+   void OnInputEventAck(const RenderWidgetHost& widget,
+@@ -848,6 +875,10 @@ class InputHandler::InputInjector
+         !pending_mouse_callbacks_.empty()) {
+       auto callback = std::move(pending_mouse_callbacks_.front());
+       pending_mouse_callbacks_.pop_front();
++      if (!callback) {
++        MaybeSelfDestruct();
++        return;
++      }
+       // We need to handle the event in the drag controller in case drag was
+       // initiated at some point between dispatch and now because the event will
+       // have been ignored during dispatch in this case.
+@@ -876,8 +907,11 @@ class InputHandler::InputInjector
+   const raw_ptr<InputHandler> owner_;
+   base::WeakPtr<RenderWidgetHostImpl> widget_host_;
+   // Callbacks for calls to Input.dispatchKey/MouseEvent that have been sent to
+-  // the renderer, but that we haven't yet received an ack for.
++  // the renderer, but that we haven't yet received an ack for. The mouse deque
++  // can also contain null FIFO markers for managed callbacks completed early.
+   bool input_queued_ = false;
++  // Number of events synchronously queued by the current Forward* call.
++  size_t input_events_queued_ = 0;
+   base::circular_deque<std::unique_ptr<DispatchKeyEventCallback>>
+       pending_key_callbacks_;
+   base::circular_deque<std::unique_ptr<DispatchMouseEventCallback>>
+@@ -1446,8 +1480,10 @@ void InputHandler::HandleMouseEvent(
+       std::move(callback));
+   // We make sure the compositor is up to date before sending a wheel event.
+   // Otherwise it wont be picked up by newly added event listeners on the main
+-  // thread.
+-  if (is_wheel_event) {
++  // thread. Managed profiles use the already-current compositor hit-test data
++  // above so an occluded window cannot wait indefinitely for a visual state.
++  if (is_wheel_event &&
++      !blink::RoxyFingerprintConfig::Get().enabled()) {
+     widget_host->InsertVisualStateCallback(
+         std::move(findWidgetAndDispatchEvent));
+   } else {

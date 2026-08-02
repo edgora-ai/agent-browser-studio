@@ -14,7 +14,7 @@ describe("seeded interaction policy", () => {
     expect(first.length).toBeGreaterThanOrEqual(8);
     expect(first.length).toBeLessThanOrEqual(32);
     expect(first.at(-1)).toMatchObject({ x: 820, y: 460 });
-    expect(first.every((point) => point.x >= 0 && point.y >= 0 && point.delayMs >= 5 && point.delayMs <= 13)).toBe(true);
+    expect(first.every((point) => point.x >= 0 && point.y >= 0 && point.delayMs >= 22 && point.delayMs <= 38)).toBe(true);
     expect(new Set(first.map((point) => `${point.x},${point.y}`)).size).toBeGreaterThan(5);
   });
 

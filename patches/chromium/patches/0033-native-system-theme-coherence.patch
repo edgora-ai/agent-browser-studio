@@ -1,0 +1,376 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 415d865a90..51c145d19f 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -422,6 +422,7 @@
+ #include "third_party/blink/public/common/mime_util/mime_util.h"
+ #include "third_party/blink/public/common/navigation/navigation_policy.h"
+ #include "third_party/blink/public/common/permissions/permission_utils.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/switches.h"
+ #include "third_party/blink/public/mojom/browsing_topics/browsing_topics.mojom.h"
+ #include "third_party/blink/public/mojom/navigation/navigation_params.mojom-forward.h"
+@@ -4149,6 +4150,15 @@ std::tuple<blink::mojom::PreferredColorScheme,
+ GetPreferredColorScheme(const WebPreferences& web_prefs,
+                         const content::SecurityPrincipal& security_principal,
+                         WebContents* web_contents) {
++  const blink::RoxyFingerprintConfig& roxy_config =
++      blink::RoxyFingerprintConfig::Get();
++  if (roxy_config.enabled()) {
++    const blink::mojom::PreferredColorScheme managed_scheme =
++        roxy_config.seed() % 4 == 0
++            ? blink::mojom::PreferredColorScheme::kDark
++            : blink::mojom::PreferredColorScheme::kLight;
++    return {managed_scheme, managed_scheme};
++  }
+   blink::mojom::PreferredColorScheme preferred_color_scheme;
+   blink::mojom::PreferredColorScheme preferred_root_scrollbar_color_scheme;
+ #if BUILDFLAG(IS_ANDROID)
+diff --git a/third_party/blink/renderer/core/highlight/highlight_style_utils.cc b/third_party/blink/renderer/core/highlight/highlight_style_utils.cc
+index c679a0f7bb..87cbef0b30 100644
+--- a/third_party/blink/renderer/core/highlight/highlight_style_utils.cc
++++ b/third_party/blink/renderer/core/highlight/highlight_style_utils.cc
+@@ -5,6 +5,7 @@
+ #include "third_party/blink/renderer/core/highlight/highlight_style_utils.h"
+ 
+ #include "components/shared_highlighting/core/common/fragment_directives_constants.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/renderer/core/css/properties/longhands.h"
+ #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
+ #include "third_party/blink/renderer/core/css/style_engine.h"
+@@ -30,6 +31,13 @@ namespace blink {
+ 
+ namespace {
+ 
++bool SupportsSelectionForegroundColors() {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (config.enabled())
++    return config.platform() == "Win32";
++  return LayoutTheme::GetTheme().SupportsSelectionForegroundColors();
++}
++
+ bool NodeIsReplaced(Node* node) {
+   return node && node->GetLayoutObject() &&
+          node->GetLayoutObject()->IsLayoutReplaced();
+@@ -137,7 +145,7 @@ std::optional<Color> DefaultForegroundColor(
+             CSSValueID::kHighlighttext, color_scheme,
+             document.GetColorProviderForPainting(color_scheme), false);
+       }
+-      if (!LayoutTheme::GetTheme().SupportsSelectionForegroundColors()) {
++      if (!SupportsSelectionForegroundColors()) {
+         return std::nullopt;
+       }
+       if (document.GetFrame()->Selection().FrameIsFocusedAndActive()) {
+diff --git a/third_party/blink/renderer/core/layout/layout_theme.cc b/third_party/blink/renderer/core/layout/layout_theme.cc
+index addb69a410..9fbd60e971 100644
+--- a/third_party/blink/renderer/core/layout/layout_theme.cc
++++ b/third_party/blink/renderer/core/layout/layout_theme.cc
+@@ -21,7 +21,10 @@
+ 
+ #include "third_party/blink/renderer/core/layout/layout_theme.h"
+ 
++#include <optional>
++
+ #include "build/build_config.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/strings/grit/blink_strings.h"
+ #include "third_party/blink/public/web/blink.h"
+ #include "third_party/blink/renderer/core/css_value_keywords.h"
+@@ -161,6 +164,201 @@ bool SystemAccentColorAllowed() {
+          RuntimeEnabledFeatures::CSSAccentColorKeywordEnabled();
+ }
+ 
++enum class ManagedThemePlatform {
++  kNone,
++  kWindows,
++  kMac,
++};
++
++ManagedThemePlatform GetManagedThemePlatform() {
++  const RoxyFingerprintConfig& config = RoxyFingerprintConfig::Get();
++  if (!config.enabled())
++    return ManagedThemePlatform::kNone;
++  return config.platform() == "Win32" ? ManagedThemePlatform::kWindows
++                                      : ManagedThemePlatform::kMac;
++}
++
++struct ManagedThemePalette {
++  Color accent;
++  Color accent_text;
++  Color active_text;
++  Color button_border;
++  Color button_face;
++  Color button_text;
++  Color canvas;
++  Color canvas_text;
++  Color field;
++  Color field_text;
++  Color gray_text;
++  Color highlight;
++  Color highlight_text;
++  Color link_text;
++  Color mark;
++  Color mark_text;
++  Color selected_item;
++  Color selected_item_text;
++  Color visited_text;
++  Color active_selection_background;
++  Color inactive_selection_background;
++  Color active_selection_foreground;
++  Color inactive_selection_foreground;
++};
++
++ManagedThemePalette GetManagedThemePalette(
++    ManagedThemePlatform platform,
++    mojom::blink::ColorScheme color_scheme) {
++  const bool dark = color_scheme == mojom::blink::ColorScheme::kDark;
++  ManagedThemePalette palette;
++  palette.accent = Color(0x00, 0x75, 0xFF);
++  palette.accent_text = Color::kWhite;
++  palette.active_text = Color(0xFF, 0x00, 0x00);
++  palette.button_border = dark ? Color::kWhite : Color::kBlack;
++  palette.button_face = dark ? Color(0x6B, 0x6B, 0x6B)
++                             : Color(0xEF, 0xEF, 0xEF);
++  palette.button_text = dark ? Color::kWhite : Color::kBlack;
++  palette.canvas = dark ? Color(0x12, 0x12, 0x12) : Color::kWhite;
++  palette.canvas_text = dark ? Color::kWhite : Color::kBlack;
++  palette.field = dark ? Color(0x3B, 0x3B, 0x3B) : Color::kWhite;
++  palette.field_text = dark ? Color::kWhite : Color::kBlack;
++  palette.gray_text = Color(0x80, 0x80, 0x80);
++  palette.highlight = Color(0x19, 0x67, 0xD2).BlendWithWhite();
++  palette.highlight_text = Color::kWhite;
++  palette.link_text = dark ? Color(0x9E, 0x9E, 0xFF)
++                           : Color(0x00, 0x00, 0xEE);
++  palette.mark = Color(0xFF, 0xFF, 0x00);
++  palette.mark_text = Color::kBlack;
++  palette.selected_item = dark ? Color(0x99, 0xC8, 0xFF)
++                               : Color(0x19, 0x67, 0xD2);
++  palette.selected_item_text = dark ? Color(0x3B, 0x3B, 0x3B)
++                                    : Color::kWhite;
++  palette.visited_text = dark ? Color(0xD0, 0xAD, 0xF0)
++                              : Color(0x55, 0x1A, 0x8B);
++  palette.active_selection_background =
++      Color(0x19, 0x67, 0xD2).BlendWithWhite();
++  palette.inactive_selection_background =
++      Color(0xC8, 0xC8, 0xC8).BlendWithWhite();
++  palette.active_selection_foreground = Color::kWhite;
++  palette.inactive_selection_foreground = Color::kBlack;
++
++  if (platform == ManagedThemePlatform::kWindows && !dark) {
++    // Windows 11's standard light system palette. Chromium intentionally uses
++    // its renderer selection colors separately from CSS Highlight.
++    palette.active_text = Color(0x00, 0x66, 0xCC);
++    palette.button_face = Color(0xF0, 0xF0, 0xF0);
++    palette.gray_text = Color(0x6D, 0x6D, 0x6D);
++    palette.highlight = Color(0x00, 0x78, 0xD4).BlendWithWhite();
++    palette.highlight_text = Color::kWhite;
++    palette.link_text = Color(0x00, 0x66, 0xCC);
++    palette.visited_text = Color(0x00, 0x66, 0xCC);
++  }
++
++  if (platform == ManagedThemePlatform::kMac) {
++    // These are Chromium's default Aqua/Dark Aqua values. Fixing them to the
++    // declared persona prevents the macOS host accent from leaking into a
++    // managed Windows profile and keeps managed Mac profiles restart-stable.
++    palette.highlight = dark ? Color(0xB3, 0xD7, 0xFF, 204)
++                             : Color(0xB3, 0xD7, 0xFF).BlendWithWhite();
++    palette.highlight_text = Color::kBlack;
++    palette.selected_item = dark ? Color(0x99, 0xC8, 0xFF)
++                                 : Color(0xB3, 0xD7, 0xFF);
++    palette.selected_item_text =
++        dark ? Color(0x3B, 0x3B, 0x3B) : Color::kBlack;
++    palette.active_selection_background =
++        dark ? Color(0x3F, 0x63, 0x8B, 204)
++             : Color(0xB3, 0xD7, 0xFF).BlendWithWhite();
++    palette.inactive_selection_background =
++        (dark ? Color(0x46, 0x46, 0x46) : Color(0xDC, 0xDC, 0xDC))
++            .BlendWithWhite();
++    palette.active_selection_foreground = Color::kBlack;
++    palette.inactive_selection_foreground = Color::kBlack;
++  }
++
++  return palette;
++}
++
++std::optional<Color> ManagedSystemColor(
++    CSSValueID css_value_id,
++    mojom::blink::ColorScheme color_scheme) {
++  const ManagedThemePlatform platform = GetManagedThemePlatform();
++  if (platform == ManagedThemePlatform::kNone)
++    return std::nullopt;
++  const ManagedThemePalette palette =
++      GetManagedThemePalette(platform, color_scheme);
++
++  switch (css_value_id) {
++    case CSSValueID::kAccentcolor:
++      return palette.accent;
++    case CSSValueID::kAccentcolortext:
++      return palette.accent_text;
++    case CSSValueID::kActivetext:
++      return palette.active_text;
++    case CSSValueID::kButtonborder:
++    case CSSValueID::kActiveborder:
++    case CSSValueID::kInactiveborder:
++    case CSSValueID::kThreeddarkshadow:
++    case CSSValueID::kThreedhighlight:
++    case CSSValueID::kThreedlightshadow:
++    case CSSValueID::kThreedshadow:
++    case CSSValueID::kWindowframe:
++      return palette.button_border;
++    case CSSValueID::kButtonface:
++    case CSSValueID::kButtonhighlight:
++    case CSSValueID::kButtonshadow:
++    case CSSValueID::kThreedface:
++      return palette.button_face;
++    case CSSValueID::kButtontext:
++      return palette.button_text;
++    case CSSValueID::kCanvas:
++    case CSSValueID::kActivecaption:
++    case CSSValueID::kAppworkspace:
++    case CSSValueID::kBackground:
++    case CSSValueID::kInactivecaption:
++    case CSSValueID::kInfobackground:
++    case CSSValueID::kMenu:
++    case CSSValueID::kScrollbar:
++    case CSSValueID::kWindow:
++      return palette.canvas;
++    case CSSValueID::kCanvastext:
++    case CSSValueID::kCaptiontext:
++    case CSSValueID::kInfotext:
++    case CSSValueID::kMenutext:
++    case CSSValueID::kWindowtext:
++    case CSSValueID::kText:
++      return palette.canvas_text;
++    case CSSValueID::kField:
++      return palette.field;
++    case CSSValueID::kFieldtext:
++      return palette.field_text;
++    case CSSValueID::kGraytext:
++    case CSSValueID::kInactivecaptiontext:
++      return palette.gray_text;
++    case CSSValueID::kHighlight:
++      return palette.highlight;
++    case CSSValueID::kHighlighttext:
++      return palette.highlight_text;
++    case CSSValueID::kLinktext:
++      return palette.link_text;
++    case CSSValueID::kMark:
++      return palette.mark;
++    case CSSValueID::kMarktext:
++      return palette.mark_text;
++    case CSSValueID::kVisitedtext:
++      return palette.visited_text;
++    case CSSValueID::kSelecteditem:
++    case CSSValueID::kInternalActiveListBoxSelection:
++      return palette.selected_item;
++    case CSSValueID::kSelecteditemtext:
++    case CSSValueID::kInternalActiveListBoxSelectionText:
++      return palette.selected_item_text;
++    case CSSValueID::kInternalInactiveListBoxSelection:
++      return palette.inactive_selection_background;
++    case CSSValueID::kInternalInactiveListBoxSelectionText:
++      return palette.inactive_selection_foreground;
++    default:
++      return std::nullopt;
++  }
++}
++
+ }  // namespace
+ 
+ LayoutTheme& LayoutTheme::GetTheme() {
+@@ -336,6 +534,11 @@ String LayoutTheme::ExtraFullscreenStyleSheet() {
+ 
+ Color LayoutTheme::ActiveSelectionBackgroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .active_selection_background;
++  }
+   Color color = PlatformActiveSelectionBackgroundColor(color_scheme);
+ #if BUILDFLAG(IS_MAC)
+   // BlendWithWhite() darkens Mac system colors too much.
+@@ -348,37 +551,72 @@ Color LayoutTheme::ActiveSelectionBackgroundColor(
+ 
+ Color LayoutTheme::InactiveSelectionBackgroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .inactive_selection_background;
++  }
+   return PlatformInactiveSelectionBackgroundColor(color_scheme)
+       .BlendWithWhite();
+ }
+ 
+ Color LayoutTheme::ActiveSelectionForegroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .active_selection_foreground;
++  }
+   return PlatformActiveSelectionForegroundColor(color_scheme);
+ }
+ 
+ Color LayoutTheme::InactiveSelectionForegroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .inactive_selection_foreground;
++  }
+   return PlatformInactiveSelectionForegroundColor(color_scheme);
+ }
+ 
+ Color LayoutTheme::ActiveListBoxSelectionBackgroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .selected_item;
++  }
+   return PlatformActiveListBoxSelectionBackgroundColor(color_scheme);
+ }
+ 
+ Color LayoutTheme::InactiveListBoxSelectionBackgroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .inactive_selection_background;
++  }
+   return PlatformInactiveListBoxSelectionBackgroundColor(color_scheme);
+ }
+ 
+ Color LayoutTheme::ActiveListBoxSelectionForegroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .selected_item_text;
++  }
+   return PlatformActiveListBoxSelectionForegroundColor(color_scheme);
+ }
+ 
+ Color LayoutTheme::InactiveListBoxSelectionForegroundColor(
+     mojom::blink::ColorScheme color_scheme) const {
++  const ManagedThemePlatform managed_platform = GetManagedThemePlatform();
++  if (managed_platform != ManagedThemePlatform::kNone) {
++    return GetManagedThemePalette(managed_platform, color_scheme)
++        .inactive_selection_foreground;
++  }
+   return PlatformInactiveListBoxSelectionForegroundColor(color_scheme);
+ }
+ 
+@@ -545,6 +783,10 @@ Color LayoutTheme::SystemColor(CSSValueID css_value_id,
+                                mojom::blink::ColorScheme color_scheme,
+                                const ui::ColorProvider* color_provider,
+                                bool can_expose_accent_color) const {
++  if (const std::optional<Color> managed_color =
++          ManagedSystemColor(css_value_id, color_scheme)) {
++    return *managed_color;
++  }
+   if (color_provider && !WebTestSupport::IsRunningWebTest()) {
+     return SystemColorFromColorProvider(
+         css_value_id, color_scheme, color_provider, can_expose_accent_color);

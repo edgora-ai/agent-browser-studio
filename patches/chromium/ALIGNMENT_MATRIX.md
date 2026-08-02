@@ -45,7 +45,7 @@ Status meanings:
 | WebGL identity | partial | Cover the stock parameter/capability set, not only vendor and renderer | WebGL 1/2 parameter corpus compared with a plausible reference GPU |
 | WebGPU identity | partial | Cover adapter info, features, limits, device IDs and subgroup properties | Window/Worker adapter corpus and cross-API GPU consistency |
 | Fonts | partial | Add target-platform metrics, fallback, emoji and system rendering coherence | availability + measured glyph corpus + canvas emoji/reference metrics |
-| System colors and selection rendering | missing | Match the declared platform | CSS system-color and selection rendering probes |
+| System colors and selection rendering | verified | Preserve the declared platform and seeded light/dark preference | 19 CSS system colors in preferred/light/dark schemes plus screenshot pixel evidence for Windows/macOS selection paint |
 | Speech voices | verified | Maintain locale/platform coherence and playable mapping | enumeration, repeat reads and successful playback selection |
 | Plugins and MIME types | verified | Preserve stock version-appropriate plugin identity | Window/Worker exposure and descriptor checks |
 | Media devices | verified | Preserve labels, IDs, constraints, capabilities and output routing | enumeration plus exact/ideal constraints and track settings |
@@ -59,8 +59,8 @@ Status meanings:
 | Capability | Current 150 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
 | `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks |
-| CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus with no untrusted events |
-| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests plus installed Chromium 150 E2E; no page injection |
+| CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
+| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests, compositor-paced pointer points and installed Chromium 150 E2E; no page injection |
 | HTTP proxy authentication | partial | Prefer native version-aware authentication; extension fallback must not alter observable state | authenticated HTTP/HTTPS proxy E2E and extension-surface audit |
 | SOCKS5 TCP | partial | Native authenticated routing with remote DNS | DNS-leak and authenticated routing tests |
 | SOCKS5 UDP / QUIC / HTTP3 | missing | Preserve UDP/QUIC where the proxy supports it | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
@@ -78,7 +78,7 @@ Status meanings:
 | Joint hardware profiles | partial | Generate CPU/RAM/GPU/screen/DPR/font/audio as one plausible profile | profile corpus constraints and cross-field invariant tests |
 | Headed/headless parity | partial | Same declared identity with only unavoidable stock differences | paired headed/headless capture and allow-listed diff |
 | Persistent-context parity | partial | No incognito/storage/window geometry drift | fresh vs persistent comparative capture |
-| Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 48-surface native-host comparison with all managed profile consumers disabled |
+| Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 50-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
 | Signed multi-platform distribution | missing | macOS arm64/x64, Windows x64, Linux x64/arm64 | reproducible build metadata, checksums/signatures and platform E2E |
 
@@ -104,25 +104,27 @@ waive any engine row above.
 ## Current verified build
 
 The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
-commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 48-surface
+commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 50-surface
 verifier across same-seed restarts, a different seed, `el-GR`/`el-CY` locale
-coherence, headed geometry and native-host pass-through. Verified runtime
-surfaces include Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
+coherence, headed geometry and native-host pass-through. A further 61 checks
+cover preferred/light/dark CSS system colors and actual selection screenshot
+pixels for both declared platforms. Verified runtime surfaces include
+Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
 audio capture, native Storage Buckets quota, WebAuthn, media-device remapping,
-WebRTC disable mode, CDP identity and exact build-version coherence.
+WebRTC disable mode, CDP identity, system-theme coherence and exact
+build-version coherence.
 
 The installed-cache journey retains Chromium `149.0.7827.22` alongside 150 and
 passes exact selection, rollback, pass-through, trusted humanized input and
-third-party-cookie compatibility/restoration (`8/8` targeted E2E) with the
+third-party-cookie compatibility/restoration (`13/13` targeted E2E) with the
 license environment explicitly absent. Installing 150 leaves the existing
 CloakLite config and six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 22 of 36 engine/network/lifecycle rows
-are currently `verified`, 9 are `partial`, 4 are `missing`, and 1 stock-network
-row remains unverified. The four hard missing rows are system-color/selection
-rendering, SOCKS5 UDP/QUIC/HTTP3, proxy timing/cache/header signals, and signed
-multi-platform distribution. These counts are workflow gates, not a browser
-quality percentage.
+Using the stage labels in this matrix, 23 of 36 engine/network/lifecycle rows
+are currently `verified`, 9 are `partial`, 3 are `missing`, and 1 stock-network
+row remains unverified. The three hard missing rows are SOCKS5 UDP/QUIC/HTTP3,
+proxy timing/cache/header signals, and signed multi-platform distribution.
+These counts are workflow gates, not a browser quality percentage.
 
 ## Completion gates
 

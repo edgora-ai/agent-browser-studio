@@ -19,6 +19,7 @@ JavaScript into pages.
 | WebGPU adapter | Configurable | partial | adapter info is native; full features/limits/device corpus remains |
 | WebRTC | Real/altered/disabled | verified | allocator + candidate + SDP paths |
 | Fonts | Allow-list + profile directory | partial | CoreText registration is native; cross-platform metrics/fallback/emoji remain |
+| System theme/selection | Platform-shaped light/dark | verified | Blink `LayoutTheme`, preferred color scheme and native selection paint |
 | Timezone | Configurable | verified | Blink `TimeZoneController` + ICU/V8 process timezone |
 | ClientRects | Stable noise | verified | Blink layout geometry export |
 | Geolocation | Real/disabled/custom | verified | Blink request/result path |
@@ -33,9 +34,9 @@ JavaScript into pages.
 Installed Chromium `150.0.7871.114` also verifies native trusted CDP input,
 seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
 rollback, native-host pass-through, and explicit third-party-cookie
-compatibility with exact preference restoration. The strict verifier checks 48
-surfaces; the targeted installed-app journeys pass `8/8` without a license
-environment.
+compatibility with exact preference restoration. The strict verifier checks 50
+surfaces plus 61 preferred/light/dark system-theme and selection-pixel cases;
+the targeted installed-app journeys pass `13/13` without a license environment.
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,

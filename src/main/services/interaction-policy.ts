@@ -65,7 +65,9 @@ export function buildHumanizedPointerPath(
     points.push({
       x: index === steps ? target.x : Math.max(0, Math.round(x * 10) / 10),
       y: index === steps ? target.y : Math.max(0, Math.round(y * 10) / 10),
-      delayMs: 5 + Math.floor(unit(seed, action, 10 + index) * 9),
+      // Pace distinct points across compositor frames. Faster bursts can be
+      // coalesced while an otherwise valid managed window is occluded.
+      delayMs: 22 + Math.floor(unit(seed, action, 10 + index) * 17),
     });
   }
   return points;

@@ -7,8 +7,8 @@ serialize it.
 | Configuration field | Native consumer / invariant |
 |---|---|
 | `schemaVersion` | `RoxyFingerprintConfig` rejects versions other than `1` |
-| `seed` | Canvas, Audio, ClientRects, media IDs and stable tokens |
-| `platform` | Window/Worker Navigator, UA metadata, media/plugin labels |
+| `seed` | Canvas, Audio, ClientRects, media IDs, preferred color scheme and stable tokens |
+| `platform` | Window/Worker Navigator, UA metadata, media/plugin labels, CSS system colors and selection rendering |
 | `platformVersion` | low/high entropy UA Client Hints |
 | `userAgent` | browser network UA and Window/Worker Navigator |
 | `appVersion` | validated redundant value; Blink derives the same value from configured UA |

@@ -92,13 +92,14 @@ Chromium version compares the executable SHA-256, atomically replaces a changed
 build, and retains the prior bundle in a hidden recovery directory.
 
 The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
-the strict native harness passes all 48 checked surfaces and the installed
-version/input/cookie journeys pass `8/8`, with Chromium 149 retained for
+the strict native harness passes all 50 checked surfaces plus 61 system-theme
+checks, and the installed version/input/cookie journeys pass `13/13`, with
+Chromium 149 retained for
 rollback. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
-engine/network/lifecycle gates, 22 are verified, 9 remain partial, 4 are
+engine/network/lifecycle gates, 23 are verified, 9 remain partial, 3 are
 missing, and 1 stock-network row is unverified. The hard missing rows are
-system-color/selection rendering, SOCKS5 UDP/QUIC/HTTP3, proxy
-timing/cache/header signals, and signed multi-platform distribution; see
+SOCKS5 UDP/QUIC/HTTP3, proxy timing/cache/header signals, and signed
+multi-platform distribution; see
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 
 ### Development checks

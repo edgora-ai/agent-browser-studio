@@ -86,12 +86,13 @@ GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
 `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` 时才使用 wrapper 管理的 GeoIP 数据库。
 
 当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
-原生严格校验 48 项全部通过，安装版的版本/输入/Cookie 旅程为 `8/8`，并保留
-Chromium 149 用于回滚。这不代表已经完全等同 RoxyChrome/CloakBrowser：
-36 项引擎/网络/生命周期门禁中，22 项 verified、9 项 partial、4 项 missing，
-另有 1 项 stock 网络行为尚未验证。四项硬缺失是系统颜色/选区渲染、
-SOCKS5 UDP/QUIC/HTTP3、代理 timing/cache/header 信号和签名的多平台发行包；
-详见 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
+原生严格校验 50 项及 61 项系统主题专项检查全部通过，安装版的版本/输入/Cookie
+旅程为 `13/13`，并保留 Chromium 149 用于回滚。这不代表已经完全等同
+RoxyChrome/CloakBrowser：
+36 项引擎/网络/生命周期门禁中，23 项 verified、9 项 partial、3 项 missing，
+另有 1 项 stock 网络行为尚未验证。三项硬缺失是 SOCKS5 UDP/QUIC/HTTP3、
+代理 timing/cache/header 信号和签名的多平台发行包；详见
+[`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查
 

@@ -1,0 +1,119 @@
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index b0cad39e9b27ebf50a7a5a2c081234d979370590..ff02d1a93bd4c4b5544fc3857e1968f7d68ba74f 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <memory>
+ #include <string>
+ 
+@@ -498,6 +499,11 @@ std::unique_ptr<CommitState> LayerTreeHost::WillCommit(
+   activated_commit_state->benchmarks =
+       micro_benchmark_controller_.CreateImplBenchmarks();
+ 
++  for (const ElementId& scroll_element :
++       activated_commit_state->scrollers_clobbering_active_value) {
++    synchronized_debugger_scroll_deltas_.erase(scroll_element);
++  }
++
+   commit_completion_event_ = std::move(completion);
+   return activated_commit_state;
+ }
+@@ -1175,6 +1181,8 @@ void LayerTreeHost::ApplyViewportChanges(
+       pending_commit_state()->viewport_property_ids.inner_scroll;
+   if (inner_scroll_id != kInvalidPropertyNodeId) {
+     const ScrollNode& inner_scroll = pt->scroll_tree().Node(inner_scroll_id);
++    inner_viewport_scroll_delta = SubtractSynchronizedDebuggerScrollDelta(
++        inner_scroll.element_id, inner_viewport_scroll_delta);
+     UpdateScrollOffsetFromImpl(
+         inner_scroll.element_id, inner_viewport_scroll_delta,
+         ScrollSourceType::kNone,
+@@ -1204,6 +1212,38 @@ void LayerTreeHost::UpdateScrollOffsetFromImpl(
+                                                       snap_target_ids);
+ }
+ 
++gfx::Vector2dF LayerTreeHost::SubtractSynchronizedDebuggerScrollDelta(
++    const ElementId& scroll_element,
++    const gfx::Vector2dF& scroll_delta) {
++  auto it = synchronized_debugger_scroll_deltas_.find(scroll_element);
++  if (it == synchronized_debugger_scroll_deltas_.end())
++    return scroll_delta;
++
++  gfx::Vector2dF synchronized_delta = it->second;
++  auto subtract_axis = [](float delta, float* synchronized) {
++    if (delta * *synchronized <= 0.f)
++      return delta;
++    const float amount = std::min(std::abs(delta), std::abs(*synchronized));
++    const float consumed = std::copysign(amount, delta);
++    *synchronized -= consumed;
++    return delta - consumed;
++  };
++
++  float synchronized_x = synchronized_delta.x();
++  float synchronized_y = synchronized_delta.y();
++  gfx::Vector2dF remaining_delta(
++      subtract_axis(scroll_delta.x(), &synchronized_x),
++      subtract_axis(scroll_delta.y(), &synchronized_y));
++  synchronized_delta.set_x(synchronized_x);
++  synchronized_delta.set_y(synchronized_y);
++  if (synchronized_delta.IsZero()) {
++    synchronized_debugger_scroll_deltas_.erase(it);
++  } else {
++    it->second = synchronized_delta;
++  }
++  return remaining_delta;
++}
++
+ void LayerTreeHost::SynchronizeDebuggerScrollFromImpl(
+     const ElementId& scroll_element,
+     const gfx::Vector2dF& scroll_delta) {
+@@ -1211,6 +1251,7 @@ void LayerTreeHost::SynchronizeDebuggerScrollFromImpl(
+   if (!scroll_element || scroll_delta.IsZero())
+     return;
+ 
++  synchronized_debugger_scroll_deltas_[scroll_element] += scroll_delta;
+   UpdateScrollOffsetFromImpl(scroll_element, scroll_delta,
+                              ScrollSourceType::kRelativeScroll, std::nullopt);
+   // The delta is already reflected in the main-thread property tree. Ensure a
+@@ -1244,7 +1285,10 @@ void LayerTreeHost::ApplyCompositorChanges(CompositorCommitData* commit_data) {
+       if (scroll.element_id == commit_data->scroll_latched_element_id) {
+         scroll_type = commit_data->scroll_type;
+       }
+-      UpdateScrollOffsetFromImpl(scroll.element_id, scroll.scroll_delta,
++      const gfx::Vector2dF scroll_delta =
++          SubtractSynchronizedDebuggerScrollDelta(scroll.element_id,
++                                                  scroll.scroll_delta);
++      UpdateScrollOffsetFromImpl(scroll.element_id, scroll_delta,
+                                  scroll_type, scroll.snap_target_element_ids);
+     }
+     // const_cast to ensure the compiler chooses to the const version of
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index 79989f1bf5df8e1146353d884158e05a39ea49e9..e80f725101fb931eb914f7597e3f12e9a84954ef 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -1075,6 +1075,9 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+       const gfx::Vector2dF& delta,
+       ScrollSourceType type,
+       const std::optional<TargetSnapAreaElementIds>&);
++  gfx::Vector2dF SubtractSynchronizedDebuggerScrollDelta(
++      const ElementId& scroll_element,
++      const gfx::Vector2dF& scroll_delta);
+ 
+   void SetRequestHighFramerate(bool flag);
+ 
+@@ -1191,6 +1194,12 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+ 
+   bool syncing_deltas_for_test_ = false;
+ 
++  // Deltas applied eagerly for managed DevTools input. A later regular
++  // BeginMainFrame can carry the same impl-side deltas and must not apply them
++  // to Blink a second time.
++  base::flat_map<ElementId, gfx::Vector2dF>
++      synchronized_debugger_scroll_deltas_;
++
+   std::unique_ptr<PropertyTreeDelegate> owned_property_tree_delegate_;
+   raw_ptr<PropertyTreeDelegate> property_tree_delegate_;
+ 

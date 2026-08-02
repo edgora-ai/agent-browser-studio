@@ -32,6 +32,23 @@ export const CAPTURE_EXPRESSION = `(async function(){
   try { o.innerWidth = window.innerWidth; o.innerHeight = window.innerHeight; } catch(e){}
   try { o.colorDepth = screen.colorDepth; o.pixelDepth = screen.pixelDepth; } catch(e){}
   try { o.devicePixelRatio = devicePixelRatio; } catch(e){}
+  try { o.preferredColorScheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch(e){}
+  try {
+    var systemColorKeywords = ["AccentColor", "AccentColorText", "ActiveText", "ButtonBorder", "ButtonFace", "ButtonText", "Canvas", "CanvasText", "Field", "FieldText", "GrayText", "Highlight", "HighlightText", "LinkText", "Mark", "MarkText", "SelectedItem", "SelectedItemText", "VisitedText"];
+    function readSystemColors(scheme) {
+      var result = {};
+      var node = document.createElement("span");
+      node.style.cssText = "position:fixed;left:-10000px;top:-10000px;color-scheme:" + scheme;
+      document.documentElement.appendChild(node);
+      systemColorKeywords.forEach(function(keyword){
+        node.style.color = keyword;
+        result[keyword] = getComputedStyle(node).color;
+      });
+      node.remove();
+      return result;
+    }
+    o.systemColors = JSON.stringify({ preferred: readSystemColors("light dark"), light: readSystemColors("light"), dark: readSystemColors("dark") });
+  } catch(e){}
   try { o.tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch(e){}
   try { o.tzOffset = new Date().getTimezoneOffset(); } catch(e){}
   try { o.uaPlatform = navigator.userAgentData ? navigator.userAgentData.platform : null; } catch(e){}
@@ -204,7 +221,7 @@ export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
     "devicePixelRatio", "canvasHash",
     "clientRect", "workerIdentity", "plugins", "mimeTypes", "speechVoices",
     "fontAvailability", "audioHash",
-    "mediaDevices", "storageQuota", "doNotTrack",
+    "mediaDevices", "storageQuota", "doNotTrack", "systemColors", "preferredColorScheme",
   ]);
   return drift.some((d) => risky.has(d.field));
 }

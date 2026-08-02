@@ -1,0 +1,443 @@
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index 4a740ff0ecbfedfbeb6ef46203809a93c2f0e976..b0cad39e9b27ebf50a7a5a2c081234d979370590 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1204,6 +1204,20 @@ void LayerTreeHost::UpdateScrollOffsetFromImpl(
+                                                       snap_target_ids);
+ }
+ 
++void LayerTreeHost::SynchronizeDebuggerScrollFromImpl(
++    const ElementId& scroll_element,
++    const gfx::Vector2dF& scroll_delta) {
++  DCHECK(IsMainThread());
++  if (!scroll_element || scroll_delta.IsZero())
++    return;
++
++  UpdateScrollOffsetFromImpl(scroll_element, scroll_delta,
++                             ScrollSourceType::kRelativeScroll, std::nullopt);
++  // The delta is already reflected in the main-thread property tree. Ensure a
++  // later regular commit does not apply the active compositor delta again.
++  DropActiveScrollDeltaNextCommit(scroll_element);
++}
++
+ void LayerTreeHost::ApplyCompositorChanges(CompositorCommitData* commit_data) {
+   DCHECK(IsMainThread());
+   DCHECK(commit_data);
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index bb1b8edfe423ed0ef126a3c2012f024615d5a56c..79989f1bf5df8e1146353d884158e05a39ea49e9 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -826,6 +826,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+   void DidCompletePageScaleAnimation();
+   // Virtual for testing
+   virtual void ApplyCompositorChanges(CompositorCommitData* commit_data);
++  // Applies a compositor-consumed DevTools scroll delta immediately on the
++  // main thread. This keeps DOM scroll state current when display begin frames
++  // are unavailable, such as while the desktop session is locked.
++  void SynchronizeDebuggerScrollFromImpl(const ElementId& scroll_element,
++                                         const gfx::Vector2dF& scroll_delta);
+   void ApplyMutatorEvents(std::unique_ptr<MutatorEvents> events);
+   void RecordStartOfFrameMetrics();
+   void RecordEndOfFrameMetrics(base::TimeTicks frame_begin_time,
+diff --git a/components/input/mouse_wheel_event_queue.cc b/components/input/mouse_wheel_event_queue.cc
+index 9c2e12ef053f35b873d34fa71d5c11e35c4442f8..75117fbbff3250c0c0673bdf88c2bec472635e06 100644
+--- a/components/input/mouse_wheel_event_queue.cc
++++ b/components/input/mouse_wheel_event_queue.cc
+@@ -137,8 +137,13 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
+ 
+   // If event wasn't consumed then generate a gesture scroll for it.
+   if (CanGenerateGestureScroll(ack_result)) {
++    int scroll_modifiers = WebInputEvent::kNoModifiers;
++    if (event_sent_for_gesture_ack_->event.GetModifiers() &
++        WebInputEvent::kFromDebugger) {
++      scroll_modifiers |= WebInputEvent::kFromDebugger;
++    }
+     WebGestureEvent scroll_update(
+-        WebInputEvent::Type::kGestureScrollUpdate, WebInputEvent::kNoModifiers,
++        WebInputEvent::Type::kGestureScrollUpdate, scroll_modifiers,
+         event_sent_for_gesture_ack_->event.TimeStamp(),
+         blink::WebGestureDevice::kTouchpad);
+ 
+diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143b6b7a080 100644
+--- a/content/browser/devtools/protocol/input_handler.cc
++++ b/content/browser/devtools/protocol/input_handler.cc
+@@ -21,6 +21,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "base/timer/timer.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/types/expected.h"
+ #include "components/input/render_widget_host_input_event_router.h"
+@@ -41,6 +42,7 @@
+ #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
+ #include "content/common/input/synthetic_tap_gesture.h"
+ #include "content/common/input/synthetic_tap_gesture_params.h"
++#include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/common/content_features.h"
+ #include "content/public/common/url_constants.h"
+ #include "third_party/blink/public/common/input/web_input_event.h"
+@@ -474,9 +476,7 @@ CreateWebMouseEvent(const std::string& event_type,
+     if (wheel_event->delta_y != 0.0f) {
+       wheel_event->wheel_ticks_y = wheel_event->delta_y > 0.0f ? 1.0f : -1.0f;
+     }
+-    wheel_event->phase = blink::RoxyFingerprintConfig::Get().enabled()
+-                             ? blink::WebMouseWheelEvent::kPhaseNone
+-                             : blink::WebMouseWheelEvent::kPhaseBegan;
++    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
+     wheel_event->delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
+     wheel_event->dispatch_type = blink::WebInputEvent::DispatchType::kBlocking;
+     mouse_event = std::move(wheel_event);
+@@ -686,6 +686,9 @@ class InputHandler::InputInjector
+   InputInjector& operator=(const InputInjector&) = delete;
+ 
+   void Cleanup() {
++    managed_wheel_end_timer_.Stop();
++    managed_wheel_active_ = false;
++    managed_wheel_end_event_.reset();
+     for (auto& callback : pending_key_callbacks_)
+       callback->sendSuccess();
+     pending_key_callbacks_.clear();
+@@ -711,6 +714,13 @@ class InputHandler::InputInjector
+     widget_host_->Focus();
+     input_queued_ = false;
+     input_events_queued_ = 0;
++    const bool managed = blink::RoxyFingerprintConfig::Get().enabled();
++    if (managed) {
++      wheel_event->phase = managed_wheel_active_
++                               ? blink::WebMouseWheelEvent::kPhaseChanged
++                               : blink::WebMouseWheelEvent::kPhaseBegan;
++    }
++    DispatchMouseEventCallback* callback_ptr = callback.get();
+     pending_mouse_callbacks_.push_back(std::move(callback));
+     // This may destroy the injector if the events get discarded.
+     base::WeakPtr<InputHandler::InputInjector> weak_this =
+@@ -726,14 +736,16 @@ class InputHandler::InputInjector
+       return;
+     }
+ 
+-    // Managed multi-step wheel input uses the host phase handler, just like a
+-    // physical mouse wheel. Complete the command once its unphased event is
+-    // queued and retain a FIFO ack marker to keep the injector alive.
+-    if (blink::RoxyFingerprintConfig::Get().enabled()) {
+-      pending_mouse_callbacks_.back()->sendSuccess();
+-      pending_mouse_callbacks_.back().reset();
+-      for (size_t i = 1; i < input_events_queued_; ++i)
+-        pending_mouse_callbacks_.push_back(nullptr);
++    // Keep one managed began/changed sequence open across nearby commands,
++    // then terminate it after a short idle interval like a physical wheel.
++    if (managed) {
++      managed_wheel_active_ = true;
++      managed_wheel_end_event_ = *wheel_event;
++      managed_wheel_end_timer_.Start(
++          FROM_HERE, base::Milliseconds(90),
++          base::BindOnce(&InputHandler::InputInjector::FinishManagedWheel,
++                         weak_ptr_factory_.GetWeakPtr()));
++      CompleteManagedMouseCallback(callback_ptr);
+       return;
+     }
+ 
+@@ -763,6 +775,7 @@ class InputHandler::InputInjector
+     widget_host_->Focus();
+     input_queued_ = false;
+     input_events_queued_ = 0;
++    DispatchMouseEventCallback* callback_ptr = callback.get();
+     pending_mouse_callbacks_.push_back(std::move(callback));
+     // This may destroy the injector if the events get discarded.
+     base::WeakPtr<InputHandler::InputInjector> weak_this =
+@@ -779,10 +792,7 @@ class InputHandler::InputInjector
+       pending_mouse_callbacks_.pop_back();
+       MaybeSelfDestruct();
+     } else if (blink::RoxyFingerprintConfig::Get().enabled()) {
+-      pending_mouse_callbacks_.back()->sendSuccess();
+-      pending_mouse_callbacks_.back().reset();
+-      for (size_t i = 1; i < input_events_queued_; ++i)
+-        pending_mouse_callbacks_.push_back(nullptr);
++      CompleteManagedMouseCallback(callback_ptr);
+     }
+   }
+ 
+@@ -848,6 +858,50 @@ class InputHandler::InputInjector
+   }
+ 
+  private:
++  void CompleteManagedMouseCallback(DispatchMouseEventCallback* callback) {
++    // A renderer ack may synchronously complete this exact callback while
++    // Forward*Event is still on the stack. In that case there is nothing left
++    // to complete early, even if older null ack markers keep this injector
++    // alive.
++    if (pending_mouse_callbacks_.empty() ||
++        pending_mouse_callbacks_.back().get() != callback) {
++      return;
++    }
++    pending_mouse_callbacks_.back()->sendSuccess();
++    pending_mouse_callbacks_.back().reset();
++    for (size_t i = 1; i < input_events_queued_; ++i)
++      pending_mouse_callbacks_.push_back(nullptr);
++  }
++
++  void FinishManagedWheel() {
++    if (!widget_host_ || !managed_wheel_end_event_) {
++      managed_wheel_active_ = false;
++      managed_wheel_end_event_.reset();
++      MaybeSelfDestruct();
++      return;
++    }
++
++    blink::WebMouseWheelEvent wheel_event = *managed_wheel_end_event_;
++    managed_wheel_end_event_.reset();
++    wheel_event.delta_x = 0;
++    wheel_event.delta_y = 0;
++    wheel_event.wheel_ticks_x = 0;
++    wheel_event.wheel_ticks_y = 0;
++    wheel_event.phase = blink::WebMouseWheelEvent::kPhaseEnded;
++    wheel_event.dispatch_type =
++        blink::WebInputEvent::DispatchType::kEventNonBlocking;
++    pending_mouse_callbacks_.push_back(nullptr);
++    input_queued_ = false;
++    input_events_queued_ = 0;
++    widget_host_->ForwardWheelEvent(wheel_event);
++    if (!input_queued_)
++      pending_mouse_callbacks_.pop_back();
++    for (size_t i = 1; i < input_events_queued_; ++i)
++      pending_mouse_callbacks_.push_back(nullptr);
++    managed_wheel_active_ = false;
++    MaybeSelfDestruct();
++  }
++
+   void OnInputEvent(const RenderWidgetHost& widget,
+                     const blink::WebInputEvent& event,
+                     InputEventSource source) override {
+@@ -897,7 +951,8 @@ class InputHandler::InputInjector
+   }
+ 
+   void MaybeSelfDestruct() {
+-    if (!pending_key_callbacks_.empty() || !pending_mouse_callbacks_.empty())
++    if (managed_wheel_active_ || !pending_key_callbacks_.empty() ||
++        !pending_mouse_callbacks_.empty())
+       return;
+     if (widget_host_)
+       widget_host_->RemoveInputEventObserver(this);
+@@ -912,6 +967,9 @@ class InputHandler::InputInjector
+   bool input_queued_ = false;
+   // Number of events synchronously queued by the current Forward* call.
+   size_t input_events_queued_ = 0;
++  bool managed_wheel_active_ = false;
++  std::optional<blink::WebMouseWheelEvent> managed_wheel_end_event_;
++  base::OneShotTimer managed_wheel_end_timer_;
+   base::circular_deque<std::unique_ptr<DispatchKeyEventCallback>>
+       pending_key_callbacks_;
+   base::circular_deque<std::unique_ptr<DispatchMouseEventCallback>>
+@@ -1428,6 +1486,16 @@ void InputHandler::HandleMouseEvent(
+   bool is_wheel_event =
+       event->GetType() == blink::WebInputEvent::Type::kMouseWheel;
+ 
++  // Native wheel default actions are owned by the active top-level window on
++  // desktop platforms. A managed CDP interaction explicitly targets this tab,
++  // so activate and focus it before routing the sequence instead of letting an
++  // occluded window emit DOM input without committing its compositor action.
++  if (blink::RoxyFingerprintConfig::Get().enabled() && web_contents_) {
++    if (WebContentsDelegate* delegate = web_contents_->GetDelegate())
++      delegate->ActivateContents(web_contents_);
++    web_contents_->Focus();
++  }
++
+   RenderWidgetHostImpl* widget_host =
+       host_ ? host_->GetRenderWidgetHost() : nullptr;
+   if (!widget_host || !widget_host->delegate() ||
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+index 502dec2025874a538618b96cc6a56a5c29ed268e..7d0a60a38a33b9d0de69191863dd4c6f6cb26bd3 100644
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+@@ -1303,6 +1303,18 @@ InputHandlerProxy::HandleGestureScrollUpdate(
+   cc::InputHandlerScrollResult scroll_result =
+       input_handler_->ScrollUpdate(cc::ScrollState(scroll_state_data), delay);
+ 
++  if ((gesture_event.GetModifiers() & WebInputEvent::kFromDebugger) &&
++      scroll_result.did_scroll) {
++    gfx::Vector2dF consumed_delta(
++        static_cast<float>(scroll_state_data.delta_x),
++        static_cast<float>(scroll_state_data.delta_y));
++    consumed_delta -= scroll_result.unused_scroll_delta;
++    if (!consumed_delta.IsZero()) {
++      client_->SynchronizeDebuggerScrollFromImpl(latched_element_id,
++                                                 consumed_delta);
++    }
++  }
++
+   if (scroll_result.hit_snap_constraint) {
+     snap_fling_controller_->Finish();
+     input_handler_->ScrollEnd(/*should_snap=*/true, std::nullopt);
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
+index fb8179350c43e054bd6340760048a836b093a12b..d7e110e2fd18be0696f7b1e92257e93bc9a5d7e1 100644
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
+@@ -5,6 +5,9 @@
+ #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WIDGET_INPUT_INPUT_HANDLER_PROXY_CLIENT_H_
+ #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WIDGET_INPUT_INPUT_HANDLER_PROXY_CLIENT_H_
+ 
++#include "cc/paint/element_id.h"
++#include "ui/gfx/geometry/vector2d_f.h"
++
+ namespace blink {
+ 
+ // All callbacks invoked from the compositor thread.
+@@ -13,6 +16,12 @@ class InputHandlerProxyClient {
+   // Called just before the InputHandlerProxy shuts down.
+   virtual void WillShutdown() = 0;
+   virtual void DidStartScrollingViewport() = 0;
++  // A DevTools wheel may arrive while no display begin frames are produced.
++  // Reflect its compositor-consumed delta to the main-thread property tree so
++  // DOM scroll state does not depend on display scheduling.
++  virtual void SynchronizeDebuggerScrollFromImpl(
++      const cc::ElementId& scroll_element,
++      const gfx::Vector2dF& scroll_delta) = 0;
+   virtual void SetAllowedTouchAction(cc::TouchAction touch_action) = 0;
+   virtual bool AllowsScrollResampling() = 0;
+ 
+diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+index bc3251cabe0a50e608df447223202da4beec85f4..64662ef6f3cc85df476abb84eda07726acfac29e 100644
+--- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
++++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
+@@ -28,6 +28,7 @@ namespace blink {
+ namespace {
+ 
+ constexpr base::TimeDelta kMaxRafDelay = base::Milliseconds(5 * 1000);
++constexpr base::TimeDelta kDebuggerMaxRafDelay = base::Milliseconds(100);
+ 
+ class QueuedClosure : public MainThreadEventQueueTask {
+  public:
+@@ -933,8 +934,13 @@ void MainThreadEventQueue::SetNeedsMainFrame(cc::BeginMainFrameReason reason,
+                                              bool urgent) {
+   if (main_task_runner_->BelongsToCurrentThread()) {
+     if (raf_fallback_timer_) {
++      const base::TimeDelta fallback_delay =
++          use_low_latency_raf_fallback_for_debugger_.load(
++              std::memory_order_relaxed)
++              ? kDebuggerMaxRafDelay
++              : kMaxRafDelay;
+       raf_fallback_timer_->Start(
+-          FROM_HERE, kMaxRafDelay,
++          FROM_HERE, fallback_delay,
+           base::BindOnce(&MainThreadEventQueue::RafFallbackTimerFired, this));
+     }
+     if (client_) {
+@@ -963,6 +969,12 @@ void MainThreadEventQueue::SetNeedsUnbufferedInputForDebugger(bool unbuffered) {
+                                              std::memory_order_relaxed);
+ }
+ 
++void MainThreadEventQueue::SetUseLowLatencyRafFallbackForDebugger(
++    bool enabled) {
++  use_low_latency_raf_fallback_for_debugger_.store(enabled,
++                                                   std::memory_order_relaxed);
++}
++
+ void MainThreadEventQueue::SetHasPointerRawUpdateEventHandlers(
+     bool has_handlers) {
+   has_pointerrawupdate_handlers_.store(has_handlers, std::memory_order_relaxed);
+diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
+index d42add7ee7a91b0ff035bef81f58c95e68b9f11b..a387c6e8454ad07b3eda09e395ea455f561e157f 100644
+--- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
++++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
+@@ -132,6 +132,7 @@ class PLATFORM_EXPORT MainThreadEventQueue
+   void ClearClient();
+   void SetNeedsLowLatency(bool low_latency);
+   void SetNeedsUnbufferedInputForDebugger(bool unbuffered);
++  void SetUseLowLatencyRafFallbackForDebugger(bool enabled);
+ 
+   void SetHasPointerRawUpdateEventHandlers(bool has_handlers);
+ 
+@@ -215,6 +216,7 @@ class PLATFORM_EXPORT MainThreadEventQueue
+   std::atomic<bool> has_pointerrawupdate_handlers_ = false;
+   std::atomic<bool> needs_low_latency_ = false;
+   std::atomic<bool> needs_unbuffered_input_for_debugger_ = false;
++  std::atomic<bool> use_low_latency_raf_fallback_for_debugger_ = false;
+   std::atomic<bool> needs_low_latency_until_pointer_up_ = false;
+ 
+   // Contains data to be shared between main thread and compositor thread.
+diff --git a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
+index 34908aa2b1d76e874e2c3eb2ba62ff692c3da732..8fbc7ecc547ab8dd9db3cb33abee0d933732823e 100644
+--- a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
++++ b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
+@@ -39,6 +39,9 @@ class MockInputHandlerProxyClient : public InputHandlerProxyClient {
+                     const gfx::PointF& causal_event_viewport_point,
+                     const cc::OverscrollBehavior& overscroll_behavior));
+   void DidStartScrollingViewport() override {}
++  MOCK_METHOD2(SynchronizeDebuggerScrollFromImpl,
++               void(const cc::ElementId& scroll_element,
++                    const gfx::Vector2dF& scroll_delta));
+   MOCK_METHOD1(SetAllowedTouchAction, void(cc::TouchAction touch_action));
+   bool AllowsScrollResampling() override { return true; }
+ };
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
+index 3e5c67461d642d6ce345f8f9924f97fced79ad65..936979278f0aeeb7b4ef4686d9bfac3ca54af687 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
+@@ -40,6 +40,7 @@
+ #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
+ #include "third_party/blink/public/common/input/web_input_event_attribution.h"
+ #include "third_party/blink/public/common/input/web_keyboard_event.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/scheduler/main_thread/pending_user_input.h"
+ #include "third_party/blink/renderer/platform/scheduler/public/agent_group_scheduler.h"
+@@ -390,6 +391,8 @@ void WidgetInputHandlerManager::SetHidden(bool hidden) {
+ void WidgetInputHandlerManager::OnDevToolsSessionConnectionChanged(
+     bool attached) {
+   dev_tools_session_attached_ = attached;
++  input_event_queue_->SetUseLowLatencyRafFallbackForDebugger(
++      attached && RoxyFingerprintConfig::Get().enabled());
+ }
+ 
+ void WidgetInputHandlerManager::InitInputHandler() {
+@@ -489,6 +492,26 @@ void WidgetInputHandlerManager::SetNeedsMainFrame(
+   widget_->RequestAnimationAfterDelay(reason, base::TimeDelta(), urgent);
+ }
+ 
++void WidgetInputHandlerManager::SynchronizeDebuggerScrollFromImpl(
++    const cc::ElementId& scroll_element,
++    const gfx::Vector2dF& scroll_delta) {
++  main_thread_task_runner_->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          &WidgetInputHandlerManager::SynchronizeDebuggerScrollOnMainThread,
++          this, scroll_element, scroll_delta));
++}
++
++void WidgetInputHandlerManager::SynchronizeDebuggerScrollOnMainThread(
++    cc::ElementId scroll_element,
++    gfx::Vector2dF scroll_delta) {
++  DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
++  if (!widget_)
++    return;
++  widget_->LayerTreeHost()->SynchronizeDebuggerScrollFromImpl(scroll_element,
++                                                              scroll_delta);
++}
++
+ bool WidgetInputHandlerManager::RequestedMainFramePending() {
+   return widget_->LayerTreeHost()->RequestedMainFramePending();
+ }
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
+index 31c072f0ad03272ff934592236434b1da55e445c..3523ff1650237661c8a15500cb5268bb643c445b 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
+@@ -126,6 +126,9 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+   // InputHandlerProxyClient overrides.
+   void WillShutdown() override;
+   void DidStartScrollingViewport() override;
++  void SynchronizeDebuggerScrollFromImpl(
++      const cc::ElementId& scroll_element,
++      const gfx::Vector2dF& scroll_delta) override;
+   void SetAllowedTouchAction(cc::TouchAction touch_action) override;
+   bool AllowsScrollResampling() override { return allow_scroll_resampling_; }
+ 
+@@ -235,6 +238,8 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+   void InitOnInputHandlingThread(
+       const base::WeakPtr<cc::CompositorDelegateForInput>& compositor_delegate,
+       bool sync_compositing);
++  void SynchronizeDebuggerScrollOnMainThread(cc::ElementId scroll_element,
++                                             gfx::Vector2dF scroll_delta);
+   void BindChannel(
+       mojo::PendingReceiver<mojom::blink::WidgetInputHandler> receiver);
+ 

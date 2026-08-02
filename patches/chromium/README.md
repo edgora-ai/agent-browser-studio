@@ -18,6 +18,12 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ./patches/chromium/apply.sh /path/to/chromium/src
 ```
 
+Released Chromium changes are append-only: add the next numbered patch instead
+of rewriting an earlier patch. The current `0002`–`0037` chain therefore keeps
+the system-theme and occluded-input fixes independently reviewable and
+revertible, while `check.sh` validates the complete order against a clean
+upstream index.
+
 ## Build configuration
 
 Use the checked-in release arguments so the binary exposes the same public
@@ -44,7 +50,7 @@ Blink/public common code. There is no page-script injection or JavaScript
 prototype replacement. The implementation covers deterministic
 Navigator/User-Agent Client Hints, screen/DPR, Canvas, AudioBuffer, WebGL,
 WebRTC policy, font enumeration, ClientRects, timezone reporting, media/plugin
-enumeration, and geolocation policy.
+enumeration, geolocation policy, and declared-platform system themes.
 
 Native patches now apply the same UA, UA Client Hints headers, platform,
 language, CPU, memory, touch, screen and DPR identity in Blink, the network
@@ -82,10 +88,18 @@ the field-by-field native consumer audit.
 Chromium 150 additions preserve the managed identity across CDP user-agent
 operations, bind browser-window bounds to the declared screen geometry, extend
 WebGPU adapter architecture/subgroup coherence, and keep trusted native input
-routing for CDP-driven mouse, keyboard and wheel events. The application layer
-adds seeded bounded interaction timing, exact installed-version pins with 149
-rollback retention, a native-host pass-through mode, and explicit
-third-party-cookie compatibility with exact preference restoration.
+routing for CDP-driven mouse, keyboard and wheel events. Managed occluded
+windows retain FIFO renderer-ack bookkeeping, use a bounded rAF fallback, and
+reconcile compositor scroll offsets into DOM state without duplicating later
+commits; pass-through keeps Chromium's stock path. The application layer
+paces seeded pointer points across compositor frames and adds exact
+installed-version pins with 149 rollback retention, a native-host pass-through
+mode, and explicit third-party-cookie compatibility with exact preference
+restoration.
+Blink system colors, list selection and painted text selection now use fixed
+Windows/macOS light and dark palettes from the declared platform rather than
+the host theme. The seed also owns `prefers-color-scheme`; an unconfigured
+pass-through launch continues to expose the native host theme.
 
 The profile timezone is owned by Blink's native `TimeZoneController`, so the
 same ICU/V8 timezone is used by Window and Workers and cannot be reset by a
@@ -93,7 +107,8 @@ later host-timezone monitor notification.
 
 The application baseline capture records Window and Worker Navigator identity,
 UA high-entropy values, Canvas, Audio, ClientRects, WebGL/WebGPU, fonts,
-plugins, speech voices, media-device counts, storage quota, DNT and touch state.
+plugins, speech voices, media-device counts, storage quota, DNT, touch state,
+preferred color scheme and light/dark system colors.
 It is intended for same-profile restart stability and cross-seed distinction
 checks once a patched Chromium binary is available.
 
@@ -108,16 +123,19 @@ npm run verify:chromium -- /path/to/Chromium.app
 
 It launches fresh same-seed and different-seed profiles on fixed loopback
 origins, then adds adversarial locale, headed-geometry and pass-through runs.
-The 48 checked surfaces include Window/Worker identity, UA-CH, screen/window
+The 50 checked surfaces include Window/Worker identity, UA-CH, screen/window
 geometry, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
 geolocation, StorageManager/Storage Buckets, WebAuthn, AAC/H.264 playback,
 MediaSource, MediaCapabilities and WebCodecs encode support, media-device
 constraint remapping, audio capture, request headers in Window and
 Dedicated/Shared/Service Workers, disabled WebRTC candidates, CDP identity,
 exact build-version coherence, restart stability and cross-seed distinction.
-Missing WebGPU or a mixed pass-through identity is a failure.
+An additional 61-case theme corpus checks 19 CSS system colors in preferred,
+explicit light and explicit dark schemes, Windows/macOS differences, real
+selection screenshot pixels and native-host pass-through. Missing WebGPU or a
+mixed pass-through identity/theme is a failure.
 
-The verified macOS arm64 build reports `150.0.7871.114` and passes all 48
-surfaces. Installed-app acceptance additionally passes exact 150/149 rollback,
-trusted humanized input and third-party-cookie compatibility (`8/8` targeted
-E2E) without a CloakBrowser license key or login.
+The verified macOS arm64 build reports `150.0.7871.114` and passes all 50
+surfaces plus the 61 theme cases. Installed-app acceptance additionally passes
+exact 150/149 rollback, trusted humanized input and third-party-cookie
+compatibility (`13/13` targeted E2E) without a CloakBrowser license key or login.

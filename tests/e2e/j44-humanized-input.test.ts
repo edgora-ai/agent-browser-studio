@@ -54,7 +54,7 @@ describe("J44 — seeded native humanized input", () => {
 
     h = await setupTestApp({ userDataDir: USERDATA });
     const created = await h.page.evaluate(async (seed: number) =>
-      (window as any).cloak.api.cloak.create({ name: "J44", platform: "windows", fingerprintSeed: seed }), SEED);
+      (window as any).cloak.api.cloak.create({ name: "J44", platform: "windows", fingerprintSeed: seed, proxyMode: "none" }), SEED);
     const launched = await h.page.evaluate(async (dirId: string) =>
       (window as any).cloak.api.cloak.launch(dirId), created.dirId) as { success: boolean; cdpPort: number; pid: number; error?: string };
     expect(launched.success, launched.error || "J44 launch failed").toBe(true);
@@ -91,7 +91,7 @@ describe("J44 — seeded native humanized input", () => {
       events: window.__events
     })`) as { value: string; scrollY: number; events: Array<{ type: string; trusted: boolean; key: string | null; deltaY: number; x: number; y: number; time: number }> };
     expect(state.value).toBe("hello");
-    expect(state.scrollY).toBeGreaterThan(0);
+    expect(state.scrollY).toBe(731);
 
     const moves = state.events.filter((event) => event.type === "mousemove");
     const keyboard = state.events.filter((event) => ["keydown", "keypress", "keyup"].includes(event.type));

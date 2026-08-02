@@ -859,7 +859,7 @@ export async function cdpScroll(client: CdpClient, direction: "up" | "down", amo
       deltaX: 0,
       deltaY: deltas[index],
     });
-    await sleep(interactionDelay(client.interactionSeed, action, 230 + index, 12, 34));
+    await sleep(interactionDelay(client.interactionSeed, action, 230 + index, 45, 75));
   }
   return { success: true, direction, amount: normalizedAmount, native: true, steps: deltas.length };
 }

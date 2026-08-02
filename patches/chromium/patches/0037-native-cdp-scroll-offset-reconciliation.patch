@@ -1,0 +1,161 @@
+diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
+index ff02d1a93bd4c4b5544fc3857e1968f7d68ba74f..be56a4d062237728e641239a28b32568db9d6ac4 100644
+--- a/cc/trees/layer_tree_host.cc
++++ b/cc/trees/layer_tree_host.cc
+@@ -1246,9 +1246,23 @@ gfx::Vector2dF LayerTreeHost::SubtractSynchronizedDebuggerScrollDelta(
+ 
+ void LayerTreeHost::SynchronizeDebuggerScrollFromImpl(
+     const ElementId& scroll_element,
+-    const gfx::Vector2dF& scroll_delta) {
++    const gfx::PointF& compositor_scroll_offset) {
+   DCHECK(IsMainThread());
+-  if (!scroll_element || scroll_delta.IsZero())
++  if (!scroll_element)
++    return;
++
++  const auto* property_trees =
++      const_cast<const LayerTreeHost*>(this)->property_trees();
++  const ScrollTree& scroll_tree = property_trees->scroll_tree();
++  if (!scroll_tree.FindNodeFromElementId(scroll_element))
++    return;
++
++  const gfx::PointF main_scroll_offset =
++      scroll_tree.current_scroll_offset(scroll_element);
++  const gfx::Vector2dF scroll_delta(
++      compositor_scroll_offset.x() - main_scroll_offset.x(),
++      compositor_scroll_offset.y() - main_scroll_offset.y());
++  if (scroll_delta.IsZero())
+     return;
+ 
+   synchronized_debugger_scroll_deltas_[scroll_element] += scroll_delta;
+diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
+index e80f725101fb931eb914f7597e3f12e9a84954ef..fa9d080061302453703efd918381cbfa68551b02 100644
+--- a/cc/trees/layer_tree_host.h
++++ b/cc/trees/layer_tree_host.h
+@@ -829,8 +829,9 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+   // Applies a compositor-consumed DevTools scroll delta immediately on the
+   // main thread. This keeps DOM scroll state current when display begin frames
+   // are unavailable, such as while the desktop session is locked.
+-  void SynchronizeDebuggerScrollFromImpl(const ElementId& scroll_element,
+-                                         const gfx::Vector2dF& scroll_delta);
++  void SynchronizeDebuggerScrollFromImpl(
++      const ElementId& scroll_element,
++      const gfx::PointF& compositor_scroll_offset);
+   void ApplyMutatorEvents(std::unique_ptr<MutatorEvents> events);
+   void RecordStartOfFrameMetrics();
+   void RecordEndOfFrameMetrics(base::TimeTicks frame_begin_time,
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+index 7d0a60a38a33b9d0de69191863dd4c6f6cb26bd3..1f3e1b64c09653d7f0e7be66538b9c116de69d65 100644
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+@@ -1305,13 +1305,12 @@ InputHandlerProxy::HandleGestureScrollUpdate(
+ 
+   if ((gesture_event.GetModifiers() & WebInputEvent::kFromDebugger) &&
+       scroll_result.did_scroll) {
+-    gfx::Vector2dF consumed_delta(
+-        static_cast<float>(scroll_state_data.delta_x),
+-        static_cast<float>(scroll_state_data.delta_y));
+-    consumed_delta -= scroll_result.unused_scroll_delta;
+-    if (!consumed_delta.IsZero()) {
++    gfx::PointF compositor_scroll_offset;
++    if (latched_element_id &&
++        input_handler_->GetScrollOffsetForLayer(
++            latched_element_id, &compositor_scroll_offset)) {
+       client_->SynchronizeDebuggerScrollFromImpl(latched_element_id,
+-                                                 consumed_delta);
++                                                 compositor_scroll_offset);
+     }
+   }
+ 
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
+index d7e110e2fd18be0696f7b1e92257e93bc9a5d7e1..d268d27118f9bb0c3c3531be97713611cba41b8a 100644
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
+@@ -6,7 +6,7 @@
+ #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WIDGET_INPUT_INPUT_HANDLER_PROXY_CLIENT_H_
+ 
+ #include "cc/paint/element_id.h"
+-#include "ui/gfx/geometry/vector2d_f.h"
++#include "ui/gfx/geometry/point_f.h"
+ 
+ namespace blink {
+ 
+@@ -21,7 +21,7 @@ class InputHandlerProxyClient {
+   // DOM scroll state does not depend on display scheduling.
+   virtual void SynchronizeDebuggerScrollFromImpl(
+       const cc::ElementId& scroll_element,
+-      const gfx::Vector2dF& scroll_delta) = 0;
++      const gfx::PointF& compositor_scroll_offset) = 0;
+   virtual void SetAllowedTouchAction(cc::TouchAction touch_action) = 0;
+   virtual bool AllowsScrollResampling() = 0;
+ 
+diff --git a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
+index 8fbc7ecc547ab8dd9db3cb33abee0d933732823e..47b29a1983fa309df6c0156f8382c96b2716e999 100644
+--- a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
++++ b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
+@@ -41,7 +41,7 @@ class MockInputHandlerProxyClient : public InputHandlerProxyClient {
+   void DidStartScrollingViewport() override {}
+   MOCK_METHOD2(SynchronizeDebuggerScrollFromImpl,
+                void(const cc::ElementId& scroll_element,
+-                    const gfx::Vector2dF& scroll_delta));
++                    const gfx::PointF& compositor_scroll_offset));
+   MOCK_METHOD1(SetAllowedTouchAction, void(cc::TouchAction touch_action));
+   bool AllowsScrollResampling() override { return true; }
+ };
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
+index 936979278f0aeeb7b4ef4686d9bfac3ca54af687..19208b9566e3472978f92269317d2e818d0dc9f0 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
+@@ -494,22 +494,22 @@ void WidgetInputHandlerManager::SetNeedsMainFrame(
+ 
+ void WidgetInputHandlerManager::SynchronizeDebuggerScrollFromImpl(
+     const cc::ElementId& scroll_element,
+-    const gfx::Vector2dF& scroll_delta) {
++    const gfx::PointF& compositor_scroll_offset) {
+   main_thread_task_runner_->PostTask(
+       FROM_HERE,
+       base::BindOnce(
+           &WidgetInputHandlerManager::SynchronizeDebuggerScrollOnMainThread,
+-          this, scroll_element, scroll_delta));
++          this, scroll_element, compositor_scroll_offset));
+ }
+ 
+ void WidgetInputHandlerManager::SynchronizeDebuggerScrollOnMainThread(
+     cc::ElementId scroll_element,
+-    gfx::Vector2dF scroll_delta) {
++    gfx::PointF compositor_scroll_offset) {
+   DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
+   if (!widget_)
+     return;
+-  widget_->LayerTreeHost()->SynchronizeDebuggerScrollFromImpl(scroll_element,
+-                                                              scroll_delta);
++  widget_->LayerTreeHost()->SynchronizeDebuggerScrollFromImpl(
++      scroll_element, compositor_scroll_offset);
+ }
+ 
+ bool WidgetInputHandlerManager::RequestedMainFramePending() {
+diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
+index 3523ff1650237661c8a15500cb5268bb643c445b..587fdeea9a695c495bffbbfffb6b7297209000fa 100644
+--- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
++++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
+@@ -128,7 +128,7 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+   void DidStartScrollingViewport() override;
+   void SynchronizeDebuggerScrollFromImpl(
+       const cc::ElementId& scroll_element,
+-      const gfx::Vector2dF& scroll_delta) override;
++      const gfx::PointF& compositor_scroll_offset) override;
+   void SetAllowedTouchAction(cc::TouchAction touch_action) override;
+   bool AllowsScrollResampling() override { return allow_scroll_resampling_; }
+ 
+@@ -238,8 +238,9 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+   void InitOnInputHandlingThread(
+       const base::WeakPtr<cc::CompositorDelegateForInput>& compositor_delegate,
+       bool sync_compositing);
+-  void SynchronizeDebuggerScrollOnMainThread(cc::ElementId scroll_element,
+-                                             gfx::Vector2dF scroll_delta);
++  void SynchronizeDebuggerScrollOnMainThread(
++      cc::ElementId scroll_element,
++      gfx::PointF compositor_scroll_offset);
+   void BindChannel(
+       mojo::PendingReceiver<mojom::blink::WidgetInputHandler> receiver);
+ 
