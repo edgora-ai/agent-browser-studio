@@ -19,12 +19,12 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0038` chain therefore keeps
+of rewriting an earlier patch. The current `0002`–`0039` chain therefore keeps
 the system-theme and occluded-input fixes independently reviewable and
 revertible, while `check.sh` validates the complete order against a clean
 upstream index. `PATCHSET.sha256` detects any rewrite of an already released
 patch or source payload, and `PATCH_HISTORY.md` records the OSS and Chromium
-source provenance. The next Chromium change must start at `0039`.
+source provenance. The next Chromium change must start at `0040`.
 
 ## Build configuration
 
@@ -81,8 +81,10 @@ per-profile least-significant-bit transform. Media enumeration exposes a
 stable, origin-scoped desktop device set, and the standard Chromium PDF
 plugin/MIME set is enforced in Blink. Geolocation `real`, `disable`, and
 `custom` policies run in Blink's
-native request/result path. Storage Buckets use the same configured quota as
-`navigator.storage.estimate()`, and WebAuthn capability probes use the
+native request/result path. Storage Buckets and deprecated temporary/persistent
+query/request callbacks use the same configured quota as
+`navigator.storage.estimate()`; OPFS and the legacy FileSystem path are covered
+in persistent and incognito contexts. WebAuthn capability probes use the
 profile's declared platform-authenticator identity. See
 `CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
 the field-by-field native consumer audit.
@@ -143,9 +145,10 @@ npm run verify:chromium -- /path/to/Chromium.app
 It launches same-seed and different-seed profiles on fixed loopback origins,
 reopens the same persistent Profile, then adds adversarial locale, a full
 headed run, paired no-config Stock window-mode captures and pass-through.
-The 50 checked surfaces include Window/Worker identity, UA-CH, screen/window
+The 52 checked surfaces include Window/Worker identity, UA-CH, screen/window
 geometry, Canvas, Audio, ClientRects, WebGL/WebGPU, plugins, speech,
-geolocation, StorageManager/Storage Buckets, WebAuthn, AAC/H.264 playback,
+geolocation, StorageManager/Storage Buckets, legacy quota APIs, OPFS and the
+legacy FileSystem path in persistent/incognito contexts, WebAuthn, AAC/H.264 playback,
 MediaSource, MediaCapabilities and WebCodecs encode support, media-device
 constraint remapping, audio capture, request headers in Window and
 Dedicated/Shared/Service Workers, disabled WebRTC candidates, CDP identity,
@@ -153,13 +156,26 @@ exact build-version coherence, same-Profile restart stability, cross-seed
 distinction and full headed/headless parity. On macOS, the only permitted
 window-mode differences are `screenY` and `innerHeight`, and both values must
 exactly match the dynamically captured no-config Stock path.
+The deep WebGL gate additionally covers Window/Worker WebGL 1/2 extensions,
+26/53 capability parameters, compressed formats, draw-buffer/anisotropy limits
+and shader precision. Its normalized SHA-256 must match the six-Profile
+observable RoxyChrome reference recorded in `WEBGL_CORPUS.md`.
+The WebGPU gate covers Window/Worker adapter and default-device identity,
+features, limits, preferred canvas format and WGSL language features. Its
+capability SHA-256 must match Stock Chrome 150; `WEBGPU_CORPUS.md` also records
+the six-Profile RoxyChrome comparison and the mixed Windows/Metal identity that
+the joint OSS hardware persona avoids.
+The Storage gate covers Window/Worker modern estimates and Buckets, OPFS,
+Window legacy temporary/persistent quota query/request callbacks and the legacy
+FileSystem path. `STORAGE_CORPUS.md` records the pre-`0039` leak, the fixed
+values, and the immutable source/patch checkpoint.
 An additional 61-case theme corpus checks 19 CSS system colors in preferred,
 explicit light and explicit dark schemes, Windows/macOS differences, real
 selection screenshot pixels and native-host pass-through. Missing WebGPU or a
 mixed pass-through identity/theme is a failure.
 
-The verified macOS arm64 build reports `150.0.7871.114` and passes all 50
-surfaces plus the 61 theme cases. Installed-app acceptance additionally passes
+The verified macOS arm64 build reports `150.0.7871.114` and passes all 52
+surfaces, the deep Storage corpus, and the 61 theme cases. Installed-app acceptance additionally passes
 exact 150/149 rollback, trusted humanized input and third-party-cookie
 compatibility and authenticated HTTP/SOCKS proxy routing (`15/15` targeted E2E)
 without a CloakBrowser license key or login.

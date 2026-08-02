@@ -17,12 +17,13 @@ serialize it.
 | `hardwareConcurrency` | shared Window/Worker `NavigatorBase` |
 | `deviceMemory` | shared Window/Worker `NavigatorDeviceMemory` |
 | `maxTouchPoints` | Blink `NavigatorEvents` |
+| `hardwareProfile.*` | launch-time joint-persona gate constrains CPU/RAM/GPU/screen/DPR/font/audio before the constituent native consumers receive them |
 | `screen.*` | Blink `Screen` and `LocalDOMWindow`; `pixelDepth` delegates to configured `colorDepth` |
-| `storageQuotaBytes` | Blink `StorageManager::estimate()` and `StorageBucket::estimate()` callbacks |
+| `storageQuotaBytes` | Blink `StorageManager::estimate()`, `StorageBucket::estimate()` and deprecated temporary/persistent query/request callbacks; verified with OPFS and legacy FileSystem in persistent/incognito contexts |
 | `canvas.*` | detached 8-bit, float16 and float32 Canvas/OffscreenCanvas readbacks |
 | `audio.*` | `AudioBuffer` and all analyser readback variants |
-| `webgl.*` | WebGL 1/2 debug renderer parameter path in Window/Worker |
-| `webgpu.*` | `GPUAdapter.info` / `GPUDevice.adapterInfo` vendor in Window/Worker |
+| `webgl.*` | WebGL 1/2 debug renderer plus 39/36 extensions, 26/53 capability parameters and shader-precision corpus in Window/Worker |
+| `webgpu.*` | Window/Worker `GPUAdapter.info` / `GPUDevice.adapterInfo`, 23 adapter features, 36 adapter/device limits and WGSL capability corpus |
 | `webauthn.*` | `PublicKeyCredential` client capabilities, conditional mediation and platform-authenticator availability |
 | `webrtc.*` | native allocator routing plus ICE candidate and SDP rewriting |
 | `timezone` | Blink `TimeZoneController` authoritative ICU/V8 process override for Window and Workers |

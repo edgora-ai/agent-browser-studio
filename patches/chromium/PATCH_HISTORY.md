@@ -94,3 +94,25 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
   run. The only headed/headless differences are the dynamically matched Stock
   macOS window-decoration values for `screenY` and `innerHeight`; this follow-up
   changes no Chromium source or released patch bytes.
+
+### `0039` — 2026-08-03
+
+- First preserved in OSS commit:
+  `e78c2cd84e551efc872d8ec321080e6d82ece1c1`.
+- Chromium source commit:
+  `3eb1216fd3259fa220ce2612c16020f190c7eda7`
+  (`feat: align legacy managed storage quota`).
+- Annotated Chromium source tag:
+  `roxy-chromium-150-patchset-0039`.
+- Patch SHA-256:
+  `a111080791715db1fc6886e0b2607cc72ead8949e3343f4873a68d2102107d39`.
+- Scope: apply `storageQuotaBytes` to Blink's deprecated temporary/persistent
+  quota query and request callbacks without reporting a quota below actual
+  usage. No byte in patch `0038` or any earlier payload changed.
+- Acceptance: successful incremental Chromium 150 build; strict native
+  verification of 52 baseline surfaces, the Window/Worker
+  modern/legacy/Buckets/OPFS/FileSystem corpus in persistent and incognito
+  contexts, 61 theme cases, restart and headed/headless parity; `424/424`
+  tests; and clean-upstream-index application of patches `0002–0039`.
+- The next Chromium source change must be exported as `0040-*`; do not amend,
+  squash, rebase or replace this source commit, tag, patch or digest row.
