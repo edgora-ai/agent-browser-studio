@@ -9,8 +9,8 @@ before the patch applicability check runs.
 
 1. Keep experimental, diagnostic, cleanup and final-fix commits in the
    Chromium source branch. Do not amend, squash or rebase that branch.
-2. Export a released source change as the next numbered patch. After `0038`,
-   the next file is `0039-*`.
+2. Export a released source change as the next numbered patch. After `0041`,
+   the next file is `0042-*`.
 3. Append its digest to `PATCHSET.sha256` and its provenance to this ledger in
    the same OSS commit. Do not alter prior digest or history rows.
 4. Run `check.sh` against the pinned clean upstream commit before release.
@@ -38,6 +38,9 @@ before the patch applicability check runs.
 | `0029–0032` | `57e73755f5cdbe4cf148ee5e19ae289776305ed6` | CDP identity, geometry, WebGPU and input routing |
 | `0033–0037` | `462a28857088403f926d759eac340b4b9fa2f152` | Theme coherence and occluded CDP input/scroll fixes |
 | `0038` | See the append-only `0038` release entry below | Native managed HTTP proxy authentication |
+| `0039` | `e78c2cd84e551efc872d8ec321080e6d82ece1c1` | Legacy storage quota coherence |
+| `0040` | `0922ab130a2268d12862e30cca6e282507f721ec` | Managed platform-font resolution |
+| `0041` | `2152f8799831fd9eb183ae550826cbfdbbedf9a2` | Managed QUIC proxy and SOCKS5 UDP transport |
 
 ## Chromium 150 source checkpoint
 
@@ -46,6 +49,11 @@ before the patch applicability check runs.
 - Preserved branch: `roxy/chromium-150-checkpoint-20260802`.
 - Preserved head after patch `0037`:
   `4cce113972524faf9fe01d502fe391a0671a74e2`.
+- Preserved head after patch `0041`:
+  `4461854586be1840bc84e1577017b4163061af38`.
+- Current branch head after the post-release scroll diagnostic cleanup:
+  `b4bf6e9f21638c71848e72aed5deb6289f953a7a`; its tree is identical to the
+  tagged `0041` source tree.
 
 The following source commits intentionally retain the unsuccessful diagnostics
 and experiments as well as the fixes, so later Chromium upgrades can recover
@@ -65,6 +73,11 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
 582137b30be4492ac43885130f64f3a4c61f83ab fix: deduplicate synchronized debugger scroll commits
 4cce113972524faf9fe01d502fe391a0671a74e2 fix: reconcile debugger scrolls against absolute offsets
 0198524b77609cfe0f898ac1b6f56f5932b1ae21 feat: add native managed proxy authentication
+3eb1216fd3259fa220ce2612c16020f190c7eda7 feat: align legacy managed storage quota
+e7fc69f9ac673fd3f85f74438efa22154efaf1d7 feat: enforce managed font resolution
+4461854586be1840bc84e1577017b4163061af38 feat: enable managed QUIC proxy transport
+ef1c9d89ece1192f40fe8ca42f6929ba2d93ed5a diagnostic: trace managed debugger scroll reconciliation
+b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation diagnostics
 ```
 
 ## Append-only release entries
@@ -142,4 +155,45 @@ eeeed6a4a003fa8722a2464da113e8f883009ea1 fix: bound managed debugger input deliv
   `0002–0040` with immutable payload hashes verified.
 - No byte in patch `0039`, any earlier patch, or either source payload changed.
   The next Chromium source change must be exported as `0041-*`; do not amend,
+  squash, rebase or replace this source commit, tag, patch or digest row.
+
+### `0041` — 2026-08-11
+
+- First preserved in OSS commit:
+  `2152f8799831fd9eb183ae550826cbfdbbedf9a2`.
+- Chromium source commit:
+  `4461854586be1840bc84e1577017b4163061af38`
+  (`feat: enable managed QUIC proxy transport`).
+- Annotated Chromium source tag:
+  `roxy-chromium-150-patchset-0041`.
+- Patch SHA-256:
+  `171b7036a1a22f4bb124b7e00c5bcd7fd925d314d5912929c5d4899cb6b0fc11`.
+- Scope: enable Chromium's upstream QUIC-proxy implementation in Release
+  builds and advertise `roxy-quic-proxy-v1` alongside the existing native
+  proxy-auth capability. The application starts a profile-owned loopback
+  MASQUE helper that translates normal CONNECT and RFC 9298 CONNECT-UDP into
+  authenticated SOCKS5 CONNECT and UDP ASSOCIATE. Oversized HTTP Datagrams use
+  the RFC 9297 DATAGRAM Capsule fallback; credentials cross only a mode-0600
+  one-shot file and never enter Chrome arguments or logs.
+- Acceptance: successful incremental Chromium 150 build; helper Go tests and
+  race detector; real Electron/Profile authenticated SOCKS5 TCP compatibility
+  on both `0040` and `0041`; real UDP-capable SOCKS5 HTTP/3 navigation with
+  `nextHopProtocol=h3`; mode-0600 deletion and helper lifecycle checks;
+  `36/36` test files and `433/433` tests; and immutable-payload verification
+  plus clean pinned-upstream-index application of patches `0002–0041`.
+- Application input-completion follow-up
+  `2ffafa614bf2b5bf987c5cc2fb82528cd5338792` waits for the native viewport to
+  reconcile after trusted wheel dispatch by polling `Page.getLayoutMetrics`;
+  it does not inject page script or change Chromium patch bytes. Source-build
+  and installed-cache J44 both complete at the exact requested scroll offset.
+- Release-path verification follow-up
+  `a8cc6e53fc6ce0ac07e5c5826439a4f61bae9d1e` covers explicit source/install
+  Chromium selection for the real H3 journey and asserts that patch `0041`
+  and the packaged helper remain in the release inputs. The rebuilt local App
+  retained all 6 Profiles, 1202 files and 4 symlinks byte-for-byte: config
+  SHA-256 `dc97fac627544e1521e7a5425ca734c08cff65e262d70faf9f74b527792d8430`
+  and Profile-tree SHA-256
+  `f54cd1d68782ab7afc521d213fe8d825b1681fe0e72f5bae41a4499a9759ec7f`.
+- No byte in patch `0040`, any earlier patch, or either source payload changed.
+  The next Chromium source change must be exported as `0042-*`; do not amend,
   squash, rebase or replace this source commit, tag, patch or digest row.

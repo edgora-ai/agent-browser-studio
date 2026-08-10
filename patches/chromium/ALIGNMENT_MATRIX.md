@@ -63,7 +63,7 @@ Status meanings:
 | Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests, compositor-paced pointer points and installed Chromium 150 E2E; no page injection |
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |
 | SOCKS5 TCP | verified | Preserve authenticated routing and proxy-side name resolution through the loopback bridge | unit rejection/echo corpus plus real Electron/Profile remote-domain E2E and bridge lifecycle check |
-| SOCKS5 UDP / QUIC / HTTP3 | missing | Managed proxies currently fail closed with QUIC disabled; add UDP-capable proxy transport | controlled SOCKS5 UDP-associate and HTTP/3 endpoint test |
+| SOCKS5 UDP / QUIC / HTTP3 | verified | Preserve authenticated TCP/UDP routing, proxy-side DNS and fail-closed behavior on older/HTTP-only paths | profile-owned MASQUE bridge, per-flow SOCKS5 UDP ASSOCIATE, RFC 9297 oversized-datagram Capsule fallback and real Electron/Profile HTTP/3 E2E |
 | Proxy timing, cache and header signals | verified | Preserve direct/HTTP/SOCKS structural parity as Chromium evolves | HTTP/HTTPS Window/Worker/frame/Service Worker headers, WSS, Navigation/Resource Timing, cache and ETag revalidation corpus against stock Chrome and Cloak |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
 | TLS, HTTP/2 and HTTP/3 stock parity | verified | Preserve the same-major Stock Chromium wire identity without spoofing | two cold-process samples: normalized TLS ClientHello/JA4, H2 SETTINGS/WINDOW_UPDATE/frame/header order and H3 QUIC Client Initial/ClientHello/transport parameters exactly match Stock Chrome 150 (`NETWORK_FINGERPRINT_CORPUS.md`) |
@@ -124,14 +124,15 @@ build-version coherence.
 The installed-cache journey retains Chromium `149.0.7827.22` alongside 150 and
 passes exact selection, rollback, pass-through, trusted humanized input and
 third-party-cookie compatibility/restoration and authenticated HTTP/SOCKS
-proxy routing (`15/15` targeted E2E) with the
-license environment explicitly absent. Installing 150 leaves the existing
-CloakLite config and six-profile tree byte-for-byte unchanged.
+proxy routing. Patchset `0041` additionally advertises the managed QUIC
+capability and passes a real UDP-capable SOCKS5 HTTP/3 Profile journey with no
+license environment. Installing 150 leaves the existing CloakLite config and
+six-profile tree byte-for-byte unchanged.
 
-Using the stage labels in this matrix, 34 of 36 engine/network/lifecycle rows
-are currently `verified`, none is `partial`, and 2 are `missing`. The two hard
-missing rows are SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution.
-These counts are workflow gates, not a browser quality percentage.
+Using the stage labels in this matrix, 35 of 36 engine/network/lifecycle rows
+are currently `verified`, none is `partial`, and 1 is `missing`. The remaining
+hard missing row is signed multi-platform distribution. These counts are
+workflow gates, not a browser quality percentage.
 
 ## Completion gates
 
@@ -145,7 +146,7 @@ The alignment goal is complete only when all of the following are true:
    Workers, headed/headless and persistent contexts where applicable.
 4. Same identity is stable across fresh launches and restarts; different seeds
    differ only on seeded surfaces and remain internally coherent.
-5. Direct and proxied network comparisons pass without page JavaScript
-   injection or prototype replacement.
+5. Direct and proxied network comparisons, including managed SOCKS5 HTTP/3,
+   pass without page JavaScript injection or prototype replacement.
 6. Packaged CloakLite selects the verified independent binary without a license
    key and passes the complete unit, E2E and installed-app smoke suites.

@@ -19,12 +19,13 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0040` chain therefore keeps
-the system-theme and occluded-input fixes independently reviewable and
-revertible, while `check.sh` validates the complete order against a clean
-upstream index. `PATCHSET.sha256` detects any rewrite of an already released
-patch or source payload, and `PATCH_HISTORY.md` records the OSS and Chromium
-source provenance. The next Chromium change must start at `0041`.
+of rewriting an earlier patch. The current `0002`–`0041` chain therefore keeps
+the system-theme, occluded-input and managed-QUIC changes independently
+reviewable and revertible, while `check.sh` validates the complete order from
+the pinned upstream index regardless of the checkout's current HEAD.
+`PATCHSET.sha256` detects any rewrite of an already released patch or source
+payload, and `PATCH_HISTORY.md` records the OSS and Chromium source provenance.
+The next Chromium change must start at `0042`.
 
 ## Build configuration
 
@@ -107,13 +108,16 @@ restoration.
 Managed HTTP proxy authentication now uses a browser-only 407 challenge path.
 The application passes credentials through a mode-0600 one-shot file that the
 browser reads and deletes before child processes start; credentials no longer
-require an observable extension on the verified build. Managed HTTP/SOCKS
-launches disable QUIC until an authenticated UDP-capable proxy transport is
-implemented, preventing an unproxied UDP fallback.
-Authenticated SOCKS5 TCP profiles use an ephemeral loopback bridge: Chromium
-speaks its supported no-auth SOCKS5 dialect to loopback, while the bridge
-authenticates to the configured upstream and forwards the unresolved target
-domain. The bridge is owned by the profile process lifecycle and never loads a
+require an observable extension on the verified build. Managed HTTP proxies
+and older Chromium builds still disable QUIC, preventing an unproxied UDP
+fallback. Builds advertising `roxy-quic-proxy-v1` route SOCKS5 profiles through
+a profile-owned loopback MASQUE helper. Chromium uses ordinary CONNECT for TCP
+and RFC 9298 CONNECT-UDP for HTTP/3; the helper authenticates to the configured
+upstream with SOCKS5 CONNECT or a per-flow UDP ASSOCIATE while keeping target
+DNS resolution at the proxy. Oversized HTTP Datagrams fall back to the RFC 9297
+DATAGRAM Capsule, credentials cross only a mode-0600 one-shot file, and the
+helper exits with its owning Profile. Older capable-TCP-only builds retain the
+ephemeral no-auth-to-authenticated SOCKS bridge. Neither path loads a
 page-visible extension.
 Blink system colors, list selection and painted text selection now use fixed
 Windows/macOS light and dark palettes from the declared platform rather than
@@ -141,7 +145,9 @@ The external wire corpus compares two cold processes against same-major Stock
 Chrome and verifies normalized TLS ClientHello/JA4, HTTP/2 SETTINGS and frame/
 header order, plus a real HTTP/3 QUIC Client Initial, normalized ClientHello and
 transport parameters. The Chromium 150 results are exact Stock; see
-`NETWORK_FINGERPRINT_CORPUS.md`.
+`NETWORK_FINGERPRINT_CORPUS.md`. A separate real Electron/Profile gate verifies
+that the managed MASQUE-to-SOCKS path reaches the HTTP/3 observer over `h3`
+without changing the bounded Chromium ClientHello and transport semantics.
 
 ## Runtime verification
 
@@ -189,12 +195,15 @@ An additional 61-case theme corpus checks 19 CSS system colors in preferred,
 explicit light and explicit dark schemes, Windows/macOS differences, real
 selection screenshot pixels and native-host pass-through. Missing WebGPU or a
 mixed pass-through identity/theme is a failure.
-The separate network-fingerprint gate dynamically fails on any same-major
-Stock mismatch in TLS, HTTP/2 or HTTP/3. It does not run through an HTTP/SOCKS
-proxy and therefore does not waive the missing UDP-capable managed transport.
+The separate direct network-fingerprint gate dynamically fails on any
+same-major Stock mismatch in TLS, HTTP/2 or HTTP/3. The managed SOCKS gate uses
+an authorized UDP-capable upstream and fails unless a real Profile obtains H3
+through CONNECT-UDP, preserves the expected Client Initial and bounded
+field-trial-aware ClientHello/transport semantics, removes its one-shot state,
+and terminates the helper with the Profile.
 
 The verified macOS arm64 build reports `150.0.7871.114` and passes all 53
 surfaces, the deep Font and Storage corpora, and the 61 theme cases. Installed-app acceptance additionally passes
 exact 150/149 rollback, trusted humanized input and third-party-cookie
-compatibility and authenticated HTTP/SOCKS proxy routing (`15/15` targeted E2E)
-without a CloakBrowser license key or login.
+compatibility, authenticated HTTP/SOCKS proxy routing and the managed SOCKS5
+HTTP/3 journey without a CloakBrowser license key or login.

@@ -55,6 +55,7 @@ Do **not** use CloakLite for fraud, spam, credential attacks, unauthorized scrap
 
 - macOS on Apple Silicon
 - Node.js 22.16 or newer
+- Go 1.25 or newer (builds the packaged MASQUE/SOCKS helper)
 - npm
 
 ### Install and run
@@ -96,12 +97,13 @@ the strict native harness passes all 53 checked surfaces, the modern/legacy
 Storage corpus, 61 system-theme checks and the deep Window/Worker/DOM/Local
 Access font corpus, including full WebGL 1/2 and WebGPU adapter/device
 capability corpora, same-Profile restart and headed/headless comparison, and
-the installed version/input/cookie/proxy journeys pass `15/15`, with Chromium
-149 retained for rollback. This is not a claim of complete
-RoxyChrome/CloakBrowser parity. Of 36 engine/network/lifecycle gates, 34 are
-verified, none remains partial, and 2 are missing. The hard missing rows are
-SOCKS5 UDP/QUIC/HTTP3 and signed multi-platform distribution; the controlled
-HTTP/HTTPS/WSS proxy timing/cache/header corpus and the Stock-150-exact
+the installed version/input/cookie/proxy journeys pass with Chromium 149
+retained for rollback. Patchset `0041` also verifies authenticated SOCKS5 TCP
+and UDP, proxy-side DNS and real Profile HTTP/3 through a profile-owned MASQUE
+bridge. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
+engine/network/lifecycle gates, 35 are verified, none remains partial, and 1 is
+missing: signed multi-platform distribution. The controlled HTTP/HTTPS/WSS
+proxy timing/cache/header corpus and the Stock-150-exact direct
 TLS/HTTP2/HTTP3 fingerprint corpus are verified; see
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 

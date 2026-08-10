@@ -55,6 +55,7 @@ CloakLite 是具有双用途属性的本地自动化工具。请仅用于合法�
 
 - Apple Silicon macOS
 - Node.js 22.16 或更高版本
+- Go 1.25 或更高版本（用于构建随包分发的 MASQUE/SOCKS helper）
 - npm
 
 ### 安装与启动
@@ -90,13 +91,15 @@ GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
 Window/Worker/DOM/Local Font Access 字体深层语料全部通过，并覆盖 WebGL 1/2
 及 WebGPU adapter/device 深层能力语料、同一
 Profile 重启及 headed/headless 全能力面对照；安装版的
-版本/输入/Cookie/代理旅程为 `15/15`，并保留 Chromium 149 用于回滚。
+版本/输入/Cookie/代理旅程全部通过，并保留 Chromium 149 用于回滚。
+`0041` 补丁集还验证了认证 SOCKS5 TCP/UDP、代理侧 DNS，以及通过
+Profile 自有 MASQUE bridge 建立的真实 HTTP/3。
 这不代表已经完全等同
 RoxyChrome/CloakBrowser：
-36 项引擎/网络/生命周期门禁中，34 项 verified、已无 partial、2 项 missing。
-两项硬缺失是 SOCKS5 UDP/QUIC/HTTP3 和签名的多平台发行包；代理
+36 项引擎/网络/生命周期门禁中，35 项 verified、已无 partial、1 项 missing。
+唯一硬缺失是签名的多平台发行包；代理
 timing/cache/header 已通过受控 HTTP/HTTPS/WSS 语料，TLS/HTTP2/HTTP3
-深层指纹也与 Stock Chrome 150 完全一致并标记为 verified；详见
+直连深层指纹也与 Stock Chrome 150 完全一致并标记为 verified；详见
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查

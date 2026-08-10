@@ -66,6 +66,34 @@ Stock/independent Chromium 150. Cloak's HTTP/3 corpus hash is
 with top ID `389a0820a022b8d7` and transport ID `d1ebb3c7cbcd40ec`;
 its normalized QUIC ClientHello remains `a45deedc2529fb27`.
 
+## Managed SOCKS5 HTTP/3 path
+
+Patchset `0041` adds a separate transport gate on 2026-08-11. A real
+Electron-created Profile routes Chromium's QUIC proxy to a loopback MASQUE
+helper; ordinary CONNECT becomes authenticated SOCKS5 CONNECT and RFC 9298
+CONNECT-UDP becomes a per-flow SOCKS5 UDP ASSOCIATE. The helper uses RFC 9297
+DATAGRAM Capsules only when a response is too large for the current outer QUIC
+DATAGRAM frame. It does not terminate or rewrite the inner TLS/QUIC handshake.
+
+With an authorized UDP-capable SOCKS5 upstream, the first cold navigation used
+H2 and persisted the observer's `Alt-Svc`; reopening the same Profile selected
+H3 and returned a complete QUIC observation. The Client Initial packet-shape
+ID remained `91fc7b001022ca85`. Cipher suites, supported groups, signature
+algorithms, ALPN, key shares, flow-control values, transport-parameter IDs and
+the 1472-byte advertised UDP payload stayed equal to Chromium 150.
+
+The real Profile had Chromium's official `TLSTrustAnchorIDs` and
+`QuicLongerIdleConnectionTimeout` field trials active. Its observer IDs were
+therefore top `b1ebf4d92ad09e8d`, normalized ClientHello
+`e601c9bfda25c131` and transport `1c3546ed0fbdf53d`; the only bounded semantic
+differences from the direct corpus were TLS trust-anchor extension `51764` and
+the stock 300-second rather than 30-second QUIC idle timeout. A direct run of
+the same `0041` binary with those two stock features enabled reproduced all
+three IDs exactly. A direct run without them remained the Stock-150-exact
+`9b960c78d5e9235f` / `a45deedc2529fb27` / `b1466e9ebbb4020c` corpus above.
+The managed E2E accepts only these bounded stock field-trial semantics and
+continues to assert every other named ClientHello and transport field.
+
 ## Acceptance
 
 Run the dynamic gate with an installed Stock Chrome of the same major:
@@ -81,10 +109,14 @@ The command fails if either browser is incomplete or unstable, their major
 versions differ, or any canonical TLS, HTTP/2 or HTTP/3 field differs. Optional
 older baselines may be added without weakening the Stock-vs-candidate gate.
 
-This result requires no Chromium patch: the independent build deliberately
-retains Chromium's stock TLS, HTTP/2 and QUIC implementation. It also does not
-claim proxy-transport support. Managed HTTP and SOCKS5 profiles still disable
-QUIC until an authenticated UDP-capable transport is implemented and verified.
-The dynamic verifier and bounded canonicalization were first preserved in OSS
-commit `592cb125a00c658e11fc6b60013112ea5d2ff2a9`; Chromium source checkpoint
-`e7fc69f9ac673fd3f85f74438efa22154efaf1d7` and patchset `0040` are unchanged.
+The direct result requires no fingerprint patch: the independent build retains
+Chromium's stock TLS, HTTP/2 and QUIC implementation. Managed HTTP proxies and
+older builds still disable QUIC to prevent an unmanaged UDP fallback. A build
+advertising `roxy-quic-proxy-v1` may enable it only through the verified
+profile-owned transport above. The dynamic direct verifier and bounded
+canonicalization were first preserved in OSS commit
+`592cb125a00c658e11fc6b60013112ea5d2ff2a9`; the managed transport was first
+preserved in OSS commit `2152f8799831fd9eb183ae550826cbfdbbedf9a2`,
+Chromium source commit `4461854586be1840bc84e1577017b4163061af38` and
+append-only patchset `0041`. Patch `0040` and all earlier bytes remain
+unchanged.

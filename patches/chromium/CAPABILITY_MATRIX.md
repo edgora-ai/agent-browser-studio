@@ -30,6 +30,7 @@ JavaScript into pages.
 | Storage quota | Configurable | verified | Window/Worker StorageManager, Buckets and OPFS plus Window legacy query/request/FileSystem paths agree in persistent and incognito contexts |
 | WebAuthn capabilities | Platform-shaped | verified | PublicKeyCredential capability and availability paths |
 | AAC/H.264 codecs | Chrome codec surface | verified | media MIME, MSE, MediaCapabilities and WebCodecs paths |
+| Authenticated SOCKS5 TCP/UDP | Profile proxy with HTTP/3 where the upstream supports UDP | verified | profile-owned loopback MASQUE, SOCKS5 CONNECT/UDP ASSOCIATE, proxy-side DNS and real H3 navigation |
 
 Installed Chromium `150.0.7871.114` also verifies native trusted CDP input,
 seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
@@ -43,8 +44,10 @@ across headed/headless runs apart from dynamically verified Stock macOS window
 decoration differences in `screenY` and `innerHeight`;
 the separate cold-process wire gate exactly matches same-major Stock Chrome
 for normalized TLS ClientHello/JA4, HTTP/2 settings/frame/header order and
-HTTP/3 QUIC Client Initial/ClientHello/transport parameters;
-the targeted installed-app journeys pass `15/15` without a license environment.
+HTTP/3 QUIC Client Initial/ClientHello/transport parameters; the managed
+Profile gate separately verifies CONNECT-UDP through an authorized UDP-capable
+SOCKS5 upstream, including field-trial-aware ClientHello/transport semantics;
+the targeted installed-app journeys run without a license environment.
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,
