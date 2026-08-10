@@ -847,6 +847,7 @@ export async function cdpScroll(client: CdpClient, direction: "up" | "down", amo
   if (direction !== "up" && direction !== "down") throw new Error("Invalid scroll direction");
   const normalizedAmount = normalizeToolNumber(amount, 500, 1, 5000, "scroll amount");
   const deltaY = direction === "down" ? normalizedAmount : -normalizedAmount;
+  const before = await readViewportMetrics(client);
   const action = beginInteraction(client);
   const deltas = buildHumanizedScrollDeltas(client.interactionSeed, action, deltaY);
   const x = client.pointerX ?? 640;
@@ -861,7 +862,47 @@ export async function cdpScroll(client: CdpClient, direction: "up" | "down", amo
     });
     await sleep(interactionDelay(client.interactionSeed, action, 230 + index, 45, 75));
   }
-  return { success: true, direction, amount: normalizedAmount, native: true, steps: deltas.length };
+  const settled = before ? await waitForViewportScroll(client, before, deltaY, 3_000) : false;
+  return { success: true, direction, amount: normalizedAmount, native: true, steps: deltas.length, settled };
+}
+
+interface ViewportMetrics {
+  pageY: number;
+  clientHeight: number;
+  contentHeight: number;
+}
+
+async function readViewportMetrics(client: CdpClient): Promise<ViewportMetrics | null> {
+  try {
+    const result = await cdpSendRaw(client, "Page.getLayoutMetrics");
+    const viewport = result.cssLayoutViewport || result.layoutViewport;
+    const content = result.cssContentSize || result.contentSize;
+    const pageY = Number(viewport?.pageY);
+    const clientHeight = Number(viewport?.clientHeight);
+    const contentHeight = Number(content?.height);
+    if (![pageY, clientHeight, contentHeight].every(Number.isFinite)) return null;
+    return { pageY, clientHeight, contentHeight };
+  } catch {
+    return null;
+  }
+}
+
+async function waitForViewportScroll(
+  client: CdpClient,
+  before: ViewportMetrics,
+  deltaY: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const maxY = Math.max(0, before.contentHeight - before.clientHeight);
+  const expectedY = Math.min(maxY, Math.max(0, before.pageY + deltaY));
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const current = await readViewportMetrics(client);
+    if (!current) return false;
+    if (Math.abs(current.pageY - expectedY) < 0.5) return true;
+    await sleep(50);
+  }
+  return false;
 }
 
 export async function cdpSelect(client: CdpClient, selector: string, value: string): Promise<any> {

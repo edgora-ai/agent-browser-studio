@@ -15,6 +15,7 @@ interface CdpCall {
 function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
   const calls: CdpCall[] = [];
   let typedValue = "old";
+  let scrollY = 0;
   let client: CdpClient;
   const ws = {
     send(raw: string) {
@@ -35,6 +36,18 @@ function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
         if (message.method === "Input.insertText") {
           typedValue += String(message.params?.text || "");
           callback.resolve({});
+          return;
+        }
+        if (message.method === "Input.dispatchMouseEvent" && message.params?.type === "mouseWheel") {
+          scrollY += Number(message.params.deltaY || 0);
+          callback.resolve({});
+          return;
+        }
+        if (message.method === "Page.getLayoutMetrics") {
+          callback.resolve({
+            cssLayoutViewport: { pageY: scrollY, clientHeight: 800 },
+            cssContentSize: { height: 3000 },
+          });
           return;
         }
         if (message.method === "Runtime.evaluate") {
@@ -99,6 +112,7 @@ describe("local agent native humanized input", () => {
     expect(result.native).toBe(true);
     expect(wheel.length).toBeGreaterThanOrEqual(5);
     expect(wheel.reduce((sum, call) => sum + Number(call.params?.deltaY), 0)).toBe(731);
+    expect(result.settled).toBe(true);
     expect(calls.some((call) => call.method === "Runtime.evaluate")).toBe(false);
   });
 

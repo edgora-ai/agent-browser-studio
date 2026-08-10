@@ -91,7 +91,7 @@ describe("J44 — seeded native humanized input", () => {
       events: window.__events
     })`) as { value: string; scrollY: number; events: Array<{ type: string; trusted: boolean; key: string | null; deltaY: number; x: number; y: number; time: number }> };
     expect(state.value).toBe("hello");
-    expect(state.scrollY).toBe(731);
+    expect(state.scrollY, JSON.stringify(state.events.filter((event) => event.type === "wheel"))).toBe(731);
 
     const moves = state.events.filter((event) => event.type === "mousemove");
     const keyboard = state.events.filter((event) => ["keydown", "keypress", "keyup"].includes(event.type));
