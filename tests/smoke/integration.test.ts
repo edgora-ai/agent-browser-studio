@@ -694,6 +694,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(builder).toContain("dist/tools/webgl-corpus.js");
     expect(builder).toContain("dist/tools/webgpu-corpus.js");
     expect(builder).toContain("dist/tools/font-corpus.js");
+    expect(builder).toContain("dist/native");
   });
 
   it("exposes all WebRTC policy modes from UI through the native config", () => {
@@ -749,6 +750,7 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0038-native-managed-proxy-auth.patch",
       "0039-native-legacy-storage-quota.patch",
       "0040-native-managed-font-resolution.patch",
+      "0041-native-managed-quic-proxy.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

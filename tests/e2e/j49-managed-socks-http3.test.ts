@@ -11,7 +11,9 @@ import { connectPageCdp, waitForCdpPort, waitForPortClosed } from "./helpers/cdp
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j49");
-const CHROMIUM = path.resolve(REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease", "Chromium.app", "Contents", "MacOS", "Chromium");
+const CHROMIUM = process.env.ROXY_E2E_CHROMIUM_PATH
+  ? path.resolve(process.env.ROXY_E2E_CHROMIUM_PATH)
+  : path.resolve(REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease", "Chromium.app", "Contents", "MacOS", "Chromium");
 const BRIDGE = path.join(REPO, "dist", "native", process.platform === "win32" ? "roxy-masque-bridge.exe" : "roxy-masque-bridge");
 const UPSTREAM_URL = process.env.ROXY_E2E_SOCKS5_UDP_URL || "";
 const ENDPOINT = "https://quic.tlsfingerprint.io/api/client-fingerprint-quic";
