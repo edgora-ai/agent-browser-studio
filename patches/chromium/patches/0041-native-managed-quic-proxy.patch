@@ -1,0 +1,44 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 7ec4330ef1..e3e6f2229a 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -372,7 +372,8 @@ bool HandleCreditsSwitch(const base::CommandLine& command_line) {
+ // one of these switches and should exit now.
+ bool HandleVersionSwitches(const base::CommandLine& command_line) {
+   if (command_line.HasSwitch(roxy::kCapabilitiesSwitch)) {
+-    UNSAFE_TODO(printf("%s\n", roxy::kProxyAuthCapability));
++    UNSAFE_TODO(printf("%s\n%s\n", roxy::kProxyAuthCapability,
++                       roxy::kQuicProxyCapability));
+     return true;
+   }
+ 
+diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
+index f9dbd74af6..4e656d0e7e 100644
+--- a/chrome/browser/net/roxy_proxy_auth.h
++++ b/chrome/browser/net/roxy_proxy_auth.h
+@@ -18,6 +18,7 @@ namespace roxy {
+ inline constexpr char kProxyAuthFileSwitch[] = "roxy-proxy-auth-file";
+ inline constexpr char kCapabilitiesSwitch[] = "roxy-capabilities";
+ inline constexpr char kProxyAuthCapability[] = "roxy-proxy-auth-file-v1";
++inline constexpr char kQuicProxyCapability[] = "roxy-quic-proxy-v1";
+ 
+ // Loads and deletes the one-shot credential file before child processes are
+ // started. Calling this more than once has no effect.
+diff --git a/net/features.gni b/net/features.gni
+index 58807c2250..a7bdd8d669 100644
+--- a/net/features.gni
++++ b/net/features.gni
+@@ -64,10 +64,11 @@ declare_args() {
+   # feature is changed at all.
+   enable_bracketed_proxy_uris = is_debug
+ 
+-  # General QUIC proxy support is only available for debug builds.
++  # The independent release build uses QUIC proxies for its loopback MASQUE
++  # bridge, including CONNECT-UDP for proxied HTTP/3 traffic.
+   # TODO(crbug.com/367400641): If flag is changed or removed, ensure all
+   # TODOs for this bug are correctly modified.
+-  enable_quic_proxy_support = is_debug
++  enable_quic_proxy_support = true
+ 
+   # The SQL disk cache backend is an experimental feature (crbug.com/422065015).
+   # It is enabled only in specific build configurations to avoid increasing the

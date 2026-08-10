@@ -4,12 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export const NATIVE_PROXY_AUTH_CAPABILITY = "roxy-proxy-auth-file-v1";
+export const NATIVE_QUIC_PROXY_CAPABILITY = "roxy-quic-proxy-v1";
 export const NATIVE_PROXY_AUTH_SWITCH = "--roxy-proxy-auth-file";
 
 interface CapabilityCacheEntry {
   mtimeMs: number;
   size: number;
-  supported: boolean;
+  capabilities: ReadonlySet<string>;
 }
 
 export interface NativeProxyAuthFile {
@@ -20,33 +21,41 @@ export interface NativeProxyAuthFile {
 const capabilityCache = new Map<string, CapabilityCacheEntry>();
 
 export function supportsNativeProxyAuth(binaryPath: string): boolean {
+  return readNativeChromiumCapabilities(binaryPath).has(NATIVE_PROXY_AUTH_CAPABILITY);
+}
+
+export function supportsNativeQuicProxy(binaryPath: string): boolean {
+  return readNativeChromiumCapabilities(binaryPath).has(NATIVE_QUIC_PROXY_CAPABILITY);
+}
+
+export function readNativeChromiumCapabilities(binaryPath: string): ReadonlySet<string> {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(binaryPath);
-    if (!stat.isFile()) return false;
+    if (!stat.isFile()) return new Set();
   } catch {
-    return false;
+    return new Set();
   }
 
   const resolved = path.resolve(binaryPath);
   const cached = capabilityCache.get(resolved);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.supported;
+    return cached.capabilities;
   }
 
-  let supported = false;
+  let capabilities: ReadonlySet<string> = new Set();
   try {
     const output = execFileSync(resolved, ["--version", "--roxy-capabilities"], {
       encoding: "utf8",
       timeout: 15_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    supported = output.split(/\s+/).includes(NATIVE_PROXY_AUTH_CAPABILITY);
+    capabilities = new Set(output.split(/\s+/).filter((value) => /^roxy-[a-z0-9-]+-v\d+$/.test(value)));
   } catch {
-    supported = false;
+    capabilities = new Set();
   }
-  capabilityCache.set(resolved, { mtimeMs: stat.mtimeMs, size: stat.size, supported });
-  return supported;
+  capabilityCache.set(resolved, { mtimeMs: stat.mtimeMs, size: stat.size, capabilities });
+  return capabilities;
 }
 
 export function writeNativeProxyAuthFile(

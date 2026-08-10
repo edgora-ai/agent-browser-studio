@@ -1,6 +1,7 @@
 // J48: Chromium's no-auth SOCKS5 client is bridged over loopback to an
 // authenticated upstream SOCKS5 proxy without resolving the target locally.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -165,11 +166,21 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
 
     const logPath = path.join(USERDATA, "logs", `cloak-${dirId}.log`);
     const log = fs.readFileSync(logPath, "utf8");
-    const proxyMatch = log.match(/--proxy-server=socks5:\/\/127\.0\.0\.1:(\d+)/);
-    expect(proxyMatch).not.toBeNull();
-    const bridgePort = Number(proxyMatch![1]);
+    const socksProxyMatch = log.match(/--proxy-server=socks5:\/\/127\.0\.0\.1:(\d+)/);
+    const masqueProxyMatch = log.match(/--proxy-server=quic:\/\/roxy-masque\.local:(\d+)/);
+    expect(Boolean(socksProxyMatch) !== Boolean(masqueProxyMatch)).toBe(true);
+    const managedQuic = Boolean(masqueProxyMatch);
+    const bridgePort = Number((socksProxyMatch || masqueProxyMatch)![1]);
     expect(bridgePort).not.toBe(upstreamPort);
-    expect(log).toContain("--disable-quic");
+    const helperPids = managedQuic ? masqueBridgePids(h.app.process().pid!) : [];
+    if (managedQuic) {
+      expect(helperPids).toHaveLength(1);
+      expect(log).toContain("--host-resolver-rules=MAP roxy-masque.local 127.0.0.1");
+      expect(log).toContain("--enable-quic");
+      expect(log).not.toContain("--disable-quic");
+    } else {
+      expect(log).toContain("--disable-quic");
+    }
     expect(log).not.toContain(USERNAME);
     expect(log).not.toContain(PASSWORD);
     expect(log).not.toContain("proxy-auth-");
@@ -196,7 +207,8 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
       client.close();
       await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
       await waitForPortClosed(launched.cdpPort, 10_000);
-      await waitForPortClosed(bridgePort, 10_000);
+      if (managedQuic) await waitForProcessesExit(helperPids, 5_000);
+      else await waitForPortClosed(bridgePort, 10_000);
     }
 
     expect(observations.some((item) =>
@@ -205,3 +217,29 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
     expect(fs.existsSync(path.join(USERDATA, "runtime-extensions", `proxy-auth-${dirId}`))).toBe(false);
   }, 60_000);
 });
+
+function masqueBridgePids(parentPid: number): number[] {
+  const output = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+  return output.split("\n").flatMap((line) => {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match || Number(match[2]) !== parentPid || !match[3].includes("roxy-masque-bridge")) return [];
+    return [Number(match[1])];
+  });
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessesExit(pids: number[], timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs && pids.some((pid) => processExists(pid))) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  expect(pids.some((pid) => processExists(pid))).toBe(false);
+}

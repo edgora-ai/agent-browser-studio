@@ -5,6 +5,7 @@ set -euo pipefail
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
 CHROMIUM_SRC="${1:?usage: check.sh /path/to/chromium/src}"
+UPSTREAM_BASELINE="f405107495a07cb1bfcf687d4af8d91117098db6"
 
 if ! diff -u \
   <(awk '{print $2}' "$PATCH_ROOT/PATCHSET.sha256" | LC_ALL=C sort) \
@@ -34,10 +35,16 @@ if [[ ! -f "$CHROMIUM_SRC/chrome/renderer/chrome_content_renderer_client.cc" ]];
   exit 2
 fi
 
+if ! git -C "$CHROMIUM_SRC" cat-file -e "${UPSTREAM_BASELINE}^{commit}"; then
+  echo "error: pinned Chromium baseline is missing: $UPSTREAM_BASELINE" >&2
+  exit 2
+fi
+
 TEMP_INDEX="$(mktemp)"
 rm -f "$TEMP_INDEX"
 trap 'rm -f "$TEMP_INDEX"' EXIT
-GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" read-tree HEAD
+GIT_INDEX_FILE="$TEMP_INDEX" git -C "$CHROMIUM_SRC" read-tree "$UPSTREAM_BASELINE"
+echo "upstream baseline: $UPSTREAM_BASELINE"
 
 # apply.sh copies immutable source payloads before applying the numbered patch
 # chain. Mirror that order in the temporary index so a later append-only patch

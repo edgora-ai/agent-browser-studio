@@ -35,5 +35,9 @@ files:
   - dist/tools/webgpu-corpus.js
   - dist/tools/font-corpus.js
 
+extraResources:
+  - from: dist/native
+    to: native
+
 asar: true
 compression: maximum

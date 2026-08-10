@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   NATIVE_PROXY_AUTH_CAPABILITY,
+  NATIVE_QUIC_PROXY_CAPABILITY,
+  readNativeChromiumCapabilities,
   supportsNativeProxyAuth,
+  supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "../../src/main/services/native-proxy-auth.js";
 
@@ -47,10 +50,16 @@ describe("native proxy authentication handoff", () => {
   it("requires an explicit binary capability marker", () => {
     const root = makeRoot();
     const capable = path.join(root, "capable-browser");
-    fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_PROXY_AUTH_CAPABILITY}'\n`, { mode: 0o700 });
+    fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_PROXY_AUTH_CAPABILITY}' '${NATIVE_QUIC_PROXY_CAPABILITY}'\n`, { mode: 0o700 });
     fs.chmodSync(capable, 0o700);
     expect(supportsNativeProxyAuth(capable)).toBe(true);
+    expect(supportsNativeQuicProxy(capable)).toBe(true);
+    expect([...readNativeChromiumCapabilities(capable)].sort()).toEqual([
+      NATIVE_PROXY_AUTH_CAPABILITY,
+      NATIVE_QUIC_PROXY_CAPABILITY,
+    ].sort());
     expect(supportsNativeProxyAuth("/bin/echo")).toBe(false);
+    expect(supportsNativeQuicProxy("/bin/echo")).toBe(false);
     expect(supportsNativeProxyAuth(path.join(root, "missing"))).toBe(false);
   });
 });

@@ -20,8 +20,8 @@ import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
   startAuthenticatedSocksBridge,
-  type AuthenticatedSocksBridge,
 } from "./authenticated-socks-bridge.js";
+import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
 import { buildProxyUrl, buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
@@ -40,6 +40,7 @@ import {
   NATIVE_PROXY_AUTH_SWITCH,
   type NativeProxyAuthFile,
   supportsNativeProxyAuth,
+  supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
 import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
@@ -87,7 +88,7 @@ const runningProcesses = new Map<string, {
   process: any;
   port: number;
   killTimer?: ReturnType<typeof setTimeout>;
-  proxyBridge?: AuthenticatedSocksBridge;
+  proxyBridge?: { close: () => Promise<void> };
 }>();
 
 // ═══════════════════════════════════════════════════════════════
@@ -411,7 +412,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   }
   let releaseLaunchLock: (() => void) | null = null;
   let pendingNativeProxyAuth: NativeProxyAuthFile | null = null;
-  let pendingSocksBridge: AuthenticatedSocksBridge | null = null;
+  let pendingProxyBridge: { close: () => Promise<void> } | null = null;
   try {
     releaseLaunchLock = acquireRestoreLock(dirId);
   } catch {
@@ -597,29 +598,48 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     }
   }
 
-  // Ordinary HTTP/SOCKS proxies cannot carry Chromium QUIC traffic. Fail
-  // closed instead of allowing a UDP path outside the managed proxy. HTTP 407
-  // credentials use the browser-only native channel when available; older or
-  // third-party binaries retain the extension compatibility fallback.
+  // Chromium 150 builds advertising the native QUIC-proxy capability route
+  // SOCKS5 TCP and UDP through a profile-owned loopback MASQUE bridge. Older
+  // builds and HTTP proxies continue to fail closed with QUIC disabled rather
+  // than allowing an unmanaged UDP path. HTTP 407 credentials use the
+  // browser-only native channel when available.
   const runtimeExtensionPaths: string[] = [];
   if (activeProxy) {
     let chromiumProxy = activeProxy;
-    if (activeProxy.username && (activeProxy.type === "socks5" || activeProxy.type === "socks5h")) {
-      pendingSocksBridge = await startAuthenticatedSocksBridge(activeProxy);
-      chromiumProxy = {
-        ...activeProxy,
-        type: "socks5",
-        host: pendingSocksBridge.host,
-        port: pendingSocksBridge.port,
-        username: undefined,
-        password: undefined,
-      };
+    const isSocks = activeProxy.type === "socks5" || activeProxy.type === "socks5h";
+    if (isSocks && supportsNativeQuicProxy(bin)) {
+      const masqueBridge = await startMasqueSocksBridge(activeProxy);
+      pendingProxyBridge = masqueBridge;
+      const proxyOrigin = `${masqueBridge.proxyHost}:${masqueBridge.port}`;
+      const resolverRule = `MAP ${masqueBridge.proxyHost} ${masqueBridge.listenHost}`;
+      args = args.filter((arg) => arg !== "--disable-quic");
+      args = dedupeChromeArgs([
+        ...args,
+        `--proxy-server=quic://${proxyOrigin}`,
+        `--host-resolver-rules=${mergeCommaSeparatedValue(resolverRule, getLaunchArgValue(args, "--host-resolver-rules"))}`,
+        `--ignore-certificate-errors-spki-list=${mergeCommaSeparatedValue(masqueBridge.spki, getLaunchArgValue(args, "--ignore-certificate-errors-spki-list"))}`,
+        `--origin-to-force-quic-on=${mergeCommaSeparatedValue(proxyOrigin, getLaunchArgValue(args, "--origin-to-force-quic-on"))}`,
+        "--enable-quic",
+      ]);
+    } else {
+      if (activeProxy.username && isSocks) {
+        const socksBridge = await startAuthenticatedSocksBridge(activeProxy);
+        pendingProxyBridge = socksBridge;
+        chromiumProxy = {
+          ...activeProxy,
+          type: "socks5",
+          host: socksBridge.host,
+          port: socksBridge.port,
+          username: undefined,
+          password: undefined,
+        };
+      }
+      args = dedupeChromeArgs([
+        ...args,
+        `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
+        "--disable-quic",
+      ]);
     }
-    args = dedupeChromeArgs([
-      ...args,
-      `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
-      "--disable-quic",
-    ]);
     if (activeProxy.username && activeProxy.type === "http" && supportsNativeProxyAuth(bin)) {
       pendingNativeProxyAuth = writeNativeProxyAuthFile({
         host: activeProxy.host,
@@ -673,9 +693,9 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
     pid,
     process: child,
     port: cdpPort,
-    ...(pendingSocksBridge ? { proxyBridge: pendingSocksBridge } : {}),
+    ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
   });
-  pendingSocksBridge = null;
+  pendingProxyBridge = null;
   if (releaseLaunchLock) {
     releaseLaunchLock();
     releaseLaunchLock = null;
@@ -712,7 +732,7 @@ export async function launchCloak(dirId: string): Promise<{ pid: number; cdpPort
   return { pid, cdpPort };
   } finally {
     pendingNativeProxyAuth?.cleanup();
-    await pendingSocksBridge?.close().catch(() => undefined);
+    await pendingProxyBridge?.close().catch(() => undefined);
     if (releaseLaunchLock) releaseLaunchLock();
   }
 }
@@ -869,6 +889,13 @@ function getLaunchArgValue(args: string[], key: string): string | null {
   const prefix = `${key}=`;
   const arg = [...args].reverse().find((item) => item.startsWith(prefix));
   return arg ? arg.slice(prefix.length) : null;
+}
+
+function mergeCommaSeparatedValue(value: string, existing: string | null): string {
+  const entries = [value, ...(existing || "").split(",")]
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return [...new Set(entries)].join(",");
 }
 
 function shouldUseWrapperGeoip(): boolean {
@@ -1322,6 +1349,7 @@ export function stopAllCloakProfiles(): void {
     const pid = entry.pid;
     if (entry.killTimer) clearTimeout(entry.killTimer);
     try { process.kill(pid, "SIGTERM"); } catch {}
+    void entry.proxyBridge?.close().catch(() => undefined);
     // Give a brief window for clean exit before SIGKILL
     setTimeout(() => {
       try { process.kill(pid, "SIGKILL"); } catch {}

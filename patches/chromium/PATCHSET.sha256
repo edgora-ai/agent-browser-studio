@@ -40,3 +40,4 @@ c546dd580fa9b6b5a4bb8d034655150f2e01571abcb6b45bb2710222bb4e34d8  patches/0036-n
 e23fb1c02e2336339118e61ff4f66955e921582dca6d8e23a36c31133bb358de  patches/0038-native-managed-proxy-auth.patch
 a111080791715db1fc6886e0b2607cc72ead8949e3343f4873a68d2102107d39  patches/0039-native-legacy-storage-quota.patch
 76d717fbff25f48d75ffdef84b491968a113e08ec2ec0d77583e2ebe3845f8bc  patches/0040-native-managed-font-resolution.patch
+171b7036a1a22f4bb124b7e00c5bcd7fd925d314d5912929c5d4899cb6b0fc11  patches/0041-native-managed-quic-proxy.patch
