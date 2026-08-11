@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { CHROMIUM_CACHE_DIR_NAME } from "../branding.js";
 
 export interface ManagedChromiumBinary {
   version: string;
@@ -11,8 +12,9 @@ export interface ManagedChromiumBinary {
 const EXACT_CHROMIUM_VERSION = /^\d+\.\d+\.\d+\.\d+$/;
 
 export function getManagedChromiumRoot(): string {
-  const override = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
-  return override ? path.resolve(override) : path.join(os.homedir(), ".roxy-lite-cloak");
+  const override = process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR
+    || process.env.CLOAKLITE_CHROMIUM_CACHE_DIR; // pre-rename compatibility
+  return override ? path.resolve(override) : path.join(os.homedir(), CHROMIUM_CACHE_DIR_NAME);
 }
 
 export function normalizeManagedChromiumVersion(value: unknown): string | null {

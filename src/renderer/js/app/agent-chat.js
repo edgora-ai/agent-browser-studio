@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -46,28 +46,28 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   // Sub-view switcher (chat, config, accounts, skills)
-  cloak.switchAgentSub = function(view) {
+  agentBrowser.switchAgentSub = function(view) {
     document.getElementById('agent-view-chat').style.display = (view === 'chat') ? 'flex' : 'none';
     document.getElementById('agent-view-config').style.display = (view === 'config') ? 'block' : 'none';
     document.getElementById('agent-view-accounts').style.display = (view === 'accounts') ? 'block' : 'none';
     document.getElementById('agent-view-skills').style.display = (view === 'skills') ? 'block' : 'none';
-    if (view === 'accounts') cloak.agentLoadAccounts();
-    if (view === 'skills') cloak.agentLoadSkills();
-    if (view === 'config') cloak.agentLoadConfig();
-    if (view === 'chat') cloak.agentLoadConversations();
+    if (view === 'accounts') agentBrowser.agentLoadAccounts();
+    if (view === 'skills') agentBrowser.agentLoadSkills();
+    if (view === 'config') agentBrowser.agentLoadConfig();
+    if (view === 'chat') agentBrowser.agentLoadConversations();
   };
 
   // ── Conversation List ──
-  cloak.agentLoadConversations = function() {
+  agentBrowser.agentLoadConversations = function() {
     R.agent.conversations.list().then(function(list) {
       var el = document.getElementById('agent-conv-list');
       if (!list || list.length === 0) {
         el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;text-align:center;padding:16px;">No chats yet</div>';
-        cloak.agentNewConv();
+        agentBrowser.agentNewConv();
         return;
       }
       var html = '';
@@ -81,7 +81,7 @@
       }
       el.innerHTML = html;
       if (!state.agentActiveConvId && list.length > 0) {
-        cloak.agentSelectConv(list[0].id);
+        agentBrowser.agentSelectConv(list[0].id);
       }
     }).catch(function(e) {
       console.error('Load conversations:', e);
@@ -89,41 +89,41 @@
     });
   };
 
-  cloak.agentNewConv = function() {
+  agentBrowser.agentNewConv = function() {
     R.agent.conversations.create().then(function(c) {
       state.agentActiveConvId = c.id;
       state.agentMessages = [];
       document.getElementById('agent-chat-title').textContent = c.title || t('agent.chat-title', 'New Chat');
       document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">✨</div><div class="chat-empty-title">' + esc(t('agent.empty-title', 'New conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.empty-hint', 'Ask me anything!')) + '</div></div>';
       document.getElementById('agent-chat-status').textContent = '';
-      cloak.agentLoadConversations();
+      agentBrowser.agentLoadConversations();
     }).catch(function(e) { toast(t('agent.create-failed', 'Failed to create conversation: ') + e.message, 'error'); });
   };
 
-  cloak.agentSelectConv = function(convId) {
+  agentBrowser.agentSelectConv = function(convId) {
     R.agent.conversations.get(convId).then(function(conv) {
       if (!conv) return;
       state.agentActiveConvId = convId;
       state.agentMessages = conv.messages || [];
       document.getElementById('agent-chat-title').textContent = conv.title || t('agent.chat-title', 'New Chat');
-      cloak.agentRenderMessages();
-      cloak.agentLoadConversations();
+      agentBrowser.agentRenderMessages();
+      agentBrowser.agentLoadConversations();
     }).catch(function(e) { console.error('Load conversation:', e); });
   };
 
-  cloak.agentDeleteConv = function() {
+  agentBrowser.agentDeleteConv = function() {
     if (!state.agentActiveConvId) return;
     if (!confirm(t('agent.delete-confirm', 'Delete this conversation? All messages will be lost.'))) return;
     R.agent.conversations.delete(state.agentActiveConvId).then(function() {
       state.agentActiveConvId = null;
       state.agentMessages = [];
       document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">No conversation selected</div><div class="chat-empty-hint">Select one from the sidebar or create a new one</div></div>';
-      cloak.agentLoadConversations();
+      agentBrowser.agentLoadConversations();
     });
   };
 
   // ── Chat ──
-  cloak.agentSend = function() {
+  agentBrowser.agentSend = function() {
     var input = document.getElementById('agent-chat-input');
     var msg = input.value.trim();
     if (!msg) return;
@@ -131,15 +131,15 @@
       // Create conversation first
       R.agent.conversations.create(msg.slice(0, 40)).then(function(c) {
         state.agentActiveConvId = c.id;
-        cloak.agentLoadConversations();
-        cloak._doAgentSend(msg);
+        agentBrowser.agentLoadConversations();
+        agentBrowser._doAgentSend(msg);
       });
       return;
     }
-    cloak._doAgentSend(msg);
+    agentBrowser._doAgentSend(msg);
   };
 
-  cloak._doAgentSend = function(msg) {
+  agentBrowser._doAgentSend = function(msg) {
     var input = document.getElementById('agent-chat-input');
     input.value = '';
     input.disabled = true;
@@ -150,12 +150,12 @@
 
     // Add user message locally for immediate display
     state.agentMessages.push({ role: 'user', content: msg, timestamp: Date.now() });
-    cloak.agentRenderMessages();
+    agentBrowser.agentRenderMessages();
 
     // Streaming assistant message placeholder
     var assistantIdx = state.agentMessages.length;
     state.agentMessages.push({ role: 'assistant', content: '', timestamp: Date.now() });
-    cloak.agentRenderMessages();
+    agentBrowser.agentRenderMessages();
 
     // Correlate this request's stream events. Only payloads whose streamId
     // matches are applied — this prevents stale listeners or concurrent sends
@@ -178,7 +178,7 @@
       rafPending = true;
       (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
         rafPending = false;
-        cloak.agentRenderMessages();
+        agentBrowser.agentRenderMessages();
         var node = document.querySelector('#agent-chat-messages .chat-msg-agent:last-child .chat-bubble-agent');
         if (node && state.agentMessages[assistantIdx]) {
           node.innerHTML = renderChatMarkdown(state.agentMessages[assistantIdx].content);
@@ -207,7 +207,7 @@
       if (argSummary.length > 120) argSummary = argSummary.slice(0, 120) + '…';
       steps.push({ name: tc.name, args: argSummary, at: Date.now(), done: false });
       state.agentMessages[assistantIdx].steps = steps;
-      cloak.agentRenderMessages();
+      agentBrowser.agentRenderMessages();
     };
     var onDone = function(payload) {
       if (!matchStream(payload)) return;
@@ -215,7 +215,7 @@
       // Mark every step as finished so spinners become checkmarks.
       var steps = state.agentMessages[assistantIdx] && state.agentMessages[assistantIdx].steps;
       if (steps) for (var k = 0; k < steps.length; k++) steps[k].done = true;
-      cloak.agentRenderMessages();
+      agentBrowser.agentRenderMessages();
       cleanup();
     };
     // Normalize an error payload to a human string. The main process sends
@@ -236,7 +236,7 @@
       var why = explainError(err) || t('agent.stream-error', 'Stream error');
       console.error('[agent] stream error:', err);
       state.agentMessages[assistantIdx].content = finalReply || ('❌ ' + why);
-      cloak.agentRenderMessages();
+      agentBrowser.agentRenderMessages();
       cleanup();
     };
     var cleanup = function() {
@@ -252,8 +252,8 @@
       api.removeListener('agent:stream-tool-call', onToolCall);
       api.removeListener('agent:stream-done', onDone);
       api.removeListener('agent:stream-error', onError);
-      cloak.agentRenderMessages({ scrollOnly: true });
-      cloak.agentLoadConversations();
+      agentBrowser.agentRenderMessages({ scrollOnly: true });
+      agentBrowser.agentLoadConversations();
     };
 
     // Subscribe to stream events
@@ -274,7 +274,7 @@
     });
   };
 
-  cloak.agentRenderMessages = function() {
+  agentBrowser.agentRenderMessages = function() {
     var el = document.getElementById('agent-chat-messages');
     var html = '';
     for (var i = 0; i < state.agentMessages.length; i++) {

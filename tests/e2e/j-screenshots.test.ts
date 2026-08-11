@@ -14,7 +14,7 @@ const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j-screenshots");
 const UPDATE_README_SCREENSHOTS = process.env.UPDATE_README_SCREENSHOTS === "1";
 const OUT = UPDATE_README_SCREENSHOTS
   ? path.join(REPO, "docs", "screenshots")
-  : path.join(os.tmpdir(), `cloak-readme-screenshots-${process.pid}`);
+  : path.join(os.tmpdir(), `agent-browser-readme-screenshots-${process.pid}`);
 
 describe("J-screenshots — README captures", () => {
   let h: TestAppHandle;
@@ -28,7 +28,7 @@ describe("J-screenshots — README captures", () => {
     fs.mkdirSync(USERDATA, { recursive: true });
     const cfg = {
       version: 3,
-      cloakBin: "auto",
+      chromiumBin: "auto",
       defaultProxy: "default",
       proxies: {
         default: { type: "http", host: "127.0.0.1", port: 7890 },
@@ -36,7 +36,7 @@ describe("J-screenshots — README captures", () => {
       },
       proxyDetections: {},
       sync: { enabled: false },
-      cloakProfiles: {
+      browserProfiles: {
         cb_amazon_us: {
           dirId: "cb_amazon_us", name: "Amazon US Shop", version: "149", fingerprintSeed: 12345,
           platform: "windows", timezone: "America/Los_Angeles", locale: "en-US", webrtcIp: "203.0.113.10",
@@ -69,7 +69,7 @@ describe("J-screenshots — README captures", () => {
   });
 
   async function shot(tab: string, file: string) {
-    await h.page.evaluate((t) => (window as any).cloak.switchTab(t), tab);
+    await h.page.evaluate((t) => (window as any).agentBrowser.switchTab(t), tab);
     await h.page.waitForTimeout(900);
     await h.page.screenshot({ path: path.join(OUT, file), fullPage: false });
     expect(fs.existsSync(path.join(OUT, file))).toBe(true);
@@ -88,7 +88,7 @@ describe("J-screenshots — README captures", () => {
   });
 
   it("captures the wizard overlay", async () => {
-    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).cloak.showWizard(); });
+    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).agentBrowser.showWizard(); });
     await h.page.waitForTimeout(800);
     await h.page.screenshot({ path: path.join(OUT, "wizard.png"), fullPage: false });
     expect(fs.existsSync(path.join(OUT, "wizard.png"))).toBe(true);

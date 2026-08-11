@@ -1,4 +1,5 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerProfileHandlers } from "./ipc/profile.js";
@@ -10,23 +11,63 @@ import { registerDetectHandlers } from "./ipc/detect.js";
 import { registerSettingsHandlers } from "./ipc/settings.js";
 import { registerAgentHandlers } from "./ipc/agent.js";
 import { registerMcpHandlers } from "./ipc/mcp.js";
-import { registerCloakHandlers } from "./ipc/cloak.js";
+import { registerBrowserHandlers } from "./ipc/browser.js";
 import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
 import { startScheduler } from "./services/automation.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
-import { stopAllCloakProfiles } from "./services/cloak-manager.js";
+import { stopAllBrowserProfiles } from "./services/browser-manager.js";
 import { migrateSecrets } from "./services/config-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
-import * as fs from "node:fs";
+import {
+  APP_DATA_DIR_NAME,
+  CHROMIUM_CACHE_DIR_NAME,
+  LEGACY_CHROMIUM_CACHE_DIR_NAME,
+  LEGACY_PRODUCT_NAME,
+  PRODUCT_NAME,
+  configureProductIdentity,
+} from "./branding.js";
+import {
+  migrateLegacyChromiumCache,
+  migrateLegacyUserData,
+} from "./services/legacy-data-migration.js";
 
 // ── ESM dirname equivalent ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Normalize app name for consistent cross-platform data paths
-if (app.name !== "CloakLite") {
-  app.setName("CloakLite");
+// Establish the new product identity before any lazy user-data path resolves.
+// Explicit --user-data-dir runs (tests and diagnostics) stay isolated and do
+// not import real user data.
+const productIdentity = configureProductIdentity(app);
+let legacyMigrationError: Error | null = null;
+if (productIdentity.canonical && process.env.AGENT_BROWSER_DISABLE_LEGACY_MIGRATION !== "1") {
+  try {
+    const appDataRoot = app.getPath("appData");
+    const legacyUserData = path.join(appDataRoot, LEGACY_PRODUCT_NAME);
+    const managedUserData = path.join(appDataRoot, APP_DATA_DIR_NAME);
+    const legacyChromiumRoot = path.join(os.homedir(), LEGACY_CHROMIUM_CACHE_DIR_NAME);
+    const managedChromiumRoot = path.join(os.homedir(), CHROMIUM_CACHE_DIR_NAME);
+    const dataReport = migrateLegacyUserData({
+      source: legacyUserData,
+      target: managedUserData,
+      legacyChromiumRoot,
+      chromiumRoot: managedChromiumRoot,
+    });
+    const chromiumReport = migrateLegacyChromiumCache({
+      source: legacyChromiumRoot,
+      target: managedChromiumRoot,
+    });
+    if (dataReport.migrated) {
+      console.log(`[migration] imported ${dataReport.profileCount} profiles (${dataReport.profileFileCount} files, ${dataReport.profileSymlinkCount} symlinks) from ${LEGACY_PRODUCT_NAME}`);
+    }
+    if (chromiumReport.migratedVersions.length) {
+      console.log(`[migration] imported managed Chromium ${chromiumReport.migratedVersions.join(", ")}`);
+    }
+  } catch (error) {
+    legacyMigrationError = error instanceof Error ? error : new Error(String(error));
+    console.error("[migration] legacy data import failed:", legacyMigrationError);
+  }
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -38,7 +79,7 @@ function createWindow(): void {
     height: 750,
     minWidth: 800,
     minHeight: 600,
-    title: "CloakLite",
+    title: PRODUCT_NAME,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -58,7 +99,7 @@ function createWindow(): void {
   });
 
   // Open DevTools in dev mode only
-  if (process.env.ROXY_DEV === "1") {
+  if (process.env.AGENT_BROWSER_DEV === "1") {
     mainWindow.webContents.openDevTools({ mode: "bottom" });
   }
 
@@ -107,7 +148,7 @@ function registerAllHandlers(): void {
   registerSettingsHandlers();
   registerAgentHandlers();
   registerMcpHandlers();
-  registerCloakHandlers();
+  registerBrowserHandlers();
   registerAutomationHandlers();
   registerAuditHandlers();
   registerDataHandlers();
@@ -115,6 +156,14 @@ function registerAllHandlers(): void {
 
 // ── App lifecycle ──
 app.whenReady().then(() => {
+  if (legacyMigrationError) {
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} migration failed`,
+      `Your existing data was left unchanged. ${legacyMigrationError.message}`,
+    );
+    app.quit();
+    return;
+  }
   registerAllHandlers();
   createWindow();
   // Encrypt any plaintext secrets from prior versions (no-op if keychain
@@ -162,9 +211,9 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async (event) => {
   isQuitting = true;
-  console.log("CloakLite shutting down — cleaning up child processes");
+  console.log(`${PRODUCT_NAME} shutting down — cleaning up child processes`);
   try {
-    stopAllCloakProfiles();
+    stopAllBrowserProfiles();
   } catch (e) {
     console.error("[shutdown] failed to stop managed Chromium children:", e);
   }

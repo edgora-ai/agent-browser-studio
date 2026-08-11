@@ -1,5 +1,5 @@
-appId: com.ahoo.cloak-lite
-productName: CloakLite
+appId: com.ahoo.agent-browser-studio
+productName: Agent Browser Studio
 copyright: Copyright © 2026
 
 icon: dist/resources/icon.icns
@@ -9,14 +9,14 @@ mac:
   target:
     - target: dmg
       arch: [arm64]
-  artifactName: CloakLite-${version}-mac-${arch}.${ext}
+  artifactName: Agent-Browser-Studio-${version}-mac-${arch}.${ext}
   icon: dist/resources/icon.icns
 
 win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: CloakLite-${version}-win-${arch}.${ext}
+  artifactName: Agent-Browser-Studio-${version}-win-${arch}.${ext}
 
 nsis:
   oneClick: false

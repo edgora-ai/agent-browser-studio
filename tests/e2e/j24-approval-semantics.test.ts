@@ -12,9 +12,9 @@ const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j24");
 
 async function configureMock(h: TestAppHandle, mock: { url: string }) {
-  await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
   await h.page.waitForTimeout(200);
-  await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
   await h.page.waitForTimeout(200);
   await h.page.locator("#agent-llm-provider").selectOption("openai");
   await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -25,10 +25,10 @@ async function configureMock(h: TestAppHandle, mock: { url: string }) {
 }
 
 async function newConversation(h: TestAppHandle) {
-  await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
   await h.page.waitForTimeout(200);
   await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-  await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+  await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
 }
 
 // Watch for approvals and resolve each that appears with `mode`, until the
@@ -38,7 +38,7 @@ async function runApproving(h: TestAppHandle, message: string, mode: "once" | "a
     (window as any).__approvals = [];
     (window as any).__done = false;
     (window as any).__err = null;
-    const api = (window as any).cloak.api;
+    const api = (window as any).agentBrowser.api;
     api.on("agent:approval-request", (req: any) => (window as any).__approvals.push(req));
     api.on("agent:stream-done", () => { (window as any).__done = true; });
     api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
@@ -49,15 +49,15 @@ async function runApproving(h: TestAppHandle, message: string, mode: "once" | "a
   while (Date.now() - start < 40000) {
     const st = await h.page.evaluate((m) => {
       // Resolve any pending approval with the chosen mode.
-      if ((window as any).__approvals && (window as any).cloak.state) {
+      if ((window as any).__approvals && (window as any).agentBrowser.state) {
         // The renderer's own listener already set currentRequest; use its helper.
       }
       return { d: (window as any).__done, e: (window as any).__err, n: (window as any).__approvals.length };
     }, mode);
     // Resolve pending approvals via the dialog helper (resolves + closes modal).
     await h.page.evaluate((m) => {
-      if ((window as any).cloak.approvalAllow && document.getElementById("dlg-approval").open) {
-        (window as any).cloak.approvalAllow(m);
+      if ((window as any).agentBrowser.approvalAllow && document.getElementById("dlg-approval").open) {
+        (window as any).agentBrowser.approvalAllow(m);
       }
     }, mode);
     if (st.d || st.e) break;
@@ -106,7 +106,7 @@ describe("J24 — approval always/once semantics", () => {
     expect(result.approvals[0].category).toBe("db-destroy");
     // Table is gone after both DROPs.
     const exists = await h.page.evaluate(async () => {
-      const tables = await (window as any).cloak.api.agentDb.tables();
+      const tables = await (window as any).agentBrowser.api.agentDb.tables();
       return tables.some((t: any) => t.name === "t_always");
     });
     expect(exists).toBe(false);

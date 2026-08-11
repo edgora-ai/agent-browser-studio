@@ -23,14 +23,14 @@ export const storageMonitor = {
    */
   async getInfo(): Promise<StorageInfo> {
     const profiles: StorageInfo["profiles"] = [];
-    const cloakDir = getProfilesDir();
+    const profilesDir = getProfilesDir();
 
-    if (fs.existsSync(cloakDir)) {
-      const entries = await fsPromises.readdir(cloakDir, { withFileTypes: true });
+    if (fs.existsSync(profilesDir)) {
+      const entries = await fsPromises.readdir(profilesDir, { withFileTypes: true });
       const tasks = entries.map(async entry => {
         if (!entry.isDirectory()) return;
         const dirId = entry.name;
-        const profilePath = path.join(cloakDir, dirId);
+        const profilePath = path.join(profilesDir, dirId);
         const meta = getProfileMeta(dirId);
         const [sizeBytes, lastModified] = await Promise.all([
           getDirectorySizeAsync(profilePath),
@@ -39,7 +39,7 @@ export const storageMonitor = {
         profiles.push({
           dirId,
           name: meta?.name || dirId.substring(0, 8),
-          browser: "cloak",
+          browser: "chromium",
           sizeBytes,
           lastModified,
         });
@@ -128,7 +128,7 @@ function resolveProfileDir(dirId: string): string {
   const profilePath = path.resolve(baseDir, dirId);
   const relative = path.relative(baseDir, profilePath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Profile path escapes cloak-profiles: ${JSON.stringify(dirId)}`);
+    throw new Error(`Profile path escapes profiles directory: ${JSON.stringify(dirId)}`);
   }
   return profilePath;
 }

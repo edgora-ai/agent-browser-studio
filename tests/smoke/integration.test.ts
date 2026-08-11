@@ -11,18 +11,26 @@ const readRendererModules = (): string => fs.readdirSync(RENDERER_MODULE_DIR)
   .map((file) => readRendererModule(file))
   .join("\n");
 
+function registeredIpcChannels(): string[] {
+  const channels: string[] = [];
+  const ipcDir = path.join(ROOT, "src/main/ipc");
+  for (const file of fs.readdirSync(ipcDir).filter((name) => name.endsWith(".ts"))) {
+    const content = fs.readFileSync(path.join(ipcDir, file), "utf-8");
+    for (const match of content.matchAll(/ipcMain\.handle\("([^"]+)"/g)) channels.push(match[1]);
+    for (const match of content.matchAll(/handleBrowser\("([^"]+)"/g)) {
+      channels.push(`browser:${match[1]}`, `cloak:${match[1]}`);
+    }
+  }
+  return channels;
+}
+
 describe("Integration — IPC System", () => {
   it("all expected IPC channels are registered", () => {
-    const ipcFiles = fs.readdirSync(path.join(ROOT, "src/main/ipc")).filter(f => f.endsWith(".ts"));
-    const channels: string[] = [];
-    for (const f of ipcFiles) {
-      const content = fs.readFileSync(path.join(ROOT, "src/main/ipc", f), "utf-8");
-      for (const m of content.matchAll(/ipcMain\.handle\("([^"]+)"/g)) channels.push(m[1]);
-    }
+    const channels = registeredIpcChannels();
     expect(channels.length).toBeGreaterThan(20);
     const expected = [
       "profile:list",
-      "cloak:launch",
+      "browser:launch",
       "proxy:list",
       "sync:push",
       "agent:chat",
@@ -61,13 +69,7 @@ describe("Integration — IPC System", () => {
   });
 
   it("preload invocations map to existing IPC channels", () => {
-    const ipcFiles = fs.readdirSync(path.join(ROOT, "src/main/ipc")).filter(f => f.endsWith(".ts"));
-    const ipcChannels = new Set<string>();
-    for (const f of ipcFiles) {
-      for (const m of fs.readFileSync(path.join(ROOT, "src/main/ipc", f), "utf-8").matchAll(/ipcMain\.handle\("([^"]+)"/g)) {
-        ipcChannels.add(m[1]);
-      }
-    }
+    const ipcChannels = new Set(registeredIpcChannels());
     const preload = fs.readFileSync(path.join(ROOT, "src/main/preload.cjs"), "utf-8");
     for (const m of preload.matchAll(/ipcRenderer\.invoke\("([^"]+)"/g)) {
       expect(ipcChannels.has(m[1]), `preload invokes non-existent: ${m[1]}`).toBe(true);
@@ -76,7 +78,7 @@ describe("Integration — IPC System", () => {
 
   it("all IPC modules are registered in index.ts", () => {
     const idx = fs.readFileSync(path.join(ROOT, "src/main/index.ts"), "utf-8");
-    for (const h of ["Profile", "Proxy", "Storage", "Sync", "App", "Detect", "Settings", "Agent", "Mcp", "Cloak"]) {
+    for (const h of ["Profile", "Proxy", "Storage", "Sync", "App", "Detect", "Settings", "Agent", "Mcp", "Browser"]) {
       expect(idx).toContain("register" + h + "Handlers");
     }
   });
@@ -94,9 +96,9 @@ describe("Integration — Extensions", () => {
 
   it("MCP tools route extension work through the private repository", () => {
     const mcp = fs.readFileSync(path.join(ROOT, "src/main/services/mcp-server.ts"), "utf-8");
-    expect(mcp).toContain("cloak_list_extensions");
-    expect(mcp).toContain("cloak_install_extension");
-    expect(mcp).toContain("cloak_delete_extension");
+    expect(mcp).toContain("agent_browser_list_extensions");
+    expect(mcp).toContain("agent_browser_install_extension");
+    expect(mcp).toContain("agent_browser_delete_extension");
     expect(mcp).toContain("addOrUpdateChromeStoreExtension");
     expect(mcp).toContain("listExtensionRepository");
     expect(mcp).not.toContain("getProfileExtensionsDir");
@@ -240,15 +242,15 @@ describe("Integration — System tray", () => {
 });
 
 describe("Integration — Child process cleanup", () => {
-  it("before-quit calls stopAllCloakProfiles and stopMcpServer", () => {
+  it("before-quit calls stopAllBrowserProfiles and stopMcpServer", () => {
     const idx = fs.readFileSync(path.join(ROOT, "src/main/index.ts"), "utf-8");
-    expect(idx).toContain("stopAllCloakProfiles()");
+    expect(idx).toContain("stopAllBrowserProfiles()");
     expect(idx).toContain("stopMcpServer()");
   });
 
-  it("cloak-manager exports stopAllCloakProfiles", () => {
-    const cm = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
-    expect(cm).toContain("export function stopAllCloakProfiles()");
+  it("browser-manager exports stopAllBrowserProfiles", () => {
+    const cm = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
+    expect(cm).toContain("export function stopAllBrowserProfiles()");
   });
 });
 
@@ -311,14 +313,14 @@ describe("Integration — Fingerprint UX", () => {
     expect(app).toContain("ANGLE");
   });
 
-  it("cloak:open-risk-check IPC replaces generic cloak:navigate", () => {
-    const ipc = fs.readFileSync(path.join(ROOT, "src/main/ipc/cloak.ts"), "utf-8");
+  it("browser:open-risk-check IPC replaces generic browser:navigate", () => {
+    const ipc = fs.readFileSync(path.join(ROOT, "src/main/ipc/browser.ts"), "utf-8");
     const preload = fs.readFileSync(path.join(ROOT, "src/main/preload.cjs"), "utf-8");
-    expect(ipc).toContain("cloak:open-risk-check");
-    expect(ipc).not.toContain("cloak:navigate");
+    expect(ipc).toContain('handleBrowser("open-risk-check"');
+    expect(ipc).not.toContain("browser:navigate");
     expect(ipc).toContain("ping0.cc");
     expect(preload).toContain("openRiskCheck");
-    expect(preload).not.toContain("cloak:navigate");
+    expect(preload).not.toContain("browser:navigate");
   });
 });
 
@@ -392,12 +394,12 @@ describe("Integration — First-run wizard", () => {
   it("wizard logic is wired in renderer modules", () => {
     const app = readRendererModules();
     expect(app).toContain("function maybeShowWizard");
-    expect(app).toContain("cloak.wizardVerifyBinary");
-    expect(app).toContain("cloak.wizardCreateProfile");
-    expect(app).toContain("cloak.wizardLaunchAndCheck");
-    expect(app).toContain("cloak.wizardSkip");
-    expect(app).toContain("cloak.wizardNeverShow");
-    expect(app).toContain("cloak-wizard-dismissed");
+    expect(app).toContain("agentBrowser.wizardVerifyBinary");
+    expect(app).toContain("agentBrowser.wizardCreateProfile");
+    expect(app).toContain("agentBrowser.wizardLaunchAndCheck");
+    expect(app).toContain("agentBrowser.wizardSkip");
+    expect(app).toContain("agentBrowser.wizardNeverShow");
+    expect(app).toContain("agent-browser-studio-wizard-dismissed");
     expect(app).toContain("function advanceWizardStep");
   });
 
@@ -457,7 +459,7 @@ describe("Integration — i18n", () => {
   it("i18n renderer pushes language to main process on change", () => {
     const i18n = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf-8");
     expect(i18n).toContain("app.setLanguage");
-    expect(i18n).toContain("cloak-language-change");
+    expect(i18n).toContain("agent-browser-language-change");
   });
 
   it("toast.fp.opened key exists in both dictionaries", () => {
@@ -472,8 +474,8 @@ describe("Integration — i18n", () => {
     expect(tray).toContain('tMain("tray.show"');
     expect(tray).toContain('tMain("tray.running"');
     expect(tray).toContain('tMain("tray.quit"');
-    expect(tray).not.toContain('label: "Show CloakLite"');
-    expect(tray).not.toContain('label: "Quit CloakLite"');
+    expect(tray).not.toContain('label: "Show Agent Browser Studio"');
+    expect(tray).not.toContain('label: "Quit Agent Browser Studio"');
   });
 });
 
@@ -513,14 +515,15 @@ describe("Integration — Renderer hardening", () => {
 describe("Integration — Cross-platform paths", () => {
   it("config-manager uses app.getPath('userData') not hardcoded macOS paths", () => {
     const cfg = fs.readFileSync(path.join(ROOT, "src/main/services/config-manager.ts"), "utf-8");
-    expect(cfg).not.toContain('"Library/Application Support/CloakLite"');
-    expect(cfg).not.toContain('"Library", "Application Support", "CloakLite"');
+    expect(cfg).not.toContain('"Library/Application Support/Agent Browser Studio"');
+    expect(cfg).not.toContain('"Library", "Application Support", "Agent Browser Studio"');
     expect(cfg).toContain('app.getPath("userData")');
   });
 
-  it("app index sets app name to CloakLite for consistent userData path", () => {
-    const idx = fs.readFileSync(path.join(ROOT, "src/main/index.ts"), "utf-8");
-    expect(idx).toContain('app.setName("CloakLite")');
+  it("app index sets app name to Agent Browser Studio for consistent userData path", () => {
+    const branding = fs.readFileSync(path.join(ROOT, "src/main/branding.ts"), "utf-8");
+    expect(branding).toContain('PRODUCT_NAME = "Agent Browser Studio"');
+    expect(branding).toContain("electronApp.setName(PRODUCT_NAME)");
   });
 });
 
@@ -544,8 +547,8 @@ describe("Integration — Sync & Config", () => {
     const types = fs.readFileSync(path.join(ROOT, "src/main/types.ts"), "utf-8");
     expect(types).toContain("SyncConfig");
     expect(types).toContain("MgmtConfig");
-    expect(types).toContain("cloakBin");
-    expect(types).toContain("cloakProfiles");
+    expect(types).toContain("chromiumBin");
+    expect(types).toContain("browserProfiles");
   });
 
   it("sync payload has all file-type categories", () => {
@@ -624,7 +627,7 @@ describe("Integration — Hardware fingerprint controls", () => {
   });
 
   it("launch path passes explicit hardware flags to managed Chromium", () => {
-    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
+    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
     for (const flag of [
       "--fingerprint-gpu-vendor",
       "--fingerprint-gpu-renderer",
@@ -647,7 +650,7 @@ describe("Integration — Hardware fingerprint controls", () => {
   it("has no upstream wrapper dependency or fallback launch path", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
     const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf-8"));
-    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
+    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
     expect(pkg.dependencies.cloakbrowser).toBeUndefined();
     expect(lock.packages["node_modules/cloakbrowser"]).toBeUndefined();
     expect(manager).not.toContain('from "cloakbrowser"');
@@ -656,20 +659,21 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).not.toContain("CloakHQ/cloakbrowser");
     expect(manager).not.toContain("CLOAKBROWSER_LICENSE_KEY");
     expect(manager).toContain("upstream wrapper fallback is disabled");
-    expect(manager).toContain("CLOAKLITE_CHROMIUM_BINARY_PATH");
+    expect(manager).toContain("AGENT_BROWSER_CHROMIUM_BINARY_PATH");
     expect(manager).toContain("env: launchEnv || process.env");
     expect(manager).not.toContain('"--test-type"');
     expect(manager).not.toContain('"--disable-blink-features=AutomationControlled"');
   });
 
   it("passes a versioned identity to the self-built Chromium 149+ renderer", () => {
-    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
-    const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
-    expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion)");
+    const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
+    const config = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
+    expect(manager).toContain("buildBrowserFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion, fingerprintSwitch)");
     expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).not.toContain("--time-zone-for-testing=");
     expect(manager).toContain("findManagedRuntimeChromium(requestedVersion)");
-    expect(config).toContain('ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
+    expect(config).toContain('AGENT_BROWSER_FINGERPRINT_SWITCH = "--agent-browser-fingerprint-config="');
+    expect(config).toContain('LEGACY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
     expect(config).toContain("schemaVersion: 1");
     const verifier = fs.readFileSync(path.join(ROOT, "src/tools/verify-native-chromium.ts"), "utf-8");
     expect(verifier).toContain("sameSeedStable");
@@ -703,9 +707,9 @@ describe("Integration — Hardware fingerprint controls", () => {
   it("exposes all WebRTC policy modes from UI through the native config", () => {
     const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
     const renderer = readRendererModules();
-    const config = fs.readFileSync(path.join(ROOT, "src/main/services/roxy-fingerprint-config.ts"), "utf-8");
-    expect(html).toContain('id="new-cloak-webrtc-mode"');
-    expect(html).toContain('id="cloak-meta-webrtc-mode"');
+    const config = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
+    expect(html).toContain('id="new-agent-browser-webrtc-mode"');
+    expect(html).toContain('id="agent-browser-meta-webrtc-mode"');
     for (const mode of ["auto", "real", "altered", "disable"]) {
       expect(html).toContain(`value="${mode}"`);
     }
@@ -754,6 +758,7 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0039-native-legacy-storage-quota.patch",
       "0040-native-managed-font-resolution.patch",
       "0041-native-managed-quic-proxy.patch",
+      "0042-agent-browser-public-runtime-protocol.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }
@@ -790,8 +795,8 @@ describe("Integration — Hardware fingerprint controls", () => {
       "geolocation-longitude",
       "geolocation-accuracy",
     ]) {
-      expect(html, `create dialog missing ${id}`).toContain(`new-cloak-${id}`);
-      expect(html, `edit dialog missing ${id}`).toContain(`cloak-meta-${id}`);
+      expect(html, `create dialog missing ${id}`).toContain(`new-agent-browser-${id}`);
+      expect(html, `edit dialog missing ${id}`).toContain(`agent-browser-meta-${id}`);
     }
     expect(renderer).toContain("readHardwareFields");
     expect(renderer).toContain("writeHardwareFields");
@@ -822,7 +827,7 @@ describe("Integration — Sync restore hardening", () => {
   it("guards running profile restore and validates artifacts", () => {
     const sync = fs.readFileSync(path.join(ROOT, "src/main/services/sync-service.ts"), "utf-8");
     expect(sync).toContain("isProfileRunningForRestore(dirId)");
-    expect(sync).toContain("statusCloak(dirId).running");
+    expect(sync).toContain("statusBrowser(dirId).running");
     expect(sync).toContain("skipped localStorage for running profile");
     expect(sync).toContain("skipped preferences for running profile");
     expect(sync).toContain("validatePreferencesJson(rawPrefs)");
@@ -831,9 +836,9 @@ describe("Integration — Sync restore hardening", () => {
     expect(sync).toContain("LocalStorage archive contains non-regular entries");
   });
 
-  it("uses a single Cloak-branded sync key (no legacy fallback)", () => {
+  it("uses the Agent Browser sync key with a legacy read-only fallback", () => {
     const sync = fs.readFileSync(path.join(ROOT, "src/main/services/sync-service.ts"), "utf-8");
-    expect(sync).toContain('const SYNC_CONFIG_KEY = "cloak-lite-config.json"');
-    expect(sync).not.toContain("LEGACY_SYNC_CONFIG_KEY");
+    expect(sync).toContain('const SYNC_CONFIG_KEY = "agent-browser-studio-config.json"');
+    expect(sync).toContain('const LEGACY_SYNC_CONFIG_KEY = "cloak-lite-config.json"');
   });
 });

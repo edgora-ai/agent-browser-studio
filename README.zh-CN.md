@@ -1,8 +1,8 @@
-# CloakLite
+# Agent Browser Studio（Agent 浏览器工作台）
 
 > 面向独立补丁 Chromium 引擎的本地优先浏览器 Profile 管理与 AI 自动化控制台。
 
-CloakLite 是一个自托管 Electron 桌面应用，用于在授权场景下管理隔离的 Chromium profiles、代理、浏览器状态、AI 辅助工作流、durable automation jobs、审计轨迹和 S3 兼容同步。
+Agent Browser Studio（Agent 浏览器工作台）是一个自托管 Electron 桌面应用，用于在授权场景下管理隔离的 Chromium profiles、代理、浏览器状态、AI 辅助工作流、durable automation jobs、审计轨迹和 S3 兼容同步。
 
 **语言:** [English](README.md) | [简体中文](README.zh-CN.md)  
 **使用手册:** [English](docs/USER_GUIDE.en.md) | [简体中文](docs/USER_GUIDE.zh-CN.md)
@@ -11,9 +11,9 @@ CloakLite 是一个自托管 Electron 桌面应用，用于在授权场景下管
 
 ## 重要声明
 
-CloakLite 是具有双用途属性的本地自动化工具。请仅用于合法且已授权的工作流，例如 QA、国际化/本地化测试、隐私保护型个人工作流、授权业务运营和防御性研究。
+Agent Browser Studio 是具有双用途属性的本地自动化工具。请仅用于合法且已授权的工作流，例如 QA、国际化/本地化测试、隐私保护型个人工作流、授权业务运营和防御性研究。
 
-禁止将 CloakLite 用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避、虚假身份网络，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。详见 [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)。
+禁止将 Agent Browser Studio 用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避、虚假身份网络，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。详见 [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)。
 
 ---
 
@@ -78,17 +78,22 @@ npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-安装器会将版本化构建保存到 `~/.roxy-lite-cloak/`。Profile 默认选择最新安装版本，
+安装器会将版本化构建保存到 `~/.agent-browser-studio/`。Profile 默认选择最新安装版本，
 也可以 pin 任一保留的精确版本用于回滚。Profile 编辑器还提供 pass-through 模式，
 关闭所有托管身份消费者，以宿主原生指纹进行 stock 对照。不使用任何外部浏览器
-wrapper、license key、登录或上游更新服务。`CLOAKLITE_CHROMIUM_BINARY_PATH`
-用于显式覆盖二进制，`CLOAKLITE_CHROMIUM_CACHE_DIR` 用于覆盖托管缓存根目录。
+wrapper、license key、登录或上游更新服务。`AGENT_BROWSER_CHROMIUM_BINARY_PATH`
+用于显式覆盖二进制，`AGENT_BROWSER_CHROMIUM_CACHE_DIR` 用于覆盖托管缓存根目录。
 没有独立构建时，Profile 启动会明确失败，不会下载或选择回退引擎。GeoIP
-统一使用 CloakLite 的有界代理探测。
+统一使用 Agent Browser Studio 的有界代理探测。同版本重装会比较启动器、
+Chromium Framework 和关键资源的运行时构建哈希；构建有变化时原子替换，并把
+上一份 bundle 保留在隐藏恢复目录中。
 
-现有 `cloakBin`、`cloakProfiles`、`cloak-profiles/` 和 `cb_` 标识仅作为
-磁盘数据结构的兼容边界保留，避免升级时重命名或丢失已有 Profile。
-它们不会选择、下载或调用任何上游 CloakBrowser 组件。
+首次正常启动时，应用会将 `~/Library/Application Support/CloakLite` 非破坏性复制到
+`~/Library/Application Support/AgentBrowserStudio`，并将 `~/.roxy-lite-cloak`
+中的有效 Chromium 版本复制到 `~/.agent-browser-studio`。旧应用、旧数据和旧缓存
+都保持不动。旧 `cloakBin`、`cloakProfiles`、`cloak-profiles/` 和 `cb_` 仅作为
+兼容边界继续读取；新数据使用 `chromiumBin`、`browserProfiles`、`profiles/` 和
+`ab_`。应用不会选择、下载、授权或调用 CloakBrowser/RoxyBrowser 组件。
 
 当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
 原生严格校验 53 项、现代/旧版 Storage 深层语料、61 项系统主题专项检查及
@@ -100,8 +105,9 @@ Profile 重启及 headed/headless 全能力面对照；安装版的
 Profile 自有 MASQUE bridge 建立的真实 HTTP/3。
 应用层输入门禁还验证了两层跨源 frame 中的 trusted 操作、布局变化后的
 重新定位、遮挡拒绝以及显式按键时长。
-这不代表已经完全等同
-RoxyChrome/CloakBrowser：
+`0042` 补丁新增公开的 `agent-browser-*` 运行时协议；旧 `roxy-*` 开关仅用于兼容
+保留的 Chromium 149 和早期 150 构建。RoxyChrome/CloakBrowser 只作为历史能力
+对照，不是运行时依赖：
 36 项引擎/网络/生命周期门禁中，35 项 verified、已无 partial、1 项 missing。
 唯一硬缺失是签名的多平台发行包；代理
 timing/cache/header 已通过受控 HTTP/HTTPS/WSS 语料，TLS/HTTP2/HTTP3
@@ -169,7 +175,7 @@ resources/                应用图标
 
 ## 安全、隐私和合规
 
-CloakLite 会处理敏感本地数据，包括浏览器 profile 状态、Cookies、localStorage、代理凭证、LLM API keys、同步凭证、审计日志、截图和 agent traces。
+Agent Browser Studio 会处理敏感本地数据，包括浏览器 profile 状态、Cookies、localStorage、代理凭证、LLM API keys、同步凭证、审计日志、截图和 agent traces。
 
 安全控制包括：
 
@@ -258,4 +264,4 @@ MIT — see [LICENSE](LICENSE)。
 
 ## 商标和非隶属声明
 
-除非相关方明确声明，CloakLite 与 Google、Chrome、Chromium、Meta、Facebook、Instagram、TikTok、Amazon、Shopee、OpenAI、Anthropic、AWS、S3 兼容存储提供商或 CloakBrowser 没有关联、背书、赞助或官方连接。
+除非相关方明确声明，Agent Browser Studio 与 Google、Chrome、Chromium、Meta、Facebook、Instagram、TikTok、Amazon、Shopee、OpenAI、Anthropic、AWS、S3 兼容存储提供商、CloakBrowser 或 RoxyBrowser 没有关联、背书、赞助或官方连接。

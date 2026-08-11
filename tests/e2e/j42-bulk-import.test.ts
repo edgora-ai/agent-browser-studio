@@ -15,21 +15,21 @@ describe("J42 — bulk CSV import with proxy binding", () => {
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
     // A named proxy referenced by a CSV row.
-    await h.page.evaluate(() => (window as any).cloak.api.proxy.add("j42-proxy", { type: "http", host: "127.0.0.1", port: 7001 }));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.proxy.add("j42-proxy", { type: "http", host: "127.0.0.1", port: 7001 }));
   }, 60000);
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("imports header-CSV rows and binds a per-row proxy", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("profiles"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
     await h.page.waitForTimeout(300);
-    await h.page.evaluate(() => (window as any).cloak.bulkImport());
+    await h.page.evaluate(() => (window as any).agentBrowser.bulkImport());
     await h.page.waitForSelector("#dlg-bulk-import[open]", { timeout: 5000 });
     await h.page.locator("#bulk-import-text").fill(CSV);
-    await h.page.evaluate(() => (window as any).cloak.doBulkImport());
+    await h.page.evaluate(() => (window as any).agentBrowser.doBulkImport());
     // Wait for the import to finish + dialog to close.
     await h.page.waitForTimeout(2500);
 
-    const profiles = await h.page.evaluate(() => (window as any).cloak.api.cloak.list());
+    const profiles = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.list());
     const a = profiles.find((p: any) => p.name === "J42-A");
     const b = profiles.find((p: any) => p.name === "J42-B");
     expect(a, "J42-A must be imported").toBeTruthy();
@@ -41,12 +41,12 @@ describe("J42 — bulk CSV import with proxy binding", () => {
   }, 30000);
 
   it("renders imported profile tags and exports them", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("profiles"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
     await h.page.waitForFunction(() => document.querySelector("#profile-list")?.textContent?.includes("shop"), null, { timeout: 5000 });
     const listText = await h.page.locator("#profile-list").innerText();
     expect(listText).toContain("SHOP");
 
-    const exported = await h.page.evaluate(() => (window as any).cloak.api.data.export("profiles"));
+    const exported = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("profiles"));
     expect(exported.ok).toBe(true);
     const a = exported.data.profiles.find((p: any) => p.name === "J42-A");
     expect(a?.tags).toEqual(["shop"]);

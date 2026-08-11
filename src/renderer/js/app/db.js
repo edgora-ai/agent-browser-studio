@@ -1,16 +1,16 @@
 // DB tab — browse the agent's SQLite tables + run SQL.
 (function() {
   "use strict";
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
 
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
-  cloak.loadDbTab = function() {
+  agentBrowser.loadDbTab = function() {
     api.agentDb.tables().then(function(tables) {
       var el = document.getElementById("db-tables");
       if (!tables || tables.length === 0) {
@@ -26,12 +26,12 @@
       el.onclick = function(event) {
         var row = event.target.closest("[data-table]");
         if (!row || !el.contains(row)) return;
-        cloak.dbViewTable(row.dataset.table);
+        agentBrowser.dbViewTable(row.dataset.table);
       };
     }).catch(function(e) { toast(t("db.toast.load-failed","加载失败: ") + (e.message || e), "error"); });
   };
 
-  cloak.dbViewTable = function(table) {
+  agentBrowser.dbViewTable = function(table) {
     api.agentDb.tableData(table, 100, 0).then(function(data) {
       var el = document.getElementById("db-result");
       if (!data || !data.rows || data.rows.length === 0) {
@@ -58,7 +58,7 @@
     }).catch(function(e) { toast(t("db.toast.read-failed","读取失败: ") + (e.message || e), "error"); });
   };
 
-  cloak.dbRunSql = function(mode) {
+  agentBrowser.dbRunSql = function(mode) {
     var sql = document.getElementById("db-sql").value.trim();
     if (!sql) { toast(t("db.toast.no-sql","请输入 SQL"), "error"); return; }
     var el = document.getElementById("db-result");
@@ -68,7 +68,7 @@
       api.agentDb.exec(sql).then(function(r) {
         if (r.ok) {
           el.innerHTML = '<div style="color:var(--success);">' + t("db.exec-done","✅ 执行完成。") + '</div>';
-          cloak.loadDbTab();
+          agentBrowser.loadDbTab();
         } else {
           el.innerHTML = '<div style="color:var(--danger);">' + t("db.exec-failed","❌ ") + esc(r.error || t("db.exec-failed-default","失败")) + "</div>";
         }

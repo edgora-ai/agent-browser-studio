@@ -4,7 +4,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { chromium, type BrowserContext } from "playwright";
-import { buildRoxyFingerprintArg } from "../main/services/roxy-fingerprint-config.js";
+import { buildBrowserFingerprintArg } from "../main/services/browser-fingerprint-config.js";
 import { captureFontCorpusInPage, type FontCorpus } from "./font-corpus.js";
 
 interface Options {
@@ -48,7 +48,7 @@ function parseOptions(argv: string[]): Options {
     throw new Error("--managed-seed must be a positive integer");
   }
   if (options.managedPlatform) {
-    options.browserArgs.push(buildRoxyFingerprintArg({
+    options.browserArgs.push(buildBrowserFingerprintArg({
       fingerprintSeed: options.managedSeed,
       platform: options.managedPlatform,
       locale: "en-US",
@@ -107,7 +107,7 @@ async function captureOne(
   profileTemplate: string | null,
   index: number,
 ): Promise<Record<string, unknown>> {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-font-corpus-"));
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-font-corpus-"));
   const userDataDir = path.join(tempRoot, "profile");
   if (profileTemplate) fs.cpSync(profileTemplate, userDataDir, { recursive: true, force: false });
   else fs.mkdirSync(userDataDir, { recursive: true });

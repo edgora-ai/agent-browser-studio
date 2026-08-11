@@ -43,9 +43,9 @@ describe("J21 — parallel tool calls in one assistant turn", () => {
   });
 
   it("configures mock LLM + creates conversation", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(200);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -53,10 +53,10 @@ describe("J21 — parallel tool calls in one assistant turn", () => {
     await h.page.locator("#agent-llm-url").fill(mock.url);
     await h.page.locator('[data-cmd="agentSaveConfig"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
   });
 
   it("executes all 3 parallel tool calls and finishes the run", async () => {
@@ -64,7 +64,7 @@ describe("J21 — parallel tool calls in one assistant turn", () => {
       (window as any).__steps = [];
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:run-step", (p: any) => (window as any).__steps.push(p));
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
@@ -102,7 +102,7 @@ describe("J21 — parallel tool calls in one assistant turn", () => {
 
   it("the run is persisted as done with 3 steps + the variable", async () => {
     const run = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       return api.agentRuns.get(list[0].id);
     });

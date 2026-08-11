@@ -1,0 +1,108 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index e3e6f2229a..0a8e84ab40 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -371,6 +371,13 @@ bool HandleCreditsSwitch(const base::CommandLine& command_line) {
+ // Check for --version and --product-version; return true if we encountered
+ // one of these switches and should exit now.
+ bool HandleVersionSwitches(const base::CommandLine& command_line) {
++  if (command_line.HasSwitch(roxy::kAgentBrowserCapabilitiesSwitch)) {
++    UNSAFE_TODO(printf("%s\n%s\n%s\n",
++                       roxy::kAgentBrowserProxyAuthCapability,
++                       roxy::kAgentBrowserQuicProxyCapability,
++                       roxy::kAgentBrowserFingerprintConfigCapability));
++    return true;
++  }
+   if (command_line.HasSwitch(roxy::kCapabilitiesSwitch)) {
+     UNSAFE_TODO(printf("%s\n%s\n", roxy::kProxyAuthCapability,
+                        roxy::kQuicProxyCapability));
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index b58403c84b..9389882a66 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2894,12 +2894,13 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+     // processes. Chromium does not forward unknown browser switches by
+     // default, so copy them explicitly instead of exposing them to every
+     // child-process type.
+-    static constexpr const char* kRoxyRendererSwitchNames[] = {
++    static constexpr const char* kManagedRendererSwitchNames[] = {
++        "agent-browser-fingerprint-config",
+         "roxy-fingerprint-config",
+         "fingerprint-fonts-dir",
+     };
+     command_line->CopySwitchesFrom(browser_command_line,
+-                                   kRoxyRendererSwitchNames);
++                                   kManagedRendererSwitchNames);
+ 
+     content::RenderProcessHost* process =
+         content::RenderProcessHost::FromID(child_process_id);
+diff --git a/chrome/browser/net/roxy_proxy_auth.cc b/chrome/browser/net/roxy_proxy_auth.cc
+index 74d3141366..20d458fd1b 100644
+--- a/chrome/browser/net/roxy_proxy_auth.cc
++++ b/chrome/browser/net/roxy_proxy_auth.cc
+@@ -77,7 +77,10 @@ class ManagedProxyAuthState {
+ 
+     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+     const base::FilePath credential_path =
+-        command_line->GetSwitchValuePath(kProxyAuthFileSwitch);
++        command_line->HasSwitch(kAgentBrowserProxyAuthFileSwitch)
++            ? command_line->GetSwitchValuePath(kAgentBrowserProxyAuthFileSwitch)
++            : command_line->GetSwitchValuePath(kProxyAuthFileSwitch);
++    command_line->RemoveSwitch(kAgentBrowserProxyAuthFileSwitch);
+     command_line->RemoveSwitch(kProxyAuthFileSwitch);
+     if (credential_path.empty()) {
+       return;
+diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
+index 4e656d0e7e..6c7d518157 100644
+--- a/chrome/browser/net/roxy_proxy_auth.h
++++ b/chrome/browser/net/roxy_proxy_auth.h
+@@ -20,6 +20,20 @@ inline constexpr char kCapabilitiesSwitch[] = "roxy-capabilities";
+ inline constexpr char kProxyAuthCapability[] = "roxy-proxy-auth-file-v1";
+ inline constexpr char kQuicProxyCapability[] = "roxy-quic-proxy-v1";
+ 
++// Agent Browser Studio public names. The roxy-prefixed constants above remain
++// accepted only as compatibility aliases for Chromium 149 and the released
++// 0002-0041 application stack.
++inline constexpr char kAgentBrowserProxyAuthFileSwitch[] =
++    "agent-browser-proxy-auth-file";
++inline constexpr char kAgentBrowserCapabilitiesSwitch[] =
++    "agent-browser-capabilities";
++inline constexpr char kAgentBrowserProxyAuthCapability[] =
++    "agent-browser-proxy-auth-file-v1";
++inline constexpr char kAgentBrowserQuicProxyCapability[] =
++    "agent-browser-quic-proxy-v1";
++inline constexpr char kAgentBrowserFingerprintConfigCapability[] =
++    "agent-browser-fingerprint-config-v1";
++
+ // Loads and deletes the one-shot credential file before child processes are
+ // started. Calling this more than once has no effect.
+ void InitializeManagedProxyAuth();
+diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
+index ed9d0b8b0f..9b5079a72c 100644
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -345,15 +345,21 @@ class RoxyFingerprintConfig {
+   friend class base::NoDestructor<RoxyFingerprintConfig>;
+ 
+   RoxyFingerprintConfig() {
+-    constexpr char kSwitch[] = "roxy-fingerprint-config";
++    constexpr char kAgentBrowserSwitch[] =
++        "agent-browser-fingerprint-config";
++    constexpr char kLegacySwitch[] = "roxy-fingerprint-config";
+     constexpr size_t kMaxConfigBytes = 64 * 1024;
+     const base::CommandLine* command_line =
+         base::CommandLine::ForCurrentProcess();
+-    if (!command_line->HasSwitch(kSwitch))
++    const char* config_switch =
++        command_line->HasSwitch(kAgentBrowserSwitch) ? kAgentBrowserSwitch
++                                                     : kLegacySwitch;
++    if (!command_line->HasSwitch(config_switch))
+       return;
+ 
+     std::string decoded;
+-    const std::string encoded = command_line->GetSwitchValueASCII(kSwitch);
++    const std::string encoded =
++        command_line->GetSwitchValueASCII(config_switch);
+     if (!base::Base64UrlDecode(encoded,
+                                base::Base64UrlDecodePolicy::IGNORE_PADDING,
+                                &decoded) ||

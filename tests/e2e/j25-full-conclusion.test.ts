@@ -61,21 +61,21 @@ describe("J25 — full task finishes done with a conclusion", () => {
   }, 90000);
 
   it("launches a profile + configures the mock", async () => {
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J25", platform: "windows", fingerprintSeed: 25025 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J25", platform: "windows", fingerprintSeed: 25025 }));
     dirId = r.dirId;
-    await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), dirId);
-    cdpPort = (await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), dirId)).cdpPort;
+    await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), dirId);
+    cdpPort = (await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), dirId)).cdpPort;
 
     // Configure mock LLM.
     await h.page.evaluate((murl: string) => {
-      (window as any).cloak.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
+      (window as any).agentBrowser.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
     }, mock.url);
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(150);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(150);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
   }, 60000);
 
   it("runs the full chain and ends with a conclusion", async () => {
@@ -95,7 +95,7 @@ describe("J25 — full task finishes done with a conclusion", () => {
     await h.page.evaluate(() => {
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
     });
@@ -114,7 +114,7 @@ describe("J25 — full task finishes done with a conclusion", () => {
 
   it("the run is done, has a conclusion, the variable round-tripped, and news was stored", async () => {
     const run = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       return api.agentRuns.get(list[0].id);
     });
@@ -131,7 +131,7 @@ describe("J25 — full task finishes done with a conclusion", () => {
     expect(JSON.stringify(gv.result)).not.toContain("最新新闻");
     // News row landed.
     const stored = await h.page.evaluate(async () => {
-      const r = await (window as any).cloak.api.agentDb.query("SELECT title FROM news");
+      const r = await (window as any).agentBrowser.api.agentDb.query("SELECT title FROM news");
       return r.rows;
     });
     expect(JSON.stringify(stored)).toContain("最新新闻第1条");

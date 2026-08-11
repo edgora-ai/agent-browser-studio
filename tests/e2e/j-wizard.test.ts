@@ -22,14 +22,14 @@ describe("Wizard — skip vs never-show semantics", () => {
 
   it("skip-for-now does not persist dismissal to localStorage", async () => {
     // Ensure a clean localStorage state for this isolated assertion.
-    await h.page.evaluate(() => { try { localStorage.removeItem("cloak-wizard-dismissed"); } catch (e) {} });
+    await h.page.evaluate(() => { try { localStorage.removeItem("agent-browser-studio-wizard-dismissed"); } catch (e) {} });
 
     // The wizard auto-shows after 500ms on first run (no binary / no profiles).
     await h.page.waitForTimeout(900);
     await closeAllDialogs(h.page);
 
     // Manually trigger the wizard and press Skip.
-    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).cloak.showWizard(); });
+    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).agentBrowser.showWizard(); });
     await h.page.waitForTimeout(200);
     const openBefore = await h.page.evaluate(() => (document.getElementById("dlg-wizard") as any)?.open);
     expect(openBefore).toBe(true);
@@ -39,9 +39,9 @@ describe("Wizard — skip vs never-show semantics", () => {
     await h.page.locator('#dlg-wizard > .btn-row [data-cmd="wizardSkip"]').click({ timeout: 3000 });
     await h.page.waitForTimeout(200);
 
-    const dismissed = await h.page.evaluate(() => localStorage.getItem("cloak-wizard-dismissed"));
+    const dismissed = await h.page.evaluate(() => localStorage.getItem("agent-browser-studio-wizard-dismissed"));
     // Skip must NOT persist dismissal.
-    expect(dismissed, "skip should not persist cloak-wizard-dismissed").toBeNull();
+    expect(dismissed, "skip should not persist agent-browser-studio-wizard-dismissed").toBeNull();
 
     // And the in-memory session flag should be set so it does not reappear now.
     const sessionFlag = await h.page.evaluate(() => (window as any).wizardDismissed);
@@ -50,17 +50,17 @@ describe("Wizard — skip vs never-show semantics", () => {
 
   it("never-show persists dismissal to localStorage", async () => {
     // Clear the in-memory flag so we can re-open the wizard.
-    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).cloak.showWizard(); });
+    await h.page.evaluate(() => { (window as any).wizardDismissed = false; (window as any).agentBrowser.showWizard(); });
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="wizardNeverShow"]').click({ timeout: 3000 });
     await h.page.waitForTimeout(200);
 
-    const dismissed = await h.page.evaluate(() => localStorage.getItem("cloak-wizard-dismissed"));
+    const dismissed = await h.page.evaluate(() => localStorage.getItem("agent-browser-studio-wizard-dismissed"));
     expect(dismissed).toBe("1");
   });
 
   it("wizard exposes the optional agent configuration command", async () => {
-    const hasFn = await h.page.evaluate(() => typeof (window as any).cloak.wizardConfigureAgent === "function");
+    const hasFn = await h.page.evaluate(() => typeof (window as any).agentBrowser.wizardConfigureAgent === "function");
     expect(hasFn, "wizardConfigureAgent should be defined").toBe(true);
     const hasStep4 = await h.page.evaluate(() => !!document.querySelector('.wizard-step[data-step="4"]'));
     expect(hasStep4, "wizard step 4 should exist in the DOM").toBe(true);

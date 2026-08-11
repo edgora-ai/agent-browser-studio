@@ -9,8 +9,8 @@ before the patch applicability check runs.
 
 1. Keep experimental, diagnostic, cleanup and final-fix commits in the
    Chromium source branch. Do not amend, squash or rebase that branch.
-2. Export a released source change as the next numbered patch. After `0041`,
-   the next file is `0042-*`.
+2. Export a released source change as the next numbered patch. After `0042`,
+   the next file is `0043-*`.
 3. Append its digest to `PATCHSET.sha256` and its provenance to this ledger in
    the same OSS commit. Do not alter prior digest or history rows.
 4. Run `check.sh` against the pinned clean upstream commit before release.
@@ -41,6 +41,7 @@ before the patch applicability check runs.
 | `0039` | `e78c2cd84e551efc872d8ec321080e6d82ece1c1` | Legacy storage quota coherence |
 | `0040` | `0922ab130a2268d12862e30cca6e282507f721ec` | Managed platform-font resolution |
 | `0041` | `2152f8799831fd9eb183ae550826cbfdbbedf9a2` | Managed QUIC proxy and SOCKS5 UDP transport |
+| `0042` | See the append-only `0042` release entry below | Agent Browser public runtime protocol and legacy aliases |
 
 ## Chromium 150 source checkpoint
 
@@ -54,6 +55,8 @@ before the patch applicability check runs.
 - Current branch head after the post-release scroll diagnostic cleanup:
   `b4bf6e9f21638c71848e72aed5deb6289f953a7a`; its tree is identical to the
   tagged `0041` source tree.
+- Preserved head after patch `0042`:
+  `38cdb615cf312444490982b71f5faec5e892c350`.
 
 The following source commits intentionally retain the unsuccessful diagnostics
 and experiments as well as the fixes, so later Chromium upgrades can recover
@@ -78,6 +81,7 @@ e7fc69f9ac673fd3f85f74438efa22154efaf1d7 feat: enforce managed font resolution
 4461854586be1840bc84e1577017b4163061af38 feat: enable managed QUIC proxy transport
 ef1c9d89ece1192f40fe8ca42f6929ba2d93ed5a diagnostic: trace managed debugger scroll reconciliation
 b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation diagnostics
+38cdb615cf312444490982b71f5faec5e892c350 feat: add Agent Browser public runtime protocol
 ```
 
 ## Append-only release entries
@@ -226,5 +230,28 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   Go/race and clean `0002–0041` replay remain green. This application-only
   follow-up changes no Chromium source or released patch bytes.
 - No byte in patch `0040`, any earlier patch, or either source payload changed.
-  The next Chromium source change must be exported as `0042-*`; do not amend,
-  squash, rebase or replace this source commit, tag, patch or digest row.
+  Patch `0041` remains immutable; later source changes are appended as new
+  numbered patches.
+
+### `0042` — 2026-08-11
+
+- Chromium source commit:
+  `38cdb615cf312444490982b71f5faec5e892c350`
+  (`feat: add Agent Browser public runtime protocol`).
+- Annotated Chromium source tag:
+  `agent-browser-chromium-150-patchset-0042`.
+- Patch SHA-256:
+  `52b7ad9fdd29ecc0e0a577cec54d5bf212413170012c458e9e4eb6a549d8787d`.
+- Scope: make `--agent-browser-fingerprint-config`,
+  `--agent-browser-proxy-auth-file`, and `--agent-browser-capabilities` the
+  public runtime protocol. The capability query advertises the fingerprint,
+  native proxy-auth, and QUIC-proxy contracts under `agent-browser-*` names.
+  The released `roxy-*` switches remain compatibility aliases for existing
+  Chromium 149 Profiles and the immutable `0002–0041` application stack.
+- Preservation: no byte in `0002–0041` or either immutable source payload was
+  rewritten. The next Chromium source change must be exported as `0043-*`;
+  do not amend, squash, rebase, or replace this source commit or patch.
+- Acceptance: clean pinned-upstream-index replay of `0002–0042`, successful
+  incremental Chromium 150 build, and direct verification that the new query
+  advertises all three `agent-browser-*` capabilities while the legacy query
+  retains the two released `roxy-*` aliases.

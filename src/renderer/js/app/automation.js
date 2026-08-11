@@ -1,9 +1,9 @@
 // 自动化任务 tab 逻辑(正经 dialog 编辑)
 (function() {
   "use strict";
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -89,7 +89,7 @@
   }
 
   function fillProfileSelect(selId, selected) {
-    api.cloak.list().then(function(list) {
+    api.browser.list().then(function(list) {
       var sel = document.getElementById(selId);
       var cur = sel.value;
       sel.innerHTML = '<option value="">' + esc(t('auto.select-profile', '(选择 profile)')) + '</option>' + (list || []).map(function(p) {
@@ -157,7 +157,7 @@
     document.getElementById('auto-action-prompt').value = templatePrompt(tpl);
   }
 
-  cloak.loadAutomationTab = function() {
+  agentBrowser.loadAutomationTab = function() {
     api.automation.list().then(function(rules) {
       currentRules = rules || [];
       var el = document.getElementById('automation-list');
@@ -186,18 +186,18 @@
           var ruleId = card && card.dataset.ruleId;
           var action = target.dataset.ruleAction;
           var rule = currentRules.find(function(x){return x.id===ruleId;});
-          if (action === 'toggle') cloak.automationToggle(rule);
-          else if (action === 'test') cloak.automationTest(ruleId);
-          else if (action === 'edit') cloak.automationEdit(rule);
-          else if (action === 'delete') cloak.automationDelete(ruleId);
+          if (action === 'toggle') agentBrowser.automationToggle(rule);
+          else if (action === 'test') agentBrowser.automationTest(ruleId);
+          else if (action === 'edit') agentBrowser.automationEdit(rule);
+          else if (action === 'delete') agentBrowser.automationDelete(ruleId);
         };
       }
     });
-    cloak.automationRefreshLogs();
-    cloak.automationRefreshJobs();
+    agentBrowser.automationRefreshLogs();
+    agentBrowser.automationRefreshJobs();
   };
 
-  cloak.automationRefreshJobs = function() {
+  agentBrowser.automationRefreshJobs = function() {
     var el = document.getElementById('automation-jobs');
     if (!el) return;
     var statusEl = document.getElementById('automation-job-status');
@@ -236,9 +236,9 @@
         var card = btn.closest('[data-job-id]');
         var jobId = card && card.dataset.jobId;
         var job = (jobs || []).find(function(x) { return x.id === jobId; });
-        if (btn.dataset.jobAction === 'detail') cloak.automationShowJob(jobId);
-        else if (btn.dataset.jobAction === 'open-run' && job && job.runId) cloak.runsOpen(job.runId);
-        else if (btn.dataset.jobAction === 'cancel') cloak.automationCancelJob(jobId);
+        if (btn.dataset.jobAction === 'detail') agentBrowser.automationShowJob(jobId);
+        else if (btn.dataset.jobAction === 'open-run' && job && job.runId) agentBrowser.runsOpen(job.runId);
+        else if (btn.dataset.jobAction === 'cancel') agentBrowser.automationCancelJob(jobId);
       };
     }).catch(function(e) {
       el.innerHTML = '<div class="empty-state">' + esc(t('auto.jobs.load-failed','加载 jobs 失败: ')) + esc(e.message || e) + '</div>';
@@ -246,7 +246,7 @@
     });
   };
 
-  cloak.automationShowJob = function(jobId) {
+  agentBrowser.automationShowJob = function(jobId) {
     if (!jobId) return;
     api.automation.jobGet(jobId).then(function(job) {
       if (!job) { toast(t('auto.jobs.not-found','Job 不存在'), 'error'); return; }
@@ -259,18 +259,18 @@
     }).catch(function(e) { toast(t('auto.jobs.load-job-failed','加载 job 失败: ') + (e.message || e), 'error'); });
   };
 
-  cloak.automationCancelJob = function(jobId) {
+  agentBrowser.automationCancelJob = function(jobId) {
     if (!jobId) return;
     if (!confirm(t('auto.jobs.confirm-cancel','取消此 job? 已经开始的外部副作用不会回滚。'))) return;
     api.automation.jobCancel(jobId).then(function(r) {
       toast(r && r.success ? t('auto.jobs.cancelled','已取消 job') : t('auto.jobs.cancel-failed','取消失败'), r && r.success ? 'success' : 'error');
       var dlg = document.getElementById('dlg-auto-job');
       if (dlg && dlg.open) dlg.close();
-      cloak.automationRefreshJobs();
+      agentBrowser.automationRefreshJobs();
     }).catch(function(e) { toast(t('auto.jobs.cancel-error','取消 job 失败: ') + (e.message || e), 'error'); });
   };
 
-  cloak.automationRefreshLogs = function() {
+  agentBrowser.automationRefreshLogs = function() {
     api.automation.logs().then(function(logs) {
       var logEl = document.getElementById('automation-log');
       if (!logs || logs.length === 0) { logEl.textContent = t('auto.log.empty', '(空)'); return; }
@@ -283,12 +283,12 @@
       logEl.onclick = function(event) {
         var row = event.target.closest('[data-log-idx]');
         if (!row) return;
-        cloak.automationShowLogDetail(logs[Number(row.dataset.logIdx)]);
+        agentBrowser.automationShowLogDetail(logs[Number(row.dataset.logIdx)]);
       };
     });
   };
 
-  cloak.automationShowLogDetail = function(log) {
+  agentBrowser.automationShowLogDetail = function(log) {
     if (!log) return;
     var detail = t('auto.log.task','任务: ') + log.ruleName + ' (' + log.ruleId + ')\n' +
       t('auto.log.time','时间: ') + new Date(log.at).toLocaleString() + '\n' +
@@ -341,18 +341,18 @@
     document.getElementById('dlg-automation').showModal();
   }
 
-  cloak.automationNew = function() {
+  agentBrowser.automationNew = function() {
     var open = function() { openEditor(null); };
     if (taskTemplates.length || !api.agent.taskTemplates) { open(); return; }
     api.agent.taskTemplates().then(function(list) { taskTemplates = list || []; open(); }).catch(open);
   };
-  cloak.automationEdit = function(rule) {
+  agentBrowser.automationEdit = function(rule) {
     var open = function() { openEditor(rule); };
     if (taskTemplates.length || !api.agent.taskTemplates) { open(); return; }
     api.agent.taskTemplates().then(function(list) { taskTemplates = list || []; open(); }).catch(open);
   };
 
-  cloak.saveAutomation = function() {
+  agentBrowser.saveAutomation = function() {
     var id = document.getElementById('auto-id').value;
     var name = document.getElementById('auto-name').value.trim() || 'Untitled';
     var triggerType = document.getElementById('auto-trigger-type').value;
@@ -384,20 +384,20 @@
     var p = id ? api.automation.update(Object.assign({ id: id }, payload)) : api.automation.create(payload);
     p.then(function(r) {
       toast(r.success ? (id ? t('auto.saved','已更新') : t('auto.created','已创建')) : t('auto.save-failed','失败: ') + (r.error || ''), r.success ? 'success' : 'error');
-      cloak.loadAutomationTab();
+      agentBrowser.loadAutomationTab();
     });
   };
 
-  cloak.automationToggle = function(rule) {
+  agentBrowser.automationToggle = function(rule) {
     if (!rule) return;
-    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function() { cloak.loadAutomationTab(); });
+    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function() { agentBrowser.loadAutomationTab(); });
   };
-  cloak.automationTest = function(ruleId) {
+  agentBrowser.automationTest = function(ruleId) {
     toast(t('auto.test-running','测试运行中...'), 'info');
-    api.automation.testRun(ruleId).then(function(r) { toast((r.ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + r.result.slice(0,60), r.ok?'success':'error'); setTimeout(function(){ cloak.loadAutomationTab(); }, 500); });
+    api.automation.testRun(ruleId).then(function(r) { toast((r.ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + r.result.slice(0,60), r.ok?'success':'error'); setTimeout(function(){ agentBrowser.loadAutomationTab(); }, 500); });
   };
-  cloak.automationDelete = function(ruleId) {
+  agentBrowser.automationDelete = function(ruleId) {
     if (!confirm(t('auto.confirm-delete','删除此任务?'))) return;
-    api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); cloak.loadAutomationTab(); });
+    api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); });
   };
 })();

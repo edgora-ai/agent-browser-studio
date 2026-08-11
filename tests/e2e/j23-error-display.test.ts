@@ -21,9 +21,9 @@ describe("J23 — error is shown as text, not [object Object]", () => {
   beforeAll(async () => {
     mock = await startMockLlm({ delayMs: 20, chunks: ["unused"] });
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(200);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -31,11 +31,11 @@ describe("J23 — error is shown as text, not [object Object]", () => {
     await h.page.locator("#agent-llm-url").fill(mock.url);
     await h.page.locator('[data-cmd="agentSaveConfig"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
-    convId = await h.page.evaluate(() => (window as any).cloak.state.agentActiveConvId);
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
+    convId = await h.page.evaluate(() => (window as any).agentBrowser.state.agentActiveConvId);
   }, 60000);
 
   afterAll(async () => {
@@ -52,7 +52,7 @@ describe("J23 — error is shown as text, not [object Object]", () => {
     await h.page.evaluate(() => {
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
     });
@@ -99,7 +99,7 @@ describe("J23 — error is shown as text, not [object Object]", () => {
     await h.page.evaluate(() => {
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
     });

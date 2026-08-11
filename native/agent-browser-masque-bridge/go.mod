@@ -1,4 +1,4 @@
-module github.com/ahoo/roxy-lite-cloak-oss/native/masque-socks-bridge
+module github.com/ahoo/agent-browser-studio/native/agent-browser-masque-bridge
 
 go 1.25.0
 

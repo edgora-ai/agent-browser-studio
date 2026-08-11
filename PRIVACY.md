@@ -1,12 +1,12 @@
 # Privacy Notice
 
-CloakLite is designed as a self-hosted local desktop application. The project does not include a hosted backend operated by the maintainers.
+Agent Browser Studio is designed as a self-hosted local desktop application. The project does not include a hosted backend operated by the maintainers.
 
 ## Data Stored Locally
 
-Depending on how you use the app, CloakLite may store or process:
+Depending on how you use the app, Agent Browser Studio may store or process:
 
-- CloakBrowser profile metadata and profile directories
+- Managed Chromium profile metadata and profile directories
 - Cookies, localStorage, preferences, bookmarks, and extension state
 - Proxy hostnames, ports, usernames, and encrypted or redacted credential metadata
 - Account records and local notes
@@ -19,12 +19,12 @@ Local runtime data is ignored by `.gitignore`, but you remain responsible for ex
 
 ## Data Sent to Third Parties
 
-CloakLite may send data to third parties only when you configure or trigger those integrations, for example:
+Agent Browser Studio may send data to third parties only when you configure or trigger those integrations, for example:
 
 - LLM prompts, tool context, webpage text, and agent conversation history may be sent to the selected LLM provider.
 - Proxy detection requests may contact external IP/geolocation services.
 - Remote sync may upload selected config, cookies, localStorage, bookmarks, and preferences to your configured S3-compatible storage.
-- Browser automation interacts with websites that you visit in CloakBrowser profiles.
+- Browser automation interacts with websites that you visit in managed Chromium profiles.
 
 Review provider terms and privacy policies before connecting API keys, proxies, or sync buckets.
 

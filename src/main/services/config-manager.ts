@@ -1,12 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as net from "node:net";
-import { validateRoxyHardwareProfile } from "./roxy-fingerprint-config.js";
+import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { encryptSecret, isEncrypted, decryptSecretOr, usingEncryption } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, CloakFingerprintMeta, CloakProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
+import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
 let _appDataDir: string | null = null;
@@ -28,8 +29,8 @@ const DefaultProxy: ProxyConfig = {
 };
 
 const DefaultConfig: MgmtConfig = {
-  version: 3,
-  cloakBin: "auto",
+  version: 4,
+  chromiumBin: "auto",
   defaultProxy: "default",
   proxies: {
     "default": { ...DefaultProxy },
@@ -42,7 +43,7 @@ const DefaultConfig: MgmtConfig = {
     accessKey: "",
     secretKey: "",
   },
-  cloakProfiles: {},
+  browserProfiles: {},
   extensionRepository: {},
   skillRepository: {},
   skillCatalogSources: [],
@@ -73,7 +74,7 @@ export function getAppDataDir(): string {
 }
 
 export function getProfilesDir(): string {
-  if (!_profilesDir) _profilesDir = path.join(resolveAppDataDir(), "cloak-profiles");
+  if (!_profilesDir) _profilesDir = path.join(resolveAppDataDir(), PROFILE_DIR_NAME);
   return _profilesDir;
 }
 
@@ -162,7 +163,7 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
       delete cfg.proxyDetections[oldName];
     }
     if (cfg.defaultProxy === oldName) cfg.defaultProxy = newName;
-    for (const profile of Object.values(cfg.cloakProfiles || {})) {
+    for (const profile of Object.values(cfg.browserProfiles || {})) {
       if (profile.proxyMode === "named" && profile.proxyName === oldName) {
         profile.proxyName = newName;
       }
@@ -207,7 +208,7 @@ export function deleteProxy(name: string): boolean {
   if (name === "default") return false;
   if (!Object.hasOwn(cfg.proxies, name)) return false;
 
-  for (const p of Object.values(cfg.cloakProfiles || {})) {
+  for (const p of Object.values(cfg.browserProfiles || {})) {
     if (p.proxyMode === "named" && p.proxyName === name) {
       return false;
     }
@@ -256,7 +257,7 @@ export function resolveProfileProxySecret(dirId: string): ResolvedProfileProxy {
 function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedProfileProxy {
   validateDirId(dirId);
   const cfg = getConfig();
-  const meta = Object.hasOwn(cfg.cloakProfiles || {}, dirId) ? cfg.cloakProfiles[dirId] : undefined;
+  const meta = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
   const mode = normalizeProxyMode(meta?.proxyMode, meta?.proxyName ?? null);
 
   if (mode === "none") {
@@ -309,7 +310,7 @@ export function setProfileProxy(dirId: string, proxyName: string | null, mode?: 
 
 export function setProfileProxyOnConfig(cfg: MgmtConfig, dirId: string, proxyName: string | null, mode?: ProxyMode): void {
   validateDirId(dirId);
-  const cp = cfg.cloakProfiles || {};
+  const cp = cfg.browserProfiles || {};
   if (!Object.hasOwn(cp, dirId)) throw new Error(`Profile not found: ${dirId}`);
   const nextMode = normalizeProxyMode(mode, proxyName);
   if (nextMode === "named") {
@@ -319,7 +320,7 @@ export function setProfileProxyOnConfig(cfg: MgmtConfig, dirId: string, proxyNam
   }
   cp[dirId].proxyMode = nextMode;
   cp[dirId].proxyName = nextMode === "named" ? proxyName : null;
-  cfg.cloakProfiles = cp;
+  cfg.browserProfiles = cp;
 }
 
 function normalizeProxyMode(mode: ProxyMode | undefined, proxyName: string | null, legacyDefault = false): ProxyMode {
@@ -379,9 +380,9 @@ function sanitizeBoolean(value: unknown, label: string, fallback = false): boole
   return value;
 }
 
-function sanitizeCloakPlatform(value: unknown): "windows" | "macos" {
+function sanitizeBrowserPlatform(value: unknown): "windows" | "macos" {
   if (value === "windows" || value === "macos") return value;
-  throw new Error(`Invalid Cloak platform: ${JSON.stringify(value)}`);
+  throw new Error(`Invalid browser platform: ${JSON.stringify(value)}`);
 }
 
 function sanitizeOptionalLocale(value: unknown): string | null {
@@ -435,7 +436,7 @@ function sanitizeOptionalNumber(value: unknown, min: number, max: number): numbe
   return number;
 }
 
-function validateGeolocationMeta(meta: CloakFingerprintMeta): void {
+function validateGeolocationMeta(meta: BrowserFingerprintMeta): void {
   if (meta.geolocationMode !== "custom") return;
   if (meta.geolocationLatitude == null || meta.geolocationLongitude == null) {
     throw new Error("Custom geolocation requires latitude and longitude");
@@ -782,10 +783,10 @@ function isUnsafeBypassHost(host: string): boolean {
 
 // ── Profile metadata ──
 
-export function getProfileMeta(dirId: string): CloakProfileMeta | null {
+export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
   validateDirId(dirId);
   const cfg = getConfig();
-  const cp = Object.hasOwn(cfg.cloakProfiles || {}, dirId) ? cfg.cloakProfiles[dirId] : undefined;
+  const cp = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
   if (!cp) return null;
   return {
     name: cp.name,
@@ -821,12 +822,12 @@ export function getProfileMeta(dirId: string): CloakProfileMeta | null {
   };
 }
 
-export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): void {
+export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>): void {
   validateDirId(dirId);
   const cfg = structuredClone(getConfig());
-  const cp = cfg.cloakProfiles || {};
+  const cp = cfg.browserProfiles || {};
   const current = Object.hasOwn(cp, dirId) ? cp[dirId] : { name: dirId.substring(0, 8), fingerprintSeed: 12345 };
-  const next: CloakProfileMeta = { ...current };
+  const next: BrowserProfileMeta = { ...current };
 
   if (meta.proxyMode !== undefined || meta.proxyName !== undefined) {
     const nextMode = normalizeProxyMode(meta.proxyMode, meta.proxyName ?? next.proxyName ?? null);
@@ -850,7 +851,7 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
   if (meta.browserVersion !== undefined) next.browserVersion = normalizeManagedChromiumVersion(meta.browserVersion);
   if (meta.allowThirdPartyCookies !== undefined) next.allowThirdPartyCookies = sanitizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility");
-  if (meta.platform !== undefined) next.platform = sanitizeCloakPlatform(meta.platform);
+  if (meta.platform !== undefined) next.platform = sanitizeBrowserPlatform(meta.platform);
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
   if (meta.locale !== undefined) next.locale = sanitizeOptionalLocale(meta.locale);
   if (meta.webrtcMode !== undefined) next.webrtcMode = sanitizeWebRtcMode(meta.webrtcMode, next.webrtcIp);
@@ -873,17 +874,17 @@ export function setProfileMeta(dirId: string, meta: Partial<CloakProfileMeta>): 
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
 
   validateGeolocationMeta(next);
-  if (next.fingerprintMode !== "off") validateRoxyHardwareProfile(next);
+  if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next);
 
   cp[dirId] = next;
-  cfg.cloakProfiles = cp;
+  cfg.browserProfiles = cp;
   saveConfig(cfg);
 }
 
 export function removeProfileMeta(dirId: string): void {
   validateDirId(dirId);
   const cfg = getConfig();
-  if (cfg.cloakProfiles && Object.hasOwn(cfg.cloakProfiles, dirId)) delete cfg.cloakProfiles[dirId];
+  if (cfg.browserProfiles && Object.hasOwn(cfg.browserProfiles, dirId)) delete cfg.browserProfiles[dirId];
   saveConfig(cfg);
 }
 
@@ -1000,8 +1001,9 @@ function ensureAppDir(): void {
 
 function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mode: "load" | "save"): MgmtConfig {
   const merged = structuredClone(defaults);
-  if (parsed.version) merged.version = Math.max(3, parsed.version);
-  if (parsed.cloakBin) merged.cloakBin = parsed.cloakBin;
+  if (parsed.version) merged.version = Math.max(4, parsed.version);
+  const parsedChromiumBin = parsed.chromiumBin ?? parsed["cloakBin"];
+  if (parsedChromiumBin) merged.chromiumBin = parsedChromiumBin;
   if (parsed.proxies) {
     const rawProxies = { ...defaults.proxies, ...parsed.proxies };
     merged.proxies = {};
@@ -1048,11 +1050,12 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   if (parsed.agentFs && typeof parsed.agentFs === "object") {
     merged.agentFs = normalizeAgentFs(parsed.agentFs);
   }
-  if (parsed.cloakProfiles) {
-    merged.cloakProfiles = {};
-    for (const [dirId, rawProfile] of Object.entries(parsed.cloakProfiles)) {
+  const parsedProfiles = parsed.browserProfiles ?? parsed["cloakProfiles"];
+  if (parsedProfiles) {
+    merged.browserProfiles = {};
+    for (const [dirId, rawProfile] of Object.entries(parsedProfiles)) {
       validateDirId(dirId);
-      const profile = { ...(rawProfile as CloakProfileMeta) };
+      const profile = { ...(rawProfile as BrowserProfileMeta) };
       profile.proxyMode = normalizeProxyMode(profile.proxyMode, profile.proxyName || null, true);
       if (profile.proxyMode === "named") {
         if (!profile.proxyName || !isValidProxyName(profile.proxyName)) {
@@ -1088,13 +1091,13 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.fontsDir = sanitizeOptionalFontsDir(profile.fontsDir);
       profile.tags = normalizeProfileTags(profile.tags);
       profile.extensions = normalizeExtensionMap(profile.extensions);
-      merged.cloakProfiles[dirId] = profile;
+      merged.browserProfiles[dirId] = profile;
     }
   }
   if (parsed.llm) merged.llm = normalizeLlmConfig(parsed.llm);
   if (parsed.accounts) merged.accounts = normalizeAccounts(parsed.accounts);
   for (const [key, value] of Object.entries(parsed)) {
-    if (key in merged || key === "profiles" || key === "firefoxProfiles" || key === "chromeProfiles" || key === "chromeBin") continue;
+    if (key in merged || key === "cloakBin" || key === "cloakProfiles" || key === "profiles" || key === "firefoxProfiles" || key === "chromeProfiles" || key === "chromeBin") continue;
     (merged as any)[key] = value;
   }
   return merged;

@@ -6,19 +6,19 @@ import {
   deleteCookie,
 } from "../services/profile-manager.js";
 import {
-  listCloakProfiles,
-  createCloakProfile,
-  deleteCloakProfile,
-} from "../services/cloak-manager.js";
+  listBrowserProfiles,
+  createBrowserProfile,
+  deleteBrowserProfile,
+} from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
 import type { GeolocationMode, ProfileInfo, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerProfileHandlers(): void {
   ipcMain.handle("profile:list", async (): Promise<ProfileInfo[]> => {
-    const cloak = listCloakProfiles();
+    const browserProfiles = listBrowserProfiles();
     const result: ProfileInfo[] = [];
-    for (const p of cloak) {
+    for (const p of browserProfiles) {
       try {
         result.push(await getProfileInfo(p.dirId));
       } catch (e) {
@@ -62,7 +62,7 @@ export function registerProfileHandlers(): void {
     proxyMode?: ProxyMode;
     proxyName?: string | null;
   }): Promise<ProfileInfo> => {
-    const { dirId } = createCloakProfile({
+    const { dirId } = createBrowserProfile({
       name,
       fingerprintSeed,
       platform,
@@ -82,7 +82,7 @@ export function registerProfileHandlers(): void {
 
   ipcMain.handle("profile:delete", async (_event, dirId: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const result = deleteCloakProfile(dirId);
+      const result = deleteBrowserProfile(dirId);
       return { success: result };
     } catch (e: any) {
       return { success: false, error: e.message };

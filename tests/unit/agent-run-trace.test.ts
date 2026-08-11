@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "cloak-recorder-test");
+const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-recorder-test");
 
 vi.mock("electron", () => ({
   app: {

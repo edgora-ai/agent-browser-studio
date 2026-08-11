@@ -270,7 +270,7 @@ export function deleteRepositoryExtension(extId: string): boolean {
   const cfg = structuredClone(getConfig()) as any;
   if (!cfg.extensionRepository?.[extId]) return false;
   delete cfg.extensionRepository[extId];
-  for (const profile of Object.values(cfg.cloakProfiles || {}) as any[]) {
+  for (const profile of Object.values(cfg.browserProfiles || {}) as any[]) {
     if (profile.extensions) delete profile.extensions[extId];
   }
   saveConfig(cfg);
@@ -400,7 +400,7 @@ export const __extensionRepositoryTestHooks = {
 
 export function getEnabledRepositoryExtensionPaths(dirId: string): string[] {
   const cfg = getConfig() as any;
-  const profile = cfg.cloakProfiles?.[dirId];
+  const profile = cfg.browserProfiles?.[dirId];
   const repository = cfg.extensionRepository || {};
   const enabled = profile?.extensions || {};
   const paths: string[] = [];

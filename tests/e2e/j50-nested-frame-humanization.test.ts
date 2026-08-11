@@ -112,14 +112,14 @@ describe("J50 — nested-frame humanized actionability", () => {
 
     h = await setupTestApp({ userDataDir: USERDATA });
     const created = await h.page.evaluate(async (seed: number) =>
-      (window as any).cloak.api.cloak.create({
+      (window as any).agentBrowser.api.browser.create({
         name: "J50 nested frames",
         platform: "windows",
         fingerprintSeed: seed,
         proxyMode: "none",
       }), SEED);
     const launched = await h.page.evaluate(async (dirId: string) =>
-      (window as any).cloak.api.cloak.launch(dirId), created.dirId) as {
+      (window as any).agentBrowser.api.browser.launch(dirId), created.dirId) as {
       success: boolean; cdpPort: number; pid: number; error?: string;
     };
     expect(launched.success, launched.error || "J50 launch failed").toBe(true);
@@ -157,7 +157,10 @@ describe("J50 — nested-frame humanized actionability", () => {
 
     const reports = await cdpEvaluate(client, "window.__j50Reports") as InteractionReport[];
     expect(reports.some((event) => event.kind === "input" && event.trusted && event.value === "nested-frame")).toBe(true);
-    expect(reports.some((event) => event.kind === "deep-click" && event.trusted)).toBe(true);
+    expect(
+      reports.some((event) => event.kind === "deep-click" && event.trusted),
+      JSON.stringify({ clicked, reports }),
+    ).toBe(true);
     const down = reports.find((event) => event.kind === "keydown" && event.key === "Enter");
     const up = reports.find((event) => event.kind === "keyup" && event.key === "Enter");
     expect(down?.trusted).toBe(true);
@@ -171,7 +174,10 @@ describe("J50 — nested-frame humanized actionability", () => {
     expect(clicked).toMatchObject({ success: true, native: true, frameDepth: 2 });
     await new Promise((resolve) => setTimeout(resolve, 150));
     const reports = await cdpEvaluate(client, "window.__j50Reports") as InteractionReport[];
-    expect(reports.some((event) => event.kind === "moving-shift")).toBe(true);
+    expect(
+      reports.some((event) => event.kind === "moving-shift"),
+      JSON.stringify({ clicked, reports }),
+    ).toBe(true);
     expect(reports.some((event) => event.kind === "moving-click" && event.trusted)).toBe(true);
   }, 30_000);
 

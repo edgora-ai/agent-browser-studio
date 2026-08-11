@@ -1,8 +1,8 @@
-# CloakLite User Guide
+# Agent Browser Studio User Guide
 
-CloakLite is a local desktop console for managing isolated profiles on its independently patched Chromium engine, proxies, AI-assisted browser automation, automation jobs, audit traces, and S3-compatible sync.
+Agent Browser Studio is a local desktop console for managing isolated profiles on its independently patched Chromium engine, proxies, AI-assisted browser automation, automation jobs, audit traces, and S3-compatible sync.
 
-> Use CloakLite only for lawful and authorized workflows. Do not use it for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, or misuse of cookies, credentials, personal data, or confidential information.
+> Use Agent Browser Studio only for lawful and authorized workflows. Do not use it for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, or misuse of cookies, credentials, personal data, or confidential information.
 
 ## 1. Installation
 
@@ -10,7 +10,7 @@ CloakLite is a local desktop console for managing isolated profiles on its indep
 
 - macOS on Apple Silicon
 - Node.js 22.16 or newer
-- An independently built Chromium patchset installed with `npm run install:chromium -- /path/to/Chromium.app`, or selected through `CLOAKLITE_CHROMIUM_BINARY_PATH`
+- An independently built Chromium patchset installed with `npm run install:chromium -- /path/to/Chromium.app`, or selected through `AGENT_BROWSER_CHROMIUM_BINARY_PATH`
 
 ### Start from source
 
@@ -38,6 +38,12 @@ On first launch, if no managed Chromium binary and no profiles exist, a 4-step w
 4. **Configure AI Agent (optional)** — jump to the Agent config view to wire up an LLM provider.
 
 "Skip for now" hides the wizard only for this session; "Don't show again" persists dismissal. You can also run these steps manually from the tabs at any time.
+
+When upgrading from CloakLite, the first normal launch copies the old user data
+and valid managed Chromium versions into the Agent Browser Studio directories.
+It verifies the copied Profile tree and leaves the old app, data, and cache
+untouched. New Profiles use `ab_` identifiers; migrated `cb_` Profiles remain
+fully supported.
 
 ## 3. Profile Management
 
@@ -84,7 +90,7 @@ Notes:
 
 ## 5. Cookie, Storage, and Extension Tools
 
-CloakLite can inspect and manage browser state through CDP or local files when profiles are stopped.
+Agent Browser Studio can inspect and manage browser state through CDP or local files when profiles are stopped.
 
 Sensitive data includes:
 
@@ -154,7 +160,7 @@ Use **Automation Jobs** to inspect queued, running, completed, failed, skipped, 
 
 ## 8. Sync
 
-CloakLite supports S3-compatible sync for selected config and profile artifacts.
+Agent Browser Studio supports S3-compatible sync for selected config and profile artifacts.
 
 Before pushing or pulling:
 
@@ -187,7 +193,7 @@ Still treat exports as sensitive because they may contain operational metadata, 
 
 ## 10. Recommended Operating Checklist
 
-Before using CloakLite in a business workflow:
+Before using Agent Browser Studio in a business workflow:
 
 - Confirm you have authorization for all accounts, websites, and data.
 - Review platform terms and applicable laws.

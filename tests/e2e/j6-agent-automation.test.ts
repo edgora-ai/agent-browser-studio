@@ -56,7 +56,7 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
 
   it("creates + launches a real profile and captures its CDP port", async () => {
     const r = (await h.page.evaluate(
-      () => (window as any).cloak.api.cloak.create({
+      () => (window as any).agentBrowser.api.browser.create({
         name: "E2E J6",
         platform: "windows",
         fingerprintSeed: 66666,
@@ -66,7 +66,7 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
     dirId = r.dirId;
 
     const launch = (await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.cloak.launch(id),
+      async (id: string) => (window as any).agentBrowser.api.browser.launch(id),
       dirId,
     )) as { success: boolean; cdpPort: number; pid: number };
     expect(launch.success).toBe(true);
@@ -80,7 +80,7 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
     await dataTab(h.page, "agent").click({ timeout: 5000 });
     await h.page.waitForTimeout(300);
     await closeAllDialogs(h.page);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("test-llm-key-j6-not-real");
@@ -89,15 +89,15 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
     await h.page.locator('[data-cmd="agentSaveConfig"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
 
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(300);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
     await h.page.waitForFunction(
-      () => !!(window as any).cloak.state.agentActiveConvId,
+      () => !!(window as any).agentBrowser.state.agentActiveConvId,
       { timeout: 5000 },
     );
     conversationId = await h.page.evaluate(
-      () => (window as any).cloak.state.agentActiveConvId,
+      () => (window as any).agentBrowser.state.agentActiveConvId,
     );
     expect(conversationId).toBeTruthy();
   });
@@ -108,7 +108,7 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
       (window as any).__toolCalls = [];
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-tool-call", (tc: any) => (window as any).__toolCalls.push(tc));
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = String(e); });
@@ -163,7 +163,7 @@ describe("J6 — Agent automation: auto port-bind + tool loop + step UI", () => 
 
   it("conversation persisted the assistant reply + tool-call metadata", async () => {
     const conv = await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.agent.conversations.get(id),
+      async (id: string) => (window as any).agentBrowser.api.agent.conversations.get(id),
       conversationId,
     );
     expect(conv).toBeTruthy();

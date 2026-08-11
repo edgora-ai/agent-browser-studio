@@ -81,10 +81,10 @@ describe("J19 — search → extract → store to DB", () => {
   }, 90000);
 
   it("launches a profile", async () => {
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J19", platform: "windows", fingerprintSeed: 19191 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J19", platform: "windows", fingerprintSeed: 19191 }));
     const dirId = r.dirId;
     await h.page.evaluate((id: string) => (window as any).__j19dir = id, dirId);
-    const launched = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), dirId);
+    const launched = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), dirId);
     await h.page.evaluate((p: number) => (window as any).__j19port = p, launched.cdpPort);
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${launched.cdpPort}`);
     page = browser.contexts()[0].pages()[0] || (await browser.contexts()[0].newPage());
@@ -97,7 +97,7 @@ describe("J19 — search → extract → store to DB", () => {
 
     // 1. db_exec: create table
     const createRes = await h.page.evaluate(async (sql: string) => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       return api.agentDb.exec(sql);
     }, "CREATE TABLE IF NOT EXISTS news (id INTEGER PRIMARY KEY, title TEXT, url TEXT, date TEXT)");
     expect(createRes.ok).toBe(true);
@@ -127,30 +127,30 @@ describe("J19 — search → extract → store to DB", () => {
     // 5. store each into the DB (db_exec with params)
     for (const it of items) {
       await h.page.evaluate(async (args: any) => {
-        const api = (window as any).cloak.api;
+        const api = (window as any).agentBrowser.api;
         await api.agentDb.exec("INSERT INTO news (title, url, date) VALUES (?, ?, ?)", [args.t, args.u, args.d]);
       }, { t: it.title, u: it.url, d: it.date });
     }
 
     // 6. verify the DB has 10 rows with real data
     const stored = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const r = await api.agentDb.query("SELECT COUNT(*) AS c FROM news");
       return r.rows[0].c;
     });
     expect(stored).toBe(10);
 
     // 7. DB tab shows the news table
-    await h.page.evaluate(() => (window as any).cloak.switchTab("db"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("db"));
     await h.page.waitForTimeout(300);
-    await h.page.evaluate(() => (window as any).cloak.loadDbTab());
+    await h.page.evaluate(() => (window as any).agentBrowser.loadDbTab());
     await h.page.waitForTimeout(400);
     const hasNews = await h.page.evaluate(() =>
       [...document.querySelectorAll("#db-tables [data-table]")].some((r) => (r as HTMLElement).dataset.table === "news"));
     expect(hasNews).toBe(true);
 
     // 8. view the table data
-    await h.page.evaluate(() => (window as any).cloak.dbViewTable("news"));
+    await h.page.evaluate(() => (window as any).agentBrowser.dbViewTable("news"));
     await h.page.waitForTimeout(400);
     const rowCount = await h.page.evaluate(() => document.querySelectorAll("#db-data .db-grid tbody tr, #db-result .db-grid tbody tr").length);
     expect(rowCount).toBeGreaterThanOrEqual(10);

@@ -17,7 +17,7 @@ describe("J45 — exact Chromium pin, rollback and pass-through", () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA, allowProfileVersionSelection: true });
-    const status = await h.page.evaluate(async () => (window as any).cloak.api.cloak.binary());
+    const status = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.binary());
     versions = (status.installedVersions || []).map((entry: { version: string }) => entry.version);
     expect(versions.length, "No independent managed Chromium build is installed").toBeGreaterThan(0);
   }, 60_000);
@@ -27,8 +27,8 @@ describe("J45 — exact Chromium pin, rollback and pass-through", () => {
   }, 90_000);
 
   async function createAndLaunch(options: Record<string, unknown>): Promise<{ dirId: string; launch: LaunchResult }> {
-    const created = await h.page.evaluate(async (profile) => (window as any).cloak.api.cloak.create(profile), options) as { dirId: string };
-    const launch = await h.page.evaluate(async (dirId: string) => (window as any).cloak.api.cloak.launch(dirId), created.dirId) as LaunchResult;
+    const created = await h.page.evaluate(async (profile) => (window as any).agentBrowser.api.browser.create(profile), options) as { dirId: string };
+    const launch = await h.page.evaluate(async (dirId: string) => (window as any).agentBrowser.api.browser.launch(dirId), created.dirId) as LaunchResult;
     expect(launch.success, launch.error || "profile launch failed").toBe(true);
     h.cdpPids.push(launch.pid);
     await waitForCdpPort(launch.cdpPort, 15_000);
@@ -36,7 +36,7 @@ describe("J45 — exact Chromium pin, rollback and pass-through", () => {
   }
 
   async function stop(dirId: string, port: number): Promise<void> {
-    await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+    await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
     await waitForPortClosed(port, 10_000);
   }
 
@@ -53,7 +53,7 @@ describe("J45 — exact Chromium pin, rollback and pass-through", () => {
       proxyMode: "none",
     });
     const listed = await h.page.evaluate(async (id: string) => {
-      const profiles = await (window as any).cloak.api.cloak.list();
+      const profiles = await (window as any).agentBrowser.api.browser.list();
       return profiles.find((profile: any) => profile.dirId === id);
     }, dirId);
     expect(listed.fingerprintMode).toBe("off");

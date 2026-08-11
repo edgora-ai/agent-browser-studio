@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,16 +43,16 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
-  Object.assign(cloak, {
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  Object.assign(agentBrowser, {
   showCookies: function (dirId) {
         document.getElementById("cookie-dir-id").value = dirId;
         document.getElementById("cookie-list").innerHTML = '<div class="loading">Loading cookies...</div>';
         document.getElementById("cookie-search").value = "";
         document.getElementById("dlg-cookies").showModal();
-        cloak.loadCookies(dirId, "");
+        agentBrowser.loadCookies(dirId, "");
       },
 
   loadCookies: function (dirId, filter) {
@@ -79,7 +79,7 @@
             var btn = event.target.closest("[data-cookie-index]");
             if (!btn || !list.contains(btn)) return;
             var cookie = cookies[Number(btn.dataset.cookieIndex)];
-            if (cookie) cloak.delCookie(dirId, cookie.domain, cookie.name);
+            if (cookie) agentBrowser.delCookie(dirId, cookie.domain, cookie.name);
           };
         }).catch(function (e) { list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message) + '</div>'; });
       },
@@ -87,12 +87,12 @@
   cookieSearch: function () {
         var dirId = document.getElementById("cookie-dir-id").value;
         var filter = document.getElementById("cookie-search").value.trim();
-        cloak.loadCookies(dirId, filter);
+        agentBrowser.loadCookies(dirId, filter);
       },
 
   delCookie: function (dirId, domain, name) {
         api.profile.deleteCookie(dirId, domain, name).then(function (r) {
-          if (r.success) { toast((window.i18n ? window.i18n.t("toast.cookie.deleted", "Cookie deleted") : "Cookie deleted"), "success"); cloak.cookieSearch(); }
+          if (r.success) { toast((window.i18n ? window.i18n.t("toast.cookie.deleted", "Cookie deleted") : "Cookie deleted"), "success"); agentBrowser.cookieSearch(); }
           else toast(r.error || "Failed", "error");
         }).catch(function (e) { toast(e.message, "error"); });
       },
@@ -110,7 +110,7 @@
             document.getElementById("cookie-new-domain").value = "";
             document.getElementById("cookie-new-name").value = "";
             document.getElementById("cookie-new-value").value = "";
-            cloak.cookieSearch();
+            agentBrowser.cookieSearch();
           } else toast(r.error || "Failed", "error");
         }).catch(function (e) { toast(e.message, "error"); });
       }

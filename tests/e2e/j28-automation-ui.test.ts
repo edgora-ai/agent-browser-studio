@@ -11,7 +11,7 @@ const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j28");
 
 async function reload(h: TestAppHandle) {
-  await h.page.evaluate(() => (window as any).cloak.loadAutomationTab());
+  await h.page.evaluate(() => (window as any).agentBrowser.loadAutomationTab());
   await h.page.waitForTimeout(300);
 }
 async function cardCount(h: TestAppHandle) {
@@ -25,14 +25,14 @@ describe("J28 — automation tab UI CRUD", () => {
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
     // A profile is needed for the agent-task action's profile select.
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J28demo", platform: "windows", fingerprintSeed: 28282 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J28demo", platform: "windows", fingerprintSeed: 28282 }));
     dirId = r.dirId;
   }, 60000);
 
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("creates a rule through the 新建任务 form", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("automation"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("automation"));
     await h.page.waitForTimeout(300);
     await reload(h);
     expect(await cardCount(h)).toBe(0);
@@ -54,7 +54,7 @@ describe("J28 — automation tab UI CRUD", () => {
     await h.page.waitForTimeout(400);
 
     expect(await cardCount(h)).toBe(1);
-    const rules = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    const rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     const rule = rules[0];
     expect(rule.trigger.cron).toBe("0 9 * * *");
     expect(rule.action.type).toBe("agent-task");
@@ -65,7 +65,7 @@ describe("J28 — automation tab UI CRUD", () => {
   it("toggles the rule off then on via the card button", async () => {
     await h.page.locator('#automation-list [data-rule-action="toggle"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
-    let rules = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    let rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     expect(rules[0].enabled).toBe(false);
     // Card badge reflects 停用.
     let badge = await h.page.locator("#automation-list .status-badge").textContent();
@@ -73,7 +73,7 @@ describe("J28 — automation tab UI CRUD", () => {
 
     await h.page.locator('#automation-list [data-rule-action="toggle"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
-    rules = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     expect(rules[0].enabled).toBe(true);
   }, 20000);
 
@@ -82,7 +82,7 @@ describe("J28 — automation tab UI CRUD", () => {
     await h.page.locator('#automation-list [data-rule-action="delete"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
     expect(await cardCount(h)).toBe(0);
-    const rules = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    const rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     expect(rules.length).toBe(0);
   }, 20000);
 

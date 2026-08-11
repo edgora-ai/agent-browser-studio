@@ -2,9 +2,9 @@
 // the main process emits agent:approval-request; we show a dialog and resolve it.
 (function() {
   "use strict";
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
 
@@ -26,7 +26,7 @@
     currentRequest = null;
   }
 
-  cloak.approvalAllow = function(mode) {
+  agentBrowser.approvalAllow = function(mode) {
     if (!currentRequest) return;
     var id = currentRequest.id;
     close();
@@ -35,7 +35,7 @@
     });
   };
 
-  cloak.approvalDeny = function(arg) {
+  agentBrowser.approvalDeny = function(arg) {
     // arg may be "deny" (reject) or "close" (just close dialog, treat as deny)
     if (!currentRequest && arg !== "close") return;
     if (currentRequest) {
@@ -50,8 +50,8 @@
   };
 
   function bind() {
-    if (cloak.state.approvalBound) return;
-    cloak.state.approvalBound = true;
+    if (agentBrowser.state.approvalBound) return;
+    agentBrowser.state.approvalBound = true;
     api.on("agent:approval-request", function(req) {
       show(req);
     });

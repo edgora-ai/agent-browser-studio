@@ -1,6 +1,6 @@
 # E2E test suite
 
-Drives the **real CloakLite Electron app** via [Playwright's Electron API]
+Drives the **real Agent Browser Studio Electron app** via [Playwright's Electron API]
 (`playwright._electron`). Each journey launches the app with an isolated
 `--user-data-dir`, exercises a full user path, and tears down all spawned
 Chromium processes.
@@ -63,8 +63,10 @@ UPDATE_README_SCREENSHOTS=1 npx vitest run -c vitest.config.e2e.ts tests/e2e/j-s
 
 ## Prerequisites
 
-- **Chromium binary** installed under `~/.roxy-lite-cloak/chromium-<ver>/` or
-  selected with `CLOAKLITE_CHROMIUM_BINARY_PATH`. `setupTestApp` uses only the
+- **Chromium binary** installed under `~/.agent-browser-studio/chromium-<ver>/` or
+  selected with `AGENT_BROWSER_CHROMIUM_BINARY_PATH`. During the migration
+  transition, the test helper can also read valid builds from the retained
+  `~/.roxy-lite-cloak` cache. `setupTestApp` uses only the
   independent cache and chooses its newest version without a network lookup.
 - **J3 only**: needs to reach `clients2.google.com`. Either:
   - `E2E_EXTENSION_NETWORK=1` — host has direct internet, OR
@@ -72,7 +74,7 @@ UPDATE_README_SCREENSHOTS=1 npx vitest run -c vitest.config.e2e.ts tests/e2e/j-s
     Google directly but a proxy can. The app's default proxy is configured via
     IPC so the CRX download routes through it (the real product path).
   - Otherwise J3 is skipped.
-- **J49 only**: set `ROXY_E2E_SOCKS5_UDP_URL` to an authorized UDP-capable
+- **J49 only**: set `AGENT_BROWSER_E2E_SOCKS5_UDP_URL` to an authorized UDP-capable
   `socks5://` or `socks5h://` endpoint. It is skipped when no endpoint is set.
 - Runs **serially** (no file parallelism) — only one test Electron app at a
   time. MCP prefers port 26581 and falls back to an ephemeral loopback port if

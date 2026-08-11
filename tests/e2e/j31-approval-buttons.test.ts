@@ -1,5 +1,5 @@
 // J31: Approval gate via the REAL dialog buttons (data-cmd approvalAllow /
-// approvalDeny), not the cloak.approvalAllow() helper. J18/J24 resolve via the
+// approvalDeny), not the agentBrowser.approvalAllow() helper. J18/J24 resolve via the
 // helper; this clicks the actual ✗ 拒绝 / ✓ 始终允许 buttons the user sees.
 // deny preserves the table; always auto-allows a second identical DROP.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -18,9 +18,9 @@ describe("J31 — approval via real dialog buttons", () => {
   beforeAll(async () => {
     mock = await startMockLlm({ delayMs: 20 });
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(200);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -36,7 +36,7 @@ describe("J31 — approval via real dialog buttons", () => {
   }, 90000);
 
   async function newConv() {
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(200);
@@ -53,7 +53,7 @@ describe("J31 — approval via real dialog buttons", () => {
 
   it("deny button rejects the DROP — table survives", async () => {
     // Seed a table first (non-destructive, no approval).
-    await h.page.evaluate(async () => { await (window as any).cloak.api.agentDb.exec("CREATE TABLE IF NOT EXISTS keep_me (id INTEGER)"); });
+    await h.page.evaluate(async () => { await (window as any).agentBrowser.api.agentDb.exec("CREATE TABLE IF NOT EXISTS keep_me (id INTEGER)"); });
     mock.setResponses([
       { chunks: [], toolCalls: [{ id: "d1", name: "db_exec", arguments: { sql: "DROP TABLE keep_me" } }] },
       { chunks: ["done"] },
@@ -66,13 +66,13 @@ describe("J31 — approval via real dialog buttons", () => {
     await h.page.locator('#dlg-approval [data-cmd="approvalDeny"][data-cmd-arg="deny"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(500);
     const exists = await h.page.evaluate(async () =>
-      (await (window as any).cloak.api.agentDb.tables()).some((t: any) => t.name === "keep_me"));
+      (await (window as any).agentBrowser.api.agentDb.tables()).some((t: any) => t.name === "keep_me"));
     expect(exists, "table must survive a denied DROP").toBe(true);
   }, 40000);
 
   it("always button auto-allows a second identical DROP (no re-prompt)", async () => {
     // Recreate the table so there's something to drop twice.
-    await h.page.evaluate(async () => { await (window as any).cloak.api.agentDb.exec("CREATE TABLE IF NOT EXISTS keep_me (id INTEGER)"); });
+    await h.page.evaluate(async () => { await (window as any).agentBrowser.api.agentDb.exec("CREATE TABLE IF NOT EXISTS keep_me (id INTEGER)"); });
     mock.setResponses([
       { chunks: [], toolCalls: [{ id: "a1", name: "db_exec", arguments: { sql: "DROP TABLE keep_me" } }] },
       { chunks: [], toolCalls: [{ id: "a2", name: "db_exec", arguments: { sql: "CREATE TABLE keep_me (id INTEGER)" } }] },
@@ -91,7 +91,7 @@ describe("J31 — approval via real dialog buttons", () => {
     expect(reopened, "second identical DROP must not re-prompt").toBe(false);
     // Table is gone after both DROPs.
     const exists = await h.page.evaluate(async () =>
-      (await (window as any).cloak.api.agentDb.tables()).some((t: any) => t.name === "keep_me"));
+      (await (window as any).agentBrowser.api.agentDb.tables()).some((t: any) => t.name === "keep_me"));
     expect(exists).toBe(false);
   }, 50000);
 

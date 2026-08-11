@@ -13,6 +13,7 @@ import {
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { validateDirId, getDirectorySizeAsync } from "./utils.js";
 import type { ProfileInfo, CookieInfo } from "../types.js";
+import { PROFILE_DIR_NAME } from "../branding.js";
 
 interface RunningProcess {
   pid: number;
@@ -49,13 +50,13 @@ export async function listProfiles(): Promise<ProfileInfo[]> {
   const profiles: ProfileInfo[] = [];
   const runningProcesses = await getRunningProcesses();
 
-  const cloakDir = getProfilesDir();
-  const cloakTasks: Promise<void>[] = [];
-  if (fs.existsSync(cloakDir)) {
-    const dirs = await fsPromises.readdir(cloakDir, { withFileTypes: true });
+  const profilesDir = getProfilesDir();
+  const profileTasks: Promise<void>[] = [];
+  if (fs.existsSync(profilesDir)) {
+    const dirs = await fsPromises.readdir(profilesDir, { withFileTypes: true });
     for (const d of dirs) {
       if (d.isDirectory()) {
-        cloakTasks.push((async () => {
+        profileTasks.push((async () => {
           try {
             const info = await getProfileInfo(d.name, runningProcesses);
             profiles.push(info);
@@ -65,7 +66,7 @@ export async function listProfiles(): Promise<ProfileInfo[]> {
     }
   }
 
-  await Promise.all(cloakTasks);
+  await Promise.all(profileTasks);
   return profiles.sort((a, b) => b.lastModified - a.lastModified);
 }
 
@@ -81,7 +82,7 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
 
   let running = false;
   let pid: number | null = null;
-  const targetPath = `cloak-profiles/${dirId}`;
+  const targetPath = profilePath;
 
   const checkRunning = (procList: RunningProcess[]) => {
     for (const proc of procList) {
@@ -152,7 +153,7 @@ export async function deleteProfile(dirId: string): Promise<boolean> {
   if (!fs.existsSync(profilePath)) return false;
 
   try {
-    const targetPath = `cloak-profiles/${dirId}`;
+    const targetPath = profilePath;
     const processes = await getRunningProcesses();
     const isRunning = processes.some(proc => proc.args.includes("Chromium") && proc.args.includes(targetPath));
     if (isRunning) {
@@ -252,7 +253,8 @@ function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {
 }
 
 export function getProfileSubdir(dirId: string): string {
-  return "cloak-profiles";
+  validateDirId(dirId);
+  return PROFILE_DIR_NAME;
 }
 
 function hashProfileMeta(meta: any): string {
@@ -275,7 +277,7 @@ function resolveProfilePath(dirId: string): string {
   const baseDir = path.resolve(getProfilesDir());
   const profilePath = path.resolve(baseDir, dirId);
   if (!isPathInside(profilePath, baseDir)) {
-    throw new Error(`Profile path escapes cloak-profiles: ${JSON.stringify(dirId)}`);
+    throw new Error(`Profile path escapes profiles directory: ${JSON.stringify(dirId)}`);
   }
   return profilePath;
 }

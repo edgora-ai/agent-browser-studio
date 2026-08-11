@@ -9,11 +9,11 @@ import * as path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
 import { CAPTURE_EXPRESSION } from "../main/services/fingerprint-baseline.js";
 import {
-  buildRoxyFingerprintArg,
-  buildRoxyFingerprintConfig,
-  type RoxyFingerprintConfig,
-} from "../main/services/roxy-fingerprint-config.js";
-import type { CloakFingerprintMeta } from "../main/types.js";
+  buildBrowserFingerprintArg,
+  buildBrowserFingerprintConfig,
+  type BrowserFingerprintConfig,
+} from "../main/services/browser-fingerprint-config.js";
+import type { BrowserFingerprintMeta } from "../main/types.js";
 import { captureWebGlCorpusInPage, type WebGlCorpus } from "./webgl-corpus.js";
 import {
   captureWebGpuCorpusInPage,
@@ -765,7 +765,7 @@ async function captureVersionIdentity(context: BrowserContext, page: Page): Prom
 
 async function captureStockWindowMode(
   executablePath: string,
-  config: RoxyFingerprintConfig,
+  config: BrowserFingerprintConfig,
   userDataDir: string,
   headless: boolean,
 ): Promise<StockWindowModeIdentity> {
@@ -833,10 +833,10 @@ async function captureDisabledWebRtc(page: Page): Promise<string[]> {
 async function captureIncognitoStorage(
   executablePath: string,
   version: string,
-  meta: CloakFingerprintMeta,
+  meta: BrowserFingerprintMeta,
   origin: string,
-): Promise<{ storage: StorageCorpus; config: RoxyFingerprintConfig }> {
-  const config = buildRoxyFingerprintConfig(meta, version);
+): Promise<{ storage: StorageCorpus; config: BrowserFingerprintConfig }> {
+  const config = buildBrowserFingerprintConfig(meta, version);
   let browser: Browser | null = null;
   try {
     process.stderr.write("[verify:chromium] incognito storage: launch\n");
@@ -844,7 +844,7 @@ async function captureIncognitoStorage(
       executablePath,
       headless: true,
       timeout: 20_000,
-      args: [buildRoxyFingerprintArg(meta, version)],
+      args: [buildBrowserFingerprintArg(meta, version)],
     });
     const context = await browser.newContext();
     const page = await context.newPage();
@@ -865,14 +865,14 @@ async function captureIncognitoStorage(
 async function runOnce(
   executablePath: string,
   version: string,
-  meta: CloakFingerprintMeta,
+  meta: BrowserFingerprintMeta,
   origin: string,
   crossOrigin: string,
   userDataDir: string,
   label: string,
   headless = true,
-): Promise<{ result: RunResult; config: RoxyFingerprintConfig }> {
-  const config = buildRoxyFingerprintConfig(meta, version);
+): Promise<{ result: RunResult; config: BrowserFingerprintConfig }> {
+  const config = buildBrowserFingerprintConfig(meta, version);
   let context: BrowserContext | null = null;
   try {
     process.stderr.write(`[verify:chromium] ${label}: launch\n`);
@@ -883,7 +883,7 @@ async function runOnce(
       timeout: 20_000,
       viewport: null,
       args: [
-        buildRoxyFingerprintArg(meta, version),
+        buildBrowserFingerprintArg(meta, version),
         "--enable-unsafe-webgpu",
         "--ignore-gpu-blocklist",
         "--use-fake-device-for-media-stream",
@@ -1080,7 +1080,7 @@ function verifyPassThrough(passThrough: PassThroughIdentity, managed: RunResult)
 }
 
 function expectedSystemColors(
-  platform: RoxyFingerprintConfig["platform"],
+  platform: BrowserFingerprintConfig["platform"],
   scheme: "light" | "dark",
 ): Record<SystemColorKeyword, string> {
   const dark = scheme === "dark";
@@ -1124,13 +1124,13 @@ function expectedSystemColors(
   return colors;
 }
 
-function expectedPreferredColorScheme(config: RoxyFingerprintConfig): "light" | "dark" {
+function expectedPreferredColorScheme(config: BrowserFingerprintConfig): "light" | "dark" {
   return config.seed % 4 === 0 ? "dark" : "light";
 }
 
 function verifySystemTheme(
   identity: SystemThemeIdentity,
-  config: RoxyFingerprintConfig,
+  config: BrowserFingerprintConfig,
   label: string,
 ): void {
   expectEqual(
@@ -1195,7 +1195,7 @@ function verifyPlatformThemeDistinction(
 
 function verifyExpected(
   run: RunResult,
-  config: RoxyFingerprintConfig,
+  config: BrowserFingerprintConfig,
   stockWindowMode?: StockWindowModeIdentity,
 ): void {
   const probe = run.probe;
@@ -1417,7 +1417,7 @@ function verifyExpected(
   );
 }
 
-function verifyFontCorpus(fonts: FontCorpus, config: RoxyFingerprintConfig): void {
+function verifyFontCorpus(fonts: FontCorpus, config: BrowserFingerprintConfig): void {
   const label = config.platform === "Win32" ? "Windows" : "macOS";
   expectEqual(fonts.window.fontSetAvailable, true, `${label} Window FontFaceSet availability`);
   expectEqual(fonts.worker.fontSetAvailable, true, `${label} Worker FontFaceSet availability`);
@@ -1623,7 +1623,7 @@ async function main(): Promise<void> {
   const managedPlatform = process.platform === "win32" ? "macos" : "windows";
   const alternatePlatform = managedPlatform === "windows" ? "macos" : "windows";
   const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const baseMeta: CloakFingerprintMeta = {
+  const baseMeta: BrowserFingerprintMeta = {
     fingerprintSeed: 424242,
     platform: managedPlatform,
     locale: "en-US",

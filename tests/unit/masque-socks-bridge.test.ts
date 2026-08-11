@@ -12,7 +12,7 @@ const roots: string[] = [];
 const bridges: MasqueSocksBridge[] = [];
 
 function makeRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-masque-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-masque-test-"));
   roots.push(root);
   return root;
 }
@@ -37,7 +37,7 @@ describe("managed MASQUE to SOCKS5 bridge", () => {
     }, { temporaryRoot: root, startTimeoutMs: 5_000 });
     bridges.push(bridge);
 
-    expect(bridge.proxyHost).toBe("roxy-masque.local");
+    expect(bridge.proxyHost).toBe("agent-browser-masque.local");
     expect(bridge.listenHost).toBe("127.0.0.1");
     expect(bridge.port).toBeGreaterThan(0);
     expect(bridge.capabilities).toEqual(expect.arrayContaining(["connect", "connect-udp"]));

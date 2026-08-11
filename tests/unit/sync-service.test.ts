@@ -9,7 +9,7 @@ vi.mock("electron", () => {
   return {
     app: {
       getPath: (name: string) => {
-        if (name === "home") return path.join(os.tmpdir(), "cloak-sync-test-home");
+        if (name === "home") return path.join(os.tmpdir(), "agent-browser-sync-test-home");
         return os.tmpdir();
       },
     },
@@ -19,7 +19,7 @@ vi.mock("electron", () => {
 import { __syncTestHooks, signV2, signS3Request } from "../../src/main/services/sync-service.js";
 import { getProfilesDir } from "../../src/main/services/config-manager.js";
 
-const TEST_HOME = path.join(os.tmpdir(), "cloak-sync-test-home");
+const TEST_HOME = path.join(os.tmpdir(), "agent-browser-sync-test-home");
 
 function tarHeader(name: string, typeFlag: string, size: number): Buffer {
   const header = Buffer.alloc(512);
@@ -97,7 +97,7 @@ describe("AWS Signature V4 (signS3Request)", () => {
     const headers = signS3Request({
       method: "PUT",
       endpoint: ENDPOINT,
-      objectPath: "/my-bucket/cloak-lite-config.json",
+      objectPath: "/my-bucket/agent-browser-studio-config.json",
       body: Buffer.from(JSON.stringify({ data: "x" })),
       accessKey: AK,
       secretKey: SK,
@@ -177,14 +177,14 @@ describe("Sync service hardening", () => {
     expect(() => __syncTestHooks.validatePreferencesJson(Buffer.from(JSON.stringify({ profile: { name: "ok" } })))).not.toThrow();
   });
 
-  it("preserves Cloak hardware fingerprint metadata in sync-safe config", () => {
+  it("preserves managed browser hardware fingerprint metadata in sync-safe config", () => {
     const safe = __syncTestHooks.serializeSyncSafeConfig({
       version: 3,
-      cloakBin: "auto",
+      chromiumBin: "auto",
       defaultProxy: "default",
       proxies: { default: { type: "http", host: "127.0.0.1", port: 7890, username: "u", password: "p" } },
       sync: { enabled: true, endpoint: "https://example.test", bucket: "bucket-name", accessKey: "AK", secretKey: "SK" },
-      cloakProfiles: {
+      browserProfiles: {
         cb_hw: {
           name: "Hardware",
           fingerprintSeed: 123,
@@ -214,7 +214,7 @@ describe("Sync service hardening", () => {
           version: "1.0.0",
           description: "fixture",
           source: "local",
-          unpackedPath: "/Users/example/Library/Application Support/CloakLite/extension-repository/local_ext/current",
+          unpackedPath: "/Users/example/Library/Application Support/Agent Browser Studio/extension-repository/local_ext/current",
           packageHash: "a".repeat(128),
           manifestHash: "b".repeat(128),
           shared: true,
@@ -227,7 +227,7 @@ describe("Sync service hardening", () => {
 
     expect(safe.sync.accessKey).toBeUndefined();
     expect(safe.proxies.default.password).toBeUndefined();
-    expect(safe.cloakProfiles.cb_hw).toMatchObject({
+    expect(safe.browserProfiles.cb_hw).toMatchObject({
       gpuVendor: "Intel Inc.",
       gpuRenderer: "Intel Iris OpenGL",
       hardwareConcurrency: 8,
@@ -257,11 +257,11 @@ describe("Sync service hardening", () => {
   it("strips unpackedPath from verified legacy remote extension metadata", () => {
     const safe = __syncTestHooks.sanitizeRemoteConfig({
       version: 3,
-      cloakBin: "auto",
+      chromiumBin: "auto",
       defaultProxy: "default",
       proxies: {},
       sync: { enabled: true, endpoint: "https://example.test", bucket: "bucket-name", accessKey: "AK", secretKey: "SK" },
-      cloakProfiles: {},
+      browserProfiles: {},
       extensionRepository: {
         local_abcdefgh: {
           id: "local_abcdefgh",
@@ -269,7 +269,7 @@ describe("Sync service hardening", () => {
           version: "1.0.0",
           description: "fixture",
           source: "local",
-          unpackedPath: "/Users/example/Library/Application Support/CloakLite/extension-repository/local_abcdefgh/current",
+          unpackedPath: "/Users/example/Library/Application Support/Agent Browser Studio/extension-repository/local_abcdefgh/current",
           packageHash: "a".repeat(128),
           manifestHash: "b".repeat(128),
           shared: true,
@@ -294,11 +294,11 @@ describe("Sync service hardening", () => {
   it("skips remote extension metadata without verified hashes", () => {
     const safe = __syncTestHooks.sanitizeRemoteConfig({
       version: 3,
-      cloakBin: "auto",
+      chromiumBin: "auto",
       defaultProxy: "default",
       proxies: {},
       sync: { enabled: true, endpoint: "https://example.test", bucket: "bucket-name", accessKey: "AK", secretKey: "SK" },
-      cloakProfiles: {},
+      browserProfiles: {},
       extensionRepository: {
         local_abcdefgh: {
           id: "local_abcdefgh",
@@ -330,7 +330,7 @@ describe("Sync service hardening", () => {
   });
 
   it("rejects LocalStorage archives with symlink entries before extraction", () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-ls-test-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ls-test-"));
     try {
       const archive = tgz([
         tarEntry("CURRENT", "MANIFEST-000001"),
@@ -344,7 +344,7 @@ describe("Sync service hardening", () => {
   });
 
   it("extracts only allowed LocalStorage files from regular tar entries", () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-ls-test-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ls-test-"));
     try {
       const archive = tgz([
         tarEntry("CURRENT", "MANIFEST-000001"),
@@ -368,8 +368,31 @@ describe("Sync service hardening", () => {
     expect(__syncTestHooks.isProfileRunningForRestore(dirId)).toBe(false);
   });
 
-  it("fetches remote cookies from the single Cloak-branded sync key", async () => {
+  it("fetches remote cookies from the Agent Browser Studio sync key", async () => {
     const remoteCookies = { cb_offline: zlib.gzipSync(JSON.stringify([{ domain: "example.com", name: "sid", value: "1", path: "/", secure: false, httpOnly: true, sameSite: 0 }])).toString("base64") };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/agent-browser-studio-config.json")) return new Response(JSON.stringify({ cookies: remoteCookies }), { status: 200, headers: { "content-length": "100" } });
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(__syncTestHooks.fetchRemoteCookiesForPush({
+        enabled: true,
+        endpoint: "https://sync.example.test",
+        bucket: "agent-browser-bucket",
+        accessKey: "AK",
+        secretKey: "SK",
+      })).resolves.toEqual(remoteCookies);
+      // The current key succeeds, so no legacy fallback is needed.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toContain("/agent-browser-studio-config.json");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to the legacy CloakLite sync key when the current key is absent", async () => {
+    const remoteCookies = { cb_legacy: zlib.gzipSync(JSON.stringify([{ domain: "example.com", name: "sid", value: "legacy", path: "/", secure: false, httpOnly: true, sameSite: 0 }])).toString("base64") };
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/cloak-lite-config.json")) return new Response(JSON.stringify({ cookies: remoteCookies }), { status: 200, headers: { "content-length": "100" } });
       return new Response("not found", { status: 404 });
@@ -379,13 +402,13 @@ describe("Sync service hardening", () => {
       await expect(__syncTestHooks.fetchRemoteCookiesForPush({
         enabled: true,
         endpoint: "https://sync.example.test",
-        bucket: "cloak-bucket",
+        bucket: "agent-browser-bucket",
         accessKey: "AK",
         secretKey: "SK",
       })).resolves.toEqual(remoteCookies);
-      // Only the Cloak-branded key is fetched now (no legacy fallback).
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0][0]).toContain("/cloak-lite-config.json");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][0]).toContain("/agent-browser-studio-config.json");
+      expect(fetchMock.mock.calls[1][0]).toContain("/cloak-lite-config.json");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -397,7 +420,7 @@ describe("Sync service hardening", () => {
     await expect(__syncTestHooks.fetchRemoteCookiesForPush({
       enabled: true,
       endpoint: "https://sync.example.test",
-      bucket: "cloak-bucket",
+      bucket: "agent-browser-bucket",
       accessKey: "AK",
       secretKey: "SK",
     }, controller.signal)).rejects.toThrow(/cancelled/);
@@ -416,7 +439,7 @@ describe("Sync service hardening", () => {
       await expect(__syncTestHooks.fetchRemoteCookiesForPush({
         enabled: true,
         endpoint: "https://sync.example.test",
-        bucket: "cloak-bucket",
+        bucket: "agent-browser-bucket",
         accessKey: "AK",
         secretKey: "SK",
       })).resolves.toEqual({});

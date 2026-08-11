@@ -6,7 +6,7 @@ import * as os from "node:os";
 vi.mock("electron", () => {
   const path = require("node:path");
   const os = require("node:os");
-  const TEST_HOME = path.join(os.tmpdir(), "cloak-skill-repo-test-home");
+  const TEST_HOME = path.join(os.tmpdir(), "agent-browser-skill-repo-test-home");
   const TEST_USER_DATA = path.join(TEST_HOME, "userData");
   return {
     app: {
@@ -19,7 +19,7 @@ vi.mock("electron", () => {
   };
 });
 
-const TEST_HOME = path.join(os.tmpdir(), "cloak-skill-repo-test-home");
+const TEST_HOME = path.join(os.tmpdir(), "agent-browser-skill-repo-test-home");
 
 import {
   getConfig,

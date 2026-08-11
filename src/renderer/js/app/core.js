@@ -1,7 +1,7 @@
 (function() {
   "use strict";
 
-  var api = window.cloakLite;
+  var api = window.agentBrowserAPI;
   var R = api; // legacy alias retained for agent calls
   var currentTab = "profiles";
   var profileRefreshTimer = null;
@@ -29,9 +29,9 @@
     if (profileRefreshTimer) clearTimeout(profileRefreshTimer);
     profileRefreshTimer = setTimeout(function () {
       profileRefreshTimer = null;
-      if (currentTab === "profiles") cloak.loadProfiles(true);
-      else if (currentTab === "storage") cloak.loadStorage();
-      else if (currentTab === "extensions") cloak.loadExtensionsTab();
+      if (currentTab === "profiles") agentBrowser.loadProfiles(true);
+      else if (currentTab === "storage") agentBrowser.loadStorage();
+      else if (currentTab === "extensions") agentBrowser.loadExtensionsTab();
     }, 120);
   }
 
@@ -78,7 +78,7 @@
     return map[osName] || "Win32";
   }
 
-  function normalizeCloakPlatform(platform) {
+  function normalizeBrowserPlatform(platform) {
     var value = String(platform || "windows").trim();
     var map = {
       "Win32": "windows",
@@ -282,9 +282,9 @@
 
   function refreshSkillViews() {
     var skillsView = document.getElementById('agent-view-skills');
-    if (skillsView && skillsView.style.display !== 'none') cloak.agentLoadSkills();
+    if (skillsView && skillsView.style.display !== 'none') agentBrowser.agentLoadSkills();
     var market = document.getElementById('dlg-skill-market');
-    if (market && market.open) cloak.refreshSkillMarket();
+    if (market && market.open) agentBrowser.refreshSkillMarket();
   }
 
   function skillSourceLabel(skill) {
@@ -343,12 +343,12 @@
       if (!id) return;
       var skill = (skills || []).find(function (item) { return item.id === id; }) || {};
       var action = target.dataset.action;
-      if (action === 'skill-install') cloak.installSkill(id);
-      else if (action === 'skill-disable') cloak.setSkillEnabled(id, false);
-      else if (action === 'skill-toggle') cloak.setSkillEnabled(id, !skill.enabled);
-      else if (action === 'skill-edit') cloak.showSkillEditor(id);
-      else if (action === 'skill-share') cloak.setSkillShared(id, !skill.shared, skill.tags || []);
-      else if (action === 'skill-remove') cloak.removeSkill(id);
+      if (action === 'skill-install') agentBrowser.installSkill(id);
+      else if (action === 'skill-disable') agentBrowser.setSkillEnabled(id, false);
+      else if (action === 'skill-toggle') agentBrowser.setSkillEnabled(id, !skill.enabled);
+      else if (action === 'skill-edit') agentBrowser.showSkillEditor(id);
+      else if (action === 'skill-share') agentBrowser.setSkillShared(id, !skill.shared, skill.tags || []);
+      else if (action === 'skill-remove') agentBrowser.removeSkill(id);
     };
   }
 
@@ -356,7 +356,7 @@
     var code = [];
     var html = esc(text).replace(/`([^`]+)`/g, function(_, value) {
       code.push('<code>' + value + '</code>');
-      return "@@ROXY_CODE_" + (code.length - 1) + "@@";
+      return "@@AGENT_BROWSER_CODE_" + (code.length - 1) + "@@";
     });
     html = html
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -364,7 +364,7 @@
       .replace(/\*([^*]+)\*/g, '<em>$1</em>')
       .replace(/_([^_]+)_/g, '<em>$1</em>')
       .replace(/\n/g, '<br>');
-    return html.replace(/@@ROXY_CODE_(\d+)@@/g, function(_, idx) { return code[Number(idx)] || ""; });
+    return html.replace(/@@AGENT_BROWSER_CODE_(\d+)@@/g, function(_, idx) { return code[Number(idx)] || ""; });
   }
 
   function safeCodeLanguage(value) {
@@ -444,8 +444,8 @@
     if (i >= units.length) i = units.length - 1;
     return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
   }
-  function updateCloakStatus() {
-    api.cloak.binary().then(function (info) {
+  function updateBrowserStatus() {
+    api.browser.binary().then(function (info) {
       var el = document.getElementById("sidebar-chrome-status");
       if (info && info.installed) {
         el.innerHTML = '🟢 Chromium ' + (info.version || "?");
@@ -460,12 +460,12 @@
       el.className = 'chrome-status-unknown';
     });
   }
-  function renderCloakBinaryCard(info) {
+  function renderBrowserBinaryCard(info) {
     info = info || {};
     var status = info.installed ? "Installed" : "Not installed";
     var cls = info.installed ? "status-running" : "status-stopped";
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">CloakLite Managed Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
+      '<div class="card-header"><span class="name">Agent Browser Studio Managed Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
       '<div class="info-row"><span>Version</span><span>' + esc(info.version || "--") + '</span></div>' +
       '<div class="info-row"><span>Source</span><span>' + esc(info.source || "--") + '</span></div>' +
       '<div class="info-row"><span>Platform</span><span>' + esc(info.platform || "--") + '</span></div>' +
@@ -480,7 +480,7 @@
   var _wizardDirId = null;
   var _wizardProfileName = null;
 
-  window.cloak = {
+  window.agentBrowser = {
     api: api,
     R: R,
     state: {
@@ -500,21 +500,21 @@
     helpers: {}
   };
 
-  var cloak = window.cloak;
+  var agentBrowser = window.agentBrowser;
 
   // Custom confirm dialog (#dlg-confirm). The dialog markup ships with
-  // data-submit-cmd="doConfirm", but nothing wired cloak.confirm to open it —
-  // so profile/proxy delete (which call cloak.confirm) threw "not a function".
-  // cloak.confirm(msg, onOk) opens the modal; doConfirm() runs onOk on submit.
+  // data-submit-cmd="doConfirm", but nothing wired agentBrowser.confirm to open it —
+  // so profile/proxy delete (which call agentBrowser.confirm) threw "not a function".
+  // agentBrowser.confirm(msg, onOk) opens the modal; doConfirm() runs onOk on submit.
   var _confirmCallback = null;
-  cloak.confirm = function (msg, onOk) {
+  agentBrowser.confirm = function (msg, onOk) {
     _confirmCallback = typeof onOk === "function" ? onOk : null;
     var msgEl = document.getElementById("dlg-confirm-msg");
     if (msgEl) msgEl.textContent = String(msg == null ? "" : msg);
     var dlg = document.getElementById("dlg-confirm");
     if (dlg && !dlg.open) dlg.showModal();
   };
-  cloak.doConfirm = function () {
+  agentBrowser.doConfirm = function () {
     var dlg = document.getElementById("dlg-confirm");
     if (dlg && dlg.open) dlg.close();
     var cb = _confirmCallback;
@@ -522,7 +522,7 @@
     if (cb) { try { cb(); } catch (e) { console.error("[confirm] callback failed:", e); } }
   };
 
-  Object.assign(cloak.helpers, {
+  Object.assign(agentBrowser.helpers, {
     toast: toast,
     esc: esc,
     escAttr: escAttr,
@@ -560,8 +560,8 @@
     chromeOsFromPlatform: chromeOsFromPlatform,
     uaPlatformFromPlatform: uaPlatformFromPlatform,
     platformFromOsName: platformFromOsName,
-    normalizeCloakPlatform: normalizeCloakPlatform,
-    updateCloakStatus: updateCloakStatus,
-    renderCloakBinaryCard: renderCloakBinaryCard
+    normalizeBrowserPlatform: normalizeBrowserPlatform,
+    updateBrowserStatus: updateBrowserStatus,
+    renderBrowserBinaryCard: renderBrowserBinaryCard
   });
 })();

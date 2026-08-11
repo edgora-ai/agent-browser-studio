@@ -119,17 +119,17 @@ describe("Delegation dispatch (HTML + delegation.js)", () => {
     expect(source).toContain("cmd === 'switchAgentSub' && el.dataset.sub");
   });
 
-  it("core.js exposes api, R, state on window.cloak", () => {
+  it("core.js exposes api, R, state on window.agentBrowser", () => {
     const source = fs.readFileSync(path.join(ROOT, "src/renderer/js/app/core.js"), "utf-8");
-    expect(source).toMatch(/window\.cloak\s*=\s*\{[\s\S]*?api:\s*api/);
-    expect(source).toMatch(/window\.cloak\s*=\s*\{[\s\S]*?R:\s*R/);
-    expect(source).toMatch(/window\.cloak\s*=\s*\{[\s\S]*?state:\s*\{/);
+    expect(source).toMatch(/window\.agentBrowser\s*=\s*\{[\s\S]*?api:\s*api/);
+    expect(source).toMatch(/window\.agentBrowser\s*=\s*\{[\s\S]*?R:\s*R/);
+    expect(source).toMatch(/window\.agentBrowser\s*=\s*\{[\s\S]*?state:\s*\{/);
   });
 
-  it("tab.js defines switchTab and loadTab on cloak", () => {
+  it("tab.js defines switchTab and loadTab on agentBrowser", () => {
     const source = fs.readFileSync(path.join(ROOT, "src/renderer/js/app/tabs.js"), "utf-8");
-    expect(source).toMatch(/cloak\.switchTab\s*=/);
-    expect(source).toMatch(/cloak\.loadTab\s*=/);
+    expect(source).toMatch(/agentBrowser\.switchTab\s*=/);
+    expect(source).toMatch(/agentBrowser\.loadTab\s*=/);
   });
 
   it("delegation.js loads after all tab/feature modules", () => {

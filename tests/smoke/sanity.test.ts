@@ -18,7 +18,7 @@ describe("Smoke — Project Structure", () => {
     "src/main/ipc/settings.ts",
     "src/main/ipc/agent.ts",
     "src/main/ipc/mcp.ts",
-    "src/main/ipc/cloak.ts",
+    "src/main/ipc/browser.ts",
     "src/main/services/config-manager.ts",
     "src/main/services/profile-manager.ts",
     "src/main/services/storage-monitor.ts",
@@ -28,7 +28,7 @@ describe("Smoke — Project Structure", () => {
     "src/main/services/cdp-cookie-service.ts",
     "src/main/services/webrtc-detector.ts",
     "src/main/services/launch-args.ts",
-    "src/main/services/cloak-manager.ts",
+    "src/main/services/browser-manager.ts",
     "src/main/types.ts",
     "src/tools/network-fingerprint-corpus.ts",
     "src/tools/verify-network-fingerprint.ts",
@@ -75,7 +75,7 @@ describe("Smoke — TypeScript", () => {
 
   it("package.json is valid JSON", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
-    expect(pkg.name).toBe("cloak-lite");
+    expect(pkg.name).toBe("agent-browser-studio");
     expect(pkg.version).toBeDefined();
     expect(pkg.main).toBe("dist/main/index.js");
     expect(pkg.scripts["verify:network"]).toContain("verify-network-fingerprint.js");
@@ -91,7 +91,7 @@ describe("Smoke — TypeScript", () => {
 describe("Smoke — Preload API completeness", () => {
   it("preload exposes all required API groups", () => {
     const preload = fs.readFileSync(path.join(ROOT, "src/main/preload.cjs"), "utf-8");
-    const groups = ["profile", "proxy", "detect", "storage", "sync", "app", "settings", "mcp", "cloak", "agent"];
+    const groups = ["profile", "proxy", "detect", "storage", "sync", "app", "settings", "mcp", "browser", "agent"];
     for (const g of groups) {
       expect(preload, `preload missing ${g} group`).toContain(g + ":");
     }
@@ -111,7 +111,7 @@ describe("Smoke — IPC handler registration", () => {
       "registerProfileHandlers", "registerProxyHandlers",
       "registerStorageHandlers", "registerSyncHandlers", "registerAppHandlers",
       "registerDetectHandlers", "registerSettingsHandlers",
-      "registerAgentHandlers", "registerMcpHandlers", "registerCloakHandlers",
+      "registerAgentHandlers", "registerMcpHandlers", "registerBrowserHandlers",
     ];
     for (const h of handlers) {
       expect(index, `index.ts missing ${h}`).toContain(h);
@@ -130,7 +130,7 @@ describe("Smoke — HTML structure", () => {
 
   it("all dialogs exist", () => {
     const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
-    const dialogs = ["dlg-profile", "dlg-rename", "dlg-cookies", "dlg-proxy", "dlg-confirm", "dlg-extensions", "dlg-skill-market", "dlg-account", "dlg-note", "dlg-cloak-seed"];
+    const dialogs = ["dlg-profile", "dlg-rename", "dlg-cookies", "dlg-proxy", "dlg-confirm", "dlg-extensions", "dlg-skill-market", "dlg-account", "dlg-note", "dlg-agent-browser-seed"];
     for (const d of dialogs) {
       expect(html, `missing dialog ${d}`).toContain(`id="${d}"`);
     }

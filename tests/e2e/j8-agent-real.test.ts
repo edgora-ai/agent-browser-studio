@@ -15,7 +15,7 @@ describe.skipIf(!process.env.REAL_LLM)("J8 — Agent real LLM drives browser too
     const apiKey = process.env.REAL_LLM_API_KEY;
     if (!apiKey) throw new Error("REAL_LLM requires REAL_LLM_API_KEY");
     // Write the real LLM config from environment — never commit live credentials.
-    await h.page.evaluate((cfg: any) => (window as any).cloak.api.agent.saveLlmConfig(cfg), {
+    await h.page.evaluate((cfg: any) => (window as any).agentBrowser.api.agent.saveLlmConfig(cfg), {
       provider: "openai",
       apiKey,
       apiUrl: process.env.REAL_LLM_API_URL || "https://api.openai.com/v1/chat/completions",
@@ -29,12 +29,12 @@ describe.skipIf(!process.env.REAL_LLM)("J8 — Agent real LLM drives browser too
 
   async function runAgentTask(prompt: string): Promise<{ tools: string[]; text: string; err: string | null }> {
     // launch a profile so the agent has a CDP port (auto-injected into system prompt)
-    const r = await h.page.evaluate(() => (window as any).cloak.api.cloak.create({ name: "J8 " + Date.now(), platform: "windows", fingerprintSeed: Math.floor(Math.random() * 90000) + 10000 }));
-    await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), r.dirId);
+    const r = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.create({ name: "J8 " + Date.now(), platform: "windows", fingerprintSeed: Math.floor(Math.random() * 90000) + 10000 }));
+    await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), r.dirId);
     await h.page.waitForTimeout(2000);
-    const conv = await h.page.evaluate(() => (window as any).cloak.api.agent.conversations.create());
+    const conv = await h.page.evaluate(() => (window as any).agentBrowser.api.agent.conversations.create());
     return h.page.evaluate(async (args: { convId: string; prompt: string }) => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       return new Promise((resolve) => {
         const tools: string[] = [];
         let text = "";

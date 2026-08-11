@@ -59,7 +59,7 @@ export function exportData(scope: ExportScope): { scope: string; exportedAt: num
   const want = (s: string) => scope === "all" || scope === s;
 
   if (want("profiles")) {
-    out.profiles = Object.entries(cfg.cloakProfiles || {}).map(([dirId, m]: any) => ({
+    out.profiles = Object.entries(cfg.browserProfiles || {}).map(([dirId, m]: any) => ({
       dirId, name: m.name, platform: m.platform, timezone: m.timezone, locale: m.locale,
       proxyMode: m.proxyMode, proxyName: m.proxyName, tags: Array.isArray(m.tags) ? m.tags : [], createdAt: m.createdAt,
     }));

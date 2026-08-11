@@ -76,7 +76,7 @@ function buildProxyUrlFor(config: ProxyConfig, scheme: ProxyConfig["type"] | "so
 }
 
 export function writeCurlConfig(config: ProxyConfig): string {
-  const filePath = path.join(os.tmpdir(), `cloak-proxy-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.conf`);
+  const filePath = path.join(os.tmpdir(), `agent-browser-proxy-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.conf`);
   const lines = [`proxy = ${JSON.stringify(buildProxyUrl(config))}`];
   if (config.username) lines.push(`proxy-user = ${JSON.stringify(`${config.username}:${config.password || ""}`)}`);
   fs.writeFileSync(filePath, lines.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });

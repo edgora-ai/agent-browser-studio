@@ -1,14 +1,15 @@
-# RoxyLite Chromium 150 community patch
+# Agent Browser Chromium 150 patch set
 
 This directory is the independent Chromium implementation used by
-`roxy-lite-cloak-oss`. It does not contain CloakBrowser Pro binaries, recovered
+Agent Browser Studio. It does not contain CloakBrowser Pro binaries, recovered
 keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 
 ## Baseline
 
 - Chromium tag: `150.0.7871.114`
 - Commit: `f405107495a07cb1bfcf687d4af8d91117098db6`
-- Config switch: `--roxy-fingerprint-config=<base64url-json>`
+- Config switch: `--agent-browser-fingerprint-config=<base64url-json>`
+- Legacy compatibility switch: `--roxy-fingerprint-config=<base64url-json>`
 - Config schema: `1`
 
 ## Apply
@@ -19,13 +20,14 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0041` chain therefore keeps
+of rewriting an earlier patch. The current `0002`–`0042` chain therefore keeps
 the system-theme, occluded-input and managed-QUIC changes independently
 reviewable and revertible, while `check.sh` validates the complete order from
 the pinned upstream index regardless of the checkout's current HEAD.
 `PATCHSET.sha256` detects any rewrite of an already released patch or source
 payload, and `PATCH_HISTORY.md` records the OSS and Chromium source provenance.
-The next Chromium change must start at `0042`.
+Patch `0042` adds the Agent Browser public protocol without rewriting
+`0002–0041`; the next Chromium change must start at `0043`.
 
 ## Build configuration
 
@@ -33,10 +35,10 @@ Use the checked-in release arguments so the binary exposes the same public
 AAC/H.264 codec surface as a normal Chrome installation:
 
 ```bash
-cp ./patches/chromium/args.gn /path/to/chromium/src/out/RoxyRelease/args.gn
+cp ./patches/chromium/args.gn /path/to/chromium/src/out/AgentBrowserRelease/args.gn
 cd /path/to/chromium/src
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer gn gen out/RoxyRelease
-autoninja -C out/RoxyRelease chrome
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer gn gen out/AgentBrowserRelease
+autoninja -C out/AgentBrowserRelease chrome
 ```
 
 The template enables `proprietary_codecs` and uses the Chrome FFmpeg branding.
@@ -45,6 +47,9 @@ codec patent and distribution requirements in their jurisdictions.
 
 The application creates the encoded configuration from normal profile fields.
 No profile encryption key is embedded into Chromium.
+New builds advertise the public fingerprint, proxy-auth, and QUIC contracts
+through `--agent-browser-capabilities`. Chromium 149 and pre-`0042` builds
+remain usable through the unadvertised legacy aliases.
 
 ## Current implementation
 

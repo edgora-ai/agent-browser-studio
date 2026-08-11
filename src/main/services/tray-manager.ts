@@ -1,11 +1,11 @@
-// ── CloakLite system tray ──
+// ── Agent Browser Studio system tray ──
 // Provides a status-bar icon with menu access to show/quit the app and quick profile actions.
 // Uses macOS template image so it adapts to dark/light menu bar.
 
 import { app, Menu, Tray, BrowserWindow, nativeImage } from "electron";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listCloakProfiles } from "./cloak-manager.js";
+import { listBrowserProfiles } from "./browser-manager.js";
 import { tMain } from "./main-i18n.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,7 +34,7 @@ export function createTray(getMainWindow: () => BrowserWindow | null, options: {
     return null;
   }
 
-  tray.setToolTip(tMain("tray.tooltip", "CloakLite"));
+  tray.setToolTip(tMain("tray.tooltip", "Agent Browser Studio"));
   refreshTrayMenu(getMainWindow, options);
 
   tray.on("click", () => {
@@ -61,14 +61,14 @@ export function refreshTrayMenu(
   if (!tray) return;
   let runningCount = 0;
   try {
-    runningCount = listCloakProfiles().filter((p) => p.running).length;
+    runningCount = listBrowserProfiles().filter((p) => p.running).length;
   } catch {
     runningCount = 0;
   }
 
   const template: Electron.MenuItemConstructorOptions[] = [
     {
-      label: tMain("tray.show", "Show CloakLite"),
+      label: tMain("tray.show", "Show Agent Browser Studio"),
       click: () => {
         const win = getMainWindow();
         if (win) {
@@ -85,7 +85,7 @@ export function refreshTrayMenu(
     },
     { type: "separator" },
     {
-      label: tMain("tray.quit", "Quit CloakLite"),
+      label: tMain("tray.quit", "Quit Agent Browser Studio"),
       click: () => {
         if (options.onQuit) options.onQuit();
         else {

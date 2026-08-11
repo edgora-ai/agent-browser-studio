@@ -43,7 +43,7 @@ export const TASK_TEMPLATES: TaskTemplate[] = [
     riskLevel: "medium",
     requiredInputs: [
       { key: "urls", label: "商品 URL 列表", description: "要采集价格的商品页,一行一个。", required: true, example: "https://shop.example/products/widget" },
-      { key: "profile", label: "登录/地区 Profile", description: "用于打开目标站点的 Cloak profile。", required: true },
+      { key: "profile", label: "登录/地区 Profile", description: "用于打开目标站点的 Browser profile。", required: true },
       { key: "schedule", label: "采集频率", description: "例如每天 09:00 或每 6 小时。", required: false, example: "每天 09:00" },
     ],
     tools: ["browser_navigate", "browser_wait_for_load", "browser_evaluate", "db_exec"],

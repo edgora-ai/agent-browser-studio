@@ -57,12 +57,12 @@ describe("J20 — full agent tool chain (search → evaluate → store)", () => 
   }, 90000);
 
   it("runs the full sequence via the real chat-stream loop", async () => {
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J20", platform: "windows", fingerprintSeed: 20202 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J20", platform: "windows", fingerprintSeed: 20202 }));
     dirId = r.dirId;
-    const launched = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), dirId);
+    const launched = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), dirId);
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${launched.cdpPort}`);
     page = browser.contexts()[0].pages()[0] || (await browser.contexts()[0].newPage());
-    const cdpPort = (await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), dirId)).cdpPort;
+    const cdpPort = (await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), dirId)).cdpPort;
 
     // Mock LLM emits the full sequence a capable model would: create table,
     // navigate, type, click, wait, evaluate (extract JSON), insert one row
@@ -82,18 +82,18 @@ describe("J20 — full agent tool chain (search → evaluate → store)", () => 
       ],
     });
     await h.page.evaluate((murl: string) => {
-      (window as any).cloak.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
+      (window as any).agentBrowser.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
     }, mock.url);
 
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(150);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(150);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
 
     await h.page.evaluate(() => { (window as any).__done = false; (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = String(e); });
     });
@@ -111,7 +111,7 @@ describe("J20 — full agent tool chain (search → evaluate → store)", () => 
 
     // The news table exists and the insert landed.
     const stored = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const tables = await api.agentDb.tables();
       const newsTable = tables.find((t: any) => t.name === "news");
       if (!newsTable) return { exists: false };
@@ -124,7 +124,7 @@ describe("J20 — full agent tool chain (search → evaluate → store)", () => 
 
     // The run trace recorded all 8 tool calls without the port-ownership error.
     const trace = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       const run = await api.agentRuns.get(list[0].id);
       return run;

@@ -6,7 +6,7 @@ const api = {
   profile: {
     list: () => ipcRenderer.invoke("profile:list"),
     get: (dirId) => ipcRenderer.invoke("profile:get", dirId),
-    create: (name, options) => ipcRenderer.invoke("cloak:create", { name, ...(options || {}) }),
+    create: (name, options) => ipcRenderer.invoke("browser:create", { name, ...(options || {}) }),
     delete: (dirId) => ipcRenderer.invoke("profile:delete", dirId),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
     // Cookie management
@@ -29,7 +29,8 @@ const api = {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),
     proxyPing: (config) => ipcRenderer.invoke("detect:proxy-ping", config),
     proxyByName: (name) => ipcRenderer.invoke("detect:proxy-by-name", name),
-    webrtcLeak: (config) => ipcRenderer.invoke("detect:webrtc-leak", config),  },
+    webrtcLeak: (config) => ipcRenderer.invoke("detect:webrtc-leak", config),
+  },
   storage: {
     info: () => ipcRenderer.invoke("storage:info"),
     clearCache: (dirId) => ipcRenderer.invoke("storage:clear-cache", dirId),
@@ -83,21 +84,21 @@ const api = {
     restart: () => ipcRenderer.invoke("mcp:restart"),
     revealToken: () => ipcRenderer.invoke("mcp:reveal-token"),
   },
-  cloak: {
-    list: () => ipcRenderer.invoke("cloak:list"),
-    binary: () => ipcRenderer.invoke("cloak:binary"),
-    verifyBinary: () => ipcRenderer.invoke("cloak:verify-binary"),
-    create: (opts) => ipcRenderer.invoke("cloak:create", opts),
-    delete: (dirId) => ipcRenderer.invoke("cloak:delete", dirId),
-    launch: (dirId) => ipcRenderer.invoke("cloak:launch", { dirId }),
-    stop: (dirId) => ipcRenderer.invoke("cloak:stop", dirId),
-    status: (dirId) => ipcRenderer.invoke("cloak:status", dirId),
-    consistencyCheck: (dirId) => ipcRenderer.invoke("cloak:consistency-check", dirId),
-    captureBaseline: (dirId) => ipcRenderer.invoke("cloak:capture-baseline", dirId),
-    parseBulkCsv: (text) => ipcRenderer.invoke("cloak:parse-bulk-csv", text),
-    setSeed: (dirId, seed) => ipcRenderer.invoke("cloak:set-seed", { dirId, seed }),
-    setMeta: (dirId, meta) => ipcRenderer.invoke("cloak:set-meta", { dirId, ...meta }),
-    openRiskCheck: (dirId) => ipcRenderer.invoke("cloak:open-risk-check", { dirId }),
+  browser: {
+    list: () => ipcRenderer.invoke("browser:list"),
+    binary: () => ipcRenderer.invoke("browser:binary"),
+    verifyBinary: () => ipcRenderer.invoke("browser:verify-binary"),
+    create: (opts) => ipcRenderer.invoke("browser:create", opts),
+    delete: (dirId) => ipcRenderer.invoke("browser:delete", dirId),
+    launch: (dirId) => ipcRenderer.invoke("browser:launch", { dirId }),
+    stop: (dirId) => ipcRenderer.invoke("browser:stop", dirId),
+    status: (dirId) => ipcRenderer.invoke("browser:status", dirId),
+    consistencyCheck: (dirId) => ipcRenderer.invoke("browser:consistency-check", dirId),
+    captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
+    parseBulkCsv: (text) => ipcRenderer.invoke("browser:parse-bulk-csv", text),
+    setSeed: (dirId, seed) => ipcRenderer.invoke("browser:set-seed", { dirId, seed }),
+    setMeta: (dirId, meta) => ipcRenderer.invoke("browser:set-meta", { dirId, ...meta }),
+    openRiskCheck: (dirId) => ipcRenderer.invoke("browser:open-risk-check", { dirId }),
   },
   agent: {
     llmConfig: () => ipcRenderer.invoke("agent:llm-config"),
@@ -171,7 +172,7 @@ const api = {
     export: (scope) => ipcRenderer.invoke("data:export", scope),
   },
   on: (channel, callback) => {
-    const validChannels = ["cloak:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request"];
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request"];
     if (validChannels.includes(channel)) {
       const wrapped = (_event, ...args) => callback(...args);
       listenerMap.set(callback, wrapped);
@@ -185,4 +186,4 @@ const api = {
   },
 };
 
-contextBridge.exposeInMainWorld("cloakLite", api);
+contextBridge.exposeInMainWorld("agentBrowserAPI", api);

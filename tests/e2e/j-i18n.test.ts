@@ -61,7 +61,7 @@ describe("i18n — sidebar tabs and language switch", () => {
     await h.page.waitForTimeout(200);
     await closeAllDialogs(h.page);
     const langBefore = await h.page.evaluate(() => (window as any).i18n.get());
-    await h.page.evaluate(() => (window as any).cloak.toggleLanguage());
+    await h.page.evaluate(() => (window as any).agentBrowser.toggleLanguage());
     await h.page.waitForTimeout(250);
     const langAfter = await h.page.evaluate(() => (window as any).i18n.get());
     expect(langBefore).not.toBe(langAfter);

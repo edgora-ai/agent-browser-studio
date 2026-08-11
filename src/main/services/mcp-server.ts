@@ -1,4 +1,4 @@
-// ── CloakLite MCP Server ──
+// ── Agent Browser Studio MCP Server ──
 // Model Context Protocol server — exposed on loopback for external AI tools.
 // Claude Code, Cursor, or any MCP client can connect and control browser profiles.
 
@@ -14,16 +14,18 @@ import {
   listExtensionRepository,
 } from "./extension-repository.js";
 import { validateDirId } from "./utils.js";
-import { listCloakProfiles, launchCloak, stopCloak, statusCloak, findRuntimeChromiumBinary, getRuntimeChromiumVersion } from "./cloak-manager.js";
+import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, findRuntimeChromiumBinary, getRuntimeChromiumVersion } from "./browser-manager.js";
 
 let server: http.Server | null = null;
 let serverListening = false;
 const MCP_DEFAULT_PORT = 26581;
 let mcpPort = configuredMcpPort();
-const MCP_TOKEN = process.env.CLOAK_MCP_TOKEN || createLocalToken();
+const MCP_TOKEN = process.env.AGENT_BROWSER_MCP_TOKEN
+  || process.env.CLOAK_MCP_TOKEN // pre-rename compatibility
+  || createLocalToken();
 
 function configuredMcpPort(): number {
-  const value = Number(process.env.CLOAK_MCP_PORT ?? MCP_DEFAULT_PORT);
+  const value = Number(process.env.AGENT_BROWSER_MCP_PORT ?? process.env.CLOAK_MCP_PORT ?? MCP_DEFAULT_PORT);
   return Number.isInteger(value) && value >= 0 && value <= 65535 ? value : MCP_DEFAULT_PORT;
 }
 
@@ -33,23 +35,23 @@ function configuredMcpPort(): number {
 
 const MCP_TOOLS = [
   {
-    name: "cloak_list_profiles",
+    name: "agent_browser_list_profiles",
     description: "List all managed Chromium profiles",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "cloak_launch_profile",
+    name: "agent_browser_launch_profile",
     description: "Launch a managed Chromium profile by its dirId",
     inputSchema: {
       type: "object",
       properties: {
-        dirId: { type: "string", description: "Profile directory ID (starting with cb_)" },
+        dirId: { type: "string", description: "Profile directory ID (ab_; legacy cb_ IDs are accepted)" },
       },
       required: ["dirId"],
     },
   },
   {
-    name: "cloak_stop_profile",
+    name: "agent_browser_stop_profile",
     description: "Stop a running managed Chromium profile by its dirId",
     inputSchema: {
       type: "object",
@@ -60,7 +62,7 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: "cloak_status",
+    name: "agent_browser_status",
     description: "Get the running status and CDP debugging details of a managed Chromium profile",
     inputSchema: {
       type: "object",
@@ -71,17 +73,17 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: "cloak_list_proxies",
+    name: "agent_browser_list_proxies",
     description: "List all configured SOCKS5/HTTP proxies",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "cloak_list_accounts",
+    name: "agent_browser_list_accounts",
     description: "List all stored service account usernames and target platform URLs",
     inputSchema: { type: "object", properties: {} },
   },
   {
-    name: "cloak_profile_info",
+    name: "agent_browser_profile_info",
     description: "Get detailed fingerprint metadata for a profile",
     inputSchema: {
       type: "object",
@@ -92,7 +94,7 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: "cloak_list_extensions",
+    name: "agent_browser_list_extensions",
     description: "List all installed extensions for a profile",
     inputSchema: {
       type: "object",
@@ -103,7 +105,7 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: "cloak_install_extension",
+    name: "agent_browser_install_extension",
     description: "Download and extract a Chrome Web Store extension into a profile",
     inputSchema: {
       type: "object",
@@ -115,7 +117,7 @@ const MCP_TOOLS = [
     },
   },
   {
-    name: "cloak_delete_extension",
+    name: "agent_browser_delete_extension",
     description: "Remove an installed extension from a profile",
     inputSchema: {
       type: "object",
@@ -132,7 +134,7 @@ const MCP_TOOLS = [
 // Tool Execution
 // ═══════════════════════════════════════════════════════════════
 
-// Agent tools exposed over MCP (prefixed cloak_) so external AI can drive a
+// Agent tools exposed over MCP under the agent_browser namespace so external AI can drive a
 // launched profile's CDP, query the agent DB, make HTTP calls, etc. Built from
 // the real AGENT_TOOLS schemas so they stay in sync.
 const MCP_PASSTHROUGH = [
@@ -141,35 +143,49 @@ const MCP_PASSTHROUGH = [
   "browser_screenshot", "browser_scroll", "browser_new_tab", "browser_press_key",
   "http_request", "db_query", "db_exec", "read_file", "write_file", "set_var", "get_var",
 ];
+function publicPassthroughToolName(toolName: string): string {
+  const suffix = toolName.startsWith("browser_") ? toolName.slice("browser_".length) : toolName;
+  return `agent_browser_${suffix}`;
+}
+const MCP_PASSTHROUGH_BY_PUBLIC_NAME = new Map(
+  MCP_PASSTHROUGH.map((toolName) => [publicPassthroughToolName(toolName), toolName]),
+);
 const MCP_PASSTHROUGH_DEFS = MCP_PASSTHROUGH.map((toolName) => {
   const t = AGENT_TOOLS.find((x) => x.function.name === toolName);
   return {
-    name: `cloak_${toolName}`,
+    name: publicPassthroughToolName(toolName),
     description: t?.function.description || `Agent tool: ${toolName}`,
     inputSchema: t?.function.parameters || { type: "object", properties: {} },
   };
 });
 const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
-  { name: "cloak_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
-  { name: "cloak_runs_list", description: "List recent agent runs", inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
-  { name: "cloak_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
+  { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_runs_list", description: "List recent agent runs", inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
 ];
 
 async function executeMcpTool(name: string, args: any): Promise<any> {
+  if (name.startsWith("cloak_")) {
+    const legacySuffix = name.slice("cloak_".length);
+    name = MCP_PASSTHROUGH.includes(legacySuffix)
+      ? publicPassthroughToolName(legacySuffix)
+      : `agent_browser_${legacySuffix}`;
+  }
   // Passthrough to the agent tool layer (browser_*/db/http/file).
-  if (name.startsWith("cloak_") && MCP_PASSTHROUGH.includes(name.slice(6))) {
+  const passthroughToolName = MCP_PASSTHROUGH_BY_PUBLIC_NAME.get(name);
+  if (passthroughToolName) {
     try {
-      return await executeToolCall(name.slice(6), args || {});
+      return await executeToolCall(passthroughToolName, args || {});
     } catch (e: any) {
       return { error: e.message || String(e) };
     }
   }
   switch (name) {
-    case "cloak_list_profiles": {
-      const cloakProfiles = listCloakProfiles();
+    case "agent_browser_list_profiles": {
+      const browserProfiles = listBrowserProfiles();
       return {
-        profiles: cloakProfiles.map(p => ({
-          dirId: p.dirId, name: p.name, browser: "cloak",
+        profiles: browserProfiles.map(p => ({
+          dirId: p.dirId, name: p.name, browser: "chromium",
           running: p.running,
           proxyMode: p.proxyMode,
           proxy: p.proxyMode === "none" ? "(no proxy)" : (p.proxyName || "(missing proxy)"),
@@ -178,10 +194,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         binary: { path: findRuntimeChromiumBinary(), version: getRuntimeChromiumVersion() },
       };
     }
-    case "cloak_launch_profile": {
+    case "agent_browser_launch_profile": {
       validateDirId(args.dirId);
       try {
-        const result = await launchCloak(args.dirId);
+        const result = await launchBrowser(args.dirId);
         return {
           success: true,
           pid: result.pid,
@@ -193,14 +209,14 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         return { success: false, error: e.message };
       }
     }
-    case "cloak_stop_profile": {
+    case "agent_browser_stop_profile": {
       validateDirId(args.dirId);
-      const result = stopCloak(args.dirId);
+      const result = stopBrowser(args.dirId);
       return { success: result };
     }
-    case "cloak_status": {
+    case "agent_browser_status": {
       validateDirId(args.dirId);
-      const status = statusCloak(args.dirId);
+      const status = statusBrowser(args.dirId);
       return {
         running: status.running,
         pid: status.pid,
@@ -208,7 +224,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         dirId: args.dirId,
       };
     }
-    case "cloak_list_proxies": {
+    case "agent_browser_list_proxies": {
       const cfg = getConfig() as any;
       const proxies = cfg.proxies || {};
       return {
@@ -223,13 +239,13 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         })),
       };
     }
-    case "cloak_list_accounts": {
+    case "agent_browser_list_accounts": {
       return { accounts: getAccounts().map(a => ({ url: a.platformUrl, username: a.platformUserName, tags: a.tags })) };
     }
-    case "cloak_profile_info": {
+    case "agent_browser_profile_info": {
       validateDirId(args.dirId);
       const meta = getProfileMeta(args.dirId);
-      const status = statusCloak(args.dirId);
+      const status = statusBrowser(args.dirId);
       const resolvedProxy = resolveProfileProxy(args.dirId);
       return {
         ...meta,
@@ -247,10 +263,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         dirId: args.dirId,
       };
     }
-    case "cloak_list_extensions": {
+    case "agent_browser_list_extensions": {
       validateDirId(args.dirId);
       const cfg = getConfig() as any;
-      const enabledMap = cfg.cloakProfiles?.[args.dirId]?.extensions || {};
+      const enabledMap = cfg.browserProfiles?.[args.dirId]?.extensions || {};
       return {
         extensions: listExtensionRepository().map((entry) => ({
           ...entry,
@@ -259,11 +275,11 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         dirId: args.dirId,
       };
     }
-    case "cloak_install_extension": {
+    case "agent_browser_install_extension": {
       validateDirId(args.dirId);
       validateExtensionId(args.extId);
       try {
-        assertCloakProfileExists(args.dirId);
+        assertBrowserProfileExists(args.dirId);
         const entry = await addOrUpdateChromeStoreExtension(args.extId);
         setProfileExtensionEnabled(args.dirId, args.extId, true);
         return { success: true, extId: args.extId, dirId: args.dirId, extension: entry };
@@ -271,19 +287,19 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         return { success: false, error: e.message || String(e) };
       }
     }
-    case "cloak_delete_extension": {
+    case "agent_browser_delete_extension": {
       validateDirId(args.dirId);
       validateExtensionId(args.extId);
       setProfileExtensionEnabled(args.dirId, args.extId, false);
       return { success: true, extId: args.extId, dirId: args.dirId };
     }
-    case "cloak_automation_list": {
+    case "agent_browser_automation_list": {
       return { rules: (getConfig() as any).automation || [] };
     }
-    case "cloak_runs_list": {
+    case "agent_browser_runs_list": {
       return { runs: agentRunRecorder.listRuns().slice(0, Math.max(1, Math.min(args?.limit ?? 50, 200))) };
     }
-    case "cloak_jobs_list": {
+    case "agent_browser_jobs_list": {
       return { jobs: listJobs({ status: args?.status, limit: args?.limit }) };
     }
     default:
@@ -304,7 +320,7 @@ async function buildMcpResponse(json: any): Promise<any | null> {
     if (json.method === "initialize") {
       response.result = {
         protocolVersion: "2024-11-05",
-        serverInfo: { name: "cloak-lite", version: "1.0.0" },
+        serverInfo: { name: "agent-browser-studio", version: "1.0.0" },
         capabilities: { tools: {} },
       };
     } else if (json.method === "tools/list") {
@@ -362,7 +378,7 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     }
     res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, X-Cloak-Token");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Authorization, X-Agent-Browser-Token, X-Cloak-Token");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -401,7 +417,7 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     // Health check
     if (url.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", service: "cloak-lite-mcp", port: mcpPort }));
+      res.end(JSON.stringify({ status: "ok", service: "agent-browser-studio-mcp", port: mcpPort }));
       return;
     }
 
@@ -442,7 +458,7 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({
           jsonrpc: "2.0", id: json.id,
-          result: { protocolVersion: "2024-11-05", serverInfo: { name: "cloak-lite", version: "1.0.0" }, capabilities: { tools: {} } },
+          result: { protocolVersion: "2024-11-05", serverInfo: { name: "agent-browser-studio", version: "1.0.0" }, capabilities: { tools: {} } },
         }));
         return;
       }
@@ -526,15 +542,15 @@ export function getMcpToken(): string {
 
 // ── Helpers ──
 
-function assertCloakProfileExists(dirId: string): void {
+function assertBrowserProfileExists(dirId: string): void {
   const cfg = getConfig() as any;
-  if (!cfg.cloakProfiles?.[dirId]) throw new Error("Cloak profile not found");
+  if (!cfg.browserProfiles?.[dirId]) throw new Error("Browser profile not found");
 }
 
 function setProfileExtensionEnabled(dirId: string, extId: string, enabled: boolean): void {
   const cfg = structuredClone(getConfig()) as any;
-  const profile = cfg.cloakProfiles?.[dirId];
-  if (!profile) throw new Error("Cloak profile not found");
+  const profile = cfg.browserProfiles?.[dirId];
+  if (!profile) throw new Error("Browser profile not found");
   profile.extensions = { ...(profile.extensions || {}), [extId]: enabled };
   saveConfig(cfg);
 }
@@ -547,7 +563,7 @@ function validateExtensionId(extId: string): void {
 
 function isAuthorized(req: http.IncomingMessage, _url: URL): boolean {
   const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1] || null;
-  const headerToken = req.headers["x-cloak-token"];
+  const headerToken = req.headers["x-agent-browser-token"] ?? req.headers["x-cloak-token"];
   const token = bearer || (Array.isArray(headerToken) ? headerToken[0] : headerToken);
   return token === MCP_TOKEN;
 }

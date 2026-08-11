@@ -1,7 +1,7 @@
 {
-  "name": "cloak-lite",
+  "name": "agent-browser-studio",
   "version": "1.0.0",
-  "description": "Open-source management console for an independently patched Chromium fingerprint browser",
+  "description": "Local-first browser profile management and AI automation studio for independently patched Chromium",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
@@ -31,10 +31,10 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "electron": "^42.4.0",
+    "electron": "42.4.0",
     "electron-builder": "^26.15.3",
     "marked": "^18.0.5",
-    "playwright": "^1.61.0",
+    "playwright": "^1.62.1",
     "typescript": "^5.6.0",
     "vitest": "^4.1.8"
   },

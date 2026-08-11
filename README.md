@@ -1,8 +1,8 @@
-# CloakLite
+# Agent Browser Studio
 
 > Local-first browser profile management and AI automation console for an independently patched Chromium engine.
 
-CloakLite helps authorized teams manage isolated Chromium profiles, proxies, browser state, AI-assisted workflows, durable automation jobs, audit traces, and S3-compatible sync from a self-hosted Electron desktop app.
+Agent Browser Studio helps authorized teams manage isolated Chromium profiles, proxies, browser state, AI-assisted workflows, durable automation jobs, audit traces, and S3-compatible sync from a self-hosted Electron desktop app.
 
 **Languages:** [English](README.md) | [简体中文](README.zh-CN.md)  
 **User Guide:** [English](docs/USER_GUIDE.en.md) | [简体中文](docs/USER_GUIDE.zh-CN.md)
@@ -11,9 +11,9 @@ CloakLite helps authorized teams manage isolated Chromium profiles, proxies, bro
 
 ## Important Notice
 
-CloakLite is a dual-use local automation tool. Use it only for lawful, authorized workflows such as QA, localization testing, privacy-preserving personal workflows, authorized business operations, and defensive research.
+Agent Browser Studio is a dual-use local automation tool. Use it only for lawful, authorized workflows such as QA, localization testing, privacy-preserving personal workflows, authorized business operations, and defensive research.
 
-Do **not** use CloakLite for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, fake identity networks, or misuse of cookies, credentials, personal data, or confidential information. See [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md).
+Do **not** use Agent Browser Studio for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, fake identity networks, or misuse of cookies, credentials, personal data, or confidential information. See [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md).
 
 ---
 
@@ -79,23 +79,29 @@ npm run install:chromium -- /path/to/Chromium.app
 npm start
 ```
 
-The installer stores versioned builds under `~/.roxy-lite-cloak/`. Profiles use
+The installer stores versioned builds under `~/.agent-browser-studio/`. Profiles use
 the newest installed build by default or can pin any exact retained version for
 rollback. The profile editor also offers a pass-through mode that disables all
 managed identity consumers and exposes the native host fingerprint for stock
 comparison. No external browser wrapper, license key, login, or upstream update
-service is used. `CLOAKLITE_CHROMIUM_BINARY_PATH` is the explicit binary
-override and `CLOAKLITE_CHROMIUM_CACHE_DIR` overrides the managed cache root.
+service is used. `AGENT_BROWSER_CHROMIUM_BINARY_PATH` is the explicit binary
+override and `AGENT_BROWSER_CHROMIUM_CACHE_DIR` overrides the managed cache root.
 When no independent build is installed, profile launch fails closed instead of
-downloading or selecting a fallback. GeoIP uses CloakLite's bounded proxy
+downloading or selecting a fallback. GeoIP uses Agent Browser Studio's bounded proxy
 detector. Reinstalling a rebuilt binary with the same
-Chromium version compares the executable SHA-256, atomically replaces a changed
+Chromium version compares a runtime build hash covering the launcher, Framework,
+and key resource payloads, atomically replaces a changed
 build, and retains the prior bundle in a hidden recovery directory.
 
-Existing `cloakBin`, `cloakProfiles`, `cloak-profiles/`, and `cb_` identifiers
-remain as an on-disk schema compatibility boundary so upgrades do not rename or
-lose existing Profile data. They do not select, download, or invoke an upstream
-CloakBrowser component.
+On the first normal launch, existing data is copied non-destructively from
+`~/Library/Application Support/CloakLite` to
+`~/Library/Application Support/AgentBrowserStudio`, and valid managed Chromium
+versions are copied from `~/.roxy-lite-cloak` to `~/.agent-browser-studio`.
+The old app, data, and cache remain untouched. Legacy `cloakBin`,
+`cloakProfiles`, `cloak-profiles/`, and `cb_` values remain readable only as a
+compatibility boundary; new data uses `chromiumBin`, `browserProfiles`,
+`profiles/`, and `ab_`. No CloakBrowser or RoxyBrowser component is selected,
+downloaded, licensed, or invoked.
 
 The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
 the strict native harness passes all 53 checked surfaces, the modern/legacy
@@ -107,8 +113,10 @@ retained for rollback. Patchset `0041` also verifies authenticated SOCKS5 TCP
 and UDP, proxy-side DNS and real Profile HTTP/3 through a profile-owned MASQUE
 bridge. The app-layer input gate additionally verifies trusted actions through
 two nested cross-origin frames, post-layout re-targeting, occlusion rejection
-and explicit key-hold timing. This is not a claim of complete
-RoxyChrome/CloakBrowser parity. Of 36
+and explicit key-hold timing. Patchset `0042` adds the public `agent-browser-*`
+runtime protocol while keeping the older `roxy-*` switches as transition aliases
+for retained Chromium 149 and early 150 builds. RoxyChrome/CloakBrowser are used
+only as historical comparison targets, not runtime dependencies. Of 36
 engine/network/lifecycle gates, 35 are verified, none remains partial, and 1 is
 missing: signed multi-platform distribution. The controlled HTTP/HTTPS/WSS
 proxy timing/cache/header corpus and the Stock-150-exact direct
@@ -176,7 +184,7 @@ resources/                app icons
 
 ## Security, Privacy, and Compliance
 
-CloakLite handles sensitive local data, including browser profile state, cookies, localStorage, proxy credentials, LLM API keys, sync credentials, audit logs, screenshots, and agent traces.
+Agent Browser Studio handles sensitive local data, including browser profile state, cookies, localStorage, proxy credentials, LLM API keys, sync credentials, audit logs, screenshots, and agent traces.
 
 Security controls include:
 
@@ -265,4 +273,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Trademarks and Non-Affiliation
 
-CloakLite is not affiliated with, endorsed by, sponsored by, or officially connected to Google, Chrome, Chromium, Meta, Facebook, Instagram, TikTok, Amazon, Shopee, OpenAI, Anthropic, AWS, S3-compatible storage providers, or CloakBrowser unless explicitly stated by those parties.
+Agent Browser Studio is not affiliated with, endorsed by, sponsored by, or officially connected to Google, Chrome, Chromium, Meta, Facebook, Instagram, TikTok, Amazon, Shopee, OpenAI, Anthropic, AWS, S3-compatible storage providers, CloakBrowser, or RoxyBrowser unless explicitly stated by those parties.

@@ -19,7 +19,7 @@ describe("J29 — proxy tab UI CRUD", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("adds a proxy through the Add Proxy dialog", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("proxy"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("proxy"));
     await h.page.waitForTimeout(300);
     await h.page.locator('[data-cmd="newProxy"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#dlg-proxy[open]", { timeout: 5000 });
@@ -27,7 +27,7 @@ describe("J29 — proxy tab UI CRUD", () => {
     await h.page.locator("#dlg-proxy-type").selectOption("http");
     await h.page.locator("#dlg-proxy-host").fill("127.0.0.1");
     await h.page.locator("#dlg-proxy-port").fill("8888");
-    await h.page.evaluate(() => (window as any).cloak.saveProxy());
+    await h.page.evaluate(() => (window as any).agentBrowser.saveProxy());
     await h.page.waitForTimeout(400);
     // The test-proxy card is present (other default entries may also exist).
     await h.page.waitForSelector(card(), { timeout: 5000 });
@@ -46,7 +46,7 @@ describe("J29 — proxy tab UI CRUD", () => {
     await h.page.locator(`${card()} [data-action="edit-proxy"]`).click({ timeout: 5000 });
     await h.page.waitForSelector("#dlg-proxy[open]", { timeout: 5000 });
     await h.page.locator("#dlg-proxy-port").fill("9999");
-    await h.page.evaluate(() => (window as any).cloak.saveProxy());
+    await h.page.evaluate(() => (window as any).agentBrowser.saveProxy());
     await h.page.waitForTimeout(400);
     const cfg = JSON.parse(fs.readFileSync(userDataConfigPath(USERDATA), "utf8"));
     expect(cfg.proxies["test-proxy"].port).toBe(9999);

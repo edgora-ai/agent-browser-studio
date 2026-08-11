@@ -1,6 +1,6 @@
 # Third-party notices
 
-The `roxy-masque-bridge` executable links the following modules:
+The `agent-browser-masque-bridge` executable links the following modules:
 
 - `github.com/quic-go/masque-go` v0.4.0
 - `github.com/quic-go/quic-go` v0.60.0
@@ -12,7 +12,7 @@ The `roxy-masque-bridge` executable links the following modules:
 - `golang.org/x/sys` v0.46.0
 - `golang.org/x/text` v0.38.0
 
-`masque-go` provides the RFC 9298 request parser. CloakLite's isolated
+`masque-go` provides the RFC 9298 request parser. Agent Browser Studio's isolated
 SOCKS5 UDP and TCP relays are implemented in this directory.
 
 ## MIT-licensed modules

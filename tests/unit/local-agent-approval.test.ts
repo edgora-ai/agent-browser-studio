@@ -17,9 +17,9 @@ vi.mock("electron", () => {
   };
 });
 
-vi.mock("../../src/main/services/cloak-manager.js", () => ({
-  launchCloak: vi.fn(),
-  listCloakProfiles: () => [],
+vi.mock("../../src/main/services/browser-manager.js", () => ({
+  launchBrowser: vi.fn(),
+  listBrowserProfiles: () => [],
 }));
 vi.mock("../../src/main/services/profile-manager.js", () => ({ listProfiles: () => [] }));
 vi.mock("../../src/main/services/agent-db.js", () => ({

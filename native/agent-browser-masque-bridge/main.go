@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	localProxyHost = "roxy-masque.local"
+	localProxyHost = "agent-browser-masque.local"
 	localListenIP  = "127.0.0.1"
 )
 
@@ -36,7 +36,7 @@ type readyMessage struct {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "roxy-masque-bridge: %v\n", err)
+		fmt.Fprintf(os.Stderr, "agent-browser-masque-bridge: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -71,7 +71,7 @@ func run() error {
 		return fmt.Errorf("construct MASQUE URI template: %w", err)
 	}
 	logLevel := slog.LevelWarn
-	if os.Getenv("ROXY_MASQUE_BRIDGE_DEBUG") == "1" {
+	if os.Getenv("AGENT_BROWSER_MASQUE_BRIDGE_DEBUG") == "1" || os.Getenv("ROXY_MASQUE_BRIDGE_DEBUG") == "1" {
 		logLevel = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))

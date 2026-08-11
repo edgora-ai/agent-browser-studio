@@ -1,4 +1,4 @@
-// End-to-end user journey for CloakLite
+// End-to-end user journey for Agent Browser Studio
 // Language-agnostic: locates by data-tab / data-cmd / element ids, never by visible text.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -35,7 +35,7 @@ async function closeAllDialogs() {
 // All 8 tabs by their data-tab attribute
 const TABS = ["profiles", "proxy", "storage", "sync", "browser", "extensions", "accounts", "agent"];
 
-describe("E2E — CloakLite user journey", () => {
+describe("E2E — Agent Browser Studio user journey", () => {
   beforeAll(async () => {
     app = await electron.launch({
       args: [REPO, `--user-data-dir=${SANDBOX_USER_DATA}`],
@@ -57,7 +57,7 @@ describe("E2E — CloakLite user journey", () => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
     page.on("pageerror", (err) => pageErrors.push(err.message));
-    await page.waitForFunction(() => (window as any).cloak && (window as any).cloak.switchTab, {
+    await page.waitForFunction(() => (window as any).agentBrowser && (window as any).agentBrowser.switchTab, {
       timeout: 20000,
     });
     await page.waitForSelector("#tab-profiles", { timeout: 15000 });
@@ -67,7 +67,7 @@ describe("E2E — CloakLite user journey", () => {
     // AND setting localStorage flag, before the 500ms setTimeout fires.
     await page.evaluate(() => {
       (window as any).wizardDismissed = true;
-      try { localStorage.setItem("cloak-wizard-dismissed", "1"); } catch (_) {}
+      try { localStorage.setItem("agent-browser-studio-wizard-dismissed", "1"); } catch (_) {}
     });
 
     // First-run wizard may auto-open — dismiss it so it doesn't intercept clicks
@@ -84,8 +84,8 @@ describe("E2E — CloakLite user journey", () => {
       }
     } catch (_) { /* wizard may not exist */ }
 
-    // Also close any other dialog that may be auto-opened (dlg-profile, dlg-cloak-seed, etc.)
-    for (const id of ["dlg-profile", "dlg-new-cloak", "dlg-cloak-seed", "dlg-proxy", "dlg-rename", "dlg-cookies", "dlg-extensions", "dlg-skill-market", "dlg-account", "dlg-note", "dlg-bulk-import", "dlg-confirm"]) {
+    // Also close any other dialog that may be auto-opened (dlg-profile, dlg-agent-browser-seed, etc.)
+    for (const id of ["dlg-profile", "dlg-new-agentBrowser", "dlg-agent-browser-seed", "dlg-proxy", "dlg-rename", "dlg-cookies", "dlg-extensions", "dlg-skill-market", "dlg-account", "dlg-note", "dlg-bulk-import", "dlg-confirm"]) {
       try {
         await page.evaluate((dialogId: string) => {
           const d = document.getElementById(dialogId) as HTMLDialogElement | null;
@@ -97,7 +97,7 @@ describe("E2E — CloakLite user journey", () => {
 
     // Set wizard-dismissed flag so wizard doesn't auto-reopen
     await page.evaluate(() => {
-      try { localStorage.setItem("cloak-wizard-dismissed", "1"); } catch (_) {}
+      try { localStorage.setItem("agent-browser-studio-wizard-dismissed", "1"); } catch (_) {}
     });
   }, 90000);
 
@@ -140,7 +140,7 @@ describe("E2E — CloakLite user journey", () => {
       await page.waitForSelector("#dlg-profile", { state: "visible", timeout: 5000 });
       await shot("03-new-profile-dialog");
 
-      const seedInput = page.locator("#new-cloak-seed");
+      const seedInput = page.locator("#new-agent-browser-seed");
       const before = await seedInput.inputValue();
       expect(before).toBe("");
 
@@ -167,7 +167,7 @@ describe("E2E — CloakLite user journey", () => {
         await page.waitForSelector("#dlg-profile", { state: "visible", timeout: 5000 });
       }
       await page.locator("#new-profile-name").fill("E2E Test Profile", { timeout: 5000 });
-      const platform = await page.locator("#new-cloak-platform").inputValue();
+      const platform = await page.locator("#new-agent-browser-platform").inputValue();
       expect(platform).not.toBe("");
       await page.locator('#dlg-profile button[type="submit"]').click({ timeout: 5000 });
       await page.waitForSelector("#dlg-profile", { state: "hidden", timeout: 5000 });
@@ -181,24 +181,24 @@ describe("E2E — CloakLite user journey", () => {
     }
   });
 
-  it("opens edit dialog (cloak-meta-seed), Random works, Cancel closes it", async () => {
+  it("opens edit dialog (agent-browser-meta-seed), Random works, Cancel closes it", async () => {
     try {
       await closeAllDialogs();
       await page.locator(".profile-card [data-action='edit']").first().click({ timeout: 5000 });
-      await page.waitForSelector("#dlg-cloak-seed", { state: "visible", timeout: 5000 });
-      const seedVal = await page.locator("#cloak-meta-seed").inputValue();
+      await page.waitForSelector("#dlg-agent-browser-seed", { state: "visible", timeout: 5000 });
+      const seedVal = await page.locator("#agent-browser-meta-seed").inputValue();
       expect(seedVal, "edit seed should not be empty").not.toBe("");
       await shot("06-edit-dialog");
 
-      await page.locator('#dlg-cloak-seed [data-cmd="random-seed"]').click({ timeout: 5000 });
+      await page.locator('#dlg-agent-browser-seed [data-cmd="random-seed"]').click({ timeout: 5000 });
       await page.waitForTimeout(150);
-      const newSeedVal = await page.locator("#cloak-meta-seed").inputValue();
+      const newSeedVal = await page.locator("#agent-browser-meta-seed").inputValue();
       expect(Number(newSeedVal)).toBeGreaterThanOrEqual(1);
       await shot("07-edit-seed-random");
 
       // Cancel — the close-dialog bug we fixed (was data-cmd-target="undefined")
-      await page.locator('#dlg-cloak-seed [data-cmd="close-dialog"]').click({ timeout: 5000 });
-      await page.waitForSelector("#dlg-cloak-seed", { state: "hidden", timeout: 3000 });
+      await page.locator('#dlg-agent-browser-seed [data-cmd="close-dialog"]').click({ timeout: 5000 });
+      await page.waitForSelector("#dlg-agent-browser-seed", { state: "hidden", timeout: 3000 });
     } catch (e: any) {
       console.log("[diag] FAIL in edit-cancel:", e.message);
       throw e;
@@ -277,7 +277,7 @@ describe("E2E — CloakLite user journey", () => {
     await page.waitForTimeout(500);
 
     // Verify persistence via the IPC API
-    const profiles = await page.evaluate(() => (window as any).cloak.api.cloak.list());
+    const profiles = await page.evaluate(() => (window as any).agentBrowser.api.browser.list());
     const withNote = (profiles || []).filter((p: any) => p.note === noteText);
     expect(withNote.length, "note was not persisted to the profile").toBe(1);
     await shot("12-note-saved");
@@ -305,7 +305,7 @@ describe("E2E — CloakLite user journey", () => {
     await page.locator('.nav-item[data-tab="accounts"]').click();
     await page.waitForTimeout(300);
 
-    const before = await page.evaluate(() => (window as any).cloak.api.agent.accounts.list());
+    const before = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
     const beforeCount = (before || []).length;
 
     await page.locator('[data-cmd="agentAddAccount"]').first().click({ timeout: 5000 });
@@ -318,7 +318,7 @@ describe("E2E — CloakLite user journey", () => {
     await page.waitForSelector("#dlg-account", { state: "hidden", timeout: 5000 });
     await page.waitForTimeout(500);
 
-    const after = await page.evaluate(() => (window as any).cloak.api.agent.accounts.list());
+    const after = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
     expect((after || []).length, "account count did not increase").toBe(beforeCount + 1);
     const added = (after || []).find(
       (a: any) => a.platformUrl === "https://example-shop.test" && a.platformUserName === "e2e_buyer",
@@ -331,7 +331,7 @@ describe("E2E — CloakLite user journey", () => {
 
   it("deletes the platform account created above", async () => {
     await closeAllDialogs();
-    const before = await page.evaluate(() => (window as any).cloak.api.agent.accounts.list());
+    const before = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
     const idx = (before || []).findIndex(
       (a: any) => a.platformUrl === "https://example-shop.test",
     );
@@ -341,13 +341,13 @@ describe("E2E — CloakLite user journey", () => {
     await page.evaluate(async (i: number) => {
       // Bypass the JS confirm() prompt by directly invoking the IPC delete,
       // which is what the confirm handler does after the user clicks OK.
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       await api.agent.accounts.delete(i);
-      await (window as any).cloak.agentLoadAccounts();
+      await (window as any).agentBrowser.agentLoadAccounts();
     }, idx);
     await page.waitForTimeout(500);
 
-    const after = await page.evaluate(() => (window as any).cloak.api.agent.accounts.list());
+    const after = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
     const stillThere = (after || []).some(
       (a: any) => a.platformUrl === "https://example-shop.test",
     );
@@ -378,7 +378,7 @@ describe("E2E — CloakLite user journey", () => {
     await page.waitForSelector("#dlg-skill-editor", { state: "hidden", timeout: 5000 });
     await page.waitForTimeout(500);
 
-    const skills = await page.evaluate(() => (window as any).cloak.api.agent.skills.list());
+    const skills = await page.evaluate(() => (window as any).agentBrowser.api.agent.skills.list());
     const found = (skills || []).some((s: any) => s.id === skillId);
     expect(found, "created skill not listed").toBe(true);
     await shot("16-skill-added");
@@ -388,11 +388,11 @@ describe("E2E — CloakLite user journey", () => {
     await closeAllDialogs();
     const skillId = "e2e-journey-skill";
     await page.evaluate(async (id: string) => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       await api.agent.skills.remove(id);
     }, skillId);
     await page.waitForTimeout(300);
-    const skills = await page.evaluate(() => (window as any).cloak.api.agent.skills.list());
+    const skills = await page.evaluate(() => (window as any).agentBrowser.api.agent.skills.list());
     const stillThere = (skills || []).some((s: any) => s.id === skillId);
     expect(stillThere, "skill was not removed").toBe(false);
     await shot("17-skill-removed");
@@ -413,7 +413,7 @@ describe("E2E — CloakLite user journey", () => {
     await page.locator('#tab-sync [data-cmd="syncSave"]').click({ timeout: 5000 });
     await page.waitForTimeout(800);
 
-    const status = await page.evaluate(() => (window as any).cloak.api.sync.status());
+    const status = await page.evaluate(() => (window as any).agentBrowser.api.sync.status());
     expect(status?.enabled, "sync not enabled after save").toBe(true);
     expect(status?.endpoint, "endpoint not persisted").toBe("https://s3.example.test");
     expect(status?.bucket, "bucket not persisted").toBe("e2e-bucket");

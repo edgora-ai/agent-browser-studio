@@ -1,8 +1,8 @@
 // 自动化引擎 — 定时任务(cron) + 单次定时(once) + 事件触发(event)
-// 复用 launchCloak/stopCloak/agentChat/syncService 执行动作。
+// 复用 launchBrowser/stopBrowser/agentChat/syncService 执行动作。
 import type { AutomationRule } from "../types.js";
 import { getConfig, saveConfig } from "./config-manager.js";
-import { launchCloak, stopCloak, statusCloak } from "./cloak-manager.js";
+import { launchBrowser, stopBrowser, statusBrowser } from "./browser-manager.js";
 import { agentChat, getOrDetectLlmConfig } from "./local-agent.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
@@ -70,13 +70,13 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
     switch (a.type) {
       case "launch-profile": {
         if (!a.profileDirId) throw new Error("missing profileDirId");
-        const r = await launchCloak(a.profileDirId);
+        const r = await launchBrowser(a.profileDirId);
         assertActionNotAborted(context.signal);
         return `launched pid=${r.pid} cdpPort=${r.cdpPort}`;
       }
       case "stop-profile": {
         if (!a.profileDirId) throw new Error("missing profileDirId");
-        const ok = stopCloak(a.profileDirId);
+        const ok = stopBrowser(a.profileDirId);
         assertActionNotAborted(context.signal);
         return ok ? "stopped" : "not running";
       }
@@ -85,8 +85,8 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         const config = getOrDetectLlmConfig();
         if (!config) throw new Error("no LLM config");
         // 启动 profile(若未运行),让 agent 有 CDP target
-        const st = statusCloak(a.profileDirId);
-        if (!st.running) await launchCloak(a.profileDirId);
+        const st = statusBrowser(a.profileDirId);
+        if (!st.running) await launchBrowser(a.profileDirId);
         assertActionNotAborted(context.signal);
         const run = agentRunRecorder.startRun({
           source: { type: "automation", ruleId: rule.id, ruleName: rule.name, jobId: context.jobId },

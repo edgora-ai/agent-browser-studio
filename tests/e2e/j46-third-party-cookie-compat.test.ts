@@ -39,7 +39,7 @@ describe("J46 — third-party-cookie compatibility", () => {
       if (url.pathname === "/frame") {
         response.setHeader("content-type", "text/html; charset=utf-8");
         response.end(`<!doctype html><meta charset="utf-8"><script>
-          document.cookie = "roxy3pc=enabled; Path=/; SameSite=None; Secure";
+          document.cookie = "agent3pc=enabled; Path=/; SameSite=None; Secure";
           fetch("/echo?" + Date.now(), {credentials:"include", cache:"no-store"})
             .then(function(response){ return response.text(); })
             .then(function(requestCookie){ parent.postMessage({documentCookie:document.cookie, requestCookie:requestCookie}, "*"); })
@@ -64,7 +64,7 @@ describe("J46 — third-party-cookie compatibility", () => {
     topUrl = `http://127.0.0.1:${address.port}/top`;
 
     h = await setupTestApp({ userDataDir: USERDATA });
-    const created = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const created = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J46 cookies",
       platform: "windows",
       fingerprintSeed: 46464,
@@ -72,7 +72,7 @@ describe("J46 — third-party-cookie compatibility", () => {
       allowThirdPartyCookies: false,
     }));
     dirId = created.dirId;
-    const prefsPath = path.join(USERDATA, "cloak-profiles", dirId, "Default", "Preferences");
+    const prefsPath = path.join(USERDATA, "profiles", dirId, "Default", "Preferences");
     fs.writeFileSync(prefsPath, JSON.stringify({
       profile: { cookie_controls_mode: 1 },
       tracking_protection: {
@@ -89,7 +89,7 @@ describe("J46 — third-party-cookie compatibility", () => {
 
   async function launchAndProbe(): Promise<CookieProbe> {
     const requestStart = serverRequests.length;
-    const launched = await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.launch(id), dirId) as {
+    const launched = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.launch(id), dirId) as {
       success: boolean; pid: number; cdpPort: number; error?: string;
     };
     expect(launched.success, launched.error || "J46 launch failed").toBe(true);
@@ -115,11 +115,11 @@ describe("J46 — third-party-cookie compatibility", () => {
       }
     } finally {
       client.close();
-      await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+      await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
       await waitForPortClosed(launched.cdpPort, 10_000);
       const stoppedAt = Date.now();
       while (Date.now() - stoppedAt < 10_000) {
-        const status = await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.status(id), dirId);
+        const status = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.status(id), dirId);
         if (!status.running) break;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
@@ -130,9 +130,9 @@ describe("J46 — third-party-cookie compatibility", () => {
 
   it("blocks the iframe cookie under the profile's original setting", async () => {
     const result = await launchAndProbe();
-    expect(result.documentCookie).not.toContain("roxy3pc=enabled");
-    expect(result.requestCookie).not.toContain("roxy3pc=enabled");
-    const prefs = JSON.parse(fs.readFileSync(path.join(USERDATA, "cloak-profiles", dirId, "Default", "Preferences"), "utf-8"));
+    expect(result.documentCookie).not.toContain("agent3pc=enabled");
+    expect(result.requestCookie).not.toContain("agent3pc=enabled");
+    const prefs = JSON.parse(fs.readFileSync(path.join(USERDATA, "profiles", dirId, "Default", "Preferences"), "utf-8"));
     originalPreferences = {
       cookieControlsMode: prefs.profile.cookie_controls_mode,
       trackingProtection3pcdEnabled: prefs.tracking_protection.tracking_protection_3pcd_enabled,
@@ -141,26 +141,27 @@ describe("J46 — third-party-cookie compatibility", () => {
   }, 45_000);
 
   it("allows the real iframe cookie only after explicit compatibility opt-in", async () => {
-    const saved = await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.setMeta(id, { allowThirdPartyCookies: true }), dirId);
+    const saved = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.setMeta(id, { allowThirdPartyCookies: true }), dirId);
     expect(saved.success).toBe(true);
     const result = await launchAndProbe();
-    expect(result.documentCookie).toContain("roxy3pc=enabled");
-    expect(result.requestCookie).toContain("roxy3pc=enabled");
+    expect(result.documentCookie).toContain("agent3pc=enabled");
+    expect(result.requestCookie).toContain("agent3pc=enabled");
   }, 45_000);
 
   it("restores the exact blocking preference when compatibility is disabled", async () => {
-    const saved = await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.setMeta(id, { allowThirdPartyCookies: false }), dirId);
+    const saved = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.setMeta(id, { allowThirdPartyCookies: false }), dirId);
     expect(saved.success).toBe(true);
     const result = await launchAndProbe();
-    expect(result.documentCookie).not.toContain("roxy3pc=enabled");
-    expect(result.requestCookie).not.toContain("roxy3pc=enabled");
-    const prefs = JSON.parse(fs.readFileSync(path.join(USERDATA, "cloak-profiles", dirId, "Default", "Preferences"), "utf-8"));
+    expect(result.documentCookie).not.toContain("agent3pc=enabled");
+    expect(result.requestCookie).not.toContain("agent3pc=enabled");
+    const prefs = JSON.parse(fs.readFileSync(path.join(USERDATA, "profiles", dirId, "Default", "Preferences"), "utf-8"));
     expect(originalPreferences).not.toBeNull();
     expect({
       cookieControlsMode: prefs.profile.cookie_controls_mode,
       trackingProtection3pcdEnabled: prefs.tracking_protection.tracking_protection_3pcd_enabled,
       blockAll3pcToggleEnabled: prefs.tracking_protection.block_all_3pc_toggle_enabled,
     }).toEqual(originalPreferences);
-    expect(fs.existsSync(path.join(USERDATA, "cloak-profiles", dirId, ".roxy-third-party-cookie-backup.json"))).toBe(false);
+    expect(fs.existsSync(path.join(USERDATA, "profiles", dirId, ".agent-browser-third-party-cookie-backup.json"))).toBe(false);
+    expect(fs.existsSync(path.join(USERDATA, "profiles", dirId, ".roxy-third-party-cookie-backup.json"))).toBe(false);
   }, 45_000);
 });

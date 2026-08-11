@@ -1,8 +1,8 @@
-# CloakLite 使用手册
+# Agent Browser Studio（Agent 浏览器工作台）使用手册
 
-CloakLite 是一个本地桌面控制台，用于管理独立补丁 Chromium 引擎上的隔离浏览器配置文件、代理、AI 浏览器自动化、自动化任务、审计轨迹和 S3 兼容同步。
+Agent Browser Studio（Agent 浏览器工作台）是一个本地桌面控制台，用于管理独立补丁 Chromium 引擎上的隔离浏览器配置文件、代理、AI 浏览器自动化、自动化任务、审计轨迹和 S3 兼容同步。
 
-> 请仅将 CloakLite 用于合法且已授权的工作流。禁止用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。
+> 请仅将 Agent Browser Studio 用于合法且已授权的工作流。禁止用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。
 
 ## 1. 安装
 
@@ -10,7 +10,7 @@ CloakLite 是一个本地桌面控制台，用于管理独立补丁 Chromium 引
 
 - Apple Silicon macOS
 - Node.js 22.16 或更高版本
-- 使用 `npm run install:chromium -- /path/to/Chromium.app` 安装独立构建的 Chromium 补丁集，或通过 `CLOAKLITE_CHROMIUM_BINARY_PATH` 显式选择
+- 使用 `npm run install:chromium -- /path/to/Chromium.app` 安装独立构建的 Chromium 补丁集，或通过 `AGENT_BROWSER_CHROMIUM_BINARY_PATH` 显式选择
 
 ### 从源码启动
 
@@ -38,6 +38,10 @@ npm test
 4. **配置 AI Agent（可选）** — 跳转到 Agent 配置页接入 LLM provider。
 
 "稍后" 仅本次会话隐藏向导；"不再显示" 持久化关闭。你也可以随时从各标签页手动执行这些步骤。
+
+从 CloakLite 升级时，首次正常启动会把旧用户数据及有效的托管 Chromium 版本
+复制到 Agent Browser Studio 的新目录，核验复制后的 Profile 文件树，并保留旧应用、
+旧数据和旧缓存不动。新 Profile 使用 `ab_` 标识，迁移后的 `cb_` Profile 仍可继续使用。
 
 ## 3. Profile 管理
 
@@ -82,7 +86,7 @@ Profile 保存浏览器状态和指纹配置。
 
 ## 5. Cookie、存储和扩展工具
 
-CloakLite 可以通过 CDP 或在 profile 停止时读取本地文件来管理浏览器状态。
+Agent Browser Studio 可以通过 CDP 或在 profile 停止时读取本地文件来管理浏览器状态。
 
 敏感数据包括：
 
@@ -152,7 +156,7 @@ Automation rules 支持按计划或手动触发动作。
 
 ## 8. 同步
 
-CloakLite 支持通过 S3 兼容存储同步部分配置和 profile 数据。
+Agent Browser Studio 支持通过 S3 兼容存储同步部分配置和 profile 数据。
 
 Push/Pull 前建议：
 
@@ -185,7 +189,7 @@ Push/Pull 前建议：
 
 ## 10. 运营检查清单
 
-在业务工作流中使用 CloakLite 前：
+在业务工作流中使用 Agent Browser Studio 前：
 
 - 确认你对所有账号、网站和数据都有授权。
 - 审查平台条款和适用法律。

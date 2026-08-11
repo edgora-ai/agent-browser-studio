@@ -18,14 +18,14 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   async function createRule(partial: any): Promise<string> {
-    const r = await h.page.evaluate((rule: any) => (window as any).cloak.api.automation.create(rule), partial);
+    const r = await h.page.evaluate((rule: any) => (window as any).agentBrowser.api.automation.create(rule), partial);
     return r.rule.id;
   }
   async function testRun(id: string) {
-    return h.page.evaluate((rid: string) => (window as any).cloak.api.automation.testRun(rid), id);
+    return h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.testRun(rid), id);
   }
   async function getRule(id: string) {
-    const list = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    const list = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     return list.find((r: any) => r.id === id);
   }
 
@@ -85,7 +85,7 @@ describe("J33 — automation hardening (timeout / failure / cooldown)", () => {
     let rule = await getRule(id);
     expect(rule.failureCount ?? 0).toBe(0);
     // Flip the action to succeed.
-    await h.page.evaluate(({ rid, cron }) => (window as any).cloak.api.automation.update({
+    await h.page.evaluate(({ rid, cron }) => (window as any).agentBrowser.api.automation.update({
       id: rid, name: "j33-recover", enabled: true,
       trigger: { type: "cron", cron },
       action: { type: "custom-js", jsCode: "return 'ok'" },

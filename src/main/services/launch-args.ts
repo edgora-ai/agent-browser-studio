@@ -18,7 +18,7 @@ export interface ExtensionInfo {
 
 const EXTENSION_ID_RE = /^[a-p]{32}$/;
 
-/** Get the Extensions directory for a Cloak profile */
+/** Get the Extensions directory for a browser profile. */
 export function getProfileExtensionsDir(dirId: string): string {
   const profileDir = resolveProfileDir(dirId);
   return path.join(profileDir, "Default", "Extensions");
@@ -98,7 +98,7 @@ export function listExtensions(dirId: string): ExtensionInfo[] {
 
   const result: ExtensionInfo[] = [];
   const cfg = getConfig() as any;
-  const extensionState = cfg.cloakProfiles?.[dirId]?.extensions || {};
+  const extensionState = cfg.browserProfiles?.[dirId]?.extensions || {};
   try {
     for (const entry of fs.readdirSync(extDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
@@ -166,7 +166,7 @@ export function deleteExtension(dirId: string, extId: string): boolean {
     if (fs.existsSync(extDir)) {
       fs.rmSync(extDir, { recursive: true, force: true });
       const cfg = getConfig() as any;
-      const meta = cfg.cloakProfiles?.[dirId];
+      const meta = cfg.browserProfiles?.[dirId];
       if (meta?.extensions) {
         delete meta.extensions[extId];
         saveConfig(cfg);
@@ -345,7 +345,7 @@ function resolveProfileDir(dirId: string): string {
   const baseDir = path.resolve(getProfilesDir());
   const profileDir = path.resolve(baseDir, dirId);
   if (!isPathInside(profileDir, baseDir)) {
-    throw new Error(`Profile path escapes cloak-profiles: ${JSON.stringify(dirId)}`);
+    throw new Error(`Profile path escapes profiles directory: ${JSON.stringify(dirId)}`);
   }
   return profileDir;
 }

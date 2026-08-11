@@ -505,6 +505,26 @@ async function movePointerHumanized(
   client.pointerY = target.y;
 }
 
+async function movePointerInDomScopeHumanized(
+  client: CdpClient,
+  scope: CdpDomScope,
+  target: { x: number; y: number },
+  action: number,
+): Promise<void> {
+  if (!scope.sessionId) return;
+  const start = { x: Math.max(0, target.x - 72), y: Math.max(0, target.y + 36) };
+  const path = buildHumanizedPointerPath(client.interactionSeed, action, start, target);
+  for (const point of path) {
+    await cdpSendScoped(client, scope, "Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+      button: "none",
+    });
+    await sleep(point.delayMs);
+  }
+}
+
 interface CdpTargetInfo {
   targetId: string;
   type: string;
@@ -548,7 +568,7 @@ interface PreparedInteractionPoint {
   state: DomElementState;
 }
 
-const ACTION_WORLD_NAME = "roxy-agent-action-v1";
+const ACTION_WORLD_NAME = "agent-browser-action-v1";
 
 function cdpSendScoped(client: CdpClient, scope: CdpDomScope, method: string, params?: any): Promise<any> {
   return cdpSendRaw(client, method, params, scope.sessionId || undefined);
@@ -982,6 +1002,7 @@ async function moveToActionableDomElement(
 ): Promise<PreparedInteractionPoint> {
   let prepared = await prepareInteractionPoint(client, scopes, element, selector, action);
   await movePointerHumanized(client, prepared.root, action);
+  await movePointerInDomScopeHumanized(client, element.scope, prepared.local, action);
 
   // Pointer travel takes multiple compositor frames. Re-read and re-scroll so
   // a late layout shift cannot turn a successful call into a silent miss.
@@ -990,6 +1011,7 @@ async function moveToActionableDomElement(
     const refreshed = await prepareInteractionPoint(client, scopes, element, selector, action);
     if (Math.hypot(refreshed.root.x - prepared.root.x, refreshed.root.y - prepared.root.y) > 0.75) {
       await movePointerHumanized(client, refreshed.root, action);
+      await movePointerInDomScopeHumanized(client, element.scope, refreshed.local, action);
     }
     prepared = refreshed;
     const hit = await checkDomElementHit(client, element, prepared.local);
@@ -1008,12 +1030,14 @@ export async function cdpClick(client: CdpClient, selector: string): Promise<any
     if (!element) throw new Error(`Element not found: ${selector}`);
     const action = beginInteraction(client);
     const target = await moveToActionableDomElement(client, scopes, element, selector, action);
-    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
-      type: "mousePressed", x: target.root.x, y: target.root.y, button: "left", clickCount: 1,
+    const dispatchScope = element.scope.sessionId ? element.scope : scopes.root;
+    const dispatchPoint = element.scope.sessionId ? target.local : target.root;
+    await cdpSendScoped(client, dispatchScope, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: dispatchPoint.x, y: dispatchPoint.y, button: "left", clickCount: 1,
     });
     await sleep(interactionDelay(client.interactionSeed, action, 90, 42, 118));
-    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
-      type: "mouseReleased", x: target.root.x, y: target.root.y, button: "left", clickCount: 1,
+    await cdpSendScoped(client, dispatchScope, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: dispatchPoint.x, y: dispatchPoint.y, button: "left", clickCount: 1,
     });
     return {
       success: true,
@@ -1891,7 +1915,7 @@ export const AGENT_TOOLS = [
 // 5. Tool Execution Engine
 // ═══════════════════════════════════════════════════════════════
 
-import { launchCloak, listCloakProfiles } from "./cloak-manager.js";
+import { launchBrowser, listBrowserProfiles } from "./browser-manager.js";
 import { listProfiles } from "./profile-manager.js";
 import { getProfileMeta } from "./config-manager.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
@@ -1910,7 +1934,7 @@ function assertManagedCdpPort(port: number): void {
   // different port, or state drifted), fall back to: is something actually
   // listening on this loopback port? That's permissive enough to recover while
   // still refusing obviously-wrong ports (0 / out of range).
-  const managed = listCloakProfiles().some((profile) => profile.running && profile.cdpPort === port);
+  const managed = listBrowserProfiles().some((profile) => profile.running && profile.cdpPort === port);
   if (managed) return;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`CDP port ${port} is not a valid debug port`);
@@ -1928,7 +1952,7 @@ async function getOrConnectCdp(port: number): Promise<CdpClient> {
     try { await cdpEvaluate(client, "1"); return client; } // Test connection
     catch { cdpClients.delete(port); /* reconnect */ }
   }
-  const managedProfile = listCloakProfiles().find((profile) => profile.running && profile.cdpPort === port);
+  const managedProfile = listBrowserProfiles().find((profile) => profile.running && profile.cdpPort === port);
   client = await cdpConnect(port, managedProfile?.fingerprintSeed || port);
   cdpClients.set(port, client);
   return client;
@@ -2430,7 +2454,7 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
       };
     }
     case "launch_profile": {
-      const result = await launchCloak(normalizeToolString(args.dirId, "profile ID", 100));
+      const result = await launchBrowser(normalizeToolString(args.dirId, "profile ID", 100));
       return { launched: true, pid: result.pid, cdpPort: result.cdpPort };
     }
     case "list_accounts": {
@@ -2954,8 +2978,8 @@ async function llmClaude(config: LlmConfig, messages: LlmMessage[], tools?: any[
 // ═══════════════════════════════════════════════════════════════
 
 /** System prompt that gives the agent awareness of its capabilities */
-const SYSTEM_PROMPT = `You are CloakLite Agent — a local browser automation assistant.
-You control CloakLite managed Chromium profiles via CDP (Chrome DevTools Protocol).
+const SYSTEM_PROMPT = `You are Agent Browser Studio Agent — a local browser automation assistant.
+You control Agent Browser Studio managed Chromium profiles via CDP (Chrome DevTools Protocol).
 
 Available tools:
 - browser_navigate(port, url) — Navigate to a URL
@@ -3079,7 +3103,7 @@ export async function agentChat(
   const systemMsg: LlmMessage = {
     role: "system",
     content: buildAgentSystemPrompt(
-      listCloakProfiles()
+      listBrowserProfiles()
         .filter((p) => p.running && p.cdpPort)
         .map((p) => ({ name: p.name, dirId: p.dirId, cdpPort: p.cdpPort })),
     ),

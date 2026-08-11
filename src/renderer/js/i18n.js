@@ -1,11 +1,12 @@
-// ── CloakLite i18n runtime ──
+// ── Agent Browser Studio i18n runtime ──
 // Lightweight Chinese/English bilingual support.
 // Translations are key-based; HTML uses data-i18n / data-i18n-placeholder / data-i18n-title attributes.
 
 (function () {
   "use strict";
 
-  var STORAGE_KEY = "cloak-lite-language";
+  var STORAGE_KEY = "agent-browser-studio-language";
+  var LEGACY_STORAGE_KEY = "cloak-lite-language";
   var FALLBACK = "en-US";
 
   var dict = {
@@ -556,7 +557,7 @@
       "profile.new.proxy.none": "（无代理）",
       "profile.new.random": "🎲 随机",
 
-      // ── Profile edit (cloak-meta) ──
+      // ── Profile edit (agent-browser-meta) ──
       "profile.edit.title": "🥷 托管 Chromium 配置——指纹与身份",
       "profile.edit.help": "<strong>--fingerprint=&lt;seed&gt;</strong> 确定性生成 GPU、屏幕、硬件、Canvas、音频、字体。<br>同种子 + 平台 + 时区 + 区域 = 100% 相同指纹。",
       "profile.edit.field.name": "配置名称 *",
@@ -565,7 +566,7 @@
 
       // ── Bulk import ──
       "bulk.title": "📥 批量导入配置",
-      "bulk.description": "每行一个 Cloak 配置。格式：<code>名称, 平台, 区域, 时区, 种子, webrtcIp</code>",
+      "bulk.description": "每行一个 Browser 配置。格式：<code>名称, 平台, 区域, 时区, 种子, webrtcIp</code>",
       "bulk.field.proxy": "代理",
       "bulk.proxy.default": "（默认）",
       "bulk.submit": "导入",
@@ -590,7 +591,7 @@
       "toast.fp.nav-failed": "导航到风险检测失败",
       "toast.fp.launching": "正在启动配置并打开风险检测…",
       "toast.fp.opening": "正在打开风险检测…",
-      "wizard.title": "👋 欢迎使用 CloakLite",
+      "wizard.title": "👋 欢迎使用 Agent 浏览器工作台",
       "wizard.subtitle": "三步快速开始指纹浏览器之旅。",
       "wizard.step1.title": "验证托管 Chromium",
       "wizard.step1.desc": "创建配置前，请先构建并安装仓库自带补丁集的 Chromium。",
@@ -1214,7 +1215,7 @@
       "profile.edit.advanced.help": "Leave empty for the seed-owned joint persona. Explicit values must match one supported persona so a one-field override cannot leak cross-field inconsistency.",
 
       "bulk.title": "📥 Bulk Import Profiles",
-      "bulk.description": "One Cloak profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code>",
+      "bulk.description": "One Browser profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code>",
       "bulk.field.proxy": "Proxy",
       "bulk.proxy.default": "(default)",
       "bulk.submit": "Import",
@@ -1236,7 +1237,7 @@
       "toast.fp.nav-failed": "Failed to navigate to risk check",
       "toast.fp.launching": "Launching profile and opening risk check…",
       "toast.fp.opening": "Opening risk check…",
-      "wizard.title": "👋 Welcome to CloakLite",
+      "wizard.title": "👋 Welcome to Agent Browser Studio",
       "wizard.subtitle": "Let's get your fingerprint browser ready in 3 quick steps.",
       "wizard.step1.title": "Verify Managed Chromium",
       "wizard.step1.desc": "Build and install the repository Chromium patchset before creating profiles.",
@@ -1313,7 +1314,10 @@
 
   function detectLanguage() {
     var saved;
-    try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) { saved = null; }
+    try {
+      saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (saved && !localStorage.getItem(STORAGE_KEY)) localStorage.setItem(STORAGE_KEY, saved);
+    } catch (e) { saved = null; }
     if (saved && dict[saved]) return saved;
     var nav = (typeof navigator !== "undefined" && navigator.language) ? navigator.language : "en-US";
     if (/^zh/i.test(nav)) return "zh-CN";
@@ -1337,11 +1341,11 @@
     try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) { /* storage disabled */ }
     applyDom();
     // Push to main process so tray/menu strings stay in sync
-    var api = window.cloakLite;
+    var api = window.agentBrowserAPI;
     if (api && api.app && api.app.setLanguage) {
       api.app.setLanguage(lang).catch(function () { /* main may not be ready */ });
     }
-    document.dispatchEvent(new CustomEvent("cloak-language-change", { detail: { language: lang } }));
+    document.dispatchEvent(new CustomEvent("agent-browser-language-change", { detail: { language: lang } }));
   }
 
   function nextLanguage() {
@@ -1389,7 +1393,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     applyDom();
     // Push initial language to main process so tray menu localizes immediately
-    var api = window.cloakLite;
+    var api = window.agentBrowserAPI;
     if (api && api.app && api.app.setLanguage) {
       api.app.setLanguage(current).catch(function () { /* ok */ });
     }

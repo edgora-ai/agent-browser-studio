@@ -21,7 +21,7 @@ export const BUILTIN_SKILLS: AgentSkill[] = [
     name: "browser-automation",
     description: "Full browser control — navigate, click, type, scroll, screenshot, evaluate JS",
     tools: ["browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_screenshot", "browser_scroll", "browser_press_key", "browser_hover", "browser_select", "browser_wait_for", "browser_get_text", "browser_get_url", "browser_get_title", "browser_get_cookies"],
-    prompt: `You are a browser automation agent. Control CloakLite managed Chromium using CDP tools.
+    prompt: `You are a browser automation agent. Control Agent Browser Studio managed Chromium using CDP tools.
 Always: navigate → wait → snapshot → act. Use CSS selectors from snapshots.`,
   },
   {
@@ -40,7 +40,7 @@ Always: navigate → wait → snapshot → act. Use CSS selectors from snapshots
     name: "profile-manager",
     description: "Manage browser profiles — list, launch, check status",
     tools: ["list_profiles", "launch_profile"],
-    prompt: `You help users manage their CloakLite Chromium profiles. List profiles, suggest which to use, help launch them.`,
+    prompt: `You help users manage their Agent Browser Studio Chromium profiles. List profiles, suggest which to use, help launch them.`,
   },
 ];
 

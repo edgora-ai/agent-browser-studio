@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,23 +43,27 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   function maybeShowWizard() {
     // Don't show if previously dismissed
     if (window.wizardDismissed) return;
     try {
-      if (localStorage.getItem('cloak-wizard-dismissed')) return;
+      var dismissed = localStorage.getItem('agent-browser-studio-wizard-dismissed') || localStorage.getItem('cloak-wizard-dismissed');
+      if (dismissed) {
+        localStorage.setItem('agent-browser-studio-wizard-dismissed', dismissed);
+        return;
+      }
     } catch (e) { /* localStorage disabled — show wizard */ }
 
     // Only show if no managed Chromium is installed or no profiles exist.
     var installed = false;
     try {
-      installed = api.cloak.binary().then(function(info) {
+      installed = api.browser.binary().then(function(info) {
         if (info && info.installed) {
           // Check if there are already profiles
-          return api.cloak.list().then(function(profiles) {
+          return api.browser.list().then(function(profiles) {
             if (profiles && profiles.length > 0) return; // already has profiles, skip
             showWizard();
           });
@@ -95,10 +99,10 @@
   }
 
   // Wizard step 1: verify the independently installed browser engine.
-  cloak.wizardVerifyBinary = function() {
+  agentBrowser.wizardVerifyBinary = function() {
     var statusEl = document.getElementById('wizard-step1-status');
     statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Verifying managed Chromium…') : 'Verifying managed Chromium…') + '</span>';
-    api.cloak.verifyBinary().then(function(r) {
+    api.browser.verifyBinary().then(function(r) {
       if (r && r.success) {
         statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
         advanceWizardStep(1);
@@ -111,7 +115,7 @@
   };
 
   // Wizard step 2: create first profile
-  cloak.wizardCreateProfile = function() {
+  agentBrowser.wizardCreateProfile = function() {
     var nameInput = document.getElementById('wizard-profile-name');
     var name = nameInput.value.trim();
     if (!name) name = (window.i18n ? window.i18n.t('wizard.default-name', 'My First Profile') : 'My First Profile');
@@ -124,7 +128,7 @@
       return el;
     })();
     statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step2.in-progress', 'Creating profile…') : 'Creating profile…') + '</span>';
-    api.cloak.create({ name: name }).then(function(r) {
+    api.browser.create({ name: name }).then(function(r) {
       if (r && r.dirId) {
         state.wizardDirId = r.dirId;
         state.wizardProfileName = name;
@@ -139,12 +143,12 @@
   };
 
   // Wizard step 3: launch + risk check
-  cloak.wizardLaunchAndCheck = function() {
+  agentBrowser.wizardLaunchAndCheck = function() {
     var dirId = state.wizardDirId;
     if (!dirId) { advanceWizardStep(3); return; }
     var btn = document.querySelector('.wizard-step[data-step="3"] button');
     if (btn) btn.disabled = true;
-    api.cloak.openRiskCheck(dirId).then(function(r) {
+    api.browser.openRiskCheck(dirId).then(function(r) {
       var statusEl = document.getElementById('wizard-step3-status') || (function() {
         var el = document.createElement('div');
         el.id = 'wizard-step3-status';
@@ -189,7 +193,7 @@
     }
   }
 
-  cloak.wizardSkip = function() {
+  agentBrowser.wizardSkip = function() {
     document.getElementById('dlg-wizard').close();
     // "Skip for now" only hides the wizard for the current session — it does
     // NOT persist dismissal, so the wizard can reappear on the next app launch
@@ -197,9 +201,9 @@
     window.wizardDismissed = true;
   };
 
-  cloak.wizardNeverShow = function() {
+  agentBrowser.wizardNeverShow = function() {
     document.getElementById('dlg-wizard').close();
-    try { localStorage.setItem('cloak-wizard-dismissed', '1'); } catch (e) { /* ok */ }
+    try { localStorage.setItem('agent-browser-studio-wizard-dismissed', '1'); } catch (e) { /* ok */ }
     window.wizardDismissed = true;
   };
 
@@ -212,15 +216,15 @@
 
   // Step 4 (optional): jump to the Agent config view so the user can wire up
   // an LLM provider after their first profile is ready.
-  cloak.wizardConfigureAgent = function() {
+  agentBrowser.wizardConfigureAgent = function() {
     document.getElementById('dlg-wizard').close();
     window.wizardDismissed = true;
-    try { cloak.switchTab('agent'); } catch (e) { /* ignore */ }
-    try { cloak.switchAgentSub('config'); } catch (e) { /* ignore */ }
+    try { agentBrowser.switchTab('agent'); } catch (e) { /* ignore */ }
+    try { agentBrowser.switchAgentSub('config'); } catch (e) { /* ignore */ }
   };
 
-  cloak.maybeShowWizard = maybeShowWizard;
-  cloak.showWizard = showWizard;
-  cloak.advanceWizardStep = advanceWizardStep;
+  agentBrowser.maybeShowWizard = maybeShowWizard;
+  agentBrowser.showWizard = showWizard;
+  agentBrowser.advanceWizardStep = advanceWizardStep;
 
 })();

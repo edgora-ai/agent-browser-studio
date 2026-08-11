@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type { CloakFingerprintMeta, CloakPlatform, GeolocationMode, WebRtcMode } from "../types.js";
+import type { BrowserFingerprintMeta, BrowserPlatform, GeolocationMode, WebRtcMode } from "../types.js";
 
-export const ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
-export const ROXY_FINGERPRINT_SCHEMA_VERSION = 1;
+export const AGENT_BROWSER_FINGERPRINT_SWITCH = "--agent-browser-fingerprint-config=";
+export const LEGACY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
+export const AGENT_BROWSER_FINGERPRINT_SCHEMA_VERSION = 1;
 
 const PORTABLE_WINDOWS_FONT_POOL = [
   "Arial", "Arial Unicode MS", "Comic Sans MS", "Courier New", "Georgia",
@@ -142,7 +143,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
 ];
 
-export interface RoxyFingerprintConfig {
+export interface BrowserFingerprintConfig {
   schemaVersion: 1;
   seed: number;
   platform: "Win32" | "MacIntel";
@@ -220,10 +221,10 @@ export interface RoxyFingerprintConfig {
  * Build the versioned, public configuration consumed by our Chromium fork.
  * This deliberately does not reuse RoxyChrome's encrypted lumi.conf format.
  */
-export function buildRoxyFingerprintConfig(
-  meta: CloakFingerprintMeta,
+export function buildBrowserFingerprintConfig(
+  meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
-): RoxyFingerprintConfig {
+): BrowserFingerprintConfig {
   const seed = normalizeSeed(meta.fingerprintSeed);
   const platform = normalizePlatform(meta.platform);
   const version = normalizeChromiumVersion(chromiumVersion);
@@ -252,7 +253,7 @@ export function buildRoxyFingerprintConfig(
   };
 
   return {
-    schemaVersion: ROXY_FINGERPRINT_SCHEMA_VERSION,
+    schemaVersion: AGENT_BROWSER_FINGERPRINT_SCHEMA_VERSION,
     seed,
     platform,
     platformVersion: platform === "MacIntel" ? "15.7.0" : "10.0.0",
@@ -307,19 +308,23 @@ export function buildRoxyFingerprintConfig(
   };
 }
 
-export function encodeRoxyFingerprintConfig(config: RoxyFingerprintConfig): string {
+export function encodeBrowserFingerprintConfig(config: BrowserFingerprintConfig): string {
   return Buffer.from(JSON.stringify(config), "utf8").toString("base64url");
 }
 
-export function buildRoxyFingerprintArg(
-  meta: CloakFingerprintMeta,
+export function buildBrowserFingerprintArg(
+  meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
+  switchPrefix = AGENT_BROWSER_FINGERPRINT_SWITCH,
 ): string {
-  return ROXY_FINGERPRINT_SWITCH + encodeRoxyFingerprintConfig(buildRoxyFingerprintConfig(meta, chromiumVersion));
+  if (switchPrefix !== AGENT_BROWSER_FINGERPRINT_SWITCH && switchPrefix !== LEGACY_FINGERPRINT_SWITCH) {
+    throw new Error(`Unsupported fingerprint switch: ${switchPrefix}`);
+  }
+  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion));
 }
 
 /** Validate that advanced fields can resolve to one complete hardware tuple. */
-export function validateRoxyHardwareProfile(meta: CloakFingerprintMeta): void {
+export function validateBrowserHardwareProfile(meta: BrowserFingerprintMeta): void {
   selectHardwarePersona(normalizeSeed(meta.fingerprintSeed), normalizePlatform(meta.platform), meta);
 }
 
@@ -327,7 +332,7 @@ function normalizeSeed(value: unknown): number {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : 12345;
 }
 
-function normalizePlatform(value: CloakPlatform | undefined): "Win32" | "MacIntel" {
+function normalizePlatform(value: BrowserPlatform | undefined): "Win32" | "MacIntel" {
   return value === "macos" ? "MacIntel" : "Win32";
 }
 
@@ -352,7 +357,7 @@ function normalizeInteger(value: unknown, min: number, max: number, fallback: nu
 function deriveWebGpuIdentity(
   webglVendor: string,
   webglRenderer: string,
-): RoxyFingerprintConfig["webgpu"] {
+): BrowserFingerprintConfig["webgpu"] {
   const identity = `${webglVendor} ${webglRenderer}`;
   let vendor = "Google";
   for (const vendor of ["NVIDIA", "AMD", "Apple", "Intel", "Qualcomm", "ARM", "Imagination", "Microsoft", "Google"]) {
@@ -439,7 +444,7 @@ function selectSpeechVoices(
   return names.map((name) => ({ name, lang: locale, localService: true }));
 }
 
-function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig["geolocation"] {
+function normalizeGeolocation(meta: BrowserFingerprintMeta): BrowserFingerprintConfig["geolocation"] {
   const mode = meta.geolocationMode === "disable" || meta.geolocationMode === "custom"
     ? meta.geolocationMode
     : "real";
@@ -457,7 +462,7 @@ function normalizeGeolocation(meta: CloakFingerprintMeta): RoxyFingerprintConfig
 function normalizeWebRtc(
   requestedMode: WebRtcMode | undefined,
   publicIp: string | null | undefined,
-): RoxyFingerprintConfig["webrtc"] {
+): BrowserFingerprintConfig["webrtc"] {
   const mode = requestedMode || (publicIp ? "altered" : "auto");
   if (mode === "disable") return { mode: "disable", publicIp: null };
   if (mode === "real") return { mode: "real", publicIp: null };
@@ -478,7 +483,7 @@ function normalizeFiniteNumber(value: unknown, min: number, max: number, label: 
 function selectHardwarePersona(
   seed: number,
   platform: "Win32" | "MacIntel",
-  meta: CloakFingerprintMeta,
+  meta: BrowserFingerprintMeta,
 ): { persona: HardwarePersona; source: "seeded" | "validated-override" } {
   const personas = platform === "MacIntel" ? MAC_HARDWARE_PERSONAS : WINDOWS_HARDWARE_PERSONAS;
   const numericConstraints = [

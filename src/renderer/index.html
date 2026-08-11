@@ -4,14 +4,14 @@
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
- <title>CloakLite</title>
+ <title>Agent Browser Studio</title>
  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <nav id="sidebar">
  <div class="sidebar-header">
- <h1>CloakLite</h1>
+ <h1>Agent Browser Studio</h1>
  <span class="version">v1.0.0</span>
  </div>
  <ul class="nav-menu">
@@ -47,7 +47,7 @@
  <div class="tab-header">
  <h2 data-i18n="profiles.title">Browser Profiles</h2>
  <div class="header-btns">
- <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="newProfile" data-i18n="profiles.new">🥷 + New Cloak Profile</button>
+ <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="newProfile" data-i18n="profiles.new">🥷 + New Browser Profile</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkImport" data-i18n="profiles.bulk-import">📥 Bulk Import</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkStart" data-i18n="profiles.start-all">▶ Start All</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkStop" data-i18n="profiles.stop-all">⏹ Stop All</button>
@@ -121,7 +121,7 @@
  <div class="sync-form">
  <div class="form-row"><label><input type="checkbox" id="sync-enabled"> Enable</label></div>
  <div class="form-row"><label data-i18n="sync.field.endpoint">Endpoint</label><input id="sync-endpoint-input" placeholder="https://oss.example.com"></div>
- <div class="form-row"><label data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="cloak"></div>
+ <div class="form-row"><label data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="agent-browser"></div>
  <div class="form-row"><label data-i18n="sync.field.access">Access Key</label><input id="sync-ak-input"></div>
  <div class="form-row"><label data-i18n="sync.field.secret">Secret Key</label><input id="sync-sk-input" type="password"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
@@ -137,13 +137,13 @@
  </div>
  <div class="card">
  <h3 data-i18n="browser.install-upgrade">Independent Browser Engine</h3>
- <div id="cloak-binary-card">
+ <div id="agent-browser-binary-card">
  <div class="loading">Loading binary status...</div>
  </div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="verifyManagedChromium" data-i18n="browser.action.verify">Verify</button>
  </div>
- <div id="cloak-binary-action-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
+ <div id="agent-browser-binary-action-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
  </div>
  </section>
 
@@ -410,7 +410,7 @@
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
  <h3>📥 Bulk Import Profiles</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
- One Cloak profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code><br>
+ One Browser profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code><br>
  Example: <code>Work, windows, en-US, America/Chicago, 54321, </code>
  </p>
  <textarea id="bulk-import-text" rows="8" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="Work, windows, en-US, America/Chicago, 54321,
@@ -430,7 +430,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="new-profile-browser-row">
  <div class="form-row"><label>Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
- <option value="cloak" selected>Managed Chromium</option>
+ <option value="chromium" selected>Managed Chromium</option>
  </select>
  </div>
  <div class="form-row"><label>Version</label>
@@ -443,36 +443,36 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  <div class="form-row" id="new-profile-proxy-row"><label>Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
  <!-- Managed Chromium-specific options -->
- <div id="new-profile-cloak-opts" style="display:block;">
+ <div id="new-profile-agent-browser-opts" style="display:block;">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Fingerprint Mode</label>
- <select id="new-cloak-fingerprint-mode">
+ <select id="new-agent-browser-fingerprint-mode">
  <option value="managed">Managed identity</option>
  <option value="off">Pass-through (real machine)</option>
  </select>
  </div>
  <div class="form-row"><label>Chromium Build</label>
- <select id="new-cloak-browser-version"><option value="">Auto (newest installed)</option></select>
+ <select id="new-agent-browser-browser-version"><option value="">Auto (newest installed)</option></select>
  </div>
  </div>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.</p>
- <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-cloak-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded auth/payment/challenge compatibility</label>
+ <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded auth/payment/challenge compatibility</label>
  <div class="form-row"><label>Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
- <input id="new-cloak-seed" type="number" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
- <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-cloak-seed">🎲 Random</button>
+ <input id="new-agent-browser-seed" type="number" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
+ <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed">🎲 Random</button>
  </div>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">One integer controls GPU, screen, hardware, canvas, audio, fonts — same seed = identical fingerprint.</p>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Platform</label>
- <select id="new-cloak-platform">
+ <select id="new-agent-browser-platform">
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
  </select>
  </div>
  <div class="form-row"><label>Timezone</label>
- <select id="new-cloak-timezone">
+ <select id="new-agent-browser-timezone">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
@@ -499,7 +499,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Language / Locale</label>
- <select id="new-cloak-locale">
+ <select id="new-agent-browser-locale">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
@@ -520,7 +520,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  <div class="form-row"><label>WebRTC Mode</label>
- <select id="new-cloak-webrtc-mode">
+ <select id="new-agent-browser-webrtc-mode">
  <option value="auto">Auto (alter to proxy exit IP)</option>
  <option value="real">Real network</option>
  <option value="altered">Altered / custom exit IP</option>
@@ -529,33 +529,33 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </div>
  <div class="form-row"><label>WebRTC IP</label>
- <input id="new-cloak-webrtc" placeholder="Proxy exit IP or explicit override for altered mode">
+ <input id="new-agent-browser-webrtc" placeholder="Proxy exit IP or explicit override for altered mode">
  </div>
  <div class="form-row"><label>Geolocation</label>
- <select id="new-cloak-geolocation-mode">
+ <select id="new-agent-browser-geolocation-mode">
  <option value="real">Real (system/provider)</option>
  <option value="disable">Disabled</option>
  <option value="custom">Custom coordinates</option>
  </select>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
- <div class="form-row"><label>Latitude</label><input id="new-cloak-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
- <div class="form-row"><label>Longitude</label><input id="new-cloak-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
- <div class="form-row"><label>Accuracy (m)</label><input id="new-cloak-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ <div class="form-row"><label>Latitude</label><input id="new-agent-browser-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
+ <div class="form-row"><label>Longitude</label><input id="new-agent-browser-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
+ <div class="form-row"><label>Accuracy (m)</label><input id="new-agent-browser-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);">Advanced hardware fingerprint</summary>
  <p style="font-size:10px;color:var(--text-muted);margin:6px 0;">Leave empty to let the seed generate coherent hardware. Override only when a risk checker reports a specific mismatch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>GPU Vendor</label><input id="new-cloak-gpu-vendor" placeholder="Google Inc. / Apple Inc."></div>
- <div class="form-row"><label>GPU Renderer</label><input id="new-cloak-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)"></div>
- <div class="form-row"><label>CPU Cores</label><input id="new-cloak-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
- <div class="form-row"><label>Device Memory (GB)</label><input id="new-cloak-device-memory" type="number" min="1" max="128" placeholder="8"></div>
- <div class="form-row"><label>Screen Width</label><input id="new-cloak-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
- <div class="form-row"><label>Screen Height</label><input id="new-cloak-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label>Storage Quota (MB)</label><input id="new-cloak-storage-quota" type="number" min="1" max="1048576" placeholder="auto"></div>
- <div class="form-row"><label>Taskbar Height</label><input id="new-cloak-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
- <div class="form-row" style="grid-column:1 / -1;"><label>Fonts Directory</label><input id="new-cloak-fonts-dir" placeholder="Absolute path to custom fonts directory"></div>
+ <div class="form-row"><label>GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. / Apple Inc."></div>
+ <div class="form-row"><label>GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)"></div>
+ <div class="form-row"><label>CPU Cores</label><input id="new-agent-browser-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
+ <div class="form-row"><label>Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
+ <div class="form-row"><label>Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
+ <div class="form-row"><label>Screen Height</label><input id="new-agent-browser-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
+ <div class="form-row"><label>Storage Quota (MB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto"></div>
+ <div class="form-row"><label>Taskbar Height</label><input id="new-agent-browser-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
+ <div class="form-row" style="grid-column:1 / -1;"><label>Fonts Directory</label><input id="new-agent-browser-fonts-dir" placeholder="Absolute path to custom fonts directory"></div>
  </div>
  </details>
  </div>
@@ -838,42 +838,42 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Managed Chromium fingerprint edit dialog -->
-<dialog id="dlg-cloak-seed">
- <form method="dialog" data-role="submit" data-submit-cmd="saveCloakMeta">
+<dialog id="dlg-agent-browser-seed">
+ <form method="dialog" data-role="submit" data-submit-cmd="saveBrowserMeta">
  <h3>🥷 Managed Chromium Profile — Fingerprint & Identity</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
  <strong>--fingerprint=&lt;seed&gt;</strong> deterministically generates GPU, screen, hardware, canvas, audio, fonts.<br>
  Same seed + platform + timezone + locale = 100% identical fingerprint.
  </p>
- <input type="hidden" id="cloak-meta-dir-id">
+ <input type="hidden" id="agent-browser-meta-dir-id">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Fingerprint Mode</label>
- <select id="cloak-meta-fingerprint-mode">
+ <select id="agent-browser-meta-fingerprint-mode">
  <option value="managed">Managed identity</option>
  <option value="off">Pass-through (real machine)</option>
  </select>
  </div>
  <div class="form-row"><label>Chromium Build</label>
- <select id="cloak-meta-browser-version"><option value="">Auto (newest installed)</option></select>
+ <select id="agent-browser-meta-browser-version"><option value="">Auto (newest installed)</option></select>
  </div>
  </div>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.</p>
- <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="cloak-meta-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded compatibility</label>
+ <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded compatibility</label>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
- <div class="form-row"><label>Profile Name *</label><input id="cloak-meta-name" placeholder="My Profile" required></div>
- <div class="form-row"><label>Proxy</label><select id="cloak-meta-proxy"><option value="">(no proxy)</option></select></div>
+ <div class="form-row"><label>Profile Name *</label><input id="agent-browser-meta-name" placeholder="My Profile" required></div>
+ <div class="form-row"><label>Proxy</label><select id="agent-browser-meta-proxy"><option value="">(no proxy)</option></select></div>
  </div>
  <!-- Seed + Platform -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Fingerprint Seed *</label>
  <div style="display:flex;gap:4px;">
- <input id="cloak-meta-seed" type="number" placeholder="e.g. 54321" min="1" max="999999" style="flex:1;" required>
- <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="cloak-meta-seed">🎲</button>
+ <input id="agent-browser-meta-seed" type="number" placeholder="e.g. 54321" min="1" max="999999" style="flex:1;" required>
+ <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="agent-browser-meta-seed">🎲</button>
  </div>
  </div>
  <div class="form-row"><label>Platform</label>
- <select id="cloak-meta-platform">
+ <select id="agent-browser-meta-platform">
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
  </select>
@@ -882,7 +882,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <!-- Timezone + Locale -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Timezone</label>
- <select id="cloak-meta-timezone">
+ <select id="agent-browser-meta-timezone">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
@@ -906,7 +906,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  <div class="form-row"><label>Language / Locale</label>
- <select id="cloak-meta-locale">
+ <select id="agent-browser-meta-locale">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
@@ -929,7 +929,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>WebRTC Mode</label>
- <select id="cloak-meta-webrtc-mode">
+ <select id="agent-browser-meta-webrtc-mode">
  <option value="auto">Auto (alter to proxy exit IP)</option>
  <option value="real">Real network</option>
  <option value="altered">Altered / custom exit IP</option>
@@ -937,34 +937,34 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  <div class="form-row"><label>WebRTC IP</label>
- <input id="cloak-meta-webrtc" placeholder="Proxy exit IP or explicit override">
+ <input id="agent-browser-meta-webrtc" placeholder="Proxy exit IP or explicit override">
  </div>
  </div>
  <div class="form-row"><label>Geolocation</label>
- <select id="cloak-meta-geolocation-mode">
+ <select id="agent-browser-meta-geolocation-mode">
  <option value="real">Real (system/provider)</option>
  <option value="disable">Disabled</option>
  <option value="custom">Custom coordinates</option>
  </select>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
- <div class="form-row"><label>Latitude</label><input id="cloak-meta-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
- <div class="form-row"><label>Longitude</label><input id="cloak-meta-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
- <div class="form-row"><label>Accuracy (m)</label><input id="cloak-meta-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ <div class="form-row"><label>Latitude</label><input id="agent-browser-meta-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
+ <div class="form-row"><label>Longitude</label><input id="agent-browser-meta-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
+ <div class="form-row"><label>Accuracy (m)</label><input id="agent-browser-meta-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);">Advanced hardware fingerprint</summary>
  <p style="font-size:10px;color:var(--text-muted);margin:6px 0;">Leave empty to use seed-generated hardware. Explicit values are passed to managed Chromium launch flags and help tune ping0.cc/env risk items.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>GPU Vendor</label><input id="cloak-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc."></div>
- <div class="form-row"><label>GPU Renderer</label><input id="cloak-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)"></div>
- <div class="form-row"><label>CPU Cores</label><input id="cloak-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
- <div class="form-row"><label>Device Memory (GB)</label><input id="cloak-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
- <div class="form-row"><label>Screen Width</label><input id="cloak-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
- <div class="form-row"><label>Screen Height</label><input id="cloak-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label>Storage Quota (MB)</label><input id="cloak-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto"></div>
- <div class="form-row"><label>Taskbar Height</label><input id="cloak-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
- <div class="form-row" style="grid-column:1 / -1;"><label>Fonts Directory</label><input id="cloak-meta-fonts-dir" placeholder="Absolute path to custom fonts directory"></div>
+ <div class="form-row"><label>GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc."></div>
+ <div class="form-row"><label>GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)"></div>
+ <div class="form-row"><label>CPU Cores</label><input id="agent-browser-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
+ <div class="form-row"><label>Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
+ <div class="form-row"><label>Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
+ <div class="form-row"><label>Screen Height</label><input id="agent-browser-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
+ <div class="form-row"><label>Storage Quota (MB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto"></div>
+ <div class="form-row"><label>Taskbar Height</label><input id="agent-browser-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
+ <div class="form-row" style="grid-column:1 / -1;"><label>Fonts Directory</label><input id="agent-browser-meta-fonts-dir" placeholder="Absolute path to custom fonts directory"></div>
  </div>
  </details>
  <div class="btn-row">
@@ -982,7 +982,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 <!-- ── First-run Wizard ── -->
 <dialog id="dlg-wizard" class="dialog-wide">
- <h3 data-i18n="wizard.title">👋 Welcome to CloakLite</h3>
+ <h3 data-i18n="wizard.title">👋 Welcome to Agent Browser Studio</h3>
  <p data-i18n="wizard.subtitle" style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Let's get your fingerprint browser ready in 3 quick steps.</p>
 
  <div id="wizard-steps">

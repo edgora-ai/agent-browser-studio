@@ -50,9 +50,9 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
 
   it("configures mock LLM + creates conversation", async () => {
     // Navigate to agent config and set the mock.
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(200);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -61,11 +61,11 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
     await h.page.locator('[data-cmd="agentSaveConfig"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
 
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
-    conversationId = await h.page.evaluate(() => (window as any).cloak.state.agentActiveConvId);
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
+    conversationId = await h.page.evaluate(() => (window as any).agentBrowser.state.agentActiveConvId);
     expect(conversationId).toBeTruthy();
   });
 
@@ -74,7 +74,7 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
     await h.page.evaluate(() => {
       (window as any).__steps = [];
       (window as any).__done = false;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:run-step", (p: any) => (window as any).__steps.push(p));
       api.on("agent:stream-done", () => { (window as any).__done = true; });
     });
@@ -100,7 +100,7 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
 
   it("the run is persisted with steps + variables + source=chat", async () => {
     const result = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       // Find the run from this conversation.
       const summary = list.find((r: any) => r.source?.type === "chat" && r.source?.conversationId);
@@ -128,9 +128,9 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
   });
 
   it("Runs tab renders the run in the list", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("runs"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("runs"));
     await h.page.waitForTimeout(500);
-    await h.page.evaluate(() => (window as any).cloak.loadRunsTab());
+    await h.page.evaluate(() => (window as any).agentBrowser.loadRunsTab());
     await h.page.waitForTimeout(500);
     const count = await h.page.evaluate(() => {
       return document.querySelectorAll("#agent-run-list [data-run-id]").length;
@@ -144,7 +144,7 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
       return card ? card.getAttribute("data-run-id") : null;
     });
     expect(firstRunId).toBeTruthy();
-    await h.page.evaluate((id: string) => (window as any).cloak.runsOpen(id), firstRunId);
+    await h.page.evaluate((id: string) => (window as any).agentBrowser.runsOpen(id), firstRunId);
     await h.page.waitForTimeout(500);
     const stepCount = await h.page.evaluate(() => document.querySelectorAll("#agent-run-steps .run-step").length);
     expect(stepCount).toBeGreaterThanOrEqual(4);

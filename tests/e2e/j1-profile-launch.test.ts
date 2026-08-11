@@ -1,11 +1,11 @@
-// J1: Cloak fingerprint browser closed loop
+// J1: Agent Browser managed-fingerprint closed loop
 // create → launch → CDP fingerprint verify (UA + platform) → risk check (ping0.cc) → stop
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import {
   setupTestApp,
   closeApp,
-  getRoxyApi,
+  getAgentBrowserApi,
   TestAppHandle,
 } from "./helpers/app.js";
 import {
@@ -20,7 +20,7 @@ import { shot, closeAllDialogs, filterKnownConsoleErrors } from "./helpers/diag.
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j1");
 
-describe("J1 — Cloak profile launch + fingerprint verify + risk check", () => {
+describe("J1 — Browser profile launch + fingerprint verify + risk check", () => {
   let h: TestAppHandle;
   let dirId = "";
   let cdpPort = 0;
@@ -33,10 +33,10 @@ describe("J1 — Cloak profile launch + fingerprint verify + risk check", () => 
     if (h) await closeApp(h);
   });
 
-  it("creates a Cloak profile via IPC and gets a dirId", async () => {
-    const api = await getRoxyApi<any>(h.page);
+  it("creates a Browser profile via IPC and gets a dirId", async () => {
+    const api = await getAgentBrowserApi<any>(h.page);
     const r = await h.page.evaluate(async () => {
-      return (window as any).cloak.api.cloak.create({
+      return (window as any).agentBrowser.api.browser.create({
         name: "E2E J1",
         platform: "windows",
         locale: "en-US",
@@ -52,7 +52,7 @@ describe("J1 — Cloak profile launch + fingerprint verify + risk check", () => 
 
   it("launches the profile and CDP port becomes reachable", async () => {
     const r = (await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.cloak.launch(id),
+      async (id: string) => (window as any).agentBrowser.api.browser.launch(id),
       dirId,
     )) as { success: boolean; pid: number; cdpPort: number; error?: string };
     expect(r.success, `launch failed: ${r.error || JSON.stringify(r)}`).toBe(true);
@@ -77,7 +77,7 @@ describe("J1 — Cloak profile launch + fingerprint verify + risk check", () => 
 
   it("openRiskCheck invokes navigation (ping0.cc/env when network is available)", async () => {
     const r = (await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.cloak.openRiskCheck(id),
+      async (id: string) => (window as any).agentBrowser.api.browser.openRiskCheck(id),
       dirId,
     )) as { success: boolean; error?: string };
     // The IPC contract returns success/error deterministically.
@@ -94,7 +94,7 @@ describe("J1 — Cloak profile launch + fingerprint verify + risk check", () => 
 
   it("stopping the profile closes the CDP port", async () => {
     await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.cloak.stop(id),
+      async (id: string) => (window as any).agentBrowser.api.browser.stop(id),
       dirId,
     );
     await waitForPortClosed(cdpPort, 10000);

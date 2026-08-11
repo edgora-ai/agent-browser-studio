@@ -114,7 +114,7 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
       error: null,
     };
     if (nav.storageBuckets) {
-      const bucketName = "roxy-storage-corpus";
+      const bucketName = "agent-browser-storage-corpus";
       try {
         const handle = await nav.storageBuckets.open(bucketName);
         const estimate = await handle.estimate();
@@ -133,7 +133,7 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
     const opfs: StorageContextCorpus["opfs"] = { available: false, roundTrip: false, error: null };
     if (nav.storage?.getDirectory) {
       opfs.available = true;
-      const fileName = "roxy-storage-corpus.bin";
+      const fileName = "agent-browser-storage-corpus.bin";
       try {
         const root = await nav.storage.getDirectory();
         const handle = await root.getFileHandle(fileName, { create: true });

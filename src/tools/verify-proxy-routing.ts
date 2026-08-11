@@ -308,7 +308,7 @@ async function startHttpProxy(
     });
     if (!authenticated) {
       clientResponse.writeHead(407, {
-        "proxy-authenticate": "Basic realm=\"Roxy proxy corpus\"",
+        "proxy-authenticate": "Basic realm=\"Agent Browser proxy corpus\"",
         "cache-control": "no-store",
       });
       clientResponse.end("proxy authentication required");
@@ -352,7 +352,7 @@ async function startHttpProxy(
     if (!authenticated) {
       clientSocket.end([
         "HTTP/1.1 407 Proxy Authentication Required",
-        "Proxy-Authenticate: Basic realm=\"Roxy proxy corpus\"",
+        "Proxy-Authenticate: Basic realm=\"Agent Browser proxy corpus\"",
         "Connection: close",
         "",
         "",
@@ -735,14 +735,20 @@ function detectProxySignalHeaders(requests: RequestRecord[]): string[] {
 }
 
 function timingShape(probe: BrowserProbe): object {
-  const shape = (timing: TimingRecord) => ({
-    protocol: timing.nextHopProtocol,
-    dns: timing.domainLookupEnd > timing.domainLookupStart,
-    connect: timing.connectEnd > timing.connectStart,
-    tls: timing.secureConnectionStart > 0,
-    transfer: timing.transferSize === 0 ? "cached" : "network",
-    body: timing.decodedBodySize > 0,
-  });
+  const shape = (timing: TimingRecord) => {
+    const cached = timing.transferSize === 0;
+    return {
+      // Chromium may either retain or omit nextHopProtocol and connection
+      // timestamps on an otherwise identical memory/disk-cache hit. Normalize
+      // those cache-only fields while preserving the observable route shape.
+      protocol: cached ? "cached" : timing.nextHopProtocol,
+      dns: cached ? false : timing.domainLookupEnd > timing.domainLookupStart,
+      connect: cached ? false : timing.connectEnd > timing.connectStart,
+      tls: cached ? timing.name.startsWith("https:") : timing.secureConnectionStart > 0,
+      transfer: cached ? "cached" : "network",
+      body: timing.decodedBodySize > 0,
+    };
+  };
   return {
     navigation: shape(probe.navigation),
     cache: probe.cache.timings.map(shape),
@@ -795,7 +801,7 @@ async function runRoute(
   try {
     let page: Page;
     if (bootstrapFile) {
-      temporaryProfile = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-proxy-corpus-"));
+      temporaryProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-proxy-corpus-"));
       fs.copyFileSync(bootstrapFile, path.join(temporaryProfile, path.basename(bootstrapFile)));
       persistentContext = await chromium.launchPersistentContext(temporaryProfile, {
         executablePath,
@@ -830,7 +836,7 @@ async function runRoute(
   } finally {
     await persistentContext?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
-    if (temporaryProfile && temporaryProfile.startsWith(path.join(os.tmpdir(), "roxy-proxy-corpus-"))) {
+    if (temporaryProfile && temporaryProfile.startsWith(path.join(os.tmpdir(), "agent-browser-proxy-corpus-"))) {
       fs.rmSync(temporaryProfile, { recursive: true, force: true });
     }
   }
@@ -926,12 +932,12 @@ function compareRoutes(routes: RouteResult[]): BinaryResult["comparisons"] {
 
 async function runNativeHttpAuth(
   executablePath: string,
-  supported: boolean,
+  credentialSwitch: string | null,
   originPort: number,
   authProxy: { port: number; requests: HttpProxyRecord[] },
   originRequests: RequestRecord[],
 ): Promise<NativeHttpAuthResult> {
-  if (!supported) {
+  if (!credentialSwitch) {
     return {
       supported: false,
       ok: null,
@@ -946,7 +952,7 @@ async function runNativeHttpAuth(
   const runId = `native-auth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const proxyStart = authProxy.requests.length;
   const originStart = originRequests.length;
-  const credentialDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-native-auth-"));
+  const credentialDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-native-auth-"));
   fs.chmodSync(credentialDirectory, 0o700);
   const credentialFile = path.join(credentialDirectory, "credentials.json");
   fs.writeFileSync(credentialFile, JSON.stringify({
@@ -966,7 +972,7 @@ async function runNativeHttpAuth(
       headless: true,
       args: [
         ...routeArgs("http", authProxy.port, 0),
-        `--roxy-proxy-auth-file=${credentialFile}`,
+        `${credentialSwitch}=${credentialFile}`,
       ],
       timeout: 20_000,
     });
@@ -981,7 +987,7 @@ async function runNativeHttpAuth(
     error = caught instanceof Error ? caught.message : String(caught);
   } finally {
     await browser?.close().catch(() => undefined);
-    if (credentialDirectory.startsWith(path.join(os.tmpdir(), "roxy-native-auth-"))) {
+    if (credentialDirectory.startsWith(path.join(os.tmpdir(), "agent-browser-native-auth-"))) {
       fs.rmSync(credentialDirectory, { recursive: true, force: true });
     }
   }
@@ -1030,23 +1036,39 @@ function parseBinaryArg(value: string, index: number): BinaryInput {
 }
 
 function detectBinaryInfo(executablePath: string): { version: string; capabilities: string[] } {
+  let version = path.basename(executablePath);
+  const capabilities = new Set<string>();
   try {
-    const output = execFileSync(executablePath, ["--version", "--roxy-capabilities"], {
+    const output = execFileSync(executablePath, ["--version", "--agent-browser-capabilities"], {
       encoding: "utf8",
       timeout: 15_000,
     }).trim();
-    const reportedVersion = output.match(/\d+\.\d+\.\d+\.\d+/)?.[0] || execFileSync(
-      executablePath,
-      ["--version"],
-      { encoding: "utf8", timeout: 15_000 },
-    ).match(/\d+\.\d+\.\d+\.\d+/)?.[0];
-    return {
-      version: reportedVersion || path.basename(executablePath),
-      capabilities: output.split(/\s+/).filter((value) => value.startsWith("roxy-")),
-    };
-  } catch {
-    return { version: path.basename(executablePath), capabilities: [] };
+    version = output.match(/\d+\.\d+\.\d+\.\d+/)?.[0] || version;
+    for (const value of output.split(/\s+/)) {
+      if (value.startsWith("agent-browser-")) capabilities.add(value);
+    }
+  } catch { /* query the compatibility protocol below */ }
+  if (capabilities.size === 0) {
+    try {
+      const legacyOutput = execFileSync(executablePath, ["--version", "--roxy-capabilities"], {
+        encoding: "utf8",
+        timeout: 15_000,
+      }).trim();
+      version = legacyOutput.match(/\d+\.\d+\.\d+\.\d+/)?.[0] || version;
+      for (const value of legacyOutput.split(/\s+/)) {
+        if (value.startsWith("roxy-")) capabilities.add(value);
+      }
+    } catch { /* stock Chromium has no managed capability protocol */ }
   }
+  if (version === path.basename(executablePath)) {
+    try {
+      version = execFileSync(executablePath, ["--version"], {
+        encoding: "utf8",
+        timeout: 15_000,
+      }).match(/\d+\.\d+\.\d+\.\d+/)?.[0] || version;
+    } catch { /* retain the executable name */ }
+  }
+  return { version, capabilities: [...capabilities].sort() };
 }
 
 async function main(): Promise<void> {
@@ -1082,9 +1104,14 @@ async function main(): Promise<void> {
         ));
       }
       const binaryInfo = detectBinaryInfo(binary.executablePath);
+      const nativeProxyAuthSwitch = binaryInfo.capabilities.includes("agent-browser-proxy-auth-file-v1")
+        ? "--agent-browser-proxy-auth-file"
+        : binaryInfo.capabilities.includes("roxy-proxy-auth-file-v1")
+          ? "--roxy-proxy-auth-file"
+          : null;
       const nativeHttpAuth = await runNativeHttpAuth(
         binary.executablePath,
-        binaryInfo.capabilities.includes("roxy-proxy-auth-file-v1"),
+        nativeProxyAuthSwitch,
         origin.port,
         authProxy,
         origin.requests,

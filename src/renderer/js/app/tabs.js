@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,47 +43,47 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
 
-  cloak.switchTab = function (tab) {
+  agentBrowser.switchTab = function (tab) {
     state.currentTab = tab;
     document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.toggle('active', n.dataset.tab === tab); });
     document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.toggle('active', c.id === 'tab-' + tab); });
-    cloak.loadTab(tab);
+    agentBrowser.loadTab(tab);
   };
 
-  cloak.loadTab = function (tab) {
-    if (tab === "profiles") cloak.loadProfiles();
-    else if (tab === "proxy") cloak.loadProxies();
-    else if (tab === "storage") cloak.loadStorage();
-    else if (tab === "sync") cloak.loadSyncConfig();
-    else if (tab === "browser") cloak.loadBrowserTab();
-    else if (tab === "extensions") cloak.loadExtensionsTab();
-    else if (tab === "accounts") cloak.loadAccountsTab();
-    else if (tab === "agent") { cloak.switchAgentSub('chat'); cloak.agentLoadConversations(); cloak.agentLoadConfig(); }
-    else if (tab === "automation") cloak.loadAutomationTab();
-    else if (tab === "runs") cloak.loadRunsTab();
-    else if (tab === "db") cloak.loadDbTab();
-    else if (tab === "activity") cloak.loadActivity();
+  agentBrowser.loadTab = function (tab) {
+    if (tab === "profiles") agentBrowser.loadProfiles();
+    else if (tab === "proxy") agentBrowser.loadProxies();
+    else if (tab === "storage") agentBrowser.loadStorage();
+    else if (tab === "sync") agentBrowser.loadSyncConfig();
+    else if (tab === "browser") agentBrowser.loadBrowserTab();
+    else if (tab === "extensions") agentBrowser.loadExtensionsTab();
+    else if (tab === "accounts") agentBrowser.loadAccountsTab();
+    else if (tab === "agent") { agentBrowser.switchAgentSub('chat'); agentBrowser.agentLoadConversations(); agentBrowser.agentLoadConfig(); }
+    else if (tab === "automation") agentBrowser.loadAutomationTab();
+    else if (tab === "runs") agentBrowser.loadRunsTab();
+    else if (tab === "db") agentBrowser.loadDbTab();
+    else if (tab === "activity") agentBrowser.loadActivity();
   };
 
-  cloak.reloadCurrentTab = function () {
-    cloak.applyI18n && cloak.applyI18n();
+  agentBrowser.reloadCurrentTab = function () {
+    agentBrowser.applyI18n && agentBrowser.applyI18n();
     if (window.i18n && window.i18n.apply) window.i18n.apply();
-    cloak.loadTab(state.currentTab);
+    agentBrowser.loadTab(state.currentTab);
   };
 
-  cloak.applyI18n = function () {
+  agentBrowser.applyI18n = function () {
     if (window.i18n && window.i18n.apply) { try { window.i18n.apply(); } catch (e) {} }
   };
 
-  cloak.clearCache = function (dirId) { api.storage.clearCache(dirId).then(function (r) { toast(r.message || "Cache cleared", "success"); cloak.loadStorage(); }); };
+  agentBrowser.clearCache = function (dirId) { api.storage.clearCache(dirId).then(function (r) { toast(r.message || "Cache cleared", "success"); agentBrowser.loadStorage(); }); };
 
-  cloak.clearAllCaches = function () { api.storage.clearCache().then(function (r) { toast(r.message || "Caches cleared", "success"); cloak.loadStorage(); }); };
+  agentBrowser.clearAllCaches = function () { api.storage.clearCache().then(function (r) { toast(r.message || "Caches cleared", "success"); agentBrowser.loadStorage(); }); };
 
-  cloak.loadStorage = function () {
+  agentBrowser.loadStorage = function () {
     var list = document.getElementById("storage-profile-list");
     list.innerHTML = '<div class="loading">Loading...</div>';
     api.storage.info().then(function (info) {
@@ -107,7 +107,7 @@
         var target = event.target.closest("[data-action='clear-cache']");
         if (!target || !list.contains(target)) return;
         var card = target.closest(".profile-card");
-        if (card && card.dataset.dirId) cloak.clearCache(card.dataset.dirId);
+        if (card && card.dataset.dirId) agentBrowser.clearCache(card.dataset.dirId);
       };
     }).catch(function (e) {
       list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';

@@ -128,7 +128,7 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
 
     h = await setupTestApp({ userDataDir: USERDATA });
     const added = await h.page.evaluate(async ({ port, username, password }) =>
-      (window as any).cloak.api.proxy.add("j48-socks-auth", {
+      (window as any).agentBrowser.api.proxy.add("j48-socks-auth", {
         type: "socks5h",
         host: "127.0.0.1",
         port,
@@ -136,7 +136,7 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
         password,
       }), { port: upstreamPort, username: USERNAME, password: PASSWORD });
     expect(added.success, added.error).toBe(true);
-    const created = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const created = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J48 SOCKS auth",
       platform: "windows",
       fingerprintSeed: 48484,
@@ -157,17 +157,17 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
 
   it("forwards credentials and remote DNS, then closes the loopback bridge", async () => {
     const launched = await h.page.evaluate(async (id: string) =>
-      (window as any).cloak.api.cloak.launch(id), dirId) as {
+      (window as any).agentBrowser.api.browser.launch(id), dirId) as {
       success: boolean; pid: number; cdpPort: number; error?: string;
     };
     expect(launched.success, launched.error || "J48 launch failed").toBe(true);
     h.cdpPids.push(launched.pid);
     await waitForCdpPort(launched.cdpPort, 15_000);
 
-    const logPath = path.join(USERDATA, "logs", `cloak-${dirId}.log`);
+    const logPath = path.join(USERDATA, "logs", `browser-${dirId}.log`);
     const log = fs.readFileSync(logPath, "utf8");
     const socksProxyMatch = log.match(/--proxy-server=socks5:\/\/127\.0\.0\.1:(\d+)/);
-    const masqueProxyMatch = log.match(/--proxy-server=quic:\/\/roxy-masque\.local:(\d+)/);
+    const masqueProxyMatch = log.match(/--proxy-server=quic:\/\/agent-browser-masque\.local:(\d+)/);
     expect(Boolean(socksProxyMatch) !== Boolean(masqueProxyMatch)).toBe(true);
     const managedQuic = Boolean(masqueProxyMatch);
     const bridgePort = Number((socksProxyMatch || masqueProxyMatch)![1]);
@@ -175,7 +175,7 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
     const helperPids = managedQuic ? masqueBridgePids(h.app.process().pid!) : [];
     if (managedQuic) {
       expect(helperPids).toHaveLength(1);
-      expect(log).toContain("--host-resolver-rules=MAP roxy-masque.local 127.0.0.1");
+      expect(log).toContain("--host-resolver-rules=MAP agent-browser-masque.local 127.0.0.1");
       expect(log).toContain("--enable-quic");
       expect(log).not.toContain("--disable-quic");
     } else {
@@ -205,7 +205,7 @@ describe("J48 — authenticated SOCKS5 bridge", () => {
       expect(value).toBe("ok");
     } finally {
       client.close();
-      await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+      await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
       await waitForPortClosed(launched.cdpPort, 10_000);
       if (managedQuic) await waitForProcessesExit(helperPids, 5_000);
       else await waitForPortClosed(bridgePort, 10_000);
@@ -222,7 +222,7 @@ function masqueBridgePids(parentPid: number): number[] {
   const output = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
   return output.split("\n").flatMap((line) => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
-    if (!match || Number(match[2]) !== parentPid || !match[3].includes("roxy-masque-bridge")) return [];
+    if (!match || Number(match[2]) !== parentPid || !match[3].includes("agent-browser-masque-bridge")) return [];
     return [Number(match[1])];
   });
 }

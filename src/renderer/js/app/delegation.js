@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,9 +43,9 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   function initEventDelegation() {
     document.addEventListener('click', function(e) {
       var el = e.target.closest('[data-role="cmd"]');
@@ -75,21 +75,21 @@
         return;
       }
       if (cmd === 'ext-open-repo') {
-        cloak.switchTab('extensions');
+        agentBrowser.switchTab('extensions');
         var dlg = document.getElementById('dlg-extensions');
         if (dlg && dlg.close) dlg.close();
         e.preventDefault();
         return;
       }
-      if (typeof cloak[cmd] === 'function') {
+      if (typeof agentBrowser[cmd] === 'function') {
         var arg = el.getAttribute('data-cmd-arg');
         var a = el.getAttribute('data-cmd-a');
         var b = el.getAttribute('data-cmd-b');
-        if (a !== null && b !== null) { cloak[cmd](a, b); }
-        else if (arg !== null && arg !== '' && arg !== 'undefined') { cloak[cmd](arg); }
-        else if (cmd === 'switchTab' && el.dataset.tab) { cloak[cmd](el.dataset.tab); }
-        else if (cmd === 'switchAgentSub' && el.dataset.sub) { cloak[cmd](el.dataset.sub); }
-        else { cloak[cmd](); }
+        if (a !== null && b !== null) { agentBrowser[cmd](a, b); }
+        else if (arg !== null && arg !== '' && arg !== 'undefined') { agentBrowser[cmd](arg); }
+        else if (cmd === 'switchTab' && el.dataset.tab) { agentBrowser[cmd](el.dataset.tab); }
+        else if (cmd === 'switchAgentSub' && el.dataset.sub) { agentBrowser[cmd](el.dataset.sub); }
+        else { agentBrowser[cmd](); }
         e.preventDefault();
       }
     });
@@ -97,25 +97,25 @@
       var el = e.target.closest('[data-role="input"]');
       if (!el) return;
       var cmd = el.getAttribute('data-input-cmd');
-      if (cmd && typeof cloak[cmd] === 'function') cloak[cmd]();
+      if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
     });
     document.addEventListener('change', function(e) {
       var el = e.target.closest('[data-role="change"]');
       if (!el) return;
       var cmd = el.getAttribute('data-change-cmd');
-      if (cmd && typeof cloak[cmd] === 'function') cloak[cmd]();
+      if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
     });
     document.addEventListener('submit', function(e) {
       var el = e.target.closest('[data-role="submit"]');
       if (!el) return;
       e.preventDefault();
       var cmd = el.getAttribute('data-submit-cmd');
-      if (cmd && typeof cloak[cmd] === 'function') cloak[cmd]();
+      if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
     });
     document.addEventListener('keydown', function(e) {
       var el = e.target.closest('[data-role="keydown"]');
       if (!el) return;
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); cloak.agentSend(); }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentBrowser.agentSend(); }
     });
   }
 

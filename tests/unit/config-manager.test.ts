@@ -4,12 +4,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "cloak-config-manager-test");
+const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-config-manager-test");
 
 vi.mock("electron", () => {
   const path = require("node:path");
   const os = require("node:os");
-  const TEST_DATA = path.join(os.tmpdir(), "cloak-config-manager-test");
+  const TEST_DATA = path.join(os.tmpdir(), "agent-browser-config-manager-test");
   return {
     app: {
       getPath: (name: string) => {
@@ -62,11 +62,11 @@ describe("Config Manager (real functions)", () => {
 
   it("writes default config to disk on first get", () => {
     const cfg = getConfig();
-    expect(cfg.version).toBe(3);
-    expect(cfg.cloakBin).toBe("auto");
+    expect(cfg.version).toBe(4);
+    expect(cfg.chromiumBin).toBe("auto");
     expect(cfg.defaultProxy).toBe("default");
     expect(cfg.proxies.default.type).toBe("http");
-    expect(cfg.cloakProfiles).toEqual({});
+    expect(cfg.browserProfiles).toEqual({});
     expect(cfg.extensionRepository).toEqual({});
     expect(cfg.skillRepository).toEqual({});
     expect(fs.existsSync(getConfigPath())).toBe(true);
@@ -214,7 +214,7 @@ describe("Config Manager (real functions)", () => {
     setDefaultProxyName("primary");
 
     const cfg = getConfig();
-    cfg.cloakProfiles["cb_profile_a"] = {
+    cfg.browserProfiles["cb_profile_a"] = {
       name: "Profile A",
       proxyMode: "named",
       proxyName: "work",
@@ -224,7 +224,7 @@ describe("Config Manager (real functions)", () => {
       syncStatus: "never",
       lastModified: Date.now(),
     };
-    cfg.cloakProfiles["cb_profile_b"] = {
+    cfg.browserProfiles["cb_profile_b"] = {
       name: "Profile B",
       proxyMode: "none",
       fingerprintSeed: 54321,
@@ -233,7 +233,7 @@ describe("Config Manager (real functions)", () => {
       syncStatus: "never",
       lastModified: Date.now(),
     };
-    cfg.cloakProfiles["cb_profile_c"] = {
+    cfg.browserProfiles["cb_profile_c"] = {
       name: "Profile C",
       proxyMode: "default",
       fingerprintSeed: 99999,
@@ -265,7 +265,7 @@ describe("Config Manager (real functions)", () => {
 
     reloadConfig();
     const cfg = getConfig();
-    expect(cfg.version).toBe(3);
+    expect(cfg.version).toBe(4);
     // A .bak file should be created
     const bakFiles = fs.readdirSync(path.dirname(configPath)).filter((f) => f.endsWith(".bak"));
     expect(bakFiles.length).toBeGreaterThanOrEqual(1);
@@ -282,7 +282,7 @@ describe("Config Manager (real functions)", () => {
       proxies: {
         "migrated-proxy": { type: "http", host: "127.0.0.1", port: 8080 },
       },
-      cloakProfiles: {
+      browserProfiles: {
         cb_migrated_profile: {
           name: "Migrated Profile",
           fingerprintSeed: 12345,
@@ -311,7 +311,7 @@ describe("Config Manager (real functions)", () => {
 
     reloadConfig();
     const cfg = getConfig();
-    expect(cfg.cloakProfiles.cb_migrated_profile.name).toBe("Migrated Profile");
+    expect(cfg.browserProfiles.cb_migrated_profile.name).toBe("Migrated Profile");
     expect(cfg.proxies["migrated-proxy"].port).toBe(8080);
     expect(cfg.extensionRepository[extId].unpackedPath).toBe(expectedPath);
     expect(fs.readdirSync(TEST_USER_DATA).filter((f) => f.endsWith(".bak"))).toEqual([]);
@@ -320,7 +320,7 @@ describe("Config Manager (real functions)", () => {
   it("cross-platform directories point to userData", () => {
     reloadConfig();
     expect(getAppDataDir()).toBe(TEST_USER_DATA);
-    expect(getProfilesDir()).toBe(path.join(TEST_USER_DATA, "cloak-profiles"));
+    expect(getProfilesDir()).toBe(path.join(TEST_USER_DATA, "profiles"));
     expect(getConfigPath()).toBe(path.join(TEST_USER_DATA, "config.json"));
   });
 
@@ -332,7 +332,7 @@ describe("Config Manager (real functions)", () => {
 
   it("persists fingerprint metadata in profiles", () => {
     const cfg = getConfig();
-    cfg.cloakProfiles["cb_fp_test"] = {
+    cfg.browserProfiles["cb_fp_test"] = {
       name: "Fingerprint Test",
       tags: [" ecommerce ", "ai", "ecommerce", ""],
       proxyMode: "default",
@@ -365,7 +365,7 @@ describe("Config Manager (real functions)", () => {
     saveConfig(cfg);
     reloadConfig();
 
-    const readBack = getConfig().cloakProfiles["cb_fp_test"];
+    const readBack = getConfig().browserProfiles["cb_fp_test"];
     expect(readBack.fingerprintMode).toBe("off");
     expect(readBack.browserVersion).toBe("149.0.7827.22");
     expect(readBack.allowThirdPartyCookies).toBe(true);

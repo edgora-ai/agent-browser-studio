@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 vi.mock("electron", () => {
   const path = require("node:path");
   const os = require("node:os");
-  const TEST_HOME = path.join(os.tmpdir(), "cloak-extension-repo-test-home");
+  const TEST_HOME = path.join(os.tmpdir(), "agent-browser-extension-repo-test-home");
   const TEST_USER_DATA = path.join(TEST_HOME, "userData");
   return {
     app: {
@@ -20,7 +20,7 @@ vi.mock("electron", () => {
   };
 });
 
-const TEST_HOME = path.join(os.tmpdir(), "cloak-extension-repo-test-home");
+const TEST_HOME = path.join(os.tmpdir(), "agent-browser-extension-repo-test-home");
 
 import {
   getAppDataDir,
@@ -71,7 +71,7 @@ describe("Extension repository data flow", () => {
         updatedAt: 1710000000001,
       },
     };
-    cfg.cloakProfiles = {
+    cfg.browserProfiles = {
       cb_flow_verify: {
         dirId: "cb_flow_verify",
         name: "Flow Verify",
@@ -152,7 +152,7 @@ describe("Extension repository data flow", () => {
         updatedAt: 1710000000001,
       },
     };
-    cfg.cloakProfiles = {
+    cfg.browserProfiles = {
       cb_symlink_verify: {
         dirId: "cb_symlink_verify",
         name: "Symlink Verify",
@@ -185,7 +185,7 @@ describe("Extension repository data flow", () => {
       defaultProxy: "",
       proxies: {},
       sync: { enabled: false },
-      cloakProfiles: {
+      browserProfiles: {
         cb_symlink_entry: {
           dirId: "cb_symlink_entry",
           name: "Symlink Entry",

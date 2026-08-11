@@ -17,7 +17,7 @@ describe("J36 — durable job queue", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   async function createRule(partial: any): Promise<string> {
-    const r = await h.page.evaluate((rule: any) => (window as any).cloak.api.automation.create(rule), partial);
+    const r = await h.page.evaluate((rule: any) => (window as any).agentBrowser.api.automation.create(rule), partial);
     return r.rule.id;
   }
 
@@ -27,9 +27,9 @@ describe("J36 — durable job queue", () => {
       trigger: { type: "cron", cron: FAR_CRON },
       action: { type: "custom-js", jsCode: "return 'job-ok-sentinel'" },
     });
-    const res = await h.page.evaluate((rid: string) => (window as any).cloak.api.automation.testRun(rid), id);
+    const res = await h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.testRun(rid), id);
     expect(res.ok).toBe(true);
-    const jobs = await h.page.evaluate((rid: string) => (window as any).cloak.api.automation.jobs({ ruleId: rid }), id);
+    const jobs = await h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.jobs({ ruleId: rid }), id);
     const mine = jobs.find((j: any) => j.source === "test");
     expect(mine, "a test-source job must exist").toBeTruthy();
     expect(mine.status).toBe("done");
@@ -45,9 +45,9 @@ describe("J36 — durable job queue", () => {
       trigger: { type: "cron", cron: FAR_CRON },
       action: { type: "custom-js", jsCode: "throw new Error('job-fail-sentinel')" },
     });
-    const res = await h.page.evaluate((rid: string) => (window as any).cloak.api.automation.testRun(rid), id);
+    const res = await h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.testRun(rid), id);
     expect(res.ok).toBe(false);
-    const jobs = await h.page.evaluate((rid: string) => (window as any).cloak.api.automation.jobs({ ruleId: rid, status: "failed" }), id);
+    const jobs = await h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.jobs({ ruleId: rid, status: "failed" }), id);
     expect(jobs.length).toBeGreaterThanOrEqual(1);
     expect(jobs[0].status).toBe("failed");
     expect(jobs[0].error).toContain("job-fail-sentinel");
@@ -55,12 +55,12 @@ describe("J36 — durable job queue", () => {
 
   it("jobs persist across a config reload (durable, not just in-memory)", async () => {
     // The jobs live in jobs.sqlite; reloading config must not clear them.
-    const before = await h.page.evaluate(() => (window as any).cloak.api.automation.jobs({ limit: 100 }));
+    const before = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.jobs({ limit: 100 }));
     expect(before.length).toBeGreaterThanOrEqual(1);
     const id = before[0].id;
     const statusBefore = before[0].status;
-    await h.page.evaluate(() => (window as any).cloak.api.app.reloadConfig());
-    const after = await h.page.evaluate(() => (window as any).cloak.api.automation.jobs({ limit: 100 }));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.app.reloadConfig());
+    const after = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.jobs({ limit: 100 }));
     const same = after.find((j: any) => j.id === id);
     expect(same, "the job must survive the reload").toBeTruthy();
     expect(same.status).toBe(statusBefore);
@@ -71,7 +71,7 @@ describe("J36 — durable job queue", () => {
   }, 30000);
 
   it("automation tab surfaces durable jobs with detail lookup", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("automation"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("automation"));
     await h.page.waitForSelector("#automation-jobs .profile-card", { timeout: 5000 });
     const text = await h.page.locator("#automation-jobs").innerText();
     expect(text).toContain("j36-ok");
@@ -80,14 +80,14 @@ describe("J36 — durable job queue", () => {
     expect(text).toContain("job-fail-sentinel");
 
     const failedJob = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const failed = (await api.automation.jobs({ status: "failed", limit: 10 })).find((j: any) => j.ruleName === "j36-fail");
       return failed ? await api.automation.jobGet(failed.id) : null;
     });
     expect(failedJob, "jobGet wrapper must return the failed job").toBeTruthy();
     expect(failedJob.error).toContain("job-fail-sentinel");
 
-    await h.page.evaluate((jobId: string) => (window as any).cloak.automationShowJob(jobId), failedJob.id);
+    await h.page.evaluate((jobId: string) => (window as any).agentBrowser.automationShowJob(jobId), failedJob.id);
     await h.page.waitForSelector("#dlg-auto-job[open]", { timeout: 5000 });
     const detail = await h.page.locator("#auto-job-detail").innerText();
     expect(detail).toContain(failedJob.id);

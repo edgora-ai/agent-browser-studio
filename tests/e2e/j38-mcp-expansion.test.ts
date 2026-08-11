@@ -1,5 +1,5 @@
 // J38: MCP expansion (P1). The MCP server now exposes browser_* / db / http
-// agent tools (prefixed cloak_) plus automation/runs/jobs, so external AI can
+// agent tools (prefixed agent_browser_) plus automation/runs/jobs, so external AI can
 // drive a launched profile and the agent DB over MCP. Connects to the running
 // app's loopback MCP server with the revealed token. The preferred port is
 // 26581, with an ephemeral fallback when another local instance owns it.
@@ -40,12 +40,12 @@ describe("J38 — MCP exposes browser/db/http + automation/runs/jobs", () => {
     // The MCP server starts on app ready; wait for it, then get port + token.
     const start = Date.now();
     while (Date.now() - start < 15000) {
-      const st = await h.page.evaluate(() => (window as any).cloak.api.mcp.status());
+      const st = await h.page.evaluate(() => (window as any).agentBrowser.api.mcp.status());
       if (st.running) { port = st.port; break; }
       await h.page.waitForTimeout(300);
     }
     expect(port, "MCP server must be running").toBeGreaterThan(0);
-    const tok = await h.page.evaluate(() => (window as any).cloak.api.mcp.revealToken());
+    const tok = await h.page.evaluate(() => (window as any).agentBrowser.api.mcp.revealToken());
     token = tok.token;
     expect(token, "MCP token must be available").toBeTruthy();
   }, 60000);
@@ -54,26 +54,26 @@ describe("J38 — MCP exposes browser/db/http + automation/runs/jobs", () => {
   it("tools/list includes the expanded browser/db/http + automation tools", async () => {
     const res = await mcpCall(port, token, "tools/list", {});
     const names = (res.result?.tools || []).map((t: any) => t.name);
-    expect(names).toContain("cloak_browser_navigate");
-    expect(names).toContain("cloak_browser_evaluate");
-    expect(names).toContain("cloak_db_query");
-    expect(names).toContain("cloak_db_exec");
-    expect(names).toContain("cloak_http_request");
-    expect(names).toContain("cloak_automation_list");
-    expect(names).toContain("cloak_runs_list");
-    expect(names).toContain("cloak_jobs_list");
+    expect(names).toContain("agent_browser_navigate");
+    expect(names).toContain("agent_browser_evaluate");
+    expect(names).toContain("agent_browser_db_query");
+    expect(names).toContain("agent_browser_db_exec");
+    expect(names).toContain("agent_browser_http_request");
+    expect(names).toContain("agent_browser_automation_list");
+    expect(names).toContain("agent_browser_runs_list");
+    expect(names).toContain("agent_browser_jobs_list");
   }, 20000);
 
   it("a passthrough db tool works over MCP (create → query)", async () => {
-    const exec = await mcpCall(port, token, "tools/call", { name: "cloak_db_exec", arguments: { sql: "CREATE TABLE IF NOT EXISTS mcp_t (id INTEGER PRIMARY KEY, v TEXT)" } });
+    const exec = await mcpCall(port, token, "tools/call", { name: "agent_browser_db_exec", arguments: { sql: "CREATE TABLE IF NOT EXISTS mcp_t (id INTEGER PRIMARY KEY, v TEXT)" } });
     expect(exec.result?.isError).toBeFalsy();
-    const q = await mcpCall(port, token, "tools/call", { name: "cloak_db_query", arguments: { sql: "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_t'" } });
+    const q = await mcpCall(port, token, "tools/call", { name: "agent_browser_db_query", arguments: { sql: "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_t'" } });
     const text = q.result?.content?.[0]?.text || "";
     expect(text).toContain("mcp_t");
   }, 20000);
 
   it("automation_list returns the rules array over MCP", async () => {
-    const res = await mcpCall(port, token, "tools/call", { name: "cloak_automation_list", arguments: {} });
+    const res = await mcpCall(port, token, "tools/call", { name: "agent_browser_automation_list", arguments: {} });
     const text = res.result?.content?.[0]?.text || "";
     expect(text).toContain("rules");
   }, 20000);

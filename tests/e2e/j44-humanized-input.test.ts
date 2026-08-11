@@ -54,9 +54,9 @@ describe("J44 — seeded native humanized input", () => {
 
     h = await setupTestApp({ userDataDir: USERDATA });
     const created = await h.page.evaluate(async (seed: number) =>
-      (window as any).cloak.api.cloak.create({ name: "J44", platform: "windows", fingerprintSeed: seed, proxyMode: "none" }), SEED);
+      (window as any).agentBrowser.api.browser.create({ name: "J44", platform: "windows", fingerprintSeed: seed, proxyMode: "none" }), SEED);
     const launched = await h.page.evaluate(async (dirId: string) =>
-      (window as any).cloak.api.cloak.launch(dirId), created.dirId) as { success: boolean; cdpPort: number; pid: number; error?: string };
+      (window as any).agentBrowser.api.browser.launch(dirId), created.dirId) as { success: boolean; cdpPort: number; pid: number; error?: string };
     expect(launched.success, launched.error || "J44 launch failed").toBe(true);
     h.cdpPort = launched.cdpPort;
     h.cdpPids.push(launched.pid);

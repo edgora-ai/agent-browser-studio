@@ -1,6 +1,6 @@
-// J49: an independent Chromium advertising roxy-quic-proxy-v1 routes normal
+// J49: an independent Chromium advertising agent-browser-quic-proxy-v1 routes normal
 // CONNECT traffic and RFC 9298 CONNECT-UDP through the profile-owned helper.
-// Set ROXY_E2E_SOCKS5_UDP_URL to an authorized UDP-capable SOCKS5 endpoint.
+// Set AGENT_BROWSER_E2E_SOCKS5_UDP_URL to an authorized UDP-capable SOCKS5 endpoint.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,22 +11,22 @@ import { connectPageCdp, waitForCdpPort, waitForPortClosed } from "./helpers/cdp
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j49");
-const CHROMIUM = process.env.ROXY_E2E_CHROMIUM_PATH
-  ? path.resolve(process.env.ROXY_E2E_CHROMIUM_PATH)
+const CHROMIUM = process.env.AGENT_BROWSER_E2E_CHROMIUM_PATH
+  ? path.resolve(process.env.AGENT_BROWSER_E2E_CHROMIUM_PATH)
   : path.resolve(REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease", "Chromium.app", "Contents", "MacOS", "Chromium");
-const BRIDGE = path.join(REPO, "dist", "native", process.platform === "win32" ? "roxy-masque-bridge.exe" : "roxy-masque-bridge");
-const UPSTREAM_URL = process.env.ROXY_E2E_SOCKS5_UDP_URL || "";
+const BRIDGE = path.join(REPO, "dist", "native", process.platform === "win32" ? "agent-browser-masque-bridge.exe" : "agent-browser-masque-bridge");
+const UPSTREAM_URL = process.env.AGENT_BROWSER_E2E_SOCKS5_UDP_URL || "";
 const ENDPOINT = "https://quic.tlsfingerprint.io/api/client-fingerprint-quic";
 
 function masqueTempDirs(): string[] {
-  return fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("cloak-masque-socks-")).sort();
+  return fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("agent-browser-masque-socks-")).sort();
 }
 
 function bridgePids(parentPid: number): number[] {
   const output = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
   return output.split("\n").flatMap((line) => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
-    if (!match || Number(match[2]) !== parentPid || !match[3].includes("roxy-masque-bridge")) return [];
+    if (!match || Number(match[2]) !== parentPid || !match[3].includes("agent-browser-masque-bridge")) return [];
     return [Number(match[1])];
   });
 }
@@ -41,7 +41,7 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
     if (!fs.existsSync(BRIDGE)) throw new Error(`J49 MASQUE helper is missing: ${BRIDGE}`);
     const upstream = new URL(UPSTREAM_URL);
     if (upstream.protocol !== "socks5:" && upstream.protocol !== "socks5h:") {
-      throw new Error("ROXY_E2E_SOCKS5_UDP_URL must use socks5:// or socks5h://");
+      throw new Error("AGENT_BROWSER_E2E_SOCKS5_UDP_URL must use socks5:// or socks5h://");
     }
     const port = Number(upstream.port || 1080);
 
@@ -49,12 +49,12 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
       userDataDir: USERDATA,
       allowProfileVersionSelection: true,
       env: {
-        CLOAKLITE_CHROMIUM_BINARY_PATH: CHROMIUM,
-        CLOAK_MASQUE_BRIDGE_PATH: BRIDGE,
+        AGENT_BROWSER_CHROMIUM_BINARY_PATH: CHROMIUM,
+        AGENT_BROWSER_MASQUE_BRIDGE_PATH: BRIDGE,
       },
     });
     const added = await h.page.evaluate(async (proxy) =>
-      (window as any).cloak.api.proxy.add("j49-socks-udp", proxy), {
+      (window as any).agentBrowser.api.proxy.add("j49-socks-udp", proxy), {
       type: upstream.protocol === "socks5h:" ? "socks5h" : "socks5",
       host: upstream.hostname,
       port,
@@ -62,7 +62,7 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
       password: decodeURIComponent(upstream.password),
     });
     expect(added.success, added.error).toBe(true);
-    const created = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const created = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J49 managed SOCKS HTTP3",
       platform: "windows",
       fingerprintSeed: 49494,
@@ -81,18 +81,18 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
 
   it("upgrades to h3 through SOCKS5 UDP without leaking credentials or helper state", async () => {
     let launched = await h.page.evaluate(async (id: string) =>
-      (window as any).cloak.api.cloak.launch(id), dirId) as {
+      (window as any).agentBrowser.api.browser.launch(id), dirId) as {
       success: boolean; pid: number; cdpPort: number; error?: string;
     };
     expect(launched.success, launched.error || "J49 launch failed").toBe(true);
     h.cdpPids.push(launched.pid);
     await waitForCdpPort(launched.cdpPort, 15_000);
 
-    const log = fs.readFileSync(path.join(USERDATA, "logs", `cloak-${dirId}.log`), "utf8");
-    expect(log).toMatch(/--proxy-server=quic:\/\/roxy-masque\.local:\d+/);
-    expect(log).toContain("--host-resolver-rules=MAP roxy-masque.local 127.0.0.1");
+    const log = fs.readFileSync(path.join(USERDATA, "logs", `browser-${dirId}.log`), "utf8");
+    expect(log).toMatch(/--proxy-server=quic:\/\/agent-browser-masque\.local:\d+/);
+    expect(log).toContain("--host-resolver-rules=MAP agent-browser-masque.local 127.0.0.1");
     expect(log).toMatch(/--ignore-certificate-errors-spki-list=[A-Za-z0-9+/]{43}=/);
-    expect(log).toMatch(/--origin-to-force-quic-on=roxy-masque\.local:\d+/);
+    expect(log).toMatch(/--origin-to-force-quic-on=agent-browser-masque\.local:\d+/);
     expect(log).toContain("--enable-quic");
     expect(log).not.toContain("--disable-quic");
     const upstream = new URL(UPSTREAM_URL);
@@ -115,12 +115,12 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
       // QUIC through a command-line switch.
       if (first.protocol === "h2") {
         client.close();
-        await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+        await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
         await waitForPortClosed(launched.cdpPort, 10_000);
         await waitForProcessesExit(allHelperPids, 5_000);
 
         launched = await h.page.evaluate(async (id: string) =>
-          (window as any).cloak.api.cloak.launch(id), dirId) as {
+          (window as any).agentBrowser.api.browser.launch(id), dirId) as {
           success: boolean; pid: number; cdpPort: number; error?: string;
         };
         expect(launched.success, launched.error || "J49 relaunch failed").toBe(true);
@@ -163,7 +163,7 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
       expect([[0, 0, 117, 48], [0, 4, 147, 224]]).toContainEqual(transport?.max_idle_timeout);
     } finally {
       client.close();
-      await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+      await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
       await waitForPortClosed(launched.cdpPort, 10_000);
     }
 

@@ -15,12 +15,12 @@ describe("J51 — independent Chromium runtime", () => {
   let emptyCache = "";
 
   beforeAll(async () => {
-    emptyCache = fs.mkdtempSync(path.join(os.tmpdir(), "cloaklite-empty-chromium-"));
+    emptyCache = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-empty-chromium-"));
     h = await setupTestApp({
       userDataDir: USERDATA,
       allowProfileVersionSelection: true,
       env: {
-        CLOAKLITE_CHROMIUM_CACHE_DIR: emptyCache,
+        AGENT_BROWSER_CHROMIUM_CACHE_DIR: emptyCache,
         // These historical wrapper variables must have no effect.
         CLOAKBROWSER_BINARY_PATH: process.execPath,
         CLOAKBROWSER_LICENSE_KEY: "ignored-test-value",
@@ -35,24 +35,24 @@ describe("J51 — independent Chromium runtime", () => {
   }, 30_000);
 
   it("reports no browser instead of accepting a legacy wrapper override", async () => {
-    const status = await h.page.evaluate(async () => (window as any).cloak.api.cloak.binary());
+    const status = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.binary());
     expect(status).toMatchObject({ installed: false, path: null, version: null, source: null });
     expect(status.installedVersions).toEqual([]);
 
-    const verified = await h.page.evaluate(async () => (window as any).cloak.api.cloak.verifyBinary());
+    const verified = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.verifyBinary());
     expect(verified.success).toBe(false);
     expect(verified.error).toContain("Managed Chromium is not installed");
   });
 
   it("fails profile launch closed and leaves the managed cache untouched", async () => {
-    const created = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const created = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J51 no fallback",
       fingerprintSeed: 51515,
       platform: "windows",
       proxyMode: "none",
     }));
     const launched = await h.page.evaluate(
-      async (dirId: string) => (window as any).cloak.api.cloak.launch(dirId),
+      async (dirId: string) => (window as any).agentBrowser.api.browser.launch(dirId),
       created.dirId,
     );
     expect(launched.success).toBe(false);

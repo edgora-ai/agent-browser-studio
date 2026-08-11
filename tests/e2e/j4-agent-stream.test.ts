@@ -39,7 +39,7 @@ describe("J4 — Agent config + chat stream + persistence", () => {
     await h.page.waitForTimeout(300);
     await closeAllDialogs(h.page);
     // Open config sub-view via the app router (avoids ambiguous button matches)
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
 
     await h.page.locator("#agent-llm-provider").selectOption("openai");
@@ -61,16 +61,16 @@ describe("J4 — Agent config + chat stream + persistence", () => {
 
   it("creates a new conversation", async () => {
     // Switch to chat via the app's own router (avoids ambiguous "Back" buttons)
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(300);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
     // Wait for the async create() to populate agentActiveConvId
     await h.page.waitForFunction(
-      () => !!(window as any).cloak.state.agentActiveConvId,
+      () => !!(window as any).agentBrowser.state.agentActiveConvId,
       { timeout: 5000 },
     );
     conversationId = await h.page.evaluate(
-      () => (window as any).cloak.state.agentActiveConvId,
+      () => (window as any).agentBrowser.state.agentActiveConvId,
     );
     expect(conversationId, "no active conversation id").toBeTruthy();
     await shot(h.page, "j4-02-new-conv");
@@ -79,7 +79,7 @@ describe("J4 — Agent config + chat stream + persistence", () => {
   it("sends a message and receives >=3 streamed chunk events", async () => {
     // Install page-side chunk counter before sending
     await h.page.evaluate(() => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       (window as any).__e2eChunks = [];
       (window as any).__e2eDone = false;
       (window as any).__e2eErr = null;
@@ -119,7 +119,7 @@ describe("J4 — Agent config + chat stream + persistence", () => {
   it("second send does not pollute the first assistant bubble (streamId correlation)", async () => {
     // Send a second message; the first assistant bubble must stay intact.
     await h.page.evaluate(() => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       (window as any).__e2eChunks2 = [];
       (window as any).__e2eDone2 = false;
       (window as any).__e2eErr2 = null;
@@ -197,7 +197,7 @@ describe("J4 — Agent config + chat stream + persistence", () => {
     await closeAllDialogs(h.page);
 
     const conv = await h.page.evaluate(
-      async (id: string) => (window as any).cloak.api.agent.conversations.get(id),
+      async (id: string) => (window as any).agentBrowser.api.agent.conversations.get(id),
       persistedId,
     );
     expect(conv, "conversation not found after restart").toBeTruthy();

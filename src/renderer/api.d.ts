@@ -38,7 +38,7 @@ export interface ResolvedProfileProxy {
   config: RedactedProxyConfig | null;
 }
 
-export interface CloakProfileInfo {
+export interface BrowserProfileInfo {
   dirId: string;
   name: string;
   version: string;
@@ -119,7 +119,7 @@ export interface SkillRepositoryEntry {
   updatedAt: number;
 }
 
-export interface CloakLiteAPI {
+export interface AgentBrowserAPI {
   profile: {
     list: () => Promise<any[]>;
     get: (dirId: string) => Promise<any>;
@@ -195,8 +195,8 @@ export interface CloakLiteAPI {
     restart: () => Promise<any>;
     revealToken: () => Promise<{ token: string | null }>;
   };
-  cloak: {
-    list: () => Promise<CloakProfileInfo[]>;
+  browser: {
+    list: () => Promise<BrowserProfileInfo[]>;
     binary: () => Promise<ManagedChromiumStatus>;
     verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
     create: (opts: any) => Promise<{ dirId: string }>;
@@ -242,8 +242,8 @@ export interface CloakLiteAPI {
 
 declare global {
   interface Window {
-    cloakLite?: CloakLiteAPI;
-    cloak?: any;
+    agentBrowserAPI?: AgentBrowserAPI;
+    agentBrowser?: any;
   }
 }
 

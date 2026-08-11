@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -44,24 +44,24 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
-  Object.assign(cloak, {
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  Object.assign(agentBrowser, {
   _extDirId: null,
 
   showExtensions: function (dirId) {
-        cloak._extDirId = dirId;
+        agentBrowser._extDirId = dirId;
         api.profile.get(dirId).then(function(info) {
           document.getElementById('ext-dlg-title').textContent = 'Extensions — ' + (info.name || dirId.slice(0,8));
         }).catch(function(){});
         document.getElementById('ext-dlg-status').textContent = '';
-        cloak._extRefreshList();
+        agentBrowser._extRefreshList();
         document.getElementById('dlg-extensions').showModal();
       },
 
   _extRefreshList: function() {
-        var dirId = cloak._extDirId;
+        var dirId = agentBrowser._extDirId;
         if (!dirId) return;
         api.settings.extensions(dirId).then(function(exts) {
           var el = document.getElementById('ext-list');
@@ -98,7 +98,7 @@
             if (!target || target.dataset.extAction !== "toggle") return;
             var row = target.closest(".extension-row");
             var ext = row ? exts[Number(row.dataset.extIndex)] : null;
-            if (ext) cloak.extToggle(ext.id, target.checked);
+            if (ext) agentBrowser.extToggle(ext.id, target.checked);
           };
           el.onclick = function (event) {
             var target = event.target.closest("[data-ext-action]");
@@ -106,19 +106,19 @@
             var row = target.closest(".extension-row");
             var ext = row ? exts[Number(row.dataset.extIndex)] : null;
             if (!ext) return;
-            if (target.dataset.extAction === "update") cloak.extCheckUpdate(ext.id);
-            else if (target.dataset.extAction === "disable") cloak.extToggle(ext.id, false);
+            if (target.dataset.extAction === "update") agentBrowser.extCheckUpdate(ext.id);
+            else if (target.dataset.extAction === "disable") agentBrowser.extToggle(ext.id, false);
           };
         }).catch(function(e) { toast('Failed: ' + e.message, 'error'); });
       },
 
   extShowInstall: function() {
         document.getElementById('dlg-extensions').close();
-        cloak.switchTab('extensions');
+        agentBrowser.switchTab('extensions');
       },
 
   extInstallTab: function() {
-        cloak.extShowInstall();
+        agentBrowser.extShowInstall();
       },
 
   extInstallFromStore: function() {
@@ -130,7 +130,7 @@
           return;
         }
         document.getElementById('dlg-extensions').close();
-        cloak.showRepositoryAdd(extId);
+        agentBrowser.showRepositoryAdd(extId);
       },
 
   extInstallFromFile: function() {
@@ -144,7 +144,7 @@
               statusEl.innerHTML = '<span style="color:var(--success);">✓ Installed ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
               toast('Local extension installed', 'success');
               loadExtensionsTab();
-              if (cloak._extDirId) cloak._extRefreshList();
+              if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
               statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Install failed') + '</span>';
               toast(r.error || 'Install failed', 'error');
@@ -169,7 +169,7 @@
               statusEl.innerHTML = '<span style="color:var(--success);">✓ Imported ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
               toast('Directory extension imported', 'success');
               loadExtensionsTab();
-              if (cloak._extDirId) cloak._extRefreshList();
+              if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
               statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Import failed') + '</span>';
               toast(r.error || 'Import failed', 'error');
@@ -192,7 +192,7 @@
             if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">✓ Deleted</span>';
             toast('Extension deleted', 'success');
             loadExtensionsTab();
-            if (cloak._extDirId) cloak._extRefreshList();
+            if (agentBrowser._extDirId) agentBrowser._extRefreshList();
           } else {
             if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Delete failed') + '</span>';
             toast(r.error || 'Delete failed', 'error');
@@ -207,7 +207,7 @@
           if (r.success) {
             if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">✓ Repository updated to v' + esc((r.entry && r.entry.version) || '?') + '</span>';
             toast('Repository extension updated', 'success');
-            cloak._extRefreshList();
+            agentBrowser._extRefreshList();
             loadExtensionsTab();
           } else {
             if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Update failed') + '</span>';
@@ -220,7 +220,7 @@
       },
 
   extToggle: function(extId, enabled) {
-        api.settings.toggleExtension(cloak._extDirId, extId, enabled).then(function(r) {
+        api.settings.toggleExtension(agentBrowser._extDirId, extId, enabled).then(function(r) {
           if (r.success) toast(enabled ? 'Enabled for profile' : 'Disabled for profile', 'success');
           else toast(r.error || 'Toggle failed', 'error');
         }).catch(function(e) { toast('Toggle error: ' + e.message, 'error'); });
@@ -257,7 +257,7 @@
           document.getElementById('dlg-extension-repo').close();
           toast((window.i18n ? window.i18n.t("toast.ext.added", "Extension added to private repository") : "Extension added to private repository"), 'success');
           loadExtensionsTab();
-          if (cloak._extDirId) cloak._extRefreshList();
+          if (agentBrowser._extDirId) agentBrowser._extRefreshList();
         }).catch(function (e) {
           if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message) + '</span>';
           toast(e.message, 'error');
@@ -267,7 +267,7 @@
   updateRepositoryExtension: function (extId) {
         toast('Updating extension repository...', 'info');
         api.settings.updateRepositoryExtension(extId).then(function (r) {
-          if (r.success) { toast((window.i18n ? window.i18n.t("toast.ext.repo-updated", "Repository updated") : "Repository updated"), 'success'); loadExtensionsTab(); if (cloak._extDirId) cloak._extRefreshList(); }
+          if (r.success) { toast((window.i18n ? window.i18n.t("toast.ext.repo-updated", "Repository updated") : "Repository updated"), 'success'); loadExtensionsTab(); if (agentBrowser._extDirId) agentBrowser._extRefreshList(); }
           else toast(r.error || 'Update failed', 'error');
         }).catch(function (e) { toast(e.message, 'error'); });
       },
@@ -331,11 +331,11 @@
         var extId = card && card.dataset.extId;
         if (!extId) return;
         var action = target.dataset.action;
-        if (action === "repo-update") cloak.updateRepositoryExtension(extId);
+        if (action === "repo-update") agentBrowser.updateRepositoryExtension(extId);
         else if (action === "repo-share") {
           var entry = (entries || []).find(function (item) { return item.id === extId; });
-          cloak.setRepositoryShared(extId, !(entry && entry.shared), entry && entry.tags || []);
-        } else if (action === "repo-delete") cloak.extDelete(extId);
+          agentBrowser.setRepositoryShared(extId, !(entry && entry.shared), entry && entry.tags || []);
+        } else if (action === "repo-delete") agentBrowser.extDelete(extId);
       };
     }).catch(function (e) {
       container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';

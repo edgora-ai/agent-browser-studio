@@ -1,9 +1,9 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -55,7 +55,7 @@
     });
   }
 
-  cloak.loadSyncPreview = function() {
+  agentBrowser.loadSyncPreview = function() {
     var listEl = document.getElementById('sync-preview');
     var messageEl = document.getElementById('sync-preview-message');
     if (listEl) listEl.innerHTML = '<div class="loading">Loading...</div>';
@@ -68,13 +68,13 @@
     });
   };
 
-  cloak.syncPush = function() {
+  agentBrowser.syncPush = function() {
     var reset = setButtonBusy('#tab-sync [data-cmd="syncPush"]', 'Checking...');
     fetchPreview().then(function() {
       api.sync.push().then(function(r) {
         toast(r.message, r.success ? 'success' : 'error');
-        if (r.success) cloak.loadSyncConfig();
-        else cloak.loadSyncPreview();
+        if (r.success) agentBrowser.loadSyncConfig();
+        else agentBrowser.loadSyncPreview();
       }).catch(function(e) {
         toast(t('sync.toast.push-failed','Push failed: ') + (e.message || String(e)), 'error');
       }).finally(function() {
@@ -86,7 +86,7 @@
     });
   };
 
-  cloak.syncPull = function() {
+  agentBrowser.syncPull = function() {
     var reset = setButtonBusy('#tab-sync [data-cmd="syncPull"]', 'Checking...');
     fetchPreview().then(function(preview) {
       var running = (preview && preview.runningProfiles) || [];
@@ -96,12 +96,12 @@
       }
       api.sync.pull().then(function(r) {
         toast(r.message, r.success ? 'success' : 'error');
-        if (!r.success) { cloak.loadSyncPreview(); return; }
+        if (!r.success) { agentBrowser.loadSyncPreview(); return; }
         return api.app.reloadConfig().then(function() {
-          cloak.loadSyncConfig();
+          agentBrowser.loadSyncConfig();
         }).catch(function(e) {
           toast(t('sync.toast.reload-failed','Reload config failed: ') + (e.message || String(e)), 'error');
-          cloak.loadSyncConfig();
+          agentBrowser.loadSyncConfig();
         });
       }).catch(function(e) {
         toast(t('sync.toast.pull-failed','Pull failed: ') + (e.message || String(e)), 'error');
@@ -114,7 +114,7 @@
     });
   };
 
-  cloak.syncSave = function() {
+  agentBrowser.syncSave = function() {
     var config = {
       enabled: document.getElementById('sync-enabled').checked,
       endpoint: document.getElementById('sync-endpoint-input').value.trim(),
@@ -130,7 +130,7 @@
         document.getElementById('sync-enabled-text').textContent = config.enabled && config.endpoint && config.bucket ? 'enabled' : 'disabled';
         document.getElementById('sync-endpoint').textContent = config.endpoint || '--';
         document.getElementById('sync-bucket').textContent = config.bucket || '--';
-        cloak.loadSyncPreview();
+        agentBrowser.loadSyncPreview();
       } else {
         toast(r.error || t('sync.toast.save-failed-default','Save failed'), 'error');
       }
@@ -152,11 +152,11 @@
       if (!ak.value) ak.placeholder = status.accessKeyMasked || '';
       var sk = document.getElementById('sync-sk-input');
       if (!sk.value) sk.placeholder = status.configured ? 'saved' : '';
-      cloak.loadSyncPreview();
+      agentBrowser.loadSyncPreview();
     }).catch(function(e) {
       toast((window.i18n ? window.i18n.t('toast.sync.load-failed', 'Failed to load sync config') : 'Failed to load sync config') + ': ' + e.message, 'error');
-      cloak.loadSyncPreview();
+      agentBrowser.loadSyncPreview();
     });
   }
-  cloak.loadSyncConfig = loadSyncConfig;
+  agentBrowser.loadSyncConfig = loadSyncConfig;
 })();

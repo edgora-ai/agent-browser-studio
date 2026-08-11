@@ -14,7 +14,7 @@ const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j35");
 async function setConfigFlag(h: TestAppHandle, patch: any) {
   const cfg = JSON.parse(fs.readFileSync(userDataConfigPath(USERDATA), "utf8"));
   fs.writeFileSync(userDataConfigPath(USERDATA), JSON.stringify({ ...cfg, ...patch }, null, 2));
-  await h.page.evaluate(() => (window as any).cloak.api.app.reloadConfig());
+  await h.page.evaluate(() => (window as any).agentBrowser.api.app.reloadConfig());
 }
 
 describe("J35 — pre-launch consistency check", () => {
@@ -25,12 +25,12 @@ describe("J35 — pre-launch consistency check", () => {
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
     // Risky: WebRTC IP set, explicitly NO proxy → blocker.
-    const r1 = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const r1 = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J35-risky", platform: "windows", fingerprintSeed: 35001, webrtcIp: "203.0.113.9", proxyMode: "none",
     }));
     riskyDirId = r1.dirId;
     // Clean: US tz + en-US, no WebRTC → no findings.
-    const r2 = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const r2 = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J35-clean", platform: "windows", fingerprintSeed: 35002, timezone: "America/New_York", locale: "en-US", proxyMode: "none",
     }));
     cleanDirId = r2.dirId;
@@ -39,13 +39,13 @@ describe("J35 — pre-launch consistency check", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("flags the WebRTC-without-proxy profile as a blocker", async () => {
-    const res = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.consistencyCheck(id), riskyDirId);
+    const res = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.consistencyCheck(id), riskyDirId);
     expect(res.ok).toBe(false);
     expect(res.blockers.some((b: any) => b.code === "webrtc-no-proxy")).toBe(true);
   });
 
   it("passes the clean profile with no findings", async () => {
-    const res = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.consistencyCheck(id), cleanDirId);
+    const res = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.consistencyCheck(id), cleanDirId);
     expect(res.ok).toBe(true);
     expect(res.warnings).toHaveLength(0);
     expect(res.blockers).toHaveLength(0);
@@ -69,12 +69,12 @@ describe("J35 — pre-launch consistency check", () => {
       },
     };
     fs.writeFileSync(userDataConfigPath(USERDATA), JSON.stringify(cfg, null, 2));
-    await h.page.evaluate(() => (window as any).cloak.api.app.reloadConfig());
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    await h.page.evaluate(() => (window as any).agentBrowser.api.app.reloadConfig());
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J35-proxy-geo", platform: "windows", fingerprintSeed: 35003,
       timezone: "Asia/Shanghai", locale: "zh-CN", proxyMode: "named", proxyName: "j35-us",
     }));
-    const res = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.consistencyCheck(id), r.dirId);
+    const res = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.consistencyCheck(id), r.dirId);
     expect(res.ok).toBe(true);
     expect(res.warnings.some((w: any) => w.code === "proxy-tz")).toBe(true);
     expect(res.warnings.some((w: any) => w.code === "proxy-locale")).toBe(true);
@@ -83,13 +83,13 @@ describe("J35 — pre-launch consistency check", () => {
 
   it("refuses to launch the risky profile when blockOnConsistencyConflict=true", async () => {
     await setConfigFlag(h, { blockOnConsistencyConflict: true });
-    // cloak:launch catches errors and returns {success:false, error}.
-    const res = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), riskyDirId);
+    // browser:launch catches errors and returns {success:false, error}.
+    const res = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), riskyDirId);
     expect(res.success, "launch must be refused on a blocker when blocking is enabled").toBe(false);
     expect(res.error).toMatch(/consistency|blocked|WebRTC/i);
 
     // The blocker was recorded in the audit log.
-    const audit = await h.page.evaluate(() => (window as any).cloak.api.audit.list({ category: "profile" }));
+    const audit = await h.page.evaluate(() => (window as any).agentBrowser.api.audit.list({ category: "profile" }));
     const blocker = audit.find((a: any) => a.action === "consistency-blocker" && a.target === riskyDirId);
     expect(blocker, "blocker must be audited").toBeTruthy();
   }, 30000);

@@ -37,7 +37,7 @@ export async function waitForProfiles(
   return page.locator(".profile-card").count();
 }
 
-export async function invokeRoxy<T = unknown>(
+export async function invokeAgentBrowser<T = unknown>(
   page: Page,
   expression: string,
   arg?: unknown,

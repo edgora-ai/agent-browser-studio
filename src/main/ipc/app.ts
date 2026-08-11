@@ -6,7 +6,7 @@ import {
   getProfilesDir,
   reloadConfig,
 } from "../services/config-manager.js";
-import { findRuntimeChromiumBinary } from "../services/cloak-manager.js";
+import { findRuntimeChromiumBinary } from "../services/browser-manager.js";
 import { setMainLanguage, getMainLanguage } from "../services/main-i18n.js";
 
 export function registerAppHandlers(): void {

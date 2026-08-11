@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,9 +43,9 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
 
   function readGeolocationFields(prefix) {
     var mode = document.getElementById(prefix + "geolocation-mode").value;
@@ -73,7 +73,7 @@
     var select = document.getElementById(id);
     if (!select) return Promise.resolve();
     var selected = selectedVersion || "";
-    return api.cloak.binary().then(function(info) {
+    return api.browser.binary().then(function(info) {
       var versions = (info && info.installedVersions) || [];
       select.innerHTML = "";
       select.appendChild(new Option("Auto (newest installed)", ""));
@@ -89,9 +89,9 @@
     });
   }
 
-  Object.assign(cloak, {
+  Object.assign(agentBrowser, {
   launch: function (dirId) {
-        api.cloak.launch(dirId).then(function (r) {
+        api.browser.launch(dirId).then(function (r) {
           if (r.success) {
             toast((window.i18n ? window.i18n.t("toast.profile.started", "🥷 Managed Chromium started") : "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
             var seq = markProfileRuntime(dirId, true, r.pid);
@@ -104,7 +104,7 @@
       },
 
   stop: function (dirId) {
-        api.cloak.stop(dirId).then(function (r) {
+        api.browser.stop(dirId).then(function (r) {
           if (r && r.success === false) { toast(r.error || (window.i18n ? window.i18n.t("toast.profile.stop-failed", "Stop failed") : "Stop failed"), "error"); scheduleProfilesRefresh(); return; }
           toast((window.i18n ? window.i18n.t("toast.profile.stopped", "Browser stopped") : "Browser stopped"), "success");
           var seq = markProfileRuntime(dirId, false, null);
@@ -114,7 +114,7 @@
       },
 
   editProfile: function (dirId) {
-        api.cloak.list().then(function(profiles) {
+        api.browser.list().then(function(profiles) {
           var p = (profiles || []).find(function(x) { return x.dirId === dirId; });
           if (!p) { toast((window.i18n ? window.i18n.t("toast.profile.not-found", "Profile not found") : "Profile not found"), "error"); return; }
           var metaData = {
@@ -144,24 +144,24 @@
             proxyMode: p.proxyMode || (p.proxyName ? "named" : "none"),
             proxyName: p.proxyName || null
           };
-          document.getElementById("cloak-meta-dir-id").value = dirId;
-          document.getElementById("cloak-meta-fingerprint-mode").value = metaData.fingerprintMode;
-          populateChromiumVersionSelect("cloak-meta-browser-version", metaData.browserVersion);
-          document.getElementById("cloak-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
-          document.getElementById("cloak-meta-name").value = metaData.name;
-          document.getElementById("cloak-meta-seed").value = metaData.seed;
-          document.getElementById("cloak-meta-platform").value = metaData.platform;
-          document.getElementById("cloak-meta-timezone").value = metaData.timezone;
-          document.getElementById("cloak-meta-locale").value = metaData.locale;
-          document.getElementById("cloak-meta-webrtc-mode").value = metaData.webrtcMode;
-          document.getElementById("cloak-meta-webrtc").value = metaData.webrtcIp;
-          writeGeolocationFields("cloak-meta-", metaData);
-          writeHardwareFields("cloak-meta-", metaData);
+          document.getElementById("agent-browser-meta-dir-id").value = dirId;
+          document.getElementById("agent-browser-meta-fingerprint-mode").value = metaData.fingerprintMode;
+          populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion);
+          document.getElementById("agent-browser-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
+          document.getElementById("agent-browser-meta-name").value = metaData.name;
+          document.getElementById("agent-browser-meta-seed").value = metaData.seed;
+          document.getElementById("agent-browser-meta-platform").value = metaData.platform;
+          document.getElementById("agent-browser-meta-timezone").value = metaData.timezone;
+          document.getElementById("agent-browser-meta-locale").value = metaData.locale;
+          document.getElementById("agent-browser-meta-webrtc-mode").value = metaData.webrtcMode;
+          document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
+          writeGeolocationFields("agent-browser-meta-", metaData);
+          writeHardwareFields("agent-browser-meta-", metaData);
           api.proxy.list().then(function(proxies) {
-            var sel = document.getElementById("cloak-meta-proxy");
+            var sel = document.getElementById("agent-browser-meta-proxy");
             sel.innerHTML = renderProxyOptions(proxies, proxySelectionValue(metaData.proxyMode, metaData.proxyName), false);
           });
-          document.getElementById("dlg-cloak-seed").showModal();
+          document.getElementById("dlg-agent-browser-seed").showModal();
         }).catch(function (e) { toast(e.message, "error"); });
       },
 
@@ -172,9 +172,9 @@
       },
 
   delProfile: function (dirId) {
-        cloak.confirm("Delete profile? All data will be removed.", function () {
-          api.cloak.delete(dirId).then(function (r) {
-            if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); cloak.refresh(); }
+        agentBrowser.confirm("Delete profile? All data will be removed.", function () {
+          api.browser.delete(dirId).then(function (r) {
+            if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
           }).catch(function (e) { toast(e.message, "error"); });
         });
@@ -190,9 +190,9 @@
         var dirId = document.getElementById("rename-dir-id").value;
         var newName = document.getElementById("rename-name").value.trim();
         if (!newName) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
-        api.cloak.setMeta(dirId, { name: newName }).then(function (r) {
+        api.browser.setMeta(dirId, { name: newName }).then(function (r) {
           document.getElementById("dlg-rename").close();
-          if (r.success) { toast((window.i18n ? window.i18n.t("toast.renamed", "Renamed") : "Renamed"), "success"); cloak.refresh(); }
+          if (r.success) { toast((window.i18n ? window.i18n.t("toast.renamed", "Renamed") : "Renamed"), "success"); agentBrowser.refresh(); }
           else toast(r.error || "Failed", "error");
         }).catch(function (e) { toast(e.message, "error"); });
       },
@@ -200,8 +200,8 @@
   proxyChanged: function (dirId, selectEl) {
         var selection = parseProxySelection(selectEl.value, "none");
         api.proxy.setProfile(dirId, selection.name, selection.mode).then(function (r) {
-          if (r && r.success === false) { toast(r.error || (window.i18n ? window.i18n.t("toast.proxy.update-failed", "Proxy update failed") : "Proxy update failed"), "error"); cloak.refresh(); return; }
-          toast((window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated"), "success"); cloak.refresh();
+          if (r && r.success === false) { toast(r.error || (window.i18n ? window.i18n.t("toast.proxy.update-failed", "Proxy update failed") : "Proxy update failed"), "error"); agentBrowser.refresh(); return; }
+          toast((window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated"), "success"); agentBrowser.refresh();
         }).catch(function (e) { toast(e.message, "error"); });
       },
 
@@ -217,37 +217,37 @@
           document.getElementById("new-profile-browser").value = browser;
         }
         document.getElementById("new-profile-proxy").value = "default";
-        document.getElementById("new-cloak-fingerprint-mode").value = "managed";
-        populateChromiumVersionSelect("new-cloak-browser-version", "");
-        document.getElementById("new-cloak-allow-third-party-cookies").checked = false;
-        document.getElementById("new-cloak-seed").value = "";
-        document.getElementById("new-cloak-platform").value = "windows";
-        document.getElementById("new-cloak-timezone").value = "";
-        document.getElementById("new-cloak-locale").value = "";
-        document.getElementById("new-cloak-webrtc").value = "";
-        writeGeolocationFields("new-cloak-", {});
-        writeHardwareFields("new-cloak-", {});
+        document.getElementById("new-agent-browser-fingerprint-mode").value = "managed";
+        populateChromiumVersionSelect("new-agent-browser-browser-version", "");
+        document.getElementById("new-agent-browser-allow-third-party-cookies").checked = false;
+        document.getElementById("new-agent-browser-seed").value = "";
+        document.getElementById("new-agent-browser-platform").value = "windows";
+        document.getElementById("new-agent-browser-timezone").value = "";
+        document.getElementById("new-agent-browser-locale").value = "";
+        document.getElementById("new-agent-browser-webrtc").value = "";
+        writeGeolocationFields("new-agent-browser-", {});
+        writeHardwareFields("new-agent-browser-", {});
       },
 
   newProfile: function () {
-        cloak.resetNewProfileForm("cloak");
-        cloak.loadNewProfileProxies();
-        cloak.profileBrowserChanged();
+        agentBrowser.resetNewProfileForm("chromium");
+        agentBrowser.loadNewProfileProxies();
+        agentBrowser.profileBrowserChanged();
         document.getElementById("dlg-profile").showModal();
       },
 
   profileBrowserChanged: function() {
         var chromeOpts = document.getElementById("new-profile-chrome-opts");
-        var cloakOpts = document.getElementById("new-profile-cloak-opts");
+        var browserOptions = document.getElementById("new-profile-agent-browser-opts");
         var firefoxOpts = document.getElementById("new-profile-firefox-opts");
         if (chromeOpts) chromeOpts.style.display = "none";
-        if (cloakOpts) cloakOpts.style.display = "block";
+        if (browserOptions) browserOptions.style.display = "block";
         if (firefoxOpts) firefoxOpts.style.display = "none";
         var browserRow = document.getElementById("new-profile-browser-row");
         if (browserRow) browserRow.style.display = "none";
         var proxyRow = document.getElementById("new-profile-proxy-row");
         if (proxyRow) proxyRow.style.display = "block";
-        cloak.loadNewProfileProxies();
+        agentBrowser.loadNewProfileProxies();
       },
 
   createProfile: function () {
@@ -256,29 +256,29 @@
 
         if (!name) { toast((window.i18n ? window.i18n.t("toast.profile.name-prompt", "Please enter a name") : "Please enter a name"), "error"); return; }
 
-        var cloakPlatform = document.getElementById("new-cloak-platform").value;
-        var fingerprintMode = document.getElementById("new-cloak-fingerprint-mode").value || "managed";
-        var browserVersion = document.getElementById("new-cloak-browser-version").value || null;
-        var allowThirdPartyCookies = document.getElementById("new-cloak-allow-third-party-cookies").checked;
-        var seedRaw = document.getElementById("new-cloak-seed").value.trim();
+        var browserPlatform = document.getElementById("new-agent-browser-platform").value;
+        var fingerprintMode = document.getElementById("new-agent-browser-fingerprint-mode").value || "managed";
+        var browserVersion = document.getElementById("new-agent-browser-browser-version").value || null;
+        var allowThirdPartyCookies = document.getElementById("new-agent-browser-allow-third-party-cookies").checked;
+        var seedRaw = document.getElementById("new-agent-browser-seed").value.trim();
         var seed = seedRaw ? Number(seedRaw) : undefined;
         if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
-        var tz = document.getElementById("new-cloak-timezone").value || undefined;
-        var loc = document.getElementById("new-cloak-locale").value || undefined;
-        var webrtcMode = document.getElementById("new-cloak-webrtc-mode").value || "auto";
-        var webrtcIp = document.getElementById("new-cloak-webrtc").value.trim() || undefined;
+        var tz = document.getElementById("new-agent-browser-timezone").value || undefined;
+        var loc = document.getElementById("new-agent-browser-locale").value || undefined;
+        var webrtcMode = document.getElementById("new-agent-browser-webrtc-mode").value || "auto";
+        var webrtcIp = document.getElementById("new-agent-browser-webrtc").value.trim() || undefined;
         if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
         var hardware, geolocation;
-        try { hardware = readHardwareFields("new-cloak-"); geolocation = readGeolocationFields("new-cloak-"); }
+        try { hardware = readHardwareFields("new-agent-browser-"); geolocation = readGeolocationFields("new-agent-browser-"); }
         catch (e) { toast(e.message || String(e), "error"); return; }
 
-        api.cloak.create(Object.assign({
+        api.browser.create(Object.assign({
           name: name,
           fingerprintMode: fingerprintMode,
           browserVersion: browserVersion,
           allowThirdPartyCookies: allowThirdPartyCookies,
           fingerprintSeed: seed,
-          platform: cloakPlatform,
+          platform: browserPlatform,
           timezone: tz,
           locale: loc,
           webrtcMode: webrtcMode,
@@ -289,15 +289,15 @@
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           loadProfiles();
-          cloak.switchTab("profiles");
+          agentBrowser.switchTab("profiles");
         }).catch(function(e) { toast(e.message, "error"); });
       },
 
-  refresh: function () { cloak.loadTab(state.currentTab); },
+  refresh: function () { agentBrowser.loadTab(state.currentTab); },
 
   refreshProfilesSoft: function () { loadProfiles(true); }
   });
-  cloak.bulkImport = function() {
+  agentBrowser.bulkImport = function() {
     api.proxy.list().then(function(proxies) {
       document.getElementById("bulk-import-proxy").innerHTML = renderProxyOptions(proxies, "default", false);
       document.getElementById("bulk-import-text").value = "";
@@ -306,13 +306,13 @@
     });
   };
 
-  cloak.doBulkImport = function() {
+  agentBrowser.doBulkImport = function() {
     var text = document.getElementById("bulk-import-text").value.trim();
     var fallbackProxy = parseProxySelection(document.getElementById("bulk-import-proxy").value, "default");
     var statusEl = document.getElementById("bulk-import-status");
     if (!text) { statusEl.innerHTML = '<span style="color:var(--danger);">Enter profile definitions</span>'; return; }
     // Parse via the shared CSV parser (supports header + per-row proxy/tags).
-    api.cloak.parseBulkCsv(text).then(function(res) {
+    api.browser.parseBulkCsv(text).then(function(res) {
       if (!res || !res.ok || !res.specs || !res.specs.length) {
         statusEl.innerHTML = '<span style="color:var(--danger);">No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)</span>';
         return;
@@ -323,14 +323,14 @@
       function processNext(idx) {
         if (idx >= specs.length) {
           statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>';
-          setTimeout(function() { document.getElementById("dlg-bulk-import").close(); cloak.refresh(); }, 1000);
+          setTimeout(function() { document.getElementById("dlg-bulk-import").close(); agentBrowser.refresh(); }, 1000);
           return;
         }
         var s = specs[idx];
         // Per-row proxy wins; else the dialog's fallback selection.
         var proxyMode = s.proxyName ? "named" : fallbackProxy.mode;
         var proxyName = s.proxyName || fallbackProxy.name;
-        api.cloak.create({
+        api.browser.create({
           name: s.name,
           platform: s.platform || "windows",
           locale: s.locale,
@@ -355,40 +355,40 @@
     }).catch(function(e) { statusEl.innerHTML = '<span style="color:var(--danger);">' + esc((e && e.message) || e) + '</span>'; });
   };
 
-  cloak.bulkStart = function() {
-    api.cloak.list().then(function(profiles) {
+  agentBrowser.bulkStart = function() {
+    api.browser.list().then(function(profiles) {
       var stopped = (profiles || []).filter(function(p) { return !p.running; });
       if (stopped.length === 0) { toast((window.i18n ? window.i18n.t("toast.bulk.all-running", "All profiles already running") : "All profiles already running"), "success"); return; }
       toast("Starting " + stopped.length + " profiles...", "success");
       stopped.forEach(function(p, i) {
         setTimeout(function() {
-          cloak.launch(p.dirId);
-          if (i === stopped.length - 1) { toast(stopped.length + " profiles started", "success"); setTimeout(cloak.refresh, 2000); }
+          agentBrowser.launch(p.dirId);
+          if (i === stopped.length - 1) { toast(stopped.length + " profiles started", "success"); setTimeout(agentBrowser.refresh, 2000); }
         }, i * 500);
       });
     }).catch(function(){});
   };
 
-  cloak.bulkStop = function() {
-    api.cloak.list().then(function(profiles) {
+  agentBrowser.bulkStop = function() {
+    api.browser.list().then(function(profiles) {
       var running = (profiles || []).filter(function(p) { return p.running; });
       if (running.length === 0) { toast((window.i18n ? window.i18n.t("toast.bulk.none-running", "No profiles running") : "No profiles running"), "success"); return; }
       toast("Stopping " + running.length + " profiles...", "success");
-      running.forEach(function(r) { cloak.stop(r.dirId); });
-      setTimeout(cloak.refresh, 2000);
+      running.forEach(function(r) { agentBrowser.stop(r.dirId); });
+      setTimeout(agentBrowser.refresh, 2000);
     }).catch(function(){});
   };
 
-  cloak.openRiskCheck = function(dirId) {
+  agentBrowser.openRiskCheck = function(dirId) {
     var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
-    api.cloak.status(dirId).then(function(s) {
+    api.browser.status(dirId).then(function(s) {
       var wasRunning = s && s.running;
       if (!wasRunning) {
         toast(t('toast.fp.launching', 'Launching profile and opening risk check…'), 'info');
       } else {
         toast(t('toast.fp.opening', 'Opening risk check…'), 'info');
       }
-      return api.cloak.openRiskCheck(dirId).then(function(r) {
+      return api.browser.openRiskCheck(dirId).then(function(r) {
         if (r && r.success) {
           toast(t('toast.fp.opened', 'Opened risk check in profile'), 'success');
           // Refresh profile list to reflect newly running state
@@ -400,8 +400,8 @@
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.addNote = function(dirId) {
-    api.cloak.list().then(function(profiles) {
+  agentBrowser.addNote = function(dirId) {
+    api.browser.list().then(function(profiles) {
       var p = (profiles || []).find(function(x) { return x.dirId === dirId; });
       var note = (p && p.note) || "";
       document.getElementById("note-dir-id").value = dirId;
@@ -410,37 +410,37 @@
     });
   };
 
-  cloak.saveNote = function() {
+  agentBrowser.saveNote = function() {
     var dirId = document.getElementById("note-dir-id").value;
     var note = document.getElementById("note-text").value.trim();
     document.getElementById("dlg-note").close();
-    api.cloak.setMeta(dirId, { note: note }).then(function(r) {
-      if (r.success) { toast((window.i18n ? window.i18n.t("toast.note.saved", "Note saved") : "Note saved"), "success"); cloak.refresh(); }
+    api.browser.setMeta(dirId, { note: note }).then(function(r) {
+      if (r.success) { toast((window.i18n ? window.i18n.t("toast.note.saved", "Note saved") : "Note saved"), "success"); agentBrowser.refresh(); }
       else toast((window.i18n ? window.i18n.t("toast.note.save-failed", "Failed to save note") : "Failed to save note"), "error");
     });
   };
-  cloak.saveCloakMeta = function() {
-    var dirId = document.getElementById("cloak-meta-dir-id").value;
-    var name = document.getElementById("cloak-meta-name").value.trim();
-    var fingerprintMode = document.getElementById("cloak-meta-fingerprint-mode").value || "managed";
-    var browserVersion = document.getElementById("cloak-meta-browser-version").value || null;
-    var allowThirdPartyCookies = document.getElementById("cloak-meta-allow-third-party-cookies").checked;
-    var seed = Number(document.getElementById("cloak-meta-seed").value);
-    var platform = document.getElementById("cloak-meta-platform").value;
-    var timezone = document.getElementById("cloak-meta-timezone").value || null;
-    var locale = document.getElementById("cloak-meta-locale").value || null;
-    var webrtcMode = document.getElementById("cloak-meta-webrtc-mode").value || "auto";
-    var webrtcIp = document.getElementById("cloak-meta-webrtc").value.trim() || null;
+  agentBrowser.saveBrowserMeta = function() {
+    var dirId = document.getElementById("agent-browser-meta-dir-id").value;
+    var name = document.getElementById("agent-browser-meta-name").value.trim();
+    var fingerprintMode = document.getElementById("agent-browser-meta-fingerprint-mode").value || "managed";
+    var browserVersion = document.getElementById("agent-browser-meta-browser-version").value || null;
+    var allowThirdPartyCookies = document.getElementById("agent-browser-meta-allow-third-party-cookies").checked;
+    var seed = Number(document.getElementById("agent-browser-meta-seed").value);
+    var platform = document.getElementById("agent-browser-meta-platform").value;
+    var timezone = document.getElementById("agent-browser-meta-timezone").value || null;
+    var locale = document.getElementById("agent-browser-meta-locale").value || null;
+    var webrtcMode = document.getElementById("agent-browser-meta-webrtc-mode").value || "auto";
+    var webrtcIp = document.getElementById("agent-browser-meta-webrtc").value.trim() || null;
     if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = null;
-    var proxySelection = parseProxySelection(document.getElementById("cloak-meta-proxy").value, "none");
+    var proxySelection = parseProxySelection(document.getElementById("agent-browser-meta-proxy").value, "none");
     var hardware, geolocation;
-    try { hardware = readHardwareFields("cloak-meta-"); geolocation = readGeolocationFields("cloak-meta-"); }
+    try { hardware = readHardwareFields("agent-browser-meta-"); geolocation = readGeolocationFields("agent-browser-meta-"); }
     catch (e) { toast(e.message || String(e), "error"); return; }
-    document.getElementById("dlg-cloak-seed").close();
+    document.getElementById("dlg-agent-browser-seed").close();
     if (!Number.isInteger(seed) || seed < 1 || seed > 999999) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
     if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
     var promises = [];
-    promises.push(api.cloak.setMeta(dirId, Object.assign({
+    promises.push(api.browser.setMeta(dirId, Object.assign({
       name: name, fingerprintMode: fingerprintMode, browserVersion: browserVersion,
       allowThirdPartyCookies: allowThirdPartyCookies,
       fingerprintSeed: seed, platform: platform,
@@ -459,10 +459,10 @@
     if (!soft) container.innerHTML = '<div class="loading">Loading...</div>';
 
     Promise.all([
-      api.cloak.list().catch(function () { return []; }),
+      api.browser.list().catch(function () { return []; }),
       api.proxy.list(),
     ]).then(function (results) {
-      var cloakProfiles = results[0] || [];
+      var browserProfiles = results[0] || [];
       var proxies = results[1];
 
       // Build a proxy lookup map for legacy renderer-side fallback.
@@ -470,7 +470,7 @@
       var defaultProxyName = null;
       (proxies || []).forEach(function(p) { proxyMap[p.name] = p.config; if (p.isDefault) defaultProxyName = p.name; });
 
-      var profiles = cloakProfiles.map(function(cp) {
+      var profiles = browserProfiles.map(function(cp) {
         var proxyMode = cp.proxyMode || (cp.proxyName ? "named" : "none");
         var resolvedProxy = cp.proxy || (proxyMode === "default" ? proxyMap[defaultProxyName] : proxyMap[cp.proxyName]) || null;
         return {
@@ -485,7 +485,7 @@
           proxyName: cp.proxyName || null,
           syncedAt: cp.syncedAt || null,
           syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
-          fingerprint: { browser: "cloak", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
+          fingerprint: { browser: "chromium", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
           hardwareConcurrency: cp.hardwareConcurrency || null,
@@ -600,23 +600,23 @@
       var dirId = card.dataset.dirId;
       var action = target.dataset.action;
       if (!dirId || action === "proxy") return;
-      if (action === "rename") cloak.renameProfile(dirId, card.querySelector(".name")?.textContent || "");
-      else if (action === "note") cloak.addNote(dirId);
-      else if (action === "stop") cloak.stop(dirId);
-      else if (action === "launch") cloak.launch(dirId);
-      else if (action === "edit") cloak.editProfile(dirId);
-      else if (action === "cookies") cloak.showCookies(dirId);
-      else if (action === "extensions") cloak.showExtensions(dirId);
-      else if (action === "delete") cloak.delProfile(dirId);
-      else if (action === "risk-check") cloak.openRiskCheck(dirId);
+      if (action === "rename") agentBrowser.renameProfile(dirId, card.querySelector(".name")?.textContent || "");
+      else if (action === "note") agentBrowser.addNote(dirId);
+      else if (action === "stop") agentBrowser.stop(dirId);
+      else if (action === "launch") agentBrowser.launch(dirId);
+      else if (action === "edit") agentBrowser.editProfile(dirId);
+      else if (action === "cookies") agentBrowser.showCookies(dirId);
+      else if (action === "extensions") agentBrowser.showExtensions(dirId);
+      else if (action === "delete") agentBrowser.delProfile(dirId);
+      else if (action === "risk-check") agentBrowser.openRiskCheck(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
       if (!target || target.dataset.action !== "proxy") return;
       var card = target.closest(".profile-card");
-      if (card && card.dataset.dirId) cloak.proxyChanged(card.dataset.dirId, target);
+      if (card && card.dataset.dirId) agentBrowser.proxyChanged(card.dataset.dirId, target);
     };
   }
-  cloak.loadProfiles = loadProfiles;
+  agentBrowser.loadProfiles = loadProfiles;
 
 })();

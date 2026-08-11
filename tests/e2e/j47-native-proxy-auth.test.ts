@@ -21,7 +21,7 @@ interface ProxyRequest {
 }
 
 function nativeAuthTempDirs(): string[] {
-  return fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("cloak-native-proxy-auth-")).sort();
+  return fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("agent-browser-native-proxy-auth-")).sort();
 }
 
 describe("J47 — native HTTP proxy authentication", () => {
@@ -80,11 +80,11 @@ describe("J47 — native HTTP proxy authentication", () => {
       userDataDir: USERDATA,
       allowProfileVersionSelection: true,
       env: {
-        CLOAKLITE_CHROMIUM_BINARY_PATH: CHROMIUM,
+        AGENT_BROWSER_CHROMIUM_BINARY_PATH: CHROMIUM,
       },
     });
     const added = await h.page.evaluate(async ({ port, username, password }) =>
-      (window as any).cloak.api.proxy.add("j47-auth", {
+      (window as any).agentBrowser.api.proxy.add("j47-auth", {
         type: "http",
         host: "127.0.0.1",
         port,
@@ -92,7 +92,7 @@ describe("J47 — native HTTP proxy authentication", () => {
         password,
       }), { port: proxyPort, username: USERNAME, password: PASSWORD });
     expect(added.success, added.error).toBe(true);
-    const created = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({
+    const created = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({
       name: "J47 native auth",
       platform: "windows",
       fingerprintSeed: 47474,
@@ -112,7 +112,7 @@ describe("J47 — native HTTP proxy authentication", () => {
 
   it("authenticates without an extension or a persistent credential file", async () => {
     const launched = await h.page.evaluate(async (id: string) =>
-      (window as any).cloak.api.cloak.launch(id), dirId) as {
+      (window as any).agentBrowser.api.browser.launch(id), dirId) as {
       success: boolean; pid: number; cdpPort: number; error?: string;
     };
     expect(launched.success, launched.error || "J47 launch failed").toBe(true);
@@ -138,7 +138,7 @@ describe("J47 — native HTTP proxy authentication", () => {
       expect(value).toBe("ok");
     } finally {
       client.close();
-      await h.page.evaluate(async (id: string) => (window as any).cloak.api.cloak.stop(id), dirId);
+      await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.browser.stop(id), dirId);
       await waitForPortClosed(launched.cdpPort, 10_000);
     }
 
@@ -148,9 +148,9 @@ describe("J47 — native HTTP proxy authentication", () => {
     expect(fs.existsSync(authExtension)).toBe(false);
     expect(nativeAuthTempDirs()).toEqual(tempDirsBefore);
 
-    const log = fs.readFileSync(path.join(USERDATA, "logs", `cloak-${dirId}.log`), "utf8");
+    const log = fs.readFileSync(path.join(USERDATA, "logs", `browser-${dirId}.log`), "utf8");
     expect(log).toContain("--disable-quic");
-    expect(log).toContain("--roxy-proxy-auth-file=<ephemeral>");
+    expect(log).toContain("--agent-browser-proxy-auth-file=<ephemeral>");
     expect(log).not.toContain(PASSWORD);
   }, 60_000);
 });

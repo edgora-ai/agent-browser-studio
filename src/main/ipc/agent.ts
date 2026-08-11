@@ -13,7 +13,7 @@ import {
 import { agentRunRecorder } from "../services/agent-run-trace.js";
 import { agentDbTables, agentDbTableData, agentDbQuery, agentDbExecScript } from "../services/agent-db.js";
 import { listPendingApprovals, resolveApproval } from "../services/approval-gate.js";
-import { listCloakProfiles } from "../services/cloak-manager.js";
+import { listBrowserProfiles } from "../services/browser-manager.js";
 import type { LlmConfig, LlmMessage } from "../services/local-agent.js";
 import type { PlatformAccount } from "../services/local-agent.js";
 import {
@@ -370,7 +370,7 @@ export function registerAgentHandlers(): void {
     llmMsgs.unshift({
       role: "system",
       content: buildAgentSystemPrompt(
-        listCloakProfiles()
+        listBrowserProfiles()
           .filter((p) => p.running && p.cdpPort)
           .map((p) => ({ name: p.name, dirId: p.dirId, cdpPort: p.cdpPort })),
       ),

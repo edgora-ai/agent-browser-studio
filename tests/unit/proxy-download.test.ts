@@ -7,17 +7,17 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as http from "node:http";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "cloak-proxy-download-test");
+const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-proxy-download-test");
 
 vi.mock("electron", () => {
   const nodePath = require("node:path");
   const nodeOs = require("node:os");
-  const TEST_DATA = nodePath.join(nodeOs.tmpdir(), "cloak-proxy-download-test");
+  const TEST_DATA = nodePath.join(nodeOs.tmpdir(), "agent-browser-proxy-download-test");
   return {
     app: {
       getPath: (name: string) => {
         if (name === "userData") return TEST_DATA;
-        if (name === "home") return nodePath.join(nodeOs.tmpdir(), "cloak-proxy-download-test-home");
+        if (name === "home") return nodePath.join(nodeOs.tmpdir(), "agent-browser-proxy-download-test-home");
         return "/tmp";
       },
     },

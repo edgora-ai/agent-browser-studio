@@ -186,7 +186,7 @@ async function captureSample(spec: BrowserSpec, index: number): Promise<Componen
   try {
     let page: Page;
     if (spec.bootstrapFile) {
-      temporaryProfile = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-network-fingerprint-"));
+      temporaryProfile = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-network-fingerprint-"));
       fs.copyFileSync(spec.bootstrapFile, path.join(temporaryProfile, path.basename(spec.bootstrapFile)));
       context = await chromium.launchPersistentContext(temporaryProfile, {
         executablePath: spec.executablePath,
@@ -230,7 +230,7 @@ async function captureSample(spec: BrowserSpec, index: number): Promise<Componen
   } finally {
     await context?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
-    if (temporaryProfile?.startsWith(path.join(os.tmpdir(), "roxy-network-fingerprint-"))) {
+    if (temporaryProfile?.startsWith(path.join(os.tmpdir(), "agent-browser-network-fingerprint-"))) {
       fs.rmSync(temporaryProfile, { recursive: true, force: true });
     }
   }

@@ -9,7 +9,7 @@ import { cdpCookieService } from "./cdp-cookie-service.js";
 import { listExtensions } from "./launch-args.js";
 import { acquireRestoreLock, isRestoreLocked } from "./profile-restore-lock.js";
 import { decryptSecretOr } from "./secrets.js";
-import { statusCloak } from "./cloak-manager.js";
+import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { listExtensionRepository, getExtensionRepoEntryDir, restoreSyncedExtensionPackage } from "./extension-repository.js";
 import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig } from "../types.js";
@@ -25,7 +25,8 @@ type SyncSafeConfig = Omit<MgmtConfig, "sync" | "proxies"> & {
   proxies: Record<string, Omit<ProxyConfig, "username" | "password">>;
 };
 
-const SYNC_CONFIG_KEY = "cloak-lite-config.json";
+const SYNC_CONFIG_KEY = "agent-browser-studio-config.json";
+const LEGACY_SYNC_CONFIG_KEY = "cloak-lite-config.json";
 const MAX_REMOTE_PAYLOAD_JSON_BYTES = 150 * 1024 * 1024;
 const MAX_CONFIG_GZIP_BYTES = 10 * 1024 * 1024;
 const MAX_CONFIG_JSON_BYTES = 25 * 1024 * 1024;
@@ -56,10 +57,10 @@ export const syncService = {
   preview(): { configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string } {
     const cfg = getConfig() as any;
     const sync = getSyncConfig();
-    const profileIds = Object.keys(cfg.cloakProfiles || {});
+    const profileIds = Object.keys(cfg.browserProfiles || {});
     const runningProfiles: string[] = [];
     for (const dirId of profileIds) {
-      try { if (statusCloak(dirId).running) runningProfiles.push(dirId); } catch { /* ignore */ }
+      try { if (statusBrowser(dirId).running) runningProfiles.push(dirId); } catch { /* ignore */ }
     }
     let extensions = 0;
     try { extensions = listExtensionRepository().length; } catch { /* ignore */ }
@@ -100,20 +101,20 @@ export const syncService = {
       const cookiesBlob: Record<string, string> = {};
       const localStorageBlobs: Record<string, string> = {};
       const prefsBlobs: Record<string, string> = {};
-      const cloakPreferenceHashes: Record<string, string> = {};
+      const profilePreferenceHashes: Record<string, string> = {};
       let totalCookies = 0, totalLs = 0, totalPrefs = 0;
 
-      const cloakDirIds = Object.keys(syncSnapshot.cloakProfiles || {});
-      console.log(`[sync] push: exporting ${cloakDirIds.length} Cloak profiles`);
+      const profileDirIds = Object.keys(syncSnapshot.browserProfiles || {});
+      console.log(`[sync] push: exporting ${profileDirIds.length} Browser profiles`);
 
-      for (const dirId of cloakDirIds) {
+      for (const dirId of profileDirIds) {
         assertSyncNotAborted(signal);
         validateDirId(dirId);
         // Preferences
         const prefsPath = path.join(getProfilesDir(), dirId, "Default", "Preferences");
         if (fs.existsSync(prefsPath)) {
           const rawPrefs = fs.readFileSync(prefsPath);
-          cloakPreferenceHashes[dirId] = rawPrefs.toString("base64");
+          profilePreferenceHashes[dirId] = rawPrefs.toString("base64");
           prefsBlobs[dirId] = zlib.gzipSync(rawPrefs).toString("base64");
           totalPrefs++;
         }
@@ -151,7 +152,7 @@ export const syncService = {
         }
       }
 
-      markAllProfilesSynced(syncSnapshot, now, { cloakPreferences: cloakPreferenceHashes });
+      markAllProfilesSynced(syncSnapshot, now, { profilePreferences: profilePreferenceHashes });
 
       const configPayload = JSON.stringify({
         version: syncSnapshot.version, timestamp: now,
@@ -204,10 +205,10 @@ export const syncService = {
       }
 
       const latestConfig2 = getConfig();
-      markAllProfilesSynced(latestConfig2, now, { cloakPreferences: cloakPreferenceHashes });
+      markAllProfilesSynced(latestConfig2, now, { profilePreferences: profilePreferenceHashes });
       saveConfig(latestConfig2);
 
-      const parts = [`${cloakDirIds.length} profiles`];
+      const parts = [`${profileDirIds.length} profiles`];
       if (totalCookies > 0) parts.push(`${totalCookies} cookies`);
       if (totalLs > 0) parts.push(`${totalLs} localStorage`);
       if (totalPrefs > 0) parts.push(`${totalPrefs} preferences`);
@@ -242,7 +243,7 @@ export const syncService = {
       const pullTimestamp = typeof payload.timestamp === "number" ? payload.timestamp : Date.now();
       const importedPreferenceIds = new Set<string>();
       const importedPreferenceHashes: Record<string, string> = {};
-      const allowedProfileIds = new Set(Object.keys(remoteConfig.cloakProfiles || {}));
+      const allowedProfileIds = new Set(Object.keys(remoteConfig.browserProfiles || {}));
       if (allowedProfileIds.size > MAX_SYNC_PROFILES) throw new Error("Remote config contains too many profiles");
       validateArtifactProfileIds(payload, allowedProfileIds);
       let aggregateCookies = 0;
@@ -327,7 +328,7 @@ export const syncService = {
             validatePreferencesJson(rawPrefs);
             const release = acquireRestoreLock(dirId);
             try {
-              if (cdpCookieService.hasRunningChrome(dirId) || statusCloak(dirId).running) {
+              if (cdpCookieService.hasRunningChrome(dirId) || statusBrowser(dirId).running) {
                 console.log(`[sync] pull: skipped preferences for running profile ${dirId.slice(0, 8)}`);
                 continue;
               }
@@ -355,7 +356,7 @@ export const syncService = {
         defaultProxy: remoteConfig.defaultProxy || latestConfig.defaultProxy,
         proxies: { ...(remoteConfig.proxies || {}), ...latestConfig.proxies },
         sync: latestConfig.sync,
-        cloakProfiles: { ...(remoteConfig.cloakProfiles || {}), ...(latestConfig.cloakProfiles || {}) },
+        browserProfiles: { ...(remoteConfig.browserProfiles || {}), ...(latestConfig.browserProfiles || {}) },
       } as MgmtConfig;
 
       markRemoteProfilesSynced(merged, remoteConfig, pullTimestamp, {
@@ -391,7 +392,7 @@ export const syncService = {
         }
         extensionBytes += pkg.length;
         if (extensionBytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
-        const tmpFile = path.join(os.tmpdir(), `cloak-ext-pull-${extId}-${Date.now()}.${remoteEntry.source === "chrome-web-store" ? "crx" : "zip"}`);
+        const tmpFile = path.join(os.tmpdir(), `agent-browser-ext-pull-${extId}-${Date.now()}.${remoteEntry.source === "chrome-web-store" ? "crx" : "zip"}`);
         try {
           fs.writeFileSync(tmpFile, pkg, { mode: 0o600 });
           assertSyncNotAborted(signal);
@@ -436,7 +437,7 @@ async function exportLocalStorage(dirId: string, signal?: AbortSignal): Promise<
   assertSyncNotAborted(signal);
   const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
   if (!fs.existsSync(lsDir)) return null;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `cloak-ls-export-${dirId.slice(0, 8)}-`));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-browser-ls-export-${dirId.slice(0, 8)}-`));
   try {
     const tmpFile = path.join(tmpDir, "localstorage.tgz");
     const result = await spawnTar(["--no-xattrs", "-czf", tmpFile, "-C", lsDir, "--exclude", "LOCK", "."], 15000, signal);
@@ -458,7 +459,7 @@ function importLocalStorage(dirId: string, tgzData: Buffer, remainingByteBudget 
   assertSyncNotAborted(signal);
   const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
   if (tgzData.length > MAX_LOCAL_STORAGE_TGZ_BYTES || remainingByteBudget <= 0) return { imported: false, bytesWritten: 0 };
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), `cloak-ls-stage-${dirId.slice(0, 8)}-`));
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-browser-ls-stage-${dirId.slice(0, 8)}-`));
   let backupDir: string | null = null;
   try {
     const extracted = extractSafeLocalStorageArchive(tgzData, stagingDir, remainingByteBudget, signal);
@@ -525,7 +526,7 @@ function resolveProfileDir(dirId: string): string {
   const baseDir = path.resolve(getProfilesDir());
   const profileDir = path.resolve(baseDir, dirId);
   if (!isPathInside(profileDir, baseDir)) {
-    throw new Error(`Profile path escapes cloak-profiles: ${JSON.stringify(dirId)}`);
+    throw new Error(`Profile path escapes profiles directory: ${JSON.stringify(dirId)}`);
   }
   return profileDir;
 }
@@ -557,7 +558,7 @@ function safeExistingParentInsideProfile(dirId: string, targetSegments: string[]
     const stat = fs.lstatSync(current);
     if (stat.isSymbolicLink()) throw new Error(`Profile path contains symlink: ${dirId}`);
     const real = fs.realpathSync(current);
-    if (!isPathInside(real, profileReal)) throw new Error(`Profile path escapes cloak-profiles: ${dirId}`);
+    if (!isPathInside(real, profileReal)) throw new Error(`Profile path escapes profiles directory: ${dirId}`);
   }
   return path.dirname(resolveProfileFile(dirId, ...targetSegments));
 }
@@ -682,9 +683,9 @@ function isProfileRunningForRestore(dirId: string): boolean {
   validateDirId(dirId);
   if (cdpCookieService.hasRunningChrome(dirId)) return true;
   try {
-    if (statusCloak(dirId).running) return true;
+    if (statusBrowser(dirId).running) return true;
   } catch (e) {
-    console.error(`[sync] failed to check Cloak status for ${dirId}:`, e);
+    console.error(`[sync] failed to check browser status for ${dirId}:`, e);
     return true;
   }
   const profileDir = resolveProfileDir(dirId);
@@ -772,13 +773,17 @@ function isPathInside(childPath: string, basePath: string): boolean {
 
 async function fetchSyncConfig(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
   const payload = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, false, signal);
-  return payload;
+  if (payload.ok || !payload.message.startsWith("HTTP 404")) return payload;
+  return fetchSyncPayload(sync, LEGACY_SYNC_CONFIG_KEY, false, signal);
 }
 
 async function fetchRemoteCookiesForPush(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<Record<string, string>> {
   const merged: Record<string, string> = {};
   try {
-    const fetched = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, true, signal);
+    let fetched = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, true, signal);
+    if (!fetched.ok && fetched.message.startsWith("HTTP 404")) {
+      fetched = await fetchSyncPayload(sync, LEGACY_SYNC_CONFIG_KEY, true, signal);
+    }
     if (fetched.ok && fetched.payload.cookies && typeof fetched.payload.cookies === "object") {
       for (const [dirId, blob] of Object.entries(fetched.payload.cookies)) {
         validateDirId(dirId);
@@ -1106,7 +1111,8 @@ function sanitizeRemoteConfig(config: MgmtConfig): MgmtConfig {
 function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
   const cfg = config as any;
   const profiles: Record<string, any> = {};
-  for (const [dirId, profile] of Object.entries(cfg.cloakProfiles || {}) as Array<[string, any]>) {
+  const sourceProfiles = cfg.browserProfiles ?? cfg.cloakProfiles ?? {};
+  for (const [dirId, profile] of Object.entries(sourceProfiles) as Array<[string, any]>) {
     validateDirId(dirId);
     profiles[dirId] = {
       name: String(profile.name || dirId.slice(0, 8)),
@@ -1165,8 +1171,8 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
   }
 
   return {
-    version: cfg.version || 3,
-    cloakBin: "auto",
+    version: Math.max(4, Number(cfg.version) || 0),
+    chromiumBin: "auto",
     defaultProxy: cfg.defaultProxy || "default",
     proxies,
     sync: {
@@ -1174,34 +1180,34 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       endpoint: cfg.sync?.endpoint || "",
       bucket: cfg.sync?.bucket || "",
     },
-    cloakProfiles: profiles,
+    browserProfiles: profiles,
     extensionRepository: extensionRepo,
   } as SyncSafeConfig;
 }
 
-function markAllProfilesSynced(config: MgmtConfig | SyncSafeConfig, timestamp: number, artifacts: { cloakPreferences: Record<string, string> }): void {
+function markAllProfilesSynced(config: MgmtConfig | SyncSafeConfig, timestamp: number, artifacts: { profilePreferences: Record<string, string> }): void {
   const cfg = config as any;
-  for (const [dirId, profile] of Object.entries(cfg.cloakProfiles || {}) as Array<[string, any]>) {
-    if (!artifacts.cloakPreferences[dirId]) {
+  for (const [dirId, profile] of Object.entries(cfg.browserProfiles || {}) as Array<[string, any]>) {
+    if (!artifacts.profilePreferences[dirId]) {
       delete profile.syncedAt;
       delete profile.syncedHash;
       continue;
     }
     profile.syncedAt = timestamp;
-    profile.syncedHash = hashProfileMeta(profile, artifacts.cloakPreferences[dirId]);
+    profile.syncedHash = hashProfileMeta(profile, artifacts.profilePreferences[dirId]);
   }
 }
 
 function getSyncProfileName(config: MgmtConfig | SyncSafeConfig, dirId: string): string {
   const cfg = config as any;
-  return cfg.cloakProfiles?.[dirId]?.name || dirId.slice(0, 8);
+  return cfg.browserProfiles?.[dirId]?.name || dirId.slice(0, 8);
 }
 
 function markRemoteProfilesSynced(merged: MgmtConfig, remoteConfig: MgmtConfig, timestamp: number, artifacts: { preferences: Set<string>; preferenceHashes: Record<string, string> }): void {
   const local = merged as any;
   const remote = remoteConfig as any;
-  const remoteProfiles = remote.cloakProfiles || {};
-  const mergedProfiles = local.cloakProfiles || {};
+  const remoteProfiles = remote.browserProfiles || {};
+  const mergedProfiles = local.browserProfiles || {};
   for (const [dirId, remoteProfile] of Object.entries(remoteProfiles)) {
     const mergedProfile = mergedProfiles[dirId];
     if (!mergedProfile) continue;

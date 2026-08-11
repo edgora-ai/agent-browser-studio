@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildRoxyFingerprintArg,
-  buildRoxyFingerprintConfig,
-  ROXY_FINGERPRINT_SWITCH,
-} from "../../src/main/services/roxy-fingerprint-config.js";
+  buildBrowserFingerprintArg,
+  buildBrowserFingerprintConfig,
+  AGENT_BROWSER_FINGERPRINT_SWITCH,
+} from "../../src/main/services/browser-fingerprint-config.js";
 
-describe("Roxy fingerprint config", () => {
+describe("Agent Browser fingerprint config", () => {
   it("produces a deterministic Chromium 149+ identity", () => {
     const meta = {
       fingerprintSeed: 4242,
@@ -26,8 +26,8 @@ describe("Roxy fingerprint config", () => {
       geolocationLongitude: 121.4737,
       geolocationAccuracy: 25,
     };
-    const first = buildRoxyFingerprintConfig(meta, "149.0.7827.22");
-    const second = buildRoxyFingerprintConfig(meta, "149.0.7827.22");
+    const first = buildBrowserFingerprintConfig(meta, "149.0.7827.22");
+    const second = buildBrowserFingerprintConfig(meta, "149.0.7827.22");
 
     expect(second).toEqual(first);
     expect(Object.keys(first).sort()).toEqual([
@@ -83,9 +83,9 @@ describe("Roxy fingerprint config", () => {
   });
 
   it("encodes a versioned config without proprietary lumi.conf data", () => {
-    const arg = buildRoxyFingerprintArg({ fingerprintSeed: 7, platform: "macos" }, "150.0.7871.114");
-    expect(arg.startsWith(ROXY_FINGERPRINT_SWITCH)).toBe(true);
-    const json = Buffer.from(arg.slice(ROXY_FINGERPRINT_SWITCH.length), "base64url").toString("utf8");
+    const arg = buildBrowserFingerprintArg({ fingerprintSeed: 7, platform: "macos" }, "150.0.7871.114");
+    expect(arg.startsWith(AGENT_BROWSER_FINGERPRINT_SWITCH)).toBe(true);
+    const json = Buffer.from(arg.slice(AGENT_BROWSER_FINGERPRINT_SWITCH.length), "base64url").toString("utf8");
     const decoded = JSON.parse(json);
     expect(decoded.schemaVersion).toBe(1);
     expect(decoded.platform).toBe("MacIntel");
@@ -106,7 +106,7 @@ describe("Roxy fingerprint config", () => {
 
   it("selects default hardware as coherent seed-owned personas", () => {
     const windows = [1, 2, 3, 4, 5].map((fingerprintSeed) =>
-      buildRoxyFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114"));
+      buildBrowserFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114"));
     expect(windows.map((config) => ({
       cpu: config.hardwareConcurrency,
       memory: config.deviceMemory,
@@ -121,7 +121,7 @@ describe("Roxy fingerprint config", () => {
     ]);
 
     const mac = [1, 2, 3, 4].map((fingerprintSeed) =>
-      buildRoxyFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114"));
+      buildBrowserFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114"));
     expect(mac.map((config) => ({
       cpu: config.hardwareConcurrency,
       memory: config.deviceMemory,
@@ -134,12 +134,12 @@ describe("Roxy fingerprint config", () => {
       { cpu: 8, memory: 8, screen: "1440x900@2", renderer: expect.stringContaining("Apple M1,") },
     ]);
 
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"))
-      .toEqual(buildRoxyFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"))
+      .toEqual(buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
   });
 
   it("treats advanced hardware fields as constraints on a complete persona", () => {
-    const config = buildRoxyFingerprintConfig({
+    const config = buildBrowserFingerprintConfig({
       fingerprintSeed: 99,
       platform: "windows",
       gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
@@ -160,13 +160,13 @@ describe("Roxy fingerprint config", () => {
   });
 
   it("rejects advanced overrides that cannot belong to one supported persona", () => {
-    expect(() => buildRoxyFingerprintConfig({
+    expect(() => buildBrowserFingerprintConfig({
       fingerprintSeed: 100,
       platform: "windows",
       hardwareConcurrency: 8,
       gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     }, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
-    expect(() => buildRoxyFingerprintConfig({
+    expect(() => buildBrowserFingerprintConfig({
       fingerprintSeed: 101,
       platform: "macos",
       gpuVendor: "Google Inc. (NVIDIA)",
@@ -177,8 +177,8 @@ describe("Roxy fingerprint config", () => {
     const windowsIds = new Set<string>();
     const macIds = new Set<string>();
     for (let fingerprintSeed = 1; fingerprintSeed <= 500; fingerprintSeed++) {
-      const windows = buildRoxyFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114");
-      const mac = buildRoxyFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114");
+      const windows = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "windows" }, "150.0.7871.114");
+      const mac = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "macos" }, "150.0.7871.114");
       windowsIds.add(windows.hardwareProfile.id);
       macIds.add(mac.hardwareProfile.id);
       expect(windows.hardwareProfile).toMatchObject({ source: "seeded", fontProfile: "windows-portable", audioProfile: "chromium-desktop" });
@@ -207,18 +207,18 @@ describe("Roxy fingerprint config", () => {
   });
 
   it("emits a native disabled geolocation policy without coordinates", () => {
-    const config = buildRoxyFingerprintConfig({ fingerprintSeed: 8, geolocationMode: "disable" }, "149.0.7827.22");
+    const config = buildBrowserFingerprintConfig({ fingerprintSeed: 8, geolocationMode: "disable" }, "149.0.7827.22");
     expect(config.geolocation).toEqual({ mode: "disable", latitude: null, longitude: null, accuracy: null });
   });
 
   it("preserves all native WebRTC policy modes", () => {
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 10, webrtcMode: "disable" }, "149.0.7827.22").webrtc)
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 10, webrtcMode: "disable" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "disable", publicIp: null });
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 11, webrtcMode: "real", webrtcIp: "203.0.113.2" }, "149.0.7827.22").webrtc)
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 11, webrtcMode: "real", webrtcIp: "203.0.113.2" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "real", publicIp: null });
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 12, webrtcMode: "altered", webrtcIp: "203.0.113.3" }, "149.0.7827.22").webrtc)
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 12, webrtcMode: "altered", webrtcIp: "203.0.113.3" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "altered", publicIp: "203.0.113.3" });
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 13, webrtcMode: "altered" }, "149.0.7827.22").webrtc)
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 13, webrtcMode: "altered" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "altered", publicIp: null });
   });
 
@@ -233,19 +233,19 @@ describe("Roxy fingerprint config", () => {
       ["el-CY", "Microsoft Stefanos - Greek (Greece)"],
     ] as const;
     for (const [locale, expectedVoice] of windowsCases) {
-      const config = buildRoxyFingerprintConfig({ fingerprintSeed: 21, platform: "windows", locale }, "150.0.7871.114");
+      const config = buildBrowserFingerprintConfig({ fingerprintSeed: 21, platform: "windows", locale }, "150.0.7871.114");
       expect(config.languages).toEqual([locale, locale.split("-")[0]]);
       expect(config.speechSynthesis.voices[0]).toEqual({ name: expectedVoice, lang: locale, localService: true });
     }
 
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 22, platform: "macos", locale: "el-GR" }, "150.0.7871.114")
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 22, platform: "macos", locale: "el-GR" }, "150.0.7871.114")
       .speechSynthesis.voices[0].name).toBe("Melina");
-    expect(buildRoxyFingerprintConfig({ fingerprintSeed: 23, platform: "macos", locale: "zh-TW" }, "150.0.7871.114")
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 23, platform: "macos", locale: "zh-TW" }, "150.0.7871.114")
       .speechSynthesis.voices[0].name).toBe("Mei-Jia");
   });
 
   it("rejects incomplete custom geolocation", () => {
-    expect(() => buildRoxyFingerprintConfig({ fingerprintSeed: 9, geolocationMode: "custom", geolocationLatitude: 10 }, "149.0.7827.22"))
+    expect(() => buildBrowserFingerprintConfig({ fingerprintSeed: 9, geolocationMode: "custom", geolocationLatitude: 10 }, "149.0.7827.22"))
       .toThrow(/latitude|longitude/i);
   });
 });

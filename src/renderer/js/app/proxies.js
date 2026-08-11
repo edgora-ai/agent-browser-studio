@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,10 +43,10 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
-  Object.assign(cloak, {
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  Object.assign(agentBrowser, {
   detectProxy: function (name) {
         var el = document.getElementById("detect-" + name);
         if (el) el.textContent = "⏳ Detecting...";
@@ -70,7 +70,7 @@
 
   setDefault: function (name) {
         api.proxy.setDefault(name).then(function (r) {
-          if (r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.default-set", "Default set") : "Default set"), "success"); cloak.refresh(); }
+          if (r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.default-set", "Default set") : "Default set"), "success"); agentBrowser.refresh(); }
           else toast(r.error || "Failed", "error");
         });
       },
@@ -93,20 +93,20 @@
       },
 
   delProxy: function (name) {
-        cloak.confirm('Delete proxy "' + name + '"?', function () {
+        agentBrowser.confirm('Delete proxy "' + name + '"?', function () {
           api.proxy.delete(name).then(function (r) {
-            if (r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); cloak.refresh(); }
+            if (r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast(r.error || "Failed", "error");
           }).catch(function (e) { toast(e.message, "error"); });
         });
       },
 
   showImport: function () {
-        toast("Disk import is disabled in the Cloak-only build. Use Bulk Import to create Cloak profiles.", "error");
+        toast("Disk import is disabled in the Browser-only build. Use Bulk Import to create Browser profiles.", "error");
       },
 
   doImport: function () {
-        toast("Disk import is disabled in the Cloak-only build.", "error");
+        toast("Disk import is disabled in the Browser-only build.", "error");
       },
 
   newProxy: function () {
@@ -137,7 +137,7 @@
           bypassList: bypassList.length ? bypassList : undefined
         };
         if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
-        function done() { toast(oldName ? (window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated") : "Proxy added", "success"); document.getElementById("dlg-proxy").close(); cloak.refresh(); }
+        function done() { toast(oldName ? (window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated") : "Proxy added", "success"); document.getElementById("dlg-proxy").close(); agentBrowser.refresh(); }
         function fail(e) { toast((e && e.message) || "Failed", "error"); }
         if (oldName && oldName !== name) {
           api.proxy.rename(oldName, name, config).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
@@ -185,9 +185,9 @@
       if (!name) return;
       var action = target.dataset.action;
       if (action === "detect-proxy") detectProxyIntoCard(name, card);
-      else if (action === "default-proxy") cloak.setDefault(name);
-      else if (action === "edit-proxy") cloak.editProxy(name);
-      else if (action === "delete-proxy") cloak.delProxy(name);
+      else if (action === "default-proxy") agentBrowser.setDefault(name);
+      else if (action === "edit-proxy") agentBrowser.editProxy(name);
+      else if (action === "delete-proxy") agentBrowser.delProxy(name);
     };
   }
 
@@ -211,7 +211,7 @@
       }
     }).catch(function (e) { if (el) el.textContent = "❌ " + e.message; });
   }
-  cloak.loadProxies = loadProxyTab;
-  cloak.detectProxyIntoCard = detectProxyIntoCard;
+  agentBrowser.loadProxies = loadProxyTab;
+  agentBrowser.detectProxyIntoCard = detectProxyIntoCard;
 
 })();

@@ -1,6 +1,6 @@
 # Acceptable Use Policy
 
-CloakLite is intended for legitimate browser profile management, QA, localization testing, privacy-preserving personal workflows, authorized business operations, and defensive research.
+Agent Browser Studio is intended for legitimate browser profile management, QA, localization testing, privacy-preserving personal workflows, authorized business operations, and defensive research.
 
 ## Allowed Uses
 

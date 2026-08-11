@@ -1,9 +1,9 @@
 // Agent Runs tab — inspectable trace of each agent task execution.
 (function() {
   "use strict";
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,7 +43,7 @@
     } catch (e) { return String(val); }
   }
 
-  cloak.loadRunsTab = function() {
+  agentBrowser.loadRunsTab = function() {
     api.agentRuns.list().then(function(list) {
       var el = document.getElementById("agent-run-list");
       if (!list || list.length === 0) {
@@ -69,13 +69,13 @@
         if (!btn || !el.contains(btn)) return;
         var card = btn.closest("[data-run-id]");
         var runId = card.dataset.runId;
-        if (btn.dataset.runAction === "open") cloak.runsOpen(runId);
-        else if (btn.dataset.runAction === "delete") cloak.runsDelete(runId);
+        if (btn.dataset.runAction === "open") agentBrowser.runsOpen(runId);
+        else if (btn.dataset.runAction === "delete") agentBrowser.runsDelete(runId);
       };
     }).catch(function(e) { toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
   };
 
-  cloak.runsOpen = function(runId) {
+  agentBrowser.runsOpen = function(runId) {
     api.agentRuns.get(runId).then(function(run) {
       if (!run) { toast(t("runs.toast.not-found", "记录不存在"), "error"); return; }
       renderDetail(run);
@@ -83,18 +83,18 @@
     });
   };
 
-  cloak.runsDelete = function(runId) {
+  agentBrowser.runsDelete = function(runId) {
     api.agentRuns.delete(runId).then(function() {
       toast(t("runs.toast.deleted", "已删除"), "success");
-      cloak.loadRunsTab();
+      agentBrowser.loadRunsTab();
     });
   };
 
-  cloak.runsClear = function() {
+  agentBrowser.runsClear = function() {
     if (!confirm(t("runs.confirm.clear-all", "清空所有运行记录?"))) return;
     api.agentRuns.clear().then(function(r) {
       toast(t("runs.toast.cleared", "已清空 ") + (r.deleted || 0) + t("runs.toast.cleared-unit", " 条"), "success");
-      cloak.loadRunsTab();
+      agentBrowser.loadRunsTab();
     });
   };
 
@@ -145,10 +145,10 @@
 
   // Live updates: refresh the list (and an open detail) when runs change.
   function bindLiveEvents() {
-    if (cloak.state.runsEventsBound) return;
-    cloak.state.runsEventsBound = true;
+    if (agentBrowser.state.runsEventsBound) return;
+    agentBrowser.state.runsEventsBound = true;
     var refreshIfActive = function() {
-      if (cloak.state.currentTab === "runs") cloak.loadRunsTab();
+      if (agentBrowser.state.currentTab === "runs") agentBrowser.loadRunsTab();
     };
     api.on("agent:run-start", refreshIfActive);
     api.on("agent:run-step", function() {

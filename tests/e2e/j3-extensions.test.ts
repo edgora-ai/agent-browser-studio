@@ -58,13 +58,13 @@ describe.skipIf(!J3_ENABLED)(
           if (dirId) {
             await h.page
               .evaluate(
-                async (id: string) => (window as any).cloak.api.cloak.stop(id),
+                async (id: string) => (window as any).agentBrowser.api.browser.stop(id),
                 dirId,
               )
               .catch(() => undefined);
             await h.page
               .evaluate(
-                (id: string) => (window as any).cloak.api.settings.deleteRepositoryExtension(id),
+                (id: string) => (window as any).agentBrowser.api.settings.deleteRepositoryExtension(id),
                 EXT_ID,
               )
               .catch(() => undefined);
@@ -79,7 +79,7 @@ describe.skipIf(!J3_ENABLED)(
     it("creates a profile to host the extension", async () => {
       const r = (await h.page.evaluate(
         () =>
-          (window as any).cloak.api.cloak.create({
+          (window as any).agentBrowser.api.browser.create({
             name: "E2E J3",
             platform: "windows",
             fingerprintSeed: 33333,
@@ -92,7 +92,7 @@ describe.skipIf(!J3_ENABLED)(
     it("adds the extension to the private repository", async () => {
       const r = (await h.page.evaluate(
         (id: string) =>
-          (window as any).cloak.api.settings.addRepositoryExtension(id, {
+          (window as any).agentBrowser.api.settings.addRepositoryExtension(id, {
             source: "chrome-store",
           }),
         EXT_ID,
@@ -138,7 +138,7 @@ describe.skipIf(!J3_ENABLED)(
     it("enables the extension for the profile", async () => {
       const r = (await h.page.evaluate(
         (args: { id: string; ext: string }) =>
-          (window as any).cloak.api.settings.toggleExtension(args.id, args.ext, true),
+          (window as any).agentBrowser.api.settings.toggleExtension(args.id, args.ext, true),
         { id: dirId, ext: EXT_ID },
       )) as { success: boolean; error?: string };
       expect(r.success, JSON.stringify(r)).toBe(true);
@@ -146,7 +146,7 @@ describe.skipIf(!J3_ENABLED)(
 
     it("launches the profile and the Chromium carries --load-extension pointing at the repo path", async () => {
       const r = (await h.page.evaluate(
-        (id: string) => (window as any).cloak.api.cloak.launch(id),
+        (id: string) => (window as any).agentBrowser.api.browser.launch(id),
         dirId,
       )) as { success: boolean; cdpPort: number; pid: number };
       expect(r.success).toBe(true);
@@ -168,7 +168,7 @@ describe.skipIf(!J3_ENABLED)(
 
     it("stops the profile and the port closes", async () => {
       await h.page.evaluate(
-        (id: string) => (window as any).cloak.api.cloak.stop(id),
+        (id: string) => (window as any).agentBrowser.api.browser.stop(id),
         dirId,
       );
       await waitForPortClosed(cdpPort, 10000);

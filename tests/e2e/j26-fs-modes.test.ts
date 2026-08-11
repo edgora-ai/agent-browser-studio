@@ -17,9 +17,9 @@ const TRUSTED = fs.mkdtempSync(path.join(os.tmpdir(), "j26-trusted-"));
 const OUTSIDE = fs.mkdtempSync(path.join(os.tmpdir(), "j26-outside-"));
 
 async function configureMock(h: TestAppHandle, mock: { url: string }) {
-  await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
   await h.page.waitForTimeout(200);
-  await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
   await h.page.waitForTimeout(200);
   await h.page.locator("#agent-llm-provider").selectOption("openai");
   await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -29,16 +29,16 @@ async function configureMock(h: TestAppHandle, mock: { url: string }) {
   await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
 }
 async function newConversation(h: TestAppHandle) {
-  await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+  await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
   await h.page.waitForTimeout(200);
   await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-  await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+  await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
 }
 async function runSequence(h: TestAppHandle, message: string) {
   await h.page.evaluate(() => {
     (window as any).__done = false;
     (window as any).__err = null;
-    const api = (window as any).cloak.api;
+    const api = (window as any).agentBrowser.api;
     api.on("agent:stream-done", () => { (window as any).__done = true; });
     api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
   });
@@ -53,7 +53,7 @@ async function runSequence(h: TestAppHandle, message: string) {
 }
 async function runSteps(h: TestAppHandle) {
   return h.page.evaluate(async () => {
-    const api = (window as any).cloak.api;
+    const api = (window as any).agentBrowser.api;
     const list = await api.agentRuns.list();
     const run = await api.agentRuns.get(list[0].id);
     return run.steps
@@ -80,7 +80,7 @@ describe("J26 — file-access modes gate write_file", () => {
   });
 
   it("sandbox: relative path allowed, absolute + traversal blocked", async () => {
-    await h.page.evaluate(() => (window as any).cloak.api.settings.agentFsSet("sandbox", []));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.settings.agentFsSet("sandbox", []));
     mock.setResponses([
       { chunks: [], toolCalls: [{ id: "s1", name: "write_file", arguments: { path: "sub/ok.txt", content: "hi" } }] },
       { chunks: [], toolCalls: [{ id: "s2", name: "write_file", arguments: { path: "/tmp/j26-sandbox-escape.txt", content: "x" } }] },
@@ -96,7 +96,7 @@ describe("J26 — file-access modes gate write_file", () => {
   }, 40000);
 
   it("allowlist: inside trusted dir allowed, outside blocked", async () => {
-    await h.page.evaluate((dir: string) => (window as any).cloak.api.settings.agentFsSet("allowlist", [dir]), TRUSTED);
+    await h.page.evaluate((dir: string) => (window as any).agentBrowser.api.settings.agentFsSet("allowlist", [dir]), TRUSTED);
     const inside = path.join(TRUSTED, "in.txt");
     const outside = path.join(OUTSIDE, "out.txt");
     mock.setResponses([
@@ -114,7 +114,7 @@ describe("J26 — file-access modes gate write_file", () => {
   }, 40000);
 
   it("open: arbitrary absolute path allowed", async () => {
-    await h.page.evaluate(() => (window as any).cloak.api.settings.agentFsSet("open", []));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.settings.agentFsSet("open", []));
     const target = path.join(TRUSTED, "open-mode.txt");
     mock.setResponses([
       { chunks: [], toolCalls: [{ id: "o1", name: "write_file", arguments: { path: target, content: "open" } }] },
@@ -126,7 +126,7 @@ describe("J26 — file-access modes gate write_file", () => {
     expect(steps[0].ok, `open-mode write failed: ${steps[0].error}`).toBe(true);
     expect(fs.existsSync(target), "file must be created in open mode").toBe(true);
     // Restore sandbox for safety.
-    await h.page.evaluate(() => (window as any).cloak.api.settings.agentFsSet("sandbox", []));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.settings.agentFsSet("sandbox", []));
   }, 40000);
 
   it("no unexpected console errors", () => {

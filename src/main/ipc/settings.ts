@@ -26,7 +26,7 @@ export function registerSettingsHandlers(): void {
   ipcMain.handle("settings:extensions", async (_event, dirId: string) => {
     validateDirId(dirId);
     const cfg = getConfig() as any;
-    const enabledMap = cfg.cloakProfiles?.[dirId]?.extensions || {};
+    const enabledMap = cfg.browserProfiles?.[dirId]?.extensions || {};
     return listExtensionRepository().map((entry) => ({ ...entry, enabled: enabledMap[entry.id] === true }));
   });
 
@@ -137,11 +137,11 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  // Per-profile extension enable/disable via Cloak profile metadata
+  // Per-profile extension enable/disable via browser profile metadata
   ipcMain.handle("settings:profile-extensions", async (_event, dirId: string) => {
     validateDirId(dirId);
     const cfg = getConfig() as any;
-    const meta = Object.hasOwn(cfg.cloakProfiles || {}, dirId) ? cfg.cloakProfiles[dirId] : null;
+    const meta = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : null;
     return meta?.extensions || {};
   });
 
@@ -150,8 +150,8 @@ export function registerSettingsHandlers(): void {
   }) => {
     validateDirId(params.dirId);
     const cfg = structuredClone(getConfig()) as any;
-    const meta = Object.hasOwn(cfg.cloakProfiles || {}, params.dirId) ? cfg.cloakProfiles[params.dirId] : null;
-    if (!meta) return { success: false, error: "Cloak profile not found" };
+    const meta = Object.hasOwn(cfg.browserProfiles || {}, params.dirId) ? cfg.browserProfiles[params.dirId] : null;
+    if (!meta) return { success: false, error: "Browser profile not found" };
     try {
       meta.extensions = normalizeRepositoryExtensionSelection(params.extensions, cfg.extensionRepository || {});
       saveConfig(cfg);
@@ -236,7 +236,7 @@ export function registerSettingsHandlers(): void {
 function assertProfileExists(dirId: string): void {
   validateDirId(dirId);
   const cfg = getConfig() as any;
-  if (!cfg.cloakProfiles?.[dirId]) throw new Error("Cloak profile not found");
+  if (!cfg.browserProfiles?.[dirId]) throw new Error("Browser profile not found");
 }
 
 function normalizeRepositoryExtensionSelection(extensions: Record<string, boolean>, repository: Record<string, unknown>): Record<string, boolean> {
@@ -250,8 +250,8 @@ function normalizeRepositoryExtensionSelection(extensions: Record<string, boolea
 function toggleExtension(dirId: string, extId: string, enabled: boolean): boolean {
   validateDirId(dirId);
   const cfg = structuredClone(getConfig()) as any;
-  const meta = cfg.cloakProfiles?.[dirId];
-  if (!meta) throw new Error("Cloak profile not found");
+  const meta = cfg.browserProfiles?.[dirId];
+  if (!meta) throw new Error("Browser profile not found");
   if (!cfg.extensionRepository?.[extId]) throw new Error("Extension is not in the private repository");
   meta.extensions = normalizeProfileExtensionMap({ ...(meta.extensions || {}), [extId]: enabled });
   saveConfig(cfg);

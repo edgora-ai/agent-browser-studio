@@ -14,13 +14,13 @@ describe("J43 — sync pre-flight preview", () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J43", platform: "windows", fingerprintSeed: 43434 }));
-    await h.page.evaluate(() => (window as any).cloak.api.proxy.add("j43-proxy", { type: "http", host: "127.0.0.1", port: 7043 }));
+    await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J43", platform: "windows", fingerprintSeed: 43434 }));
+    await h.page.evaluate(() => (window as any).agentBrowser.api.proxy.add("j43-proxy", { type: "http", host: "127.0.0.1", port: 7043 }));
   }, 60000);
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("reports counts + running-skip list + configured state", async () => {
-    const p = await h.page.evaluate(() => (window as any).cloak.api.sync.preview());
+    const p = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.preview());
     expect(p.profiles).toBeGreaterThanOrEqual(1);
     expect(p.proxies).toBeGreaterThanOrEqual(1);
     expect(Array.isArray(p.runningProfiles)).toBe(true);
@@ -31,11 +31,11 @@ describe("J43 — sync pre-flight preview", () => {
   }, 30000);
 
   async function launchRunningProfile(name: string, seed: number): Promise<string> {
-    const r = await h.page.evaluate(async (p: { name: string; seed: number }) => (window as any).cloak.api.cloak.create({ name: p.name, platform: "windows", fingerprintSeed: p.seed }), { name, seed });
-    await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), r.dirId);
+    const r = await h.page.evaluate(async (p: { name: string; seed: number }) => (window as any).agentBrowser.api.browser.create({ name: p.name, platform: "windows", fingerprintSeed: p.seed }), { name, seed });
+    await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), r.dirId);
     const start = Date.now();
     while (Date.now() - start < 20000) {
-      const st = await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), r.dirId);
+      const st = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), r.dirId);
       if (st.running) return r.dirId;
       await h.page.waitForTimeout(300);
     }
@@ -44,15 +44,15 @@ describe("J43 — sync pre-flight preview", () => {
 
   it("flags a running profile that pull would skip", async () => {
     const dirId = await launchRunningProfile("J43-run", 43999);
-    const p = await h.page.evaluate(() => (window as any).cloak.api.sync.preview());
+    const p = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.preview());
     expect(p.runningProfiles).toContain(dirId);
     expect(p.message).toContain("跳过");
   }, 40000);
 
   it("renders preview in the Sync tab", async () => {
     const dirId = await launchRunningProfile("J43-ui", 43997);
-    await h.page.evaluate(() => (window as any).cloak.switchTab("sync"));
-    await h.page.evaluate(() => (window as any).cloak.loadSyncPreview());
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("sync"));
+    await h.page.evaluate(() => (window as any).agentBrowser.loadSyncPreview());
     await h.page.waitForFunction((id: string) => {
       const msg = document.getElementById("sync-preview-message")?.textContent || "";
       const list = document.getElementById("sync-preview")?.textContent || "";
@@ -71,7 +71,7 @@ describe("J43 — sync pre-flight preview", () => {
 
   it("prompts before pull when running profiles would be skipped", async () => {
     await launchRunningProfile("J43-prompt", 43998);
-    await h.page.evaluate(() => (window as any).cloak.switchTab("sync"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("sync"));
     const dialogPromise = new Promise<string>((resolve) => {
       h.page.once("dialog", async (dialog) => {
         const message = dialog.message();

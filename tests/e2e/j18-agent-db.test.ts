@@ -32,9 +32,9 @@ describe("J18 — Agent DB tools + approval", () => {
   });
 
   it("configures mock LLM + conversation", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(200);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("config"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("config"));
     await h.page.waitForTimeout(200);
     await h.page.locator("#agent-llm-provider").selectOption("openai");
     await h.page.locator("#agent-llm-apikey").fill("sk-mock");
@@ -42,16 +42,16 @@ describe("J18 — Agent DB tools + approval", () => {
     await h.page.locator("#agent-llm-url").fill(mock.url);
     await h.page.locator('[data-cmd="agentSaveConfig"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#agent-config-saved", { state: "visible", timeout: 5000 });
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(200);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
   });
 
   it("runs db_exec(create) → db_exec(insert) → db_query(select)", async () => {
     await h.page.evaluate(() => {
       (window as any).__done = false;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
     });
     await h.page.locator("#agent-chat-input").fill("建 customers 表插一条并查");
@@ -63,7 +63,7 @@ describe("J18 — Agent DB tools + approval", () => {
     }
     // The table should now exist with one row.
     const data = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const tables = await api.agentDb.tables();
       const cust = tables.find((t: any) => t.name === "customers");
       if (!cust) return { exists: false };
@@ -77,7 +77,7 @@ describe("J18 — Agent DB tools + approval", () => {
 
   it("the run trace recorded the db tools", async () => {
     const result = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       const run = await api.agentRuns.get(list[0].id);
       return run;
@@ -91,9 +91,9 @@ describe("J18 — Agent DB tools + approval", () => {
   });
 
   it("DB tab lists the customers table", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("db"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("db"));
     await h.page.waitForTimeout(400);
-    await h.page.evaluate(() => (window as any).cloak.loadDbTab());
+    await h.page.evaluate(() => (window as any).agentBrowser.loadDbTab());
     await h.page.waitForTimeout(500);
     const hasTable = await h.page.evaluate(() => {
       const rows = document.querySelectorAll("#db-tables [data-table]");
@@ -113,12 +113,12 @@ describe("J18 — Agent DB tools + approval", () => {
     await h.page.evaluate(() => {
       (window as any).__approval = null;
       (window as any).__done2 = false;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:approval-request", (req: any) => { (window as any).__approval = req; });
       api.on("agent:stream-done", () => { (window as any).__done2 = true; });
     });
     // Switch back to the agent chat tab (we left it on db).
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(300);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(300);
@@ -137,10 +137,10 @@ describe("J18 — Agent DB tools + approval", () => {
     expect(JSON.stringify(approval.description)).toContain("DROP");
 
     // Reject it — the table should survive.
-    await h.page.evaluate(() => (window as any).cloak.approvalDeny("deny"));
+    await h.page.evaluate(() => (window as any).agentBrowser.approvalDeny("deny"));
     await h.page.waitForTimeout(500);
     const exists = await h.page.evaluate(async () => {
-      const tables = await (window as any).cloak.api.agentDb.tables();
+      const tables = await (window as any).agentBrowser.api.agentDb.tables();
       return tables.some((t: any) => t.name === "customers");
     });
     expect(exists, "customers table must survive a rejected DROP").toBe(true);

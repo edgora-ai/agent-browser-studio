@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceDirectory = path.join(repositoryRoot, "native", "masque-socks-bridge");
+const sourceDirectory = path.join(repositoryRoot, "native", "agent-browser-masque-bridge");
 const outputDirectory = path.join(repositoryRoot, "dist", "native");
-const binaryName = process.platform === "win32" ? "roxy-masque-bridge.exe" : "roxy-masque-bridge";
+const binaryName = process.platform === "win32" ? "agent-browser-masque-bridge.exe" : "agent-browser-masque-bridge";
 const outputPath = path.join(outputDirectory, binaryName);
 
 fs.mkdirSync(outputDirectory, { recursive: true });

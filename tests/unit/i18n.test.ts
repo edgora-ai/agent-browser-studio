@@ -20,7 +20,7 @@ function loadI18n() {
   };
   const ctx: any = {
     window: {
-      cloakLite: { app: { setLanguage: () => Promise.resolve() } },
+      agentBrowserAPI: { app: { setLanguage: () => Promise.resolve() } },
     },
     document: dom,
     navigator: { language: "en-US" },

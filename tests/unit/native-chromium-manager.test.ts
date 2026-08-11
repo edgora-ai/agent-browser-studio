@@ -10,10 +10,11 @@ import {
 } from "../../src/main/services/native-chromium-manager.js";
 
 const roots: string[] = [];
-const originalCacheOverride = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
+const originalCacheOverride = process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR;
+const originalLegacyCacheOverride = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
 
 function makeRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-chromium-selection-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-chromium-selection-"));
   roots.push(root);
   return root;
 }
@@ -27,8 +28,10 @@ function installFakeMacBuild(root: string, version: string): string {
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  if (originalCacheOverride === undefined) delete process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
-  else process.env.CLOAKLITE_CHROMIUM_CACHE_DIR = originalCacheOverride;
+  if (originalCacheOverride === undefined) delete process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR;
+  else process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR = originalCacheOverride;
+  if (originalLegacyCacheOverride === undefined) delete process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
+  else process.env.CLOAKLITE_CHROMIUM_CACHE_DIR = originalLegacyCacheOverride;
 });
 
 describe("managed independent Chromium selection", () => {
@@ -53,8 +56,15 @@ describe("managed independent Chromium selection", () => {
     expect(() => normalizeManagedChromiumVersion("../150.0.0.0")).toThrow(/Invalid Chromium version/);
   });
 
-  it("uses only the CloakLite-managed cache override", () => {
+  it("uses the Agent Browser Studio-managed cache override", () => {
     const root = makeRoot();
+    process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR = root;
+    expect(getManagedChromiumRoot()).toBe(path.resolve(root));
+  });
+
+  it("accepts the pre-rename cache override as a compatibility fallback", () => {
+    const root = makeRoot();
+    delete process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR;
     process.env.CLOAKLITE_CHROMIUM_CACHE_DIR = root;
     expect(getManagedChromiumRoot()).toBe(path.resolve(root));
   });

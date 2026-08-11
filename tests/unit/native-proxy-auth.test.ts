@@ -14,7 +14,7 @@ import {
 const roots: string[] = [];
 
 function makeRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-native-auth-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-native-auth-test-"));
   roots.push(root);
   return root;
 }

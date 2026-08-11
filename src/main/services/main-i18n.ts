@@ -1,4 +1,4 @@
-// ── CloakLite main-process i18n (tray menu only) ──
+// ── Agent Browser Studio main-process i18n (tray menu only) ──
 // Renderer-side i18n is in src/renderer/js/i18n.js. This module mirrors
 // the small subset of strings used by the tray menu, keyed identically.
 // The renderer signals language changes via the "app:set-language" IPC.
@@ -7,18 +7,18 @@ let currentLang: "zh-CN" | "en-US" = "en-US";
 
 const dict: Record<"zh-CN" | "en-US", Record<string, string>> = {
   "zh-CN": {
-    "tray.show": "显示 CloakLite",
+    "tray.show": "显示 Agent 浏览器工作台",
     "tray.running": "运行中配置",
     "tray.idle": "暂无配置在运行",
-    "tray.quit": "退出 CloakLite",
-    "tray.tooltip": "CloakLite",
+    "tray.quit": "退出 Agent 浏览器工作台",
+    "tray.tooltip": "Agent Browser Studio",
   },
   "en-US": {
-    "tray.show": "Show CloakLite",
+    "tray.show": "Show Agent Browser Studio",
     "tray.running": "Running profiles",
     "tray.idle": "No profiles running",
-    "tray.quit": "Quit CloakLite",
-    "tray.tooltip": "CloakLite",
+    "tray.quit": "Quit Agent Browser Studio",
+    "tray.tooltip": "Agent Browser Studio",
   },
 };
 

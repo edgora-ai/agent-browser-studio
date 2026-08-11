@@ -16,9 +16,9 @@ describe("J30 — DB tab SQL execution UI", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("creates a table + inserts a row via the SQL textarea", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("db"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("db"));
     await h.page.waitForTimeout(300);
-    await h.page.evaluate(() => (window as any).cloak.loadDbTab());
+    await h.page.evaluate(() => (window as any).agentBrowser.loadDbTab());
     await h.page.waitForTimeout(300);
 
     const execBtn = '[data-cmd="dbRunSql"][data-cmd-arg="exec"]';
@@ -30,7 +30,7 @@ describe("J30 — DB tab SQL execution UI", () => {
     await h.page.waitForTimeout(400);
 
     // The table now appears in the left list.
-    await h.page.evaluate(() => (window as any).cloak.loadDbTab());
+    await h.page.evaluate(() => (window as any).agentBrowser.loadDbTab());
     await h.page.waitForTimeout(400);
     const hasTable = await h.page.evaluate(() =>
       [...document.querySelectorAll("#db-tables [data-table]")].some((r) => (r as HTMLElement).dataset.table === "notes"));

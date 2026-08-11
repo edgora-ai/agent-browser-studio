@@ -64,20 +64,20 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
   }, 90000);
 
   it("launches a profile + configures the mock LLM", async () => {
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J27", platform: "windows", fingerprintSeed: 27272 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J27", platform: "windows", fingerprintSeed: 27272 }));
     dirId = r.dirId;
-    await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.launch(id), dirId);
-    cdpPort = (await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), dirId)).cdpPort;
+    await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.launch(id), dirId);
+    cdpPort = (await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), dirId)).cdpPort;
 
     await h.page.evaluate((murl: string) => {
-      (window as any).cloak.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
+      (window as any).agentBrowser.api.agent.saveLlmConfig({ provider: "openai", apiKey: "sk", model: "mock", apiUrl: murl });
     }, mock.url);
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(150);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(150);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
   }, 60000);
 
   it("the agent creates the scheduled rule via create_automation_rule", async () => {
@@ -100,7 +100,7 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
     await h.page.evaluate(() => {
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
     });
@@ -116,7 +116,7 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
     expect(done.e, `error: ${done.e}`).toBeNull();
     expect(done.d).toBe(true);
     // The rule now exists.
-    const rules = await h.page.evaluate(() => (window as any).cloak.api.automation.list());
+    const rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());
     const rule = rules.find((x: any) => x.name === RULE_NAME);
     expect(rule, "rule must be created").toBeTruthy();
     ruleId = rule.id;
@@ -144,13 +144,13 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
       { chunks: ["已", "存入", "10条", "科技新闻。"] },
     ]);
     // Trigger the rule manually (don't wait for 8am).
-    const res = await h.page.evaluate((id: string) => (window as any).cloak.api.automation.testRun(id), ruleId);
+    const res = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.automation.testRun(id), ruleId);
     expect(res.ok, `test-run failed: ${res.result}`).toBe(true);
     expect(res.result).toContain("run ");
 
     // The execution produced a run trace sourced from automation.
     const run = await h.page.evaluate(async () => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       const list = await api.agentRuns.list();
       const summary = list.find((r: any) => r.source?.type === "automation");
       return summary ? await api.agentRuns.get(summary.id) : null;
@@ -162,7 +162,7 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
     expect(run.source.jobId).toMatch(/^job_/);
     expect(run.status).toBe("done");
 
-    const jobs = await h.page.evaluate((rid: string) => (window as any).cloak.api.automation.jobs({ ruleId: rid, source: "test" }), ruleId);
+    const jobs = await h.page.evaluate((rid: string) => (window as any).agentBrowser.api.automation.jobs({ ruleId: rid, source: "test" }), ruleId);
     const job = jobs.find((j: any) => j.id === run.source.jobId);
     expect(job, "linked automation job must exist").toBeTruthy();
     expect(job.runId).toBe(run.id);
@@ -174,14 +174,14 @@ describe("J27 — scheduled agent automation: save + auto-execute", () => {
 
     // All 10 news rows landed.
     const stored = await h.page.evaluate(async () => {
-      const r = await (window as any).cloak.api.agentDb.query("SELECT COUNT(*) AS c FROM tech_news");
+      const r = await (window as any).agentBrowser.api.agentDb.query("SELECT COUNT(*) AS c FROM tech_news");
       return r.rows[0].c;
     });
     expect(stored).toBe(10);
   }, 60000);
 
   it("the automation run log recorded the execution", async () => {
-    const logs = await h.page.evaluate(() => (window as any).cloak.api.automation.logs());
+    const logs = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.logs());
     const mine = logs.find((l: any) => l.ruleId === ruleId);
     expect(mine, "run log must exist for the rule").toBeTruthy();
     expect(mine.ok).toBe(true);

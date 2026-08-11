@@ -9,7 +9,7 @@ const START_TIMEOUT_MS = 15_000;
 const STOP_TIMEOUT_MS = 2_000;
 const MAX_READY_BYTES = 64 * 1024;
 const MAX_STDERR_BYTES = 16 * 1024;
-const EXPECTED_PROXY_HOST = "roxy-masque.local";
+const EXPECTED_PROXY_HOST = "agent-browser-masque.local";
 
 interface ReadyMessage {
   version: number;
@@ -42,12 +42,13 @@ export interface MasqueSocksBridgeOptions {
 }
 
 export function resolveMasqueBridgeBinary(explicitPath?: string): string {
-  const binaryName = process.platform === "win32" ? "roxy-masque-bridge.exe" : "roxy-masque-bridge";
+  const binaryName = process.platform === "win32" ? "agent-browser-masque-bridge.exe" : "agent-browser-masque-bridge";
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     explicitPath,
-    process.env.CLOAK_MASQUE_BRIDGE_PATH,
+    process.env.AGENT_BROWSER_MASQUE_BRIDGE_PATH,
+    process.env.CLOAK_MASQUE_BRIDGE_PATH, // pre-rename compatibility
     resourcesPath ? path.join(resourcesPath, "native", binaryName) : null,
     path.resolve(moduleDir, "..", "..", "native", binaryName),
     path.resolve(process.cwd(), "dist", "native", binaryName),
@@ -128,7 +129,7 @@ function validateSOCKSProxy(proxy: ProxyConfig): void {
 }
 
 function writeOneShotConfig(proxy: ProxyConfig, temporaryRoot: string): OneShotConfigFile {
-  const directory = fs.mkdtempSync(path.join(path.resolve(temporaryRoot), "cloak-masque-socks-"));
+  const directory = fs.mkdtempSync(path.join(path.resolve(temporaryRoot), "agent-browser-masque-socks-"));
   fs.chmodSync(directory, 0o700);
   const filePath = path.join(directory, "proxy.json");
   fs.writeFileSync(filePath, JSON.stringify({
@@ -168,8 +169,8 @@ function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number):
     const timer = setTimeout(() => finish(new Error("MASQUE bridge readiness timed out")), timeoutMs);
 
     const appendStderr = (chunk: Buffer): void => {
-      if (process.env.ROXY_MASQUE_BRIDGE_DEBUG === "1") {
-        process.stderr.write(`[roxy-masque-bridge] ${chunk.toString("utf8")}`);
+      if (process.env.AGENT_BROWSER_MASQUE_BRIDGE_DEBUG === "1" || process.env.ROXY_MASQUE_BRIDGE_DEBUG === "1") {
+        process.stderr.write(`[agent-browser-masque-bridge] ${chunk.toString("utf8")}`);
       }
       stderr = Buffer.concat([stderr, chunk]);
       if (stderr.length > MAX_STDERR_BYTES) stderr = stderr.subarray(stderr.length - MAX_STDERR_BYTES);

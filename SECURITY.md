@@ -20,7 +20,7 @@ Include:
 
 ## Security Boundaries
 
-CloakLite is a local desktop application. It handles sensitive local data including browser profile state, cookies, localStorage, proxy credentials, LLM API keys, sync credentials, audit logs, and agent traces.
+Agent Browser Studio is a local desktop application. It handles sensitive local data including browser profile state, cookies, localStorage, proxy credentials, LLM API keys, sync credentials, audit logs, and agent traces.
 
 Expected protections include:
 
@@ -30,7 +30,7 @@ Expected protections include:
 - Loopback-only MCP server protected by a bearer token
 - ZIP/archive validation before extension import or sync restore
 
-Do not assume CloakLite protects data from malware, a compromised operating system account, malicious browser extensions, or a hostile local administrator.
+Do not assume Agent Browser Studio protects data from malware, a compromised operating system account, malicious browser extensions, or a hostile local administrator.
 
 ## Out of Scope
 

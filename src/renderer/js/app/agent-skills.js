@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,10 +43,10 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
-  cloak.agentLoadSkills = function() {
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  agentBrowser.agentLoadSkills = function() {
     var el = document.getElementById('agent-skills-list');
     el.innerHTML = '<div class="loading">Loading skills...</div>';
     R.agent.skills.list().then(function(skills) {
@@ -61,7 +61,7 @@
     });
   };
 
-  cloak.showSkillEditor = function(skillId) {
+  agentBrowser.showSkillEditor = function(skillId) {
     closeDialogIfOpen('dlg-skill-market');
     clearSkillEditor();
     if (!skillId) {
@@ -90,7 +90,7 @@
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.saveSkill = function() {
+  agentBrowser.saveSkill = function() {
     var id = document.getElementById('skill-id').value.trim().toLowerCase();
     var title = document.getElementById('skill-title').value.trim();
     var prompt = document.getElementById('skill-prompt').value.trim();
@@ -120,15 +120,15 @@
       }
       document.getElementById('dlg-skill-editor').close();
       toast((window.i18n ? window.i18n.t("toast.skill.saved", "Skill saved") : "Skill saved"), 'success');
-      cloak.agentLoadSkills();
-      if (document.getElementById('dlg-skill-market').open) cloak.refreshSkillMarket();
+      agentBrowser.agentLoadSkills();
+      if (document.getElementById('dlg-skill-market').open) agentBrowser.refreshSkillMarket();
     }).catch(function(e) {
       if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || String(e)) + '</span>';
       toast(e.message || String(e), 'error');
     });
   };
 
-  cloak.removeSkill = function(id) {
+  agentBrowser.removeSkill = function(id) {
     if (!confirm('Remove or disable skill "' + id + '"?')) return;
     R.agent.skills.remove(id).then(function(r) {
       if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.skill.removed", "Skill removed/disabled") : "Skill removed/disabled"), 'success'); refreshSkillViews(); }
@@ -136,14 +136,14 @@
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.setSkillEnabled = function(id, enabled) {
+  agentBrowser.setSkillEnabled = function(id, enabled) {
     R.agent.skills.setMeta(id, { enabled: !!enabled }).then(function(r) {
       if (r && r.success) { toast(enabled ? (window.i18n ? window.i18n.t("toast.skill.enabled", "Skill enabled") : "Skill enabled") : 'Skill disabled', 'success'); refreshSkillViews(); }
       else toast((r && r.error) || 'Update failed', 'error');
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.setSkillShared = function(id, shared, tags) {
+  agentBrowser.setSkillShared = function(id, shared, tags) {
     R.agent.skills.setMeta(id, { shared: !!shared, tags: tags || [] }).then(function(r) {
       if (r && r.success) { toast(shared ? 'Marked shareable' : 'Marked private', 'success'); refreshSkillViews(); }
       else toast((r && r.error) || 'Update failed', 'error');
@@ -151,15 +151,15 @@
   };
 
   // ══════ Skill Marketplace ══════
-  cloak.skillMarket = function() {
+  agentBrowser.skillMarket = function() {
     document.getElementById('skill-market-list').innerHTML = '<div class="loading">Loading marketplace...</div>';
     var search = document.getElementById('skill-market-search');
     if (search) search.value = '';
     document.getElementById('dlg-skill-market').showModal();
-    cloak.refreshSkillMarket();
+    agentBrowser.refreshSkillMarket();
   };
 
-  cloak.refreshSkillMarket = function() {
+  agentBrowser.refreshSkillMarket = function() {
     var list = document.getElementById('skill-market-list');
     var search = document.getElementById('skill-market-search');
     var filter = search ? search.value.trim() : '';
@@ -176,14 +176,14 @@
     });
   };
 
-  cloak.installSkill = function(id) {
+  agentBrowser.installSkill = function(id) {
     R.agent.skills.install(id).then(function(r) {
       if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.skill.enabled", "Skill enabled") : "Skill enabled"), 'success'); refreshSkillViews(); }
       else toast((r && r.error) || 'Install failed', 'error');
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.exportSharedSkills = function() {
+  agentBrowser.exportSharedSkills = function() {
     R.agent.skills.exportShared().then(function(entries) {
       var json = JSON.stringify(entries || [], null, 2);
       var fallback = function() { window.prompt('Shared skill catalog JSON:', json); };
@@ -199,14 +199,14 @@
     }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
-  cloak.showSkillImport = function() {
+  agentBrowser.showSkillImport = function() {
     closeDialogIfOpen('dlg-skill-market');
     document.getElementById('skill-import-json').value = '';
     document.getElementById('skill-import-status').textContent = '';
     document.getElementById('dlg-skill-import').showModal();
   };
 
-  cloak.importSharedSkills = function() {
+  agentBrowser.importSharedSkills = function() {
     var statusEl = document.getElementById('skill-import-status');
     var entries;
     try { entries = JSON.parse(document.getElementById('skill-import-json').value); }

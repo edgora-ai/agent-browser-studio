@@ -2,9 +2,9 @@
 // timeline. Answers the team-governance question the scenario eval flagged.
 (function() {
   "use strict";
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -30,7 +30,7 @@
     var value = String(target || "");
     if (/^job_[a-z0-9_-]+$/i.test(value)) return "job";
     if (/^run_[a-z0-9_-]+$/i.test(value)) return "run";
-    if (/^cb_[a-z0-9_-]+$/i.test(value)) return "profile";
+    if (/^(?:ab|cb)_[a-z0-9_-]+$/i.test(value)) return "profile";
     return "";
   }
 
@@ -48,10 +48,10 @@
     return code;
   }
 
-  cloak.activityOpenProfile = function(dirId) {
+  agentBrowser.activityOpenProfile = function(dirId) {
     if (!dirId) return;
     var safeId = String(dirId).replace(/[^a-zA-Z0-9_-]/g, "");
-    cloak.switchTab("profiles");
+    agentBrowser.switchTab("profiles");
     var started = Date.now();
     function focusWhenReady() {
       var card = document.querySelector('[data-dir-id="' + safeId + '"]');
@@ -70,7 +70,7 @@
     focusWhenReady();
   };
 
-  cloak.loadActivity = function() {
+  agentBrowser.loadActivity = function() {
     var filter = "";
     var sel = document.getElementById("activity-filter");
     if (sel) filter = sel.value || "";
@@ -97,17 +97,17 @@
         var btn = event.target.closest("[data-activity-action]");
         if (!btn || !el.contains(btn)) return;
         var id = btn.dataset.targetId || "";
-        if (btn.dataset.activityAction === "open-job") cloak.automationShowJob(id);
-        else if (btn.dataset.activityAction === "open-run") cloak.runsOpen(id);
-        else if (btn.dataset.activityAction === "open-profile") cloak.activityOpenProfile(id);
+        if (btn.dataset.activityAction === "open-job") agentBrowser.automationShowJob(id);
+        else if (btn.dataset.activityAction === "open-run") agentBrowser.runsOpen(id);
+        else if (btn.dataset.activityAction === "open-profile") agentBrowser.activityOpenProfile(id);
       };
     }).catch(function(e) { toast(t("activity.toast.load-failed","加载审计失败: ") + (e.message || e), "error"); });
   };
 
-  cloak.activityFilter = function() { cloak.loadActivity(); };
+  agentBrowser.activityFilter = function() { agentBrowser.loadActivity(); };
 
-  cloak.activityClear = function() {
+  agentBrowser.activityClear = function() {
     if (!confirm(t("activity.confirm.clear-all","清空所有审计记录？此操作不可撤销。"))) return;
-    api.audit.clear().then(function() { toast(t("activity.toast.cleared","已清空"), "success"); cloak.loadActivity(); });
+    api.audit.clear().then(function() { toast(t("activity.toast.cleared","已清空"), "success"); agentBrowser.loadActivity(); });
   };
 })();

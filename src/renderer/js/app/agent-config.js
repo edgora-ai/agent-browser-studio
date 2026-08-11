@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -44,20 +44,20 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   // ── Theme toggle ──
-  cloak.toggleTheme = function() {
+  agentBrowser.toggleTheme = function() {
     var html = document.documentElement;
     var current = html.getAttribute('data-theme');
     var next = current === 'dark' ? 'light' : 'dark';
     html.setAttribute('data-theme', next);
-    localStorage.setItem('cloak-theme', next);
-    cloak._updateThemeUI(next);
+    localStorage.setItem('agent-browser-studio-theme', next);
+    agentBrowser._updateThemeUI(next);
   };
 
-  cloak._updateThemeUI = function(theme) {
+  agentBrowser._updateThemeUI = function(theme) {
     var toggle = document.getElementById('theme-toggle');
     var label = document.getElementById('theme-label');
     if (theme === 'dark') {
@@ -70,18 +70,18 @@
   };
 
   // ── Language toggle ──
-  cloak.toggleLanguage = function() {
+  agentBrowser.toggleLanguage = function() {
     if (!window.i18n) return;
     window.i18n.next();
-    cloak._updateLangUI();
-    cloak._updateThemeUI(document.documentElement.getAttribute('data-theme') || 'dark');
+    agentBrowser._updateLangUI();
+    agentBrowser._updateThemeUI(document.documentElement.getAttribute('data-theme') || 'dark');
     // Refresh the currently visible tab so its dynamic strings re-render
     // in the new language. Falls back to agent skills if no tab is active.
-    if (cloak.reloadCurrentTab) cloak.reloadCurrentTab();
-    else cloak.agentLoadSkills();
+    if (agentBrowser.reloadCurrentTab) agentBrowser.reloadCurrentTab();
+    else agentBrowser.agentLoadSkills();
   };
 
-  cloak._updateLangUI = function() {
+  agentBrowser._updateLangUI = function() {
     if (!window.i18n) return;
     var langLabel = document.getElementById('lang-label');
     if (langLabel) {
@@ -92,12 +92,12 @@
   };
 
   // Listen for language changes
-  document.addEventListener('cloak-language-change', function() {
-    cloak._updateLangUI();
-    if (cloak.reloadCurrentTab) cloak.reloadCurrentTab();
+  document.addEventListener('agent-browser-language-change', function() {
+    agentBrowser._updateLangUI();
+    if (agentBrowser.reloadCurrentTab) agentBrowser.reloadCurrentTab();
   });
   // ── LLM Config ──
-  cloak.agentLoadConfig = function() {
+  agentBrowser.agentLoadConfig = function() {
     R.agent.llmConfig().then(function(cfg) {
       if (cfg) {
         document.getElementById('agent-llm-provider').value = cfg.provider || 'openai';
@@ -107,12 +107,12 @@
         document.getElementById('agent-llm-url').value = cfg.apiUrl || '';
       } else {
         // Try auto-detect
-        cloak.agentDetectConfig();
+        agentBrowser.agentDetectConfig();
       }
-    }).catch(function(){ cloak.agentDetectConfig(); });
+    }).catch(function(){ agentBrowser.agentDetectConfig(); });
   };
 
-  cloak.agentDetectConfig = function() {
+  agentBrowser.agentDetectConfig = function() {
     R.agent.detectLlmConfig().then(function(cfg) {
       if (cfg) {
         document.getElementById('agent-llm-provider').value = cfg.provider || 'openai';
@@ -127,7 +127,7 @@
     }).catch(function(e) { toast('Auto-detect failed: ' + e.message, 'error'); });
   };
 
-  cloak.agentProviderChanged = function() {
+  agentBrowser.agentProviderChanged = function() {
     var prov = document.getElementById('agent-llm-provider').value;
     var modelInput = document.getElementById('agent-llm-model');
     var urlInput = document.getElementById('agent-llm-url');
@@ -140,7 +140,7 @@
     }
   };
 
-  cloak.agentSaveConfig = function() {
+  agentBrowser.agentSaveConfig = function() {
     var config = {
       provider: document.getElementById('agent-llm-provider').value,
       apiKey: document.getElementById('agent-llm-apikey').value.trim(),
@@ -181,20 +181,20 @@
     document.getElementById('agent-fs-allowlist-row').style.display = (mode === 'allowlist') ? '' : 'none';
   }
 
-  cloak.agentFsModeChanged = function() { updateFsVisibility(); };
+  agentBrowser.agentFsModeChanged = function() { updateFsVisibility(); };
 
-  cloak.agentFsAddDir = function() {
+  agentBrowser.agentFsAddDir = function() {
     api.settings.pickDir().then(function(dir) {
       if (dir && fsAllowlist.indexOf(dir) < 0) { fsAllowlist.push(dir); renderFsAllowlist(); }
     }).catch(function() {});
   };
 
-  cloak.agentFsRemoveDir = function(idxStr) {
+  agentBrowser.agentFsRemoveDir = function(idxStr) {
     var idx = parseInt(idxStr, 10);
     if (!isNaN(idx)) { fsAllowlist.splice(idx, 1); renderFsAllowlist(); }
   };
 
-  cloak.agentSaveFs = function() {
+  agentBrowser.agentSaveFs = function() {
     var mode = document.getElementById('agent-fs-mode').value;
     api.settings.agentFsSet(mode, fsAllowlist).then(function(r) {
       if (r.success) {
@@ -209,8 +209,8 @@
   };
 
   // Load agentFs into the UI when config view opens.
-  var origLoadConfig = cloak.agentLoadConfig;
-  cloak.agentLoadConfig = function() {
+  var origLoadConfig = agentBrowser.agentLoadConfig;
+  agentBrowser.agentLoadConfig = function() {
     origLoadConfig && origLoadConfig();
     api.settings.agentFsGet().then(function(cfg) {
       var modeSel = document.getElementById('agent-fs-mode');

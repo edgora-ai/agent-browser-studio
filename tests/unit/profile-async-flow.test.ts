@@ -7,18 +7,18 @@ import * as os from "node:os";
 vi.mock("electron", () => {
   const path = require("node:path");
   const os = require("node:os");
-  const TEST_HOME = path.join(os.tmpdir(), "cloak-test-home-async");
+  const TEST_HOME = path.join(os.tmpdir(), "agent-browser-test-home-async");
   return {
     app: {
       getPath: (name: string) => {
-        if (name === "home") return TEST_HOME;
+        if (name === "home" || name === "userData") return TEST_HOME;
         return "/tmp";
       }
     }
   };
 });
 
-const TEST_HOME = require("node:path").join(require("node:os").tmpdir(), "cloak-test-home-async");
+const TEST_HOME = require("node:path").join(require("node:os").tmpdir(), "agent-browser-test-home-async");
 
 // Import the services under test
 import {
@@ -30,9 +30,9 @@ import {
   deleteCookie,
 } from "../../src/main/services/profile-manager.js";
 import {
-  createCloakProfile,
-  deleteCloakProfile,
-} from "../../src/main/services/cloak-manager.js";
+  createBrowserProfile,
+  deleteBrowserProfile,
+} from "../../src/main/services/browser-manager.js";
 import { storageMonitor } from "../../src/main/services/storage-monitor.js";
 import { getProfilesDir } from "../../src/main/services/config-manager.js";
 
@@ -53,9 +53,9 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
 
   it("should create, list, info, and delete managed Chromium profiles asynchronously", async () => {
     // 1. Create a profile
-    const { dirId } = createCloakProfile({ name: "AsyncTestProfile" });
+    const { dirId } = createBrowserProfile({ name: "AsyncTestProfile" });
     expect(dirId).toBeDefined();
-    expect(dirId).toMatch(/^cb_/);
+    expect(dirId).toMatch(/^ab_/);
 
     const profilePath = path.join(getProfilesDir(), dirId);
     fs.mkdirSync(profilePath, { recursive: true });
@@ -80,14 +80,14 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
   });
 
   it("keeps stopped profile cookie writes read-only", async () => {
-    const { dirId } = createCloakProfile({ name: "CookieReadOnlyProfile" });
+    const { dirId } = createBrowserProfile({ name: "CookieReadOnlyProfile" });
     await expect(setCookie(dirId, { domain: "example.com", name: "sid", value: "abc" })).rejects.toThrow(/Launch this profile/);
     await expect(deleteCookie(dirId, "example.com", "sid")).rejects.toThrow(/Launch this profile/);
     await expect(listCookies(dirId)).resolves.toEqual([]);
   });
 
   it("escapes stopped profile cookie search wildcards for SQLite", async () => {
-    const { dirId } = createCloakProfile({ name: "CookieSearchProfile" });
+    const { dirId } = createBrowserProfile({ name: "CookieSearchProfile" });
     const cookieDb = path.join(getProfilesDir(), dirId, "Default", "Cookies");
     fs.writeFileSync(cookieDb, "not a real sqlite database");
 
@@ -104,7 +104,7 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
     fs.writeFileSync(path.join(cachePath, "data_0"), "some cached data here"); // 22 bytes
 
     // We need config entry for storage monitor to list it
-    const { createCloakProfile: createCP } = await import("../../src/main/services/cloak-manager.js");
+    const { createBrowserProfile: createCP } = await import("../../src/main/services/browser-manager.js");
     createCP({ name: "StorageTest", fingerprintSeed: 12345 });
 
     // 2. Query storage info

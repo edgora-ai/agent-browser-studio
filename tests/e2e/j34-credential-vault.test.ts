@@ -31,7 +31,7 @@ describe("J34 — credential vault: encrypt at rest, decrypt at use, audited", (
   }, 90000);
 
   it("saves the LLM key and it is encrypted at rest in config.json", async () => {
-    await h.page.evaluate((args: any) => (window as any).cloak.api.agent.saveLlmConfig(args), {
+    await h.page.evaluate((args: any) => (window as any).agentBrowser.api.agent.saveLlmConfig(args), {
       provider: "openai", apiKey: SECRET, model: "e2e-mock", apiUrl: mock.url,
     });
     const cfg = JSON.parse(fs.readFileSync(userDataConfigPath(USERDATA), "utf8"));
@@ -43,17 +43,17 @@ describe("J34 — credential vault: encrypt at rest, decrypt at use, audited", (
   });
 
   it("decrypts the key at use — the chat sends the plaintext key to the LLM", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("agent"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
     await h.page.waitForTimeout(150);
-    await h.page.evaluate(() => (window as any).cloak.switchAgentSub("chat"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchAgentSub("chat"));
     await h.page.waitForTimeout(150);
     await h.page.locator('[data-cmd="agentNewConv"]').click({ timeout: 5000 });
-    await h.page.waitForFunction(() => !!(window as any).cloak.state.agentActiveConvId, { timeout: 5000 });
+    await h.page.waitForFunction(() => !!(window as any).agentBrowser.state.agentActiveConvId, { timeout: 5000 });
 
     await h.page.evaluate(() => {
       (window as any).__done = false;
       (window as any).__err = null;
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       api.on("agent:stream-done", () => { (window as any).__done = true; });
       api.on("agent:stream-error", (e: any) => { (window as any).__err = e; });
     });
@@ -75,7 +75,7 @@ describe("J34 — credential vault: encrypt at rest, decrypt at use, audited", (
   }, 40000);
 
   it("the save was recorded in the audit log", async () => {
-    const entries = await h.page.evaluate(() => (window as any).cloak.api.audit.list({ category: "llm" }));
+    const entries = await h.page.evaluate(() => (window as any).agentBrowser.api.audit.list({ category: "llm" }));
     const mine = entries.find((e: any) => e.action === "save");
     expect(mine, "audit must record the llm save").toBeTruthy();
     expect(mine.category).toBe("llm");

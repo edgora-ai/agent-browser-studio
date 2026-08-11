@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { CHROMIUM_CACHE_DIR_NAME } from "../main/branding.js";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -91,9 +92,11 @@ function main(): void {
   const version = detectVersion(sourceExecutable);
   if (Number(version.split(".")[0]) < 149) fail(`Chromium 149+ required, detected ${version}`);
 
-  const cacheRoot = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR
-    ? path.resolve(process.env.CLOAKLITE_CHROMIUM_CACHE_DIR)
-    : path.join(os.homedir(), ".roxy-lite-cloak");
+  const cacheOverride = process.env.AGENT_BROWSER_CHROMIUM_CACHE_DIR
+    || process.env.CLOAKLITE_CHROMIUM_CACHE_DIR; // pre-rename compatibility
+  const cacheRoot = cacheOverride
+    ? path.resolve(cacheOverride)
+    : path.join(os.homedir(), CHROMIUM_CACHE_DIR_NAME);
   const targetDir = path.join(cacheRoot, `chromium-${version}`);
   const targetApp = path.join(targetDir, "Chromium.app");
   const targetExecutable = path.join(targetApp, "Contents", "MacOS", "Chromium");
@@ -132,7 +135,7 @@ function main(): void {
     const stagedVersion = detectVersion(stagedExecutable);
     if (stagedVersion !== version) fail(`Staged Chromium version changed from ${version} to ${stagedVersion}`);
     const stagedHash = bundleBuildHash(stageApp);
-    if (stagedHash !== sourceHash) fail("Staged Chromium executable hash does not match the source build");
+    if (stagedHash !== sourceHash) fail("Staged Chromium runtime build hash does not match the source build");
 
     if (installedHash !== null) {
       previousDir = path.join(

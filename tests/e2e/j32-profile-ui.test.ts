@@ -14,8 +14,8 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
   let dirId = "";
 
   beforeAll(async () => {
-    h = await setupTestApp({ userDataDir: USERDATA });
-    const r = await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J32card", platform: "windows", fingerprintSeed: 32323 }));
+    h = await setupTestApp({ userDataDir: USERDATA, allowProfileVersionSelection: true });
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J32card", platform: "windows", fingerprintSeed: 32323 }));
     dirId = r.dirId;
   }, 60000);
 
@@ -24,14 +24,14 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
   const card = () => `[data-dir-id="${dirId}"]`;
 
   it("launches the profile via the card Launch button", async () => {
-    await h.page.evaluate(() => (window as any).cloak.switchTab("profiles"));
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
     await h.page.waitForTimeout(400);
     await h.page.locator(`${card()} [data-action="launch"]`).click({ timeout: 5000 });
     // Poll until running.
     const start = Date.now();
     let running = false;
     while (Date.now() - start < 20000) {
-      running = (await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), dirId)).running;
+      running = (await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), dirId)).running;
       if (running) break;
       await h.page.waitForTimeout(300);
     }
@@ -43,7 +43,7 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
     const start = Date.now();
     let running = true;
     while (Date.now() - start < 15000) {
-      running = (await h.page.evaluate((id: string) => (window as any).cloak.api.cloak.status(id), dirId)).running;
+      running = (await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.status(id), dirId)).running;
       if (!running) break;
       await h.page.waitForTimeout(300);
     }
@@ -52,18 +52,18 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
 
   it("edits + saves the profile via the Edit dialog", async () => {
     await h.page.locator(`${card()} [data-action="edit"]`).click({ timeout: 5000 });
-    await h.page.waitForSelector("#dlg-cloak-seed[open]", { timeout: 5000 });
-    await h.page.locator("#cloak-meta-name").fill("J32-renamed");
-    await h.page.locator("#cloak-meta-seed").fill("55555");
-    await h.page.locator("#cloak-meta-fingerprint-mode").selectOption("off");
-    await h.page.locator("#cloak-meta-allow-third-party-cookies").check();
-    await h.page.waitForFunction(() => (document.getElementById("cloak-meta-browser-version") as HTMLSelectElement).options.length > 1);
-    const pinnedVersion = await h.page.locator("#cloak-meta-browser-version option").nth(1).getAttribute("value");
+    await h.page.waitForSelector("#dlg-agent-browser-seed[open]", { timeout: 5000 });
+    await h.page.locator("#agent-browser-meta-name").fill("J32-renamed");
+    await h.page.locator("#agent-browser-meta-seed").fill("55555");
+    await h.page.locator("#agent-browser-meta-fingerprint-mode").selectOption("off");
+    await h.page.locator("#agent-browser-meta-allow-third-party-cookies").check();
+    await h.page.waitForFunction(() => (document.getElementById("agent-browser-meta-browser-version") as HTMLSelectElement).options.length > 1);
+    const pinnedVersion = await h.page.locator("#agent-browser-meta-browser-version option").nth(1).getAttribute("value");
     expect(pinnedVersion).toBeTruthy();
-    await h.page.locator("#cloak-meta-browser-version").selectOption(pinnedVersion!);
-    await h.page.evaluate(() => (window as any).cloak.saveCloakMeta());
+    await h.page.locator("#agent-browser-meta-browser-version").selectOption(pinnedVersion!);
+    await h.page.evaluate(() => (window as any).agentBrowser.saveBrowserMeta());
     await h.page.waitForTimeout(500);
-    const profiles = await h.page.evaluate(() => (window as any).cloak.api.cloak.list());
+    const profiles = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.list());
     const p = profiles.find((x: any) => x.dirId === dirId);
     expect(p.name).toBe("J32-renamed");
     expect(p.fingerprintSeed).toBe(55555);

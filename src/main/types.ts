@@ -1,4 +1,4 @@
-// ── Shared types for CloakLite management console ──
+// ── Shared types for Agent Browser Studio ──
 
 export interface ProxyConfig {
   type: "http" | "socks5" | "socks5h";
@@ -29,12 +29,12 @@ export interface ResolvedProfileProxy {
   config: ProxyConfig | null;
 }
 
-export type CloakPlatform = "windows" | "macos";
+export type BrowserPlatform = "windows" | "macos";
 export type GeolocationMode = "real" | "disable" | "custom";
 export type WebRtcMode = "auto" | "real" | "altered" | "disable";
 export type FingerprintMode = "managed" | "off";
 
-export interface CloakFingerprintMeta {
+export interface BrowserFingerprintMeta {
   /** `off` launches the selected build with all managed identity consumers disabled. */
   fingerprintMode?: FingerprintMode;
   /** Exact installed independent Chromium build, or null for newest installed. */
@@ -42,7 +42,7 @@ export interface CloakFingerprintMeta {
   /** Opt-in stock preference mode for embedded auth/payment/challenge flows. */
   allowThirdPartyCookies?: boolean;
   fingerprintSeed?: number;
-  platform?: CloakPlatform;
+  platform?: BrowserPlatform;
   timezone?: string | null;
   locale?: string | null;
   webrtcMode?: WebRtcMode;
@@ -64,7 +64,7 @@ export interface CloakFingerprintMeta {
   fingerprintBaseline?: Record<string, unknown>;
 }
 
-export interface CloakProfileMeta extends CloakFingerprintMeta {
+export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   proxyMode?: ProxyMode;
   proxyName?: string | null;
@@ -135,7 +135,7 @@ export interface ProfileInfo {
   syncedAt: number | null;
   syncStatus: "synced" | "dirty" | "never";
   tags: string[];
-  fingerprint: CloakFingerprintMeta;
+  fingerprint: BrowserFingerprintMeta;
 }
 
 export interface CookieInfo {
@@ -176,12 +176,12 @@ export interface PlatformAccount {
 
 export interface MgmtConfig {
   version: number;
-  cloakBin?: string;
+  chromiumBin?: string;
   defaultProxy: string;
   proxies: Record<string, ProxyConfig>;
   proxyDetections?: Record<string, ProxyDetectionCacheEntry>;
   sync: SyncConfig;
-  cloakProfiles: Record<string, CloakProfileMeta>;
+  browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;
   skillRepository?: Record<string, SkillRepositoryEntry>;
   skillCatalogSources?: SkillCatalogSource[];
@@ -289,7 +289,7 @@ export interface StorageInfo {
   profiles: Array<{
     dirId: string;
     name: string;
-    browser: "cloak";
+    browser: "chromium";
     sizeBytes: number;
     lastModified: number;
   }>;

@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,13 +43,13 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   function loadAccountsTab() {
     renderAccountsList('accounts-tab-list');
   }
-  cloak.loadAccountsTab = loadAccountsTab;
+  agentBrowser.loadAccountsTab = loadAccountsTab;
   function renderAccountsList(targetId) {
     R.agent.accounts.list().then(function(accounts) {
       var el = document.getElementById(targetId);
@@ -71,8 +71,8 @@
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';
-        html += '<button class="btn btn-secondary btn-sm" onclick="cloak.agentEditAccount(' + i + ')" style="margin-right:4px;">Edit</button>';
-        html += '<button class="btn btn-danger btn-sm" onclick="cloak.agentDeleteAccount(' + i + ')">Del</button>';
+        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-right:4px;">Edit</button>';
+        html += '<button class="btn btn-danger btn-sm" onclick="agentBrowser.agentDeleteAccount(' + i + ')">Del</button>';
         html += '</div>';
         html += '</div></div>';
       }
@@ -84,12 +84,12 @@
     });
   }
 
-  cloak.agentLoadAccounts = function() {
+  agentBrowser.agentLoadAccounts = function() {
     renderAccountsList('agent-accounts-list');
     if (state.currentTab === 'accounts') renderAccountsList('accounts-tab-list');
   };
 
-  cloak.agentAddAccount = function() {
+  agentBrowser.agentAddAccount = function() {
     document.getElementById('dlg-account-title').textContent = 'Add Account';
     document.getElementById('acct-edit-index').value = '-1';
     document.getElementById('acct-url').value = '';
@@ -99,7 +99,7 @@
     document.getElementById('dlg-account').showModal();
   };
 
-  cloak.saveAccount = function() {
+  agentBrowser.saveAccount = function() {
     var index = parseInt(document.getElementById('acct-edit-index').value);
     var account = {
       platformUrl: document.getElementById('acct-url').value.trim(),
@@ -119,11 +119,11 @@
     p.then(function(r) {
       document.getElementById('dlg-account').close();
       toast(index >= 0 ? 'Account updated' : 'Account added', 'success');
-      cloak.agentLoadAccounts();
+      agentBrowser.agentLoadAccounts();
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 
-  cloak.agentEditAccount = function(index) {
+  agentBrowser.agentEditAccount = function(index) {
     R.agent.accounts.list().then(function(accounts) {
       var a = accounts[index];
       if (!a) return;
@@ -138,10 +138,10 @@
     });
   };
 
-  cloak.agentDeleteAccount = function(index) {
+  agentBrowser.agentDeleteAccount = function(index) {
     if (!confirm('Delete this account?')) return;
     R.agent.accounts.delete(index).then(function(r) {
-      if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); cloak.agentLoadAccounts(); }
+      if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); agentBrowser.agentLoadAccounts(); }
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 })();

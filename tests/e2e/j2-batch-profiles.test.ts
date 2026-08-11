@@ -57,7 +57,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
     await h.page.locator('#dlg-bulk-import button[type="submit"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#dlg-bulk-import", { state: "hidden", timeout: 10000 });
     const profiles = (await h.page.evaluate(
-      () => (window as any).cloak.api.cloak.list(),
+      () => (window as any).agentBrowser.api.browser.list(),
     )) as Array<{ name: string; dirId: string }>;
     const names = profiles.map((p) => p.name);
     expect(names).toContain("j2-alpha");
@@ -73,7 +73,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
     const start = Date.now();
     while (Date.now() - start < 60000) {
       const list = (await h.page.evaluate(
-        () => (window as any).cloak.api.cloak.list(),
+        () => (window as any).agentBrowser.api.browser.list(),
       )) as Array<any>;
       const running = (list || []).filter((p) => p && p.running);
       if (running.length >= 3) break;
@@ -81,7 +81,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
     }
 
     const list = (await h.page.evaluate(
-      () => (window as any).cloak.api.cloak.list(),
+      () => (window as any).agentBrowser.api.browser.list(),
     )) as Array<any>;
     for (const p of list) {
       if (!p || !p.running) continue;
@@ -133,7 +133,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
     const all = (await execFile("ps", ["aux"], { maxBuffer: 10 * 1024 * 1024 })).stdout;
     for (const lp of launched) {
       const seedToken = `--fingerprint=${lp.fingerprintSeed}`;
-      const dirToken = path.join(USERDATA, "cloak-profiles", lp.dirId);
+      const dirToken = path.join(USERDATA, "profiles", lp.dirId);
       expect(all, `${lp.name}: missing ${seedToken} in ps aux`).toContain(seedToken);
       expect(all, `${lp.name}: missing ${dirToken} in ps aux`).toContain(dirToken);
     }
@@ -145,7 +145,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
     const start = Date.now();
     while (Date.now() - start < 15000) {
       const list = (await h.page.evaluate(
-        () => (window as any).cloak.api.cloak.list(),
+        () => (window as any).agentBrowser.api.browser.list(),
       )) as Array<any>;
       const running = list.filter((p) => p && p.running);
       if (running.length === 0) break;

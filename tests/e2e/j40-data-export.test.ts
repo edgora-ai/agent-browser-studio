@@ -14,9 +14,9 @@ describe("J40 — structured data export", () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate(async () => (window as any).cloak.api.cloak.create({ name: "J40", platform: "windows", fingerprintSeed: 40404, tags: ["audit", "eval"] }));
+    await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J40", platform: "windows", fingerprintSeed: 40404, tags: ["audit", "eval"] }));
     await h.page.evaluate(async () => {
-      await (window as any).cloak.api.proxy.add("j40-auth", { type: "http", host: "8.8.8.8", port: 8080, username: "user", password: "test-proxy-password-not-real" });
+      await (window as any).agentBrowser.api.proxy.add("j40-auth", { type: "http", host: "8.8.8.8", port: 8080, username: "user", password: "test-proxy-password-not-real" });
     });
     const cfgPath = path.join(USERDATA, "config.json");
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
@@ -29,14 +29,14 @@ describe("J40 — structured data export", () => {
       { id: "run_j40vars", name: "J40 vars", source: { type: "chat" }, status: "done", startedAt: 1700000000100, finishedAt: 1700000000200, steps: [], variables: { token: "test-run-variable-secret-not-real" } },
     ];
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
-    await h.page.evaluate(async () => (window as any).cloak.api.app.reloadConfig());
-    await h.page.evaluate(async () => { await (window as any).cloak.api.agentDb.exec("CREATE TABLE IF NOT EXISTS export_t (id INTEGER PRIMARY KEY, v TEXT)"); });
-    await h.page.evaluate(async () => { await (window as any).cloak.api.agentDb.exec("INSERT INTO export_t (v) VALUES ('hello-export')"); });
+    await h.page.evaluate(async () => (window as any).agentBrowser.api.app.reloadConfig());
+    await h.page.evaluate(async () => { await (window as any).agentBrowser.api.agentDb.exec("CREATE TABLE IF NOT EXISTS export_t (id INTEGER PRIMARY KEY, v TEXT)"); });
+    await h.page.evaluate(async () => { await (window as any).agentBrowser.api.agentDb.exec("INSERT INTO export_t (v) VALUES ('hello-export')"); });
   }, 60000);
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   it("exports profiles + db in the 'all' scope", async () => {
-    const res = await h.page.evaluate(() => (window as any).cloak.api.data.export("all"));
+    const res = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("all"));
     expect(res.ok).toBe(true);
     expect(res.scope).toBe("all");
     expect(res.data.profiles.length).toBeGreaterThanOrEqual(1);
@@ -48,7 +48,7 @@ describe("J40 — structured data export", () => {
   });
 
   it("exports redacted proxy detections and profile tags", async () => {
-    const res = await h.page.evaluate(() => (window as any).cloak.api.data.export("all"));
+    const res = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("all"));
     const profile = res.data.profiles.find((p: any) => p.name === "J40");
     expect(profile.tags).toEqual(["audit", "eval"]);
     expect(res.data.proxies["j40-auth"].hasPassword).toBe(true);
@@ -61,13 +61,13 @@ describe("J40 — structured data export", () => {
   });
 
   it("a scoped export only returns that scope", async () => {
-    const res = await h.page.evaluate(() => (window as any).cloak.api.data.export("db"));
+    const res = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("db"));
     expect(res.data.db).toBeTruthy();
     expect(res.data.profiles).toBeUndefined();
   });
 
   it("never exports secrets", async () => {
-    const res = await h.page.evaluate(() => (window as any).cloak.api.data.export("all"));
+    const res = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("all"));
     const blob = JSON.stringify(res);
     expect(blob).not.toContain("test-proxy-password-not-real");
     expect(blob).not.toContain("test-run-variable-secret-not-real");

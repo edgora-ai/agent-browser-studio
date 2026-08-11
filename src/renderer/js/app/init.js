@@ -1,11 +1,11 @@
 (function() {
   "use strict";
 
-  var cloak = window.cloak;
-  var api = cloak.api;
-  var R = cloak.R;
-  var state = cloak.state;
-  var helpers = cloak.helpers;
+  var agentBrowser = window.agentBrowser;
+  var api = agentBrowser.api;
+  var R = agentBrowser.R;
+  var state = agentBrowser.state;
+  var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -43,31 +43,32 @@
   var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
   var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
   var platformFromOsName = helpers.platformFromOsName;
-  var normalizeCloakPlatform = helpers.normalizeCloakPlatform;
-  var updateCloakStatus = helpers.updateCloakStatus;
-  var renderCloakBinaryCard = helpers.renderCloakBinaryCard;
-  var loadTab = cloak.loadTab;
-  var loadSyncConfig = cloak.loadSyncConfig;
-  var maybeShowWizard = cloak.maybeShowWizard;
+  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
+  var updateBrowserStatus = helpers.updateBrowserStatus;
+  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  var loadTab = agentBrowser.loadTab;
+  var loadSyncConfig = agentBrowser.loadSyncConfig;
+  var maybeShowWizard = agentBrowser.maybeShowWizard;
   function init() {
     // Restore saved theme
-    var savedTheme = localStorage.getItem('cloak-theme') || 'light';
+    var savedTheme = localStorage.getItem('agent-browser-studio-theme') || localStorage.getItem('cloak-theme') || 'light';
+    try { localStorage.setItem('agent-browser-studio-theme', savedTheme); } catch (e) { /* storage disabled */ }
     document.documentElement.setAttribute('data-theme', savedTheme);
-    cloak._updateThemeUI(savedTheme);
+    agentBrowser._updateThemeUI(savedTheme);
     // Init language UI
-    cloak._updateLangUI();
+    agentBrowser._updateLangUI();
 
     // Track event listeners for cleanup
     window._eventListeners = [];
     if (api && api.on) {
       var exitHandler = function (data) { if (data && data.dirId) markProfileRuntime(data.dirId, false, null); scheduleProfilesRefresh(); };
-      api.on("cloak:exited", exitHandler);
-      window._eventListeners.push({ channel: "cloak:exited", handler: exitHandler });
+      api.on("browser:exited", exitHandler);
+      window._eventListeners.push({ channel: "browser:exited", handler: exitHandler });
     }
 
     loadTab("profiles");
     loadSyncConfig();
-    updateCloakStatus();
+    updateBrowserStatus();
 
     // First-run wizard — delay slightly so profiles list loads first
     setTimeout(function () { maybeShowWizard(); }, 500);

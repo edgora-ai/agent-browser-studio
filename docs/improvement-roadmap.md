@@ -1,4 +1,4 @@
-# CloakLite 改进路线图（场景化评测 → 开发推进）
+# Agent Browser Studio 改进路线图（场景化评测 → 开发推进）
 
 > 来源：8-agent 场景化评测（跨境电商 / 社媒矩阵 / AI自动化 / 广告养号 / 团队协作 / 开发者 / 竞品对标 + 综合）。
 > 本文档既是评测结论，也是开发推进的活文档——每个落地切片都会在文末「开发日志」记录。
@@ -115,7 +115,7 @@ $ npx vitest run -c vitest.config.e2e.ts j6 j27 j28 j33 → 4 files, 23 passed
 - 新增 `src/main/ipc/audit.ts` + preload `audit:{list,clear}` namespace
 - 改 `config-manager.ts` — `normalizeProxyConfig`/`normalizeAccounts`/`setSyncConfig` 写入时加密；`resolveProfileProxyInternal` 消费时解密；`migrateSecrets()` 启动一次性迁移
 - 改 `local-agent.ts` — 4 个 fetch header 站点解密 apiKey
-- 改 `cloak-manager.ts` — 启动时解密 proxy 密码注入 auth 回调；launch/stop 写 audit
+- 改 `browser-manager.ts` — 启动时解密 proxy 密码注入 auth 回调；launch/stop 写 audit
 - 改 `ipc/agent.ts` — `saveLlmConfig` 加密 apiKey + audit
 - 改 `sync-service.ts` — 3 个签名站点解密 secretKey
 - 改 `index.ts` — 启动调 `migrateSecrets()` + 注册 audit handlers
@@ -139,8 +139,8 @@ J34 关键证明（Electron 真环境，safeStorage 可用）：保存的 LLM ke
 
 **文件**：
 - 新增 `src/main/services/consistency-check.ts` — `tzToCountry` / `localeToRegion` / `checkProfileConsistency`（blocker: WebRTC+无代理泄漏；warning: tz↔locale、proxy↔tz、proxy↔locale、proxy-tz-mismatch）
-- 改 `cloak-manager.ts` `launchCloak` — 启动前跑检查，写 audit，按 flag 阻断
-- 改 `ipc/cloak.ts` + preload — `cloak:consistency-check` 供 UI badge
+- 改 `browser-manager.ts` `launchBrowser` — 启动前跑检查，写 audit，按 flag 阻断
+- 改 `ipc/browser.ts` + preload — `browser:consistency-check` 供 UI badge
 - 改 `types.ts` — `blockOnConsistencyConflict?: boolean`
 - 新增 `tests/unit/consistency-check.test.ts`（10 例）+ `tests/e2e/j35-consistency-check.test.ts`（4 例）
 
@@ -187,7 +187,7 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J37 全绿（含 journ
 5 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI）全部落地并验证。
 
 ### Slice 6 — MCP 暴露 browser/db/http + automation/runs/jobs（P1）— ✅
-MCP 不再只列 profile：passthrough `cloak_browser_*` / `cloak_db_*` / `cloak_http_*` / `cloak_{read,write}_file`（委托 executeToolCall，schema 取自 AGENT_TOOLS 同步）+ `cloak_{automation_list,runs_list,jobs_list}`。J38 连真实 MCP server 验证 tools/list + db 直通。
+MCP 不再只列 profile：统一通过 `agent_browser_*` 暴露 browser/db/http/file 工具（委托 executeToolCall，schema 取自 AGENT_TOOLS 同步），并提供 `agent_browser_{automation_list,runs_list,jobs_list}`。J38 连真实 MCP server 验证 tools/list + db 直通；旧 `cloak_*` 只保留隐藏调用兼容。
 
 ### Slice 7 — Copilot 任务模板库（P1）— ✅
 `task-templates.ts` 5 个结构化模板（价格采集/新闻采集/账号巡检/广告余额/表单→webhook），每个带 prompt + 输出表 schema + 步骤。`renderTemplateCatalog()` 注入系统提示，模型按模板流程走 + 结构化入库，而非每次重新发明。J39 验证模板驱动的结构化写入 + 提示里有模板目录。
@@ -199,7 +199,7 @@ MCP 不再只列 profile：passthrough `cloak_browser_*` / `cloak_db_*` / `cloak
 http_request 支持 GET/POST/PUT/**PATCH/DELETE/HEAD**。`data:export` 返回 profiles/proxies/accounts/runs/jobs/db 的稳定 JSON，**密钥永不导出**。
 
 ### Slice 10 — 指纹基线 + 漂移检测（P0，信任地基）— ✅
-`fingerprint-baseline.ts`：经 CDP 采集每 profile 的活跃指纹签名（UA/platform/语言/硬件/屏幕/tz/WebGL/canvas），存为基线，后续采集 diff 出漂移并审计，高风险字段（UA/tz/WebGL/硬件/屏幕）标记。`cloak:capture-baseline` IPC。J41 真浏览器验证采集 + 稳定 + 篡改基线→检出 risky 漂移。
+`fingerprint-baseline.ts`：经 CDP 采集每 profile 的活跃指纹签名（UA/platform/语言/硬件/屏幕/tz/WebGL/canvas），存为基线，后续采集 diff 出漂移并审计，高风险字段（UA/tz/WebGL/硬件/屏幕）标记。`browser:capture-baseline` IPC。J41 真浏览器验证采集 + 稳定 + 篡改基线→检出 risky 漂移。
 
 ### Slice 11 — 批量 CSV 导入（P1）— ✅
 `bulk-import.ts` header CSV 解析器（name/platform/locale/timezone/seed/proxy/webrtc/tags，带别名）+ 兼容旧位置格式；doBulkImport 走 IPC 单一解析器 + 每行代理绑定。J42 验证 header CSV 导入 + 按行绑定代理。
@@ -211,4 +211,4 @@ http_request 支持 GET/POST/PUT/**PATCH/DELETE/HEAD**。`data:export` 返回 pr
 `sync:preview` 离线报告一次 push 涉及的 profile/proxy/account/extension 数 + **运行中 profile（pull 时跳过 localStorage/preferences）**清单。J43 验证计数 + 运行中跳过标记。
 
 ### Slice 14 — Windows x64 基线（P0）— 🟡 配置就绪，待 Windows 验证
-electron-builder.yml 加 `win/nsis x64` target；新增 `.github/workflows/ci.yml`（ubuntu+windows 跑 tsc/build/unit-smoke，macOS 跑 e2e）；cloak-manager 的 win32 跨平台分支（binary 路径、process.kill/-F）已就位。**完整 Windows e2e 需 Windows runner + 自建 Chromium 正式发行包**——CI 里标注为后续。
+electron-builder.yml 加 `win/nsis x64` target；新增 `.github/workflows/ci.yml`（ubuntu+windows 跑 tsc/build/unit-smoke，macOS 跑 e2e）；browser-manager 的 win32 跨平台分支（binary 路径、process.kill/-F）已就位。**完整 Windows e2e 需 Windows runner + 自建 Chromium 正式发行包**——CI 里标注为后续。

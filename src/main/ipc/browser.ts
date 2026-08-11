@@ -1,10 +1,10 @@
 import { ipcMain } from "electron";
 import {
-  launchCloak, stopCloak, statusCloak, listCloakProfiles,
+  launchBrowser, stopBrowser, statusBrowser, listBrowserProfiles,
   getRuntimeChromiumStatus, verifyRuntimeChromium,
   getRuntimeChromiumVersion, isRuntimeChromiumInstalled,
-  createCloakProfile, deleteCloakProfile,
-} from "../services/cloak-manager.js";
+  createBrowserProfile, deleteBrowserProfile,
+} from "../services/browser-manager.js";
 import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
 import { checkProfileConsistency } from "../services/consistency-check.js";
 import { captureFingerprint, diffFingerprints, hasRiskyDrift } from "../services/fingerprint-baseline.js";
@@ -12,28 +12,37 @@ import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
-import type { CloakPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
+import type { BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
-export function registerCloakHandlers(): void {
+type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
+
+function handleBrowser(action: string, handler: BrowserIpcHandler): void {
+  ipcMain.handle(`browser:${action}`, handler);
+  // Keep the pre-rename channel as an unadvertised compatibility alias for
+  // automation clients during the data migration window.
+  ipcMain.handle(`cloak:${action}`, handler);
+}
+
+export function registerBrowserHandlers(): void {
   // Parse a bulk-import CSV (header or legacy positional) into profile specs.
-  ipcMain.handle("cloak:parse-bulk-csv", async (_event, text: string) => {
+  handleBrowser("parse-bulk-csv", async (_event, text: string) => {
     try { return { ok: true, specs: parseBulkCsv(String(text || "")) }; }
     catch (e: any) { return { ok: false, error: e.message || String(e) }; }
   });
 
-  ipcMain.handle("cloak:list", async () => {
-    return listCloakProfiles().map(p => ({
+  handleBrowser("list", async () => {
+    return listBrowserProfiles().map(p => ({
       ...p,
       installed: isRuntimeChromiumInstalled(),
       version: p.version || getRuntimeChromiumVersion() || "?",
     }));
   });
 
-  ipcMain.handle("cloak:binary", async () => {
+  handleBrowser("binary", async () => {
     return getRuntimeChromiumStatus();
   });
 
-  ipcMain.handle("cloak:verify-binary", async () => {
+  handleBrowser("verify-binary", async () => {
     try {
       return { success: true, status: verifyRuntimeChromium() };
     } catch (e: any) {
@@ -41,8 +50,8 @@ export function registerCloakHandlers(): void {
     }
   });
 
-  ipcMain.handle("cloak:create", async (_event, opts: {
-    name: string; fingerprintSeed?: number; platform?: CloakPlatform;
+  handleBrowser("create", async (_event, opts: {
+    name: string; fingerprintSeed?: number; platform?: BrowserPlatform;
     fingerprintMode?: FingerprintMode; browserVersion?: string | null;
     allowThirdPartyCookies?: boolean;
     timezone?: string; locale?: string; webrtcMode?: WebRtcMode; webrtcIp?: string;
@@ -51,7 +60,7 @@ export function registerCloakHandlers(): void {
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
   }) => {
-    const r = createCloakProfile({
+    const r = createBrowserProfile({
       name: opts.name,
       fingerprintMode: opts.fingerprintMode,
       browserVersion: opts.browserVersion,
@@ -82,38 +91,38 @@ export function registerCloakHandlers(): void {
     return r;
   });
 
-  ipcMain.handle("cloak:delete", async (_event, dirId: string) => {
+  handleBrowser("delete", async (_event, dirId: string) => {
     try {
-      return { success: deleteCloakProfile(dirId) };
+      return { success: deleteBrowserProfile(dirId) };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
   });
 
-  ipcMain.handle("cloak:launch", async (_event, params: {
+  handleBrowser("launch", async (_event, params: {
     dirId: string;
   }) => {
     try {
-      const r = await launchCloak(params.dirId);
+      const r = await launchBrowser(params.dirId);
       return { success: true, pid: r.pid, cdpPort: r.cdpPort };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
   });
 
-  ipcMain.handle("cloak:stop", async (_event, dirId: string) => {
-    return { success: stopCloak(dirId) };
+  handleBrowser("stop", async (_event, dirId: string) => {
+    return { success: stopBrowser(dirId) };
   });
 
-  ipcMain.handle("cloak:status", async (_event, dirId: string) => {
-    return statusCloak(dirId);
+  handleBrowser("status", async (_event, dirId: string) => {
+    return statusBrowser(dirId);
   });
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy) for the UI badge.
-  ipcMain.handle("cloak:consistency-check", async (_event, dirId: string) => {
+  handleBrowser("consistency-check", async (_event, dirId: string) => {
     validateDirId(dirId);
     const cfg = getConfig() as any;
-    const meta = cfg.cloakProfiles?.[dirId];
+    const meta = cfg.browserProfiles?.[dirId];
     if (!meta) return { ok: false, warnings: [], blockers: [{ severity: "blocker", code: "no-profile", message: "Profile not found" }] };
     if (meta.fingerprintMode === "off") return { ok: true, warnings: [], blockers: [] };
     const resolved = resolveProfileProxy(dirId);
@@ -126,17 +135,17 @@ export function registerCloakHandlers(): void {
   });
 
   // Capture (or re-capture) the live fingerprint baseline; diff vs the prior one.
-  ipcMain.handle("cloak:capture-baseline", async (_event, dirId: string) => {
+  handleBrowser("capture-baseline", async (_event, dirId: string) => {
     validateDirId(dirId);
-    const st = statusCloak(dirId);
+    const st = statusBrowser(dirId);
     if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
     try {
       const current = await captureFingerprint(st.cdpPort);
       const cfg = getConfig() as any;
-      const meta = cfg.cloakProfiles?.[dirId] || {};
+      const meta = cfg.browserProfiles?.[dirId] || {};
       const drift = diffFingerprints(meta.fingerprintBaseline, current);
       const risky = hasRiskyDrift(drift);
-      cfg.cloakProfiles[dirId] = { ...meta, fingerprintBaseline: current };
+      cfg.browserProfiles[dirId] = { ...meta, fingerprintBaseline: current };
       saveConfig(cfg);
       if (drift.length) {
         recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId,
@@ -151,26 +160,26 @@ export function registerCloakHandlers(): void {
   });
 
   // Set fingerprint seed for a profile
-  ipcMain.handle("cloak:set-seed", async (_event, params: {
+  handleBrowser("set-seed", async (_event, params: {
     dirId: string; seed: number;
   }) => {
     validateDirId(params.dirId);
     const cfg = getConfig();
-    if (!Object.hasOwn(cfg.cloakProfiles || {}, params.dirId)) return { success: false };
-    cfg.cloakProfiles[params.dirId]!.fingerprintSeed = params.seed;
+    if (!Object.hasOwn(cfg.browserProfiles || {}, params.dirId)) return { success: false };
+    cfg.browserProfiles[params.dirId]!.fingerprintSeed = params.seed;
     saveConfig(cfg);
     return { success: true };
   });
 
   // Set managed Chromium fingerprint metadata (name, timezone, locale, WebRTC IP, platform, seed, note)
-  ipcMain.handle("cloak:set-meta", async (_event, params: {
+  handleBrowser("set-meta", async (_event, params: {
     dirId: string;
     name?: string;
     fingerprintMode?: FingerprintMode;
     browserVersion?: string | null;
     allowThirdPartyCookies?: boolean;
     fingerprintSeed?: number;
-    platform?: CloakPlatform;
+    platform?: BrowserPlatform;
     timezone?: string;
     locale?: string;
     webrtcMode?: WebRtcMode;
@@ -195,7 +204,7 @@ export function registerCloakHandlers(): void {
   }) => {
     validateDirId(params.dirId);
     const cfg = getConfig();
-    if (!Object.hasOwn(cfg.cloakProfiles || {}, params.dirId)) return { success: false };
+    if (!Object.hasOwn(cfg.browserProfiles || {}, params.dirId)) return { success: false };
     try {
       setProfileMeta(params.dirId, {
         name: params.name,
@@ -234,20 +243,20 @@ export function registerCloakHandlers(): void {
 
   // Open fingerprint risk-check URL in a profile
   // If profile is not running, auto-launches it first and waits for CDP readiness.
-  ipcMain.handle("cloak:open-risk-check", async (_event, params: { dirId: string }) => {
+  handleBrowser("open-risk-check", async (_event, params: { dirId: string }) => {
     const { dirId } = params;
     validateDirId(dirId);
     const url = "https://ping0.cc/env";
 
-    let status = statusCloak(dirId);
+    let status = statusBrowser(dirId);
     let cdpPort = status.cdpPort || 0;
 
     // Auto-launch if not running
     if (!status.running) {
       try {
-        const launchResult = await launchCloak(dirId);
+        const launchResult = await launchBrowser(dirId);
         cdpPort = launchResult.cdpPort || 0;
-        status = statusCloak(dirId);
+        status = statusBrowser(dirId);
       } catch (e: any) {
         return { success: false, error: `Failed to launch: ${e.message || String(e)}`, autoLaunched: true };
       }

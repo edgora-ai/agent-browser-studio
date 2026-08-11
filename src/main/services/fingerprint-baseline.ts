@@ -118,14 +118,14 @@ export const CAPTURE_EXPRESSION = `(async function(){
   try {
     var c2 = document.createElement("canvas"); c2.width = 64; c2.height = 16;
     var x = c2.getContext("2d"); x.textBaseline = "top"; x.font = "12px Arial";
-    x.fillText("CloakLite-FP", 2, 2);
+    x.fillText("Agent Browser Studio-FP", 2, 2);
     var canvasData = c2.toDataURL();
     o.canvasLen = canvasData.length;
     o.canvasHash = hash(canvasData);
   } catch(e){}
   try {
     var rectNode = document.createElement("span");
-    rectNode.textContent = "CloakLite-Rect";
+    rectNode.textContent = "Agent Browser Studio-Rect";
     rectNode.style.cssText = "position:fixed;left:-10000px;top:-10000px;font:13px Arial";
     document.documentElement.appendChild(rectNode);
     var rect = rectNode.getBoundingClientRect();

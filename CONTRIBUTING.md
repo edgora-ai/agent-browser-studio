@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution to CloakLite.
+Thanks for considering a contribution to Agent Browser Studio.
 
 ## Development Setup
 

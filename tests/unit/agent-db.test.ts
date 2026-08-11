@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "cloak-agent-db-test");
+const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-agent-db-test");
 
 vi.mock("electron", () => ({
   app: {

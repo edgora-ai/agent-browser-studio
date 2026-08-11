@@ -11,12 +11,32 @@ const execFileP = promisify(execFile);
 
 // Locate the independently built Chromium cache without consulting a wrapper
 // cache or network service.
-function resolveManagedChromiumPath(): string | null {
-  if (process.env.CLOAKLITE_CHROMIUM_BINARY_PATH && fs.existsSync(process.env.CLOAKLITE_CHROMIUM_BINARY_PATH)) {
-    return process.env.CLOAKLITE_CHROMIUM_BINARY_PATH;
+function resolveManagedChromiumPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicitPath = env.AGENT_BROWSER_CHROMIUM_BINARY_PATH || env.CLOAKLITE_CHROMIUM_BINARY_PATH;
+  if (explicitPath && fs.existsSync(explicitPath)) {
+    return explicitPath;
   }
   const home = os.homedir();
+  const currentCached = newestCachedBinary(path.join(home, ".agent-browser-studio"));
+  if (currentCached) return currentCached;
+  if (process.platform === "darwin") {
+    const developmentBinary = path.resolve(
+      REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease",
+      "Chromium.app", "Contents", "MacOS", "Chromium",
+    );
+    if (fs.existsSync(developmentBinary)) return developmentBinary;
+  }
   return newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
+}
+
+function resolveManagedChromiumCacheRoot(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicitRoot = env.AGENT_BROWSER_CHROMIUM_CACHE_DIR || env.CLOAKLITE_CHROMIUM_CACHE_DIR;
+  if (explicitRoot) return path.resolve(explicitRoot);
+  const home = os.homedir();
+  const currentRoot = path.join(home, ".agent-browser-studio");
+  if (newestCachedBinary(currentRoot)) return currentRoot;
+  const legacyRoot = path.join(home, ".roxy-lite-cloak");
+  return newestCachedBinary(legacyRoot) ? legacyRoot : null;
 }
 
 function newestCachedBinary(cacheDir: string): string | null {
@@ -91,14 +111,21 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   const pageErrors: string[] = [];
   const cdpPids: number[] = [];
 
-  const chromiumBin = resolveManagedChromiumPath();
   const launchEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ELECTRON_DISABLE_GPU: "1",
     ELECTRON_ENABLE_LOGGING: "1",
     ...opts.env,
   };
-  if (chromiumBin && !opts.allowProfileVersionSelection) launchEnv.CLOAKLITE_CHROMIUM_BINARY_PATH = chromiumBin;
+  const chromiumBin = resolveManagedChromiumPath(launchEnv);
+  if (opts.allowProfileVersionSelection) {
+    const cacheRoot = resolveManagedChromiumCacheRoot(launchEnv);
+    if (cacheRoot && !launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR && !launchEnv.CLOAKLITE_CHROMIUM_CACHE_DIR) {
+      launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR = cacheRoot;
+    }
+  } else if (chromiumBin) {
+    launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
+  }
 
   const app = await electron.launch({
     args: [REPO, `--user-data-dir=${opts.userDataDir}`, ...(opts.args ?? [])],
@@ -106,7 +133,7 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     env: launchEnv,
     timeout: opts.timeoutMs ?? 30000,
   });
-  if (process.env.CLOAK_E2E_TRACE === "1") {
+  if (process.env.AGENT_BROWSER_E2E_TRACE === "1" || process.env.CLOAK_E2E_TRACE === "1") {
     app.process().stdout?.on("data", (chunk) => process.stdout.write(`[electron:stdout] ${chunk}`));
     app.process().stderr?.on("data", (chunk) => process.stderr.write(`[electron:stderr] ${chunk}`));
   }
@@ -118,7 +145,7 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   page.on("pageerror", (err) => pageErrors.push(err.message));
 
   await page.waitForFunction(
-    () => (window as any).cloak && (window as any).cloak.switchTab,
+    () => (window as any).agentBrowser && (window as any).agentBrowser.switchTab,
     { timeout: 20000 },
   );
   await page.waitForSelector("#tab-profiles", { timeout: 15000 });
@@ -140,7 +167,7 @@ export async function dismissWizard(page: Page): Promise<void> {
   await page.evaluate(() => {
     (window as any).wizardDismissed = true;
     try {
-      localStorage.setItem("cloak-wizard-dismissed", "1");
+      localStorage.setItem("agent-browser-studio-wizard-dismissed", "1");
     } catch (_) {
       /* ignore */
     }
@@ -151,13 +178,13 @@ export async function dismissWizard(page: Page): Promise<void> {
   await closeAllDialogs(page);
 }
 
-export async function getRoxyApi<T = any>(page: Page): Promise<T> {
-  return page.evaluate(() => (window as any).cloak.api) as Promise<T>;
+export async function getAgentBrowserApi<T = any>(page: Page): Promise<T> {
+  return page.evaluate(() => (window as any).agentBrowser.api) as Promise<T>;
 }
 
-export async function waitForRoxyReady(page: Page, timeoutMs = 20000): Promise<void> {
+export async function waitForAgentBrowserReady(page: Page, timeoutMs = 20000): Promise<void> {
   await page.waitForFunction(
-    () => (window as any).cloak && (window as any).cloak.switchTab,
+    () => (window as any).agentBrowser && (window as any).agentBrowser.switchTab,
     { timeout: timeoutMs },
   );
 }
@@ -165,15 +192,15 @@ export async function waitForRoxyReady(page: Page, timeoutMs = 20000): Promise<v
 export async function stopAllProfiles(page: Page, timeoutMs = 15000): Promise<void> {
   // First pass: issue stop for every running profile
   await page.evaluate(async (tmo: number) => {
-    const api = (window as any).cloak.api;
+    const api = (window as any).agentBrowser.api;
     if (!api) return;
     const start = Date.now();
     while (Date.now() - start < tmo) {
-      const list = await api.cloak.list();
+      const list = await api.browser.list();
       const running = (list || []).filter((p: any) => p && p.running);
       if (running.length === 0) return;
       for (const p of running) {
-        try { await api.cloak.stop(p.dirId); } catch (_) { /* ignore */ }
+        try { await api.browser.stop(p.dirId); } catch (_) { /* ignore */ }
       }
       // Give the SIGTERM + SIGKILL fallback time to actually terminate
       await new Promise((r) => setTimeout(r, 800));
@@ -183,7 +210,7 @@ export async function stopAllProfiles(page: Page, timeoutMs = 15000): Promise<vo
 
 export async function closeApp(handle: TestAppHandle): Promise<void> {
   // NOTE: we deliberately do NOT use the IPC-based stopAllProfiles here. When a
-  // profile was launched, ipcRenderer.invoke("cloak:list"/"cloak:stop") can
+  // profile was launched, ipcRenderer.invoke("browser:list"/"browser:stop") can
   // hang on a wedged main process, and a single hung await blocks the whole
   // teardown past the hook timeout. Each test runs in an isolated userData
   // dir, so SIGKILL by userDataDir is sufficient and never blocks.
@@ -235,7 +262,7 @@ export async function configureDefaultProxy(
   if (!config) throw new Error(`invalid proxy url: ${proxyUrl}`);
   await page.evaluate(
     async (args: { name: string; config: any }) => {
-      const api = (window as any).cloak.api;
+      const api = (window as any).agentBrowser.api;
       await api.proxy.add(args.name, args.config);
       await api.proxy.setDefault(args.name);
     },
@@ -255,7 +282,7 @@ function parseProxyUrl(raw: string): { type: "http" | "socks5" | "socks5h"; host
 }
 
 export function userDataProfilesDir(userDataDir: string): string {
-  return path.join(userDataDir, "cloak-profiles");
+  return path.join(userDataDir, "profiles");
 }
 
 export function userDataExtensionRepoDir(userDataDir: string): string {
