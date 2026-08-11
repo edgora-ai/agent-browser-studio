@@ -1,6 +1,7 @@
-// Capture README screenshots: launch the built app with a pre-seeded
-// userData, walk each tab, and save PNGs to docs/screenshots/.
-// Run: npm run build && npx vitest run -c vitest.config.e2e.ts tests/e2e/j-screenshots.test.ts
+// Capture README screenshots with a pre-seeded app. Normal full-suite runs use
+// a temporary output directory so they cannot overwrite uncommitted docs.
+// To update docs explicitly:
+// UPDATE_README_SCREENSHOTS=1 npx vitest run -c vitest.config.e2e.ts tests/e2e/j-screenshots.test.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -10,7 +11,10 @@ import { closeAllDialogs } from "./helpers/diag.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j-screenshots");
-const OUT = path.join(REPO, "docs", "screenshots");
+const UPDATE_README_SCREENSHOTS = process.env.UPDATE_README_SCREENSHOTS === "1";
+const OUT = UPDATE_README_SCREENSHOTS
+  ? path.join(REPO, "docs", "screenshots")
+  : path.join(os.tmpdir(), `cloak-readme-screenshots-${process.pid}`);
 
 describe("J-screenshots — README captures", () => {
   let h: TestAppHandle;
@@ -61,6 +65,7 @@ describe("J-screenshots — README captures", () => {
 
   afterAll(async () => {
     if (h) await closeApp(h);
+    if (!UPDATE_README_SCREENSHOTS) fs.rmSync(OUT, { recursive: true, force: true });
   });
 
   async function shot(tab: string, file: string) {
