@@ -9,11 +9,12 @@ are out of scope.
 ## Baselines
 
 - Stock Chromium/Chrome: `150.0.7871.114`.
-- CloakBrowser wrapper baseline: `0.5.3`; public binary baseline: Chromium
-  `150.0.7871.114.3` on macOS and
-  Windows (71 publicly reported source-level patches); Linux also has
-  `150.0.7871.114.4` (73 publicly reported patches).
-- RoxyBrowser product baseline: public release `4.0.0` with Chromium 150.
+- CloakBrowser wrapper baseline: public release
+  [`0.5.7`](https://github.com/CloakHQ/CloakBrowser/releases/tag/v0.5.7).
+  The platform-specific public binary baseline is Chromium
+  `150.0.7871.114.6` on Windows/Linux and `150.0.7871.114.3` on macOS.
+- RoxyBrowser product baseline: public release
+  [`4.0.2`](https://roxybrowser.com/changelog#1311) with Chromium 150.
   Deep comparison evidence still comes from the observable Chromium 149 corpus
   captured locally; exact proprietary implementation details are not an
   acceptance input.
@@ -60,11 +61,11 @@ Status meanings:
 |---|---|---|---|
 | `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks |
 | CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
-| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | deterministic distribution/range tests, compositor-paced pointer points and installed Chromium 150 E2E; no page injection |
+| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | isolated-world actionability, full cross-origin OOPIF recursion, iframe content-quad coordinate mapping, post-settle re-scroll, occlusion fail-closed, explicit key-hold timing and installed Chromium 150 J44/J50; no page-world prototype modification |
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |
 | SOCKS5 TCP | verified | Preserve authenticated routing and proxy-side name resolution through the loopback bridge | unit rejection/echo corpus plus real Electron/Profile remote-domain E2E and bridge lifecycle check |
 | SOCKS5 UDP / QUIC / HTTP3 | verified | Preserve authenticated TCP/UDP routing, proxy-side DNS and fail-closed behavior on older/HTTP-only paths | profile-owned MASQUE bridge, per-flow SOCKS5 UDP ASSOCIATE, RFC 9297 oversized-datagram Capsule fallback and real Electron/Profile HTTP/3 E2E |
-| Proxy timing, cache and header signals | verified | Preserve direct/HTTP/SOCKS structural parity as Chromium evolves | HTTP/HTTPS Window/Worker/frame/Service Worker headers, WSS, Navigation/Resource Timing, cache and ETag revalidation corpus against stock Chrome and Cloak |
+| Proxy timing, cache and header signals | verified | Preserve IPv4/IPv6, direct/HTTP/SOCKS structural parity as Chromium evolves | HTTP/HTTPS Window/Worker/frame/Service Worker headers, WSS, Navigation/Resource Timing, cache and ETag revalidation corpus against stock Chrome and Cloak; bracketed IPv6 and proxy-side-DNS environment URL parsing |
 | WebRTC routing and visible identity | verified | Maintain proxy-coherent candidates, SDP and disabled mode | ICE/SDP plus leak tests in Window and frame contexts |
 | TLS, HTTP/2 and HTTP/3 stock parity | verified | Preserve the same-major Stock Chromium wire identity without spoofing | two cold-process samples: normalized TLS ClientHello/JA4, H2 SETTINGS/WINDOW_UPDATE/frame/header order and H3 QUIC Client Initial/ClientHello/transport parameters exactly match Stock Chrome 150 (`NETWORK_FINGERPRINT_CORPUS.md`) |
 | Third-party-cookie compatibility mode | verified | Preserve explicit opt-in for embedded auth/payment/challenge flows | real cross-site iframe cookie E2E, opt-in isolation and exact preference restoration |
@@ -101,6 +102,13 @@ audit history, durable automation jobs, AI tools, MCP, extension management,
 fingerprint drift baselines and S3-compatible sync. Those strengths do not
 waive any engine row above.
 
+RoxyBrowser `4.0.2` publicly emphasizes AI Agent 2.0 orchestration of RPA,
+Skills and prompts, scheduled templates, live monitoring and rolling logs.
+CloakLite already covers those capability categories through tool-calling
+Skills, task templates, durable scheduled jobs, Activity and run traces. This
+is category alignment, not a claim that the proprietary template catalogs or
+platform adapters are identical.
+
 ## Current verified build
 
 The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
@@ -126,7 +134,10 @@ passes exact selection, rollback, pass-through, trusted humanized input and
 third-party-cookie compatibility/restoration and authenticated HTTP/SOCKS
 proxy routing. Patchset `0041` additionally advertises the managed QUIC
 capability and passes a real UDP-capable SOCKS5 HTTP/3 Profile journey with no
-license environment. Installing 150 leaves the existing CloakLite config and
+license environment. J50 verifies trusted type/click/key input through two
+cross-origin OOPIF levels, late-layout reconciliation, covered-target rejection
+and exact explicit key-hold timing on both the source and installed Chromium
+builds. Installing the updated App leaves the existing CloakLite config and
 six-profile tree byte-for-byte unchanged.
 
 Using the stage labels in this matrix, 35 of 36 engine/network/lifecycle rows

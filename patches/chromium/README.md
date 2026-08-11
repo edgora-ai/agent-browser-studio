@@ -105,6 +105,11 @@ paces seeded pointer points across compositor frames and adds exact
 installed-version pins with 149 rollback retention, a native-host pass-through
 mode, and explicit third-party-cookie compatibility with exact preference
 restoration.
+Humanized click/type/hover resolution enumerates the complete cross-origin
+OOPIF target tree and performs geometry/actionability reads in an isolated
+world. Iframe content quads map native coordinates back to the root viewport;
+late layout movement triggers a second scroll and pointer move, known
+occlusion fails closed, and explicit keyboard hold delays are retained.
 Managed HTTP proxy authentication now uses a browser-only 407 challenge path.
 The application passes credentials through a mode-0600 one-shot file that the
 browser reads and deletes before child processes start; credentials no longer
@@ -206,4 +211,6 @@ The verified macOS arm64 build reports `150.0.7871.114` and passes all 53
 surfaces, the deep Font and Storage corpora, and the 61 theme cases. Installed-app acceptance additionally passes
 exact 150/149 rollback, trusted humanized input and third-party-cookie
 compatibility, authenticated HTTP/SOCKS proxy routing and the managed SOCKS5
-HTTP/3 journey without a CloakBrowser license key or login.
+HTTP/3 journey without a CloakBrowser license key or login. J50 additionally
+passes the two-level cross-origin frame, late-layout, occlusion and explicit
+key-delay corpus against both source and installed Chromium 150.

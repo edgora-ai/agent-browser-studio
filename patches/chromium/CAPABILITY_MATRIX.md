@@ -33,7 +33,9 @@ JavaScript into pages.
 | Authenticated SOCKS5 TCP/UDP | Profile proxy with HTTP/3 where the upstream supports UDP | verified | profile-owned loopback MASQUE, SOCKS5 CONNECT/UDP ASSOCIATE, proxy-side DNS and real H3 navigation |
 
 Installed Chromium `150.0.7871.114` also verifies native trusted CDP input,
-seeded humanized mouse/keyboard/wheel behavior, exact 150/149 selection and
+seeded humanized mouse/keyboard/wheel behavior across top-level and deeply
+nested cross-origin frames, post-layout actionability, explicit key-hold
+timing, exact 150/149 selection and
 rollback, native-host pass-through, and explicit third-party-cookie
 compatibility with exact preference restoration. The strict verifier checks 53
 surfaces, a modern/legacy/Buckets/OPFS persistent/incognito Storage corpus, and

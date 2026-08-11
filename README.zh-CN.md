@@ -23,7 +23,7 @@ CloakLite 是具有双用途属性的本地自动化工具。请仅用于合法�
 |---|---|
 | CloakBrowser Profiles | 安装/配置 Chromium，创建/启动/停止 profiles，精确版本 pin、保留旧版本回滚，profile tags |
 | 指纹设置 | 确定性托管身份或宿主原生 pass-through；平台、时区、语言、WebRTC、GPU、屏幕、CPU、内存、存储额度、字体 |
-| 代理管理 | 命名 HTTP/SOCKS 代理，凭证脱敏，按 profile 分配，代理地理检测 |
+| 代理管理 | 命名 HTTP/SOCKS 代理，IPv4/IPv6 环境 URL，凭证脱敏，按 profile 分配，代理地理检测 |
 | 浏览器状态 | Cookies、localStorage、preferences、bookmarks、extension state、存储检查 |
 | 扩展仓库 | 本地 ZIP/CRX 导入，Chrome Web Store 包缓存，安全解包，同步 hash 校验 |
 | AI Agent | OpenAI-compatible 和 Claude provider，工具调用，浏览器控制，文件/HTTP/DB 工具，run traces |
@@ -94,6 +94,8 @@ Profile 重启及 headed/headless 全能力面对照；安装版的
 版本/输入/Cookie/代理旅程全部通过，并保留 Chromium 149 用于回滚。
 `0041` 补丁集还验证了认证 SOCKS5 TCP/UDP、代理侧 DNS，以及通过
 Profile 自有 MASQUE bridge 建立的真实 HTTP/3。
+应用层输入门禁还验证了两层跨源 frame 中的 trusted 操作、布局变化后的
+重新定位、遮挡拒绝以及显式按键时长。
 这不代表已经完全等同
 RoxyChrome/CloakBrowser：
 36 项引擎/网络/生命周期门禁中，35 项 verified、已无 partial、1 项 missing。
@@ -115,6 +117,7 @@ npm test
 npm run build
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j45-version-pin-pass-through.test.ts
+npx vitest run -c vitest.config.e2e.ts tests/e2e/j50-nested-frame-humanization.test.ts
 ```
 
 > E2E 会在 `tests/e2e/userdata/` 生成本地浏览器数据；该目录已被忽略，不能提交。

@@ -23,7 +23,7 @@ Do **not** use CloakLite for fraud, spam, credential attacks, unauthorized scrap
 |---|---|
 | CloakBrowser profiles | Install/configure Chromium, create/launch/stop profiles, exact installed-version pins and retained rollback builds, profile tags |
 | Fingerprint settings | Managed deterministic identity or native-host pass-through; platform, timezone, locale, WebRTC, GPU, screen, CPU, memory, storage quota, fonts |
-| Proxy management | Named HTTP/SOCKS proxies, credentials redaction, per-profile assignment, proxy geo detection |
+| Proxy management | Named HTTP/SOCKS proxies, IPv4/IPv6 environment URLs, credentials redaction, per-profile assignment, proxy geo detection |
 | Browser state | Cookies, localStorage, preferences, bookmarks, extension state, storage inspection |
 | Extension repository | Local ZIP/CRX import, Chrome Web Store package cache, safe extraction, sync hash verification |
 | AI Agent | OpenAI-compatible and Claude providers, tool calling, browser control, file/HTTP/DB tools, run traces |
@@ -100,7 +100,10 @@ capability corpora, same-Profile restart and headed/headless comparison, and
 the installed version/input/cookie/proxy journeys pass with Chromium 149
 retained for rollback. Patchset `0041` also verifies authenticated SOCKS5 TCP
 and UDP, proxy-side DNS and real Profile HTTP/3 through a profile-owned MASQUE
-bridge. This is not a claim of complete RoxyChrome/CloakBrowser parity. Of 36
+bridge. The app-layer input gate additionally verifies trusted actions through
+two nested cross-origin frames, post-layout re-targeting, occlusion rejection
+and explicit key-hold timing. This is not a claim of complete
+RoxyChrome/CloakBrowser parity. Of 36
 engine/network/lifecycle gates, 35 are verified, none remains partial, and 1 is
 missing: signed multi-platform distribution. The controlled HTTP/HTTPS/WSS
 proxy timing/cache/header corpus and the Stock-150-exact direct
@@ -120,6 +123,7 @@ Targeted E2E examples:
 npm run build
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j34-credential-vault.test.ts
 npx vitest run -c vitest.config.e2e.ts tests/e2e/j45-version-pin-pass-through.test.ts
+npx vitest run -c vitest.config.e2e.ts tests/e2e/j50-nested-frame-humanization.test.ts
 ```
 
 > E2E runs generate local browser data under `tests/e2e/userdata/`; this directory is ignored and must not be committed.

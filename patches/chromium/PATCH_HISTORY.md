@@ -194,6 +194,25 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   SHA-256 `dc97fac627544e1521e7a5425ca734c08cff65e262d70faf9f74b527792d8430`
   and Profile-tree SHA-256
   `f54cd1d68782ab7afc521d213fe8d825b1681fe0e72f5bae41a4499a9759ec7f`.
+- Wrapper-alignment follow-up
+  `b5365086f1c27941f1b7383f3918ac0ee76875eb` adds isolated-world
+  actionability and native input across the complete cross-origin OOPIF tree.
+  It maps iframe content quads to root coordinates, re-scrolls after layout
+  stability checks, repositions after late movement, fails closed on a known
+  covering element and preserves an explicit key-down hold duration. J50
+  passes `4/4` against both the source and installed `0041` builds; it changes
+  no Chromium source or released patch bytes.
+- Dual-stack wrapper follow-up
+  `c009b0ad8f347931f7aec350d19c6c352dce348e` accepts bracketed IPv6 proxy
+  environment URLs, proxy-side-DNS `socks5h` and percent-encoded credentials
+  while retaining mode-0600 curl credential handoff. Current acceptance is
+  `36/36` fast-suite files and `438/438` tests, plus the complete serial
+  Electron suite at 42 passed / 3 conditionally skipped files and 192 passed /
+  11 conditionally skipped tests. Go/race and clean `0002–0041` replay remain
+  green, and the installed App re-verifies the same config/Profile hashes.
+- Test-safety follow-up `d4577c87f8d06f937e20704ee5062f8011db4cef`
+  makes README screenshot replacement explicitly opt-in; ordinary full-suite
+  runs capture to a temporary directory and leave working-tree assets intact.
 - No byte in patch `0040`, any earlier patch, or either source payload changed.
   The next Chromium source change must be exported as `0042-*`; do not amend,
   squash, rebase or replace this source commit, tag, patch or digest row.
