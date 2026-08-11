@@ -137,8 +137,11 @@ capability and passes a real UDP-capable SOCKS5 HTTP/3 Profile journey with no
 license environment. J50 verifies trusted type/click/key input through two
 cross-origin OOPIF levels, late-layout reconciliation, covered-target rejection
 and exact explicit key-hold timing on both the source and installed Chromium
-builds. Installing the updated App leaves the existing CloakLite config and
-six-profile tree byte-for-byte unchanged.
+builds. J51 verifies that the packaged controller has no upstream wrapper
+dependency or fallback: legacy wrapper environment variables are ignored and a
+missing independent build fails closed without downloads or cache writes.
+Installing the updated App leaves the existing CloakLite config and six-profile
+tree byte-for-byte unchanged.
 
 Using the stage labels in this matrix, 35 of 36 engine/network/lifecycle rows
 are currently `verified`, none is `partial`, and 1 is `missing`. The remaining
@@ -159,5 +162,6 @@ The alignment goal is complete only when all of the following are true:
    differ only on seeded surfaces and remain internally coherent.
 5. Direct and proxied network comparisons, including managed SOCKS5 HTTP/3,
    pass without page JavaScript injection or prototype replacement.
-6. Packaged CloakLite selects the verified independent binary without a license
-   key and passes the complete unit, E2E and installed-app smoke suites.
+6. Packaged CloakLite contains no upstream wrapper dependency, selects only the
+   verified independent binary without a license key or fallback, and passes the
+   complete unit, E2E and installed-app smoke suites.

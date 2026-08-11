@@ -211,6 +211,8 @@ The verified macOS arm64 build reports `150.0.7871.114` and passes all 53
 surfaces, the deep Font and Storage corpora, and the 61 theme cases. Installed-app acceptance additionally passes
 exact 150/149 rollback, trusted humanized input and third-party-cookie
 compatibility, authenticated HTTP/SOCKS proxy routing and the managed SOCKS5
-HTTP/3 journey without a CloakBrowser license key or login. J50 additionally
-passes the two-level cross-origin frame, late-layout, occlusion and explicit
-key-delay corpus against both source and installed Chromium 150.
+HTTP/3 journey without an upstream browser-wrapper dependency, license key or
+login. J50 additionally passes the two-level cross-origin frame, late-layout,
+occlusion and explicit key-delay corpus against both source and installed
+Chromium 150. J51 proves that legacy wrapper variables cannot select or
+download a fallback browser.

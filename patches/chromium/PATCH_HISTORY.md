@@ -213,6 +213,18 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
 - Test-safety follow-up `d4577c87f8d06f937e20704ee5062f8011db4cef`
   makes README screenshot replacement explicitly opt-in; ordinary full-suite
   runs capture to a temporary directory and leave working-tree assets intact.
+- Runtime-independence follow-up
+  `c48cb5614c3388353f76f4dc9ac74eb831256144` removes the packaged
+  `cloakbrowser` dependency, its upstream download/update/GeoIP paths and the
+  fallback launch plan. CloakLite now selects only a configured or locally
+  managed independent Chromium build and fails closed when neither exists.
+  J51 proves that legacy wrapper binary/license/download variables are ignored
+  without network or cache writes. Acceptance is `36/36` fast-suite files and
+  `439/439` tests, plus the complete serial Electron suite at 43 passed / 3
+  conditionally skipped files and 194 passed / 11 conditionally skipped tests.
+  The packaged App independently reports managed Chromium `150.0.7871.114`;
+  Go/race and clean `0002–0041` replay remain green. This application-only
+  follow-up changes no Chromium source or released patch bytes.
 - No byte in patch `0040`, any earlier patch, or either source payload changed.
   The next Chromium source change must be exported as `0042-*`; do not amend,
   squash, rebase or replace this source commit, tag, patch or digest row.

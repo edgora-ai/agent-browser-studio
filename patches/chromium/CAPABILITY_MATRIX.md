@@ -49,7 +49,8 @@ for normalized TLS ClientHello/JA4, HTTP/2 settings/frame/header order and
 HTTP/3 QUIC Client Initial/ClientHello/transport parameters; the managed
 Profile gate separately verifies CONNECT-UDP through an authorized UDP-capable
 SOCKS5 upstream, including field-trial-aware ClientHello/transport semantics;
-the targeted installed-app journeys run without a license environment.
+the targeted installed-app journeys run without a license environment or an
+upstream browser-wrapper dependency.
 
 Alignment is complete only when the required rows are `native` and the same
 profile is stable across restarts while different seeds produce distinct,
