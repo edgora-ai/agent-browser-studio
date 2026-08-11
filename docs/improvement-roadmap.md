@@ -211,4 +211,4 @@ http_request 支持 GET/POST/PUT/**PATCH/DELETE/HEAD**。`data:export` 返回 pr
 `sync:preview` 离线报告一次 push 涉及的 profile/proxy/account/extension 数 + **运行中 profile（pull 时跳过 localStorage/preferences）**清单。J43 验证计数 + 运行中跳过标记。
 
 ### Slice 14 — Windows x64 基线（P0）— 🟡 配置就绪，待 Windows 验证
-electron-builder.yml 加 `win/nsis x64` target；新增 `.github/workflows/ci.yml`（ubuntu+windows 跑 tsc/build/unit-smoke，macOS 跑 e2e）；cloak-manager 的 win32 跨平台分支（archive ext、binary 路径、process.kill/-F）已就位。**完整 Windows e2e 需 Windows runner + CloakBrowser 二进制供应**——CI 里标注为后续。
+electron-builder.yml 加 `win/nsis x64` target；新增 `.github/workflows/ci.yml`（ubuntu+windows 跑 tsc/build/unit-smoke，macOS 跑 e2e）；cloak-manager 的 win32 跨平台分支（binary 路径、process.kill/-F）已就位。**完整 Windows e2e 需 Windows runner + 自建 Chromium 正式发行包**——CI 里标注为后续。

@@ -49,9 +49,8 @@ describe.skipIf(!UPSTREAM_URL)("J49 — managed SOCKS5 HTTP/3 transport", () => 
       userDataDir: USERDATA,
       allowProfileVersionSelection: true,
       env: {
-        CLOAKBROWSER_BINARY_PATH: CHROMIUM,
+        CLOAKLITE_CHROMIUM_BINARY_PATH: CHROMIUM,
         CLOAK_MASQUE_BRIDGE_PATH: BRIDGE,
-        CLOAKBROWSER_LICENSE_KEY: "",
       },
     });
     const added = await h.page.evaluate(async (proxy) =>

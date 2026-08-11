@@ -296,7 +296,7 @@ export function writePreferences(dirId: string, prefs: any): boolean {
 }
 
 /**
- * Apply common CloakBrowser profile settings.
+ * Apply common managed Chromium profile settings.
  */
 export function applyProfileSettings(dirId: string, settings: {
   homepage?: string;

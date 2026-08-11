@@ -91,8 +91,8 @@ function main(): void {
   const version = detectVersion(sourceExecutable);
   if (Number(version.split(".")[0]) < 149) fail(`Chromium 149+ required, detected ${version}`);
 
-  const cacheRoot = process.env.ROXY_CHROMIUM_CACHE_DIR
-    ? path.resolve(process.env.ROXY_CHROMIUM_CACHE_DIR)
+  const cacheRoot = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR
+    ? path.resolve(process.env.CLOAKLITE_CHROMIUM_CACHE_DIR)
     : path.join(os.homedir(), ".roxy-lite-cloak");
   const targetDir = path.join(cacheRoot, `chromium-${version}`);
   const targetApp = path.join(targetDir, "Chromium.app");

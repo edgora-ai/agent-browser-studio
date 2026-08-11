@@ -4,11 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   findManagedChromiumBinary,
+  getManagedChromiumRoot,
   listManagedChromiumBinaries,
   normalizeManagedChromiumVersion,
 } from "../../src/main/services/native-chromium-manager.js";
 
 const roots: string[] = [];
+const originalCacheOverride = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
 
 function makeRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cloak-chromium-selection-"));
@@ -25,6 +27,8 @@ function installFakeMacBuild(root: string, version: string): string {
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  if (originalCacheOverride === undefined) delete process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
+  else process.env.CLOAKLITE_CHROMIUM_CACHE_DIR = originalCacheOverride;
 });
 
 describe("managed independent Chromium selection", () => {
@@ -47,5 +51,11 @@ describe("managed independent Chromium selection", () => {
     expect(normalizeManagedChromiumVersion("auto")).toBeNull();
     expect(() => normalizeManagedChromiumVersion("150")).toThrow(/Invalid Chromium version/);
     expect(() => normalizeManagedChromiumVersion("../150.0.0.0")).toThrow(/Invalid Chromium version/);
+  });
+
+  it("uses only the CloakLite-managed cache override", () => {
+    const root = makeRoot();
+    process.env.CLOAKLITE_CHROMIUM_CACHE_DIR = root;
+    expect(getManagedChromiumRoot()).toBe(path.resolve(root));
   });
 });

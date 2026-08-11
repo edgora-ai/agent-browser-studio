@@ -49,26 +49,11 @@
   Object.assign(cloak, {
   loadBrowserTab: function () { loadBrowserTab(); },
 
-  installCloakBinary: function () { runCloakBinaryAction("Installing CloakBrowser...", api.cloak.installBinary, "Installed"); },
-
-  checkCloakUpdate: function () {
-        runCloakBinaryAction("Checking for updates...", api.cloak.checkUpdate, function (r) {
-          if (r.hasUpdate) return "Update available: " + (r.currentVersion || "unknown") + " -> " + (r.latestVersion || "unknown");
-          return "Up to date" + (r.currentVersion ? " (" + r.currentVersion + ")" : "");
-        });
-      },
-
-  updateCloakBinary: function () { runCloakBinaryAction("Updating CloakBrowser...", api.cloak.updateBinary, function (r) { return r.updated ? "Updated to " + (r.status && r.status.version || r.latestVersion || "latest") : "Already up to date"; }); },
-
-  clearCloakBinaryCache: function () {
-        cloak.confirm("Clear the CloakBrowser binary cache? The next launch may need to download it again.", function () {
-          runCloakBinaryAction("Clearing cache...", api.cloak.clearBinaryCache, "Cache cleared");
-        });
-      },
+  verifyManagedChromium: function () { runCloakBinaryAction("Verifying managed Chromium...", api.cloak.verifyBinary, "Verified"); },
 
   checkUpdates: function () {
         updateCloakStatus();
-        toast((window.i18n ? window.i18n.t("toast.browser.refreshed", "CloakBrowser binary status refreshed") : "CloakBrowser binary status refreshed"), "success");
+        toast((window.i18n ? window.i18n.t("toast.browser.refreshed", "Managed Chromium status refreshed") : "Managed Chromium status refreshed"), "success");
       }
   });
   function loadBrowserTab() {

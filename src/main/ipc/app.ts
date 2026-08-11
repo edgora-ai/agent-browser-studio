@@ -6,7 +6,7 @@ import {
   getProfilesDir,
   reloadConfig,
 } from "../services/config-manager.js";
-import { findCloakBinary } from "../services/cloak-manager.js";
+import { findRuntimeChromiumBinary } from "../services/cloak-manager.js";
 import { setMainLanguage, getMainLanguage } from "../services/main-i18n.js";
 
 export function registerAppHandlers(): void {
@@ -14,7 +14,7 @@ export function registerAppHandlers(): void {
     const appDataDir = getAppDataDir();
     const profilesDir = getProfilesDir();
     return {
-      cloakBin: findCloakBinary(),
+      chromiumBin: findRuntimeChromiumBinary(),
       appDataDir,
       profilesDir,
       configPath: getConfigPath(),
@@ -35,7 +35,7 @@ export function registerAppHandlers(): void {
       getAppDataDir(),
       getProfilesDir(),
       getConfigPath(),
-      findCloakBinary(),
+      findRuntimeChromiumBinary(),
     ].filter((p): p is string => Boolean(p));
     const resolved = path.resolve(dirPath);
     const profilesRoot = path.resolve(getProfilesDir());

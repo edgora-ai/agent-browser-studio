@@ -51,7 +51,7 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
     }
   });
 
-  it("should create, list, info, and delete CloakBrowser profiles asynchronously", async () => {
+  it("should create, list, info, and delete managed Chromium profiles asynchronously", async () => {
     // 1. Create a profile
     const { dirId } = createCloakProfile({ name: "AsyncTestProfile" });
     expect(dirId).toBeDefined();

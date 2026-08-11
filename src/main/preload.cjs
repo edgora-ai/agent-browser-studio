@@ -86,10 +86,7 @@ const api = {
   cloak: {
     list: () => ipcRenderer.invoke("cloak:list"),
     binary: () => ipcRenderer.invoke("cloak:binary"),
-    installBinary: () => ipcRenderer.invoke("cloak:install-binary"),
-    checkUpdate: () => ipcRenderer.invoke("cloak:check-update"),
-    updateBinary: () => ipcRenderer.invoke("cloak:update-binary"),
-    clearBinaryCache: () => ipcRenderer.invoke("cloak:clear-cache"),
+    verifyBinary: () => ipcRenderer.invoke("cloak:verify-binary"),
     create: (opts) => ipcRenderer.invoke("cloak:create", opts),
     delete: (dirId) => ipcRenderer.invoke("cloak:delete", dirId),
     launch: (dirId) => ipcRenderer.invoke("cloak:launch", { dirId }),

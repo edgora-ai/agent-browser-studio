@@ -73,15 +73,14 @@ export interface CloakProfileInfo {
   cdpPort: number | null;
 }
 
-export interface CloakBinaryStatus {
+export interface ManagedChromiumStatus {
   path: string | null;
   version: string | null;
-  bundledVersion: string | null;
-  tier: "community" | "free" | "pro" | null;
+  source: "managed" | "configured" | null;
   installed: boolean;
-  platform: string | null;
+  platform: string;
   cacheDir: string | null;
-  downloadUrl: string | null;
+  installedVersions: Array<{ version: string; path: string }>;
 }
 
 export interface ExtensionRepositoryEntry {
@@ -198,11 +197,8 @@ export interface CloakLiteAPI {
   };
   cloak: {
     list: () => Promise<CloakProfileInfo[]>;
-    binary: () => Promise<CloakBinaryStatus>;
-    installBinary: () => Promise<{ success: boolean; status: CloakBinaryStatus; error?: string }>;
-    checkUpdate: () => Promise<{ success: boolean; currentVersion?: string | null; latestVersion?: string | null; hasUpdate?: boolean; status?: CloakBinaryStatus; error?: string }>;
-    updateBinary: () => Promise<{ success: boolean; updated?: boolean; latestVersion?: string | null; status: CloakBinaryStatus; error?: string }>;
-    clearBinaryCache: () => Promise<{ success: boolean; status: CloakBinaryStatus; error?: string }>;
+    binary: () => Promise<ManagedChromiumStatus>;
+    verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
     create: (opts: any) => Promise<{ dirId: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     launch: (dirId: string) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string }>;

@@ -309,7 +309,7 @@ function normalizeCdpWebSocketUrl(value: string, port: number): string {
   return url.toString();
 }
 
-/** Connect to a running CloakBrowser profile via CDP */
+/** Connect to a running managed Chromium profile via CDP */
 export async function cdpConnect(port: number, interactionSeed = port): Promise<CdpClient> {
   const wsPkg = await getWs();
   if (!wsPkg) throw new Error("ws module not available");
@@ -335,7 +335,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
     };
 
     ws.on("open", () => {
-      // Enable required domains. Some custom Chromium builds (CloakBrowser)
+      // Enable required domains. Some custom Chromium builds
       // don't implement every domain (e.g. Input.enable) — use allSettled so
       // one missing domain doesn't break the whole connection.
       Promise.allSettled([
@@ -2955,7 +2955,7 @@ async function llmClaude(config: LlmConfig, messages: LlmMessage[], tools?: any[
 
 /** System prompt that gives the agent awareness of its capabilities */
 const SYSTEM_PROMPT = `You are CloakLite Agent — a local browser automation assistant.
-You control CloakBrowser fingerprint profiles via CDP (Chrome DevTools Protocol).
+You control CloakLite managed Chromium profiles via CDP (Chrome DevTools Protocol).
 
 Available tools:
 - browser_navigate(port, url) — Navigate to a URL

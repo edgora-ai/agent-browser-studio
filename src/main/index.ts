@@ -166,7 +166,7 @@ app.on("before-quit", async (event) => {
   try {
     stopAllCloakProfiles();
   } catch (e) {
-    console.error("[shutdown] failed to stop CloakBrowser children:", e);
+    console.error("[shutdown] failed to stop managed Chromium children:", e);
   }
   try {
     // Flush + close the agent SQLite DB so WAL is checkpointed.

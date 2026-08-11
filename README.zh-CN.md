@@ -1,8 +1,8 @@
 # CloakLite
 
-> 面向 CloakBrowser 的本地优先浏览器 Profile 管理与 AI 自动化控制台。
+> 面向独立补丁 Chromium 引擎的本地优先浏览器 Profile 管理与 AI 自动化控制台。
 
-CloakLite 是一个自托管 Electron 桌面应用，用于在授权场景下管理 CloakBrowser profiles、代理、浏览器状态、AI 辅助工作流、durable automation jobs、审计轨迹和 S3 兼容同步。
+CloakLite 是一个自托管 Electron 桌面应用，用于在授权场景下管理隔离的 Chromium profiles、代理、浏览器状态、AI 辅助工作流、durable automation jobs、审计轨迹和 S3 兼容同步。
 
 **语言:** [English](README.md) | [简体中文](README.zh-CN.md)  
 **使用手册:** [English](docs/USER_GUIDE.en.md) | [简体中文](docs/USER_GUIDE.zh-CN.md)
@@ -21,7 +21,7 @@ CloakLite 是具有双用途属性的本地自动化工具。请仅用于合法�
 
 | 模块 | 能力 |
 |---|---|
-| CloakBrowser Profiles | 安装/配置 Chromium，创建/启动/停止 profiles，精确版本 pin、保留旧版本回滚，profile tags |
+| 托管 Chromium Profiles | 验证/配置独立构建的 Chromium，创建/启动/停止 profiles，精确版本 pin、保留旧版本回滚，profile tags |
 | 指纹设置 | 确定性托管身份或宿主原生 pass-through；平台、时区、语言、WebRTC、GPU、屏幕、CPU、内存、存储额度、字体 |
 | 代理管理 | 命名 HTTP/SOCKS 代理，IPv4/IPv6 环境 URL，凭证脱敏，按 profile 分配，代理地理检测 |
 | 浏览器状态 | Cookies、localStorage、preferences、bookmarks、extension state、存储检查 |
@@ -80,11 +80,15 @@ npm start
 
 安装器会将版本化构建保存到 `~/.roxy-lite-cloak/`。Profile 默认选择最新安装版本，
 也可以 pin 任一保留的精确版本用于回滚。Profile 编辑器还提供 pass-through 模式，
-关闭所有托管身份消费者，以宿主原生指纹进行 stock 对照。不使用 CloakBrowser
-license key 或登录。`CLOAKBROWSER_BINARY_PATH` 仍可用于显式
-覆盖；固定在 license 机制之前的社区 wrapper 只在没有独立构建时作为兼容回退。
-GeoIP 默认使用 CloakLite 的有界代理探测；只有明确设置
-`CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` 时才使用 wrapper 管理的 GeoIP 数据库。
+关闭所有托管身份消费者，以宿主原生指纹进行 stock 对照。不使用任何外部浏览器
+wrapper、license key、登录或上游更新服务。`CLOAKLITE_CHROMIUM_BINARY_PATH`
+用于显式覆盖二进制，`CLOAKLITE_CHROMIUM_CACHE_DIR` 用于覆盖托管缓存根目录。
+没有独立构建时，Profile 启动会明确失败，不会下载或选择回退引擎。GeoIP
+统一使用 CloakLite 的有界代理探测。
+
+现有 `cloakBin`、`cloakProfiles`、`cloak-profiles/` 和 `cb_` 标识仅作为
+磁盘数据结构的兼容边界保留，避免升级时重命名或丢失已有 Profile。
+它们不会选择、下载或调用任何上游 CloakBrowser 组件。
 
 当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
 原生严格校验 53 项、现代/旧版 Storage 深层语料、61 项系统主题专项检查及

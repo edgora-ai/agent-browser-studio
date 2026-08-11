@@ -53,7 +53,7 @@
       if (localStorage.getItem('cloak-wizard-dismissed')) return;
     } catch (e) { /* localStorage disabled — show wizard */ }
 
-    // Only show if no CloakBrowser installed or no profiles
+    // Only show if no managed Chromium is installed or no profiles exist.
     var installed = false;
     try {
       installed = api.cloak.binary().then(function(info) {
@@ -94,11 +94,11 @@
     dlg.showModal();
   }
 
-  // Wizard step 1: install binary
-  cloak.wizardInstallBinary = function() {
+  // Wizard step 1: verify the independently installed browser engine.
+  cloak.wizardVerifyBinary = function() {
     var statusEl = document.getElementById('wizard-step1-status');
-    statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Downloading CloakBrowser…') : 'Downloading CloakBrowser…') + '</span>';
-    api.cloak.installBinary().then(function(r) {
+    statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Verifying managed Chromium…') : 'Verifying managed Chromium…') + '</span>';
+    api.cloak.verifyBinary().then(function(r) {
       if (r && r.success) {
         statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
         advanceWizardStep(1);

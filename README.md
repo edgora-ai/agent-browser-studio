@@ -1,8 +1,8 @@
 # CloakLite
 
-> Local-first browser profile management and AI automation console for CloakBrowser.
+> Local-first browser profile management and AI automation console for an independently patched Chromium engine.
 
-CloakLite helps authorized teams manage CloakBrowser profiles, proxies, browser state, AI-assisted workflows, durable automation jobs, audit traces, and S3-compatible sync from a self-hosted Electron desktop app.
+CloakLite helps authorized teams manage isolated Chromium profiles, proxies, browser state, AI-assisted workflows, durable automation jobs, audit traces, and S3-compatible sync from a self-hosted Electron desktop app.
 
 **Languages:** [English](README.md) | [简体中文](README.zh-CN.md)  
 **User Guide:** [English](docs/USER_GUIDE.en.md) | [简体中文](docs/USER_GUIDE.zh-CN.md)
@@ -21,7 +21,7 @@ Do **not** use CloakLite for fraud, spam, credential attacks, unauthorized scrap
 
 | Area | Capabilities |
 |---|---|
-| CloakBrowser profiles | Install/configure Chromium, create/launch/stop profiles, exact installed-version pins and retained rollback builds, profile tags |
+| Managed Chromium profiles | Verify/configure independently built Chromium, create/launch/stop profiles, exact installed-version pins and retained rollback builds, profile tags |
 | Fingerprint settings | Managed deterministic identity or native-host pass-through; platform, timezone, locale, WebRTC, GPU, screen, CPU, memory, storage quota, fonts |
 | Proxy management | Named HTTP/SOCKS proxies, IPv4/IPv6 environment URLs, credentials redaction, per-profile assignment, proxy geo detection |
 | Browser state | Cookies, localStorage, preferences, bookmarks, extension state, storage inspection |
@@ -83,14 +83,19 @@ The installer stores versioned builds under `~/.roxy-lite-cloak/`. Profiles use
 the newest installed build by default or can pin any exact retained version for
 rollback. The profile editor also offers a pass-through mode that disables all
 managed identity consumers and exposes the native host fingerprint for stock
-comparison. No CloakBrowser license key or login is used.
-`CLOAKBROWSER_BINARY_PATH` remains an explicit override, and
-the pinned license-free community wrapper is retained only as a legacy fallback
-when no independent build is installed. GeoIP defaults to CloakLite's bounded
-proxy detector; set `CLOAKBROWSER_GEOIP_AUTO_DOWNLOAD=true` only to opt into the
-wrapper-managed GeoIP database. Reinstalling a rebuilt binary with the same
+comparison. No external browser wrapper, license key, login, or upstream update
+service is used. `CLOAKLITE_CHROMIUM_BINARY_PATH` is the explicit binary
+override and `CLOAKLITE_CHROMIUM_CACHE_DIR` overrides the managed cache root.
+When no independent build is installed, profile launch fails closed instead of
+downloading or selecting a fallback. GeoIP uses CloakLite's bounded proxy
+detector. Reinstalling a rebuilt binary with the same
 Chromium version compares the executable SHA-256, atomically replaces a changed
 build, and retains the prior bundle in a hidden recovery directory.
+
+Existing `cloakBin`, `cloakProfiles`, `cloak-profiles/`, and `cb_` identifiers
+remain as an on-disk schema compatibility boundary so upgrades do not rename or
+lose existing Profile data. They do not select, download, or invoke an upstream
+CloakBrowser component.
 
 The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
 the strict native harness passes all 53 checked surfaces, the modern/legacy

@@ -11,7 +11,7 @@ export interface ManagedChromiumBinary {
 const EXACT_CHROMIUM_VERSION = /^\d+\.\d+\.\d+\.\d+$/;
 
 export function getManagedChromiumRoot(): string {
-  const override = process.env.ROXY_CHROMIUM_CACHE_DIR;
+  const override = process.env.CLOAKLITE_CHROMIUM_CACHE_DIR;
   return override ? path.resolve(override) : path.join(os.homedir(), ".roxy-lite-cloak");
 }
 

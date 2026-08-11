@@ -59,13 +59,13 @@ UPDATE_README_SCREENSHOTS=1 npx vitest run -c vitest.config.e2e.ts tests/e2e/j-s
 | **J45–J48** | exact version pin/rollback, pass-through, third-party cookies and authenticated HTTP/SOCKS routing |
 | **J49** | real Profile H3 over RFC 9298 CONNECT-UDP and SOCKS5 UDP ASSOCIATE; helper lifecycle and credential isolation |
 | **J50** | trusted type/click/key events through two cross-origin OOPIF levels, post-layout re-targeting, covered-target rejection and explicit key-hold timing |
+| **J51** | legacy wrapper variables are ignored; a missing independent Chromium build fails closed without downloads or cache writes |
 
 ## Prerequisites
 
-- **Chromium binary** installed under `~/.roxy-lite-cloak/chromium-<ver>/`,
-  cached at the legacy `~/.cloakbrowser/chromium-<ver>/`, or selected with
-  `CLOAKBROWSER_BINARY_PATH`. `setupTestApp` prefers the independent cache and
-  chooses its newest version without a network lookup.
+- **Chromium binary** installed under `~/.roxy-lite-cloak/chromium-<ver>/` or
+  selected with `CLOAKLITE_CHROMIUM_BINARY_PATH`. `setupTestApp` uses only the
+  independent cache and chooses its newest version without a network lookup.
 - **J3 only**: needs to reach `clients2.google.com`. Either:
   - `E2E_EXTENSION_NETWORK=1` — host has direct internet, OR
   - `E2E_TEST_PROXY=http://host:port` (or `socks5://...`) — host can't reach
@@ -84,5 +84,5 @@ UPDATE_README_SCREENSHOTS=1 npx vitest run -c vitest.config.e2e.ts tests/e2e/j-s
   CDP port. Stop the matching test app/profile and rerun.
 - **J2 `launched.length === 0`**: same cause — orphaned Chromium holds the CDP
   ports. Clean and rerun.
-- Flaky failures usually mean a process leaked; `closeApp` SIGKILLs orphans via
-  `pkill -f` on the userData dir + `.cloakbrowser`.
+- Flaky failures usually mean a process leaked; `closeApp` SIGKILLs only
+  processes whose command line contains the isolated test userData directory.

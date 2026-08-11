@@ -1,6 +1,6 @@
 # CloakLite User Guide
 
-CloakLite is a local desktop console for managing CloakBrowser profiles, proxies, AI-assisted browser automation, automation jobs, audit traces, and S3-compatible sync.
+CloakLite is a local desktop console for managing isolated profiles on its independently patched Chromium engine, proxies, AI-assisted browser automation, automation jobs, audit traces, and S3-compatible sync.
 
 > Use CloakLite only for lawful and authorized workflows. Do not use it for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, or misuse of cookies, credentials, personal data, or confidential information.
 
@@ -10,7 +10,7 @@ CloakLite is a local desktop console for managing CloakBrowser profiles, proxies
 
 - macOS on Apple Silicon
 - Node.js 22.16 or newer
-- A CloakBrowser binary installed through the app, or an existing local CloakBrowser path
+- An independently built Chromium patchset installed with `npm run install:chromium -- /path/to/Chromium.app`, or selected through `CLOAKLITE_CHROMIUM_BINARY_PATH`
 
 ### Start from source
 
@@ -30,9 +30,9 @@ npm test
 
 ## 2. First Run
 
-On first launch, if no CloakBrowser binary and no profiles exist, a 4-step wizard appears:
+On first launch, if no managed Chromium binary and no profiles exist, a 4-step wizard appears:
 
-1. **Install CloakBrowser** — download/configure the binary.
+1. **Verify Managed Chromium** — confirm the independently built engine is installed.
 2. **Create your first profile** — set name, platform, timezone, locale, hardware, WebRTC.
 3. **Launch & check fingerprint** — start the profile and open a risk-check page.
 4. **Configure AI Agent (optional)** — jump to the Agent config view to wire up an LLM provider.
@@ -45,7 +45,7 @@ Profiles hold browser state and fingerprint configuration.
 
 Common actions:
 
-- **Launch / Stop**: start or stop a CloakBrowser profile.
+- **Launch / Stop**: start or stop a managed Chromium profile.
 - **Edit**: update profile metadata and fingerprint fields.
 - **Chromium build**: use the newest installed independent build or pin an exact retained version for rollback.
 - **Pass-through**: disable managed UA/platform/locale/timezone/WebRTC/GPU/screen/noise consumers for a native-host comparison.

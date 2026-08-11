@@ -382,7 +382,7 @@ describe("Integration — First-run wizard", () => {
     expect(html).toContain('data-step="1"');
     expect(html).toContain('data-step="2"');
     expect(html).toContain('data-step="3"');
-    expect(html).toContain('data-cmd="wizardInstallBinary"');
+    expect(html).toContain('data-cmd="wizardVerifyBinary"');
     expect(html).toContain('data-cmd="wizardCreateProfile"');
     expect(html).toContain('data-cmd="wizardLaunchAndCheck"');
     expect(html).toContain('data-cmd="wizardSkip"');
@@ -392,7 +392,7 @@ describe("Integration — First-run wizard", () => {
   it("wizard logic is wired in renderer modules", () => {
     const app = readRendererModules();
     expect(app).toContain("function maybeShowWizard");
-    expect(app).toContain("cloak.wizardInstallBinary");
+    expect(app).toContain("cloak.wizardVerifyBinary");
     expect(app).toContain("cloak.wizardCreateProfile");
     expect(app).toContain("cloak.wizardLaunchAndCheck");
     expect(app).toContain("cloak.wizardSkip");
@@ -623,7 +623,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     }
   });
 
-  it("launch path passes explicit hardware flags to CloakBrowser", () => {
+  it("launch path passes explicit hardware flags to managed Chromium", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
     for (const flag of [
       "--fingerprint-gpu-vendor",
@@ -644,16 +644,19 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).toContain("--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}");
   });
 
-  it("delegates binary, GeoIP, proxy, and launch handling to the community wrapper", () => {
+  it("has no upstream wrapper dependency or fallback launch path", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8"));
+    const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf-8"));
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/cloak-manager.ts"), "utf-8");
-    expect(pkg.dependencies.cloakbrowser).toBe(
-      "https://github.com/edgora-ai/CloakBrowser/archive/18180fad1600b4f3c57a0efa3c175961ac01fb8e.tar.gz",
-    );
-    expect(manager).toContain("buildLaunchOptions({");
-    expect(manager).toContain("geoip: wrapperGeoip");
-    expect(manager).toContain("shouldUseWrapperGeoip()");
-    expect(manager).toContain("buildAuthenticatedProxyUrl(activeProxy)");
+    expect(pkg.dependencies.cloakbrowser).toBeUndefined();
+    expect(lock.packages["node_modules/cloakbrowser"]).toBeUndefined();
+    expect(manager).not.toContain('from "cloakbrowser"');
+    expect(manager).not.toContain("buildLaunchOptions({");
+    expect(manager).not.toContain("wrapperGeoip");
+    expect(manager).not.toContain("CloakHQ/cloakbrowser");
+    expect(manager).not.toContain("CLOAKBROWSER_LICENSE_KEY");
+    expect(manager).toContain("upstream wrapper fallback is disabled");
+    expect(manager).toContain("CLOAKLITE_CHROMIUM_BINARY_PATH");
     expect(manager).toContain("env: launchEnv || process.env");
     expect(manager).not.toContain('"--test-type"');
     expect(manager).not.toContain('"--disable-blink-features=AutomationControlled"');
@@ -665,7 +668,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).toContain("buildRoxyFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion)");
     expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).not.toContain("--time-zone-for-testing=");
-    expect(manager).toContain("findManagedRoxyBinary()");
+    expect(manager).toContain("findManagedRuntimeChromium(requestedVersion)");
     expect(config).toContain('ROXY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
     expect(config).toContain("schemaVersion: 1");
     const verifier = fs.readFileSync(path.join(ROOT, "src/tools/verify-native-chromium.ts"), "utf-8");

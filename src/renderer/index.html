@@ -4,7 +4,7 @@
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
- <title>CloakBrowser Lite</title>
+ <title>CloakLite</title>
  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
  <li class="nav-item" data-tab="proxy" data-role="cmd" data-cmd="switchTab" data-i18n="tab.proxy">🔌 Proxies</li>
  <li class="nav-item" data-tab="storage" data-role="cmd" data-cmd="switchTab" data-i18n="tab.storage">💾 Storage</li>
  <li class="nav-item" data-tab="sync" data-role="cmd" data-cmd="switchTab" data-i18n="tab.sync">☁️ Sync</li>
- <li class="nav-item" data-tab="browser" data-role="cmd" data-cmd="switchTab" data-i18n="tab.browser">🥷 CloakBrowser</li>
+ <li class="nav-item" data-tab="browser" data-role="cmd" data-cmd="switchTab" data-i18n="tab.browser">🥷 Browser Engine</li>
  <li class="nav-item" data-tab="extensions" data-role="cmd" data-cmd="switchTab" data-i18n="tab.extensions">🧩 Extensions</li>
  <li class="nav-item" data-tab="accounts" data-role="cmd" data-cmd="switchTab" data-i18n="tab.accounts">🔑 Accounts</li>
  <li class="nav-item" data-tab="agent" data-role="cmd" data-cmd="switchTab" data-i18n="tab.agent">🤖 Agent</li>
@@ -129,22 +129,19 @@
  </div>
  </section>
 
- <!-- ══════ CloakBrowser Tab ══════ -->
+ <!-- ══════ Managed Chromium Tab ══════ -->
  <section id="tab-browser" class="tab-content">
  <div class="tab-header">
- <h2 data-i18n="browser.title">CloakBrowser Binary</h2>
+ <h2 data-i18n="browser.title">Managed Chromium</h2>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadBrowserTab" data-i18n="browser.refresh">Refresh</button>
  </div>
  <div class="card">
- <h3 data-i18n="browser.install-upgrade">Install / Upgrade</h3>
+ <h3 data-i18n="browser.install-upgrade">Independent Browser Engine</h3>
  <div id="cloak-binary-card">
  <div class="loading">Loading binary status...</div>
  </div>
  <div class="btn-row">
- <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="installCloakBinary" data-i18n="browser.action.install">Install</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="checkCloakUpdate" data-i18n="browser.action.check">Check Update</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="updateCloakBinary" data-i18n="browser.action.update">Update</button>
- <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="clearCloakBinaryCache" data-i18n="browser.action.clear">Clear Cache</button>
+ <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="verifyManagedChromium" data-i18n="browser.action.verify">Verify</button>
  </div>
  <div id="cloak-binary-action-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
  </div>
@@ -433,7 +430,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="new-profile-browser-row">
  <div class="form-row"><label>Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
- <option value="cloak" selected>CloakBrowser</option>
+ <option value="cloak" selected>Managed Chromium</option>
  </select>
  </div>
  <div class="form-row"><label>Version</label>
@@ -445,7 +442,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </div>
  <div class="form-row" id="new-profile-proxy-row"><label>Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
- <!-- CloakBrowser-specific options -->
+ <!-- Managed Chromium-specific options -->
  <div id="new-profile-cloak-opts" style="display:block;">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Fingerprint Mode</label>
@@ -658,7 +655,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div id="ext-list" style="flex:1;overflow-y:auto;max-height:400px;"></div>
 
  <div style="margin-top:12px;font-size:10px;color:var(--text-muted);text-align:center;">
- Enable extensions from the private repository; changes apply on next CloakBrowser launch.
+ Enable extensions from the private repository; changes apply on the next managed Chromium launch.
  </div>
  </form>
 </dialog>
@@ -840,10 +837,10 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div id="agent-run-steps" style="max-height:360px;overflow-y:auto;"></div>
 </dialog>
 
-<!-- CloakBrowser fingerprint edit dialog -->
+<!-- Managed Chromium fingerprint edit dialog -->
 <dialog id="dlg-cloak-seed">
  <form method="dialog" data-role="submit" data-submit-cmd="saveCloakMeta">
- <h3>🥷 CloakBrowser Profile — Fingerprint & Identity</h3>
+ <h3>🥷 Managed Chromium Profile — Fingerprint & Identity</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
  <strong>--fingerprint=&lt;seed&gt;</strong> deterministically generates GPU, screen, hardware, canvas, audio, fonts.<br>
  Same seed + platform + timezone + locale = 100% identical fingerprint.
@@ -957,7 +954,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);">Advanced hardware fingerprint</summary>
- <p style="font-size:10px;color:var(--text-muted);margin:6px 0;">Leave empty to use seed-generated hardware. Explicit values are passed to CloakBrowser launch flags and help tune ping0.cc/env risk items.</p>
+ <p style="font-size:10px;color:var(--text-muted);margin:6px 0;">Leave empty to use seed-generated hardware. Explicit values are passed to managed Chromium launch flags and help tune ping0.cc/env risk items.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>GPU Vendor</label><input id="cloak-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc."></div>
  <div class="form-row"><label>GPU Renderer</label><input id="cloak-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)"></div>
@@ -990,11 +987,11 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
  <div id="wizard-steps">
   <div class="wizard-step" data-step="1">
-   <h4><span class="wizard-step-num">1</span> <span data-i18n="wizard.step1.title">Install CloakBrowser</span></h4>
-   <p style="font-size:11px;color:var(--text-muted);" data-i18n="wizard.step1.desc">Downloads the open-source Chromium binary used by all profiles. Roughly ~150 MB. One-time download.</p>
+   <h4><span class="wizard-step-num">1</span> <span data-i18n="wizard.step1.title">Verify Managed Chromium</span></h4>
+   <p style="font-size:11px;color:var(--text-muted);" data-i18n="wizard.step1.desc">Build and install the repository Chromium patchset before creating profiles.</p>
    <div id="wizard-step1-status" class="wizard-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
    <div class="btn-row">
-    <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="wizardInstallBinary" data-i18n="wizard.step1.install">Install Now</button>
+    <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="wizardVerifyBinary" data-i18n="wizard.step1.install">Verify Now</button>
    </div>
   </div>
 

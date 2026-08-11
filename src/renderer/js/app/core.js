@@ -36,7 +36,7 @@
   }
 
   function getBrowserDisplay(browser, dirId) {
-    return { icon: "🥷", name: "CloakBrowser" };
+    return { icon: "🥷", name: "Managed Chromium" };
   }
 
   function chromeOsFromPlatform(platform) {
@@ -448,15 +448,15 @@
     api.cloak.binary().then(function (info) {
       var el = document.getElementById("sidebar-chrome-status");
       if (info && info.installed) {
-        el.innerHTML = '🟢 Cloak v' + (info.version || "?");
+        el.innerHTML = '🟢 Chromium ' + (info.version || "?");
         el.className = 'chrome-status-ok';
       } else {
-        el.innerHTML = '🔴 No Cloak installed';
+        el.innerHTML = '🔴 No managed Chromium';
         el.className = 'chrome-status-err';
       }
     }).catch(function () {
       var el = document.getElementById("sidebar-chrome-status");
-      el.innerHTML = '⚪ Cloak unknown';
+      el.innerHTML = '⚪ Chromium unknown';
       el.className = 'chrome-status-unknown';
     });
   }
@@ -465,10 +465,9 @@
     var status = info.installed ? "Installed" : "Not installed";
     var cls = info.installed ? "status-running" : "status-stopped";
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">CloakBrowser Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
+      '<div class="card-header"><span class="name">CloakLite Managed Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
       '<div class="info-row"><span>Version</span><span>' + esc(info.version || "--") + '</span></div>' +
-      '<div class="info-row"><span>Tier</span><span>' + esc(info.tier || "--") + '</span></div>' +
-      '<div class="info-row"><span>Bundled</span><span>' + esc(info.bundledVersion || "--") + '</span></div>' +
+      '<div class="info-row"><span>Source</span><span>' + esc(info.source || "--") + '</span></div>' +
       '<div class="info-row"><span>Platform</span><span>' + esc(info.platform || "--") + '</span></div>' +
       '<div class="info-row"><span>Installed builds</span><span>' + esc(((info.installedVersions || []).map(function(item) { return item.version; }).join(", ")) || "--") + '</span></div>' +
       '<div class="info-row"><span>Binary</span><span title="' + escAttr(info.path || "") + '">' + esc(shortPath(info.path || "--")) + '</span></div>' +

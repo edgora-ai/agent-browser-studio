@@ -1,6 +1,6 @@
 # CloakLite 使用手册
 
-CloakLite 是一个本地桌面控制台，用于管理 CloakBrowser 浏览器配置文件、代理、AI 浏览器自动化、自动化任务、审计轨迹和 S3 兼容同步。
+CloakLite 是一个本地桌面控制台，用于管理独立补丁 Chromium 引擎上的隔离浏览器配置文件、代理、AI 浏览器自动化、自动化任务、审计轨迹和 S3 兼容同步。
 
 > 请仅将 CloakLite 用于合法且已授权的工作流。禁止用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。
 
@@ -10,7 +10,7 @@ CloakLite 是一个本地桌面控制台，用于管理 CloakBrowser 浏览器�
 
 - Apple Silicon macOS
 - Node.js 22.16 或更高版本
-- 通过应用安装 CloakBrowser，或配置已有本地 CloakBrowser 路径
+- 使用 `npm run install:chromium -- /path/to/Chromium.app` 安装独立构建的 Chromium 补丁集，或通过 `CLOAKLITE_CHROMIUM_BINARY_PATH` 显式选择
 
 ### 从源码启动
 
@@ -30,9 +30,9 @@ npm test
 
 ## 2. 首次使用
 
-首次启动时，若无 CloakBrowser 二进制且无 profile，会显示 4 步向导：
+首次启动时，若无托管 Chromium 二进制且无 profile，会显示 4 步向导：
 
-1. **安装 CloakBrowser** — 下载/配置二进制。
+1. **验证托管 Chromium** — 确认独立构建的引擎已安装。
 2. **创建首个 profile** — 设置名称、平台、时区、语言、硬件、WebRTC。
 3. **启动并检测指纹** — 启动 profile 并打开风险检测页面。
 4. **配置 AI Agent（可选）** — 跳转到 Agent 配置页接入 LLM provider。
@@ -45,7 +45,7 @@ Profile 保存浏览器状态和指纹配置。
 
 常用操作：
 
-- **Launch / Stop**：启动或停止 CloakBrowser profile。
+- **Launch / Stop**：启动或停止托管 Chromium profile。
 - **Edit**：修改 profile 元数据和指纹字段。
 - **Chromium build**：使用最新安装的独立构建，或 pin 保留的精确版本用于回滚。
 - **Pass-through**：关闭托管的 UA/平台/语言/时区/WebRTC/GPU/屏幕/noise 消费者，以宿主原生身份进行对照。

@@ -1,7 +1,7 @@
 {
   "name": "cloak-lite",
   "version": "1.0.0",
-  "description": "Open-source CloakBrowser fingerprint browser management console",
+  "description": "Open-source management console for an independently patched Chromium fingerprint browser",
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
@@ -41,7 +41,6 @@
   "author": "ahoo",
   "license": "MIT",
   "dependencies": {
-    "cloakbrowser": "https://github.com/edgora-ai/CloakBrowser/archive/18180fad1600b4f3c57a0efa3c175961ac01fb8e.tar.gz",
     "mmdb-lib": "^3.0.2",
     "socks": "^2.8.9",
     "socks-proxy-agent": "^10.1.0",

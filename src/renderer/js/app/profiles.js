@@ -93,12 +93,12 @@
   launch: function (dirId) {
         api.cloak.launch(dirId).then(function (r) {
           if (r.success) {
-            toast((window.i18n ? window.i18n.t("toast.profile.started", "🥷 CloakBrowser started") : "🥷 CloakBrowser started") + " (CDP port " + r.cdpPort + ")", "success");
+            toast((window.i18n ? window.i18n.t("toast.profile.started", "🥷 Managed Chromium started") : "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
             var seq = markProfileRuntime(dirId, true, r.pid);
             setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
             scheduleProfilesRefresh();
           } else {
-            toast(r.error || (window.i18n ? window.i18n.t("toast.profile.launch-failed", "CloakBrowser launch failed") : "CloakBrowser launch failed"), "error");
+            toast(r.error || (window.i18n ? window.i18n.t("toast.profile.launch-failed", "Managed Chromium launch failed") : "Managed Chromium launch failed"), "error");
           }
         }).catch(function (e) { toast(e.message, "error"); });
       },
@@ -287,7 +287,7 @@
           proxyName: proxySelection.name,
         }, geolocation, hardware)).then(function(r) {
           document.getElementById("dlg-profile").close();
-          toast((window.i18n ? window.i18n.t("toast.profile.created", "CloakBrowser profile created!") : "CloakBrowser profile created!"), "success");
+          toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           loadProfiles();
           cloak.switchTab("profiles");
         }).catch(function(e) { toast(e.message, "error"); });
@@ -540,7 +540,7 @@
         var platform = fp.platform || "windows";
         var osName = platform === "macos" ? "macOS" : "Windows";
 
-        var browserIcon = "🥷", browserName = "CloakBrowser";
+        var browserIcon = "🥷", browserName = "Managed Chromium";
         var fingerprintLabel = fp.mode === "off"
           ? "↪ Pass-through"
           : platformIcon(platform) + " 🎲#" + (fp.seed || "?");

@@ -80,8 +80,7 @@ describe("J47 — native HTTP proxy authentication", () => {
       userDataDir: USERDATA,
       allowProfileVersionSelection: true,
       env: {
-        CLOAKBROWSER_BINARY_PATH: CHROMIUM,
-        CLOAKBROWSER_LICENSE_KEY: "",
+        CLOAKLITE_CHROMIUM_BINARY_PATH: CHROMIUM,
       },
     });
     const added = await h.page.evaluate(async ({ port, username, password }) =>

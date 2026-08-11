@@ -1,9 +1,8 @@
 import { ipcMain } from "electron";
 import {
   launchCloak, stopCloak, statusCloak, listCloakProfiles,
-  getCloakBinaryStatus, installCloakBinary, checkCloakBinaryUpdate,
-  updateCloakBinary, clearCloakBinaryCache,
-  getCloakVersion, isCloakInstalled,
+  getRuntimeChromiumStatus, verifyRuntimeChromium,
+  getRuntimeChromiumVersion, isRuntimeChromiumInstalled,
   createCloakProfile, deleteCloakProfile,
 } from "../services/cloak-manager.js";
 import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
@@ -25,44 +24,20 @@ export function registerCloakHandlers(): void {
   ipcMain.handle("cloak:list", async () => {
     return listCloakProfiles().map(p => ({
       ...p,
-      installed: isCloakInstalled(),
-      version: p.version || getCloakVersion() || "?",
+      installed: isRuntimeChromiumInstalled(),
+      version: p.version || getRuntimeChromiumVersion() || "?",
     }));
   });
 
   ipcMain.handle("cloak:binary", async () => {
-    return getCloakBinaryStatus();
+    return getRuntimeChromiumStatus();
   });
 
-  ipcMain.handle("cloak:install-binary", async () => {
+  ipcMain.handle("cloak:verify-binary", async () => {
     try {
-      return { success: true, status: await installCloakBinary() };
+      return { success: true, status: verifyRuntimeChromium() };
     } catch (e: any) {
-      return { success: false, error: e.message || String(e), status: getCloakBinaryStatus() };
-    }
-  });
-
-  ipcMain.handle("cloak:check-update", async () => {
-    try {
-      return { success: true, ...(await checkCloakBinaryUpdate()) };
-    } catch (e: any) {
-      return { success: false, error: e.message || String(e), status: getCloakBinaryStatus() };
-    }
-  });
-
-  ipcMain.handle("cloak:update-binary", async () => {
-    try {
-      return { success: true, ...(await updateCloakBinary()) };
-    } catch (e: any) {
-      return { success: false, error: e.message || String(e), status: getCloakBinaryStatus() };
-    }
-  });
-
-  ipcMain.handle("cloak:clear-cache", async () => {
-    try {
-      return { success: true, status: clearCloakBinaryCache() };
-    } catch (e: any) {
-      return { success: false, error: e.message || String(e), status: getCloakBinaryStatus() };
+      return { success: false, error: e.message || String(e), status: getRuntimeChromiumStatus() };
     }
   });
 
@@ -187,7 +162,7 @@ export function registerCloakHandlers(): void {
     return { success: true };
   });
 
-  // Set CloakBrowser fingerprint metadata (name, timezone, locale, webrtc IP, platform, seed, note)
+  // Set managed Chromium fingerprint metadata (name, timezone, locale, WebRTC IP, platform, seed, note)
   ipcMain.handle("cloak:set-meta", async (_event, params: {
     dirId: string;
     name?: string;

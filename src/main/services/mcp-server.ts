@@ -14,7 +14,7 @@ import {
   listExtensionRepository,
 } from "./extension-repository.js";
 import { validateDirId } from "./utils.js";
-import { listCloakProfiles, launchCloak, stopCloak, statusCloak, findCloakBinary, getCloakVersion } from "./cloak-manager.js";
+import { listCloakProfiles, launchCloak, stopCloak, statusCloak, findRuntimeChromiumBinary, getRuntimeChromiumVersion } from "./cloak-manager.js";
 
 let server: http.Server | null = null;
 let serverListening = false;
@@ -34,12 +34,12 @@ function configuredMcpPort(): number {
 const MCP_TOOLS = [
   {
     name: "cloak_list_profiles",
-    description: "List all CloakBrowser profiles",
+    description: "List all managed Chromium profiles",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "cloak_launch_profile",
-    description: "Launch a CloakBrowser profile by its dirId",
+    description: "Launch a managed Chromium profile by its dirId",
     inputSchema: {
       type: "object",
       properties: {
@@ -50,7 +50,7 @@ const MCP_TOOLS = [
   },
   {
     name: "cloak_stop_profile",
-    description: "Stop a running CloakBrowser profile by its dirId",
+    description: "Stop a running managed Chromium profile by its dirId",
     inputSchema: {
       type: "object",
       properties: {
@@ -61,7 +61,7 @@ const MCP_TOOLS = [
   },
   {
     name: "cloak_status",
-    description: "Get the running status and CDP debugging details of a CloakBrowser profile",
+    description: "Get the running status and CDP debugging details of a managed Chromium profile",
     inputSchema: {
       type: "object",
       properties: {
@@ -175,7 +175,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           proxy: p.proxyMode === "none" ? "(no proxy)" : (p.proxyName || "(missing proxy)"),
           sizeMB: "0",
         })),
-        binary: { path: findCloakBinary(), version: getCloakVersion() },
+        binary: { path: findRuntimeChromiumBinary(), version: getRuntimeChromiumVersion() },
       };
     }
     case "cloak_launch_profile": {
@@ -187,7 +187,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           pid: result.pid,
           dirId: args.dirId,
           cdpPort: result.cdpPort,
-          hint: "CloakBrowser launched. Use the managed MCP or Agent CDP tools to automate.",
+          hint: "Managed Chromium launched. Use the MCP or Agent CDP tools to automate.",
         };
       } catch (e: any) {
         return { success: false, error: e.message };

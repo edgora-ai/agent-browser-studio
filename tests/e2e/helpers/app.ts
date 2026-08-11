@@ -9,18 +9,14 @@ import { closeAllDialogs } from "./diag.js";
 
 const execFileP = promisify(execFile);
 
-// Locate the globally-cached CloakBrowser Chromium so launch tests don't
-// re-download or re-verify checksums (which require network).
-function resolveCloakBinaryPath(): string | null {
-  if (process.env.CLOAKBROWSER_BINARY_PATH && fs.existsSync(process.env.CLOAKBROWSER_BINARY_PATH)) {
-    return process.env.CLOAKBROWSER_BINARY_PATH;
+// Locate the independently built Chromium cache without consulting a wrapper
+// cache or network service.
+function resolveManagedChromiumPath(): string | null {
+  if (process.env.CLOAKLITE_CHROMIUM_BINARY_PATH && fs.existsSync(process.env.CLOAKLITE_CHROMIUM_BINARY_PATH)) {
+    return process.env.CLOAKLITE_CHROMIUM_BINARY_PATH;
   }
   const home = os.homedir();
-  const managed = newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
-  if (managed) return managed;
-
-  const cacheDir = path.join(home, ".cloakbrowser");
-  return newestCachedBinary(cacheDir);
+  return newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
 }
 
 function newestCachedBinary(cacheDir: string): string | null {
@@ -95,14 +91,14 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   const pageErrors: string[] = [];
   const cdpPids: number[] = [];
 
-  const cloakBin = resolveCloakBinaryPath();
+  const chromiumBin = resolveManagedChromiumPath();
   const launchEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ELECTRON_DISABLE_GPU: "1",
     ELECTRON_ENABLE_LOGGING: "1",
     ...opts.env,
   };
-  if (cloakBin && !opts.allowProfileVersionSelection) launchEnv.CLOAKBROWSER_BINARY_PATH = cloakBin;
+  if (chromiumBin && !opts.allowProfileVersionSelection) launchEnv.CLOAKLITE_CHROMIUM_BINARY_PATH = chromiumBin;
 
   const app = await electron.launch({
     args: [REPO, `--user-data-dir=${opts.userDataDir}`, ...(opts.args ?? [])],
@@ -191,7 +187,7 @@ export async function closeApp(handle: TestAppHandle): Promise<void> {
   // hang on a wedged main process, and a single hung await blocks the whole
   // teardown past the hook timeout. Each test runs in an isolated userData
   // dir, so SIGKILL by userDataDir is sufficient and never blocks.
-  // 1. Force-kill the Electron app + any CloakBrowser child it spawned.
+  // 1. Force-kill the Electron app + any managed Chromium child it spawned.
   //    pkill -f <userDataDir> matches both the main Electron process (its args
   //    carry --user-data-dir) and the Chromium children.
   await killOrphanChromium(handle.userDataDir).catch(() => undefined);
@@ -212,11 +208,7 @@ export async function closeApp(handle: TestAppHandle): Promise<void> {
 
 async function killOrphanChromium(userDataDir: string): Promise<void> {
   const sig = os.platform() === "win32" ? "-F" : "-9";
-  const patterns = [
-    userDataDir,
-    ".cloakbrowser",
-    "CloakBrowser",
-  ];
+  const patterns = [userDataDir];
   for (const pat of patterns) {
     try {
       await execFileP("pkill", ["-9", "-f", pat]);
