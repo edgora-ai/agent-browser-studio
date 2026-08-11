@@ -290,6 +290,7 @@ function getWs(): Promise<any> {
 export interface CdpClient {
   ws: any;
   port: number;
+  targetId: string | null;
   msgId: number;
   callbacks: Map<number, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>;
   pendingMessages: Promise<any>[];
@@ -323,6 +324,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
     const client: CdpClient = {
       ws,
       port,
+      targetId: typeof page.id === "string" ? page.id : null,
       msgId: 0,
       callbacks: new Map(),
       pendingMessages: [],
@@ -361,7 +363,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
   });
 }
 
-function cdpSendRaw(client: CdpClient, method: string, params?: any): Promise<any> {
+function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = ++client.msgId;
     const timer = setTimeout(() => {
@@ -372,7 +374,12 @@ function cdpSendRaw(client: CdpClient, method: string, params?: any): Promise<an
     }, 15000);
     client.callbacks.set(id, { resolve, reject, timer });
     try {
-      client.ws.send(JSON.stringify({ id, method, ...(params ? { params } : {}) }));
+      client.ws.send(JSON.stringify({
+        id,
+        method,
+        ...(params ? { params } : {}),
+        ...(sessionId ? { sessionId } : {}),
+      }));
     } catch (error) {
       clearTimeout(timer);
       client.callbacks.delete(id);
@@ -498,23 +505,184 @@ async function movePointerHumanized(
   client.pointerY = target.y;
 }
 
-export async function cdpClick(client: CdpClient, selector: string): Promise<any> {
-  const evaluateExpr = `(() => {
-    function querySelectorDeep(selector, root = document) {
-      const el = root.querySelector(selector);
-      if (el) return el;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-      let node = walker.currentNode;
+interface CdpTargetInfo {
+  targetId: string;
+  type: string;
+  parentId?: string;
+  parentFrameId?: string;
+}
+
+interface CdpDomScope {
+  targetId: string | null;
+  parentId: string | null;
+  sessionId: string | null;
+  depth: number;
+}
+
+interface CdpDomScopeSet {
+  root: CdpDomScope;
+  ordered: CdpDomScope[];
+  byTargetId: Map<string, CdpDomScope>;
+  close: () => Promise<void>;
+}
+
+interface ResolvedDomElement {
+  scope: CdpDomScope;
+  objectId: string;
+}
+
+interface DomElementState {
+  connected: boolean;
+  visible: boolean;
+  enabled: boolean;
+  pointerEvents: boolean;
+  tagName: string;
+  editable: boolean;
+  frameDepth: number;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+interface PreparedInteractionPoint {
+  local: { x: number; y: number };
+  root: { x: number; y: number };
+  state: DomElementState;
+}
+
+const ACTION_WORLD_NAME = "roxy-agent-action-v1";
+
+function cdpSendScoped(client: CdpClient, scope: CdpDomScope, method: string, params?: any): Promise<any> {
+  return cdpSendRaw(client, method, params, scope.sessionId || undefined);
+}
+
+async function openDomScopes(client: CdpClient): Promise<CdpDomScopeSet> {
+  let rootTargetId = client.targetId;
+  if (!rootTargetId) {
+    try {
+      const current = await cdpSendRaw(client, "Target.getTargetInfo");
+      rootTargetId = typeof current?.targetInfo?.targetId === "string"
+        ? current.targetInfo.targetId
+        : null;
+    } catch {
+      rootTargetId = null;
+    }
+  }
+
+  const root: CdpDomScope = {
+    targetId: rootTargetId,
+    parentId: null,
+    sessionId: null,
+    depth: 0,
+  };
+  const ordered = [root];
+  const byTargetId = new Map<string, CdpDomScope>();
+  if (rootTargetId) byTargetId.set(rootTargetId, root);
+  const attachedSessionIds: string[] = [];
+
+  if (rootTargetId) {
+    try {
+      const response = await cdpSendRaw(client, "Target.getTargets");
+      const allTargets: CdpTargetInfo[] = Array.isArray(response?.targetInfos)
+        ? response.targetInfos
+          .filter((entry: any) => entry?.type === "iframe" && typeof entry.targetId === "string")
+          .map((entry: any) => ({
+            targetId: entry.targetId,
+            type: entry.type,
+            ...(typeof entry.parentId === "string" ? { parentId: entry.parentId } : {}),
+            ...(typeof entry.parentFrameId === "string" ? { parentFrameId: entry.parentFrameId } : {}),
+          }))
+        : [];
+      const targetsById = new Map<string, CdpTargetInfo>(
+        allTargets.map((entry: CdpTargetInfo) => [entry.targetId, entry]),
+      );
+
+      const depthFromRoot = (entry: CdpTargetInfo): number | null => {
+        let depth = 1;
+        let parentId = entry.parentId || entry.parentFrameId || null;
+        const seen = new Set<string>([entry.targetId]);
+        while (parentId && parentId !== rootTargetId) {
+          if (seen.has(parentId)) return null;
+          seen.add(parentId);
+          const parent = targetsById.get(parentId);
+          if (!parent) return null;
+          parentId = parent.parentId || parent.parentFrameId || null;
+          depth += 1;
+        }
+        return parentId === rootTargetId ? depth : null;
+      };
+
+      const descendants = allTargets
+        .map((entry: CdpTargetInfo) => ({ entry, depth: depthFromRoot(entry) }))
+        .filter((item: { entry: CdpTargetInfo; depth: number | null }): item is { entry: CdpTargetInfo; depth: number } => item.depth !== null)
+        .sort((a: { entry: CdpTargetInfo; depth: number }, b: { entry: CdpTargetInfo; depth: number }) =>
+          a.depth - b.depth || a.entry.targetId.localeCompare(b.entry.targetId));
+
+      for (const { entry, depth } of descendants) {
+        try {
+          const attached = await cdpSendRaw(client, "Target.attachToTarget", {
+            targetId: entry.targetId,
+            flatten: true,
+          });
+          if (typeof attached?.sessionId !== "string") continue;
+          attachedSessionIds.push(attached.sessionId);
+          const scope: CdpDomScope = {
+            targetId: entry.targetId,
+            parentId: entry.parentId || entry.parentFrameId || rootTargetId,
+            sessionId: attached.sessionId,
+            depth,
+          };
+          ordered.push(scope);
+          byTargetId.set(entry.targetId, scope);
+          await Promise.allSettled([
+            cdpSendScoped(client, scope, "Page.enable"),
+            cdpSendScoped(client, scope, "Runtime.enable"),
+            cdpSendScoped(client, scope, "DOM.enable"),
+          ]);
+        } catch {
+          // A dynamic iframe can disappear between discovery and attachment.
+        }
+      }
+    } catch {
+      // Older CDP implementations still retain the top-frame path.
+    }
+  }
+
+  return {
+    root,
+    ordered,
+    byTargetId,
+    close: async () => {
+      for (const sessionId of attachedSessionIds.reverse()) {
+        try {
+          await cdpSendRaw(client, "Target.detachFromTarget", { sessionId });
+        } catch {
+          // Navigation or frame removal may have detached it already.
+        }
+      }
+    },
+  };
+}
+
+function buildElementResolverExpression(selector: string): string {
+  return `(() => {
+    const requested = ${JSON.stringify(selector)};
+    function queryDeep(part, root) {
+      root = root || document;
+      let direct = null;
+      try { direct = root.querySelector(part); } catch (error) { throw error; }
+      if (direct) return direct;
+      const owner = root.nodeType === 9 ? root : (root.ownerDocument || document);
+      const walker = owner.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      let node = walker.nextNode();
       while (node) {
         if (node.shadowRoot) {
-          const found = querySelectorDeep(selector, node.shadowRoot);
+          const found = queryDeep(part, node.shadowRoot);
           if (found) return found;
         }
         if (node.tagName === 'IFRAME') {
           try {
-            const iframeDoc = node.contentDocument || node.contentWindow?.document;
-            if (iframeDoc) {
-              const found = querySelectorDeep(selector, iframeDoc);
+            const child = node.contentDocument || node.contentWindow?.document;
+            if (child) {
+              const found = queryDeep(part, child);
               if (found) return found;
             }
           } catch (error) { void error; }
@@ -523,268 +691,492 @@ export async function cdpClick(client: CdpClient, selector: string): Promise<any
       }
       return null;
     }
-
-    function resolveSelector(selector) {
-      const parts = selector.split('>>>').map(p => p.trim());
-      let current = document;
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const found = querySelectorDeep(part, current);
-        if (!found) return null;
-        if (i < parts.length - 1) {
-          if (found.shadowRoot) {
-            current = found.shadowRoot;
-          } else if (found.tagName === 'IFRAME') {
-            try {
-              current = found.contentDocument || found.contentWindow?.document || found;
-            } catch {
-              current = found;
-            }
-          } else {
-            current = found;
-          }
-        } else {
-          return found;
-        }
-      }
-      return null;
+    const parts = requested.split('>>>').map(part => part.trim()).filter(Boolean);
+    if (!parts.length) return null;
+    let current = document;
+    for (let index = 0; index < parts.length; index++) {
+      const found = queryDeep(parts[index], current);
+      if (!found) return null;
+      if (index === parts.length - 1) return found;
+      if (found.shadowRoot) current = found.shadowRoot;
+      else if (found.tagName === 'IFRAME') {
+        try { current = found.contentDocument || found.contentWindow?.document || found; }
+        catch (error) { return null; }
+      } else current = found;
     }
-
-    const el = resolveSelector(${JSON.stringify(selector)});
-    if (!el) return null;
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    const rect = el.getBoundingClientRect();
-    let cur = el;
-    let left = rect.left;
-    let top = rect.top;
-    while (cur) {
-      const win = cur.ownerDocument?.defaultView;
-      if (!win || win === window) break;
-      const frameEl = win.frameElement;
-      if (!frameEl) break;
-      try {
-        const frameRect = frameEl.getBoundingClientRect();
-        left += frameRect.left;
-        top += frameRect.top;
-      } catch (error) { void error; }
-      cur = frameEl;
-    }
-    return {
-      x: Math.round(left + rect.width / 2),
-      y: Math.round(top + rect.height / 2),
-      width: rect.width,
-      height: rect.height
-    };
+    return null;
   })()`;
+}
 
-  const coords = await cdpEvaluate(client, evaluateExpr);
-  if (!coords) throw new Error(`Element not found: ${selector}`);
+const READ_ELEMENT_STATE = `function() {
+  const rect = this.getBoundingClientRect();
+  const doc = this.ownerDocument;
+  const view = doc && doc.defaultView;
+  const style = view ? view.getComputedStyle(this) : null;
+  let x = rect.left;
+  let y = rect.top;
+  let frameDepth = 0;
+  let frameView = view;
+  while (frameView) {
+    let frame = null;
+    try { frame = frameView.frameElement; } catch (error) { break; }
+    if (!frame) break;
+    const frameRect = frame.getBoundingClientRect();
+    x += frameRect.left + (frame.clientLeft || 0);
+    y += frameRect.top + (frame.clientTop || 0);
+    frameDepth += 1;
+    frameView = frame.ownerDocument && frame.ownerDocument.defaultView;
+  }
+  const disabled = Boolean(('disabled' in this && this.disabled) || this.getAttribute('aria-disabled') === 'true');
+  const opacity = style ? Number.parseFloat(style.opacity || '1') : 1;
+  const visible = Boolean(this.isConnected && rect.width > 0 && rect.height > 0 && style &&
+    style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' &&
+    Number.isFinite(opacity) && opacity > 0);
+  const tagName = String(this.tagName || '').toUpperCase();
+  return {
+    connected: Boolean(this.isConnected),
+    visible,
+    enabled: !disabled,
+    pointerEvents: Boolean(style && style.pointerEvents !== 'none'),
+    tagName,
+    editable: tagName === 'INPUT' || tagName === 'TEXTAREA' || Boolean(this.isContentEditable),
+    frameDepth,
+    rect: { x, y, width: rect.width, height: rect.height }
+  };
+}`;
 
-  await sleep(100); // Wait for scroll stabilization
+const CHECK_ELEMENT_HIT = `function(point) {
+  const doc = this.ownerDocument;
+  let offsetX = 0;
+  let offsetY = 0;
+  let frameView = doc && doc.defaultView;
+  while (frameView) {
+    let frame = null;
+    try { frame = frameView.frameElement; } catch (error) { break; }
+    if (!frame) break;
+    const frameRect = frame.getBoundingClientRect();
+    offsetX += frameRect.left + (frame.clientLeft || 0);
+    offsetY += frameRect.top + (frame.clientTop || 0);
+    frameView = frame.ownerDocument && frame.ownerDocument.defaultView;
+  }
+  const hit = doc.elementFromPoint(point.x - offsetX, point.y - offsetY);
+  const receives = Boolean(hit && (hit === this || this.contains(hit)));
+  let covering = null;
+  if (hit && !receives) {
+    const id = hit.id ? '#' + hit.id : '';
+    const cls = typeof hit.className === 'string' && hit.className.trim()
+      ? '.' + hit.className.trim().split(/\\s+/).slice(0, 2).join('.')
+      : '';
+    covering = String(hit.tagName || 'element').toLowerCase() + id + cls;
+  }
+  return { hit: receives, covering };
+}`;
 
-  const action = beginInteraction(client);
-  const target = jitterInteractionTarget(
+async function resolveDomElement(
+  client: CdpClient,
+  scopes: CdpDomScopeSet,
+  selector: string,
+): Promise<ResolvedDomElement | null> {
+  for (const scope of scopes.ordered) {
+    let contextId: number | undefined;
+    if (scope.targetId) {
+      try {
+        const world = await cdpSendScoped(client, scope, "Page.createIsolatedWorld", {
+          frameId: scope.targetId,
+          worldName: ACTION_WORLD_NAME,
+          grantUniveralAccess: false,
+        });
+        if (Number.isInteger(world?.executionContextId)) contextId = world.executionContextId;
+      } catch {
+        contextId = undefined;
+      }
+    }
+
+    try {
+      const evaluated = await cdpSendScoped(client, scope, "Runtime.evaluate", {
+        expression: buildElementResolverExpression(selector),
+        returnByValue: false,
+        awaitPromise: true,
+        ...(contextId === undefined ? {} : { contextId }),
+      });
+      if (evaluated?.exceptionDetails) {
+        const description = evaluated.exceptionDetails.exception?.description || "selector evaluation failed";
+        throw new Error(description);
+      }
+      const objectId = evaluated?.result?.objectId;
+      if (typeof objectId === "string") return { scope, objectId };
+    } catch (error) {
+      if (scope === scopes.root) throw error;
+      // A dynamic child target may navigate while scopes are enumerated.
+    }
+  }
+  return null;
+}
+
+async function releaseDomElement(client: CdpClient, element: ResolvedDomElement | null): Promise<void> {
+  if (!element) return;
+  try {
+    await cdpSendScoped(client, element.scope, "Runtime.releaseObject", { objectId: element.objectId });
+  } catch {
+    // The element's frame may already have navigated.
+  }
+}
+
+async function readDomElementState(client: CdpClient, element: ResolvedDomElement): Promise<DomElementState> {
+  const response = await cdpSendScoped(client, element.scope, "Runtime.callFunctionOn", {
+    objectId: element.objectId,
+    functionDeclaration: READ_ELEMENT_STATE,
+    returnByValue: true,
+  });
+  const state = response?.result?.value as DomElementState | undefined;
+  if (!state?.rect || ![state.rect.x, state.rect.y, state.rect.width, state.rect.height].every(Number.isFinite)) {
+    throw new Error("Element became unavailable during interaction");
+  }
+  return state;
+}
+
+async function scrollDomElementIntoView(client: CdpClient, element: ResolvedDomElement): Promise<void> {
+  await cdpSendScoped(client, element.scope, "DOM.scrollIntoViewIfNeeded", { objectId: element.objectId });
+}
+
+function elementStateDistance(a: DomElementState, b: DomElementState): number {
+  return Math.max(
+    Math.abs(a.rect.x - b.rect.x),
+    Math.abs(a.rect.y - b.rect.y),
+    Math.abs(a.rect.width - b.rect.width),
+    Math.abs(a.rect.height - b.rect.height),
+  );
+}
+
+async function waitForStableDomElement(
+  client: CdpClient,
+  element: ResolvedDomElement,
+  timeoutMs = 1_200,
+): Promise<DomElementState> {
+  const started = Date.now();
+  let previous = await readDomElementState(client, element);
+  let stableSamples = 0;
+  while (Date.now() - started < timeoutMs) {
+    await sleep(50);
+    const current = await readDomElementState(client, element);
+    if (!current.connected) throw new Error("Element detached during interaction");
+    if (elementStateDistance(previous, current) <= 0.5) {
+      stableSamples += 1;
+      if (stableSamples >= 2) return current;
+    } else {
+      stableSamples = 0;
+    }
+    previous = current;
+  }
+  throw new Error("Element did not become stable before interaction");
+}
+
+function assertDomElementActionable(state: DomElementState, selector: string): void {
+  if (!state.connected) throw new Error(`Element detached: ${selector}`);
+  if (!state.visible) throw new Error(`Element is not visible: ${selector}`);
+  if (!state.enabled) throw new Error(`Element is disabled: ${selector}`);
+  if (!state.pointerEvents) throw new Error(`Element does not receive pointer events: ${selector}`);
+}
+
+async function prepareDomElement(
+  client: CdpClient,
+  element: ResolvedDomElement,
+  selector: string,
+): Promise<DomElementState> {
+  await scrollDomElementIntoView(client, element);
+  await waitForStableDomElement(client, element);
+  // Settling can move the element out of view again; always re-scroll before
+  // deriving the final native input coordinates.
+  await scrollDomElementIntoView(client, element);
+  const state = await readDomElementState(client, element);
+  assertDomElementActionable(state, selector);
+  return state;
+}
+
+function mapPointThroughQuad(
+  point: { x: number; y: number },
+  width: number,
+  height: number,
+  quad: number[],
+): { x: number; y: number } {
+  if (quad.length !== 8 || width <= 0 || height <= 0) throw new Error("Invalid iframe geometry");
+  const u = point.x / width;
+  const v = point.y / height;
+  const weights = [(1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v];
+  return {
+    x: quad[0] * weights[0] + quad[2] * weights[1] + quad[4] * weights[2] + quad[6] * weights[3],
+    y: quad[1] * weights[0] + quad[3] * weights[1] + quad[5] * weights[2] + quad[7] * weights[3],
+  };
+}
+
+async function scopePointToRoot(
+  client: CdpClient,
+  scopes: CdpDomScopeSet,
+  startScope: CdpDomScope,
+  startPoint: { x: number; y: number },
+): Promise<{ x: number; y: number }> {
+  let scope = startScope;
+  let point = startPoint;
+  while (scope !== scopes.root) {
+    if (!scope.targetId || !scope.parentId) throw new Error("Incomplete iframe target hierarchy");
+    const parent = scopes.byTargetId.get(scope.parentId);
+    if (!parent) throw new Error("Parent iframe target became unavailable");
+    const [metrics, owner] = await Promise.all([
+      cdpSendScoped(client, scope, "Page.getLayoutMetrics"),
+      cdpSendScoped(client, parent, "DOM.getFrameOwner", { frameId: scope.targetId }),
+    ]);
+    const viewport = metrics?.cssLayoutViewport || metrics?.layoutViewport;
+    const width = Number(viewport?.clientWidth);
+    const height = Number(viewport?.clientHeight);
+    const box = await cdpSendScoped(client, parent, "DOM.getBoxModel", {
+      backendNodeId: owner?.backendNodeId,
+    });
+    point = mapPointThroughQuad(point, width, height, box?.model?.content || []);
+    scope = parent;
+  }
+  return point;
+}
+
+async function checkDomElementHit(
+  client: CdpClient,
+  element: ResolvedDomElement,
+  point: { x: number; y: number },
+): Promise<{ hit: boolean; covering: string | null }> {
+  const response = await cdpSendScoped(client, element.scope, "Runtime.callFunctionOn", {
+    objectId: element.objectId,
+    functionDeclaration: CHECK_ELEMENT_HIT,
+    arguments: [{ value: point }],
+    returnByValue: true,
+  });
+  const value = response?.result?.value;
+  return {
+    hit: value?.hit === true,
+    covering: typeof value?.covering === "string" ? value.covering : null,
+  };
+}
+
+async function prepareInteractionPoint(
+  client: CdpClient,
+  scopes: CdpDomScopeSet,
+  element: ResolvedDomElement,
+  selector: string,
+  action: number,
+): Promise<PreparedInteractionPoint> {
+  const state = await prepareDomElement(client, element, selector);
+  const local = jitterInteractionTarget(
     client.interactionSeed,
     action,
-    { x: coords.x, y: coords.y },
-    { width: Number(coords.width) || 1, height: Number(coords.height) || 1 },
+    { x: state.rect.x + state.rect.width / 2, y: state.rect.y + state.rect.height / 2 },
+    { width: state.rect.width, height: state.rect.height },
   );
-  await movePointerHumanized(client, target, action);
-  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mousePressed", x: target.x, y: target.y, button: "left", clickCount: 1 });
-  await sleep(interactionDelay(client.interactionSeed, action, 90, 42, 118));
-  await cdpSendRaw(client, "Input.dispatchMouseEvent", { type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1 });
-  return { success: true, x: target.x, y: target.y, selector };
+  const root = await scopePointToRoot(client, scopes, element.scope, local);
+  return { local, root, state };
+}
+
+async function moveToActionableDomElement(
+  client: CdpClient,
+  scopes: CdpDomScopeSet,
+  element: ResolvedDomElement,
+  selector: string,
+  action: number,
+): Promise<PreparedInteractionPoint> {
+  let prepared = await prepareInteractionPoint(client, scopes, element, selector, action);
+  await movePointerHumanized(client, prepared.root, action);
+
+  // Pointer travel takes multiple compositor frames. Re-read and re-scroll so
+  // a late layout shift cannot turn a successful call into a silent miss.
+  let lastCovering: string | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const refreshed = await prepareInteractionPoint(client, scopes, element, selector, action);
+    if (Math.hypot(refreshed.root.x - prepared.root.x, refreshed.root.y - prepared.root.y) > 0.75) {
+      await movePointerHumanized(client, refreshed.root, action);
+    }
+    prepared = refreshed;
+    const hit = await checkDomElementHit(client, element, prepared.local);
+    if (hit.hit) return prepared;
+    lastCovering = hit.covering || lastCovering;
+    await sleep(50 + attempt * 35);
+  }
+  throw new Error(`Element is covered and cannot receive pointer events: ${selector}${lastCovering ? ` (${lastCovering})` : ""}`);
+}
+
+export async function cdpClick(client: CdpClient, selector: string): Promise<any> {
+  const scopes = await openDomScopes(client);
+  let element: ResolvedDomElement | null = null;
+  try {
+    element = await resolveDomElement(client, scopes, selector);
+    if (!element) throw new Error(`Element not found: ${selector}`);
+    const action = beginInteraction(client);
+    const target = await moveToActionableDomElement(client, scopes, element, selector, action);
+    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: target.root.x, y: target.root.y, button: "left", clickCount: 1,
+    });
+    await sleep(interactionDelay(client.interactionSeed, action, 90, 42, 118));
+    await cdpSendRaw(client, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: target.root.x, y: target.root.y, button: "left", clickCount: 1,
+    });
+    return {
+      success: true,
+      native: true,
+      x: target.root.x,
+      y: target.root.y,
+      selector,
+      frameDepth: element.scope.depth + target.state.frameDepth,
+    };
+  } finally {
+    await releaseDomElement(client, element);
+    await scopes.close();
+  }
 }
 
 export async function cdpHover(client: CdpClient, selector: string): Promise<any> {
-  const evaluateExpr = `(() => {
-    function querySelectorDeep(selector, root = document) {
-      const el = root.querySelector(selector);
-      if (el) return el;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-      let node = walker.currentNode;
-      while (node) {
-        if (node.shadowRoot) {
-          const found = querySelectorDeep(selector, node.shadowRoot);
-          if (found) return found;
-        }
-        if (node.tagName === 'IFRAME') {
-          try {
-            const iframeDoc = node.contentDocument || node.contentWindow?.document;
-            if (iframeDoc) {
-              const found = querySelectorDeep(selector, iframeDoc);
-              if (found) return found;
-            }
-          } catch (error) { void error; }
-        }
-        node = walker.nextNode();
-      }
-      return null;
-    }
-
-    function resolveSelector(selector) {
-      const parts = selector.split('>>>').map(p => p.trim());
-      let current = document;
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const found = querySelectorDeep(part, current);
-        if (!found) return null;
-        if (i < parts.length - 1) {
-          if (found.shadowRoot) {
-            current = found.shadowRoot;
-          } else if (found.tagName === 'IFRAME') {
-            try {
-              current = found.contentDocument || found.contentWindow?.document || found;
-            } catch {
-              current = found;
-            }
-          } else {
-            current = found;
-          }
-        } else {
-          return found;
-        }
-      }
-      return null;
-    }
-
-    const el = resolveSelector(${JSON.stringify(selector)});
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    let cur = el;
-    let left = rect.left;
-    let top = rect.top;
-    while (cur) {
-      const win = cur.ownerDocument?.defaultView;
-      if (!win || win === window) break;
-      const frameEl = win.frameElement;
-      if (!frameEl) break;
-      try {
-        const frameRect = frameEl.getBoundingClientRect();
-        left += frameRect.left;
-        top += frameRect.top;
-      } catch (error) { void error; }
-      cur = frameEl;
-    }
+  const scopes = await openDomScopes(client);
+  let element: ResolvedDomElement | null = null;
+  try {
+    element = await resolveDomElement(client, scopes, selector);
+    if (!element) throw new Error(`Element not found: ${selector}`);
+    const action = beginInteraction(client);
+    const target = await moveToActionableDomElement(client, scopes, element, selector, action);
     return {
-      x: Math.round(left + rect.width / 2),
-      y: Math.round(top + rect.height / 2),
-      width: rect.width,
-      height: rect.height
+      success: true,
+      native: true,
+      x: target.root.x,
+      y: target.root.y,
+      selector,
+      frameDepth: element.scope.depth + target.state.frameDepth,
     };
-  })()`;
+  } finally {
+    await releaseDomElement(client, element);
+    await scopes.close();
+  }
+}
 
-  const coords = await cdpEvaluate(client, evaluateExpr);
-  if (!coords) throw new Error(`Element not found: ${selector}`);
+async function readDomElementValue(client: CdpClient, element: ResolvedDomElement): Promise<string> {
+  const response = await cdpSendScoped(client, element.scope, "Runtime.callFunctionOn", {
+    objectId: element.objectId,
+    functionDeclaration: `function() {
+      const tag = String(this.tagName || '').toUpperCase();
+      return tag === 'INPUT' || tag === 'TEXTAREA'
+        ? String(this.value || '')
+        : String(this.innerText || this.textContent || '');
+    }`,
+    returnByValue: true,
+  });
+  return typeof response?.result?.value === "string" ? response.result.value : "";
+}
 
-  const action = beginInteraction(client);
-  const target = jitterInteractionTarget(
-    client.interactionSeed,
-    action,
-    { x: coords.x, y: coords.y },
-    { width: Number(coords.width) || 1, height: Number(coords.height) || 1 },
-  );
-  await movePointerHumanized(client, target, action);
-  return { success: true, x: target.x, y: target.y, selector };
+async function setDomElementValue(client: CdpClient, element: ResolvedDomElement, text: string): Promise<boolean> {
+  const response = await cdpSendScoped(client, element.scope, "Runtime.callFunctionOn", {
+    objectId: element.objectId,
+    functionDeclaration: `function(value) {
+      this.focus();
+      const tag = String(this.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        const proto = tag === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(this, value);
+        else this.value = value;
+      } else {
+        this.innerText = value;
+      }
+      this.dispatchEvent(new Event('input', { bubbles: true }));
+      this.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }`,
+    arguments: [{ value: text }],
+    returnByValue: true,
+  });
+  return response?.result?.value === true;
 }
 
 export async function cdpType(client: CdpClient, selector: string, text: string): Promise<any> {
-  // Phase 1: Find element, focus, clear
-  const focusExpr = `(() => {
-    function qs(s,r){r=r||document;var e=r.querySelector(s);if(e)return e;var w=r.createTreeWalker(r,NodeFilter.SHOW_ELEMENT),n=w.currentNode;while(n){if(n.shadowRoot){var f=qs(s,n.shadowRoot);if(f)return f;}if(n.tagName==='IFRAME'){try{var d=n.contentDocument||n.contentWindow.document;if(d){var f=qs(s,d);if(f)return f;}}catch(x){}}n=w.nextNode();}return null;}
-    var e=qs(${JSON.stringify(selector)});
-    if(!e)return'__NOT_FOUND__';
-    e.focus(); e.scrollIntoView({block:'center'});
-    var tag=e.tagName;
-    return tag + (e.getAttribute('contenteditable')!==null?'[contenteditable]':'') + (e.isContentEditable?'[isCE]':'');
-  })()`;
-
-  const tag = await cdpEvaluate(client, focusExpr);
-  if (!tag || tag === "__NOT_FOUND__") {
-    throw new Error(`Element not found: ${selector}`);
-  }
-
-  // Phase 2: select/clear through the native Input domain, then insert text in
-  // bounded profile-seeded chunks. This keeps input events trusted while
-  // avoiding the single zero-duration insert that automation detectors flag.
-  const action = beginInteraction(client);
-  await sleep(interactionDelay(client.interactionSeed, action, 100, 55, 135));
-
-  let typed = false;
+  const scopes = await openDomScopes(client);
+  let element: ResolvedDomElement | null = null;
   try {
-    await cdpSendRaw(client, "Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      key: "a",
-      code: "KeyA",
-      modifiers: 2,
-      windowsVirtualKeyCode: 65,
-      commands: ["SelectAll"],
+    element = await resolveDomElement(client, scopes, selector);
+    if (!element) throw new Error(`Element not found: ${selector}`);
+    const state = await prepareDomElement(client, element, selector);
+    if (!state.editable) throw new Error(`Element is not editable: ${selector}`);
+    await cdpSendScoped(client, element.scope, "Runtime.callFunctionOn", {
+      objectId: element.objectId,
+      functionDeclaration: "function() { this.focus(); return this === this.ownerDocument.activeElement; }",
+      returnByValue: true,
     });
-    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 });
-    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
-    await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 });
 
-    const characters = Array.from(text);
-    const chunkSize = characters.length <= 160 ? 1 : Math.max(2, Math.ceil(characters.length / 80));
-    for (let index = 0; index < characters.length; index += chunkSize) {
-      const chunk = characters.slice(index, index + chunkSize).join("");
-      if (chunkSize === 1 && /^[A-Za-z0-9 ]$/.test(chunk)) {
-        const isSpace = chunk === " ";
-        const code = isSpace ? "Space" : /[0-9]/.test(chunk) ? `Digit${chunk}` : `Key${chunk.toUpperCase()}`;
-        const virtualKey = isSpace ? 32 : chunk.toUpperCase().charCodeAt(0);
-        await cdpSendRaw(client, "Input.dispatchKeyEvent", {
-          type: "rawKeyDown", key: chunk, code, windowsVirtualKeyCode: virtualKey, unmodifiedText: chunk,
-        });
-        await sleep(interactionDelay(client.interactionSeed, action, 300 + index, 3, 12));
-        await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "char", key: chunk, code, text: chunk, unmodifiedText: chunk, windowsVirtualKeyCode: virtualKey });
-        await cdpSendRaw(client, "Input.dispatchKeyEvent", { type: "keyUp", key: chunk, code, windowsVirtualKeyCode: virtualKey });
-      } else {
-        await cdpSendRaw(client, "Input.insertText", { text: chunk });
-      }
-      const minDelay = chunkSize === 1 ? 12 : 5;
-      const maxDelay = chunkSize === 1 ? 42 : 16;
-      await sleep(interactionDelay(client.interactionSeed, action, 110 + index, minDelay, maxDelay));
-    }
-    // Verify it worked
-    await sleep(interactionDelay(client.interactionSeed, action, 190, 35, 75));
-    const verify = await cdpEvaluate(client, `(function(){
-      function qs(s){return document.querySelector(s);}
-      var e=qs(${JSON.stringify(selector)});
-      if(!e)return'nofound';
-      var v=(e.tagName==='INPUT'||e.tagName==='TEXTAREA')?(e.value||''):(e.innerText||e.textContent||'');
-      return v;
-    })()`);
-    if (typeof verify === "string" && verify.includes(text.slice(0, Math.min(5, text.length)))) {
-      typed = true;
-    }
-  } catch {}
+    const action = beginInteraction(client);
+    await sleep(interactionDelay(client.interactionSeed, action, 100, 55, 135));
+    let native = false;
+    let nativeError: string | null = null;
+    try {
+      await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+        type: "rawKeyDown", key: "a", code: "KeyA", modifiers: 2,
+        windowsVirtualKeyCode: 65, commands: ["SelectAll"],
+      });
+      await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+        type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65,
+      });
+      await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+        type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      });
+      await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+        type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8,
+      });
 
-  if (!typed) {
-    // Fallback: set value/textContent directly + dispatch events (works for any element incl contenteditable)
-    const setExpr = `(() => {
-      function qs(s){return document.querySelector(s)||document.querySelector(s.replace(/^body > /,''));}
-      var e=qs(${JSON.stringify(selector)});
-      if(!e)return false;
-      e.focus();
-      var tag=e.tagName;
-      if(tag==='INPUT'||tag==='TEXTAREA'){
-        var p=tag==='INPUT'?HTMLInputElement.prototype:HTMLTextAreaElement.prototype;
-        var d=Object.getOwnPropertyDescriptor(p,'value');
-        if(d&&d.set)d.set.call(e,${JSON.stringify(text)});else e.value=${JSON.stringify(text)};
-      }else{
-        // contenteditable: set innerText + trigger input
-        e.innerText=${JSON.stringify(text)};
+      const characters = Array.from(text);
+      const chunkSize = characters.length <= 160 ? 1 : Math.max(2, Math.ceil(characters.length / 80));
+      for (let index = 0; index < characters.length; index += chunkSize) {
+        const chunk = characters.slice(index, index + chunkSize).join("");
+        if (chunkSize === 1 && /^[A-Za-z0-9 ]$/.test(chunk)) {
+          const isSpace = chunk === " ";
+          const code = isSpace ? "Space" : /[0-9]/.test(chunk) ? `Digit${chunk}` : `Key${chunk.toUpperCase()}`;
+          const virtualKey = isSpace ? 32 : chunk.toUpperCase().charCodeAt(0);
+          await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+            type: "rawKeyDown", key: chunk, code, windowsVirtualKeyCode: virtualKey, unmodifiedText: chunk,
+          });
+          await sleep(interactionDelay(client.interactionSeed, action, 300 + index, 3, 12));
+          await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+            type: "char", key: chunk, code, text: chunk, unmodifiedText: chunk, windowsVirtualKeyCode: virtualKey,
+          });
+          await cdpSendRaw(client, "Input.dispatchKeyEvent", {
+            type: "keyUp", key: chunk, code, windowsVirtualKeyCode: virtualKey,
+          });
+        } else {
+          await cdpSendRaw(client, "Input.insertText", { text: chunk });
+        }
+        await sleep(interactionDelay(
+          client.interactionSeed,
+          action,
+          110 + index,
+          chunkSize === 1 ? 12 : 5,
+          chunkSize === 1 ? 42 : 16,
+        ));
       }
-      e.dispatchEvent(new Event('input',{bubbles:true}));
-      e.dispatchEvent(new Event('change',{bubbles:true}));
-      return true;
-    })()`;
-    await cdpEvaluate(client, setExpr);
+      await sleep(interactionDelay(client.interactionSeed, action, 190, 35, 75));
+      native = await readDomElementValue(client, element) === text;
+      if (!native) nativeError = "native input verification did not match the requested text";
+    } catch (error) {
+      nativeError = error instanceof Error ? error.message : String(error);
+    }
+
+    let fallback = false;
+    if (!native) fallback = await setDomElementValue(client, element, text);
+    if (!native && !fallback) throw new Error(nativeError || `Failed to type into element: ${selector}`);
+    return {
+      success: true,
+      selector,
+      length: text.length,
+      native,
+      fallback,
+      nativeError,
+      frameDepth: element.scope.depth + state.frameDepth,
+    };
+  } finally {
+    await releaseDomElement(client, element);
+    await scopes.close();
   }
-  return { success: true, selector, length: text.length };
 }
 
-export async function cdpPressKey(client: CdpClient, key: string): Promise<any> {
+export async function cdpPressKey(client: CdpClient, key: string, delayMs?: number): Promise<any> {
   const codeMap: Record<string, number> = {
     Enter: 13, Tab: 9, Escape: 27,
     ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39,
@@ -794,6 +1186,9 @@ export async function cdpPressKey(client: CdpClient, key: string): Promise<any> 
   const keyCode = codeMap[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
   const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
   const action = beginInteraction(client);
+  const holdDelayMs = delayMs === undefined
+    ? interactionDelay(client.interactionSeed, action, 200, 28, 92)
+    : normalizeToolNumber(delayMs, 0, 0, 5_000, "key press delay");
 
   let nativeSent = false;
   let nativeError: string | null = null;
@@ -803,7 +1198,7 @@ export async function cdpPressKey(client: CdpClient, key: string): Promise<any> 
       windowsVirtualKeyCode: keyToVK(key),
       ...(key.length === 1 ? { text: key, unmodifiedText: key } : {}),
     });
-    await sleep(interactionDelay(client.interactionSeed, action, 200, 28, 92));
+    await sleep(holdDelayMs);
     if (key.length === 1 || key === "Enter" || key === "Space") {
       const text = key === "Enter" ? "\r" : key === "Space" ? " " : key;
       await cdpSendRaw(client, "Input.dispatchKeyEvent", {
@@ -831,7 +1226,7 @@ export async function cdpPressKey(client: CdpClient, key: string): Promise<any> 
     })()`);
   }
 
-  return { success: true, key, native: nativeSent, nativeError };
+  return { success: true, key, native: nativeSent, nativeError, delayMs: holdDelayMs };
 }
 
 function keyToVK(key: string): number {
@@ -1075,7 +1470,7 @@ export const AGENT_TOOLS = [
     type: "function" as const,
     function: {
       name: "browser_click",
-      description: "Click an element by CSS selector",
+      description: "Click an actionable element by CSS selector, including inside nested frames",
       parameters: {
         type: "object",
         properties: {
@@ -1090,7 +1485,7 @@ export const AGENT_TOOLS = [
     type: "function" as const,
     function: {
       name: "browser_type",
-      description: "Type text into an input field by CSS selector",
+      description: "Type text into an input field by CSS selector, including inside nested frames",
       parameters: {
         type: "object",
         properties: {
@@ -1136,12 +1531,13 @@ export const AGENT_TOOLS = [
     type: "function" as const,
     function: {
       name: "browser_press_key",
-      description: "Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.)",
+      description: "Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.) with an optional hold delay",
       parameters: {
         type: "object",
         properties: {
           port: { type: "number", description: "CDP debugging port" },
           key: { type: "string", description: "Key name: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, etc." },
+          delayMs: { type: "number", description: "Optional key-down hold time in milliseconds (0-5000)" },
         },
         required: ["port", "key"],
       },
@@ -1958,7 +2354,10 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
     }
     case "browser_press_key": {
       const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpPressKey(c, normalizeToolString(args.key, "key", 40));
+      const delayMs = args.delayMs === undefined
+        ? undefined
+        : normalizeToolNumber(args.delayMs, 0, 0, 5000, "key press delay");
+      return cdpPressKey(c, normalizeToolString(args.key, "key", 40), delayMs);
     }
     case "browser_hover": {
       const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
@@ -2562,11 +2961,11 @@ Available tools:
 - browser_navigate(port, url) — Navigate to a URL
 - browser_wait_for_load(port) — Wait for page to finish loading
 - browser_snapshot(port) — Get page text/elements snapshot
-- browser_click(port, selector) — Click an element by CSS selector
-- browser_type(port, selector, text) — Type text into an input field
+- browser_click(port, selector) — Click an actionable element, including inside nested frames
+- browser_type(port, selector, text) — Type text into an input field, including inside nested frames
 - browser_screenshot(port) — Take a screenshot
 - browser_scroll(port, direction, amount?) — Scroll up/down
-- browser_press_key(port, key) — Press keyboard key
+- browser_press_key(port, key, delayMs?) — Press keyboard key with an optional hold delay
 - browser_hover(port, selector) — Hover over element
 - browser_select(port, selector, value) — Select dropdown option
 - browser_wait_for(port, selector, timeout?) — Wait for element to appear

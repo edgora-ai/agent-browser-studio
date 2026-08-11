@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cdpClick,
   cdpPressKey,
@@ -12,7 +12,7 @@ interface CdpCall {
   params?: Record<string, any>;
 }
 
-function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
+function fakeClient(seed = 424242, elementHit = true): { client: CdpClient; calls: CdpCall[] } {
   const calls: CdpCall[] = [];
   let typedValue = "old";
   let scrollY = 0;
@@ -50,10 +50,44 @@ function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
           });
           return;
         }
+        if (message.method === "Target.getTargets") {
+          callback.resolve({ targetInfos: [] });
+          return;
+        }
+        if (message.method === "Page.createIsolatedWorld") {
+          callback.resolve({ executionContextId: 7 });
+          return;
+        }
+        if (message.method === "Runtime.callFunctionOn") {
+          const declaration = String(message.params?.functionDeclaration || "");
+          if (declaration.includes("elementFromPoint")) {
+            callback.resolve({ result: { value: { hit: elementHit, covering: elementHit ? null : "div#cover" } } });
+          } else if (declaration.includes("getBoundingClientRect")) {
+            callback.resolve({
+              result: {
+                value: {
+                  connected: true,
+                  visible: true,
+                  enabled: true,
+                  pointerEvents: true,
+                  tagName: "INPUT",
+                  editable: true,
+                  frameDepth: 0,
+                  rect: { x: 360, y: 244, width: 80, height: 32 },
+                },
+              },
+            });
+          } else if (declaration.includes("return tag === 'INPUT'")) {
+            callback.resolve({ result: { value: typedValue } });
+          } else {
+            callback.resolve({ result: { value: true } });
+          }
+          return;
+        }
         if (message.method === "Runtime.evaluate") {
           const expression = String(message.params?.expression || "");
-          if (expression.includes("resolveSelector")) {
-            callback.resolve({ result: { value: { x: 400, y: 260, width: 80, height: 32 } } });
+          if (expression.includes("const requested =")) {
+            callback.resolve({ result: { objectId: "element-1" } });
           } else if (expression.includes("__NOT_FOUND__")) {
             callback.resolve({ result: { value: "INPUT" } });
           } else if (expression.includes("var v=")) {
@@ -70,6 +104,7 @@ function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
   client = {
     ws,
     port: 9222,
+    targetId: "root-target",
     msgId: 0,
     callbacks: new Map(),
     pendingMessages: [],
@@ -80,6 +115,10 @@ function fakeClient(seed = 424242): { client: CdpClient; calls: CdpCall[] } {
   };
   return { client, calls };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("local agent native humanized input", () => {
   it("moves over a bounded curve before a delayed native click", async () => {
@@ -123,5 +162,26 @@ describe("local agent native humanized input", () => {
     expect(calls.filter((call) => call.method === "Input.dispatchKeyEvent").map((call) => call.params?.type))
       .toEqual(["rawKeyDown", "char", "keyUp"]);
     expect(calls.some((call) => call.method === "Runtime.evaluate")).toBe(false);
+  });
+
+  it("preserves an explicit key-down hold delay", async () => {
+    vi.useFakeTimers();
+    const { client, calls } = fakeClient();
+    const pending = cdpPressKey(client, "Enter", 300);
+    await vi.advanceTimersByTimeAsync(299);
+    expect(calls.filter((call) => call.method === "Input.dispatchKeyEvent").map((call) => call.params?.type))
+      .toEqual(["rawKeyDown"]);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(result).toMatchObject({ native: true, delayMs: 300 });
+    expect(calls.filter((call) => call.method === "Input.dispatchKeyEvent").map((call) => call.params?.type))
+      .toEqual(["rawKeyDown", "char", "keyUp"]);
+  });
+
+  it("does not dispatch a click when the target is covered", async () => {
+    const { client, calls } = fakeClient(424242, false);
+    await expect(cdpClick(client, "#covered")).rejects.toThrow(/covered|pointer events/i);
+    expect(calls.some((call) =>
+      call.method === "Input.dispatchMouseEvent" && call.params?.type === "mousePressed")).toBe(false);
   });
 });
