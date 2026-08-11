@@ -25,7 +25,7 @@ vi.mock("electron", () => {
 });
 
 import { getConfig, saveConfig, addProxy, setDefaultProxyName, deleteProxy, reloadConfig } from "../../src/main/services/config-manager.js";
-import { resolveDownloadProxy, downloadFileWithCurl, writeCurlConfig } from "../../src/main/services/proxy-detector.js";
+import { resolveDownloadProxy, downloadFileWithCurl, parseEnvProxy, writeCurlConfig } from "../../src/main/services/proxy-detector.js";
 
 // Start a tiny local http server that serves a known payload; return its origin.
 async function startLocalServer(): Promise<{ origin: string; close: () => Promise<void> }> {
@@ -121,6 +121,23 @@ describe("resolveDownloadProxy — priority chain", () => {
     expect(p!.password).toBe("secret");
   });
 
+  it("parses bracketed IPv6, proxy-side DNS and encoded credentials", () => {
+    getConfig().defaultProxy = "does-not-exist";
+    process.env.ALL_PROXY = "socks5h://user%40tenant:p%3Ass@[2001:db8::42]:1080/";
+    expect(resolveDownloadProxy()).toEqual({
+      type: "socks5h",
+      host: "2001:db8::42",
+      port: 1080,
+      username: "user@tenant",
+      password: "p:ss",
+    });
+  });
+
+  it("rejects unsupported or path-bearing proxy environment URLs", () => {
+    expect(parseEnvProxy("ftp://proxy.example:21")).toBeNull();
+    expect(parseEnvProxy("http://proxy.example:8080/not-a-proxy-root")).toBeNull();
+  });
+
   it("explicit override takes priority over app default and env", () => {
     addProxy("app-default", { type: "http", host: "app.proxy", port: 1 });
     setDefaultProxyName("app-default");
@@ -153,6 +170,15 @@ describe("writeCurlConfig — credential safety", () => {
       expect(content).toContain("p.example:8080");
       expect(content).toContain("proxy-user = ");
       expect(content).toContain("u:secret");
+    } finally {
+      try { fs.unlinkSync(conf); } catch { /* ignore */ }
+    }
+  });
+
+  it("brackets an IPv6 proxy host for curl", () => {
+    const conf = writeCurlConfig({ type: "socks5h", host: "2001:db8::42", port: 1080 });
+    try {
+      expect(fs.readFileSync(conf, "utf-8")).toContain("socks5h://[2001:db8::42]:1080");
     } finally {
       try { fs.unlinkSync(conf); } catch { /* ignore */ }
     }

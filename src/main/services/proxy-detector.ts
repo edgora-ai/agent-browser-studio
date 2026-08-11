@@ -114,21 +114,39 @@ export function resolveDownloadProxy(opts: { proxyConfig?: ProxyConfig | null } 
   return null;
 }
 
-/** Parse a standard `scheme://[user:pass@]host:port` proxy env var into ProxyConfig. */
-function parseEnvProxy(raw: string): ProxyConfig | null {
-  const m = /^([a-z0-9]+):\/\/(?:([^:@/]+)(?::([^@/]*))?@)?([^:/]+)(?::(\d+))?\/?$/i.exec(raw.trim());
-  if (!m) return null;
-  const [, scheme, user, pass, host, port] = m;
-  const type: ProxyConfig["type"] =
-    scheme.toLowerCase() === "socks5h" ? "socks5h" :
-    scheme.toLowerCase() === "socks5" ? "socks5" : "http";
-  const numPort = port ? Number(port) : type === "http" ? 8080 : 1080;
-  return {
-    type,
-    host,
-    port: numPort,
-    ...(user ? { username: user, password: pass || "" } : {}),
-  };
+/** Parse a standard proxy URL, including bracketed IPv6 and encoded credentials. */
+export function parseEnvProxy(raw: string): ProxyConfig | null {
+  try {
+    const parsed = new URL(raw.trim());
+    const protocol = parsed.protocol.toLowerCase();
+    const type: ProxyConfig["type"] = protocol === "socks5h:"
+      ? "socks5h"
+      : protocol === "socks5:"
+        ? "socks5"
+        : protocol === "http:" || protocol === "https:"
+          ? "http"
+          : (() => { throw new Error("unsupported proxy scheme"); })();
+    if ((parsed.pathname && parsed.pathname !== "/") || parsed.search || parsed.hash) return null;
+    const host = parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+      ? parsed.hostname.slice(1, -1)
+      : parsed.hostname;
+    const port = parsed.port ? Number(parsed.port) : type === "http" ? 8080 : 1080;
+    const config: ProxyConfig = {
+      type,
+      host,
+      port,
+      ...(parsed.username
+        ? {
+          username: decodeURIComponent(parsed.username),
+          password: decodeURIComponent(parsed.password || ""),
+        }
+        : {}),
+    };
+    buildProxyUrl(config);
+    return config;
+  } catch {
+    return null;
+  }
 }
 
 /**
