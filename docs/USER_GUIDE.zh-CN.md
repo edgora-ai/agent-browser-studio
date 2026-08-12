@@ -43,6 +43,11 @@ npm test
 复制到 Agent Browser Studio 的新目录，核验复制后的 Profile 文件树，并保留旧应用、
 旧数据和旧缓存不动。新 Profile 使用 `ab_` 标识，迁移后的 `cb_` Profile 仍可继续使用。
 
+macOS 上若存在旧 `v1:` 凭据，首次修复版启动可能会对 `CloakLite Safe Storage`
+发起一次受控授权。应用会原子地把全部旧字段转换到本地 AES-GCM 凭据库，之后不再
+重复申请；若拒绝授权，应用会停止启动并保持旧密文原样。在迁移成功前不要删除旧
+钥匙串项。
+
 ## 3. Profile 管理
 
 Profile 保存浏览器状态和指纹配置。

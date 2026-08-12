@@ -22,6 +22,17 @@ const MAC_CJK_FONT_POOL = [
   "PingFang SC", "PingFang TC", "Hiragino Kaku Gothic ProN",
 ];
 
+// Managed profiles resolve DNS over HTTPS through the configured proxy so the
+// resolver and DNS queries stay consistent with the exit identity. The DoH
+// endpoint hostname is resolved by the proxy; DNS lookups themselves go to
+// this provider inside the proxy tunnel.
+export const MANAGED_SECURE_DNS_TEMPLATES = ["https://dns.google/dns-query{?dns}"] as const;
+
+export interface SecureDnsConfig {
+  enabled: boolean;
+  templates: string[];
+}
+
 interface HardwarePersona {
   id: string;
   hardwareConcurrency: number;
@@ -213,6 +224,7 @@ export interface BrowserFingerprintConfig {
     videoInputs: number;
     audioOutputs: number;
   };
+  secureDns: SecureDnsConfig;
   fonts: string[];
   doNotTrack: string | null;
 }
@@ -224,6 +236,7 @@ export interface BrowserFingerprintConfig {
 export function buildBrowserFingerprintConfig(
   meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
+  secureDns: SecureDnsConfig | null = null,
 ): BrowserFingerprintConfig {
   const seed = normalizeSeed(meta.fingerprintSeed);
   const platform = normalizePlatform(meta.platform);
@@ -303,6 +316,7 @@ export function buildBrowserFingerprintConfig(
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
     geolocation: normalizeGeolocation(meta),
     mediaDevices: { enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 },
+    secureDns: secureDns ?? { enabled: false, templates: [] },
     fonts: selectStableFonts(seed, platform, locale),
     doNotTrack: "1",
   };
@@ -316,11 +330,12 @@ export function buildBrowserFingerprintArg(
   meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
   switchPrefix = AGENT_BROWSER_FINGERPRINT_SWITCH,
+  secureDns: SecureDnsConfig | null = null,
 ): string {
   if (switchPrefix !== AGENT_BROWSER_FINGERPRINT_SWITCH && switchPrefix !== LEGACY_FINGERPRINT_SWITCH) {
     throw new Error(`Unsupported fingerprint switch: ${switchPrefix}`);
   }
-  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion));
+  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion, secureDns));
 }
 
 /** Validate that advanced fields can resolve to one complete hardware tuple. */

@@ -103,6 +103,14 @@ compatibility boundary; new data uses `chromiumBin`, `browserProfiles`,
 `profiles/`, and `ab_`. No CloakBrowser or RoxyBrowser component is selected,
 downloaded, licensed, or invoked.
 
+Sensitive config fields use Electron's OS credential storage in a verified
+team-signed build. Local/ad-hoc macOS builds instead use an AES-256-GCM vault
+with a random mode-0600 key beside `config.json`; Electron and managed Chromium
+also use the mock Keychain backend in that local mode, so rebuilding does not
+cause repeated macOS authorization prompts. Existing `CloakLite Safe Storage`
+values are converted once and atomically, without deleting the legacy
+Keychain item or writing plaintext to the config file.
+
 The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
 the strict native harness passes all 53 checked surfaces, the modern/legacy
 Storage corpus, 61 system-theme checks and the deep Window/Worker/DOM/Local
@@ -115,7 +123,13 @@ bridge. The app-layer input gate additionally verifies trusted actions through
 two nested cross-origin frames, post-layout re-targeting, occlusion rejection
 and explicit key-hold timing. Patchset `0042` adds the public `agent-browser-*`
 runtime protocol while keeping the older `roxy-*` switches as transition aliases
-for retained Chromium 149 and early 150 builds. RoxyChrome/CloakBrowser are used
+for retained Chromium 149 and early 150 builds. Patchset `0043` adds an explicit
+managed-runtime capability that suppresses Chromium's missing-Google-API-key
+information bar without adding a fake key or enabling unavailable Google
+services. Patchset `0044` keeps managed secure DNS -- including the DoH probe --
+inside the exit proxy with no host-resolver fallback, and preserves the managed
+ICU locale, font mapping and native refresh rate so DNS, fonts and frame timing
+stay consistent with the exit identity. RoxyChrome/CloakBrowser are used
 only as historical comparison targets, not runtime dependencies. Of 36
 engine/network/lifecycle gates, 35 are verified, none remains partial, and 1 is
 missing: signed multi-platform distribution. The controlled HTTP/HTTPS/WSS

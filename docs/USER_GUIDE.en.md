@@ -45,6 +45,12 @@ It verifies the copied Profile tree and leaves the old app, data, and cache
 untouched. New Profiles use `ab_` identifiers; migrated `cb_` Profiles remain
 fully supported.
 
+On macOS, an existing `v1:` credential may require one controlled authorization
+to read `CloakLite Safe Storage`. The app converts all such fields atomically to
+its local AES-GCM vault and does not ask again. If access is denied, startup
+stops with the old ciphertext unchanged. Do not delete the legacy Keychain item
+until this migration has completed.
+
 ## 3. Profile Management
 
 Profiles hold browser state and fingerprint configuration.

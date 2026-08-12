@@ -82,3 +82,10 @@ Local Font Access.
 Patch `0040-native-managed-font-resolution.patch` moves the allow-list into the
 actual Blink platform-font lookup and maps Windows CSS generics to managed
 portable families before host fallback can occur.
+
+Patch `0044-agent-browser-managed-dns-locale-refresh.patch` narrows the generic
+family set (only CSS `math` and the standard generics are treated as generic
+for host-font detection) and passes the generic flag explicitly so
+`ManagedGenericFontFamily` maps exactly the declared platform families without
+leaking emoji/fangsong/ui- host fonts, while the renderer keeps the managed ICU
+locale so font selection stays consistent with the declared language.

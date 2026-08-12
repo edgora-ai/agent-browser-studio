@@ -33,7 +33,7 @@ describe("Agent Browser fingerprint config", () => {
     expect(Object.keys(first).sort()).toEqual([
       "appVersion", "audio", "canvas", "deviceMemory", "doNotTrack", "fonts",
       "geolocation", "hardwareConcurrency", "hardwareProfile", "languages", "maxTouchPoints",
-      "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen",
+      "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen", "secureDns",
       "seed", "speechSynthesis", "storageQuotaBytes", "timezone", "userAgent",
       "vendor", "webauthn", "webgl", "webgpu", "webrtc",
     ]);
@@ -247,5 +247,18 @@ describe("Agent Browser fingerprint config", () => {
   it("rejects incomplete custom geolocation", () => {
     expect(() => buildBrowserFingerprintConfig({ fingerprintSeed: 9, geolocationMode: "custom", geolocationLatitude: 10 }, "149.0.7827.22"))
       .toThrow(/latitude|longitude/i);
+  });
+
+  it("keeps secure DNS disabled by default and carries a managed DoH block when enabled", () => {
+    const defaultConfig = buildBrowserFingerprintConfig({ fingerprintSeed: 30, platform: "windows" }, "150.0.7871.114");
+    expect(defaultConfig.secureDns).toEqual({ enabled: false, templates: [] });
+
+    const secureDns = { enabled: true, templates: ["https://dns.google/dns-query{?dns}"] };
+    const managedConfig = buildBrowserFingerprintConfig({ fingerprintSeed: 31, platform: "windows" }, "150.0.7871.114", secureDns);
+    expect(managedConfig.secureDns).toEqual(secureDns);
+
+    const arg = buildBrowserFingerprintArg({ fingerprintSeed: 32, platform: "macos" }, "150.0.7871.114", AGENT_BROWSER_FINGERPRINT_SWITCH, secureDns);
+    const decoded = JSON.parse(Buffer.from(arg.slice(AGENT_BROWSER_FINGERPRINT_SWITCH.length), "base64url").toString("utf8"));
+    expect(decoded.secureDns).toEqual(secureDns);
   });
 });

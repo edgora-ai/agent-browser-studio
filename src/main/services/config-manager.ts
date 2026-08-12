@@ -4,7 +4,14 @@ import * as net from "node:net";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
-import { encryptSecret, isEncrypted, decryptSecretOr, usingEncryption } from "./secrets.js";
+import {
+  clearLegacySecretMigrationCache,
+  decryptSecretOr,
+  encryptSecret,
+  isEncrypted,
+  migrateSecret,
+  usingEncryption,
+} from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
@@ -175,31 +182,40 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
 }
 
 /**
- * One-time migration: encrypt any plaintext secrets already sitting in config
- * (existing users with plaintext llm key / proxy password / account password /
- * sync secret). Safe on every startup — no-op once encrypted, and no-op when
- * the OS keychain isn't available. Returns how many fields were migrated.
+ * One-time migration: encrypt plaintext fields and convert legacy v1 values to
+ * the selected OS or local-file backend. Safe on every startup, atomic across
+ * all fields, and a no-op once every value uses the current marker.
  */
 export function migrateSecrets(): number {
   if (!usingEncryption()) return 0;
-  const cfg = getConfig();
+  // Work on a clone so a denied legacy-Keychain migration cannot leave the
+  // in-memory config half-converted. saveConfig is called only after every
+  // sensitive field has migrated successfully.
+  const cfg = structuredClone(getConfig());
   let changed = 0;
-  if (cfg.llm?.apiKey && !isEncrypted(cfg.llm.apiKey)) { cfg.llm.apiKey = encryptSecret(cfg.llm.apiKey); changed++; }
-  if (cfg.sync?.secretKey && !isEncrypted(cfg.sync.secretKey)) { cfg.sync.secretKey = encryptSecret(cfg.sync.secretKey); changed++; }
-  for (const proxy of Object.values(cfg.proxies || {})) {
-    if (proxy.username && proxy.password && !isEncrypted(proxy.password)) {
-      proxy.password = encryptSecret(proxy.password);
-      changed++;
+  const migrateValue = (value: string): string => {
+    const migrated = migrateSecret(value);
+    if (migrated !== value) changed++;
+    return migrated;
+  };
+  try {
+    if (cfg.llm?.apiKey) cfg.llm.apiKey = migrateValue(cfg.llm.apiKey);
+    if (cfg.sync?.secretKey) cfg.sync.secretKey = migrateValue(cfg.sync.secretKey);
+    for (const proxy of Object.values(cfg.proxies || {})) {
+      if (proxy.username && proxy.password) {
+        proxy.password = migrateValue(proxy.password);
+      }
     }
-  }
-  for (const acc of cfg.accounts || []) {
-    if (acc.platformPassword && !isEncrypted(acc.platformPassword)) {
-      acc.platformPassword = encryptSecret(acc.platformPassword);
-      changed++;
+    for (const acc of cfg.accounts || []) {
+      if (acc.platformPassword) {
+        acc.platformPassword = migrateValue(acc.platformPassword);
+      }
     }
+    if (changed > 0) saveConfig(cfg);
+    return changed;
+  } finally {
+    clearLegacySecretMigrationCache();
   }
-  if (changed > 0) saveConfig(cfg);
-  return changed;
 }
 
 export function deleteProxy(name: string): boolean {

@@ -95,6 +95,12 @@ Chromium Framework 和关键资源的运行时构建哈希；构建有变化时�
 兼容边界继续读取；新数据使用 `chromiumBin`、`browserProfiles`、`profiles/` 和
 `ab_`。应用不会选择、下载、授权或调用 CloakBrowser/RoxyBrowser 组件。
 
+经有效团队签名的发行版使用 Electron 的系统凭据存储。macOS 本地/ad-hoc 构建则
+使用随机 mode-0600 密钥保护的 AES-256-GCM 凭据库，同时让 Electron 与托管
+Chromium 使用 mock Keychain 后端，避免每次重建后重复弹出钥匙串授权。旧
+`CloakLite Safe Storage` 密文会一次性、原子地转换；不会删除旧钥匙串项，也不会
+把明文写回配置文件。
+
 当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
 原生严格校验 53 项、现代/旧版 Storage 深层语料、61 项系统主题专项检查及
 Window/Worker/DOM/Local Font Access 字体深层语料全部通过，并覆盖 WebGL 1/2
@@ -106,7 +112,11 @@ Profile 自有 MASQUE bridge 建立的真实 HTTP/3。
 应用层输入门禁还验证了两层跨源 frame 中的 trusted 操作、布局变化后的
 重新定位、遮挡拒绝以及显式按键时长。
 `0042` 补丁新增公开的 `agent-browser-*` 运行时协议；旧 `roxy-*` 开关仅用于兼容
-保留的 Chromium 149 和早期 150 构建。RoxyChrome/CloakBrowser 只作为历史能力
+保留的 Chromium 149 和早期 150 构建。`0043` 新增显式的托管运行时能力：仅隐藏
+Chromium 的“缺少 Google API Key”信息条，不注入伪造 Key，也不声称启用了不可用的
+Google 服务。`0044` 让托管 Profile 的 DoH（含探测）始终走出口代理、不再绕过
+或落到本机解析器，同时保留托管 ICU locale、字体映射与原生刷新率，使 DNS、字体
+与帧率始终与出口身份一致。RoxyChrome/CloakBrowser 只作为历史能力
 对照，不是运行时依赖：
 36 项引擎/网络/生命周期门禁中，35 项 verified、已无 partial、1 项 missing。
 唯一硬缺失是签名的多平台发行包；代理

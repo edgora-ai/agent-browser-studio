@@ -31,6 +31,7 @@ JavaScript into pages.
 | WebAuthn capabilities | Platform-shaped | verified | PublicKeyCredential capability and availability paths |
 | AAC/H.264 codecs | Chrome codec surface | verified | media MIME, MSE, MediaCapabilities and WebCodecs paths |
 | Authenticated SOCKS5 TCP/UDP | Profile proxy with HTTP/3 where the upstream supports UDP | verified | profile-owned loopback MASQUE, SOCKS5 CONNECT/UDP ASSOCIATE, proxy-side DNS and real H3 navigation |
+| Managed secure DNS | Proxy-routed DoH (incl. probe) | verified | secure-only DoH through the exit proxy, zero direct connects / host-resolver jobs / out-of-proxy DNS in netlog, `verify-managed-doh` corpus |
 
 Installed Chromium `150.0.7871.114` also verifies native trusted CDP input,
 seeded humanized mouse/keyboard/wheel behavior across top-level and deeply

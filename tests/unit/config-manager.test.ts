@@ -46,18 +46,32 @@ import {
   updateProxy,
   renameProxy,
   normalizeProfileExtensionMap,
+  migrateSecrets,
 } from "../../src/main/services/config-manager.js";
 import type { MgmtConfig } from "../../src/main/types.js";
+import {
+  decryptSecret,
+  initializeSecretStorage,
+  planSecretStorage,
+  resetSecretStorageForTests,
+} from "../../src/main/services/secrets.js";
 
 describe("Config Manager (real functions)", () => {
   beforeEach(() => {
+    resetSecretStorageForTests();
     if (fs.existsSync(TEST_USER_DATA)) fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    initializeSecretStorage(planSecretStorage({
+      userDataDir: TEST_USER_DATA,
+      platform: "darwin",
+      trustedMacSignature: false,
+      environment: {},
+    }));
     reloadConfig(); // force fresh load
   });
 
   afterEach(() => {
+    resetSecretStorageForTests();
     if (fs.existsSync(TEST_USER_DATA)) fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
-    reloadConfig();
   });
 
   it("writes default config to disk on first get", () => {
@@ -70,6 +84,31 @@ describe("Config Manager (real functions)", () => {
     expect(cfg.extensionRepository).toEqual({});
     expect(cfg.skillRepository).toEqual({});
     expect(fs.existsSync(getConfigPath())).toBe(true);
+  });
+
+  it("atomically migrates legacy v1 credentials into the local vault", () => {
+    const cfg = getConfig();
+    cfg.llm = { provider: "openai", apiKey: "v1:bGxt", model: "test" };
+    cfg.sync = { ...cfg.sync, secretKey: "v1:c3luYw==" };
+    saveConfig(cfg);
+
+    resetSecretStorageForTests();
+    initializeSecretStorage(planSecretStorage({
+      userDataDir: TEST_USER_DATA,
+      platform: "darwin",
+      trustedMacSignature: false,
+      environment: {},
+    }), {
+      legacyDecryptor: (stored) => stored === "v1:bGxt" ? "llm-secret" : "sync-secret",
+    });
+    reloadConfig();
+
+    expect(migrateSecrets()).toBe(2);
+    const stored = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(stored.llm.apiKey).toMatch(/^v2:/);
+    expect(stored.sync.secretKey).toMatch(/^v2:/);
+    expect(decryptSecret(stored.llm.apiKey)).toBe("llm-secret");
+    expect(decryptSecret(stored.sync.secretKey)).toBe("sync-secret");
   });
 
   it("allows repository local extension ids in profile extension maps", () => {
@@ -107,7 +146,7 @@ describe("Config Manager (real functions)", () => {
   it("getProxySecret decrypts stored authenticated proxy passwords for detection", () => {
     addProxy("auth-detect", { type: "http", host: "1.2.3.4", port: 3128, username: "u", password: "plain-secret" });
     const stored = JSON.parse(fs.readFileSync(getConfigPath(), "utf-8"));
-    expect(stored.proxies["auth-detect"].password).toMatch(/^v1:/);
+    expect(stored.proxies["auth-detect"].password).toMatch(/^v2:/);
     expect(stored.proxies["auth-detect"].password).not.toBe("plain-secret");
 
     const proxy = getProxySecret("auth-detect");

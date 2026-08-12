@@ -1,6 +1,6 @@
-// J34: Credential vault (Slice 2). In the real Electron app safeStorage IS
-// available, so this proves real at-rest encryption:
-//   (1) a saved LLM key is stored encrypted ("v1:…") in config.json — the
+// J34: Credential vault (Slice 2). Local/ad-hoc macOS builds use the
+// authenticated file vault, so this proves real at-rest encryption:
+//   (1) a saved LLM key is stored encrypted ("v2:…") in config.json — the
 //       plaintext never lands on disk;
 //   (2) the key still decrypts at use — a chat sends Authorization: Bearer
 //       <plaintext> to the (mock) LLM;
@@ -37,7 +37,7 @@ describe("J34 — credential vault: encrypt at rest, decrypt at use, audited", (
     const cfg = JSON.parse(fs.readFileSync(userDataConfigPath(USERDATA), "utf8"));
     const stored = cfg.llm?.apiKey;
     expect(stored, "llm.apiKey must be present").toBeTruthy();
-    expect(stored.startsWith("v1:"), `must be encrypted, got: ${stored.slice(0, 10)}…`).toBe(true);
+    expect(stored.startsWith("v2:"), `must be encrypted, got: ${stored.slice(0, 10)}…`).toBe(true);
     expect(stored).not.toContain(SECRET);
     expect(JSON.stringify(cfg)).not.toContain(SECRET);
   });

@@ -20,14 +20,19 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0042` chain therefore keeps
+of rewriting an earlier patch. The current `0002`–`0044` chain therefore keeps
 the system-theme, occluded-input and managed-QUIC changes independently
 reviewable and revertible, while `check.sh` validates the complete order from
 the pinned upstream index regardless of the checkout's current HEAD.
 `PATCHSET.sha256` detects any rewrite of an already released patch or source
 payload, and `PATCH_HISTORY.md` records the OSS and Chromium source provenance.
 Patch `0042` adds the Agent Browser public protocol without rewriting
-`0002–0041`; the next Chromium change must start at `0043`.
+`0002–0041`. Patch `0043` adds an advertised, managed-only switch that hides
+the missing-Google-API-key information bar without fabricating a key or
+enabling unavailable services. Patch `0044` keeps managed secure DNS inside
+the exit proxy (no host-resolver or out-of-proxy DoH probe), preserves the
+managed ICU locale and fonts, and keeps the native refresh rate; the next
+Chromium change must start at `0045`.
 
 ## Build configuration
 

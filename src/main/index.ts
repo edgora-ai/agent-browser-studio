@@ -32,6 +32,11 @@ import {
   migrateLegacyChromiumCache,
   migrateLegacyUserData,
 } from "./services/legacy-data-migration.js";
+import {
+  initializeSecretStorage,
+  planSecretStorage,
+  type SecretStoragePlan,
+} from "./services/secrets.js";
 
 // ── ESM dirname equivalent ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +46,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // not import real user data.
 const productIdentity = configureProductIdentity(app);
 let legacyMigrationError: Error | null = null;
+let secretStoragePlan: SecretStoragePlan | null = null;
+let secretStoragePlanError: Error | null = null;
+try {
+  secretStoragePlan = planSecretStorage({
+    userDataDir: productIdentity.userDataDir,
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+  });
+  // Electron's own cookie/session OSCrypt provider is independent from our
+  // config vault. Local/ad-hoc macOS builds use its deterministic mock backend
+  // so simply creating a BrowserWindow cannot trigger Keychain prompts.
+  if (process.platform === "darwin" && secretStoragePlan.backend === "file") {
+    app.commandLine.appendSwitch("use-mock-keychain");
+  }
+} catch (error) {
+  secretStoragePlanError = error instanceof Error ? error : new Error(String(error));
+}
 if (productIdentity.canonical && process.env.AGENT_BROWSER_DISABLE_LEGACY_MIGRATION !== "1") {
   try {
     const appDataRoot = app.getPath("appData");
@@ -155,7 +177,7 @@ function registerAllHandlers(): void {
 }
 
 // ── App lifecycle ──
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (legacyMigrationError) {
     dialog.showErrorBox(
       `${PRODUCT_NAME} migration failed`,
@@ -164,14 +186,33 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
+  if (secretStoragePlanError || !secretStoragePlan) {
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} credential vault failed`,
+      `The credential vault could not be initialized. Your existing data was left unchanged. ${secretStoragePlanError?.message || "No storage plan was available."}`,
+    );
+    app.quit();
+    return;
+  }
+  try {
+    const osStorage = secretStoragePlan.backend === "os"
+      ? (await import("electron")).safeStorage
+      : undefined;
+    const storage = initializeSecretStorage(secretStoragePlan, { osStorage });
+    console.log(`[secrets] backend=${storage.backend} reason=${storage.reason}`);
+    const migrated = migrateSecrets();
+    if (migrated > 0) console.log(`[secrets] migrated ${migrated} at-rest secret field(s)`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox(
+      `${PRODUCT_NAME} credential migration failed`,
+      `Your encrypted credentials were not changed. ${message}`,
+    );
+    app.quit();
+    return;
+  }
   registerAllHandlers();
   createWindow();
-  // Encrypt any plaintext secrets from prior versions (no-op if keychain
-  // unavailable or already encrypted).
-  try {
-    const migrated = migrateSecrets();
-    if (migrated > 0) console.log(`[secrets] encrypted ${migrated} at-rest secret field(s)`);
-  } catch (e) { console.error("[secrets] migration failed:", e); }
   startScheduler();
 
   // Create system tray

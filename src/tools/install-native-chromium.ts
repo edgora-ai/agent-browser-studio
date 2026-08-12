@@ -82,6 +82,29 @@ function bundleBuildHash(app: string): string {
   return hash.digest("hex");
 }
 
+function signAndVerifyMacBundle(app: string): void {
+  // Chromium component builds carry linker ad-hoc signatures, but the bundle
+  // resources are not sealed. Re-sign the staged copy so macOS sees a valid
+  // application without mutating the caller's build output.
+  execFileSync("/usr/bin/codesign", [
+    "--force",
+    "--deep",
+    "--sign",
+    "-",
+    "--timestamp=none",
+    "--identifier",
+    "org.chromium.Chromium",
+    app,
+  ], { stdio: "inherit" });
+  execFileSync("/usr/bin/codesign", [
+    "--verify",
+    "--deep",
+    "--strict",
+    "--verbose=2",
+    app,
+  ], { stdio: "inherit" });
+}
+
 function main(): void {
   if (process.platform !== "darwin") fail("The current native installer supports macOS application bundles only");
   const input = process.argv[2];
@@ -100,23 +123,12 @@ function main(): void {
   const targetDir = path.join(cacheRoot, `chromium-${version}`);
   const targetApp = path.join(targetDir, "Chromium.app");
   const targetExecutable = path.join(targetApp, "Contents", "MacOS", "Chromium");
-  const sourceHash = bundleBuildHash(sourceApp);
   let installedHash: string | null = null;
 
   if (fs.existsSync(targetExecutable)) {
     const installedVersion = detectVersion(targetExecutable);
     if (installedVersion === version) {
       installedHash = bundleBuildHash(targetApp);
-      if (installedHash === sourceHash) {
-        process.stdout.write(JSON.stringify({
-          installed: true,
-          unchanged: true,
-          version,
-          buildHash: sourceHash,
-          executablePath: targetExecutable,
-        }, null, 2) + "\n");
-        return;
-      }
     } else {
       fail(`Install target already exists with version ${installedVersion}: ${targetDir}`);
     }
@@ -129,13 +141,25 @@ function main(): void {
   const stageDir = fs.mkdtempSync(path.join(cacheRoot, ".chromium-install-"));
   const stageApp = path.join(stageDir, "Chromium.app");
   let previousDir: string | null = null;
+  let stagedHash: string | null = null;
   try {
     execFileSync("ditto", [sourceApp, stageApp], { stdio: "inherit" });
+    signAndVerifyMacBundle(stageApp);
     const stagedExecutable = executableFor(stageApp);
     const stagedVersion = detectVersion(stagedExecutable);
     if (stagedVersion !== version) fail(`Staged Chromium version changed from ${version} to ${stagedVersion}`);
-    const stagedHash = bundleBuildHash(stageApp);
-    if (stagedHash !== sourceHash) fail("Staged Chromium runtime build hash does not match the source build");
+    stagedHash = bundleBuildHash(stageApp);
+
+    if (installedHash === stagedHash) {
+      process.stdout.write(JSON.stringify({
+        installed: true,
+        unchanged: true,
+        version,
+        buildHash: stagedHash,
+        executablePath: targetExecutable,
+      }, null, 2) + "\n");
+      return;
+    }
 
     if (installedHash !== null) {
       previousDir = path.join(
@@ -162,7 +186,7 @@ function main(): void {
     unchanged: false,
     replaced: installedHash !== null,
     version,
-    buildHash: sourceHash,
+    buildHash: stagedHash,
     executablePath: targetExecutable,
     previousPath: previousDir,
   }, null, 2) + "\n");

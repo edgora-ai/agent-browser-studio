@@ -6,8 +6,10 @@ import * as path from "node:path";
 export const NATIVE_PROXY_AUTH_CAPABILITY = "agent-browser-proxy-auth-file-v1";
 export const NATIVE_QUIC_PROXY_CAPABILITY = "agent-browser-quic-proxy-v1";
 export const NATIVE_FINGERPRINT_CONFIG_CAPABILITY = "agent-browser-fingerprint-config-v1";
+export const NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY = "agent-browser-google-api-key-infobar-v1";
 export const NATIVE_PROXY_AUTH_SWITCH = "--agent-browser-proxy-auth-file";
 export const NATIVE_CAPABILITIES_SWITCH = "--agent-browser-capabilities";
+export const NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH = "--agent-browser-suppress-missing-google-api-key-infobar";
 
 export const LEGACY_NATIVE_PROXY_AUTH_CAPABILITY = "roxy-proxy-auth-file-v1";
 export const LEGACY_NATIVE_QUIC_PROXY_CAPABILITY = "roxy-quic-proxy-v1";
@@ -39,6 +41,10 @@ export function supportsNativeQuicProxy(binaryPath: string): boolean {
 
 export function supportsAgentBrowserFingerprintConfig(binaryPath: string): boolean {
   return readNativeChromiumCapabilities(binaryPath).has(NATIVE_FINGERPRINT_CONFIG_CAPABILITY);
+}
+
+export function supportsGoogleApiKeyInfoBarSuppression(binaryPath: string): boolean {
+  return readNativeChromiumCapabilities(binaryPath).has(NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY);
 }
 
 export function nativeProxyAuthSwitch(binaryPath: string): string {

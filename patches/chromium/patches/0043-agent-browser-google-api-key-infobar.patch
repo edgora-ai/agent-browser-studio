@@ -1,0 +1,74 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 0a8e84ab4085879577669fa994ae7a8b14e968e8..9ae2bdc61f2e6f572e0c72109a4bbf02d946177d 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -372,10 +372,11 @@ bool HandleCreditsSwitch(const base::CommandLine& command_line) {
+ // one of these switches and should exit now.
+ bool HandleVersionSwitches(const base::CommandLine& command_line) {
+   if (command_line.HasSwitch(roxy::kAgentBrowserCapabilitiesSwitch)) {
+-    UNSAFE_TODO(printf("%s\n%s\n%s\n",
++    UNSAFE_TODO(printf("%s\n%s\n%s\n%s\n",
+                        roxy::kAgentBrowserProxyAuthCapability,
+                        roxy::kAgentBrowserQuicProxyCapability,
+-                       roxy::kAgentBrowserFingerprintConfigCapability));
++                       roxy::kAgentBrowserFingerprintConfigCapability,
++                       roxy::kAgentBrowserGoogleApiKeyInfoBarCapability));
+     return true;
+   }
+   if (command_line.HasSwitch(roxy::kCapabilitiesSwitch)) {
+diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
+index 6c7d5181577e672c009572f15e31149aef0cc56c..e1f0ad097cb160c21e3ffd443cfede7e6816ee8a 100644
+--- a/chrome/browser/net/roxy_proxy_auth.h
++++ b/chrome/browser/net/roxy_proxy_auth.h
+@@ -33,6 +33,8 @@ inline constexpr char kAgentBrowserQuicProxyCapability[] =
+     "agent-browser-quic-proxy-v1";
+ inline constexpr char kAgentBrowserFingerprintConfigCapability[] =
+     "agent-browser-fingerprint-config-v1";
++inline constexpr char kAgentBrowserGoogleApiKeyInfoBarCapability[] =
++    "agent-browser-google-api-key-infobar-v1";
+ 
+ // Loads and deletes the one-shot credential file before child processes are
+ // started. Calling this more than once has no effect.
+diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
+index 4907b9a951040624eab323061636a222315194e5..744d01f81dadf2cde4101110dfbc0d2dd0a032d4 100644
+--- a/chrome/browser/ui/startup/infobar_utils.cc
++++ b/chrome/browser/ui/startup/infobar_utils.cc
+@@ -185,7 +185,9 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+   infobars::ContentInfoBarManager* infobar_manager =
+       infobars::ContentInfoBarManager::FromWebContents(web_contents);
+ 
+-  if (!google_apis::HasAPIKeyConfigured()) {
++  if (!startup_command_line.HasSwitch(
++          switches::kAgentBrowserSuppressMissingGoogleApiKeyInfoBar) &&
++      !google_apis::HasAPIKeyConfigured()) {
+     GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
+   }
+ 
+diff --git a/chrome/common/chrome_switches.cc b/chrome/common/chrome_switches.cc
+index e980faedf244b699b0cab88b0f81454f0bd2de32..9609a291388f520a30c58d33adb24acd66ba26bf 100644
+--- a/chrome/common/chrome_switches.cc
++++ b/chrome/common/chrome_switches.cc
+@@ -27,6 +27,11 @@ namespace switches {
+ // letter code from ISO-639.
+ const char kAcceptLang[] = "accept-lang";
+ 
++// Suppresses only the missing Google API key informational bar for a managed
++// Agent Browser Studio runtime. It does not enable or emulate Google services.
++const char kAgentBrowserSuppressMissingGoogleApiKeyInfoBar[] =
++    "agent-browser-suppress-missing-google-api-key-infobar";
++
+ #if BUILDFLAG(IS_MAC)
+ // Only if we're running in an unsigned build, passing this flag will allow
+ // app shims whose code signature does not match what chrome is expecting to
+diff --git a/chrome/common/chrome_switches.h b/chrome/common/chrome_switches.h
+index 6e432013f51bedb362527fdf6f5311a4429ee9a6..0332210d277b713afc6386473aefd45a575d825b 100644
+--- a/chrome/common/chrome_switches.h
++++ b/chrome/common/chrome_switches.h
+@@ -37,6 +37,7 @@ namespace switches {
+ // All switches in alphabetical order. The switches should be documented
+ // alongside the definition of their values in the .cc file.
+ extern const char kAcceptLang[];
++extern const char kAgentBrowserSuppressMissingGoogleApiKeyInfoBar[];
+ #if BUILDFLAG(IS_MAC)
+ extern const char kAllowAppShimSignatureMismatchForTests[];
+ #endif

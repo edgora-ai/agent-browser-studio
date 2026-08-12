@@ -124,6 +124,11 @@ describe("Integration — Packaging", () => {
     const yml = fs.readFileSync(path.join(ROOT, "electron-builder.yml"), "utf-8");
     expect(yml).toContain("icon:");
     expect(yml).toContain("icon.icns");
+    expect(yml).toContain("afterPack: scripts/after-pack.mjs");
+    const afterPack = fs.readFileSync(path.join(ROOT, "scripts/after-pack.mjs"), "utf-8");
+    expect(afterPack).toContain("--timestamp=none");
+    expect(afterPack).toContain('"--verify"');
+    expect(afterPack).toContain("com.ahoo.agent-browser-studio");
   });
 });
 
@@ -668,7 +673,8 @@ describe("Integration — Hardware fingerprint controls", () => {
   it("passes a versioned identity to the self-built Chromium 149+ renderer", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
     const config = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
-    expect(manager).toContain("buildBrowserFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion, fingerprintSwitch)");
+    expect(manager).toContain("buildBrowserFingerprintArg(");
+    expect(manager).toContain("managedSecureDns");
     expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).not.toContain("--time-zone-for-testing=");
     expect(manager).toContain("findManagedRuntimeChromium(requestedVersion)");
@@ -697,6 +703,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(installer).toContain("bundleBuildHash");
     expect(installer).toContain("Chromium Framework");
     expect(installer).toContain("previousPath");
+    expect(installer).toContain("signAndVerifyMacBundle");
     const builder = fs.readFileSync(path.join(ROOT, "electron-builder.yml"), "utf-8");
     expect(builder).toContain("dist/tools/webgl-corpus.js");
     expect(builder).toContain("dist/tools/webgpu-corpus.js");
@@ -759,6 +766,8 @@ describe("Integration — Hardware fingerprint controls", () => {
       "0040-native-managed-font-resolution.patch",
       "0041-native-managed-quic-proxy.patch",
       "0042-agent-browser-public-runtime-protocol.patch",
+      "0043-agent-browser-google-api-key-infobar.patch",
+      "0044-agent-browser-managed-dns-locale-refresh.patch",
     ]) {
       expect(fs.existsSync(path.join(patchRoot, "patches", name))).toBe(true);
     }

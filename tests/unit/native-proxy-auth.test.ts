@@ -3,11 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY,
   NATIVE_PROXY_AUTH_CAPABILITY,
   NATIVE_QUIC_PROXY_CAPABILITY,
   readNativeChromiumCapabilities,
   supportsNativeProxyAuth,
   supportsNativeQuicProxy,
+  supportsGoogleApiKeyInfoBarSuppression,
   writeNativeProxyAuthFile,
 } from "../../src/main/services/native-proxy-auth.js";
 
@@ -50,16 +52,19 @@ describe("native proxy authentication handoff", () => {
   it("requires an explicit binary capability marker", () => {
     const root = makeRoot();
     const capable = path.join(root, "capable-browser");
-    fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_PROXY_AUTH_CAPABILITY}' '${NATIVE_QUIC_PROXY_CAPABILITY}'\n`, { mode: 0o700 });
+    fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_PROXY_AUTH_CAPABILITY}' '${NATIVE_QUIC_PROXY_CAPABILITY}' '${NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY}'\n`, { mode: 0o700 });
     fs.chmodSync(capable, 0o700);
     expect(supportsNativeProxyAuth(capable)).toBe(true);
     expect(supportsNativeQuicProxy(capable)).toBe(true);
+    expect(supportsGoogleApiKeyInfoBarSuppression(capable)).toBe(true);
     expect([...readNativeChromiumCapabilities(capable)].sort()).toEqual([
       NATIVE_PROXY_AUTH_CAPABILITY,
       NATIVE_QUIC_PROXY_CAPABILITY,
+      NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY,
     ].sort());
     expect(supportsNativeProxyAuth("/bin/echo")).toBe(false);
     expect(supportsNativeQuicProxy("/bin/echo")).toBe(false);
+    expect(supportsGoogleApiKeyInfoBarSuppression("/bin/echo")).toBe(false);
     expect(supportsNativeProxyAuth(path.join(root, "missing"))).toBe(false);
   });
 });

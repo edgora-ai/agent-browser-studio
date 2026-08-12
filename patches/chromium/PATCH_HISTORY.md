@@ -9,8 +9,8 @@ before the patch applicability check runs.
 
 1. Keep experimental, diagnostic, cleanup and final-fix commits in the
    Chromium source branch. Do not amend, squash or rebase that branch.
-2. Export a released source change as the next numbered patch. After `0042`,
-   the next file is `0043-*`.
+2. Export a released source change as the next numbered patch. After `0043`,
+   the next file is `0044-*`.
 3. Append its digest to `PATCHSET.sha256` and its provenance to this ledger in
    the same OSS commit. Do not alter prior digest or history rows.
 4. Run `check.sh` against the pinned clean upstream commit before release.
@@ -42,6 +42,7 @@ before the patch applicability check runs.
 | `0040` | `0922ab130a2268d12862e30cca6e282507f721ec` | Managed platform-font resolution |
 | `0041` | `2152f8799831fd9eb183ae550826cbfdbbedf9a2` | Managed QUIC proxy and SOCKS5 UDP transport |
 | `0042` | See the append-only `0042` release entry below | Agent Browser public runtime protocol and legacy aliases |
+| `0043` | See the append-only `0043` release entry below | Managed missing-Google-API-key information-bar suppression |
 
 ## Chromium 150 source checkpoint
 
@@ -57,6 +58,8 @@ before the patch applicability check runs.
   tagged `0041` source tree.
 - Preserved head after patch `0042`:
   `38cdb615cf312444490982b71f5faec5e892c350`.
+- Preserved head after patch `0043`:
+  `855038800408acc6801e4aa98707d28f6123a631`.
 
 The following source commits intentionally retain the unsuccessful diagnostics
 and experiments as well as the fixes, so later Chromium upgrades can recover
@@ -82,6 +85,7 @@ e7fc69f9ac673fd3f85f74438efa22154efaf1d7 feat: enforce managed font resolution
 ef1c9d89ece1192f40fe8ca42f6929ba2d93ed5a diagnostic: trace managed debugger scroll reconciliation
 b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation diagnostics
 38cdb615cf312444490982b71f5faec5e892c350 feat: add Agent Browser public runtime protocol
+855038800408acc6801e4aa98707d28f6123a631 fix: suppress managed missing Google API key infobar
 ```
 
 ## Append-only release entries
@@ -255,3 +259,53 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   incremental Chromium 150 build, and direct verification that the new query
   advertises all three `agent-browser-*` capabilities while the legacy query
   retains the two released `roxy-*` aliases.
+
+### `0043` — 2026-08-12
+
+- Chromium source commit:
+  `855038800408acc6801e4aa98707d28f6123a631`
+  (`fix: suppress managed missing Google API key infobar`).
+- Annotated Chromium source tag:
+  `agent-browser-chromium-150-patchset-0043`.
+- Patch SHA-256:
+  `311c0d382160d93a091871390af6ccd9a9c697f8646df32203260d1c8c795762`.
+- Scope: advertise `agent-browser-google-api-key-infobar-v1` and accept
+  `--agent-browser-suppress-missing-google-api-key-infobar`. Only that managed
+  switch suppresses Chromium's informational bar; the build does not embed a
+  Google API key, fake one, or enable unavailable Google services. Manual and
+  unmanaged Chromium launches retain upstream behavior.
+- Preservation: no byte in `0002–0042` or either immutable source payload was
+  rewritten. The next Chromium source change must be exported as `0044-*`;
+  do not amend, squash, rebase, or replace this source commit or patch.
+- Acceptance: successful incremental Chromium 150 build and direct capability
+  query showing all four public `agent-browser-*` contracts. Clean replay,
+  installed-App, signature, vault-migration, and full regression results are
+  recorded by the corresponding OSS release commit.
+
+### `0044` — 2026-08-13
+
+- Chromium source commit:
+  `c35ff15cc18156300f234761276a92f4892f78da`
+  (`fix: keep managed secure DNS inside the exit proxy`).
+- Annotated Chromium source tag:
+  `agent-browser-chromium-150-patchset-0044`.
+- Patch SHA-256:
+  `c8e3755c1bfb5e2ddcc316ca3b4c034b7dbdb93a9d6a7477ea2d49e8f63382d9`.
+- Scope: managed profiles force secure-only DNS over HTTPS and route every
+  DoH request -- including the probe, which previously always bypassed the
+  proxy -- through the configured exit proxy, so the proxy resolves the DoH
+  endpoint and no DNS request leaks to the host resolver. The renderer also
+  preserves the managed ICU locale, maps CSS generic families to the declared
+  platform fonts, and keeps the native macOS refresh rate so animation frames
+  match a standard display timing. Experimental trace commits in the source
+  branch are preserved for provenance but their net effect is removed; the
+  exported patch contains no diagnostics or logging.
+- Preservation: no byte in `0002–0043` or either immutable source payload was
+  rewritten. The next Chromium source change must be exported as `0045-*`;
+  do not amend, squash, rebase, or replace this source commit or patch.
+- Acceptance: `net_unittests` passes all 1108 DNS/NetworkService/DnsConfig
+  tests, `check.sh` replays `0002–0044` cleanly on the pinned upstream index,
+  and the replay tree is byte-identical to the annotated `0044` source commit.
+  HTTP and SOCKS5 proxy modes show zero direct connects, zero host-resolver
+  jobs, and zero out-of-proxy DNS traffic in the network log; see the
+  `verify-managed-doh` tool and the matching OSS release commit.

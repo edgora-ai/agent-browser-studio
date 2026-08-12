@@ -26,6 +26,7 @@ import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
   LEGACY_FINGERPRINT_SWITCH,
+  MANAGED_SECURE_DNS_TEMPLATES,
   buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
   validateBrowserHardwareProfile,
@@ -38,9 +39,11 @@ import {
 import {
   LEGACY_NATIVE_PROXY_AUTH_SWITCH,
   NATIVE_PROXY_AUTH_SWITCH,
+  NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH,
   nativeProxyAuthSwitch,
   type NativeProxyAuthFile,
   supportsAgentBrowserFingerprintConfig,
+  supportsGoogleApiKeyInfoBarSuppression,
   supportsNativeProxyAuth,
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
@@ -477,6 +480,12 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   }
   let args = [...(launchPlan.args || [])];
   if (passThrough) args = stripManagedFingerprintArgs(args);
+  if (supportsGoogleApiKeyInfoBarSuppression(bin)) {
+    args = dedupeChromeArgs([
+      ...args,
+      NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH,
+    ]);
+  }
 
   // Resolve the exit identity through our bounded proxy detector. Explicit
   // altered mode must never
@@ -506,11 +515,27 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
       webrtcMode: effectiveWebRtcMode,
       webrtcIp,
     };
-    const nativeFingerprint = buildBrowserFingerprintConfig(nativeFingerprintMeta, nativeChromiumVersion);
+    // Managed profiles with a proxy resolve DNS over HTTPS through that same
+    // proxy (secure-only, no host-resolver fallback) so the resolver and DNS
+    // queries stay consistent with the exit identity. Without a proxy the
+    // browser keeps its stock DNS behavior.
+    const managedSecureDns = activeProxy
+      ? { enabled: true, templates: [...MANAGED_SECURE_DNS_TEMPLATES] }
+      : null;
+    const nativeFingerprint = buildBrowserFingerprintConfig(
+      nativeFingerprintMeta,
+      nativeChromiumVersion,
+      managedSecureDns,
+    );
     const fingerprintSwitch = supportsAgentBrowserFingerprintConfig(bin)
       ? AGENT_BROWSER_FINGERPRINT_SWITCH
       : LEGACY_FINGERPRINT_SWITCH;
-    args.push(buildBrowserFingerprintArg(nativeFingerprintMeta, nativeChromiumVersion, fingerprintSwitch));
+    args.push(buildBrowserFingerprintArg(
+      nativeFingerprintMeta,
+      nativeChromiumVersion,
+      fingerprintSwitch,
+      managedSecureDns,
+    ));
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
     args = dedupeChromeArgs([
       ...args,
@@ -518,6 +543,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
       `--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}`,
       `--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}`,
     ]);
+    args = applyManagedNativeRefreshRate(args);
   }
 
   // Chromium 150 builds advertising the native QUIC-proxy capability route
@@ -817,6 +843,38 @@ function mergeCommaSeparatedValue(value: string, existing: string | null): strin
     .map((entry) => entry.trim())
     .filter(Boolean);
   return [...new Set(entries)].join(",");
+}
+
+const THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE = "ThrottleMainFrameTo60Hz";
+
+function featureEntryName(entry: string): string {
+  return entry.split(/[<:]/, 1)[0].trim();
+}
+
+/**
+ * Keep managed rAF/compositor pacing on the display's native VSync cadence.
+ * Chromium's ThrottleMainFrameTo60Hz field trial deliberately halves main
+ * frames on 120Hz displays even while DisplayLink continues at 120Hz. Managed
+ * profiles disable that experiment; pass-through launches never call this.
+ */
+export function applyManagedNativeRefreshRate(args: string[]): string[] {
+  const enabled = (getLaunchArgValue(args, "--enable-features") || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && featureEntryName(entry) !== THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE);
+  const disabled = (getLaunchArgValue(args, "--disable-features") || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!disabled.some((entry) => featureEntryName(entry) === THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE)) {
+    disabled.push(THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE);
+  }
+
+  const next = args.filter((arg) =>
+    !arg.startsWith("--enable-features=") && !arg.startsWith("--disable-features="));
+  if (enabled.length) next.push(`--enable-features=${[...new Set(enabled)].join(",")}`);
+  next.push(`--disable-features=${[...new Set(disabled)].join(",")}`);
+  return dedupeChromeArgs(next);
 }
 
 function addExtensionArgs(args: string[], dirId: string, runtimeExtensionPaths: string[] = []): void {

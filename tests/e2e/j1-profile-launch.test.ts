@@ -1,6 +1,7 @@
 // J1: Agent Browser managed-fingerprint closed loop
 // create → launch → CDP fingerprint verify (UA + platform) → risk check (ping0.cc) → stop
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   setupTestApp,
@@ -73,6 +74,13 @@ describe("J1 — Browser profile launch + fingerprint verify + risk check", () =
   it("Runtime.evaluate returns navigator.platform === 'Win32'", async () => {
     const p = await evaluateInPage<string>(cdpPort, "navigator.platform");
     expect(p).toBe("Win32");
+  });
+
+  it("uses the managed capability to suppress only the missing Google API key infobar", () => {
+    const log = fs.readFileSync(path.join(USERDATA, "logs", `browser-${dirId}.log`), "utf8");
+    expect(log).toContain("--agent-browser-suppress-missing-google-api-key-infobar");
+    expect(log).not.toContain("--test-type");
+    expect(log).not.toContain("--enable-automation");
   });
 
   it("openRiskCheck invokes navigation (ping0.cc/env when network is available)", async () => {

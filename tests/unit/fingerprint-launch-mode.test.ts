@@ -6,6 +6,7 @@ import * as path from "node:path";
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
 import {
+  applyManagedNativeRefreshRate,
   parseBrowserProcessLine,
   patchThirdPartyCookieCompatibility,
   stripManagedFingerprintArgs,
@@ -18,6 +19,24 @@ afterEach(() => {
 });
 
 describe("fingerprint pass-through launch mode", () => {
+  it("uses native display VSync for managed profiles without replacing unrelated feature flags", () => {
+    expect(applyManagedNativeRefreshRate([
+      "--user-data-dir=/tmp/profile",
+      "--enable-features=KeepEnabled,ThrottleMainFrameTo60Hz<Trial",
+      "--disable-features=KeepDisabled",
+    ])).toEqual([
+      "--user-data-dir=/tmp/profile",
+      "--enable-features=KeepEnabled",
+      "--disable-features=KeepDisabled,ThrottleMainFrameTo60Hz",
+    ]);
+
+    expect(applyManagedNativeRefreshRate([
+      "--disable-features=ThrottleMainFrameTo60Hz,KeepDisabled",
+    ])).toEqual([
+      "--disable-features=ThrottleMainFrameTo60Hz,KeepDisabled",
+    ]);
+  });
+
   it("removes every managed identity consumer while preserving operational and proxy switches", () => {
     expect(stripManagedFingerprintArgs([
       "--user-data-dir=/tmp/profile",

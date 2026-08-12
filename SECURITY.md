@@ -27,6 +27,8 @@ Expected protections include:
 - Renderer sandbox, context isolation, and no Node integration in the renderer
 - Local config file permissions intended for the current OS user
 - Secret redaction in IPC, UI, export, and sync-safe config paths
+- OS-backed secret encryption for team-signed builds; local/ad-hoc macOS
+  builds use an authenticated AES-256-GCM vault with a mode-0600 random key
 - Loopback-only MCP server protected by a bearer token
 - ZIP/archive validation before extension import or sync restore
 
