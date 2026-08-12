@@ -13,7 +13,7 @@ const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j49");
 const CHROMIUM = process.env.AGENT_BROWSER_E2E_CHROMIUM_PATH
   ? path.resolve(process.env.AGENT_BROWSER_E2E_CHROMIUM_PATH)
-  : path.resolve(REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease", "Chromium.app", "Contents", "MacOS", "Chromium");
+  : path.resolve(REPO, "..", "chromium-build-150", "src", "out", "Chromium.app", "Contents", "MacOS", "Chromium");
 const BRIDGE = path.join(REPO, "dist", "native", process.platform === "win32" ? "agent-browser-masque-bridge.exe" : "agent-browser-masque-bridge");
 const UPSTREAM_URL = process.env.AGENT_BROWSER_E2E_SOCKS5_UDP_URL || "";
 const ENDPOINT = "https://quic.tlsfingerprint.io/api/client-fingerprint-quic";

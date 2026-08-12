@@ -21,7 +21,7 @@ function resolveManagedChromiumPath(env: NodeJS.ProcessEnv = process.env): strin
   if (currentCached) return currentCached;
   if (process.platform === "darwin") {
     const developmentBinary = path.resolve(
-      REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease",
+      REPO, "..", "chromium-build-150", "src", "out",
       "Chromium.app", "Contents", "MacOS", "Chromium",
     );
     if (fs.existsSync(developmentBinary)) return developmentBinary;

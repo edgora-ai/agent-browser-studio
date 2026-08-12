@@ -11,7 +11,7 @@ import { connectPageCdp, waitForCdpPort, waitForPortClosed } from "./helpers/cdp
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j47");
-const CHROMIUM = path.resolve(REPO, "..", "chromium-build-150", "src", "out", "RoxyRelease", "Chromium.app", "Contents", "MacOS", "Chromium");
+const CHROMIUM = path.resolve(REPO, "..", "chromium-build-150", "src", "out", "Chromium.app", "Contents", "MacOS", "Chromium");
 const USERNAME = "j47-user";
 const PASSWORD = "j47-password";
 
