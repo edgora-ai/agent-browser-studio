@@ -1,0 +1,1144 @@
+{
+  "launch": {
+    "runId": "official-run1",
+    "profileId": "cb_mqf5t3zn_j1pu41",
+    "profileName": "demo",
+    "proxy": {
+      "type": "http",
+      "host": "127.0.0.1",
+      "port": 7890
+    },
+    "geo": {
+      "source": "https://ipwho.is/",
+      "ip": "152.70.241.120",
+      "countryCode": "KR",
+      "timezone": "Asia/Seoul"
+    },
+    "timezone": "Asia/Seoul",
+    "locale": "ko-KR",
+    "webrtcIp": "152.70.241.120",
+    "seed": 73861,
+    "platform": "windows",
+    "browserVersion": "150.0.7871.114",
+    "browserPath": "/Users/ahoo/workspace/chromium-build-150/src/out/AgentBrowserOfficial/Chromium.app/Contents/MacOS/Chromium"
+  },
+  "state": {
+    "startedAt": "2026-08-12T23:00:36.998Z",
+    "finishedAt": "2026-08-12T23:00:43.432Z",
+    "settledAt": "2026-08-12T23:00:58.438Z",
+    "score": 100,
+    "level": "green",
+    "reportId": "",
+    "findings": [],
+    "evidence": null,
+    "rows": {
+      "multigeo.results": {
+        "value": [
+          {
+            "provider": "ipify",
+            "provider_label": "ipify",
+            "region": "US",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "ipify-64",
+            "provider_label": "ipify",
+            "region": "US-v6",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "bigdatacloud",
+            "provider_label": "BigDataCloud",
+            "region": "NL",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "ip.sb",
+            "provider_label": "ip.sb",
+            "region": "JP",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "ipinfo.io",
+            "provider_label": "ipinfo",
+            "region": "US",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "geojs.io",
+            "provider_label": "geojs",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "ipapi.is",
+            "provider_label": "ipapi.is",
+            "region": "US",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "netease-163",
+            "provider_label": "网易云音乐",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "bytedance-perfops",
+            "provider_label": "今日头条",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "douyin-v26web",
+            "provider_label": "抖音",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "tencent-weixin-clientip",
+            "provider_label": "微信",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "sina-sinaimg",
+            "provider_label": "微博",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "youku-mykimg",
+            "provider_label": "优酷",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "xhs-avatar",
+            "provider_label": "小红书",
+            "region": "CN",
+            "ip": "152.70.241.120",
+            "country": ""
+          },
+          {
+            "provider": "cf-1.1.1.1",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "cf-1.0.0.1",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "cf-dns",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "cf-workers",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "cf-pages",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "chatgpt",
+            "provider_label": "chatgpt",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "claude",
+            "provider_label": "claude",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "x.com",
+            "provider_label": "x.com",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "grok",
+            "provider_label": "grok",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "nodejs",
+            "provider_label": "nodejs",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "gitlab",
+            "provider_label": "gitlab",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "unpkg",
+            "provider_label": "unpkg",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "discord",
+            "provider_label": "discord",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          },
+          {
+            "provider": "shopify",
+            "provider_label": "shopify",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "medium",
+            "provider_label": "medium",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "mdn",
+            "provider_label": "mdn",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          },
+          {
+            "provider": "cdnjs",
+            "provider_label": "cdnjs",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "npm",
+            "provider_label": "npm",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "skypack",
+            "provider_label": "skypack",
+            "region": "Anycast",
+            "ip": "152.70.241.120",
+            "country": "KR"
+          },
+          {
+            "provider": "vercel",
+            "provider_label": "vercel",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          }
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.resolvers": {
+        "value": [
+          {
+            "ip": "140.204.24.35",
+            "cc": "KR",
+            "country": "South Korea",
+            "foreign": false
+          }
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip_v6": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.local_ip": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.local_ip_v6": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.mdns_hostname": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.disabled": {
+        "value": false,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_browser": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "ident.ua_version": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "engine.detected_browser": {
+        "value": "chrome",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_version": {
+        "value": "151",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua": {
+        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.platform": {
+        "value": "Win32",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.vendor": {
+        "value": "Google Inc.",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.product_sub": {
+        "value": "20030107",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.app_version": {
+        "value": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.oscpu": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.window_chrome": {
+        "value": "loadTimes,csi,app",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_chua": {
+        "value": "{\"brands\":[{\"brand\":\"Chromium\",\"version\":\"150\"},{\"brand\":\"Google Chrome\",\"version\":\"150\"},{\"brand\":\"Not_A Brand\",\"version\":\"99\"}],\"mobile\":false,\"platform\":\"Windows\"}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_high_entropy": {
+        "value": "{\"architecture\":\"x86\",\"bitness\":\"64\",\"brands\":[{\"brand\":\"Chromium\",\"version\":\"150\"},{\"brand\":\"Google Chrome\",\"version\":\"150\"},{\"brand\":\"Not_A Brand\",\"version\":\"99\"}],\"fullVersionList\":[{\"brand\":\"Chromium\",\"version\":\"150.0.7871.114\"},{\"brand\":\"Google Chrome\",\"version\":\"150.0.7871.114\"},{\"brand\":\"Not_A Brand\",\"version\":\"99.0.0.0\"}],\"mobile\":false,\"model\":\"\",\"platform\":\"Windows\",\"platformVersion\":\"10.0.0\",\"uaFullVersion\":\"150.0.7871.114\",\"wow64\":false}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.do_not_track": {
+        "value": "1",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.cookie_enabled": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.pdf_viewer": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.max_touch_points": {
+        "value": 0,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.online": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.connection": {
+        "value": "4g · 1.65 Mbps · 100 ms",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.user-agent": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-ch-ua": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-ch-ua-platform": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-ch-ua-mobile": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-ch-ua-platform-version": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.accept-language": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.accept-encoding": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-fetch-site": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.sec-fetch-mode": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.forwarded": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "headers.via": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "locale.language": {
+        "value": "ko-KR",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.languages": {
+        "value": [
+          "ko-KR"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.intl_locale": {
+        "value": "ko-KR",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.region": {
+        "value": "KR",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.intl_timezone": {
+        "value": "Asia/Seoul",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.tz_offset_human": {
+        "value": "UTC+09:00",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.tz_offset": {
+        "value": -540,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.calendar": {
+        "value": "gregory",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.numbering": {
+        "value": "latn",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.hour_cycle": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.first_day_of_week": {
+        "value": 7,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.measurement": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.date_sample": {
+        "value": "2026년 8월 13일 오전 8:00:40",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.number_format": {
+        "value": "1,234.5",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.currency_sample": {
+        "value": "₩1,235",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.fonts_cn": {
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.voices": {
+        "value": [
+          "ko-KR:Microsoft Heami - Korean (Korea)"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.screen": {
+        "value": "1920x1080@1x24",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.hardware_concurrency": {
+        "value": 8,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.device_memory": {
+        "value": 16,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.media_devices": {
+        "value": 3,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_vendor": {
+        "value": "Google Inc. (Intel)",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_renderer": {
+        "value": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgpu_adapter_info": {
+        "value": "{\"vendor\":\"Intel\",\"architecture\":\"Gen 12 LP\",\"device\":\"\",\"description\":\"\"}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.canvas_hash": {
+        "value": "c1c81dab",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.canvas_noise_x5": {
+        "value": [
+          "c1c81dab",
+          "c1c81dab",
+          "c1c81dab",
+          "c1c81dab",
+          "c1c81dab"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.audio_hash": {
+        "value": "503.21412c6d754",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.audio_stable_x3": {
+        "value": [
+          "503.21412c6d754",
+          "503.21412c6d754",
+          "503.21412c6d754"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_count": {
+        "value": 10,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_mac": {
+        "value": [
+          "BlinkMacSystemFont"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_linux": {
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_design": {
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webauthn": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.credentials": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.serial": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.wakelock": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.permissions": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.clipboard_read": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.clipboard_write": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.push": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.broadcast_channel": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.shared_worker": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webassembly": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webgpu": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.storage_access": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.compression": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.crypto_random_uuid": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.structured_clone": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.abort_signal_timeout": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.abort_signal_any": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.promise_with_resolvers": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.array_to_sorted": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.object_group_by": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.set_intersection": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.url_can_parse": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.user_activation": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.missing_count": {
+        "value": 0,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "xc.ip_tz": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ip_lang": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ip_fonts_cn": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ua_webgl": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ua_engine_browser": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ua_engine_version": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ipv4_ipv6_country": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.rtc_http_ip": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.tz_intl_tz": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.dns_ip_country": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.dns_blackhole": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.voices_country": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.proxy_headers": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.multi_geo_ip": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.gpu_cpu_mismatch": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.webgl_driver_leak": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.ua_header_match": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "xc.sec_ch_ua_match": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": true
+      },
+      "net.ipv4": {
+        "value": {
+          "ip": "152.70.241.120",
+          "isv6": false,
+          "country": "韩国",
+          "country_code": "KR",
+          "province": "首尔特别市",
+          "city": "首尔特别市 江西区 — 甲骨文云 Oracle",
+          "location": "韩国 首尔特别市 首尔特别市 江西区 — 甲骨文云 Oracle",
+          "asn": 31898,
+          "asnname": "Oracle Corporation",
+          "asndomain": "cloud.oracle.com",
+          "asntype": "idc",
+          "org": "Oracle Corporation",
+          "orgdomain": "cloud.oracle.com",
+          "orgtype": "idc",
+          "isidc": true,
+          "iptype": "IDC机房IP",
+          "iprisk": 19,
+          "isproxy": false,
+          "nativeip": false,
+          "usecount": "1 - 10 (极好)",
+          "cdn": "",
+          "needCaptcha": false,
+          "captchaHost": "ipv4.ping0.cc"
+        },
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "net.ipv6": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.total": {
+        "value": 24,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts": {
+        "value": [
+          "Arial",
+          "Times New Roman",
+          "Courier New",
+          "Verdana",
+          "Georgia",
+          "Tahoma",
+          "Trebuchet MS",
+          "Comic Sans MS",
+          "Impact",
+          "BlinkMacSystemFont"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_cn_list": {
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgpu_adapter": {
+        "value": "{\"features\":[\"depth32float-stencil8\",\"rg11b10ufloat-renderable\",\"bgra8unorm-storage\",\"texture-formats-tier1\",\"texture-compression-bc\",\"dual-source-blending\",\"core-features-and-limits\",\"float32-filterable\",\"indirect-first-instance\",\"texture-compression-astc-sliced-3d\",\"float32-blendable\",\"texture-compression-astc\",\"texture-compression-etc2\",\"depth-clip-control\",\"texture-compression-bc-sliced-3d\",\"texture-formats-tier2\",\"timestamp-query\",\"shader-f16\",\"clip-distances\",\"primitive-index\",\"texture-component-swizzle\",\"subgroups\"],\"limits\":{\"maxBufferSize\":4294967292,\"maxTextureDimension2D\":16384,\"maxComputeWorkgroupSizeX\":1024},\"isFallbackAdapter\":false}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_params_hash": {
+        "value": "5fbeabe4620f57b63cc6690b8534288d526f7181d1f1b013499d6deb5aecfc30",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.storage_quota": {
+        "value": 125829120000,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.indexeddb": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.serviceworker": {
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.third_party_cookies": {
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_min": {
+        "value": "149",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_max": {
+        "value": "151",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.resolver_count": {
+        "value": 1,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.resolver_countries": {
+        "value": [
+          "KR"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.dnssec": {
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "multigeo.distinct_ips": {
+        "value": [
+          "152.70.241.120"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "multigeo.distinct_countries": {
+        "value": [
+          "KR"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      }
+    },
+    "quickProbes": {
+      "webdriver": false,
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+      "platform": "Win32",
+      "languages": [
+        "ko-KR"
+      ],
+      "language": "ko-KR",
+      "timezone": "Asia/Seoul",
+      "hwConcurrency": 8,
+      "deviceMemory": 16,
+      "visibility": "visible",
+      "hasFocus": true
+    },
+    "status": "captured",
+    "raf": null,
+    "bodyText": "PING0\nIP 查询\n环境检测New\nIP 反查域名\nLatency\nPing\nTrace\nASN 变化监控\n中文\n◌\n探测中…\n10 / 11\n91%\n00:53.16\n[MULTIGEO]\n完成（3 项）\n00:48.41\n[DNS]\n完成（4 项）\n00:46.53\n[ENGINE]\n完成（4 项）\n00:44.90\n[RTC]\n完成（6 项）\n00:43.46\n[PRIVACY]\n完成（4 项）\n00:43.43\n[NET]\n完成（2 项）\n00:43.41\n[HW]\n完成（19 项）\n00:43.40\n[API]\n完成（26 项）\n00:43.23\n[IDENT]\n完成（15 项）\n00:40.92\n[LOCALE]\n完成（17 项）\n00:40.57\n[MULTIGEO]\n多出口检测（split-tunnel）\n00:40.57\n[API]\nAPI 能力可用性扫描\n00:40.57\n[PRIVACY]\n存储配额/IndexedDB/SW\n00:40.57\n[STEALTH]\n检查 webdriver/cdc/anti-detect 特征\n00:40.57\n[HW]\nWebGL/Canvas×5/Audio×3/字体枚举\n00:40.57\n[LOCALE]\n时区/语言/字体环境\n00:40.57\n[ENGINE]\n运行引擎反推（数百探针）\n00:40.57\n[IDENT]\n采集 UA/Sec-CH-UA/平台串\n00:40.57\n[DNS]\n随机子域 DNS 泄漏测试\n00:40.57\n[RTC]\nSTUN 探测公网/本地 IP\n00:40.57\n[NET]\n请求服务端 IP/ASN/Proxy 信息\n00:40.26\n[SYS]\n准备探针…\n当前分数\n100\n安全\n已检 100\n异常 0\n总 131\n异常项\n0\n检测中…\n检测中…\n🛰\nIPv4\n✓\nIP\n152.70.241.120\nIP 位置\n韩国 首尔特别市 首尔特别市 江西区 — 甲骨文云 Oracle\nASN\nAS31898\nASN 所有者\nIDC\nOracle Corporation\n— cloud.oracle.com\n企业\nIDC\nOracle Corporation\n— cloud.oracle.com\nIP 类型\nIDC 机房 IP\n风控值\n19%\n纯净\n原生 IP\n广播 IP\n共享人数\n1 - 10 (极好)\n🛰\nIPv6\n✓\n未检出\n🌐\n多出口检测\n✓\n微信\n152.70.241.120\n·\n网易云音乐\n152.70.241.120\n·\n今日头条\n152.70.241.120\n·\n抖音\n152.70.241.120\n·\n微博\n152.70.241.120\n·\n优酷\n152.70.241.120\n·\n小红书\n152.70.241.120\n·\nipify\n152.70.241.120\n·\nipify\n152.70.241.120\n·\nBigDataCloud\n152.70.241.120\n·\nip.sb\n152.70.241.120\nipinfo\n152.70.241.120\ngeojs\n152.70.241.120\nipapi.is\n152.70.241.120\n·\n🔍\nDNS\n✓\n140.204.24.35\nSouth Korea\n📡\nWebRTC\n✓\n公网 IPv4（WebRTC）\n—\n公网 IPv6（WebRTC）\n—\n本地 IPv4\n—\n本地 IPv6\n—\nmDNS 主机名\n—\nWebRTC 已禁用\n否\n⭐\n浏览器版本检测\nUA 声明浏览器\n检测中…\nUA 声明版本\n检测中…\n启发式检测浏览器\nchrome\n启发式检测版本\n149 – 151\n🪪\n浏览器信息\n✓\nUser-Agent\nMozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.787…\nnavigator.platform\nWin32\nnavigator.vendor\nGoogle Inc.\nnavigator.productSub\n20030107\nnavigator.appVersion\n5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Sa…\nnavigator.oscpu\n—\nwindow.chrome\nloadTimes,csi,app\nSec-CH-UA\n{\"brands\":[{\"brand\":\"Chromium\",\"version\":\"150\"},{\"brand\":\"Google Chrome\",\"version\":\"150\"},{\"brand…\nUA 高熵\n{\"architecture\":\"x86\",\"bitness\":\"64\",\"brands\":[{\"brand\":\"Chromium\",\"version\":\"150\"},{\"brand\":\"Goo…\nDo Not Track\n1\nCookie 启用\n是\n内置 PDF 阅读器\n是\n最大触摸点\n0\n网络在线\n是\n网络连接信息\n4g · 1.65 Mbps · 100 ms\n📨\nHTTP 请求头\nUser-Agent\n检测中…\nSec-CH-UA\n检测中…\nSec-CH-UA-Platform\n检测中…\nSec-CH-UA-Mobile\n检测中…\nSec-CH-UA-Platform-Version\n检测中…\nAccept-Language\n检测中…\nAccept-Encoding\n检测中…\nSec-Fetch-Site\n检测中…\nSec-Fetch-Mode\n检测中…\nForwarded\n检测中…\nVia\n检测中…\n🌍\n区域 / 时区\n✓\nnavigator.language\nko-KR\nnavigator.languages\nko-KR\nIntl locale\nko-KR\n区域代码\nKR\nIntl 时区\nAsia/Seoul\n时区偏移\nUTC+09:00\nDate 时区偏移（分钟，UTC−本地）\n-540\n历法\ngregory\n数字系统\nlatn\n时制\n—\n每周首日\n7\n度量制\n—\n日期样例\n2026년 8월 13일 오전 8:00:40\n数字格式\n1,234.5\n货币样例\n₩1,235\n中文字体\n无\n语音列表\nko-KR:Microsoft Heami - Korean (Korea)\n🖥\n硬件指纹\n✓\n屏幕\n1920x1080@1x24\nCPU 核数\n8\n内存（GB）\n16\n媒体设备\n3\nWebGL 厂商\nGoogle Inc. (Intel)\nWebGL 渲染器\nANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)\nWebGPU 适配器\n{\"vendor\":\"Intel\",\"architecture\":\"Gen 12 LP\",\"device\":\"\",\"description\":\"\"}\nCanvas 指纹\nc1c81dab\nCanvas 5 次稳定性\nc1c81dab, c1c81dab, c1c81dab, c1c81dab, c1c81dab\nAudio 指纹\n503.21412c6d754\nAudio 3 次稳定性\n503.21412c6d754, 503.21412c6d754, 503.21412c6d754\n字体数量\n10\nmacOS 独占字体\nBlinkMacSystemFont\nLinux 独占字体\n无\n设计/Office 字体\n无\n🧩\nAPI 能力探针\n✓\nWebAuthn / PublicKeyCredential\n是\nCredential Management\n是\nWeb Serial\n是\nScreen Wake Lock\n是\nPermissions API\n是\nClipboard Read\n是\nClipboard Write\n是\nPush Manager\n是\nBroadcastChannel\n是\nSharedWorker\n是\nWebAssembly\n是\nWebGPU\n是\nStorage Access\n是\nCompressionStream\n是\ncrypto.randomUUID\n是\nstructuredClone\n是\nAbortSignal.timeout\n是\nAbortSignal.any\n是\nPromise.withResolvers\n是\nArray.prototype.toSorted\n是\nObject.groupBy\n是\nSet.prototype.intersection\n是\nURL.canParse\n是\nnavigator.userActivation\n是\n缺失 API 数\n0\n⚖️\n交叉校验\nIP 国家 ↔ 时区\n检测中…\nIP 国家 ↔ 浏览器语言\n检测中…\nIP 国家 ↔ 中文字体\n检测中…\nUA 平台 ↔ GPU 渲染器\n检测中…\n⭐ UA ↔ 启发式检测浏览器\n检测中…\n⭐ UA 版本 ↔ 启发式检测版本\n检测中…\nIPv4 ↔ IPv6 国家\n检测中…\nWebRTC IP ↔ HTTP IP\n检测中…\ntz offset ↔ Intl 时区\n检测中…\nDNS 解析器 ↔ IP 国家\n检测中…\nDNS 黑洞（VPN fake-ip）\n检测中…\n语音包国家 ↔ IP 国家\n检测中…\nHTTP 代理头（Forwarded/Via）\n检测中…\n多出口出口国家一致性\n检测中…\n⭐ GPU ↔ CPU 核心数物理矛盾\n检测中…\n⭐ WebGL 驱动号泄漏（老内核痕迹）\n检测中…\n⭐ HTTP UA 头 ↔ navigator.userAgent\n检测中…\nSec-CH-UA 头 ↔ navigator.userAgentData\n检测中…\n这个工具能帮你检测什么\n\n一站式浏览器与网络环境自检工具，覆盖 12 个维度、近 100 项指标、19 条交叉校验规则，包括：\n\n网络出口：IPv4 / IPv6 双栈、ASN、IDC 机房库、代理 / VPN 标记、Tor 出口、风控值、原生 IP；\nWebRTC 检测：公网 / 本地 / mDNS 主机名暴露情况；\nDNS 解析器：实际生效的 DNS 服务器、所在国家、是否泄漏；\n多出口 GeoIP：并发请求多家第三方端点比对，识别 split-tunnel；\n浏览器版本反推：基于 1247 项引擎特征探针 推断真实内核版本，与 UA 交叉比对；\n身份与请求头：UA、Sec-CH-UA、navigator.platform、HTTP 头一致性；\n区域 / 时区 / 字体 / 语言包 / TTS 语音；\n硬件指纹：Canvas × 5 / Audio × 3 稳定性、WebGL / WebGPU 厂商与渲染器、屏幕、CPU 核数、内存；\nAPI 能力：23 项现代 Web API 可用性扫描；\n隐私模式：存储配额、IndexedDB、Service Worker；\n跨维度校验：IP 国家 ↔ 时区 / 语言 / 字体 / DNS / 语音包，UA ↔ 引擎 / WebGL / Sec-CH-UA / HTTP 头，IPv4 ↔ IPv6 国家，WebRTC ↔ HTTP IP，等等。\n适用场景\n跨境电商 / 海外业务：Amazon / eBay / Walmart / TikTok Shop / 独立站等多账号、多店铺环境的健康自检；\n支付与广告：PayPal / Stripe / Wise / Facebook Ads / Google Ads 等账号环境一致性核对；\nAI 应用使用者：ChatGPT / Claude / Midjourney 等多账号 / API 订阅环境检查；\n社媒运营 / 自媒体：TikTok / Instagram / X(Twitter) / YouTube 多号矩阵；\n跨境购物 / 海淘：海外限定商品、抢购场景的网络出口确认；\n游戏 / 虚拟物品：Steam / Epic / G2A 多区账号环境一致性；\n隐私研究 / 安全测试：评估浏览器 / 系统的指纹暴露程度，验证 VPN / 代理 / DoH 是否真正生效，排查 WebRTC、DNS 泄漏。\n环境异常可能带来的影响\n\n检测出的不一致项 / 泄漏点 / 自动化痕迹会被主流平台的风控系统当作异常信号采集。常见的影响包括：\n\n账号注册 / 登录：触发额外人机校验、邮箱 / 手机二次验证、账号被标记待审核或直接拒绝注册；\n支付与提现：交易进入人工审核、单笔限额降低、支付失败、收款方被冻结或要求补充材料；\n店铺 / 多账号关联：同一指纹被关联到历史账号，触发关联店铺受限、连带停权、卖家中心审查；\n广告与营销：广告账户被审核 / 暂停投放、预算异常重置、Pixel 数据失效；\nAI / SaaS 订阅：免费额度无法领取、API key 申请被拒、被识别为滥用导致频次限流甚至封禁；\n限定 / 抢购：被识别为机器人 / 黄牛而失去抢购资格，订单被取消；\n隐私层面：真实地理位置、本地 OS 语言、字体清单、硬件指纹等\"原本以为隐藏了\"的信息其实正在向第三方泄漏。\n\n这些影响是各家平台风控算法长期累积的策略，与本工具无关 —— 本工具只负责把\"哪些维度泄漏了 / 不一致\"这件事客观告诉你，便于后续做隐私加固或环境配置调整。\n\n分数怎么读\n\n满分 100。扣分越多，说明环境中的不一致项 / 泄漏点 / anti-detect 痕迹越明显。重点看左侧\"异常项\"列表 —— 每一条都是技术层面客观存在的不一致或指纹异常，比如 IP 国家与时区不符、WebRTC 公网 IP 与 HTTP 出口不一致、UA 声明与引擎反推版本对不上等等，可作为优化网络与浏览器配置的参考。\n\n数据收集说明： 检测过程会在客户端采集浏览器与设备的公开特征（UA、屏幕、Canvas / WebGL / Audio 指纹哈希、时区、字体列表、API 能力等）以及网络层信息（出口 IP、ASN、WebRTC 公网地址、DNS 解析器），用于本次评分和生成可分享的报告。我们不收集任何账号、密码、Cookie、表单输入等敏感数据。\n本工具仅供 环境自检、隐私评估与教育研究目的，结果仅反映检测时刻的技术状态，不构成任何业务能力或合规性承诺。使用本工具产生的任何后果由使用者自行承担，请勿用于违反所在地法律或服务条款的用途。\nIP 查询\nIP 查询\n环境检测\nIP 反查\nIP 反查域名\nrDNS 批量查询\nrDNS 反查\nCNAME 反查\n常用功能\nLatency\nPing\nTrace\nASN 变化监控\nIP Leak 检测\n小鸡监控\n近24小时\n近5天\n近一个月\n近一年\nAPI 接口\nAPI接口\n联系我们\n广告位联系: https://t.me/heyxiun\n© 2021 - 2026 ping0.cc 所有权利保留 | 广告位联系: https://t.me/heyxiun",
+    "endedAt": "2026-08-12T23:00:58.475Z"
+  }
+}

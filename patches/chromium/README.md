@@ -37,11 +37,17 @@ Chromium change must start at `0045`.
 ## Build configuration
 
 Use the checked-in release arguments so the binary exposes the same public
-AAC/H.264 codec surface as a normal Chrome installation:
+AAC/H.264 codec surface as a normal Chrome installation and is compiled as an
+official build (ThinLTO, no debug symbols). The template keeps
+`is_official_build=true` and `chrome_pgo_phase=0`; the verified build measured
+at or above stock Chrome 151 on the string, array-sort and Canvas2D
+micro-benchmarks (see docs/verification), so PGO is not required for parity
+on this hardware.
 
 ```bash
 cp ./patches/chromium/args.gn /path/to/chromium/src/out/AgentBrowserRelease/args.gn
 cd /path/to/chromium/src
+# add target_cpu = "arm64" to args.gn on Apple Silicon, then:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer gn gen out/AgentBrowserRelease
 autoninja -C out/AgentBrowserRelease chrome
 ```
