@@ -159,6 +159,9 @@ export function addProxy(name: string, config: ProxyConfig): void {
   validateProxyName(name);
   const cfg = getConfig();
   cfg.proxies[name] = normalizeProxyConfig(config);
+  if (cfg.proxies[name].fallbacks && cfg.proxies[name].fallbacks.includes(name)) {
+    cfg.proxies[name].fallbacks = cfg.proxies[name].fallbacks.filter((f) => f !== name);
+  }
   if (cfg.proxyDetections) delete cfg.proxyDetections[name];
   if (cfg.proxyHealth) delete cfg.proxyHealth[name];
   saveConfig(cfg);
@@ -183,8 +186,12 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
     if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName) && !proxyConfigEquivalent(previous, normalized)) {
       delete cfg.proxyHealth[oldName];
     }
+    if (normalized.fallbacks && normalized.fallbacks.includes(oldName)) {
+      normalized.fallbacks = normalized.fallbacks.filter((f) => f !== oldName);
+    }
   } else {
     delete cfg.proxies[oldName];
+    replaceFallbackReference(cfg, oldName, newName);
     if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName)) {
       if (proxyConfigEquivalent(previous, normalized)) cfg.proxyDetections[newName] = cfg.proxyDetections[oldName];
       delete cfg.proxyDetections[oldName];
@@ -259,6 +266,7 @@ export function deleteProxy(name: string): boolean {
   delete cfg.proxies[name];
   if (cfg.proxyDetections) delete cfg.proxyDetections[name];
   if (cfg.proxyHealth) delete cfg.proxyHealth[name];
+  removeFallbackReference(cfg, name);
 
   if (cfg.defaultProxy === name) {
     cfg.defaultProxy = "default";
@@ -290,6 +298,72 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   return true;
 }
 
+function isProxyUnhealthyForRotation(name: string): boolean {
+  const cfg = getConfig();
+  const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
+  if (!health) return false;
+  const now = Date.now();
+  if (health.cooldownUntil && health.cooldownUntil > now) return true;
+  if (health.risk === "poor" && (health.consecutiveFailures || 0) >= 1) return true;
+  return false;
+}
+
+function rotationReasonFor(name: string): string | null {
+  const cfg = getConfig();
+  const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
+  if (!health) return null;
+  const now = Date.now();
+  if (health.cooldownUntil && health.cooldownUntil > now) return "冷却中（连续失败）";
+  if (health.risk === "poor") return "健康评分较差";
+  return null;
+}
+
+function pickRotationFallback(name: string): string | null {
+  const cfg = getConfig();
+  const fallbacks = cfg.proxies[name]?.fallbacks || [];
+  for (const fb of fallbacks) {
+    if (!isValidProxyName(fb) || fb === name) continue;
+    if (!Object.hasOwn(cfg.proxies, fb)) continue;
+    if (isProxyUnhealthyForRotation(fb)) continue;
+    return fb;
+  }
+  return null;
+}
+
+/** Whether rotation is currently active for `name`, and which fallback would be used. */
+export function getProxyRotationInfo(name: string): { from: string; to: string | null; reason: string | null; active: boolean } | null {
+  if (!isValidProxyName(name)) return null;
+  const cfg = getConfig();
+  if (!Object.hasOwn(cfg.proxies, name)) return null;
+  const active = isProxyUnhealthyForRotation(name);
+  const reason = active ? rotationReasonFor(name) : null;
+  const to = active ? pickRotationFallback(name) : null;
+  return { from: name, to, reason, active };
+}
+
+function replaceFallbackReference(cfg: MgmtConfig, oldName: string, newName: string): void {
+  for (const proxy of Object.values(cfg.proxies)) {
+    if (!proxy.fallbacks || !proxy.fallbacks.length) continue;
+    const next: string[] = [];
+    for (const fb of proxy.fallbacks) {
+      if (fb === oldName) {
+        if (newName && !next.includes(newName)) next.push(newName);
+      } else if (!next.includes(fb)) {
+        next.push(fb);
+      }
+    }
+    proxy.fallbacks = next.length ? next : undefined;
+  }
+}
+
+function removeFallbackReference(cfg: MgmtConfig, name: string): void {
+  for (const proxy of Object.values(cfg.proxies)) {
+    if (!proxy.fallbacks) continue;
+    const next = proxy.fallbacks.filter((f) => f !== name);
+    proxy.fallbacks = next.length ? next : undefined;
+  }
+}
+
 export function resolveProfileProxy(dirId: string): ResolvedProfileProxy {
   return resolveProfileProxyInternal(dirId, true);
 }
@@ -316,14 +390,35 @@ function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedPr
   if (!Object.hasOwn(cfg.proxies, proxyName)) {
     return { mode, name: proxyName, config: null };
   }
-  const proxy = cfg.proxies[proxyName];
+
+  // Health-aware rotation: when the configured proxy is unhealthy (cooldown or
+  // poor risk with recent failures) and healthy fallbacks are configured, use the
+  // first healthy fallback so profile launches keep working.
+  let effectiveName = proxyName;
+  let rotatedFrom: string | null = null;
+  let rotationReason: string | null = null;
+  if (isProxyUnhealthyForRotation(proxyName)) {
+    rotationReason = rotationReasonFor(proxyName);
+    const fallback = pickRotationFallback(proxyName);
+    if (fallback) {
+      effectiveName = fallback;
+      rotatedFrom = proxyName;
+    }
+  }
+  const proxy = cfg.proxies[effectiveName];
 
   // Decrypt the password for consumers that actually use it (browser launch);
   // redacted path strips it entirely.
   const usableConfig = proxy.username && proxy.password
     ? { ...proxy, password: decryptSecretOr(proxy.password) }
     : { ...proxy };
-  return { mode, name: proxyName, config: redact ? redactProxyConfig(proxy) : usableConfig };
+  return {
+    mode,
+    name: effectiveName,
+    config: redact ? redactProxyConfig(proxy) : usableConfig,
+    rotatedFrom,
+    rotationReason,
+  };
 }
 
 function redactProxyConfig(proxy: ProxyConfig): ProxyConfig & { hasAuth?: boolean } {
@@ -775,6 +870,9 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
     bindings: (Array.isArray(entry.bindings) ? entry.bindings : []).slice(-50).map((s) => sanitizeOptionalText(s, 120)).filter((s): s is string => Boolean(s)),
     cooldownUntil: entry.cooldownUntil ? sanitizeTimestamp(entry.cooldownUntil) : null,
     suggestion: sanitizeOptionalText(entry.suggestion, 300),
+    rotations: Math.max(0, Math.floor(Number(entry.rotations) || 0)),
+    lastRotatedAt: entry.lastRotatedAt ? sanitizeTimestamp(entry.lastRotatedAt) : null,
+    lastRotatedTo: sanitizeOptionalText(entry.lastRotatedTo, 80),
   };
 }
 
@@ -811,7 +909,22 @@ function normalizeProxyConfig(config: ProxyConfig, previous?: ProxyConfig): Prox
     port,
     ...(username ? { username, password } : {}),
     ...(bypassList.length ? { bypassList } : {}),
+    ...(config.fallbacks && config.fallbacks.length ? { fallbacks: normalizeProxyFallbacks(config.fallbacks) } : {}),
   };
+}
+
+function normalizeProxyFallbacks(value: string[] | undefined): string[] {
+  if (!value) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of value) {
+    const name = String(raw || "").trim();
+    if (!isValidProxyName(name)) throw new Error(`Invalid proxy fallback name: ${JSON.stringify(raw)}`);
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
 }
 
 function normalizeProxyHost(value: unknown): string {

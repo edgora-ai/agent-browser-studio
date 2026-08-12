@@ -7,6 +7,8 @@ export interface ProxyConfig {
   username?: string;
   password?: string;
   bypassList?: string[];
+  /** Backup proxy names tried (in order) when this proxy is unhealthy. */
+  fallbacks?: string[];
 }
 
 export interface ProxyDetectionCacheEntry {
@@ -55,6 +57,9 @@ export interface ProxyHealthEntry {
   bindings: string[];
   cooldownUntil: number | null;
   suggestion: string | null;
+  rotations: number;
+  lastRotatedAt: number | null;
+  lastRotatedTo: string | null;
 }
 
 export type ProxyMode = "none" | "default" | "named";
@@ -63,6 +68,9 @@ export interface ResolvedProfileProxy {
   mode: ProxyMode;
   name: string | null;
   config: ProxyConfig | null;
+  /** Set when the configured proxy was unhealthy and a fallback was selected. */
+  rotatedFrom?: string | null;
+  rotationReason?: string | null;
 }
 
 export type BrowserPlatform = "windows" | "macos";

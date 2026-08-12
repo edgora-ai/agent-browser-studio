@@ -49,6 +49,9 @@ function freshEntry(name: string): ProxyHealthEntry {
     bindings: [],
     cooldownUntil: null,
     suggestion: null,
+    rotations: 0,
+    lastRotatedAt: null,
+    lastRotatedTo: null,
   };
 }
 
@@ -117,6 +120,23 @@ export function recordProxyDetection(name: string, obs: ProxyHealthObservation):
   entry.suggestion = suggestionFor(entry);
 
   setProxyHealth(name, entry);
+  return entry;
+}
+
+/**
+ * Record that a profile launched on fallback `toName` because `fromName` was
+ * unhealthy. Updates the rotation counters on the primary proxy's health entry.
+ */
+export function recordProxyRotation(fromName: string, toName: string): ProxyHealthEntry | null {
+  const existing = getProxyHealthEntry(fromName);
+  if (!existing) return null;
+  const entry: ProxyHealthEntry = {
+    ...existing,
+    rotations: (existing.rotations || 0) + 1,
+    lastRotatedAt: Date.now(),
+    lastRotatedTo: toName,
+  };
+  setProxyHealth(fromName, entry);
   return entry;
 }
 

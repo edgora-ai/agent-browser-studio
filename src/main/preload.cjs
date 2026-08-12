@@ -26,6 +26,8 @@ const api = {
     setProfile: (dirId, proxyName, mode) => ipcRenderer.invoke("proxy:set-profile", { dirId, proxyName, mode }),
     healthGet: () => ipcRenderer.invoke("proxy:health-get"),
     healthClear: (name) => ipcRenderer.invoke("proxy:health-clear", name),
+    rotate: (name) => ipcRenderer.invoke("proxy:rotate", name),
+    rotationInfo: (name) => ipcRenderer.invoke("proxy:rotation-info", name),
   },
   detect: {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),

@@ -9,8 +9,10 @@ import {
   setDefaultProxyName,
   setProfileProxy,
   renameProxy,
+  getProxyRotationInfo,
 } from "../services/config-manager.js";
-import { clearProxyHealth, listProxyHealth, proxyHealthSummary } from "../services/proxy-health.js";
+import { clearProxyHealth, listProxyHealth, proxyHealthSummary, recordProxyRotation } from "../services/proxy-health.js";
+import { recordAudit } from "../services/audit-log.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
 
 export function registerProxyHandlers(): void {
@@ -133,5 +135,34 @@ export function registerProxyHandlers(): void {
     } catch (e: any) {
       return { success: false, error: e.message };
     }
+  });
+
+  // Rotation: report whether the proxy is currently unhealthy and which healthy
+  // fallback would be used; record the rotation event when one is selected.
+  ipcMain.handle("proxy:rotate", async (_event, name: string): Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }> => {
+    try {
+      const info = getProxyRotationInfo(name);
+      if (!info) return { success: false, error: "Proxy not found" };
+      if (info.to && info.to !== info.from) {
+        recordProxyRotation(info.from, info.to);
+        recordAudit({
+          category: "proxy",
+          action: "rotate",
+          target: info.from,
+          actor: "user",
+          detail: `manual rotate to ${info.to} (${info.reason || "unhealthy"})`,
+        });
+      }
+      return { success: true, info };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Read-only rotation status (no event recorded) for UI badges.
+  ipcMain.handle("proxy:rotation-info", async (_event, name: string): Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }> => {
+    const info = getProxyRotationInfo(name);
+    if (!info) return { success: false, error: "Proxy not found" };
+    return { success: true, info };
   });
 }

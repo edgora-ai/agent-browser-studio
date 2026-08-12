@@ -21,6 +21,7 @@ import {
 } from "./authenticated-socks-bridge.js";
 import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
 import { buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
+import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { emitEvent } from "./event-bus.js";
 import {
@@ -412,6 +413,23 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
     const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
     throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
+  }
+  // Health-based rotation: when the configured proxy was unhealthy and a
+  // healthy fallback was selected, record it (health counters + audit) so the
+  // rotation is visible and attributable.
+  if (resolvedProxy.rotatedFrom && resolvedProxy.name && resolvedProxy.name !== resolvedProxy.rotatedFrom) {
+    try {
+      recordProxyRotation(resolvedProxy.rotatedFrom, resolvedProxy.name);
+    } catch (e) {
+      console.warn(`[agent-browser] failed to record proxy rotation:`, e);
+    }
+    recordAudit({
+      category: "proxy",
+      action: "rotate",
+      target: resolvedProxy.rotatedFrom,
+      actor: "auto",
+      detail: `profile ${dirId} rotated to ${resolvedProxy.name} (${resolvedProxy.rotationReason || "unhealthy"})`,
+    });
   }
   const activeProxy = resolvedProxy.config;
   const requestedWebRtcMode = passThrough ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);

@@ -7,6 +7,7 @@ export interface ProxyConfig {
   username?: string;
   password?: string;
   bypassList?: string[];
+  fallbacks?: string[];
 }
 
 export interface RedactedProxyConfig extends Omit<ProxyConfig, "password"> {
@@ -36,6 +37,8 @@ export interface ResolvedProfileProxy {
   mode: ProxyMode;
   name: string | null;
   config: RedactedProxyConfig | null;
+  rotatedFrom?: string | null;
+  rotationReason?: string | null;
 }
 
 export type ProxyRiskLevel = "good" | "watch" | "poor";
@@ -72,6 +75,9 @@ export interface ProxyHealthEntry {
   bindings: string[];
   cooldownUntil: number | null;
   suggestion: string | null;
+  rotations: number;
+  lastRotatedAt: number | null;
+  lastRotatedTo: string | null;
 }
 
 export interface ProxyHealthSummary {
@@ -187,6 +193,8 @@ export interface AgentBrowserAPI {
     setProfile: (dirId: string, proxyName: string | null, mode?: ProxyMode) => Promise<{ success: boolean; error?: string }>;
     healthGet: () => Promise<{ entries: ProxyHealthEntry[]; summary: ProxyHealthSummary }>;
     healthClear: (name?: string) => Promise<{ success: boolean; error?: string; cleared?: number }>;
+    rotate: (name: string) => Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }>;
+    rotationInfo: (name: string) => Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }>;
   };
   detect: {
     proxy: (config: ProxyConfig) => Promise<any>;

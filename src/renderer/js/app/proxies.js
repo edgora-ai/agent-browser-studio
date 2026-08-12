@@ -88,6 +88,7 @@
           document.getElementById("dlg-proxy-password").value = "";
           document.getElementById("dlg-proxy-password").placeholder = cfg.hasAuth ? "saved — leave blank to keep" : "optional";
           document.getElementById("dlg-proxy-bypass").value = (cfg.bypassList || []).join(", ");
+          document.getElementById("dlg-proxy-fallbacks").value = (cfg.fallbacks || []).join(", ");
           document.getElementById("dlg-proxy").showModal();
         });
       },
@@ -105,6 +106,23 @@
         api.proxy.healthClear(name).then(function (r) {
           if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.health-cleared", "Health cleared") : "Health cleared"), "success"); agentBrowser.refresh(); }
           else toast((r && r.error) || "Failed", "error");
+        }).catch(function (e) { toast(e.message, "error"); });
+      },
+
+  rotateProxy: function (name) {
+        api.proxy.rotate(name).then(function (r) {
+          if (r && r.info) {
+            if (r.info.active && r.info.to) {
+              toast('已轮换到备用代理 ' + r.info.to + '（' + (r.info.reason || '健康不佳') + '）', "success");
+            } else if (r.info.active) {
+              toast('该代理不健康，但未配置可用的备用代理', "error");
+            } else {
+              toast('当前代理健康，无需轮换', "success");
+            }
+            agentBrowser.refresh();
+          } else {
+            toast((r && r.error) || "Failed", "error");
+          }
         }).catch(function (e) { toast(e.message, "error"); });
       },
 
@@ -126,6 +144,7 @@
         document.getElementById("dlg-proxy-username").value = "";
         document.getElementById("dlg-proxy-password").value = "";
         document.getElementById("dlg-proxy-bypass").value = "";
+        document.getElementById("dlg-proxy-fallbacks").value = "";
         document.getElementById("dlg-proxy").showModal();
       },
 
@@ -135,13 +154,15 @@
         var username = document.getElementById("dlg-proxy-username").value.trim();
         var password = document.getElementById("dlg-proxy-password").value;
         var bypassList = document.getElementById("dlg-proxy-bypass").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+        var fallbacks = document.getElementById("dlg-proxy-fallbacks").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
         var config = {
           type: document.getElementById("dlg-proxy-type").value,
           host: document.getElementById("dlg-proxy-host").value.trim(),
           port: parseInt(document.getElementById("dlg-proxy-port").value, 10),
           username: username || undefined,
           password: username && password ? password : undefined,
-          bypassList: bypassList.length ? bypassList : undefined
+          bypassList: bypassList.length ? bypassList : undefined,
+          fallbacks: fallbacks.length ? fallbacks : undefined
         };
         if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
         function done() { toast(oldName ? (window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated") : "Proxy added", "success"); document.getElementById("dlg-proxy").close(); agentBrowser.refresh(); }
@@ -190,6 +211,34 @@
     return html;
   }
 
+  function rotationRowsHtml(cfg) {
+    var html = '';
+    if (cfg.fallbacks && cfg.fallbacks.length) {
+      html += '<div class="info-row"><span>备用</span><span>' + esc(cfg.fallbacks.join(", ")) + '</span></div>' +
+        '<div class="info-row proxy-rotation-row" style="display:none"><span>轮换</span><span class="proxy-rotation-text"></span></div>';
+    }
+    return html;
+  }
+
+  function loadRotationInfo(container) {
+    var cards = container.querySelectorAll('.profile-card');
+    Array.prototype.forEach.call(cards, function (card) {
+      var name = card.dataset.proxyName;
+      api.proxy.rotationInfo(name).then(function (r) {
+        if (!r || !r.info) return;
+        var row = card.querySelector('.proxy-rotation-row');
+        var txt = card.querySelector('.proxy-rotation-text');
+        if (!row || !txt || !r.info.active) return;
+        if (r.info.to) {
+          txt.textContent = '⚠ ' + name + ' → ' + r.info.to + '（' + (r.info.reason || '健康不佳') + '）';
+        } else {
+          txt.textContent = '⚠ ' + name + ' 不健康，无可用备用';
+        }
+        row.style.display = '';
+      }).catch(function () {});
+    });
+  }
+
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
     container.innerHTML = '<div class="loading">Loading proxies...</div>';
@@ -214,16 +263,19 @@
           '<div class="info-row"><span>Endpoint</span><span>' + esc(label) + '</span></div>' +
           '<div class="info-row"><span>Detect</span><span class="proxy-detect-result">Not checked</span></div>' +
           healthRowsHtml(entry) +
+          rotationRowsHtml(cfg) +
           '<div class="card-actions">' +
             '<button class="btn btn-secondary btn-sm" data-action="detect-proxy">🔍 Detect</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="default-proxy">★ Default</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="clear-health">🧹 清除健康</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy">🔄 轮换</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
           '</div>' +
         '</div>';
       }).join("");
       attachProxyHandlers(container);
+      loadRotationInfo(container);
     }).catch(function (e) {
       container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
@@ -239,6 +291,7 @@
       if (action === "detect-proxy") detectProxyIntoCard(name, card);
       else if (action === "default-proxy") agentBrowser.setDefault(name);
       else if (action === "clear-health") agentBrowser.clearHealth(name);
+      else if (action === "rotate-proxy") agentBrowser.rotateProxy(name);
       else if (action === "edit-proxy") agentBrowser.editProxy(name);
       else if (action === "delete-proxy") agentBrowser.delProxy(name);
     };

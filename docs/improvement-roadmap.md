@@ -212,3 +212,44 @@ http_request 支持 GET/POST/PUT/**PATCH/DELETE/HEAD**。`data:export` 返回 pr
 
 ### Slice 14 — Windows x64 基线（P0）— 🟡 配置就绪，待 Windows 验证
 electron-builder.yml 加 `win/nsis x64` target；新增 `.github/workflows/ci.yml`（ubuntu+windows 跑 tsc/build/unit-smoke，macOS 跑 e2e）；browser-manager 的 win32 跨平台分支（binary 路径、process.kill/-F）已就位。**完整 Windows e2e 需 Windows runner + 自建 Chromium 正式发行包**——CI 里标注为后续。
+
+### Slice 15 — 代理资产化：健康分/历史/绑定（P0，速赢 #8）— ✅
+
+**范围**：把代理从「配置项」升级为「风险资产」——每次检测记录滚动健康历史，算出健康分/风险档位，展示绑定关系与建议，支持清除。
+
+**文件**：
+- 新增 `src/main/services/proxy-health.ts` — `recordProxyDetection`（历史 20 条封顶）、`computeScore`（成功率45+延迟25+漂移20+新鲜度10）、`riskFromScore`、`suggestionFor`、`computeBindings`、`listProxyHealth`/`clearProxyHealth`/`proxyHealthSummary`
+- 改 `config-manager.ts` — `proxyHealth` 持久化 + 归一化；代理增删改/重命名同步清理或搬移健康记录
+- 改 `ipc/detect.ts` — detect-by-name 成功后写健康；`ipc/proxy.ts` — `proxy:health-get`/`proxy:health-clear`
+- 改 preload + `api.d.ts` + `proxies.js` + `style.css` — 代理页健康汇总、每卡健康徽章/建议/绑定、清除按钮
+- 新增 `tests/unit/proxy-health.test.ts`（8 例）+ e2e J29 健康行断言
+
+**验证**：unit 8 + e2e 5（J29）。健康分、连续失败→30 分钟冷却、IP/国家漂移、绑定计算、清除全部有测试钉死。
+
+### Slice 16 — 代理自动轮换（P0，代理资产收尾）— ✅
+
+**范围**：代理健康恶化（冷却 / poor+近期失败）时，自动把绑定它的 profile 切到第一个健康备用代理，启动继续可用；支持手动轮换 + 全程审计。
+
+**设计**：轮换是**健康驱动的动态解析**——profile 仍指向主代理，`resolveProfileProxy*` 在解析时按健康状态选择生效代理，主代理恢复健康即自动回切，无需改 profile 配置。`fallbacks` 列表按序尝试，跳过同样不健康的备用。
+
+**文件**：
+- 改 `types.ts` — `ProxyConfig.fallbacks`、`ResolvedProfileProxy.rotatedFrom/rotationReason`、`ProxyHealthEntry.rotations/lastRotatedAt/lastRotatedTo`
+- 改 `config-manager.ts` — `normalizeProxyFallbacks`、`isProxyUnhealthyForRotation`/`pickRotationFallback`/`getProxyRotationInfo`；`resolveProfileProxyInternal` 应用轮换；增删/重命名同步维护其它代理的 fallback 引用
+- 改 `proxy-health.ts` — `recordProxyRotation`（轮换计数）
+- 改 `browser-manager.ts` — 启动时若发生轮换：写健康计数 + audit（actor=auto）
+- 改 `ipc/proxy.ts` — `proxy:rotate`（手动轮换 + audit）+ `proxy:rotation-info`（只读状态）；preload/api 同步
+- 改 `index.html` + `proxies.js` — 编辑对话框「Fallback Proxies」字段；卡片备用列表、轮换状态徽章（⚠ 主→备用）、🔄 轮换按钮
+- 新增 `tests/unit/proxy-rotation.test.ts`（9 例）+ `tests/e2e/j52-proxy-rotation.test.ts`（3 例）
+
+**验证**：unit 9 + e2e 3（J52）。J52 走真实链路：对话框配置 fallback → 注入不健康健康态 → `rotation-info` 报 active/to → 手动轮换落盘 rotations=1 → 卡片轮换徽章出现。J29（5 例）回归通过。
+
+---
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 452 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J52 全绿（含 journey 10/10 tab 切换）
+```
+
+7 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换）落地并验证。
