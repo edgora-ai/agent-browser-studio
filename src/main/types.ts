@@ -21,6 +21,42 @@ export interface ProxyDetectionCacheEntry {
   error: string | null;
 }
 
+export interface ProxyHealthHistoryPoint {
+  at: number;
+  success: boolean;
+  exitIp: string | null;
+  countryCode: string | null;
+  timezone: string | null;
+  provider: string | null;
+  latencyMs: number | null;
+  isp: string | null;
+  org: string | null;
+  as: string | null;
+  error: string | null;
+}
+
+export type ProxyRiskLevel = "good" | "watch" | "poor";
+
+export interface ProxyHealthEntry {
+  proxyName: string;
+  firstSeenAt: number;
+  lastCheckedAt: number;
+  lastSuccessAt: number | null;
+  checks: number;
+  successes: number;
+  consecutiveFailures: number;
+  distinctExitIps: string[];
+  ipDriftCount: number;
+  geoDriftCount: number;
+  avgLatencyMs: number | null;
+  score: number;
+  risk: ProxyRiskLevel;
+  history: ProxyHealthHistoryPoint[];
+  bindings: string[];
+  cooldownUntil: number | null;
+  suggestion: string | null;
+}
+
 export type ProxyMode = "none" | "default" | "named";
 
 export interface ResolvedProfileProxy {
@@ -180,6 +216,7 @@ export interface MgmtConfig {
   defaultProxy: string;
   proxies: Record<string, ProxyConfig>;
   proxyDetections?: Record<string, ProxyDetectionCacheEntry>;
+  proxyHealth?: Record<string, ProxyHealthEntry>;
   sync: SyncConfig;
   browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;

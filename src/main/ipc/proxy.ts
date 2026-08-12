@@ -10,6 +10,7 @@ import {
   setProfileProxy,
   renameProxy,
 } from "../services/config-manager.js";
+import { clearProxyHealth, listProxyHealth, proxyHealthSummary } from "../services/proxy-health.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
 
 export function registerProxyHandlers(): void {
@@ -111,6 +112,24 @@ export function registerProxyHandlers(): void {
     try {
       setProfileProxy(dirId, proxyName, mode);
       return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Rolling health data for all proxies (score / risk / bindings / suggestions)
+  ipcMain.handle("proxy:health-get", async () => {
+    return {
+      entries: listProxyHealth(),
+      summary: proxyHealthSummary(),
+    };
+  });
+
+  // Clear one proxy's health history, or all when name is omitted
+  ipcMain.handle("proxy:health-clear", async (_event, name?: string): Promise<{ success: boolean; error?: string; cleared?: number }> => {
+    try {
+      const cleared = clearProxyHealth(name);
+      return { success: true, cleared };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

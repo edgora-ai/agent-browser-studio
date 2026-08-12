@@ -12,7 +12,7 @@ import {
   migrateSecret,
   usingEncryption,
 } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
@@ -43,6 +43,7 @@ const DefaultConfig: MgmtConfig = {
     "default": { ...DefaultProxy },
   },
   proxyDetections: {},
+  proxyHealth: {},
   sync: {
     enabled: false,
     endpoint: "",
@@ -139,11 +140,27 @@ export function setProxyDetectionIfCurrent(name: string, expectedConfig: ProxyCo
   return true;
 }
 
+export function getProxyHealthEntry(name: string): ProxyHealthEntry | null {
+  if (!isValidProxyName(name)) return null;
+  const cfg = getConfig();
+  return cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
+}
+
+export function setProxyHealth(name: string, entry: ProxyHealthEntry): void {
+  validateProxyName(name);
+  const cfg = getConfig();
+  if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+  cfg.proxyHealth = cfg.proxyHealth || {};
+  cfg.proxyHealth[name] = normalizeProxyHealthEntry(entry);
+  saveConfig(cfg);
+}
+
 export function addProxy(name: string, config: ProxyConfig): void {
   validateProxyName(name);
   const cfg = getConfig();
   cfg.proxies[name] = normalizeProxyConfig(config);
   if (cfg.proxyDetections) delete cfg.proxyDetections[name];
+  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
   saveConfig(cfg);
 }
 
@@ -163,11 +180,20 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
     if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName) && !proxyConfigEquivalent(previous, normalized)) {
       delete cfg.proxyDetections[oldName];
     }
+    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName) && !proxyConfigEquivalent(previous, normalized)) {
+      delete cfg.proxyHealth[oldName];
+    }
   } else {
     delete cfg.proxies[oldName];
     if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName)) {
       if (proxyConfigEquivalent(previous, normalized)) cfg.proxyDetections[newName] = cfg.proxyDetections[oldName];
       delete cfg.proxyDetections[oldName];
+    }
+    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName)) {
+      if (proxyConfigEquivalent(previous, normalized)) {
+        cfg.proxyHealth[newName] = { ...cfg.proxyHealth[oldName], proxyName: newName };
+      }
+      delete cfg.proxyHealth[oldName];
     }
     if (cfg.defaultProxy === oldName) cfg.defaultProxy = newName;
     for (const profile of Object.values(cfg.browserProfiles || {})) {
@@ -232,6 +258,7 @@ export function deleteProxy(name: string): boolean {
 
   delete cfg.proxies[name];
   if (cfg.proxyDetections) delete cfg.proxyDetections[name];
+  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
 
   if (cfg.defaultProxy === name) {
     cfg.defaultProxy = "default";
@@ -258,6 +285,7 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   const normalized = normalizeProxyConfig(config, previous);
   cfg.proxies[name] = normalized;
   if (cfg.proxyDetections && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyDetections[name];
+  if (cfg.proxyHealth && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyHealth[name];
   saveConfig(cfg);
   return true;
 }
@@ -712,6 +740,58 @@ function normalizeProxyDetections(value: Record<string, ProxyDetectionCacheEntry
   return normalized;
 }
 
+function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
+  const history: ProxyHealthEntry["history"] = (Array.isArray(entry.history) ? entry.history : [])
+    .slice(-20)
+    .map((h) => ({
+      at: sanitizeTimestamp(h.at),
+      success: Boolean(h.success),
+      exitIp: sanitizeOptionalText(h.exitIp, 80),
+      countryCode: sanitizeOptionalText(h.countryCode, 8),
+      timezone: sanitizeOptionalText(h.timezone, 80),
+      provider: sanitizeOptionalText(h.provider, 80),
+      latencyMs: typeof h.latencyMs === "number" && Number.isFinite(h.latencyMs) ? Math.max(0, Math.floor(h.latencyMs)) : null,
+      isp: sanitizeOptionalText(h.isp, 160),
+      org: sanitizeOptionalText(h.org, 160),
+      as: sanitizeOptionalText(h.as, 80),
+      error: sanitizeOptionalText(h.error, 500),
+    }));
+  const risk = entry.risk === "good" || entry.risk === "watch" || entry.risk === "poor" ? entry.risk : "poor";
+  return {
+    proxyName: sanitizeOptionalText(entry.proxyName, 80) || "unknown",
+    firstSeenAt: sanitizeTimestamp(entry.firstSeenAt),
+    lastCheckedAt: sanitizeTimestamp(entry.lastCheckedAt),
+    lastSuccessAt: entry.lastSuccessAt ? sanitizeTimestamp(entry.lastSuccessAt) : null,
+    checks: Math.max(0, Math.floor(Number(entry.checks) || 0)),
+    successes: Math.max(0, Math.floor(Number(entry.successes) || 0)),
+    consecutiveFailures: Math.max(0, Math.floor(Number(entry.consecutiveFailures) || 0)),
+    distinctExitIps: (Array.isArray(entry.distinctExitIps) ? entry.distinctExitIps : []).slice(-5).map((s) => sanitizeOptionalText(s, 80)).filter((s): s is string => Boolean(s)),
+    ipDriftCount: Math.max(0, Math.floor(Number(entry.ipDriftCount) || 0)),
+    geoDriftCount: Math.max(0, Math.floor(Number(entry.geoDriftCount) || 0)),
+    avgLatencyMs: typeof entry.avgLatencyMs === "number" && Number.isFinite(entry.avgLatencyMs) ? Math.max(0, Math.floor(entry.avgLatencyMs)) : null,
+    score: Math.max(0, Math.min(100, Math.floor(Number(entry.score) || 0))),
+    risk,
+    history,
+    bindings: (Array.isArray(entry.bindings) ? entry.bindings : []).slice(-50).map((s) => sanitizeOptionalText(s, 120)).filter((s): s is string => Boolean(s)),
+    cooldownUntil: entry.cooldownUntil ? sanitizeTimestamp(entry.cooldownUntil) : null,
+    suggestion: sanitizeOptionalText(entry.suggestion, 300),
+  };
+}
+
+function normalizeProxyHealth(value: Record<string, ProxyHealthEntry> | undefined, proxies: Record<string, ProxyConfig>): Record<string, ProxyHealthEntry> {
+  const normalized: Record<string, ProxyHealthEntry> = Object.create(null);
+  if (!value) return normalized;
+  for (const [name, entry] of Object.entries(value)) {
+    if (!isValidProxyName(name) || !Object.hasOwn(proxies, name)) continue;
+    try {
+      normalized[name] = normalizeProxyHealthEntry(entry);
+    } catch (e) {
+      console.warn(`Ignoring invalid proxy health entry for ${name}:`, e);
+    }
+  }
+  return normalized;
+}
+
 function normalizeProxyConfig(config: ProxyConfig, previous?: ProxyConfig): ProxyConfig {
   if (!config || (config.type !== "http" && config.type !== "socks5" && config.type !== "socks5h")) {
     throw new Error(`Invalid proxy type: ${JSON.stringify(config?.type)}`);
@@ -1034,6 +1114,9 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   if (parsed.defaultProxy && isValidProxyName(parsed.defaultProxy) && Object.hasOwn(merged.proxies, parsed.defaultProxy)) merged.defaultProxy = parsed.defaultProxy;
   if (parsed.proxyDetections) {
     merged.proxyDetections = normalizeProxyDetections(parsed.proxyDetections, merged.proxies);
+  }
+  if (parsed.proxyHealth) {
+    merged.proxyHealth = normalizeProxyHealth(parsed.proxyHealth, merged.proxies);
   }
   if (parsed.sync) {
     merged.sync = { ...merged.sync, ...parsed.sync };

@@ -24,6 +24,8 @@ const api = {
     rename: (oldName, newName, config) => ipcRenderer.invoke("proxy:rename", { oldName, newName, config }),
     setDefault: (name) => ipcRenderer.invoke("proxy:set-default", name),
     setProfile: (dirId, proxyName, mode) => ipcRenderer.invoke("proxy:set-profile", { dirId, proxyName, mode }),
+    healthGet: () => ipcRenderer.invoke("proxy:health-get"),
+    healthClear: (name) => ipcRenderer.invoke("proxy:health-clear", name),
   },
   detect: {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),

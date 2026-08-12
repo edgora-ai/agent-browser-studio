@@ -33,6 +33,9 @@ describe("J29 — proxy tab UI CRUD", () => {
     await h.page.waitForSelector(card(), { timeout: 5000 });
     const exists = await h.page.evaluate(() => document.querySelector('#proxy-list [data-proxy-name="test-proxy"]') !== null);
     expect(exists).toBe(true);
+    // Health row renders with an untested state for a proxy with no history.
+    const healthText = await h.page.textContent(`${card()} .proxy-health-row`);
+    expect(healthText).toContain("未检测");
   }, 20000);
 
   it("sets the proxy as default via the card button", async () => {

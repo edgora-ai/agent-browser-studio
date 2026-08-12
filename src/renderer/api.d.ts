@@ -38,6 +38,51 @@ export interface ResolvedProfileProxy {
   config: RedactedProxyConfig | null;
 }
 
+export type ProxyRiskLevel = "good" | "watch" | "poor";
+
+export interface ProxyHealthHistoryPoint {
+  at: number;
+  success: boolean;
+  exitIp: string | null;
+  countryCode: string | null;
+  timezone: string | null;
+  provider: string | null;
+  latencyMs: number | null;
+  isp: string | null;
+  org: string | null;
+  as: string | null;
+  error: string | null;
+}
+
+export interface ProxyHealthEntry {
+  proxyName: string;
+  firstSeenAt: number;
+  lastCheckedAt: number;
+  lastSuccessAt: number | null;
+  checks: number;
+  successes: number;
+  consecutiveFailures: number;
+  distinctExitIps: string[];
+  ipDriftCount: number;
+  geoDriftCount: number;
+  avgLatencyMs: number | null;
+  score: number;
+  risk: ProxyRiskLevel;
+  history: ProxyHealthHistoryPoint[];
+  bindings: string[];
+  cooldownUntil: number | null;
+  suggestion: string | null;
+}
+
+export interface ProxyHealthSummary {
+  total: number;
+  good: number;
+  watch: number;
+  poor: number;
+  inCooldown: number;
+  lastCheckedAt: number | null;
+}
+
 export interface BrowserProfileInfo {
   dirId: string;
   name: string;
@@ -140,6 +185,8 @@ export interface AgentBrowserAPI {
     rename: (oldName: string, newName: string, config: ProxyConfig) => Promise<{ success: boolean; error?: string }>;
     setDefault: (name: string) => Promise<{ success: boolean; error?: string }>;
     setProfile: (dirId: string, proxyName: string | null, mode?: ProxyMode) => Promise<{ success: boolean; error?: string }>;
+    healthGet: () => Promise<{ entries: ProxyHealthEntry[]; summary: ProxyHealthSummary }>;
+    healthClear: (name?: string) => Promise<{ success: boolean; error?: string; cleared?: number }>;
   };
   detect: {
     proxy: (config: ProxyConfig) => Promise<any>;

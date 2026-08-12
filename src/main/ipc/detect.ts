@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import { proxyDetector, type ProxyDetectionResult } from "../services/proxy-detector.js";
+import { recordProxyDetection } from "../services/proxy-health.js";
 import { webrtcDetector } from "../services/webrtc-detector.js";
 import { getProxySecret, setProxyDetectionIfCurrent } from "../services/config-manager.js";
 import type { ProxyConfig, ProxyDetectionCacheEntry } from "../types.js";
@@ -33,6 +34,18 @@ export function registerDetectHandlers(): void {
     const result = await proxyDetector.detect(config);
     try {
       setProxyDetectionIfCurrent(name, config, cacheEntryFromDetection(result));
+      recordProxyDetection(name, {
+        success: Boolean(result?.success),
+        exitIp: result?.exitIp || null,
+        countryCode: result?.countryCode || null,
+        timezone: result?.timezone || null,
+        provider: result?.provider || null,
+        latencyMs: typeof result?.latencyMs === "number" ? result.latencyMs : null,
+        isp: result?.isp || null,
+        org: result?.org || null,
+        as: result?.as || null,
+        error: result?.error || null,
+      });
     } catch (e) {
       console.warn(`[detect] failed to persist proxy detection for ${name}:`, e);
     }

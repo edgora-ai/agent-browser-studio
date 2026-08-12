@@ -101,6 +101,13 @@
         });
       },
 
+  clearHealth: function (name) {
+        api.proxy.healthClear(name).then(function (r) {
+          if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.health-cleared", "Health cleared") : "Health cleared"), "success"); agentBrowser.refresh(); }
+          else toast((r && r.error) || "Failed", "error");
+        }).catch(function (e) { toast(e.message, "error"); });
+      },
+
   showImport: function () {
         toast("Disk import is disabled in the Browser-only build. Use Bulk Import to create Browser profiles.", "error");
       },
@@ -148,24 +155,69 @@
         }
       }
   });
+  function healthBadgeHtml(entry) {
+    if (!entry) return '<span class="proxy-health-badge health-none">未检测</span>';
+    var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
+    var label = entry.risk === "good" ? "良好" : entry.risk === "watch" ? "需关注" : "较差";
+    var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " ⏸冷却" : "";
+    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + '分' + cooldown + '</span>';
+  }
+
+  function renderHealthSummary(health) {
+    var summary = (health && health.summary) || null;
+    if (!summary || !summary.total) return "";
+    return '<div class="proxy-health-summary">' +
+      '<span>代理健康 <b>' + summary.total + '</b></span>' +
+      '<span style="color:var(--success)">良好 <b>' + summary.good + '</b></span>' +
+      '<span style="color:var(--warning)">需关注 <b>' + summary.watch + '</b></span>' +
+      '<span style="color:var(--danger)">较差 <b>' + summary.poor + '</b></span>' +
+      (summary.inCooldown ? '<span>⏸ 冷却 <b>' + summary.inCooldown + '</b></span>' : '') +
+      '</div>';
+  }
+
+  function findHealth(entries, name) {
+    if (!entries) return null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].proxyName === name) return entries[i];
+    }
+    return null;
+  }
+
+  function healthRowsHtml(entry) {
+    var html = '<div class="info-row"><span>健康</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
+    if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>建议</span><span class="proxy-health-suggestion">' + esc(entry.suggestion) + '</span></div>';
+    if (entry && entry.bindings && entry.bindings.length) html += '<div class="info-row"><span>绑定</span><span>' + esc(entry.bindings.join(", ")) + '</span></div>';
+    return html;
+  }
+
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
     container.innerHTML = '<div class="loading">Loading proxies...</div>';
-    api.proxy.list().then(function (proxies) {
+    api.proxy.healthGet().then(function (health) {
+      window.__proxyHealth = health || { entries: [], summary: null };
+    }).catch(function () {
+      window.__proxyHealth = { entries: [], summary: null };
+    }).then(function () {
+      return api.proxy.list();
+    }).then(function (proxies) {
+      var health = window.__proxyHealth || { entries: [], summary: null };
       if (!proxies || proxies.length === 0) {
         container.innerHTML = '<div class="empty-state">No proxies configured.</div>';
         return;
       }
-      container.innerHTML = proxies.map(function (p) {
+      container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
         var cfg = p.config || {};
         var label = cfg.type + '://' + cfg.host + ':' + cfg.port;
+        var entry = findHealth(health.entries, p.name);
         return '<div class="profile-card" data-proxy-name="' + escAttr(p.name) + '">' +
           '<div class="card-header"><span class="name">' + esc(p.name) + '</span><span class="status-badge ' + (p.isDefault ? 'status-running' : 'status-stopped') + '">' + (p.isDefault ? 'Default' : 'Proxy') + '</span></div>' +
           '<div class="info-row"><span>Endpoint</span><span>' + esc(label) + '</span></div>' +
           '<div class="info-row"><span>Detect</span><span class="proxy-detect-result">Not checked</span></div>' +
+          healthRowsHtml(entry) +
           '<div class="card-actions">' +
             '<button class="btn btn-secondary btn-sm" data-action="detect-proxy">🔍 Detect</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="default-proxy">★ Default</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="clear-health">🧹 清除健康</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
           '</div>' +
@@ -186,9 +238,30 @@
       var action = target.dataset.action;
       if (action === "detect-proxy") detectProxyIntoCard(name, card);
       else if (action === "default-proxy") agentBrowser.setDefault(name);
+      else if (action === "clear-health") agentBrowser.clearHealth(name);
       else if (action === "edit-proxy") agentBrowser.editProxy(name);
       else if (action === "delete-proxy") agentBrowser.delProxy(name);
     };
+  }
+
+  function refreshHealthInCard(name, card) {
+    api.proxy.healthGet().then(function (health) {
+      var entry = findHealth((health && health.entries) || [], name);
+      var row = card.querySelector(".proxy-health-row");
+      if (row) row.innerHTML = healthBadgeHtml(entry);
+      var sugRow = card.querySelector(".proxy-health-suggestion-row");
+      if (sugRow) {
+        if (entry && entry.suggestion) {
+          var txt = sugRow.querySelector(".proxy-health-suggestion");
+          if (txt) txt.textContent = entry.suggestion;
+          sugRow.style.display = "";
+        } else {
+          sugRow.style.display = "none";
+        }
+      }
+      var summaryEl = document.querySelector(".proxy-health-summary");
+      if (summaryEl) summaryEl.outerHTML = renderHealthSummary(health);
+    }).catch(function () {});
   }
 
   function detectProxyIntoCard(name, card) {
@@ -209,6 +282,7 @@
       } else if (el) {
         el.textContent = "❌ " + (r.error || "Failed");
       }
+      refreshHealthInCard(name, card);
     }).catch(function (e) { if (el) el.textContent = "❌ " + e.message; });
   }
   agentBrowser.loadProxies = loadProxyTab;
