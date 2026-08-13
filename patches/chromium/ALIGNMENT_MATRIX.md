@@ -59,7 +59,7 @@ Status meanings:
 
 | Capability | Current 150 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
-| `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks |
+| `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks; e2e `j72` reads the live managed process command line and proves the feature-set delta vs the pass-through stock control is exactly the documented `ThrottleMainFrameTo60Hz` refresh-rate setting — no `--enable-automation`, no blink-features overrides, `MediaRouter` never disabled (Slice 47) |
 | CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
 | Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | isolated-world actionability, full cross-origin OOPIF recursion, iframe content-quad coordinate mapping, post-settle re-scroll, occlusion fail-closed, explicit key-hold timing and installed Chromium 150 J44/J50; no page-world prototype modification |
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |

@@ -569,3 +569,14 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **结论**：默认窗口 1280x800（`min(avail,1280/800)`），resize 到 1000x700 后 `outerWidth` 落在 900-1050、`innerWidth` 跟随且在 outer 内、`screen.*` 不变——headed 窗口几何与上游 v0.3.32 unreleased 对齐点自洽，无需额外 DOM 覆盖补丁。
 
 **验证**：j71 4 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。
+
+### Slice 47 — 启动参数特性集与 stock Chrome 对齐（P1，反检测可信闭环）— ✅
+
+**背景**：上游 CloakBrowser v0.5.3 修了一类 bug——Playwright 默认参数关掉了 stock Chrome 默认开启的 MediaRouter 特性（Windows 字体 profile 场景），导致特性集像测试工具而非真浏览器。我们不用 Playwright、参数是自己拼的，理论上没有这类问题，但此前没有实证护栏。本切片用「pass-through 模式作 stock 对照」做进程级实证：同一二进制、同一版本、同一 trial 状态，只差指纹注入。
+
+**新增**：
+- `tests/e2e/j72-launch-args-parity.test.ts` — 6 例：同时启动 managed（windows seed）与 pass-through（`fingerprintMode: off`）两个 profile；读两个 Chromium 进程真实命令行（`ps -ww`，按 ` --` 边界切分，剥离 Chromium 自带的 `--flag-switches-begin/end` 字段试验块）；断言：① managed 无任何 automation/test-harness 痕迹（`--enable-automation`、`--no-sandbox`、`--single-process`、`--in-process-gpu`、`--disable-gpu`、`--disable-dev-shm-usage`、`--headless`、blink-features 开关）；② managed 相对 pass-through 的特性集 delta 恰好等于 `--disable-features=ThrottleMainFrameTo60Hz`（文档化的原生刷新率对齐），不额外 enable 任何东西；③ `MediaRouter` 永不被 managed 禁用；④ pass-through 不带任何 fingerprint 参数（`--user-agent`/`--lang`/`--window-size`/`--window-position`/`--force-device-scale-factor`/指纹配置等）；⑤ managed 保留声明的窗口几何与身份参数；⑥ 无意外 console error。
+
+**结论**：进程级证据确认 managed 启动只比 stock 对照多一项文档化的刷新率设置，其余特性集与 stock Chrome 一致；上游 v0.5.3 那类「特性集偏离 stock」的回归被永久护栏覆盖。
+
+**验证**：j72 6 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。
