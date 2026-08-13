@@ -11,6 +11,8 @@ export interface ProxyHealthObservation {
   isp?: string | null;
   org?: string | null;
   as?: string | null;
+  hosting?: boolean | null;
+  isProxy?: boolean | null;
   error?: string | null;
 }
 
@@ -75,6 +77,8 @@ export function recordProxyDetection(name: string, obs: ProxyHealthObservation):
     isp: obs.isp || null,
     org: obs.org || null,
     as: obs.as || null,
+    hosting: obs.hosting ?? null,
+    isProxy: obs.isProxy ?? null,
     error: obs.error || null,
   };
 
@@ -189,6 +193,11 @@ export function suggestionFor(entry: ProxyHealthEntry): string | null {
   }
   if ((entry.ipDriftCount || 0) >= 2) {
     return "出口 IP 频繁漂移，可能触发账号风控，建议使用固定 IP";
+  }
+  const latest = entry.history && entry.history.length ? entry.history[entry.history.length - 1] : null;
+  if (latest?.success && latest.hosting === true) {
+    const who = [latest.org, latest.as].filter(Boolean).join(" · ");
+    return `出口是机房/IDC IP${who ? `（${who}）` : ""}，云机房出口会被 ping0/平台风控标记（net.isidc），建议换住宅/非 IDC 出口`;
   }
   if (typeof entry.avgLatencyMs === "number" && entry.avgLatencyMs > 800) {
     return "延迟偏高，建议换更近的节点";

@@ -303,7 +303,16 @@
     var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
     var label = entry.risk === "good" ? "良好" : entry.risk === "watch" ? "需关注" : "较差";
     var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " ⏸冷却" : "";
-    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + '分' + cooldown + '</span>';
+    var history = entry.history || [];
+    var latest = history.length ? history[history.length - 1] : null;
+    var riskBadges = "";
+    if (latest && latest.success && latest.hosting === true) {
+      riskBadges += ' <span class="proxy-idc-badge" title="出口为机房/IDC IP（' + escAttr([latest.org, latest.as].filter(Boolean).join(" · ") || "未知归属") + '）">🏭 IDC</span>';
+    }
+    if (latest && latest.success && latest.isProxy === true) {
+      riskBadges += ' <span class="proxy-idc-badge" title="出口被标记为公共代理/VPN">⚠ 代理</span>';
+    }
+    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + '分' + cooldown + '</span>' + riskBadges;
   }
 
   function renderHealthSummary(health) {
@@ -348,6 +357,8 @@
         if (h.countryCode) bits.push(h.countryCode);
         if (h.timezone) bits.push(h.timezone);
         if (h.provider) bits.push(h.provider);
+        if (h.hosting === true) bits.push("🏭IDC");
+        if (h.isProxy === true) bits.push("⚠代理");
         if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
         return '<div style="color:var(--success);">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
       }
@@ -505,6 +516,8 @@
         if (r.exitIp) parts.push("IP:" + r.exitIp);
         if (r.country) parts.push(r.country);
         if (r.city) parts.push(r.city);
+        if (r.hosting === true) parts.push("🏭IDC");
+        if (r.isProxy === true) parts.push("⚠代理");
         if (r.latencyMs) parts.push(r.latencyMs + "ms");
         if (el) el.textContent = parts.join(" | ") || "✅ OK";
       } else if (el) {

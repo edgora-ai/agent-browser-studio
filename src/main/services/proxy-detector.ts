@@ -20,6 +20,10 @@ export interface ProxyDetectionResult {
   isp: string | null;
   org: string | null;
   as: string | null;
+  /** true when the exit IP belongs to a hosting/IDC/datacenter (e.g. Oracle/AWS/Azure cloud). */
+  hosting: boolean | null;
+  /** true when the exit IP is flagged as a public proxy/VPN/anonymizer. */
+  isProxy: boolean | null;
   provider: string | null;
   latencyMs: number | null;
   error: string | null;
@@ -40,10 +44,92 @@ function emptyResult(success: boolean, error?: string): ProxyDetectionResult {
     isp: null,
     org: null,
     as: null,
+    hosting: null,
+    isProxy: null,
     provider: null,
     latencyMs: null,
     error: error || null,
   };
+}
+
+// Known hosting/IDC/cloud ASNs (conservative set — public cloud & datacenter
+// providers that platforms treat as high-risk for account warming). Matched
+// against the exit IP's ASN so hosting is detectable even from providers that
+// don't return an explicit `hosting` field (ipwho.is free endpoint).
+const HOSTING_ASNS = new Set<number>([
+  31898, // Oracle Cloud
+  16509, 14618, 8987, 9059, 8068, 8069, // Amazon / AWS
+  396982, 396983, 396984, 146824, 206194, 15169, // Google / GCP
+  8075, 12076, 8070, 8071, 8072, 8073, 8074, // Microsoft / Azure
+  14061, 19871, // DigitalOcean
+  20473, // Vultr / Choopa
+  63949, 20940, // Linode / Akamai
+  24940, // Hetzner
+  16276, // OVH
+  12876, // Scaleway
+  51167, // Contabo
+  8560, // IONOS / 1&1
+  26347, // DreamHost
+  13335, 209242, // Cloudflare
+  37963, 45102, 45062, // Alibaba / Aliyun
+  45090, 132203, // Tencent Cloud
+  136907, 55990, // Huawei Cloud
+  199524, // G-Core
+  55286, // UpCloud
+  29802, // HCC
+  63199, // CDN77
+  212238, // Datacamp / CDN77
+  49392, // Choopa (secondary)
+  46606, 46604, // Unified Layer (Bluehost/HostGator)
+  46475, // HostGator / Bluehost (LIMESTONENETWORKS)
+  43959, // CloudSigma
+  42610, // iWeb / Quebec
+  395954, // Hostwinds
+  36444, // Aruba / Cloud Italia
+  35913, // DediPath
+  33324, // HostDime
+  32748, // Steadfast
+  32475, // SingleHop
+  32097, // WholeSale Internet
+  30083, // GoDaddy
+  29873, // Newfold / Bluehost
+  26496, // GoDaddy (AS-26496-GODADDY)
+  25184, // NFOrce
+  21859, // Zenlayer
+  201838, // Zenlayer
+  204428, // Zenlayer
+  207990, // Zenlayer
+  213230, // Zenlayer
+  14745, // Internap
+]);
+
+const HOSTING_ORG_HINTS = [
+  "oracle cloud", "oracle corporation", "amazon", "amazonaws", "aws ",
+  "microsoft azure", "azure ", "google cloud", "google llc", "digitalocean",
+  "linode", "vultr", "hetzner", "ovh", "scaleway", "ionos", "contabo",
+  "alibaba", "aliyun", "tencent cloud", "huawei cloud", "cloudflare",
+  "g-core", "upcloud", "phoenixnap", "datacamp", "unified layer",
+  "limestonenetworks", "hostgator", "bluehost", "dreamhost", "cloudsigma",
+  "hostwinds", "aruba", "dedipath", "hostdime", "steadfast", "singlehop",
+  "wholesale internet", "godaddy", "newfold", "zenlayer", "internap",
+  "idc", "datacenter", "data center", "hosting", "colocation", "dedicated server",
+];
+
+/**
+ * Classify an exit identity as hosting/IDC or public-proxy from offline ASN /
+ * org hints. Conservative: only known cloud/datacenter ASNs and explicit
+ * hosting/IDC org names match, so residential ISPs are never mislabeled.
+ */
+export function classifyHosting(identity: { as?: string | null; org?: string | null; isp?: string | null }): { hosting: boolean; isProxy: boolean } {
+  const asnMatch = identity.as?.match(/AS(\d+)/i);
+  const asn = asnMatch ? Number(asnMatch[1]) : null;
+  if (asn && HOSTING_ASNS.has(asn)) return { hosting: true, isProxy: false };
+  const haystack = [identity.org, identity.isp].filter(Boolean).join(" ").toLowerCase();
+  if (!haystack) return { hosting: false, isProxy: false };
+  for (const hint of HOSTING_ORG_HINTS) {
+    if (haystack.includes(hint)) return { hosting: true, isProxy: false };
+  }
+  return { hosting: false, isProxy: false };
 }
 
 export function buildProxyUrl(config: ProxyConfig): string {
@@ -245,6 +331,7 @@ function fromIpwhois(data: any, latencyMs: number): ProxyDetectionResult | null 
   if (!data || data.success === false) return null;
   const ip = data.ip || data.query;
   if (!ip || !data.timezone?.id || !data.country_code) return null;
+  const classified = classifyHosting({ as: data.connection?.asn ? `AS${data.connection.asn}` : null, org: data.connection?.org, isp: data.connection?.isp });
   return {
     success: true,
     exitIp: ip,
@@ -259,6 +346,8 @@ function fromIpwhois(data: any, latencyMs: number): ProxyDetectionResult | null 
     isp: data.connection?.isp || null,
     org: data.connection?.org || null,
     as: data.connection?.asn ? `AS${data.connection.asn}` : null,
+    hosting: classified.hosting,
+    isProxy: classified.isProxy,
     provider: "ipwho.is",
     latencyMs,
     error: null,
@@ -269,6 +358,7 @@ function fromIpapi(data: any, latencyMs: number): ProxyDetectionResult | null {
   if (!data || data.error) return null;
   const ip = data.ip;
   if (!ip || !data.timezone || !data.country_code) return null;
+  const classified = classifyHosting({ as: data.asn, org: data.org, isp: data.org });
   return {
     success: true,
     exitIp: ip,
@@ -283,6 +373,8 @@ function fromIpapi(data: any, latencyMs: number): ProxyDetectionResult | null {
     isp: data.org || null,
     org: data.org || null,
     as: data.asn || null,
+    hosting: classified.hosting,
+    isProxy: classified.isProxy,
     provider: "ipapi.co",
     latencyMs,
     error: null,
@@ -293,6 +385,7 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
   if (!data || data.status === "fail") return null;
   const ip = data.query;
   if (!ip || !data.timezone || !data.countryCode) return null;
+  const classified = classifyHosting({ as: data.as, org: data.org, isp: data.isp });
   return {
     success: true,
     exitIp: ip,
@@ -307,6 +400,10 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
     isp: data.isp || null,
     org: data.org || null,
     as: data.as || null,
+    // ip-api.com returns authoritative `hosting` / `proxy` flags; fall back to
+    // the offline heuristic when the flags are absent.
+    hosting: typeof data.hosting === "boolean" ? data.hosting : classified.hosting,
+    isProxy: typeof data.proxy === "boolean" ? data.proxy : classified.isProxy,
     provider: "ip-api.com",
     latencyMs,
     error: null,
@@ -364,7 +461,7 @@ export const proxyDetector = {
         parse: fromIpapi,
       },
       {
-        url: "http://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,timezone,lat,lon,isp,org,as",
+        url: "http://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,timezone,lat,lon,isp,org,as,proxy,hosting",
         timeoutSeconds: 2,
         parse: fromIpApi,
       },

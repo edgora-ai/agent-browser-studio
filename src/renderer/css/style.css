@@ -332,6 +332,17 @@ dialog,
 .health-watch { background: var(--warning-bg); color: var(--warning); }
 .health-poor { background: var(--danger-bg); color: var(--danger); }
 .health-none { background: var(--surface2); color: var(--text-muted); }
+.proxy-idc-badge {
+  font-size: 10px;
+  font-weight: 650;
+  padding: 3px 9px;
+  border-radius: 20px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  background: var(--warning-bg);
+  color: var(--warning);
+  margin-left: 6px;
+}
 .proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-secondary); }
 .proxy-health-summary b { color: var(--text); }
 

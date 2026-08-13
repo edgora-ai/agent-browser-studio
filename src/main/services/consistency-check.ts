@@ -17,7 +17,15 @@ export interface ConsistencyInput {
   platform?: string | null;
   proxyMode: "none" | "default" | "named";
   /** Cached proxy geo (from proxy-detector), if a detection exists. */
-  proxyGeo?: { country?: string | null; countryCode?: string | null; timezone?: string | null } | null;
+  proxyGeo?: {
+    country?: string | null;
+    countryCode?: string | null;
+    timezone?: string | null;
+    hosting?: boolean | null;
+    isProxy?: boolean | null;
+    org?: string | null;
+    as?: string | null;
+  } | null;
 }
 
 export interface ConsistencyFinding {
@@ -111,6 +119,27 @@ export function checkProfileConsistency(input: ConsistencyInput): ConsistencyRes
       severity: "warning",
       code: "proxy-tz-mismatch",
       message: `Proxy timezone ${input.proxyGeo.timezone} doesn't match profile timezone ${input.timezone}.`,
+    });
+  }
+
+  // Warning: proxy exit is a hosting/IDC/datacenter IP. This is the #1 real
+  // deduction on environment scanners (ping0 `net.isidc`) and a known
+  // account-warming risk — platforms treat cloud/IDC exits as high-risk.
+  if (input.proxyGeo?.hosting === true) {
+    const who = [input.proxyGeo.org, input.proxyGeo.as].filter(Boolean).join(" · ");
+    warnings.push({
+      severity: "warning",
+      code: "proxy-idc",
+      message: `Proxy exit is a hosting/IDC IP${who ? ` (${who})` : ""} — cloud/data-center exits are flagged by ping0 (net.isidc) and account-warming risk controls; prefer a residential/non-IDC exit for account-heavy work.`,
+    });
+  }
+
+  // Warning: proxy exit is flagged as a public proxy/VPN/anonymizer.
+  if (input.proxyGeo?.isProxy === true) {
+    warnings.push({
+      severity: "warning",
+      code: "proxy-anonymous",
+      message: "Proxy exit is flagged as a public proxy/VPN — many platforms block known proxy exits outright; prefer a clean residential exit.",
     });
   }
 

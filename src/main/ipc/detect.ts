@@ -15,6 +15,10 @@ function cacheEntryFromDetection(result: ProxyDetectionResult): ProxyDetectionCa
     timezone: result?.timezone || null,
     provider: result?.provider || null,
     latencyMs: typeof result?.latencyMs === "number" ? result.latencyMs : null,
+    org: result?.org || null,
+    as: result?.as || null,
+    hosting: result?.hosting ?? null,
+    isProxy: result?.isProxy ?? null,
     error: result?.error || null,
   };
 }
@@ -44,6 +48,8 @@ export function registerDetectHandlers(): void {
         isp: result?.isp || null,
         org: result?.org || null,
         as: result?.as || null,
+        hosting: result?.hosting ?? null,
+        isProxy: result?.isProxy ?? null,
         error: result?.error || null,
       });
     } catch (e) {

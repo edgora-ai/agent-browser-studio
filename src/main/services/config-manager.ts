@@ -887,6 +887,10 @@ function normalizeProxyDetection(entry: ProxyDetectionCacheEntry): ProxyDetectio
     timezone: sanitizeOptionalText(entry.timezone, 80),
     provider: sanitizeOptionalText(entry.provider, 80),
     latencyMs: typeof entry.latencyMs === "number" && Number.isFinite(entry.latencyMs) ? Math.max(0, Math.floor(entry.latencyMs)) : null,
+    org: sanitizeOptionalText(entry.org, 160),
+    as: sanitizeOptionalText(entry.as, 80),
+    hosting: typeof entry.hosting === "boolean" ? entry.hosting : null,
+    isProxy: typeof entry.isProxy === "boolean" ? entry.isProxy : null,
     error: sanitizeOptionalText(entry.error, 500),
   };
 }
@@ -919,6 +923,8 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
       isp: sanitizeOptionalText(h.isp, 160),
       org: sanitizeOptionalText(h.org, 160),
       as: sanitizeOptionalText(h.as, 80),
+      hosting: typeof h.hosting === "boolean" ? h.hosting : null,
+      isProxy: typeof h.isProxy === "boolean" ? h.isProxy : null,
       error: sanitizeOptionalText(h.error, 500),
     }));
   const risk = entry.risk === "good" || entry.risk === "watch" || entry.risk === "poor" ? entry.risk : "poor";

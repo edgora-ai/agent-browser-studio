@@ -22,6 +22,10 @@ export interface ProxyDetectionCacheEntry {
   timezone: string | null;
   provider: string | null;
   latencyMs: number | null;
+  org?: string | null;
+  as?: string | null;
+  hosting?: boolean | null;
+  isProxy?: boolean | null;
   error: string | null;
 }
 
@@ -36,6 +40,8 @@ export interface ProxyHealthHistoryPoint {
   isp: string | null;
   org: string | null;
   as: string | null;
+  hosting?: boolean | null;
+  isProxy?: boolean | null;
   error: string | null;
 }
 

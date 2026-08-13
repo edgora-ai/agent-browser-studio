@@ -9,7 +9,7 @@ import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { BrowserWindow } from "electron";
-import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, sanitizeAppUrl } from "./config-manager.js";
+import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
@@ -26,7 +26,7 @@ import {
   startAuthenticatedSocksBridge,
 } from "./authenticated-socks-bridge.js";
 import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
-import { buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
+import { buildChromiumProxyUrl, proxyDetector, type ProxyDetectionResult } from "./proxy-detector.js";
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
@@ -508,13 +508,16 @@ export async function launchBrowser(
   });
   // Geo-IP is resolved at most once per launch (even though both the
   // timezone/locale and the WebRTC exit-IP paths can consume it).
-  let geoDetection: { timezone: string | null; locale: string | null; exitIp: string | null } | null = null;
+  let geoDetection: { timezone: string | null; locale: string | null; exitIp: string | null; detection: ProxyDetectionResult | null } | null = null;
   let effectiveTimezone = passThrough ? null : normalizeOptionalTimezone(meta.timezone);
   let effectiveLocale = passThrough ? null : normalizeOptionalLocale(meta.locale);
   let webrtcIp = shouldResolveWebRtc ? normalizeOptionalIp(meta.webrtcIp) : null;
   if (!passThrough) {
     if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
       geoDetection = await resolveGeoFromProxy(activeProxy);
+      if (resolvedProxy.name && geoDetection?.detection?.success) {
+        persistLaunchDetection(resolvedProxy.name, activeProxy, geoDetection.detection);
+      }
       if (!effectiveTimezone) effectiveTimezone = geoDetection.timezone;
       if (!effectiveLocale) effectiveLocale = geoDetection.locale;
       if (shouldResolveWebRtc && !webrtcIp) {
@@ -1483,19 +1486,47 @@ function findBrowserByProfile(dirId: string): { pid: number; cdpPort: number } |
 // Geo-IP: Auto-detect timezone + locale from proxy exit IP
 // ═══════════════════════════════════════════════════════════════
 
-async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: string | null; locale: string | null; exitIp: string | null }> {
+async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: string | null; locale: string | null; exitIp: string | null; detection: ProxyDetectionResult | null }> {
   try {
     const detection = await proxyDetector.detect(proxy);
     if (!detection.success) {
       console.log(`[agent-browser] Geo-IP detection skipped: ${detection.error || "proxy may be local or unreachable"}`);
-      return { timezone: null, locale: null, exitIp: null };
+      return { timezone: null, locale: null, exitIp: null, detection: null };
     }
     const locale = localeFromCountry(detection.countryCode);
     console.log(`[agent-browser] Geo-IP via ${detection.provider}: country=${detection.countryCode || ""} tz=${detection.timezone || ""} locale=${locale || ""}`);
-    return { timezone: detection.timezone || null, locale, exitIp: detection.exitIp || null };
+    return { timezone: detection.timezone || null, locale, exitIp: detection.exitIp || null, detection };
   } catch {
     console.log("[agent-browser] Geo-IP detection skipped (proxy may be local or unreachable)");
-    return { timezone: null, locale: null, exitIp: null };
+    return { timezone: null, locale: null, exitIp: null, detection: null };
+  }
+}
+
+/**
+ * Persist a launch-time geo detection into the proxy's detection cache so the
+ * next launch's consistency check sees fresh risk flags (hosting / isProxy)
+ * even when the user never clicked Detect. Only touches the detection cache,
+ * not the health history (which is owned by the manual Detect flow).
+ */
+function persistLaunchDetection(proxyName: string, proxy: ProxyConfig, detection: ProxyDetectionResult): void {
+  try {
+    setProxyDetectionIfCurrent(proxyName, proxy, {
+      detectedAt: Date.now(),
+      success: true,
+      exitIp: detection.exitIp,
+      country: detection.country || detection.countryCode || null,
+      countryCode: detection.countryCode,
+      timezone: detection.timezone,
+      provider: detection.provider,
+      latencyMs: typeof detection.latencyMs === "number" ? detection.latencyMs : null,
+      org: detection.org,
+      as: detection.as,
+      hosting: detection.hosting,
+      isProxy: detection.isProxy,
+      error: null,
+    });
+  } catch (e) {
+    console.warn(`[agent-browser] failed to persist launch detection for ${proxyName}:`, e);
   }
 }
 
