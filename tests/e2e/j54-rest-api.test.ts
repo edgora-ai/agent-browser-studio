@@ -113,6 +113,13 @@ describe("J54 — local REST API + OpenAPI", () => {
     expect(noBaseline.body.hasBaseline).toBe(false);
     expect(noBaseline.body.checked).toBe(false);
 
+    const env = await apiRequest(port, token, "GET", "/api/profiles/" + dirId + "/env-risk");
+    expect(env.status).toBe(200);
+    expect(env.body).toHaveProperty("findings");
+    expect(Array.isArray(env.body.resolvers)).toBe(true);
+    expect(Array.isArray(env.body.cnFonts)).toBe(true);
+    expect(env.body.proxy).toBeTruthy();
+
     const del = await apiRequest(port, token, "DELETE", "/api/profiles/" + dirId);
     expect(del.status).toBe(200);
     expect(del.body.success).toBe(true);

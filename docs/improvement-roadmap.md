@@ -431,3 +431,34 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J58 全绿（含 journ
 - 新增 `tests/unit/environment-risk.test.ts`（13 例）+ `tests/e2e/j58-env-risk.test.ts`（4 例）
 
 **验证**：unit 13 例全绿（解析器分类/字体 fixture/代理 DNS/RAF 分类/findings 严重级与 CN 兼容）；e2e J58 4 例全绿（预检结构、非中文 profile 遇 CN 解析器 → high、运行中 raf 字段）；unit/smoke 478 全绿；j55/j56/j57/j54/j41 回归 30 例通过；whitespace audit 通过。
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 39 files, 480 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journey 10/10 tab 切换）
+```
+
+14 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI / 19 指纹漂移启动阻断 / 20 sync 团队 diff 预览 / 21 团队 profile 签出锁定 / 22 Host 环境风控检查 / 23 环境风控启动闸门）落地并验证。
+
+### Slice 23 — 环境风控启动闸门（P0，信任地基收口）— ✅
+
+**范围**：Slice 22 只「检测」，Slice 23 把它接进启动流程——每次 launch 后运行环境风控预检（DNS 解析器 / 中文字体 / 代理 DNS），高危发现**始终落审计**，并可按配置 `blockOnEnvironmentRisk=true` 硬阻断启动；launch 返回体带 `envCheck` 供 UI/API 消费。默认仅告警记录（不阻断），避免中文字体这类普遍存在的主机项把正常用户卡死。
+
+**设计**：
+- `environment-risk.ts` 新增纯函数：`summarizeEnvFindings(findings, severity)`（audit/UI 摘要）、`shouldBlockEnvironmentRisk(result, enabled)`（opt-in 硬闸）
+- `types.ts` 新增 `MgmtConfig.blockOnEnvironmentRisk?: boolean`
+- `browser-manager.ts` launchBrowser：waitForCdpReady 之后跑 `checkEnvironmentRisk`（传 profile tz/locale/platform + resolvedProxy 的 type），返回 `envCheck: { checked, high, findings, error }`；高危写 audit `env-risk-high`（actor=auto）；`blockOnEnvironmentRisk===true` 时杀进程（SIGTERM→SIGKILL）、写 audit `env-risk-block`、抛 `envBlocked`；检查失败仅告警
+- IPC `browser:launch` 返回 `envCheck`；REST 新增只读 `GET /api/profiles/{dirId}/env-risk`（运行中带 rAF，否则预检），OpenAPI/README 同步
+- UI：launch 成功后若 `envCheck.high` 弹警告 toast（列出高危 code，提示点 🖥 Env 看修复建议）
+
+**文件**：
+- 改 `services/environment-risk.ts` — summarize/shouldBlock 助手 + proxyDnsLeak 类型松化
+- 改 `types.ts` — `blockOnEnvironmentRisk`
+- 改 `services/browser-manager.ts` — `LaunchEnvCheck`、env check 集成、两处提前返回、launch 返回体
+- 改 `ipc/browser.ts` + `services/rest-api-server.ts` + `README.md` — launch envCheck、env-risk 端点 + OpenAPI
+- 改 `renderer/js/app/profiles.js` — launch 高危 toast
+- 改 `tests/unit/environment-risk.test.ts` — +2 例（shouldBlock/summarize）
+- 新增 `tests/e2e/j59-env-risk-launch-gate.test.ts`（6 例）；`tests/e2e/j54-rest-api.test.ts` +env-risk 端点断言
+
+**验证**：e2e J59 6 例全绿（默认 launch 返回 envCheck.high=true（本机有 CN 解析器 114.114.114.114 + Hiragino/STHeiti 字体）→ audit 有 env-risk-high → `blockOnEnvironmentRisk=true` 时 launch 被拦且无残留进程 → audit 有 env-risk-block → 关闭后放行）；unit/smoke 480 全绿；j54（含 env-risk REST）/j58/j55/j56/j57/j41 回归 34 例通过；whitespace audit 通过。

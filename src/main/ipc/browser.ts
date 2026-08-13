@@ -105,7 +105,7 @@ export function registerBrowserHandlers(): void {
   }) => {
     try {
       const r = await launchBrowser(params.dirId);
-      return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck };
+      return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

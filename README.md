@@ -222,6 +222,7 @@ Main resources:
 | POST | `/api/profiles/{dirId}/launch` | `/stop` | Start / stop the profile's Chromium |
 | GET | `/api/profiles/{dirId}/status` | Running state + CDP port |
 | GET | `/api/profiles/{dirId}/drift` | Read-only fingerprint drift check vs stored baseline |
+| GET | `/api/profiles/{dirId}/env-risk` | Host environment risk report (DNS / CN fonts / proxy DNS / rAF) |
 | GET/POST | `/api/proxies` | List / add proxies |
 | PATCH/DELETE | `/api/proxies/{name}` | Update / delete a proxy |
 | GET | `/api/proxies/health` | Health score / risk / bindings / suggestions |

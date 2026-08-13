@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   classifyResolver, scanSystemFonts, proxyDnsLeak, classifyRaf,
-  checkEnvironmentRisk,
+  checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings,
 } from "../../src/main/services/environment-risk.js";
 
 const TMP = path.join(os.tmpdir(), "agent-browser-envrisk-test-" + Date.now());
@@ -124,5 +124,36 @@ describe("environment risk — assembled findings", () => {
       { resolvers: ["8.8.8.8"], hostLocale: "zh-CN", proxy: { mode: "none", config: null } as any },
     );
     expect(res.findings.some((f) => f.code === "host-locale-leak" && f.severity === "medium")).toBe(true);
+  });
+});
+
+describe("environment risk — launch gate helpers", () => {
+  function sampleResult(high: boolean, medium = false): any {
+    const findings: any[] = [];
+    if (high) findings.push({ severity: "high", code: "cn-fonts-exposed", message: "x", fix: "y" });
+    if (medium) findings.push({ severity: "medium", code: "host-locale-leak", message: "x", fix: "y" });
+    return { ok: !high, findings };
+  }
+
+  it("shouldBlockEnvironmentRisk only when enabled and high findings exist", () => {
+    expect(shouldBlockEnvironmentRisk(sampleResult(true), true)).toBe(true);
+    expect(shouldBlockEnvironmentRisk(sampleResult(true), false)).toBe(false);
+    expect(shouldBlockEnvironmentRisk(sampleResult(true), undefined)).toBe(false);
+    expect(shouldBlockEnvironmentRisk(sampleResult(false, true), true)).toBe(false);
+    expect(shouldBlockEnvironmentRisk(sampleResult(false), true)).toBe(false);
+  });
+
+  it("summarizeEnvFindings filters by severity and caps output", () => {
+    const findings = [
+      { severity: "high", code: "a" },
+      { severity: "high", code: "b" },
+      { severity: "medium", code: "c" },
+      { severity: "info", code: "d" },
+    ];
+    expect(summarizeEnvFindings(findings)).toBe("a, b, c, d");
+    expect(summarizeEnvFindings(findings, "high")).toBe("a, b");
+    expect(summarizeEnvFindings(findings, "medium")).toBe("c");
+    const many = Array.from({ length: 12 }, (_, i) => ({ severity: "high", code: "f" + i }));
+    expect(summarizeEnvFindings(many)).toBe("f0, f1, f2, f3, f4, f5, f6, f7 (+4 more)");
   });
 });

@@ -23,6 +23,7 @@ import {
   findRuntimeChromiumBinary, getRuntimeChromiumVersion,
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
+import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
 
 const API_VERSION = "1.0.0";
@@ -172,7 +173,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       validateDirId(dirId);
       const r = await launchBrowser(dirId);
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
-      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck } };
+      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -198,6 +199,21 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       return { status: 200, body: { dirId, running: st.running, pid: st.pid, cdpPort: st.cdpPort } };
     } catch (e: any) {
       return { status: 404, body: { error: e.message || String(e) } };
+    }
+  }
+  const mEnvRisk = p.match(/^\/api\/profiles\/([^/]+)\/env-risk$/);
+  if (mEnvRisk && method === "GET") {
+    try {
+      const dirId = mEnvRisk[1];
+      validateDirId(dirId);
+      const meta = getProfileMeta(dirId);
+      if (!meta) return { status: 404, body: { error: "Profile not found" } };
+      const st = statusBrowser(dirId);
+      const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
+      if (st.running && st.cdpPort) return { status: 200, body: await checkEnvironmentRiskRuntime(profile, st.cdpPort) };
+      return { status: 200, body: checkEnvironmentRisk(profile) };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
     }
   }
   const mDrift = p.match(/^\/api\/profiles\/([^/]+)\/drift$/);
@@ -539,6 +555,10 @@ function buildOpenApi(): any {
       "/api/profiles/{dirId}/drift": {
         parameters: [dirIdParam],
         get: { summary: "Read-only fingerprint drift check vs stored baseline", responses: ok("Drift check") },
+      },
+      "/api/profiles/{dirId}/env-risk": {
+        parameters: [dirIdParam],
+        get: { summary: "Host environment risk report (DNS resolvers / CN fonts / proxy DNS / rAF)", responses: ok("Environment risk") },
       },
       "/api/profiles/{dirId}/launch": {
         parameters: [dirIdParam],

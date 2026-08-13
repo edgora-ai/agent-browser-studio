@@ -18,6 +18,7 @@ import {
   captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
+import { checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
@@ -355,7 +356,14 @@ export interface LaunchDriftCheck {
   error?: string;
 }
 
-export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck }> {
+export interface LaunchEnvCheck {
+  checked: boolean;
+  high?: boolean;
+  findings?: EnvRiskFinding[];
+  error?: string;
+}
+
+export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a managed Chromium profile`);
@@ -377,7 +385,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   // Memory-map check with alive test
   const existing = runningProcesses.get(dirId);
   if (existing) {
-    try { process.kill(existing.pid, 0); return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false } }; }
+    try { process.kill(existing.pid, 0); return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false }, envCheck: { checked: false } }; }
     catch { runningProcesses.delete(dirId); }
   }
 
@@ -385,7 +393,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   const psFallback = findBrowserByProfile(dirId);
   if (psFallback) {
     runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort });
-    return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false } };
+    return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
   }
 
   const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
@@ -731,6 +739,44 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
     }
   }
 
+  // Host environment risk check (DNS resolvers / CN fonts / proxy DNS).
+  // Runs after CDP is ready so a healthy launch is not penalized by a slow
+  // pre-launch probe; high findings are always audited, and only block when
+  // config.blockOnEnvironmentRisk is true (opt-in hard gate).
+  let envCheck: LaunchEnvCheck = { checked: false };
+  if (!passThrough) {
+    try {
+      const envResult = checkEnvironmentRisk(
+        { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
+        { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
+      );
+      envCheck = { checked: true, high: !envResult.ok, findings: envResult.findings };
+      if (!envResult.ok) {
+        recordAudit({
+          category: "profile", action: "env-risk-high", target: dirId, actor: "auto",
+          detail: "high: " + summarizeEnvFindings(envResult.findings, "high") + (envResult.findings.some((f) => f.severity === "medium") ? "; medium: " + summarizeEnvFindings(envResult.findings, "medium") : ""),
+        });
+      }
+      if (shouldBlockEnvironmentRisk(envResult, cfg.blockOnEnvironmentRisk)) {
+        const reason = "Environment risk blocked (" + summarizeEnvFindings(envResult.findings, "high") + "). Fix the host environment or set blockOnEnvironmentRisk=false to launch.";
+        recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail: reason });
+        const failedEntry = runningProcesses.get(dirId);
+        runningProcesses.delete(dirId);
+        await failedEntry?.proxyBridge?.close().catch(() => undefined);
+        try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate env-blocked process " + pid + ":", killError); }
+        try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
+        await waitForProcessExit(pid);
+        const envBlockError: any = new Error(reason);
+        envBlockError.envBlocked = true;
+        throw envBlockError;
+      }
+    } catch (e: any) {
+      if (e && e.envBlocked) throw e;
+      console.warn("[agent-browser] environment risk check failed for " + dirId.slice(0, 8) + ":", e.message || e);
+      envCheck = { checked: false, error: (e && e.message) || String(e) };
+    }
+  }
+
   child.on("exit", () => {
     // Cancel pending SIGKILL timer if any — process exited naturally
     const entry = runningProcesses.get(dirId);
@@ -750,7 +796,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
 
   emitEvent("profile:launched", { dirId, pid, cdpPort });
   recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
-  return { pid, cdpPort, driftCheck };
+  return { pid, cdpPort, driftCheck, envCheck };
   } finally {
     pendingNativeProxyAuth?.cleanup();
     await pendingProxyBridge?.close().catch(() => undefined);

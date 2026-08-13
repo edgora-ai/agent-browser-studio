@@ -253,6 +253,8 @@ export interface MgmtConfig {
   blockOnConsistencyConflict?: boolean;
   /** When true (default), a post-launch fingerprint drift on high-risk fields stops the browser. */
   blockOnFingerprintDrift?: boolean;
+  /** When true, launch is refused when the host environment check finds high-risk findings (DNS leak / CN fonts / SOCKS5 DNS). Default false (warn only). */
+  blockOnEnvironmentRisk?: boolean;
   /** Max automation jobs running concurrently. Default 3. */
   maxConcurrentJobs?: number;
 }

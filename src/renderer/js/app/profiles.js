@@ -96,6 +96,10 @@
         api.browser.launch(dirId).then(function (r) {
           if (r.success) {
             toast((window.i18n ? window.i18n.t("toast.profile.started", "🥷 Managed Chromium started") : "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
+            if (r.envCheck && r.envCheck.high) {
+              var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
+              toast("⚠️ 环境风险: " + (envCodes || "host 环境高危") + " — 点卡片 🖥 Env 看修复建议", "error");
+            }
             var seq = markProfileRuntime(dirId, true, r.pid);
             setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
             scheduleProfilesRefresh();

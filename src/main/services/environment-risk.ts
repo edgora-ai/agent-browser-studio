@@ -176,7 +176,7 @@ export function scanSystemFonts(dirs?: string[]): string[] {
 }
 
 /** Pure proxy DNS-leak classification. */
-export function proxyDnsLeak(proxy: Pick<ResolvedProfileProxy, "mode" | "config">): { mode: string; type?: string; dnsLeakRisk: "low" | "high" | "none"; note: string } {
+export function proxyDnsLeak(proxy: Pick<ResolvedProfileProxy, "mode"> & { config?: { type?: string } | null }): { mode: string; type?: string; dnsLeakRisk: "low" | "high" | "none"; note: string } {
   if (proxy.mode === "none" || !proxy.config) {
     return { mode: proxy.mode, dnsLeakRisk: "none", note: "直连：系统 DNS 即出口解析（无代理隔离，出口 IP 与 DNS 均来自本机）" };
   }
@@ -197,6 +197,17 @@ export function classifyRaf(medianMs: number, samples: number): EnvRafResult {
   const refreshHz = Math.round(1000 / medianMs);
   const standard = STANDARD_REFRESH_HZ.some((hz) => Math.abs(refreshHz - hz) <= 2);
   return { samples, medianMs: Math.round(medianMs * 100) / 100, meanMs: 0, refreshHz, standard };
+}
+
+/** Comma-joined high/medium finding codes for audit/UI summaries. */
+export function summarizeEnvFindings(findings: EnvRiskFinding[], severity?: EnvSeverity): string {
+  const filtered = severity ? findings.filter((f) => f.severity === severity) : findings;
+  return filtered.slice(0, 8).map((f) => f.code).join(", ") + (filtered.length > 8 ? " (+" + (filtered.length - 8) + " more)" : "");
+}
+
+/** Block decision: env-risk blocking is opt-in (blockOnEnvironmentRisk === true). */
+export function shouldBlockEnvironmentRisk(result: EnvironmentRiskResult, enabled: boolean | undefined): boolean {
+  return enabled === true && result.findings.some((f) => f.severity === "high");
 }
 
 export const RAF_MEASURE_EXPRESSION = `(async () => {
@@ -242,7 +253,7 @@ export interface EnvCheckOptions {
   runtime?: boolean;
   cdpPort?: number | null;
   /** Proxy override for unit tests (defaults to resolving from config). */
-  proxy?: Pick<ResolvedProfileProxy, "mode" | "config"> | null;
+  proxy?: (Pick<ResolvedProfileProxy, "mode"> & { config?: { type?: string } | null }) | null;
   /** Host locale override for unit tests. */
   hostLocale?: string;
   /** Font dirs override for unit tests. */
