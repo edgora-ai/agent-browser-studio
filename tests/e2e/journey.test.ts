@@ -140,6 +140,11 @@ describe("E2E — Agent Browser Studio user journey", () => {
       await page.waitForSelector("#dlg-profile", { state: "visible", timeout: 5000 });
       await shot("03-new-profile-dialog");
 
+      // RoxyBrowser 4.0.3-style creation flow: advanced fields are collapsed by
+      // default behind the "高级设置" summary — expand before touching the seed.
+      await page.locator("#new-profile-advanced > summary").click({ timeout: 5000 });
+      await page.waitForSelector("#new-profile-advanced[open]", { timeout: 5000 });
+
       const seedInput = page.locator("#new-agent-browser-seed");
       const before = await seedInput.inputValue();
       expect(before).toBe("");
