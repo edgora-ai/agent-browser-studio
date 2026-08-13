@@ -761,3 +761,31 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：j52 proxy-rotation + j58 env-risk + j70 proxy-health 全绿；tsc/build 干净
 
 **后续项**：REST 其余模块写端点（/api/automation/rules、/api/extension-repository、/api/skills）；引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）；app 冷启动（Electron boot→UI 就绪）计时与优化。
+
+
+### Slice 58 — app 冷启动提速：UI 存储独立分区 + 一次性迁移（DCL ~4s → ~0.4s，约 10x）— ✅
+
+**背景**：Slice 57 收尾时点名的「app 冷启动计时」。真实 app 冷启动基线：firstWindow ≈1.5-2s、页面导航 DCL ≈4000ms（首屏长时间空白），而空白页/迷你 Electron 只有 ~150ms —— 差距在真实 app 自己的初始化里。
+
+**根因（插桩 + CPU profile + 对照实验锁定）**：
+- 渲染端 22 个脚本 385ms 全部执行完，DCL 仍 4018ms；setInterval 首跳延迟到 4021ms → 渲染主线程被冻结 ~3.6s
+- CPU profile：13453/18874 采样在 init()；init 内第一步 localStorage.getItem('agent-browser-studio-theme') 阻塞 571→3801ms
+- 对照：全新 user-data-dir → 247ms；真实 userData（748MB，profiles 744MB）→ 4000ms；真实 userData 去掉 profiles → 385ms；静态完整副本（无运行中 Chromium）→ 392ms；700MB 假文件 → 212ms（非磁盘竞争）
+- **结论**：Electron 默认 session 的存储服务首次打开 localStorage 时对 userData 全目录做发现扫描；目录内有运行中 Chromium profile 的 LevelDB 锁时，首个 localStorage 调用阻塞 ~3.5-4s，拖死 DOMContentLoaded
+
+**修复**：
+- 新增 src/main/services/renderer-storage.ts — 主窗口改用独立持久化分区 persist:app（存储于 <userData>/Partitions/app），把存储发现范围收敛到不含运行中 profile 的小目录；migrateLegacyRendererStorage() 一次性把旧默认 session 的 6 个 key（theme×2、language×2、wizard×2）拷进分区，标记文件 .ui-storage-migrated-v1 防重复，超时/失败也写标记避免每次启动卡死
+- 新增 src/renderer/storage-migrate.html — 隐藏迁移页（file:// 源，供 localStorage 读写）
+- 改 src/main/index.ts — webPreferences.session = session.fromPartition(UI_STORAGE_PARTITION)（**必须放 webPreferences 内**，放 BrowserWindow 顶层会被静默忽略）+ 建窗前 await 迁移
+- 改 package.json — build 拷贝 storage-migrate.html
+
+**修的连带 bug**：renderer-storage.ts 是 ESM 但直接用了 __dirname（ReferenceError，迁移每次启动静默失败 → 用户主题/语言丢失）；且 services 目录层级需要两级 .. 才到 dist/renderer。两个都导致迁移实际从未生效，已修并通过真实验证（dark/zh-CN/wizard 全部迁入分区）。
+
+**实测（真实 userData，含运行中 profile 的目录）**：修复前 DCL ≈4009ms；修复后 **DCL 384ms / load 448ms**（约 10x），分区首次 localStorage <10ms，theme=light、lang=zh-CN 均从旧 localStorage 成功迁移。
+
+**验证**：
+- e2e tests/e2e/j81-ui-storage-partition.test.ts 4 例：窗口写入独立分区且默认 session 不再被 UI 使用；忙碌 user-data 树（含假运行 profile 布局）下 DCL < 2s；旧主题/语言/wizard 设置迁移进分区并生效；无意外 console error
+- 新增 tests/e2e/helpers/seed-legacy-storage.mjs（独立 Electron 种子脚本，写默认 session）+ tests/e2e/helpers/app.ts 主窗口定位改为按 URL（index.html）等待（迁移会先短暂创建隐藏窗口，firstWindow 会抓到已销毁的窗口）
+- 回归：全量单测 + smoke + e2e 见文末
+
+**注意（升级权衡）**：迁移是阻塞式的，升级后首次启动会多花 ~2.5-4s（读旧 localStorage 的代价），后续启动快。若希望首启也快，可改为「先建窗、后台迁移」（牺牲首屏主题/语言默认值）。
