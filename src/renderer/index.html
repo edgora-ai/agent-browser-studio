@@ -208,6 +208,16 @@
  <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-env-risk"> <span data-i18n="browser.gate.env">Block on environment risk (DNS leak / CN fonts / proxy DNS)</span></label>
  <div id="gate-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
  </div>
+ <div class="card">
+ <h3 data-i18n="browser.updates">🔄 App Updates</h3>
+ <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="browser.updates.hint">Version-aware release store: check the update manifest, stage a newer payload, activate it for the next launch, or roll back to the previous known-good release.</p>
+ <div id="app-updates-card"><div class="loading">Loading update status...</div></div>
+ <div class="btn-row">
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshUpdatesStatus" data-i18n="browser.updates.check">Check for updates</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshUpdates" data-i18n="browser.updates.refresh">Refresh</button>
+ </div>
+ <div id="updates-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
+ </div>
  </section>
 
  <!-- ══════ Extensions Tab ══════ -->

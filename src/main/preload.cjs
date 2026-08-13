@@ -42,6 +42,13 @@ const api = {
     ensure: () => ipcRenderer.invoke("drm:ensure"),
     probe: (dirId) => ipcRenderer.invoke("drm:probe", dirId),
   },
+  updates: {
+    status: () => ipcRenderer.invoke("updates:status"),
+    check: (manifestUrl) => ipcRenderer.invoke("updates:check", { manifestUrl }),
+    install: (version) => ipcRenderer.invoke("updates:install", { version }),
+    activate: (version) => ipcRenderer.invoke("updates:activate", { version }),
+    rollback: () => ipcRenderer.invoke("updates:rollback"),
+  },
   detect: {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),
     proxyPing: (config) => ipcRenderer.invoke("detect:proxy-ping", config),

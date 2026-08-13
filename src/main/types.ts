@@ -424,3 +424,58 @@ export interface SyncResult {
   message: string;
   transferredBytes?: number;
 }
+
+// ── Updates (version-aware release store with pin + rollback) ──
+export interface UpdateRelease {
+  version: string;          // dot-separated numeric, e.g. 1.1.0
+  url: string;              // http(s):// or file:// archive (.zip), or local dir path
+  sha256?: string;          // hex digest of the archive bytes (dir payloads skip this)
+  notes?: string;           // human changelog for the UI
+  publishedAt?: string;     // ISO timestamp
+  minSupported?: string;    // minimum current app version allowed to install this
+}
+
+export interface UpdateManifest {
+  product: string;          // must equal "agent-browser-studio"
+  channel?: string;         // e.g. stable / beta
+  releases: UpdateRelease[];
+}
+
+export type InstalledUpdateStatus = "staged" | "active" | "retired";
+
+export interface InstalledUpdate {
+  version: string;
+  status: InstalledUpdateStatus;
+  installedAt: number;
+  sha256?: string | null;
+  url?: string | null;
+}
+
+export interface UpdateHistoryEntry {
+  at: number;
+  action: "check" | "install" | "activate" | "rollback" | "auto-rollback";
+  version: string | null;
+  from: string | null;
+  detail: string | null;
+}
+
+export interface UpdateState {
+  activeVersion: string;
+  previousVersion: string | null;
+  channel: string;
+  manifestUrl: string | null;
+  lastCheckedAt: number | null;
+  lastCheckError: string | null;
+  crashCount: number;
+  lastCrashAt: number | null;
+  lastAutoRollbackAt: number | null;
+  installed: InstalledUpdate[];
+  history: UpdateHistoryEntry[];
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  available: UpdateRelease[];
+  checkedAt: number;
+  error: string | null;
+}

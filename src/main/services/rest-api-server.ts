@@ -16,6 +16,7 @@ import {
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
+import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion } from "./update-manager.js";
 import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled } from "./team.js";
 import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
@@ -481,6 +482,47 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       return { status: 400, body: { error: e?.message || String(e) } };
     }
   }
+  // ── Version-aware updates (release store with pin + rollback) ──
+  if (method === "GET" && p === "/api/updates/status") {
+    return { status: 200, body: { success: true, currentVersion: getCurrentVersion(), state: getUpdateState() } };
+  }
+  if (method === "POST" && p === "/api/updates/check") {
+    try {
+      const body = await readJson(req);
+      const result = await checkForUpdates(body?.manifestUrl);
+      return { status: 200, body: { success: true, ...result } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/updates/install") {
+    try {
+      const body = await readJson(req);
+      const state = await installRelease(body?.version);
+      return { status: 200, body: { success: true, state } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/updates/activate") {
+    try {
+      const body = await readJson(req);
+      const state = activateVersion(body?.version);
+      recordAudit({ category: "updates", action: "activate", target: body?.version, actor: "api" });
+      return { status: 200, body: { success: true, state } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/updates/rollback") {
+    try {
+      const state = rollback();
+      return { status: 200, body: { success: true, state } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+
   const mProxy = p.match(/^\/api\/proxies\/([^/]+)$/);
   const mProxyDefault = p.match(/^\/api\/proxies\/([^/]+)\/default$/);
   const mProxyRotate = p.match(/^\/api\/proxies\/([^/]+)\/rotate$/);
@@ -879,6 +921,11 @@ function buildOpenApi(): any {
       "/api/team/members/{deviceId}": { parameters: [{ name: "deviceId", in: "path", required: true, schema: { type: "string" } }], delete: { summary: "Remove a workspace member", responses: ok("Updated team manifest") } },
       "/api/team/members/{deviceId}/role": { parameters: [{ name: "deviceId", in: "path", required: true, schema: { type: "string" } }], put: { summary: "Change a member role", requestBody: { content: { "application/json": { schema: { type: "object", required: ["role"], properties: { role: { type: "string", enum: ["owner", "admin", "member", "viewer"] } } } } } }, responses: ok("Updated team manifest") } },
       "/api/team/rename": { post: { summary: "Rename the workspace (owner only)", requestBody: { content: { "application/json": { schema: { type: "object", required: ["name"], properties: { name: { type: "string" } } } } } }, responses: ok("Updated team manifest") } },
+      "/api/updates/status": { get: { summary: "Release store status (active/pinned/installed/history)", responses: ok("Update state") } },
+      "/api/updates/check": { post: { summary: "Check the update manifest for newer releases", requestBody: { content: { "application/json": { schema: { type: "object", properties: { manifestUrl: { type: "string", description: "Optional manifest URL/path override" } } } } } }, responses: ok("Available releases") } },
+      "/api/updates/install": { post: { summary: "Download + verify + stage a release payload", requestBody: { content: { "application/json": { schema: { type: "object", required: ["version"], properties: { version: { type: "string" } } } } } }, responses: ok("Updated state") } },
+      "/api/updates/activate": { post: { summary: "Pin a staged release as active for next launch", requestBody: { content: { "application/json": { schema: { type: "object", required: ["version"], properties: { version: { type: "string" } } } } } }, responses: ok("Updated state") } },
+      "/api/updates/rollback": { post: { summary: "Roll back to the previous known-good release", responses: ok("Updated state") } },
       "/api/proxies/{name}": {
         parameters: [nameParam],
         get: { summary: "Proxy detail", responses: ok("Proxy info") },

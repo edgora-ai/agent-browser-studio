@@ -218,6 +218,8 @@ export async function launchHeadlessApp(opts: {
   userDataDir: string;
   token?: string;
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  args?: string[];
 }): Promise<HeadlessAppHandle> {
   fs.rmSync(opts.userDataDir, { recursive: true, force: true });
   fs.mkdirSync(opts.userDataDir, { recursive: true });
@@ -229,12 +231,13 @@ export async function launchHeadlessApp(opts: {
     ELECTRON_ENABLE_LOGGING: "1",
     AGENT_BROWSER_API_PORT: String(port),
     AGENT_BROWSER_API_TOKEN: token,
+    ...opts.env,
   };
   const chromiumBin = resolveManagedChromiumPath(launchEnv);
   if (chromiumBin) launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
 
   const app = await electron.launch({
-    args: [REPO, "--user-data-dir=" + opts.userDataDir, "--headless"],
+    args: [REPO, "--user-data-dir=" + opts.userDataDir, "--headless", ...(opts.args ?? [])],
     executablePath: ELECTRON_BIN,
     env: launchEnv,
     timeout: opts.timeoutMs ?? 30000,

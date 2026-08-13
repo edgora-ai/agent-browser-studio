@@ -18,12 +18,14 @@ import { registerTeamHandlers } from "./ipc/team.js";
 import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
+import { registerUpdateHandlers } from "./ipc/updates.js";
 import { startScheduler } from "./services/automation.js";
 import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
 import { stopAllBrowserProfiles } from "./services/browser-manager.js";
 import { migrateSecrets } from "./services/config-manager.js";
+import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
 import {
   APP_DATA_DIR_NAME,
@@ -182,6 +184,7 @@ function registerAllHandlers(): void {
   registerAutomationHandlers();
   registerAuditHandlers();
   registerDataHandlers();
+  registerUpdateHandlers();
 }
 
 // ── App lifecycle ──
@@ -219,6 +222,12 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  // Version-aware release store: auto-rollback after a crash loop,
+  // then mark the run healthy once the app has been up for a while.
+  const updateState = noteAppStarted();
+  if (updateState.history.length) console.log("[updates] active=" + updateState.activeVersion + " history=" + updateState.history.length);
+  setTimeout(() => { try { markAppHealthy(); } catch { /* best effort */ } }, 60000);
+  process.on("exit", (code) => { if (code !== 0) { try { noteAppCrashed(); } catch { /* best effort */ } } });
   registerAllHandlers();
   const headless = isHeadlessMode();
   if (!headless) {
