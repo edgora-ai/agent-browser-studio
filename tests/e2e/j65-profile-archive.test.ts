@@ -5,22 +5,64 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as http from "node:http";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j65");
 
+function apiRequest(
+  port: number, token: string, method: string, p: string, body?: any, auth = true,
+): Promise<{ status: number; body: any }> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (auth) headers.authorization = "Bearer " + token;
+    if (payload) headers["content-length"] = String(Buffer.byteLength(payload));
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: p, method, headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let parsed: any = null;
+          try { parsed = JSON.parse(text); } catch { parsed = text; }
+          resolve({ status: res.statusCode || 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 describe("J65 — profile backup export/import", () => {
   let h: TestAppHandle;
   let zipPath = path.join(USERDATA, "profile-backup.zip");
+  let restZipPath = path.join(USERDATA, "rest-backup.zip");
+  let port = 0;
+  let token = "";
 
   beforeAll(async () => {
-    h = await setupTestApp({ userDataDir: USERDATA });
+    h = await setupTestApp({ userDataDir: USERDATA, env: { AGENT_BROWSER_API_PORT: "0" } });
+    const start = Date.now();
+    while (Date.now() - start < 15000) {
+      const st = await h.page.evaluate(() => (window as any).agentBrowser.api.apiRpc.status());
+      if (st && st.running && st.port > 0) { port = st.port; break; }
+      await h.page.waitForTimeout(300);
+    }
+    expect(port, "REST API server must be running").toBeGreaterThan(0);
+    const tok = await h.page.evaluate(() => (window as any).agentBrowser.api.apiRpc.revealToken());
+    token = tok.token;
+    expect(token, "REST API token must be available").toBeTruthy();
   }, 60000);
   afterAll(async () => {
     if (h) await closeApp(h);
     try { fs.rmSync(zipPath, { force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(restZipPath, { force: true }); } catch { /* ignore */ }
   }, 90000);
 
   it("exports a profile to a zip and re-imports it with meta + data intact", async () => {
@@ -79,6 +121,64 @@ describe("J65 — profile backup export/import", () => {
     // Toolbar import-backup button exists.
     expect(await h.page.locator('[data-cmd="importProfileArchive"]').count()).toBe(1);
   }, 30000);
+
+  it("exposes profile backup export/import over the REST API", async () => {
+    // Create a profile through the REST API so the round-trip is fully API-driven.
+    const created = await apiRequest(port, token, "POST", "/api/profiles", {
+      name: "REST Backup",
+      platform: "windows",
+      fingerprintSeed: 4242,
+      timezone: "Europe/Paris",
+      tags: ["rest"],
+    });
+    expect(created.status).toBe(201);
+    const dirId = created.body.dirId;
+    expect(dirId).toBeTruthy();
+
+    // Drop a data file into the profile so we can verify it survives the round trip.
+    const info = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), dirId);
+    fs.mkdirSync(path.join(info.path, "Default"), { recursive: true });
+    fs.writeFileSync(path.join(info.path, "Default", "Preferences"), JSON.stringify({ profile: { name: "rest-data" } }));
+    fs.writeFileSync(path.join(info.path, "cookies.sqlite"), "cookie-db");
+
+    const exp = await apiRequest(port, token, "POST", "/api/profiles/" + dirId + "/export", { destPath: restZipPath });
+    expect(exp.status, JSON.stringify(exp)).toBe(200);
+    expect(exp.body.success).toBe(true);
+    expect(exp.body.filePath).toBe(restZipPath);
+    expect(exp.body.entries).toBeGreaterThan(0);
+    expect(exp.body.bytes).toBeGreaterThan(0);
+    expect(fs.existsSync(restZipPath)).toBe(true);
+
+    // Delete the source, then import the archive back under a fresh dirId.
+    const del = await apiRequest(port, token, "DELETE", "/api/profiles/" + dirId);
+    expect(del.status).toBe(200);
+    const imp = await apiRequest(port, token, "POST", "/api/profiles/import", { zipPath: restZipPath });
+    expect(imp.status, JSON.stringify(imp)).toBe(200);
+    expect(imp.body.success).toBe(true);
+    expect(imp.body.dirId).toBeTruthy();
+    expect(imp.body.dirId).not.toBe(dirId);
+    expect(imp.body.name).toBe("REST Backup");
+
+    const iinfo = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), imp.body.dirId);
+    const prefs = JSON.parse(fs.readFileSync(path.join(iinfo.path, "Default", "Preferences"), "utf8"));
+    expect(prefs.profile.name).toBe("rest-data");
+    expect(fs.readFileSync(path.join(iinfo.path, "cookies.sqlite"), "utf8")).toBe("cookie-db");
+
+    // Import without a zipPath must be a client error.
+    const missing = await apiRequest(port, token, "POST", "/api/profiles/import", {});
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toMatch(/zipPath/i);
+
+    // OpenAPI document advertises both endpoints.
+    const spec = await apiRequest(port, token, "GET", "/openapi.json");
+    expect(spec.status).toBe(200);
+    expect(spec.body.paths["/api/profiles/import"]).toBeTruthy();
+    expect(spec.body.paths["/api/profiles/{dirId}/export"]).toBeTruthy();
+
+    // Cleanup: remove the imported profile so later tests stay deterministic.
+    const clean = await apiRequest(port, token, "DELETE", "/api/profiles/" + imp.body.dirId);
+    expect(clean.status).toBe(200);
+  }, 60000);
 
   it("no unexpected console errors", () => {
     const c = filterKnownConsoleErrors(h.consoleErrors).filter((e: string) =>

@@ -6,10 +6,12 @@
 
 import * as http from "node:http";
 import { randomBytes } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   getConfig, getProxyList, addProxy, deleteProxy, updateProxy,
   setDefaultProxyName, getProxyRotationInfo, getProfileMeta,
-  resolveProfileProxy, saveConfig,
+  resolveProfileProxy, saveConfig, getAppDataDir,
 } from "./config-manager.js";
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { getAccounts } from "./local-agent.js";
@@ -24,6 +26,7 @@ import {
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
+import { exportProfileArchive, importProfileArchive } from "./profile-archive.js";
 import { syncService } from "./sync-service.js";
 import { retryAgentRun, retryJobRuns } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
@@ -228,6 +231,37 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       return { status: 400, body: { error: e.message || String(e) } };
     }
   }
+
+  // ── Profile backup (export / import via REST) ──
+  // Note: /api/profiles/import must be matched before /api/profiles/{dirId}.
+  if (method === "POST" && p === "/api/profiles/import") {
+    const body = await readJson(req).catch(() => null);
+    if (!body || typeof body.zipPath !== "string" || !body.zipPath.trim()) {
+      return { status: 400, body: { error: "zipPath is required" } };
+    }
+    try {
+      const r = importProfileArchive(body.zipPath);
+      recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + body.zipPath });
+      return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mExport = p.match(/^\/api\/profiles\/([^/]+)\/export$/);
+  if (mExport && method === "POST") {
+    try {
+      const dirId = mExport[1];
+      validateDirId(dirId);
+      const body = await readJson(req).catch(() => null);
+      const destPath = typeof body?.destPath === "string" && body.destPath.trim() ? body.destPath : defaultBackupPath(dirId);
+      const r = await exportProfileArchive(dirId, destPath);
+      recordAudit({ category: "profile", action: "export", target: dirId, actor: "api", detail: r.filePath });
+      return { status: 200, body: { success: true, filePath: r.filePath, entries: r.entries, bytes: r.bytes } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
   const mProfile = p.match(/^\/api\/profiles\/([^/]+)$/);
   if (mProfile && method === "GET") {
     try {
@@ -617,6 +651,21 @@ function buildOpenApi(): any {
         parameters: [dirIdParam, extIdParam],
         delete: { summary: "Disable an extension for the profile", responses: ok("Disable result") },
       },
+      "/api/profiles/import": {
+        post: {
+          summary: "Import a profile backup ZIP into a fresh profile (portable archive)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["zipPath"], properties: { zipPath: { type: "string", description: "Absolute path to a profile backup ZIP produced by the export endpoint" } } } } } },
+          responses: ok("Import result with new dirId"),
+        },
+      },
+      "/api/profiles/{dirId}/export": {
+        parameters: [dirIdParam],
+        post: {
+          summary: "Export a stopped profile into a portable ZIP backup",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { destPath: { type: "string", description: "Optional absolute destination path; defaults to <appData>/backups/profile-<dirId>-<timestamp>.zip" } } } } } },
+          responses: ok("Export result with filePath"),
+        },
+      },
       "/api/proxies": {
         get: { summary: "List configured proxies", responses: ok("Proxy list") },
         post: {
@@ -717,6 +766,13 @@ function clampInt(value: string | null, fallback: number, min: number, max: numb
   const n = value === null ? NaN : Number(value);
   if (!Number.isInteger(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function defaultBackupPath(dirId: string): string {
+  const backupsDir = path.join(getAppDataDir(), "backups");
+  fs.mkdirSync(backupsDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(backupsDir, "profile-" + dirId + "-" + stamp + ".zip");
 }
 
 function assertProfileExists(dirId: string): void {
