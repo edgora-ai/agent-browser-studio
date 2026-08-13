@@ -22,6 +22,7 @@
     "verify:chromium": "npm run build && node dist/tools/verify-native-chromium.js",
     "verify:network": "npm run build && node dist/tools/verify-network-fingerprint.js",
     "verify:proxy": "npm run build && node dist/tools/verify-proxy-routing.js",
+    "verify:ping0": "npm run build && node dist/tools/verify-ping0.js",
     "install:chromium": "npm run build && node dist/tools/install-native-chromium.js",
     "pretest": "npm run build",
     "postinstall": "electron-builder install-app-deps"
