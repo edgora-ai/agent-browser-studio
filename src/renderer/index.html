@@ -433,6 +433,15 @@
 <!-- ── New Profile Dialog ── -->
 
 <!-- ── Bulk Import Dialog ── -->
+<dialog id="dlg-env-risk" style="max-width:660px;width:94%;">
+ <div>
+  <h3 style="margin:0 0 10px;">🖥 Host 环境风控检查</h3>
+  <div id="env-risk-body" style="max-height:62vh;overflow:auto;">Loading...</div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+  </div>
+ </div>
+</dialog>
 <dialog id="dlg-bulk-import">
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
  <h3>📥 Bulk Import Profiles</h3>

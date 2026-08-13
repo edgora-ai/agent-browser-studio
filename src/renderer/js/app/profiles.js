@@ -691,6 +691,7 @@
         var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · Chromium " + (fp.browserVersion || fp.version || "auto");
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
         var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
+        var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var tagHtml = (p.tags || []).map(function(tag) {
@@ -710,7 +711,7 @@
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>Fingerprint</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>Identity</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + '</span></div>' +
+          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + '</span></div>' +
           '<div class="info-row"><span>Sync</span><span class="' + syncCls + '" title="' + escAttr(syncTitle) + '"><button class="btn btn-xs" style="font-size:9px;color:var(--text-muted);" data-action="note">📝</button>' + syncIcon + ' ' + esc((p.syncStatus === "synced" ? "Synced" : p.syncStatus === "dirty" ? "Dirty" : "Never")) + '</span></div>' +
           '<div class="info-row"><span>Proxy</span><span>' + esc(proxyStr) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row"><span>Tags</span><span>' + tagHtml + '</span></div>' : '') +
@@ -756,6 +757,7 @@
       else if (action === "risk-check") agentBrowser.openRiskCheck(dirId);
       else if (action === "drift-check") agentBrowser.checkDrift(dirId);
       else if (action === "lock") agentBrowser.toggleLock(dirId, card);
+      else if (action === "env-risk") agentBrowser.openEnvRisk(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -784,6 +786,51 @@
         toast("⚠ Risky fingerprint drift: " + fields + ((r.drift || []).length > 6 ? " (+" + ((r.drift || []).length - 6) + ")" : ""), "error");
       }
     }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
+  function renderEnvRisk(r) {
+    var body = document.getElementById('env-risk-body');
+    if (!body) return;
+    if (!r || !r.ok) {
+      body.innerHTML = '<div class="empty-state">' + esc((r && r.error) || 'Env check failed') + '</div>';
+      return;
+    }
+    var res = r.result || {};
+    var findings = res.findings || [];
+    var okBadge = res.ok ? '<span class="status-badge status-done">PASS</span>' : '<span class="status-badge" style="background:var(--danger-bg);color:var(--danger);">RISK</span>';
+    var rows = [];
+    rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + ((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">中文字体: ' + ((res.cnFonts || []).join(', ') || '无') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">代理: ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
+    if (res.raf && res.raf.samples > 0) {
+      rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(String(res.raf.medianMs)) + 'ms ≈ ' + esc(String(res.raf.refreshHz)) + 'Hz (' + esc(String(res.raf.samples)) + ' samples, ' + (res.raf.standard ? 'standard' : 'non-standard') + ')</div>');
+    }
+    body.innerHTML = rows.join('') +
+      '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">' +
+      findings.map(function(f) {
+        var color = f.severity === 'high' ? 'var(--danger)' : (f.severity === 'medium' ? 'var(--warning)' : 'var(--text-muted)');
+        var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
+        return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
+          '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(f.severity.toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
+          '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">💡 ' + esc(f.fix) + '</div>' +
+        '</div>';
+      }).join('') +
+      (!findings.length ? '<div class="empty-state">未发现环境风险</div>' : '') +
+      '</div>';
+  }
+
+  agentBrowser.openEnvRisk = function(dirId) {
+    var dlg = document.getElementById('dlg-env-risk');
+    var body = document.getElementById('env-risk-body');
+    if (!dlg) { toast('Env check dialog unavailable', 'error'); return; }
+    if (body) body.innerHTML = '<div class="loading">Checking host environment…</div>';
+    dlg.showModal();
+    api.browser.envRisk(dirId).then(renderEnvRisk).catch(function(e) {
+      renderEnvRisk({ ok: false, error: e.message || String(e) });
+    });
   };
 
   agentBrowser.toggleLock = function(dirId, card) {

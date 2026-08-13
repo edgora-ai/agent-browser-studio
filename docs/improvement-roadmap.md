@@ -401,3 +401,33 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J57 全绿（含 journ
 - 新增 `tests/e2e/j57-sync-lock.test.ts`（7 例，mock S3）
 
 **验证**：e2e J57 7 例全绿（锁定→push 携带锁→注入他人锁定后 previewDiff 标出 remoteLocks→push 被拦→force 绕过→解锁）；unit/smoke 465 全绿；j56/j55/j54/j41 回归 23 例通过；whitespace audit 通过。
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 39 files, 478 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J58 全绿（含 journey 10/10 tab 切换）
+```
+
+13 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI / 19 指纹漂移启动阻断 / 20 sync 团队 diff 预览 / 21 团队 profile 签出锁定 / 22 Host 环境风控检查）落地并验证。
+
+### Slice 22 — Host 环境风控检查（P0，反检测环境可信）— ✅
+
+**范围**：ping0.cc 那类环境扫描发现的三类宿主泄漏——DNS 解析器混入国内（DNS 泄漏）、本机中文字体暴露中文系统、rAF 帧间隔非标准——此前只能靠用户自己开网页测。Slice 22 把它们做成**应用内检查**：profile 卡片一键出报告，给出严重级别和可执行的修复建议；profile 运行时还会叠加 rAF 实测。
+
+**设计**（`services/environment-risk.ts`，纯逻辑可注入、可单测）：
+- **DNS 解析器**：`node:dns.getServers()` 枚举系统解析器，已知公共/运营商表（Google/Cloudflare/Quad9 vs 114DNS/AliDNS/DNSPod/电信联通）分类 + 国内 ISP 前缀启发式；非中文 profile 混入 CN 解析器 → high（dns-resolver-leak），中文 profile → info
+- **中文字体**：扫描系统字体目录（macOS System/Library+用户、Windows Fonts、Linux fonts），文件名匹配 SimSun/雅黑/楷体/仿宋/等线/苹方/黑体-简/宋体-简/华文/方正 等；非中文 profile 检测到 → high（cn-fonts-exposed）
+- **代理 DNS 泄漏**：SOCKS5（本地解析）→ high（proxy-dns-leak），HTTP/socks5h → low，直连 → none
+- **宿主语言**：宿主 locale 为 zh 但 profile 非中文 → medium（host-locale-leak）
+- **rAF 运行时测量**：profile 运行中经 CDP 采样 ~1.5s，中位间隔归类刷新率，非标准（非 60/75/90/120/144/165/240Hz）→ medium（raf-non-standard）
+- `checkEnvironmentRisk()` 预检（快、无副作用）；`checkEnvironmentRiskRuntime()` 运行中变体（附加 rAF）
+- IPC `browser:env-risk`；profile 卡片 Hardware 行新增 🖥 Env 按钮，报告弹 dialog（PASS/RISK 徽章 + 逐条 severity/code/message/fix）
+
+**文件**：
+- 新增 `services/environment-risk.ts` — 解析器分类 / 字体扫描 / 代理 DNS 泄漏 / RAF 分类与测量 / findings 组装
+- 改 `ipc/browser.ts` + `preload.cjs` — `browser:env-risk`（运行中走 runtime 变体）
+- 改 `renderer/js/app/profiles.js` + `index.html` — 🖥 Env 按钮 + `dlg-env-risk` 报告 dialog
+- 新增 `tests/unit/environment-risk.test.ts`（13 例）+ `tests/e2e/j58-env-risk.test.ts`（4 例）
+
+**验证**：unit 13 例全绿（解析器分类/字体 fixture/代理 DNS/RAF 分类/findings 严重级与 CN 兼容）；e2e J58 4 例全绿（预检结构、非中文 profile 遇 CN 解析器 → high、运行中 raf 字段）；unit/smoke 478 全绿；j55/j56/j57/j54/j41 回归 30 例通过；whitespace audit 通过。

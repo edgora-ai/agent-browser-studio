@@ -106,6 +106,7 @@ const api = {
     consistencyCheck: (dirId) => ipcRenderer.invoke("browser:consistency-check", dirId),
     captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
+    envRisk: (dirId) => ipcRenderer.invoke("browser:env-risk", dirId),
     setLock: (dirId, locked) => ipcRenderer.invoke("browser:set-lock", { dirId, locked }),
     parseBulkCsv: (text) => ipcRenderer.invoke("browser:parse-bulk-csv", text),
     setSeed: (dirId, seed) => ipcRenderer.invoke("browser:set-seed", { dirId, seed }),

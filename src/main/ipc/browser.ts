@@ -8,6 +8,7 @@ import {
 import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
 import { checkProfileConsistency } from "../services/consistency-check.js";
 import { captureFingerprint, diffFingerprints, hasRiskyDrift } from "../services/fingerprint-baseline.js";
+import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "../services/environment-risk.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { validateDirId } from "../services/utils.js";
@@ -107,6 +108,24 @@ export function registerBrowserHandlers(): void {
       return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck };
     } catch (e: any) {
       return { success: false, error: e.message };
+    }
+  });
+
+  // Host environment risk check (DNS resolvers / CN fonts / proxy DNS / RAF).
+  handleBrowser("env-risk", async (_event, dirId: string) => {
+    try {
+      validateDirId(dirId);
+      const cfg = getConfig() as any;
+      const meta = cfg.browserProfiles?.[dirId];
+      if (!meta) return { ok: false, error: "Profile not found" };
+      const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
+      const st = statusBrowser(dirId);
+      if (st.running && st.cdpPort) {
+        return { ok: true, result: await checkEnvironmentRiskRuntime(profile, st.cdpPort) };
+      }
+      return { ok: true, result: checkEnvironmentRisk(profile) };
+    } catch (e: any) {
+      return { ok: false, error: e.message || String(e) };
     }
   });
 
