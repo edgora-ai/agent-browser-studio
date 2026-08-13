@@ -149,6 +149,7 @@ const api = {
     setSeed: (dirId, seed) => ipcRenderer.invoke("browser:set-seed", { dirId, seed }),
     setMeta: (dirId, meta) => ipcRenderer.invoke("browser:set-meta", { dirId, ...meta }),
     openRiskCheck: (dirId) => ipcRenderer.invoke("browser:open-risk-check", { dirId }),
+    openApp: (dirId, url) => ipcRenderer.invoke("browser:open-app", { dirId, url }),
   },
   agent: {
     llmConfig: () => ipcRenderer.invoke("agent:llm-config"),

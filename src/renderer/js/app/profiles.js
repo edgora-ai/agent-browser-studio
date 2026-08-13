@@ -149,6 +149,7 @@
             storageQuota: p.storageQuota || '',
             taskbarHeight: p.taskbarHeight === 0 ? 0 : (p.taskbarHeight || ''),
             fontsDir: p.fontsDir || '',
+            appUrl: p.appUrl || '',
             proxyMode: p.proxyMode || (p.proxyName ? "named" : "none"),
             proxyName: p.proxyName || null
           };
@@ -171,6 +172,7 @@
           var wtPrefix = (wtPrefixMeta && wtPrefixMeta !== "") ? wtPrefixMeta : "";
           document.getElementById("agent-browser-meta-window-title-enabled").checked = wtEnabled;
           document.getElementById("agent-browser-meta-window-title-prefix").value = wtPrefix;
+          document.getElementById("agent-browser-meta-app-url").value = metaData.appUrl;
           api.proxy.list().then(function(proxies) {
             var sel = document.getElementById("agent-browser-meta-proxy");
             sel.innerHTML = renderProxyOptions(proxies, proxySelectionValue(metaData.proxyMode, metaData.proxyName), false);
@@ -638,6 +640,7 @@
     var locale = document.getElementById("agent-browser-meta-locale").value || null;
     var webrtcMode = document.getElementById("agent-browser-meta-webrtc-mode").value || "auto";
     var webrtcIp = document.getElementById("agent-browser-meta-webrtc").value.trim() || null;
+    var appUrl = document.getElementById("agent-browser-meta-app-url").value.trim() || null;
     var windowTitlePrefix;
     if (document.getElementById("agent-browser-meta-window-title-enabled").checked) {
       windowTitlePrefix = document.getElementById("agent-browser-meta-window-title-prefix").value.trim() || "";
@@ -660,6 +663,7 @@
       fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
       proxyMode: proxySelection.mode, proxyName: proxySelection.name,
+      appUrl: appUrl,
       windowTitlePrefix: windowTitlePrefix
     }, geolocation, hardware)));
     Promise.all(promises).then(function(r) {
@@ -783,9 +787,11 @@
         var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
         var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
         var webRtcAction = '<button class="btn btn-xs" data-action="webrtc-diag" title="Run an in-browser WebRTC probe (ICE candidates / mDNS / RTT)" style="font-size:9px;">📡 WebRTC</button> ';
+        var openAppAction = '<button class="btn btn-xs" data-action="open-app" title="Open as Web App (PWA / Sub-apps): standalone app window with this profile identity" style="font-size:9px;">🖥 App</button> ';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var drmBadge = p.drm ? '<span class="status-badge" style="background:var(--primary-bg);color:var(--primary);" title="Widevine/DRM enabled">🎬 DRM</span>' : '';
+        var appBadge = p.appUrl ? '<span class="status-badge" style="background:var(--surface2);color:var(--text);" title="Web App: ' + escAttr(p.appUrl) + '">🖥 App</span>' : '';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
@@ -799,12 +805,13 @@
             '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
             lockBadge +
             drmBadge +
+            appBadge +
           '</div>' +
           '<div class="info-row"><span>Browser</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>Fingerprint</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>Identity</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + webRtcAction + '</span></div>' +
+          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + webRtcAction + (p.appUrl ? openAppAction : '') + '</span></div>' +
           '<div class="info-row"><span>Sync</span><span class="' + syncCls + '" title="' + escAttr(syncTitle) + '"><button class="btn btn-xs" style="font-size:9px;color:var(--text-muted);" data-action="note">📝</button>' + syncIcon + ' ' + esc((p.syncStatus === "synced" ? "Synced" : p.syncStatus === "dirty" ? "Dirty" : "Never")) + '</span></div>' +
           '<div class="info-row"><span>Proxy</span><span>' + esc(proxyStr) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row"><span>Tags</span><span>' + tagHtml + '</span></div>' : '') +
@@ -854,6 +861,7 @@
       else if (action === "lock") agentBrowser.toggleLock(dirId, card);
       else if (action === "env-risk") agentBrowser.openEnvRisk(dirId);
       else if (action === "webrtc-diag") agentBrowser.openWebRtcDiag(dirId);
+      else if (action === "open-app") agentBrowser.openApp(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -993,6 +1001,27 @@
       if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC 诊断历史已清除"), "success"); }
       var histEl = document.getElementById("webrtc-diag-history");
       if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "暂无历史记录")) + '</div>';
+    }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
+  agentBrowser.openApp = function(dirId) {
+    api.browser.list().then(function(profiles) {
+      var p = (profiles || []).find(function(x) { return x.dirId === dirId; });
+      var appUrl = (p && p.appUrl) || "";
+      if (!appUrl) {
+        toast((window.i18n ? window.i18n.t("toast.app.no-url", "No Web App URL configured — set one in Profile Edit") : "No Web App URL configured — set one in Profile Edit"), "error");
+        agentBrowser.editProfile(dirId);
+        return;
+      }
+      toast((window.i18n ? window.i18n.t("toast.app.opening", "Opening as Web App (auto-launch if needed)…") : "Opening as Web App (auto-launch if needed)…"), "info");
+      api.browser.openApp(dirId).then(function(r) {
+        if (r && r.success) {
+          toast((window.i18n ? window.i18n.t("toast.app.opened", "Web App opened: ") : "Web App opened: ") + (r.appUrl || appUrl), "success");
+          scheduleProfilesRefresh();
+        } else {
+          toast((r && r.error) || (window.i18n ? window.i18n.t("toast.app.failed", "Failed to open Web App") : "Failed to open Web App"), "error");
+        }
+      }).catch(function(e) { toast(e.message || String(e), "error"); });
     }).catch(function(e) { toast(e.message || String(e), "error"); });
   };
 

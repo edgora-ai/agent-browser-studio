@@ -61,6 +61,7 @@ export function registerBrowserHandlers(): void {
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
     windowTitlePrefix?: string | null;
+    appUrl?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
   }) => {
     const r = createBrowserProfile({
@@ -89,6 +90,7 @@ export function registerBrowserHandlers(): void {
       taskbarHeight: opts.taskbarHeight,
       fontsDir: opts.fontsDir,
       windowTitlePrefix: opts.windowTitlePrefix,
+      appUrl: opts.appUrl,
       proxyMode: opts.proxyMode,
       proxyName: opts.proxyName,
       tags: opts.tags,
@@ -250,6 +252,7 @@ export function registerBrowserHandlers(): void {
     fontsDir?: string | null;
     windowTitlePrefix?: string | null;
     note?: string;
+    appUrl?: string | null;
     proxyMode?: ProxyMode;
     proxyName?: string | null;
     tags?: string[];
@@ -288,6 +291,7 @@ export function registerBrowserHandlers(): void {
         taskbarHeight: params.taskbarHeight,
         windowTitlePrefix: params.windowTitlePrefix,
         fontsDir: params.fontsDir,
+        appUrl: params.appUrl,
       });
       return { success: true };
     } catch (e: any) {
@@ -327,6 +331,48 @@ export function registerBrowserHandlers(): void {
       // Wait up to 10s for page load
       await cdpWaitForLoad(client, 10000);
       return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    } finally {
+      if (client) { try { cdpDisconnect(client); } catch (e) { /* ignore */ } }
+    }
+  });
+
+  // Open a profile as its Web App (PWA app-mode): auto-launch if needed and
+  // navigate to the profile's appUrl. When the profile was launched with
+  // --app=<appUrl> the standalone app window is already at that URL; this
+  // handler covers the already-running-without-app case and one-click "open
+  // as app" from the profile card.
+  handleBrowser("open-app", async (_event, params: { dirId: string; url?: string }) => {
+    const { dirId } = params;
+    validateDirId(dirId);
+    const cfg = getConfig() as any;
+    const meta = cfg.browserProfiles?.[dirId];
+    if (!meta) return { success: false, error: "Profile not found" };
+    const appUrl = String(params.url && params.url.trim() ? params.url : (meta.appUrl || "")).trim();
+    if (!appUrl) return { success: false, error: "No Web App URL configured for this profile" };
+
+    let status = statusBrowser(dirId);
+    let cdpPort = status.cdpPort || 0;
+    if (!status.running) {
+      try {
+        const launchResult = await launchBrowser(dirId);
+        cdpPort = launchResult.cdpPort || 0;
+        status = statusBrowser(dirId);
+      } catch (e: any) {
+        return { success: false, error: `Failed to launch: ${e.message || String(e)}`, autoLaunched: true };
+      }
+    }
+    if (!cdpPort || !status.running) {
+      return { success: false, error: "Profile is not running and CDP port could not be obtained" };
+    }
+
+    let client;
+    try {
+      client = await cdpConnect(cdpPort);
+      await cdpNavigate(client, appUrl);
+      await cdpWaitForLoad(client, 10000);
+      return { success: true, appUrl };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     } finally {

@@ -9,7 +9,7 @@ import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { BrowserWindow } from "electron";
-import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection } from "./config-manager.js";
+import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, sanitizeAppUrl } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
@@ -86,6 +86,7 @@ export interface BrowserProfile {
   storageQuota: number | null;
   taskbarHeight: number | null;
   fontsDir: string | null;
+  appUrl: string | null;  // Web App (PWA app-mode) launch URL, or null
   proxyMode: "none" | "default" | "named";
   proxyName: string | null;  // resolved proxy reference name
   note: string | null;      // user note
@@ -233,6 +234,7 @@ export function createBrowserProfile(opts: {
   taskbarHeight?: number | null;
   windowTitlePrefix?: string | null;
   fontsDir?: string | null;
+  appUrl?: string | null;
   proxyMode?: "none" | "default" | "named";
   proxyName?: string | null;
   tags?: string[];
@@ -270,6 +272,7 @@ export function createBrowserProfile(opts: {
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
     drm: normalizeBoolean(opts.drm, "drm"),
     windowTitlePrefix: opts.windowTitlePrefix === undefined ? undefined : (opts.windowTitlePrefix === null ? null : sanitizeWindowTitlePrefix(opts.windowTitlePrefix)),
+    appUrl: sanitizeAppUrl(opts.appUrl),
     note: null,
     tags: normalizeTags(opts.tags),
     updatedAt: Date.now(),
@@ -346,6 +349,7 @@ export function listBrowserProfiles(): BrowserProfile[] {
       storageQuota: Number.isInteger(m.storageQuota) ? m.storageQuota : null,
       taskbarHeight: Number.isInteger(m.taskbarHeight) ? m.taskbarHeight : null,
       fontsDir: m.fontsDir || null,
+      appUrl: m.appUrl || null,
       proxyMode: resolvedProxy.mode,
       proxyName: resolvedProxy.name,
       note: m.note || null,
@@ -685,6 +689,15 @@ export async function launchBrowser(
   }
   addExtensionArgs(args, dirId, runtimeExtensionPaths);
   addDrmArgs(args, dirId);
+
+  // Web App (PWA app-mode) launch: when the profile has an appUrl, open it as
+  // a standalone app window (no tabs/omnibox) carrying the full managed
+  // fingerprint identity. Mirrors RoxyBrowser 3.9.2 "PWA / Sub apps" — a
+  // profile can run a site as its own dedicated app window.
+  const appUrl = sanitizeAppUrl(meta.appUrl);
+  if (appUrl) {
+    args = dedupeChromeArgs([...args, `--app=${appUrl}`]);
+  }
 
   // If bounded egress resolution is unavailable, use a deterministic locale
   // fallback instead of leaking the host UI language.

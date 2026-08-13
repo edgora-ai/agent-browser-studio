@@ -593,6 +593,24 @@ function sanitizeOptionalIp(value: unknown): string | null {
   return ip;
 }
 
+/**
+ * Web App (PWA app-mode) URL for a profile. Only http(s) and data: URLs are
+ * accepted so --app=<url> can never hand the browser an arbitrary scheme
+ * (e.g. file:, chrome://) from the settings surface.
+ */
+export function sanitizeAppUrl(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  const raw = String(value)
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+  if (!raw) return null;
+  if (raw.length > 2048) throw new Error("Web App URL exceeds maximum length");
+  if (!/^https?:\/\//i.test(raw) && !/^data:/i.test(raw)) {
+    throw new Error(`Invalid Web App URL (http/https/data only): ${JSON.stringify(raw.slice(0, 80))}`);
+  }
+  return raw;
+}
+
 function sanitizeWebRtcMode(value: unknown, legacyIp?: unknown): "auto" | "real" | "altered" | "disable" {
   if (value === undefined || value === null || value === "") {
     return sanitizeOptionalIp(legacyIp) ? "altered" : "auto";
@@ -1134,6 +1152,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>)
   if (meta.taskbarHeight !== undefined) next.taskbarHeight = sanitizeOptionalInteger(meta.taskbarHeight, 0, 500);
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
   if (meta.windowTitlePrefix !== undefined) next.windowTitlePrefix = sanitizeWindowTitlePrefix(meta.windowTitlePrefix);
+  if (meta.appUrl !== undefined) next.appUrl = sanitizeAppUrl(meta.appUrl);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
   if (meta.drm !== undefined) next.drm = sanitizeBoolean(meta.drm, "drm");
 
@@ -1371,6 +1390,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.fontsDir = sanitizeOptionalFontsDir(profile.fontsDir);
       profile.tags = normalizeProfileTags(profile.tags);
       profile.extensions = normalizeExtensionMap(profile.extensions);
+      profile.appUrl = sanitizeAppUrl(profile.appUrl);
       merged.browserProfiles[dirId] = profile;
     }
   }

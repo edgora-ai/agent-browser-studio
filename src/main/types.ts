@@ -137,6 +137,8 @@ export interface ProfileLock {
 export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   windowTitlePrefix?: string | null;
+  /** Web App (PWA) mode: when set, the profile launches as a standalone app window at this URL (RoxyBrowser 3.9.2 "PWA / Sub apps" parity). */
+  appUrl?: string | null;
   proxyMode?: ProxyMode;
   proxyName?: string | null;
   /** When true, the profile launches with Widevine/DRM enabled when a CDM is available. */

@@ -1838,6 +1838,7 @@ function sanitizeProfileOpts(opts: any): any {
     "geolocationLatitude", "geolocationLongitude", "geolocationAccuracy", "gpuVendor",
     "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth", "screenHeight",
     "windowTitlePrefix",
+    "appUrl",
     "storageQuota", "taskbarHeight", "fontsDir", "proxyMode", "proxyName", "tags",
   ];
   const out: any = { name: String(opts.name).trim() };
