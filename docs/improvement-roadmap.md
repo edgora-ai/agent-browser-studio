@@ -695,3 +695,21 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 单测（accounts.test.ts +3 → 14 例）：批量创建生成 profile+account 对并绑定、密码加密、畸形行不产生半对、重名自动加后缀
 - e2e tests/e2e/j77-bulk-create-profiles.test.ts 4 例（IPC 批量创建→profile 名称/绑定/forProfile 回查、对话框勾选+选项展开、viewer 拒绝 bulk-create、无意外 console error）
 - 回归：全量单测 + smoke 50 文件 610 例全绿；tsc/build 干净；全量 e2e 见文末（72 文件 68 passed/4 skipped）
+
+
+### Slice 55 — 窗口任务栏显示 profile 名（对齐 RoxyBrowser 3.8.9「Settings > Taskbar Icon Display > Profile Name」）— ✅
+
+**背景**：RoxyBrowser 3.8.9 的设置里可以在任务栏图标/窗口标题显示 profile 名，方便多开时一眼区分窗口归属。此前我们只做 document.title（指纹面），不做 OS 级窗口标题。本切片走 Chromium 引擎补丁正路（OS 级窗口标题前缀），不改 document.title，零检测风险。
+
+**新增**：
+- 引擎补丁 patches/chromium/patches/0046-agent-browser-window-title-prefix.patch（构建树提交 35d5fe5cc4）：新增开关 --agent-browser-window-title-prefix=<text>，浏览器窗口标题（任务栏显示）变更为「前缀 — 原标题」（例：TestProfile — HelloTitle）；document.title 与页面可见面不受影响；未传标志时行为与上游一致
+- 服务层（browser-manager.ts）：sanitizeWindowTitlePrefix + resolveWindowTitlePrefix —— undefined/空 = 用 profile 名，非空字符串 = 原样使用，null = 关闭；构建启动参数时追加 --agent-browser-window-title-prefix；createBrowserProfile 透传 windowTitlePrefix
+- 类型/IPC/REST/同步/归档（types.ts、ipc/browser.ts create+set-meta、rest-api-server sanitizeProfileOpts、sync-service、profile-archive）：windowTitlePrefix 全链路携带（undefined 保留默认语义、null 关闭、字符串原样）
+- UI（profiles.js + index.html）：新建/编辑对话框新增「🖥 Show profile name in taskbar / window title」勾选（默认开）+ 编辑框可填自定义前缀（默认用 profile 名）
+- 默认开启：存量 profile 升级后自动在任务栏显示 profile 名（document.title 不受影响、无检测风险）
+
+**验证**：
+- 引擎实证：Chromium 150 新二进制 + 标志启动 → OS 层窗口标题（CGWindowListCopyWindowInfo）= TestProfile — HelloTitle；CDP 读 document.title = HelloTitle（无前缀，指纹面干净）；argv 含标志
+- 单测 tests/unit/window-title-prefix.test.ts 5 例（默认取 profile 名、自定义原样、null 关闭、控制字符清洗/64 字符上限、空前缀返回 null）
+- e2e tests/e2e/j78-window-title-prefix.test.ts 6 例（默认/自定义/null 三档 argv 断言、document.title 不含前缀、无意外 console error）
+- 回归：journey + j32 profile UI e2e 全绿；tsc/build 干净
