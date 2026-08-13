@@ -55,6 +55,7 @@ export function registerBrowserHandlers(): void {
     name: string; fingerprintSeed?: number; platform?: BrowserPlatform;
     fingerprintMode?: FingerprintMode; browserVersion?: string | null;
     allowThirdPartyCookies?: boolean;
+    drm?: boolean;
     timezone?: string; locale?: string; webrtcMode?: WebRtcMode; webrtcIp?: string;
     geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
@@ -66,6 +67,7 @@ export function registerBrowserHandlers(): void {
       fingerprintMode: opts.fingerprintMode,
       browserVersion: opts.browserVersion,
       allowThirdPartyCookies: opts.allowThirdPartyCookies,
+      drm: opts.drm,
       fingerprintSeed: opts.fingerprintSeed,
       platform: opts.platform,
       timezone: opts.timezone,
@@ -224,6 +226,7 @@ export function registerBrowserHandlers(): void {
     fingerprintMode?: FingerprintMode;
     browserVersion?: string | null;
     allowThirdPartyCookies?: boolean;
+    drm?: boolean;
     fingerprintSeed?: number;
     platform?: BrowserPlatform;
     timezone?: string;
@@ -257,6 +260,7 @@ export function registerBrowserHandlers(): void {
         fingerprintMode: params.fingerprintMode,
         browserVersion: params.browserVersion,
         allowThirdPartyCookies: params.allowThirdPartyCookies,
+        drm: params.drm,
         fingerprintSeed: params.fingerprintSeed,
         platform: params.platform,
         timezone: params.timezone,

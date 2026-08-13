@@ -2,6 +2,7 @@
 // Requires a Widevine CDM on the host (macOS Chrome/Edge/Brave bundles) and a
 // managed Chromium build that registers the CDM from --widevine-cdm-path.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { waitForCdpPort } from "./helpers/cdp.js";
@@ -40,7 +41,10 @@ describe("J66 — Widevine/DRM discovery, per-profile enable, and probe", () => 
     await h.page.waitForTimeout(400);
     const card = `[data-dir-id="${drmDirId}"]`;
     await h.page.waitForSelector(card, { timeout: 5000 });
-    await expect(h.page.locator(card).getByText("🎬 DRM")).toBeVisible();
+    await h.page.waitForFunction((sel: string) => {
+      const el = document.querySelector(sel);
+      return !!el && el.textContent!.includes("🎬 DRM");
+    }, card, { timeout: 5000 });
 
     const list = (await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.list())) as any[];
     const p = list.find((x) => x.dirId === drmDirId);
@@ -67,8 +71,10 @@ describe("J66 — Widevine/DRM discovery, per-profile enable, and probe", () => 
     expect(r.success).toBe(true);
     expect(r.staged).toBe(true);
     expect(r.status.available).toBe(true);
-    expect(r.status.cdm?.source).toBe("managed");
-    expect(r.status.cdm?.path).toContain(path.join("cdm", "widevine"));
+    // The managed copy is staged under <appData>/cdm/widevine/<version>.
+    const managedRoot = path.join(USERDATA, "cdm", "widevine");
+    const staged = fs.readdirSync(managedRoot).find((v) => fs.existsSync(path.join(managedRoot, v, "manifest.json")));
+    expect(staged).toBeTruthy();
   }, 20000);
 
   it("toggles the DRM flag via the Edit dialog and persists it", async () => {

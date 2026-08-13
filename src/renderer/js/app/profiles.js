@@ -688,6 +688,7 @@
           taskbarHeight: cp.taskbarHeight === 0 ? 0 : (cp.taskbarHeight || null),
           fontsDir: cp.fontsDir || null,
           allowThirdPartyCookies: cp.allowThirdPartyCookies === true,
+          drm: cp.drm === true,
           tags: cp.tags || [],
         };
       });
