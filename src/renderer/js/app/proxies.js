@@ -251,7 +251,41 @@
     var html = '<div class="info-row"><span>健康</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
     if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>建议</span><span class="proxy-health-suggestion">' + esc(entry.suggestion) + '</span></div>';
     if (entry && entry.bindings && entry.bindings.length) html += '<div class="info-row"><span>绑定</span><span>' + esc(entry.bindings.join(", ")) + '</span></div>';
+    html += '<div class="info-row proxy-history-row" style="display:none"><span>历史</span><span class="proxy-history-text"></span></div>';
     return html;
+  }
+
+  function renderHistoryTimeline(entry) {
+    if (!entry || !entry.history || !entry.history.length) {
+      return '<span style="color:var(--text-muted);">No detections recorded yet — run Detect to start tracking.</span>';
+    }
+    var points = entry.history.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 8);
+    var lines = points.map(function (h) {
+      var when = new Date(h.at);
+      var stamp = when.toLocaleDateString() + " " + when.toLocaleTimeString();
+      if (h.success) {
+        var bits = [];
+        if (h.exitIp) bits.push(h.exitIp);
+        if (h.countryCode) bits.push(h.countryCode);
+        if (h.timezone) bits.push(h.timezone);
+        if (h.provider) bits.push(h.provider);
+        if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
+        return '<div style="color:var(--success);">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
+      }
+      return '<div style="color:var(--danger);">❌ ' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
+    });
+    return '<div style="font-size:11px;line-height:1.7;">' + lines.join("") + '</div>';
+  }
+
+  function renderHistoryIntoRow(entry, row, txt) {
+    if (!row || !txt) return;
+    if (entry && entry.history && entry.history.length) {
+      txt.innerHTML = renderHistoryTimeline(entry);
+      row.style.display = '';
+    } else {
+      txt.innerHTML = '<span style="color:var(--text-muted);">No detections recorded yet — run Detect to start tracking.</span>';
+      row.style.display = '';
+    }
   }
 
   function rotationRowsHtml(cfg) {
@@ -312,6 +346,7 @@
             '<button class="btn btn-secondary btn-sm" data-action="default-proxy">★ Default</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="clear-health">🧹 清除健康</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy">🔄 轮换</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="toggle-history">📈 历史</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
           '</div>' +
@@ -335,6 +370,15 @@
       else if (action === "default-proxy") agentBrowser.setDefault(name);
       else if (action === "clear-health") agentBrowser.clearHealth(name);
       else if (action === "rotate-proxy") agentBrowser.rotateProxy(name);
+      else if (action === "toggle-history") {
+        var row = card.querySelector(".proxy-history-row");
+        var txt = card.querySelector(".proxy-history-text");
+        if (!row) return;
+        if (row.style.display !== "none") { row.style.display = "none"; return; }
+        var health = window.__proxyHealth || { entries: [] };
+        var entry = findHealth(health.entries, name);
+        renderHistoryIntoRow(entry, row, txt);
+      }
       else if (action === "edit-proxy") agentBrowser.editProxy(name);
       else if (action === "delete-proxy") agentBrowser.delProxy(name);
     };
@@ -357,6 +401,11 @@
       }
       var summaryEl = document.querySelector(".proxy-health-summary");
       if (summaryEl) summaryEl.outerHTML = renderHealthSummary(health);
+      var histRow = card.querySelector(".proxy-history-row");
+      var histTxt = card.querySelector(".proxy-history-text");
+      if (histRow && histRow.style.display !== "none" && histTxt) {
+        renderHistoryIntoRow(entry, histRow, histTxt);
+      }
     }).catch(function () {});
   }
 
