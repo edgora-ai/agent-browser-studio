@@ -42,6 +42,23 @@ describe("task templates", () => {
     expect(getTemplate("nope")).toBeUndefined();
   });
 
+  it("covers the production template library (17 templates across all categories)", () => {
+    const ids = TASK_TEMPLATES.map((x) => x.id);
+    expect(ids.length).toBe(17);
+    for (const id of ["product-inventory", "order-sync", "review-monitor", "keyword-rank", "follower-growth", "comment-watch", "social-publish", "ad-campaign-health", "competitor-track", "session-check", "screenshot-archive", "table-extract"]) {
+      expect(ids).toContain(id);
+    }
+    const cat = new Set(TASK_TEMPLATES.map((x) => x.category));
+    expect(cat.has("ecommerce")).toBe(true);
+    expect(cat.has("social")).toBe(true);
+    expect(cat.has("ads")).toBe(true);
+    expect(cat.has("data")).toBe(true);
+    expect(cat.has("ops")).toBe(true);
+    const catText = renderTemplateCatalog();
+    expect(catText).toContain("session-check");
+    expect(catText).toContain("social-publish");
+  });
+
   it("renderTemplateCatalog mentions each template + its output table", () => {
     const text = renderTemplateCatalog();
     expect(text).toContain("price-scrape");
