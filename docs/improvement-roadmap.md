@@ -658,4 +658,4 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 
 **修的真 bug（j59）**：全量 e2e 回归发现 j59-env-risk-launch-gate 6 例中 5 例失败——app 内置 DefaultConfig.defaultProxy="default" + proxies.default=http://127.0.0.1:7890，而 createBrowserProfile 默认 proxyMode="default"，因此测试里「没指定代理」的 profile 实际走了本地 7890 HTTP 代理，DNS 被接管 → env-risk 不再报 dns-resolver-leak 高危 → 测试断言过时。修复：j59 显式 proxyMode="none" 以测直连高危路径（这正是该测试的本意），6 例全绿。
 
-**验证**：smoke multiplatform-ci 4 例全绿；j59 6 例全绿；全量单测 + smoke 48 文件 579 例全绿；tsc 干净。引擎真实构建/生产 E2E 需 GitHub runner 执行 engine-verify（本机为 macOS arm64，无法本地验证 Windows/Linux 构建产物）。
+**验证**：smoke multiplatform-ci 4 例全绿；j59 6 例全绿；全量单测 + smoke 48 文件 579 例全绿；tsc 干净。全量 e2e 71 文件回归：除 j47 外全部通过——j47 硬性要求源码构建树（/Users/ahoo/workspace/chromium-build-150/src/out/Chromium.app），缺失时 beforeAll 抛错会让 CI 永远红，已改为 describe.skipIf 缺失时诚实跳过（构建树存在时仍全量执行）。引擎真实构建/生产 E2E 需 GitHub runner 执行 engine-verify（本机为 macOS arm64，无法本地验证 Windows/Linux 构建产物）。
