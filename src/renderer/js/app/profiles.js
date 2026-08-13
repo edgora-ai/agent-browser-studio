@@ -250,6 +250,8 @@
         agentBrowser.resetNewProfileForm("chromium");
         agentBrowser.loadNewProfileProxies();
         agentBrowser.profileBrowserChanged();
+        var adv = document.getElementById("new-profile-advanced");
+        if (adv && adv.open) adv.open = false; // RoxyBrowser 4.0.3-style: basic fields first, advanced collapsed
         document.getElementById("dlg-profile").showModal();
       },
 

@@ -526,6 +526,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="createProfile">
  <h3>Create New Profile</h3>
  <div class="form-row"><label>Name *</label><input id="new-profile-name" placeholder="My Profile" required></div>
+ <p style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;">只需填 Name 即可创建（其余用默认值）。更多身份/指纹选项在下方「⚙️ 高级设置」里，之后也可随时在 Profile 编辑中修改。</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="new-profile-browser-row">
  <div class="form-row"><label>Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
@@ -540,8 +541,18 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  </div>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+ <div class="form-row"><label>Platform</label>
+ <select id="new-agent-browser-platform">
+ <option value="windows">Windows</option>
+ <option value="macos">macOS</option>
+ </select>
+ </div>
  <div class="form-row" id="new-profile-proxy-row"><label>Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
+ </div>
  <!-- Managed Chromium-specific options -->
+ <details id="new-profile-advanced">
+ <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;">⚙️ 高级设置（Advanced configuration）</summary>
  <div id="new-profile-agent-browser-opts" style="display:block;">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Fingerprint Mode</label>
@@ -566,12 +577,6 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">One integer controls GPU, screen, hardware, canvas, audio, fonts — same seed = identical fingerprint.</p>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Platform</label>
- <select id="new-agent-browser-platform">
- <option value="windows">Windows</option>
- <option value="macos">macOS</option>
- </select>
- </div>
  <div class="form-row"><label>Timezone</label>
  <select id="new-agent-browser-timezone">
  <option value="">🛰 Auto (match proxy exit IP)</option>
@@ -660,6 +665,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </details>
  </div>
+ </details>
 
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.create">Create</button>
