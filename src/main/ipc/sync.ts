@@ -20,6 +20,10 @@ export function registerSyncHandlers(): void {
     return syncService.preview();
   });
 
+  ipcMain.handle("sync:preview-diff", async (): Promise<any> => {
+    return syncService.previewDiff();
+  });
+
   ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig>): Promise<{ success: boolean; error?: string }> => {
     try {
       setSyncConfig(config);

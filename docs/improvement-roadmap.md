@@ -334,3 +334,35 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J55 全绿（含 journ
 - 新增 `tests/e2e/j55-drift-block.test.ts`（6 例）；`tests/unit/fingerprint-baseline.test.ts` +2 例
 
 **验证**：e2e J55 6 例全绿（无 baseline 直启→capture baseline→check stable→篡改高风险字段后启动被 block 且无残留进程→audit 有 fingerprint-drift-block→`blockOnFingerprintDrift=false` 时 risky 放行）；unit/smoke 454 全绿；j41（基线流程）/j54/j53 回归 18 例通过。
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 461 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J56 全绿（含 journey 10/10 tab 切换）
+```
+
+11 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI / 19 指纹漂移启动阻断 / 20 sync 团队 diff 预览）落地并验证。
+
+### Slice 20 — sync 团队工作区第一步：push/pull 前 diff 预览（P1，团队协作）— ✅
+
+**范围**：把 sync 从「盲推盲拉的 S3 备份」推向团队工作区——push/pull 前拉取远端配置做结构化对比，明确「本地独有 / 远端独有 / 两边冲突」以及 push 会移除什么。这是竞品团队协作短板的第一个增量，也是后续锁/所有权/冲突合并的地基。
+
+**设计**：
+- `previewDiff()` 只读：拉取远端 config 快照（S3 GET，SigV4 签名，走与 pull 相同的 fetchSyncConfig），解码 gzip data，与本地 sanitized 快照对比
+- 对比面：profiles / proxies / accounts / extensions / defaultProxy + 远端工件（cookies/localStorage/preferences 的 dirId 列表）+ 远端最后同步时间戳
+- 方向语义：`localOnly`（本地独有，push 会新增/保留）、`remoteOnly`（远端独有，**push 会把它们从远端移除**=数据丢失风险，pull 会导入本地）、`changed`（两边都有但字段不同，忽略 syncedAt/syncedHash 记账字段）
+- 结果带 `pushWarnings`（红色，push 会移除的远端数据）与 `pullNotes`（蓝色，pull 会导入/覆盖什么）
+- 远端 404 = 首次推送：返回 `firstPush:true`，不报错
+- **顺带修复**：accounts 元数据（platformPassword 已剔除）此前根本没进 sync 快照但 UI 声称会同步——现在真正纳入同步，pull 时按 (platformUrl, platformUserName) 去重合并、本地优先
+- UI：sync tab 新增「Team Diff 预览」卡片 + 对比按钮；push 前自动 diff，有 pushWarnings 时弹确认「会移除远端数据」；pull 前自动刷新 diff
+
+**文件**：
+- 改 `services/sync-service.ts` — `previewDiff()` / `buildSyncDiff()` / `stableStringify` / `diffSectionById` / `diffAccountArrays` / `mergeAccountArrays` / accounts 纳入 `serializeSyncSafeConfig`（去密码）+ pull 合并
+- 改 `ipc/sync.ts` + `preload.cjs` — `sync:preview-diff`
+- 改 `renderer/js/app/sync.js` — diff 渲染（profile-card 徽章、push 风险红卡、pull 蓝卡、工件计数、首次推送提示）、push 前确认
+- 改 `renderer/index.html` — Team Diff 卡片
+- 改 `tests/unit/sync-service.test.ts` — +7 例（分类/工件/警告/clean/stableStringify/mergeAccountArrays/去密码）
+- 新增 `tests/e2e/j56-sync-diff-preview.test.ts`（5 例，本地 mock S3）
+
+**验证**：e2e J56 5 例全绿（首次 preview firstPush+localOnly → push 落盘 → push 后 clean+remoteTimestamp → 注入远端独有 profile 后 pushWarnings/pullNotes 出现）；unit/smoke 461 全绿；j55/j54/j41 回归 18 例通过；whitespace audit 通过。

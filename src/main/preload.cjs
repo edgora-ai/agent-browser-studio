@@ -45,6 +45,7 @@ const api = {
     pull: () => ipcRenderer.invoke("sync:pull"),
     status: () => ipcRenderer.invoke("sync:status"),
     preview: () => ipcRenderer.invoke("sync:preview"),
+    previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
     configure: (config) => ipcRenderer.invoke("sync:configure", config),
   },
   app: {

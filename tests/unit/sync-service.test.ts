@@ -448,3 +448,127 @@ describe("Sync service hardening", () => {
     }
   });
 });
+
+describe("Sync diff preview (buildSyncDiff)", () => {
+  const local = {
+    defaultProxy: "default",
+    browserProfiles: {
+      cb_local_only: { name: "LocalOnly", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows" },
+      cb_both: { name: "Both", fingerprintMode: "managed", fingerprintSeed: 5, platform: "windows", timezone: "Asia/Shanghai", syncedAt: 111, syncedHash: "abc" },
+    },
+    proxies: {
+      default: { type: "http", host: "127.0.0.1", port: 7890 },
+      local_proxy: { type: "socks5", host: "10.0.0.1", port: 1080 },
+    },
+    extensionRepository: {
+      ext_both: { id: "ext_both", name: "Ext", version: "1.0.0", packageHash: "a".repeat(128), manifestHash: "b".repeat(128) },
+    },
+    accounts: [
+      { platformUrl: "https://amazon.com", platformUserName: "alice", tags: ["us"] },
+      { platformUrl: "https://ebay.com", platformUserName: "bob", tags: [] },
+    ],
+  };
+  const remote = {
+    defaultProxy: "default",
+    browserProfiles: {
+      cb_remote_only: { name: "RemoteOnly", fingerprintMode: "managed", fingerprintSeed: 2, platform: "windows" },
+      cb_both: { name: "Both", fingerprintMode: "managed", fingerprintSeed: 5, platform: "windows", timezone: "Europe/Berlin", syncedAt: 222, syncedHash: "xyz" },
+    },
+    proxies: {
+      default: { type: "http", host: "127.0.0.1", port: 7890 },
+      remote_proxy: { type: "http", host: "10.0.0.2", port: 3128 },
+    },
+    extensionRepository: {
+      ext_both: { id: "ext_both", name: "Ext", version: "2.0.0", packageHash: "a".repeat(128), manifestHash: "b".repeat(128) },
+      ext_remote: { id: "ext_remote", name: "Remote Ext", version: "1.0.0", packageHash: "c".repeat(128), manifestHash: "d".repeat(128) },
+    },
+    accounts: [
+      { platformUrl: "https://ebay.com", platformUserName: "bob", tags: [] },
+      { platformUrl: "https://walmart.com", platformUserName: "carol", tags: ["us"] },
+    ],
+  };
+  const payload = {
+    cookies: { cb_both: "x", cb_remote_only: "y" },
+    localStorage: { cb_both: "z" },
+    preferences: { cb_remote_only: "w" },
+  };
+
+  it("classifies profiles into local-only / remote-only / changed (ignoring sync bookkeeping)", () => {
+    const diff = __syncTestHooks.buildSyncDiff(local, remote, payload);
+    expect(diff.profiles.localOnly).toEqual(["cb_local_only"]);
+    expect(diff.profiles.remoteOnly).toEqual(["cb_remote_only"]);
+    expect(diff.profiles.changed).toEqual([{ id: "cb_both", fields: ["timezone"] }]);
+  });
+
+  it("classifies proxies, extensions and accounts", () => {
+    const diff = __syncTestHooks.buildSyncDiff(local, remote, payload);
+    expect(diff.proxies.localOnly).toEqual(["local_proxy"]);
+    expect(diff.proxies.remoteOnly).toEqual(["remote_proxy"]);
+    expect(diff.proxies.changed).toEqual([]);
+    expect(diff.extensions.localOnly).toEqual([]);
+    expect(diff.extensions.remoteOnly).toEqual(["ext_remote"]);
+    expect(diff.extensions.changed).toEqual([{ id: "ext_both", fields: ["version"] }]);
+    expect(diff.accounts.localOnly).toEqual(["alice @ https://amazon.com"]);
+    expect(diff.accounts.remoteOnly).toEqual(["carol @ https://walmart.com"]);
+    expect(diff.accounts.changed).toEqual([]);
+  });
+
+  it("reports artifact keys and remote-only push/pull guidance", () => {
+    const diff = __syncTestHooks.buildSyncDiff(local, remote, payload);
+    expect(diff.artifacts).toEqual({
+      cookies: ["cb_both", "cb_remote_only"],
+      localStorage: ["cb_both"],
+      preferences: ["cb_remote_only"],
+    });
+    // pushWarnings: remote-only profiles (1) + proxies (1) + extensions (1) + accounts (1)
+    expect(diff.pushWarnings).toHaveLength(4);
+    expect(diff.pushWarnings[0]).toContain("cb_remote_only");
+    // pullNotes: remote-only profiles + remote-only proxies + changed profiles
+    expect(diff.pullNotes).toHaveLength(3);
+    expect(diff.pullNotes[0]).toContain("cb_remote_only");
+  });
+
+  it("reports an identical sync as clean", () => {
+    const diff = __syncTestHooks.buildSyncDiff(local, local, {});
+    expect(diff.profiles.localOnly).toEqual([]);
+    expect(diff.profiles.remoteOnly).toEqual([]);
+    expect(diff.profiles.changed).toEqual([]);
+    expect(diff.pushWarnings).toEqual([]);
+    expect(diff.pullNotes).toEqual([]);
+  });
+
+  it("stableStringify canonicalizes key order for deep comparison", () => {
+    expect(__syncTestHooks.stableStringify({ b: 1, a: { d: 2, c: 3 } }))
+      .toBe(__syncTestHooks.stableStringify({ a: { c: 3, d: 2 }, b: 1 }));
+  });
+
+  it("mergeAccountArrays keeps remote-only accounts and prefers local on duplicates", () => {
+    const remoteAccs = [
+      { platformUrl: "https://a.com", platformUserName: "u1", tags: ["r"] },
+      { platformUrl: "https://b.com", platformUserName: "u2" },
+    ];
+    const localAccs = [
+      { platformUrl: "https://a.com", platformUserName: "u1", tags: ["l"] },
+      { platformUrl: "https://c.com", platformUserName: "u3" },
+    ];
+    const merged = __syncTestHooks.mergeAccountArrays(remoteAccs as any, localAccs as any);
+    expect(merged).toHaveLength(3);
+    expect(merged.find((a: any) => a.platformUrl === "https://a.com").tags).toEqual(["l"]);
+    expect(merged.some((a: any) => a.platformUrl === "https://b.com")).toBe(true);
+    expect(merged.some((a: any) => a.platformUrl === "https://c.com")).toBe(true);
+  });
+
+  it("serializeSyncSafeConfig strips account passwords", () => {
+    const safe = __syncTestHooks.serializeSyncSafeConfig({
+      version: 4,
+      defaultProxy: "default",
+      sync: { enabled: true, endpoint: "https://x", bucket: "b", accessKey: "AK", secretKey: "SK" },
+      browserProfiles: {},
+      accounts: [{ platformUrl: "https://amazon.com", platformUserName: "alice", platformPassword: "s3cr3t", tags: ["us"] }],
+    } as any) as any;
+    expect(safe.accounts).toHaveLength(1);
+    expect(safe.accounts[0].platformUserName).toBe("alice");
+    expect(safe.accounts[0].platformPassword).toBeUndefined();
+    expect(JSON.stringify(safe)).not.toContain("s3cr3t");
+  });
+});

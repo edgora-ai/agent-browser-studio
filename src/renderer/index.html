@@ -136,6 +136,14 @@
  <div id="sync-preview" class="profile-grid"><div class="loading">Loading...</div></div>
  </div>
  <div class="card">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
+ <h3 style="margin:0;">Team Diff 预览（push/pull 前变更对比）</h3>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff">对比远端</button>
+ </div>
+ <p id="sync-diff-message" style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">对比后显示本地/远端各自独有的 profile、代理、账号、扩展，以及 push 会覆盖/移除什么。Push 前会自动检查。</p>
+ <div id="sync-diff"><div class="empty-state">尚未对比 —— 点击「对比远端」</div></div>
+ </div>
+ <div class="card">
  <h3 data-i18n="sync.config">Configuration</h3>
  <div class="sync-form">
  <div class="form-row"><label><input type="checkbox" id="sync-enabled"> Enable</label></div>

@@ -80,6 +80,36 @@ export const syncService = {
         : `同步未配置 (endpoint/bucket/enabled)${skipNote}`,
     };
   },
+  // ── Diff preview (remote vs local, read-only) ──
+  async previewDiff(): Promise<SyncDiffResult> {
+    const sync = getSyncConfig();
+    if (!sync.enabled || !sync.endpoint || !sync.bucket) {
+      return { ok: false, message: "Sync not enabled or configured", ...emptySyncDiff() };
+    }
+    try {
+      const fetched = await fetchSyncConfig(sync);
+      if (!fetched.ok) {
+        if (fetched.message.startsWith("HTTP 404")) {
+          const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
+          const body = buildSyncDiff(localSnapshot, { browserProfiles: {}, proxies: {}, extensionRepository: {}, accounts: [] } as any, {});
+          return { ok: true, firstPush: true, remoteTimestamp: null, ...body };
+        }
+        return { ok: false, message: fetched.message, ...emptySyncDiff() };
+      }
+      const payload = fetched.payload;
+      const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
+      const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+      const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
+      const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload);
+      return {
+        ok: true,
+        remoteTimestamp: typeof payload.timestamp === "number" ? payload.timestamp : null,
+        ...body,
+      };
+    } catch (e: any) {
+      return { ok: false, message: e.message || String(e), ...emptySyncDiff() };
+    }
+  },
   // ── Push ──
   async push(signal?: AbortSignal): Promise<SyncResult> {
     assertSyncNotAborted(signal);
@@ -355,6 +385,7 @@ export const syncService = {
         ...latestConfig,
         defaultProxy: remoteConfig.defaultProxy || latestConfig.defaultProxy,
         proxies: { ...(remoteConfig.proxies || {}), ...latestConfig.proxies },
+        accounts: mergeAccountArrays((remoteConfig as any).accounts, (latestConfig as any).accounts),
         sync: latestConfig.sync,
         browserProfiles: { ...(remoteConfig.browserProfiles || {}), ...(latestConfig.browserProfiles || {}) },
       } as MgmtConfig;
@@ -1170,6 +1201,17 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
     if (safeEntry) extensionRepo[entry.id] = safeEntry;
   }
 
+  const accounts = Array.isArray(cfg.accounts)
+    ? (cfg.accounts as any[]).map((acc) => ({
+        platformUrl: String(acc?.platformUrl || ""),
+        platformUserName: String(acc?.platformUserName || ""),
+        profileIds: Array.isArray(acc?.profileIds) ? (acc.profileIds as any[]).map(String) : [],
+        tags: Array.isArray(acc?.tags) ? (acc.tags as any[]).map(String) : [],
+        createdAt: Number.isFinite(acc?.createdAt) ? acc.createdAt : undefined,
+        updatedAt: Number.isFinite(acc?.updatedAt) ? acc.updatedAt : undefined,
+      })).filter((a) => a.platformUrl && a.platformUserName)
+    : [];
+
   return {
     version: Math.max(4, Number(cfg.version) || 0),
     chromiumBin: "auto",
@@ -1182,6 +1224,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
     },
     browserProfiles: profiles,
     extensionRepository: extensionRepo,
+    accounts,
   } as SyncSafeConfig;
 }
 
@@ -1237,6 +1280,167 @@ function sortKeys(value: any): any {
 }
 
 function getHostname(): string { try { return os.hostname(); } catch { return "unknown"; } }
+export interface SyncDiffSection {
+  localOnly: string[];
+  remoteOnly: string[];
+  changed: Array<{ id: string; fields: string[] }>;
+}
+
+export interface SyncDiffResult {
+  ok: boolean;
+  message?: string;
+  remoteTimestamp?: number | null;
+  firstPush?: boolean;
+  profiles: SyncDiffSection;
+  proxies: SyncDiffSection;
+  accounts: SyncDiffSection;
+  extensions: SyncDiffSection;
+  defaultProxy: { local: string | null; remote: string | null };
+  artifacts: { cookies: string[]; localStorage: string[]; preferences: string[] };
+  pushWarnings: string[];
+  pullNotes: string[];
+}
+
+const SYNC_BOOKKEEPING_FIELDS = new Set(["syncedAt", "syncedHash"]);
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify((value as Record<string, unknown>)[k])).join(",") + "}";
+}
+
+function changedTopFields(a: any, b: any, ignore: Set<string>): string[] {
+  const keys = new Set<string>([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  const out: string[] = [];
+  for (const k of keys) {
+    if (ignore.has(k)) continue;
+    if (stableStringify(a?.[k]) !== stableStringify(b?.[k])) out.push(k);
+  }
+  return out.sort();
+}
+
+function diffSectionById(localMap: Record<string, any>, remoteMap: Record<string, any>): SyncDiffSection {
+  const localIds = Object.keys(localMap || {});
+  const remoteIds = Object.keys(remoteMap || {});
+  const localSet = new Set(localIds);
+  const remoteSet = new Set(remoteIds);
+  const localOnly = localIds.filter((id) => !remoteSet.has(id)).sort();
+  const remoteOnly = remoteIds.filter((id) => !localSet.has(id)).sort();
+  const changed: Array<{ id: string; fields: string[] }> = [];
+  for (const id of localIds) {
+    if (!remoteSet.has(id)) continue;
+    const fields = changedTopFields(localMap[id], remoteMap[id], SYNC_BOOKKEEPING_FIELDS);
+    if (fields.length) changed.push({ id, fields });
+  }
+  changed.sort((a, b) => a.id.localeCompare(b.id));
+  return { localOnly, remoteOnly, changed };
+}
+
+function diffAccountArrays(local: any[], remote: any[]): SyncDiffSection {
+  const keyOf = (a: any): [string, string] => [String(a?.platformUserName || ""), String(a?.platformUrl || "")];
+  const localMap: Record<string, any> = {};
+  const remoteMap: Record<string, any> = {};
+  for (const a of local || []) {
+    const [u, url] = keyOf(a);
+    if (u && url) localMap[u + "\u0000" + url] = a;
+  }
+  for (const a of remote || []) {
+    const [u, url] = keyOf(a);
+    if (u && url) remoteMap[u + "\u0000" + url] = a;
+  }
+  const raw = diffSectionById(localMap, remoteMap);
+  const pretty = (k: string) => k.split("\u0000").join(" @ ");
+  return {
+    localOnly: raw.localOnly.map(pretty),
+    remoteOnly: raw.remoteOnly.map(pretty),
+    changed: raw.changed.map((c) => ({ id: pretty(c.id), fields: c.fields })),
+  };
+}
+
+function mergeAccountArrays(remote: any[], local: any[]): any[] {
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const acc of local || []) {
+    const u = String(acc?.platformUserName || "");
+    const url = String(acc?.platformUrl || "");
+    if (!u || !url) continue;
+    const key = u + "\u0000" + url;
+    seen.add(key);
+    out.push(acc);
+  }
+  for (const acc of remote || []) {
+    const u = String(acc?.platformUserName || "");
+    const url = String(acc?.platformUrl || "");
+    if (!u || !url) continue;
+    const key = u + "\u0000" + url;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(acc);
+  }
+  return out;
+}
+
+function emptySyncDiff(): Omit<SyncDiffResult, "ok" | "message"> {
+  return {
+    firstPush: false,
+    profiles: { localOnly: [], remoteOnly: [], changed: [] },
+    proxies: { localOnly: [], remoteOnly: [], changed: [] },
+    accounts: { localOnly: [], remoteOnly: [], changed: [] },
+    extensions: { localOnly: [], remoteOnly: [], changed: [] },
+    defaultProxy: { local: null, remote: null },
+    artifacts: { cookies: [], localStorage: [], preferences: [] },
+    pushWarnings: [],
+    pullNotes: [],
+  };
+}
+
+function buildSyncDiff(local: any, remote: any, payload: any): Omit<SyncDiffResult, "ok" | "message" | "remoteTimestamp"> {
+  const profiles = diffSectionById(local?.browserProfiles || {}, remote?.browserProfiles || {});
+  const proxies = diffSectionById(local?.proxies || {}, remote?.proxies || {});
+  const extensions = diffSectionById(local?.extensionRepository || {}, remote?.extensionRepository || {});
+  const accounts = diffAccountArrays(local?.accounts || [], remote?.accounts || []);
+
+  const pushWarnings: string[] = [];
+  const pullNotes: string[] = [];
+  if (profiles.remoteOnly.length) {
+    pushWarnings.push("Push 会把 " + profiles.remoteOnly.length + " 个远端独有的 profile 从远端移除（本地不存在）: " + profiles.remoteOnly.slice(0, 8).join(", ") + (profiles.remoteOnly.length > 8 ? " (+" + (profiles.remoteOnly.length - 8) + ")" : ""));
+  }
+  if (proxies.remoteOnly.length) {
+    pushWarnings.push("Push 会把 " + proxies.remoteOnly.length + " 个远端独有的代理从远端移除: " + proxies.remoteOnly.slice(0, 8).join(", ") + (proxies.remoteOnly.length > 8 ? " (+" + (proxies.remoteOnly.length - 8) + ")" : ""));
+  }
+  if (extensions.remoteOnly.length) {
+    pushWarnings.push("Push 会把 " + extensions.remoteOnly.length + " 个远端独有的扩展从远端移除");
+  }
+  if (accounts.remoteOnly.length) {
+    pushWarnings.push("Push 会把 " + accounts.remoteOnly.length + " 个远端独有的账号从远端移除");
+  }
+  if (profiles.remoteOnly.length) {
+    pullNotes.push("Pull 会把 " + profiles.remoteOnly.length + " 个远端独有的 profile 导入本地: " + profiles.remoteOnly.slice(0, 8).join(", ") + (profiles.remoteOnly.length > 8 ? " (+" + (profiles.remoteOnly.length - 8) + ")" : ""));
+  }
+  if (proxies.remoteOnly.length) {
+    pullNotes.push("Pull 会把 " + proxies.remoteOnly.length + " 个远端独有的代理导入本地");
+  }
+  if (profiles.changed.length) {
+    pullNotes.push("Pull 会用远端版本覆盖 " + profiles.changed.length + " 个两边都有的 profile 冲突字段（本地优先不覆盖整档）");
+  }
+
+  return {
+    profiles,
+    proxies,
+    accounts,
+    extensions,
+    defaultProxy: { local: local?.defaultProxy || null, remote: remote?.defaultProxy || null },
+    artifacts: {
+      cookies: Object.keys(payload?.cookies || {}).sort(),
+      localStorage: Object.keys(payload?.localStorage || {}).sort(),
+      preferences: Object.keys(payload?.preferences || {}).sort(),
+    },
+    pushWarnings,
+    pullNotes,
+  };
+}
+
 function maskKey(k: string): string { return k?.length >= 8 ? k.slice(0, 4) + "****" + k.slice(-4) : k || ""; }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T | null> {
@@ -1273,4 +1477,7 @@ export const __syncTestHooks = {
   serializeSyncSafeConfig,
   sanitizeRemoteConfig,
   validatePreferencesJson,
+  buildSyncDiff,
+  stableStringify,
+  mergeAccountArrays,
 };
