@@ -51,6 +51,7 @@ import {
   getWebRtcDiagnostics,
   setWebRtcDiagnostics,
   clearWebRtcDiagnostics,
+  sanitizeAppUrl,
 } from "../../src/main/services/config-manager.js";
 import type { MgmtConfig } from "../../src/main/types.js";
 import {
@@ -591,5 +592,23 @@ describe("Agent Run normalization", () => {
     clearWebRtcDiagnostics(dirId);
     reloadConfig();
     expect(getWebRtcDiagnostics(dirId).length).toBe(0);
+  });
+
+  it("sanitizes and persists the Web App (appUrl) setting", () => {
+    expect(sanitizeAppUrl("  https://shop.example.com/dash  ")).toBe("https://shop.example.com/dash");
+    expect(sanitizeAppUrl("data:text/html,hello")).toMatch(/^data:/);
+    expect(sanitizeAppUrl(null)).toBeNull();
+    expect(sanitizeAppUrl("")).toBeNull();
+    expect(() => sanitizeAppUrl("file:///etc/passwd")).toThrow(/http\/https\/data/);
+    expect(() => sanitizeAppUrl("chrome://settings")).toThrow(/http\/https\/data/);
+
+    const dirId = "ab_webapp_test";
+    setProfileMeta(dirId, { name: "WebApp", appUrl: "https://shop.example.com/dash" });
+    reloadConfig();
+    expect(getConfig().browserProfiles![dirId].appUrl).toBe("https://shop.example.com/dash");
+
+    setProfileMeta(dirId, { appUrl: null });
+    reloadConfig();
+    expect(getConfig().browserProfiles![dirId].appUrl).toBeNull();
   });
 });
