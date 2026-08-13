@@ -70,6 +70,7 @@ interface Ping0State {
   quickProbes: unknown;
   status: string;
   raf: unknown;
+  probeFocus: { visibility: string; hasFocus: boolean } | null;
   bodyText: string;
 }
 
@@ -283,6 +284,10 @@ async function captureState(page: Page, settledAt: string): Promise<Ping0State> 
       bodyText: document.body.innerText || "",
     };
   });
+  const focus = await page.evaluate(() => ({
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus(),
+  })).catch(() => null);
   const now = new Date().toISOString();
   return {
     startedAt: "",
@@ -297,6 +302,7 @@ async function captureState(page: Page, settledAt: string): Promise<Ping0State> 
     quickProbes: captured.quickProbes,
     status: captured.status,
     raf: captured.raf,
+    probeFocus: focus,
     bodyText: captured.bodyText,
   };
 }
@@ -394,6 +400,11 @@ try {
   const context = browser.contexts()[0];
   const page = context.pages()[0] || (await context.newPage());
    await page.goto("https://ping0.cc/env", { waitUntil: "domcontentloaded", timeout: 60000 });
+   // Best-effort foreground the window so ping0's stealth/rAF probes measure
+   // a visible, focused window — an occluded/background tab throttles rAF to
+   // ~100ms and false-flags stealth.raf_timing even on a clean engine.
+   try { await page.bringToFront(); } catch { /* ignore */ }
+   await new Promise((resolve) => setTimeout(resolve, 400));
    let timedOut = false;
    try {
      await waitForPing0Finished(page, opts.waitTimeoutMs);
@@ -402,6 +413,7 @@ try {
      process.stderr.write("[verify-ping0] warning: " + (error instanceof Error ? error.message : String(error)) + " — capturing partial state\n");
    }
    const finishedAt = new Date().toISOString();
+   try { await page.bringToFront(); } catch { /* ignore */ }
    if (!timedOut && opts.settleMs > 0) {
      process.stderr.write("[verify-ping0] finished, settling " + opts.settleMs + "ms before capture…\n");
      await new Promise((resolve) => setTimeout(resolve, opts.settleMs));
@@ -431,7 +443,12 @@ try {
     await browser?.close().catch(() => undefined);
     try { child.kill("SIGKILL"); } catch { /* ignore */ }
    if (userDataDir.startsWith(temporaryRoot)) {
-     fs.rmSync(userDataDir, { recursive: true, force: true });
+      // Give the killed Chromium a beat to release the profile dir (macOS
+      // can still hold files briefly after SIGKILL); retry instead of failing.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try { fs.rmSync(userDataDir, { recursive: true, force: true }); break; }
+        catch { await new Promise((resolve) => setTimeout(resolve, 200)); }
+      }
    }
  }
 }
