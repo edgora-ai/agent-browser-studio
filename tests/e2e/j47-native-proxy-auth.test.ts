@@ -24,7 +24,7 @@ function nativeAuthTempDirs(): string[] {
   return fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("agent-browser-native-proxy-auth-")).sort();
 }
 
-describe("J47 — native HTTP proxy authentication", () => {
+describe.skipIf(!fs.existsSync(CHROMIUM))("J47 — native HTTP proxy authentication (skipped when the source Chromium build tree is absent)", () => {
   let h: TestAppHandle;
   let proxy: http.Server;
   let proxyPort = 0;
