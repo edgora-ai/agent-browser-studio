@@ -339,3 +339,24 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   for a plain profile, confirmed both from the build tree and the published
   runtime binary; the OSS `j66-drm` e2e journey covers discovery,
   per-profile enable, managed staging, and the real probe.
+
+### `0046` — 2026-08-13
+
+- Chromium source commit:
+  `35d5fe5cc4`
+  (`feat: optional OS-level window-title prefix for managed profiles`).
+- Patch SHA-256:
+  `8220c59fb695d8a7f603068da3b87e1511c1c2b83074c965a99780b70902f1de`.
+- Scope: adds an optional OS-level window-title prefix for managed profiles.
+  When a managed launch passes `--agent-browser-window-title-prefix=<text>`
+  (e.g. the profile name), `Browser::GetWindowTitleForCurrentTab` appends the
+  prefix to the native window-frame / taskbar title. `document.title` and
+  every page-visible surface stay untouched, so the fingerprint surface is not
+  affected; unmanaged and plain launches keep upstream behavior.
+- Preservation: no byte in `0002–0045` or either immutable source payload was
+  rewritten. The next Chromium source change must be exported as `0047-*`;
+  do not amend, squash, rebase, or replace this source commit or patch.
+- Acceptance: applied to the preserved Chromium 150 checkout; the exported
+  patch replays cleanly and the tree stays byte-identical to the annotated
+  source commit. Runtime wiring and the OS-level title check are covered by
+  the matching OSS slice and e2e journey.

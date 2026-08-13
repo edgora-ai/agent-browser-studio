@@ -56,7 +56,7 @@ import {
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
-import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock } from "../types.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta } from "../types.js";
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
 
 export interface BrowserProfile {
@@ -231,6 +231,7 @@ export function createBrowserProfile(opts: {
   screenHeight?: number | null;
   storageQuota?: number | null;
   taskbarHeight?: number | null;
+  windowTitlePrefix?: string | null;
   fontsDir?: string | null;
   proxyMode?: "none" | "default" | "named";
   proxyName?: string | null;
@@ -268,6 +269,7 @@ export function createBrowserProfile(opts: {
     proxyMode,
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
     drm: normalizeBoolean(opts.drm, "drm"),
+    windowTitlePrefix: opts.windowTitlePrefix === undefined ? undefined : (opts.windowTitlePrefix === null ? null : sanitizeWindowTitlePrefix(opts.windowTitlePrefix)),
     note: null,
     tags: normalizeTags(opts.tags),
     updatedAt: Date.now(),
@@ -602,6 +604,17 @@ export async function launchBrowser(
       `--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}`,
     ]);
     args = applyManagedNativeRefreshRate(args);
+  }
+
+  // RoxyBrowser-style taskbar/window title: show the profile name at the OS
+  // level without touching document.title (zero fingerprint surface). The
+  // Chromium fork consumes an optional window-title prefix switch.
+  const windowTitlePrefix = resolveWindowTitlePrefix(meta);
+  if (windowTitlePrefix) {
+    args = dedupeChromeArgs([
+      ...args,
+      `--agent-browser-window-title-prefix=${windowTitlePrefix}`,
+    ]);
   }
 
   // Chromium 150 builds advertising the native QUIC-proxy capability route
@@ -1181,6 +1194,31 @@ function addHardwareFingerprintArgs(args: string[], meta: any): void {
   if (Number.isInteger(normalized.storageQuota)) args.push(`--fingerprint-storage-quota=${normalized.storageQuota}`);
   if (Number.isInteger(normalized.taskbarHeight)) args.push(`--fingerprint-taskbar-height=${normalized.taskbarHeight}`);
   if (normalized.fontsDir) args.push(`--fingerprint-fonts-dir=${normalized.fontsDir}`);
+}
+
+const WINDOW_TITLE_PREFIX_MAX_LENGTH = 64;
+
+/** Clean a taskbar window-title prefix before handing it to the OS-level switch. */
+export function sanitizeWindowTitlePrefix(text: string): string {
+  return String(text)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, WINDOW_TITLE_PREFIX_MAX_LENGTH);
+}
+
+/**
+ * Resolve the OS-level window-title prefix for a managed profile. Mirrors
+ * RoxyBrowser's Taskbar Icon Display > Profile Name: undefined/empty uses the
+ * profile name, a non-empty string is used verbatim, null disables. Never
+ * touches document.title.
+ */
+export function resolveWindowTitlePrefix(meta: BrowserProfileMeta): string | null {
+  const raw = meta.windowTitlePrefix;
+  if (raw === null) return null;
+  const text = raw === undefined || raw === "" ? meta.name || "" : raw;
+  const cleaned = sanitizeWindowTitlePrefix(text);
+  return cleaned || null;
 }
 
 function normalizeHardwareFingerprintMeta(meta: any): {

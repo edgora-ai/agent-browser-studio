@@ -60,6 +60,7 @@ export function registerBrowserHandlers(): void {
     geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
+    windowTitlePrefix?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
   }) => {
     const r = createBrowserProfile({
@@ -87,6 +88,7 @@ export function registerBrowserHandlers(): void {
       storageQuota: opts.storageQuota,
       taskbarHeight: opts.taskbarHeight,
       fontsDir: opts.fontsDir,
+      windowTitlePrefix: opts.windowTitlePrefix,
       proxyMode: opts.proxyMode,
       proxyName: opts.proxyName,
       tags: opts.tags,
@@ -246,6 +248,7 @@ export function registerBrowserHandlers(): void {
     storageQuota?: number | null;
     taskbarHeight?: number | null;
     fontsDir?: string | null;
+    windowTitlePrefix?: string | null;
     note?: string;
     proxyMode?: ProxyMode;
     proxyName?: string | null;
@@ -283,6 +286,7 @@ export function registerBrowserHandlers(): void {
         screenHeight: params.screenHeight,
         storageQuota: params.storageQuota,
         taskbarHeight: params.taskbarHeight,
+        windowTitlePrefix: params.windowTitlePrefix,
         fontsDir: params.fontsDir,
       });
       return { success: true };

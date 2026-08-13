@@ -121,6 +121,7 @@ export interface ProfileLock {
 
 export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
+  windowTitlePrefix?: string | null;
   proxyMode?: ProxyMode;
   proxyName?: string | null;
   /** When true, the profile launches with Widevine/DRM enabled when a CDM is available. */

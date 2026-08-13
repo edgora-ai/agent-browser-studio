@@ -542,6 +542,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.</p>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded auth/payment/challenge compatibility</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> 🎬 Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> 🖥 Show profile name in taskbar / window title (RoxyBrowser-style)</label>
 <div class="form-row"><label>Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="new-agent-browser-seed" type="number" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
@@ -994,6 +995,8 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.</p>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded compatibility</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-drm" type="checkbox"> 🎬 Enable Widevine/DRM (streaming sites)</label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-window-title-enabled" type="checkbox" checked> 🖥 Show profile name in taskbar / window title (RoxyBrowser-style, document.title untouched)</label>
+<div class="form-row"><label>Custom Title Prefix</label><input id="agent-browser-meta-window-title-prefix" placeholder="Default: profile name"></div>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
  <div class="form-row"><label>Profile Name *</label><input id="agent-browser-meta-name" placeholder="My Profile" required></div>

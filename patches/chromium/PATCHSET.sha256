@@ -45,3 +45,5 @@ a111080791715db1fc6886e0b2607cc72ead8949e3343f4873a68d2102107d39  patches/0039-n
 311c0d382160d93a091871390af6ccd9a9c697f8646df32203260d1c8c795762  patches/0043-agent-browser-google-api-key-infobar.patch
 c8e3755c1bfb5e2ddcc316ca3b4c034b7dbdb93a9d6a7477ea2d49e8f63382d9  patches/0044-agent-browser-managed-dns-locale-refresh.patch
 6a3abc7e80b6feb3563bec6a33a3ca952ecdb0de53e345b9b430628fb673a9e6  patches/0045-native-widevine-cdm-registration.patch
+
+8220c59fb695d8a7f603068da3b87e1511c1c2b83074c965a99780b70902f1de  patches/0046-agent-browser-window-title-prefix.patch

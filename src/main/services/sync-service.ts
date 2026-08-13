@@ -1230,6 +1230,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       storageQuota: Number.isInteger(profile.storageQuota) ? profile.storageQuota : null,
       taskbarHeight: Number.isInteger(profile.taskbarHeight) ? profile.taskbarHeight : null,
       fontsDir: null,
+      windowTitlePrefix: profile.windowTitlePrefix === null ? null : (typeof profile.windowTitlePrefix === "string" ? profile.windowTitlePrefix.slice(0, 64) : undefined),
       proxyMode: profile.proxyMode,
       proxyName: profile.proxyName || null,
       note: profile.note || null,

@@ -166,6 +166,11 @@
           document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
           writeGeolocationFields("agent-browser-meta-", metaData);
           writeHardwareFields("agent-browser-meta-", metaData);
+          var wtPrefixMeta = metaData.windowTitlePrefix;
+          var wtEnabled = wtPrefixMeta !== null;
+          var wtPrefix = (wtPrefixMeta && wtPrefixMeta !== "") ? wtPrefixMeta : "";
+          document.getElementById("agent-browser-meta-window-title-enabled").checked = wtEnabled;
+          document.getElementById("agent-browser-meta-window-title-prefix").value = wtPrefix;
           api.proxy.list().then(function(proxies) {
             var sel = document.getElementById("agent-browser-meta-proxy");
             sel.innerHTML = renderProxyOptions(proxies, proxySelectionValue(metaData.proxyMode, metaData.proxyName), false);
@@ -278,6 +283,7 @@
         var loc = document.getElementById("new-agent-browser-locale").value || undefined;
         var webrtcMode = document.getElementById("new-agent-browser-webrtc-mode").value || "auto";
         var webrtcIp = document.getElementById("new-agent-browser-webrtc").value.trim() || undefined;
+        var windowTitlePrefix = document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null;
         if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
         var hardware, geolocation;
         try { hardware = readHardwareFields("new-agent-browser-"); geolocation = readGeolocationFields("new-agent-browser-"); }
@@ -296,6 +302,7 @@
           webrtcMode: webrtcMode,
           webrtcIp: webrtcIp,
           proxyMode: proxySelection.mode,
+          windowTitlePrefix: windowTitlePrefix,
           proxyName: proxySelection.name,
         }, geolocation, hardware)).then(function(r) {
           document.getElementById("dlg-profile").close();
@@ -622,6 +629,12 @@
     var locale = document.getElementById("agent-browser-meta-locale").value || null;
     var webrtcMode = document.getElementById("agent-browser-meta-webrtc-mode").value || "auto";
     var webrtcIp = document.getElementById("agent-browser-meta-webrtc").value.trim() || null;
+    var windowTitlePrefix;
+    if (document.getElementById("agent-browser-meta-window-title-enabled").checked) {
+      windowTitlePrefix = document.getElementById("agent-browser-meta-window-title-prefix").value.trim() || "";
+    } else {
+      windowTitlePrefix = null;
+    }
     if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = null;
     var proxySelection = parseProxySelection(document.getElementById("agent-browser-meta-proxy").value, "none");
     var hardware, geolocation;
@@ -637,7 +650,8 @@
       drm: drm,
       fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
-      proxyMode: proxySelection.mode, proxyName: proxySelection.name
+      proxyMode: proxySelection.mode, proxyName: proxySelection.name,
+      windowTitlePrefix: windowTitlePrefix
     }, geolocation, hardware)));
     Promise.all(promises).then(function(r) {
       if (r[0] && r[0].success) { toast((window.i18n ? window.i18n.t("toast.profile.saved", "Profile saved") : "Profile saved"), "success"); loadProfiles(); }

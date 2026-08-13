@@ -599,6 +599,17 @@ function validateGeolocationMeta(meta: BrowserFingerprintMeta): void {
   if (meta.geolocationAccuracy == null) meta.geolocationAccuracy = 50;
 }
 
+function sanitizeWindowTitlePrefix(value: unknown): string | null {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string") throw new Error("Invalid window title prefix");
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 64);
+  return cleaned || null;
+}
+
 function sanitizeOptionalInteger(value: unknown, min: number, max: number): number | null {
   if (value === undefined || value === null || value === "") return null;
   const n = Number(value);
@@ -1097,6 +1108,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>)
   if (meta.storageQuota !== undefined) next.storageQuota = sanitizeOptionalInteger(meta.storageQuota, 1, 1048576);
   if (meta.taskbarHeight !== undefined) next.taskbarHeight = sanitizeOptionalInteger(meta.taskbarHeight, 0, 500);
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
+  if (meta.windowTitlePrefix !== undefined) next.windowTitlePrefix = sanitizeWindowTitlePrefix(meta.windowTitlePrefix);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
   if (meta.drm !== undefined) next.drm = sanitizeBoolean(meta.drm, "drm");
 

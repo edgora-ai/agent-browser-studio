@@ -1029,6 +1029,7 @@ function sanitizeProfileOpts(opts: any): any {
     "platform", "timezone", "locale", "webrtcMode", "webrtcIp", "geolocationMode",
     "geolocationLatitude", "geolocationLongitude", "geolocationAccuracy", "gpuVendor",
     "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth", "screenHeight",
+    "windowTitlePrefix",
     "storageQuota", "taskbarHeight", "fontsDir", "proxyMode", "proxyName", "tags",
   ];
   const out: any = { name: String(opts.name).trim() };

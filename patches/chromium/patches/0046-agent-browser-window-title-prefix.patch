@@ -1,0 +1,86 @@
+diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
+index b6bcac3e84..f1fc5d8108 100644
+--- a/chrome/browser/ui/browser.cc
++++ b/chrome/browser/ui/browser.cc
+@@ -709,21 +709,42 @@ gfx::Image Browser::GetCurrentPageIcon() const {
+   return favicon_driver ? favicon_driver->GetFavicon() : gfx::Image();
+ }
+ 
++namespace {
++
++// Agent Browser: optional OS-level window-title prefix (taskbar label).
++// --agent-browser-window-title-prefix=<text> affects only the window frame and
++// the taskbar label; document.title and every page-visible surface stay
++// untouched, so the fingerprint surface is not affected.
++std::u16string MaybeAppendWindowTitlePrefix(std::u16string title) {
++  const std::string prefix =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          switches::kAgentBrowserWindowTitlePrefix);
++  if (prefix.empty() || title.empty()) {
++    return title;
++  }
++  return base::UTF8ToUTF16(prefix) + u" \u2014 " + title;
++}
++
++}  // namespace
++
+ std::u16string Browser::GetWindowTitleForCurrentTab(
+     bool include_app_name) const {
++  std::u16string title;
+   if (!user_title_.empty()) {
+-    return base::UTF8ToUTF16(user_title_);
+-  }
++    title = base::UTF8ToUTF16(user_title_);
++  } else {
++    // For document picture-in-picture windows, we use the title from the
++    // opener WebContents instead of the picture-in-picture WebContents.
++    content::WebContents* web_contents_for_title =
++        is_type_picture_in_picture()
++            ? PictureInPictureWindowManager::GetInstance()->GetWebContents()
++            : tab_strip_model_->GetActiveWebContents();
+ 
+-  // For document picture-in-picture windows, we use the title from the opener
+-  // WebContents instead of the picture-in-picture WebContents itself.
+-  content::WebContents* web_contents_for_title =
+-      is_type_picture_in_picture()
+-          ? PictureInPictureWindowManager::GetInstance()->GetWebContents()
+-          : tab_strip_model_->GetActiveWebContents();
++    title = GetWindowTitleFromWebContents(include_app_name,
++                                          web_contents_for_title);
++  }
+ 
+-  return GetWindowTitleFromWebContents(include_app_name,
+-                                       web_contents_for_title);
++  return MaybeAppendWindowTitlePrefix(std::move(title));
+ }
+ 
+ std::u16string Browser::GetWindowTitleForTab(const tabs::TabHandle& tab) const {
+diff --git a/chrome/common/chrome_switches.cc b/chrome/common/chrome_switches.cc
+index 9609a29138..7bbd6e78b2 100644
+--- a/chrome/common/chrome_switches.cc
++++ b/chrome/common/chrome_switches.cc
+@@ -32,6 +32,12 @@ const char kAcceptLang[] = "accept-lang";
+ const char kAgentBrowserSuppressMissingGoogleApiKeyInfoBar[] =
+     "agent-browser-suppress-missing-google-api-key-infobar";
+ 
++// Agent Browser: optional window-title prefix shown in the window frame and
++// taskbar label (e.g. the profile name). It is applied only to the native
++// window title; document.title and page-visible surfaces are unaffected.
++const char kAgentBrowserWindowTitlePrefix[] =
++    "agent-browser-window-title-prefix";
++
+ #if BUILDFLAG(IS_MAC)
+ // Only if we're running in an unsigned build, passing this flag will allow
+ // app shims whose code signature does not match what chrome is expecting to
+diff --git a/chrome/common/chrome_switches.h b/chrome/common/chrome_switches.h
+index 0332210d27..0c0cf2cd01 100644
+--- a/chrome/common/chrome_switches.h
++++ b/chrome/common/chrome_switches.h
+@@ -38,6 +38,7 @@ namespace switches {
+ // alongside the definition of their values in the .cc file.
+ extern const char kAcceptLang[];
+ extern const char kAgentBrowserSuppressMissingGoogleApiKeyInfoBar[];
++extern const char kAgentBrowserWindowTitlePrefix[];
+ #if BUILDFLAG(IS_MAC)
+ extern const char kAllowAppShimSignatureMismatchForTests[];
+ #endif
