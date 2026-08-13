@@ -502,16 +502,19 @@ export async function launchBrowser(
     fingerprintMode,
     headless: opts?.headless,
   });
+  // Geo-IP is resolved at most once per launch (even though both the
+  // timezone/locale and the WebRTC exit-IP paths can consume it).
+  let geoDetection: { timezone: string | null; locale: string | null; exitIp: string | null } | null = null;
   let effectiveTimezone = passThrough ? null : normalizeOptionalTimezone(meta.timezone);
   let effectiveLocale = passThrough ? null : normalizeOptionalLocale(meta.locale);
   let webrtcIp = shouldResolveWebRtc ? normalizeOptionalIp(meta.webrtcIp) : null;
   if (!passThrough) {
     if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
-      const detected = await resolveGeoFromProxy(activeProxy);
-      if (!effectiveTimezone) effectiveTimezone = detected.timezone;
-      if (!effectiveLocale) effectiveLocale = detected.locale;
+      geoDetection = await resolveGeoFromProxy(activeProxy);
+      if (!effectiveTimezone) effectiveTimezone = geoDetection.timezone;
+      if (!effectiveLocale) effectiveLocale = geoDetection.locale;
       if (shouldResolveWebRtc && !webrtcIp) {
-        webrtcIp = detected.exitIp;
+        webrtcIp = geoDetection.exitIp;
       }
     }
     if (!effectiveTimezone) effectiveTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -553,7 +556,7 @@ export async function launchBrowser(
   if (shouldResolveWebRtc && !webrtcIp) {
     webrtcIp = normalizeOptionalIp(getLaunchArgValue(args, "--fingerprint-webrtc-ip"));
     if (!webrtcIp && activeProxy) {
-      webrtcIp = (await resolveGeoFromProxy(activeProxy)).exitIp;
+      webrtcIp = geoDetection?.exitIp ?? (await resolveGeoFromProxy(activeProxy)).exitIp;
     }
   }
   if (requestedWebRtcMode === "altered" && !webrtcIp) {

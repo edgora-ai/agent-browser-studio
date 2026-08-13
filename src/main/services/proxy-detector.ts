@@ -313,6 +313,43 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
   };
 }
 
+// Successful geo-IP detections are cached per proxy identity so repeat
+// launches skip the network round-trip (profile launch speed optimization).
+const DETECT_CACHE_TTL_MS = 10 * 60 * 1000;
+const detectCache = new Map<string, { at: number; result: ProxyDetectionResult }>();
+
+function detectCacheKey(config: ProxyConfig): string {
+  return [config.type, String(config.host || ""), String(config.port || ""), String(config.username || "")].join("|");
+}
+
+function cachedDetection(config: ProxyConfig): ProxyDetectionResult | null {
+  const cached = detectCache.get(detectCacheKey(config));
+  if (!cached) return null;
+  if (Date.now() - cached.at > DETECT_CACHE_TTL_MS) {
+    detectCache.delete(detectCacheKey(config));
+    return null;
+  }
+  return cached.result;
+}
+
+function rememberDetection(config: ProxyConfig, result: ProxyDetectionResult): void {
+  if (!result.success || !result.exitIp) return;
+  detectCache.set(detectCacheKey(config), { at: Date.now(), result });
+}
+
+/** Test-only hooks for the geo-IP detection cache. */
+export function rememberProxyDetectionForTests(config: ProxyConfig, result: ProxyDetectionResult): void {
+  rememberDetection(config, result);
+}
+
+export function cachedProxyDetectionForTests(config: ProxyConfig): ProxyDetectionResult | null {
+  return cachedDetection(config);
+}
+
+export function resetProxyDetectionCacheForTests(): void {
+  detectCache.clear();
+}
+
 export const proxyDetector = {
   async detect(config: ProxyConfig): Promise<ProxyDetectionResult> {
     const providers = [
@@ -339,34 +376,35 @@ export const proxyDetector = {
       return emptyResult(false, e.message || "Invalid proxy config");
     }
 
-    // Run all geo-IP queries concurrently
-    const promises = providers.map(async (provider) => {
+    // Repeat launches of the same proxy reuse the last successful detection.
+    const cached = cachedDetection(config);
+    if (cached) return cached;
+
+    // Fire all geo-IP queries concurrently and settle on the FIRST success
+    // (Promise.any) instead of waiting for the slowest provider.
+    const attempts = providers.map(async (provider) => {
       const result = await curlJsonAsync(config, provider.url, provider.timeoutSeconds);
-      if (result.error) {
-        return { error: `${provider.url}: ${result.error}`, parsed: null };
-      }
+      if (result.error) throw new Error(`${provider.url}: ${result.error}`);
       const parsed = provider.parse(result.data, result.latencyMs);
-      return { error: null, parsed };
+      if (!parsed) throw new Error(`${provider.url}: missing IP/Geo data`);
+      return parsed;
     });
 
-    const results = await Promise.all(promises);
-
-    // Pick the first successful parse
-    for (const res of results) {
-      if (res.parsed) return res.parsed;
+    try {
+      const parsed = await Promise.any(attempts);
+      rememberDetection(config, parsed);
+      return parsed;
+    } catch (e: any) {
+      const errors: string[] = Array.isArray(e?.errors) ? e.errors.map((x: any) => String(x?.message || x)) : [String(e?.message || e)];
+      const summary = errors.map(error => {
+        const provider = error.split(": ")[0].replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+        if (/timed out|timeout|Operation timed out/i.test(error)) return `${provider}: timeout`;
+        if (/Connection reset|Recv failure/i.test(error)) return `${provider}: connection reset`;
+        if (/Could not resolve|Name or service not known/i.test(error)) return `${provider}: DNS failed`;
+        return `${provider}: failed`;
+      }).join("; ");
+      return emptyResult(false, summary || "Proxy Geo-IP detection failed");
     }
-
-    // Accumulate errors if all failed
-    const errors = results.map((res, i) => res.error || `${providers[i].url}: missing IP/Geo data`);
-    const summary = errors.map(error => {
-      const provider = error.split(": ")[0].replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-      if (/timed out|timeout|Operation timed out/i.test(error)) return `${provider}: timeout`;
-      if (/Connection reset|Recv failure/i.test(error)) return `${provider}: connection reset`;
-      if (/Could not resolve|Name or service not known/i.test(error)) return `${provider}: DNS failed`;
-      return `${provider}: failed`;
-    }).join("; ");
-
-    return emptyResult(false, summary || "Proxy Geo-IP detection failed");
   },
 
   ping(config: ProxyConfig): Promise<{ success: boolean; latencyMs: number | null; error: string | null }> {
