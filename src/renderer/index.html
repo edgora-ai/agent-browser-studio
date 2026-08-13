@@ -488,9 +488,23 @@
   <div id="env-risk-body" style="max-height:62vh;overflow:auto;">Loading...</div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+ </div>
+</div>
+</dialog>
+
+<!-- ── WebRTC Diagnostics Dialog ── -->
+<dialog id="dlg-webrtc-diag" style="max-width:640px;width:94%;">
+ <div>
+  <h3 style="margin:0 0 10px;" data-i18n="webrtc.diag.title">📡 浏览器内 WebRTC 诊断</h3>
+  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;">Loading...</div>
+  <div id="webrtc-diag-history"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear">🗑 清除历史</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
   </div>
  </div>
 </dialog>
+
 <dialog id="dlg-bulk-import">
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
  <h3>📥 Bulk Import Profiles</h3>

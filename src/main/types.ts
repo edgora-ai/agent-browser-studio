@@ -66,6 +66,21 @@ export interface ProxyHealthEntry {
 
 export type ProxyMode = "none" | "default" | "named";
 
+/** One persisted in-browser WebRTC diagnostics run for a profile. */
+export interface WebRtcDiagnosticsEntry {
+  at: number;
+  success: boolean;
+  rtcAvailable: boolean;
+  candidates: string[];
+  mdnsHosts: string[];
+  hostIps: string[];
+  srflxIps: string[];
+  connectionState: string;
+  rttMs: number | null;
+  error: string | null;
+  summary: string;
+}
+
 export interface ResolvedProfileProxy {
   mode: ProxyMode;
   name: string | null;
@@ -269,6 +284,7 @@ export interface MgmtConfig {
   proxies: Record<string, ProxyConfig>;
   proxyDetections?: Record<string, ProxyDetectionCacheEntry>;
   proxyHealth?: Record<string, ProxyHealthEntry>;
+  webrtcDiagnostics?: Record<string, WebRtcDiagnosticsEntry[]>;
   sync: SyncConfig;
   browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;

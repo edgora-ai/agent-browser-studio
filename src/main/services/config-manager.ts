@@ -16,6 +16,7 @@ import {
 } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
+import type { WebRtcDiagnosticsEntry } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
@@ -46,6 +47,7 @@ const DefaultConfig: MgmtConfig = {
   },
   proxyDetections: {},
   proxyHealth: {},
+  webrtcDiagnostics: {},
   sync: {
     enabled: false,
     endpoint: "",
@@ -164,6 +166,29 @@ export function setProxyHealth(name: string, entry: ProxyHealthEntry): void {
   if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
   cfg.proxyHealth = cfg.proxyHealth || {};
   cfg.proxyHealth[name] = normalizeProxyHealthEntry(entry);
+  saveConfig(cfg);
+}
+
+const MAX_WEBRTC_DIAG_HISTORY = 20;
+
+export function getWebRtcDiagnostics(dirId: string): WebRtcDiagnosticsEntry[] {
+  const cfg = getConfig();
+  const list = cfg.webrtcDiagnostics && Object.hasOwn(cfg.webrtcDiagnostics, dirId) ? cfg.webrtcDiagnostics[dirId] : null;
+  return Array.isArray(list) ? list : [];
+}
+
+export function setWebRtcDiagnostics(dirId: string, entries: WebRtcDiagnosticsEntry[]): void {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  cfg.webrtcDiagnostics = cfg.webrtcDiagnostics || {};
+  cfg.webrtcDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_WEBRTC_DIAG_HISTORY);
+  saveConfig(cfg);
+}
+
+export function clearWebRtcDiagnostics(dirId: string): void {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  if (cfg.webrtcDiagnostics) delete cfg.webrtcDiagnostics[dirId];
   saveConfig(cfg);
 }
 
@@ -1266,6 +1291,13 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   }
   if (parsed.proxyHealth) {
     merged.proxyHealth = normalizeProxyHealth(parsed.proxyHealth, merged.proxies);
+  }
+  if (parsed.webrtcDiagnostics && typeof parsed.webrtcDiagnostics === "object") {
+    merged.webrtcDiagnostics = {};
+    for (const [dirId, entries] of Object.entries(parsed.webrtcDiagnostics)) {
+      if (!Array.isArray(entries)) continue;
+      merged.webrtcDiagnostics[dirId] = (entries as WebRtcDiagnosticsEntry[]).slice(-MAX_WEBRTC_DIAG_HISTORY);
+    }
   }
   if (parsed.sync) {
     merged.sync = { ...merged.sync, ...parsed.sync };

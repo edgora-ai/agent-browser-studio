@@ -56,6 +56,11 @@ const api = {
     proxyByName: (name) => ipcRenderer.invoke("detect:proxy-by-name", name),
     webrtcLeak: (config) => ipcRenderer.invoke("detect:webrtc-leak", config),
   },
+  webrtc: {
+    diag: (dirId) => ipcRenderer.invoke("webrtc:diag", dirId),
+    diagHistory: (dirId) => ipcRenderer.invoke("webrtc:diag-history", dirId),
+    diagClear: (dirId) => ipcRenderer.invoke("webrtc:diag-clear", dirId),
+  },
   storage: {
     info: () => ipcRenderer.invoke("storage:info"),
     clearCache: (dirId) => ipcRenderer.invoke("storage:clear-cache", dirId),

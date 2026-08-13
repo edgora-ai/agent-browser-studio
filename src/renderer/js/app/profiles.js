@@ -782,6 +782,7 @@
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
         var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
         var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
+        var webRtcAction = '<button class="btn btn-xs" data-action="webrtc-diag" title="Run an in-browser WebRTC probe (ICE candidates / mDNS / RTT)" style="font-size:9px;">📡 WebRTC</button> ';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var drmBadge = p.drm ? '<span class="status-badge" style="background:var(--primary-bg);color:var(--primary);" title="Widevine/DRM enabled">🎬 DRM</span>' : '';
@@ -803,7 +804,7 @@
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>Fingerprint</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>Identity</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + '</span></div>' +
+          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + webRtcAction + '</span></div>' +
           '<div class="info-row"><span>Sync</span><span class="' + syncCls + '" title="' + escAttr(syncTitle) + '"><button class="btn btn-xs" style="font-size:9px;color:var(--text-muted);" data-action="note">📝</button>' + syncIcon + ' ' + esc((p.syncStatus === "synced" ? "Synced" : p.syncStatus === "dirty" ? "Dirty" : "Never")) + '</span></div>' +
           '<div class="info-row"><span>Proxy</span><span>' + esc(proxyStr) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row"><span>Tags</span><span>' + tagHtml + '</span></div>' : '') +
@@ -852,6 +853,7 @@
       else if (action === "drift-check") agentBrowser.checkDrift(dirId);
       else if (action === "lock") agentBrowser.toggleLock(dirId, card);
       else if (action === "env-risk") agentBrowser.openEnvRisk(dirId);
+      else if (action === "webrtc-diag") agentBrowser.openWebRtcDiag(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -925,6 +927,73 @@
     api.browser.envRisk(dirId).then(renderEnvRisk).catch(function(e) {
       renderEnvRisk({ ok: false, error: e.message || String(e) });
     });
+  };
+
+
+  function renderWebRtcDiag(r, dirId) {
+    var body = document.getElementById("webrtc-diag-body");
+    if (!body) return;
+    if (!r || !r.ok) {
+      body.innerHTML = '<div class="empty-state">' + esc((r && r.error) || "WebRTC diagnostic failed") + '</div>';
+      return;
+    }
+    var res = r.result || {};
+    var hasLeak = (res.hostIps || []).length > 0;
+    var badge = !res.rtcAvailable
+      ? '<span class="status-badge" style="background:var(--surface2);color:var(--text-muted);">N/A</span>'
+      : hasLeak
+        ? '<span class="status-badge" style="background:var(--danger-bg);color:var(--danger);">RISK</span>'
+        : '<span class="status-badge status-done">PASS</span>';
+    var when = res.at ? new Date(res.at).toLocaleString() : "";
+    var rows = [];
+    rows.push('<div class="card-header"><span class="name">WebRTC · ' + esc(when) + '</span><span>' + badge + '</span></div>');
+    rows.push('<div style="font-size:12px;color:var(--text);margin-top:4px;">' + esc(res.summary || "") + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? "可用" : "不可用") + ' · ICE candidates: ' + (res.candidates || []).length + ' · 连接状态: ' + esc(res.connectionState || "") + (typeof res.rttMs === "number" ? " · RTT: " + res.rttMs + "ms" : "") + '</div>');
+    if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">mDNS 主机名: </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
+    if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--danger);">⚠ 本地 IP 泄漏: </span>' + res.hostIps.map(esc).join(", ") + '</div>');
+    if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">STUN 公网 IP: </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
+    if (res.error) rows.push('<div style="font-size:11px;color:var(--warning);margin-top:4px;">⚠ ' + esc(res.error) + '</div>');
+    body.innerHTML = rows.join("");
+    var histEl = document.getElementById("webrtc-diag-history");
+    if (histEl && dirId) {
+      api.webrtc.diagHistory(dirId).then(function(h) {
+        var entries = (h && h.entries) || [];
+        if (!entries.length) { histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "暂无历史记录")) + '</div>'; return; }
+        var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("webrtc.diag.history", "历史记录 ({n})").replace("{n}", entries.length)) + '</div>';
+        entries.slice().reverse().forEach(function(en) {
+          var ts = en.at ? new Date(en.at).toLocaleString() : "?";
+          var leak = (en.hostIps || []).length > 0;
+          html += '<div style="font-size:11px;margin-top:4px;">' + (leak ? "⚠" : "✅") + " " + esc(ts) + " — " + esc(en.summary || "") + '</div>';
+        });
+        histEl.innerHTML = html;
+      }).catch(function() { histEl.innerHTML = ""; });
+    }
+  }
+
+  agentBrowser.openWebRtcDiag = function(dirId) {
+    window.__webrtcDiagDirId = dirId;
+    var dlg = document.getElementById("dlg-webrtc-diag");
+    var body = document.getElementById("webrtc-diag-body");
+    var histEl = document.getElementById("webrtc-diag-history");
+    if (!dlg) { toast(t("webrtc.diag.unavailable", "WebRTC 诊断对话框不可用"), "error"); return; }
+    if (body) body.innerHTML = '<div class="loading">' + esc(t("webrtc.diag.running", "运行 WebRTC 诊断（如需会自动启动 profile 浏览器）…")) + '</div>';
+    if (histEl) histEl.innerHTML = "";
+    dlg.showModal();
+    api.webrtc.diag(dirId).then(function(r) {
+      renderWebRtcDiag(r || { ok: false, error: "unknown" }, dirId);
+    }).catch(function(e) {
+      renderWebRtcDiag({ ok: false, error: e.message || String(e) }, dirId);
+    });
+  };
+
+  agentBrowser.webRtcDiagClear = function() {
+    var dirId = window.__webrtcDiagDirId;
+    if (!dirId) { return; }
+    api.webrtc.diagClear(dirId).then(function(r) {
+      if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC 诊断历史已清除"), "success"); }
+      var histEl = document.getElementById("webrtc-diag-history");
+      if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "暂无历史记录")) + '</div>';
+    }).catch(function(e) { toast(e.message || String(e), "error"); });
   };
 
   agentBrowser.toggleLock = function(dirId, card) {
