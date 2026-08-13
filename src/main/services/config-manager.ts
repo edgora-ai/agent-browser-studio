@@ -1395,6 +1395,19 @@ function normalizeAutomationRules(raw: any): AutomationRule[] {
     }
     const action: AutomationAction = { type: actionType as AutomationActionType };
     if (a.profileDirId && typeof a.profileDirId === "string") action.profileDirId = String(a.profileDirId).slice(0, 100);
+    if (Array.isArray(a.profileDirIds)) {
+      const seen = new Set<string>();
+      const ids: string[] = [];
+      for (const id of a.profileDirIds) {
+        if (typeof id !== "string") continue;
+        const trimmed = id.trim();
+        if (!trimmed || seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        ids.push(trimmed.slice(0, 100));
+        if (ids.length >= 100) break;
+      }
+      if (ids.length) action.profileDirIds = ids;
+    }
     if (typeof a.templateId === "string") action.templateId = sanitizeOptionalText(a.templateId, 80) || undefined;
     if (typeof a.agentPrompt === "string") action.agentPrompt = a.agentPrompt.slice(0, 8000);
     if (typeof a.jsCode === "string") action.jsCode = a.jsCode.slice(0, 50000);
@@ -1508,6 +1521,7 @@ function normalizeAgentRuns(raw: any): AgentRun[] {
     }
     return {
       id,
+      dirId: typeof r.dirId === "string" ? r.dirId.slice(0, 100) : undefined,
       name,
       summary: typeof r.summary === "string" ? r.summary.slice(0, 500) : undefined,
       source: normalizeAgentRunSource(r.source),

@@ -160,7 +160,7 @@ const MCP_PASSTHROUGH_DEFS = MCP_PASSTHROUGH.map((toolName) => {
 });
 const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
   { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
-  { name: "agent_browser_runs_list", description: "List recent agent runs", inputSchema: { type: "object", properties: { limit: { type: "number" } } } },
+  { name: "agent_browser_runs_list", description: "List recent agent runs (optionally filtered by profile dirId)", inputSchema: { type: "object", properties: { limit: { type: "number" }, dirId: { type: "string" } } } },
   { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
 ];
 
@@ -297,7 +297,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       return { rules: (getConfig() as any).automation || [] };
     }
     case "agent_browser_runs_list": {
-      return { runs: agentRunRecorder.listRuns().slice(0, Math.max(1, Math.min(args?.limit ?? 50, 200))) };
+      return { runs: agentRunRecorder.listRuns({ dirId: args?.dirId }).slice(0, Math.max(1, Math.min(args?.limit ?? 50, 200))) };
     }
     case "agent_browser_jobs_list": {
       return { jobs: listJobs({ status: args?.status, limit: args?.limit }) };

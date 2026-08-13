@@ -283,6 +283,7 @@ export interface AgentRunStep {
 
 export interface AgentRun {
   id: string;                 // run_<random>
+  dirId?: string;             // profile this run was scoped to (batch/automation)
   name: string;
   summary?: string;
   source: AgentRunSource;
@@ -322,7 +323,8 @@ export interface AutomationTrigger {
 
 export interface AutomationAction {
   type: AutomationActionType;
-  profileDirId?: string;    // launch/stop/agent
+  profileDirId?: string;    // launch/stop/agent (single)
+  profileDirIds?: string[]; // batch agent-task: run the same prompt across these profiles
   templateId?: string;      // agent-task built-in template id
   agentPrompt?: string;     // agent-task preset prompt
   jsCode?: string;          // custom-js

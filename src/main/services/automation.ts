@@ -1,9 +1,9 @@
 // 自动化引擎 — 定时任务(cron) + 单次定时(once) + 事件触发(event)
 // 复用 launchBrowser/stopBrowser/agentChat/syncService 执行动作。
-import type { AutomationRule } from "../types.js";
+import type { AutomationRule, AutomationAction } from "../types.js";
 import { getConfig, saveConfig } from "./config-manager.js";
 import { launchBrowser, stopBrowser, statusBrowser } from "./browser-manager.js";
-import { agentChat, getOrDetectLlmConfig } from "./local-agent.js";
+import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
 import { onEvent } from "./event-bus.js";
@@ -81,37 +81,34 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         return ok ? "stopped" : "not running";
       }
       case "agent-task": {
-        if (!a.profileDirId || !a.agentPrompt) throw new Error("missing profileDirId/agentPrompt");
+        if (!a.agentPrompt) throw new Error("missing agentPrompt");
+        const dirIds = (Array.isArray(a.profileDirIds) && a.profileDirIds.length > 0)
+          ? a.profileDirIds
+          : (a.profileDirId ? [a.profileDirId] : []);
+        if (dirIds.length === 0) throw new Error("missing profileDirId/profileDirIds");
         const config = getOrDetectLlmConfig();
         if (!config) throw new Error("no LLM config");
-        // 启动 profile(若未运行),让 agent 有 CDP target
-        const st = statusBrowser(a.profileDirId);
-        if (!st.running) await launchBrowser(a.profileDirId);
-        assertActionNotAborted(context.signal);
-        const run = agentRunRecorder.startRun({
-          source: { type: "automation", ruleId: rule.id, ruleName: rule.name, jobId: context.jobId },
-          name: rule.name || "Automation agent task",
-          summary: String(a.agentPrompt).slice(0, 500),
-        });
-        if (context.jobId) {
-          try {
-            markJobRunId(context.jobId, run.id);
-          } catch (e) {
-            console.warn(`[automation] failed to link job ${context.jobId} to run ${run.id}:`, e);
-          }
+        if (dirIds.length === 1) {
+          const out = await runAgentTaskOnProfile(rule, config, dirIds[0], a, context);
+          if (!out.ok) throw new Error(`agent error: ${out.error} (run ${out.runId})`);
+          return `agent done (run ${out.runId})`;
         }
-        let result;
-        try {
-          result = await agentChat(config, [{ role: "user", content: a.agentPrompt }], { runId: run.id, signal: context.signal });
-          agentRunRecorder.finishRun(run.id, result.error ? "error" : "done", result.error);
-        } catch (e: any) {
-          const errMsg = e?.message || String(e);
-          agentRunRecorder.finishRun(run.id, "error", errMsg);
-          throw e;
+        // Batch mode: same prompt on every profile sequentially, one scoped run per profile.
+        // Per-profile failures are recorded as error runs; the job keeps going so the rest
+        // of the batch still completes, then the summary reports N ok / M failed.
+        const results: AgentTaskOutcome[] = [];
+        for (const dirId of dirIds) {
+          assertActionNotAborted(context.signal);
+          results.push(await runAgentTaskOnProfile(rule, config, dirId, a, context));
+          assertActionNotAborted(context.signal);
         }
-        if (result.error) throw new Error(`agent error: ${result.error} (run ${run.id})`);
-        assertActionNotAborted(context.signal);
-        return `agent done (run ${run.id})`;
+        const okCount = results.filter((x) => x.ok).length;
+        const failed = results.filter((x) => !x.ok);
+        const runIds = results.map((x) => x.runId).filter(Boolean).join(",");
+        if (failed.length > 0) {
+          return `agent batch: ${okCount} ok / ${failed.length} failed (runs ${runIds}; first error: ${failed[0].error})`;
+        }
+        return `agent batch done: ${okCount} ok / 0 failed (runs ${runIds})`;
       }
       case "sync-push": {
         assertActionNotAborted(context.signal);
@@ -142,6 +139,53 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
     }
   } catch (e: any) {
     throw e;
+  }
+}
+
+interface AgentTaskOutcome { dirId: string; runId: string; ok: boolean; error?: string; }
+
+/** Run one agent task on one profile: launch if needed, own run trace, scoped system prompt. */
+async function runAgentTaskOnProfile(
+  rule: AutomationRule,
+  config: LlmConfig,
+  dirId: string,
+  action: AutomationAction,
+  context: ExecuteActionContext,
+): Promise<AgentTaskOutcome> {
+  try {
+    // 启动 profile(若未运行),让 agent 有 CDP target
+    const st = statusBrowser(dirId);
+    if (!st.running) await launchBrowser(dirId);
+  } catch (e: any) {
+    return { dirId, runId: "", ok: false, error: `launch failed: ${e?.message || String(e)}` };
+  }
+  assertActionNotAborted(context.signal);
+  const run = agentRunRecorder.startRun({
+    source: { type: "automation", ruleId: rule.id, ruleName: rule.name, jobId: context.jobId },
+    name: rule.name || "Automation agent task",
+    summary: String(action.agentPrompt || "").slice(0, 500),
+    dirId,
+  });
+  if (context.jobId) {
+    try {
+      markJobRunId(context.jobId, run.id);
+    } catch (e) {
+      console.warn(`[automation] failed to link job ${context.jobId} to run ${run.id}:`, e);
+    }
+  }
+  try {
+    const result = await agentChat(config, [{ role: "user", content: action.agentPrompt || "" }], {
+      runId: run.id,
+      signal: context.signal,
+      profileDirId: dirId,
+    });
+    agentRunRecorder.finishRun(run.id, result.error ? "error" : "done", result.error);
+    if (result.error) return { dirId, runId: run.id, ok: false, error: result.error };
+    return { dirId, runId: run.id, ok: true };
+  } catch (e: any) {
+    const errMsg = e?.message || String(e);
+    agentRunRecorder.finishRun(run.id, "error", errMsg);
+    return { dirId, runId: run.id, ok: false, error: errMsg };
   }
 }
 

@@ -28,6 +28,7 @@
     var map = { 'launch-profile': t('auto.action.launch','🚀 启动'), 'stop-profile': t('auto.action.stop','⏹ 停止'), 'agent-task': t('auto.action.agent','🤖 Agent'), 'sync-push': t('auto.action.push','☁️ Push'), 'sync-pull': t('auto.action.pull','☁️ Pull'), 'custom-js': t('auto.action.js','⚙️ JS') };
     var base = map[a.type] || a.type;
     if (a.profileDirId) base += ' ' + esc(a.profileDirId).slice(0,10);
+    if (a.profileDirIds && a.profileDirIds.length > 1) base += ' ×' + a.profileDirIds.length + t('auto.action.batch-profiles', ' profiles');
     if (a.type === 'agent-task' && a.agentPrompt) base += ' <em style="color:var(--text-muted)">"' + esc(a.agentPrompt).slice(0,30) + '..."</em>';
     return base;
   }
@@ -99,6 +100,16 @@
     });
   }
 
+  function fillProfileMultiSelect(selId, selectedArr) {
+    api.browser.list().then(function(list) {
+      var sel = document.getElementById(selId);
+      var selected = selectedArr || [];
+      sel.innerHTML = (list || []).map(function(p) {
+        return '<option value="' + escAttr(p.dirId) + '"' + (selected.indexOf(p.dirId) >= 0 ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+      }).join('');
+    });
+  }
+
   function updateTriggerVisibility() {
     var type = document.getElementById('auto-trigger-type').value;
     document.getElementById('auto-cron-row').style.display = type === 'cron' ? '' : 'none';
@@ -108,9 +119,14 @@
   }
   function updateActionVisibility() {
     var type = document.getElementById('auto-action-type').value;
-    document.getElementById('auto-action-profile-row').style.display = (type === 'launch-profile' || type === 'stop-profile' || type === 'agent-task') ? '' : 'none';
-    document.getElementById('auto-action-template-row').style.display = type === 'agent-task' ? '' : 'none';
-    document.getElementById('auto-action-prompt-row').style.display = type === 'agent-task' ? '' : 'none';
+    var batch = document.getElementById('auto-action-batch') && document.getElementById('auto-action-batch').checked;
+    var isAgent = type === 'agent-task';
+    var needsSingle = type === 'launch-profile' || type === 'stop-profile' || (isAgent && !batch);
+    document.getElementById('auto-action-profile-row').style.display = needsSingle ? '' : 'none';
+    document.getElementById('auto-action-batch-row').style.display = isAgent ? '' : 'none';
+    document.getElementById('auto-action-profiles-row').style.display = (isAgent && batch) ? '' : 'none';
+    document.getElementById('auto-action-template-row').style.display = isAgent ? '' : 'none';
+    document.getElementById('auto-action-prompt-row').style.display = isAgent ? '' : 'none';
     document.getElementById('auto-action-js-row').style.display = type === 'custom-js' ? '' : 'none';
   }
 
@@ -315,7 +331,10 @@
     fillProfileSelect('auto-event-profile', rule && rule.trigger.profileFilter);
     var at = rule ? rule.action.type : 'launch-profile';
     document.getElementById('auto-action-type').value = at;
+    var batchMode = !!(rule && rule.action.profileDirIds && rule.action.profileDirIds.length > 0);
+    document.getElementById('auto-action-batch').checked = batchMode;
     fillProfileSelect('auto-action-profile', rule && rule.action.profileDirId);
+    fillProfileMultiSelect('auto-action-profiles', rule && rule.action.profileDirIds);
     fillTemplateSelect();
     document.getElementById('auto-action-template').value = (rule && rule.action.templateId) || '';
     document.getElementById('auto-template-hint').textContent = '';
@@ -328,6 +347,7 @@
     updateActionVisibility();
     document.getElementById('auto-trigger-type').onchange = updateTriggerVisibility;
     document.getElementById('auto-action-type').onchange = updateActionVisibility;
+    document.getElementById('auto-action-batch').onchange = updateActionVisibility;
     document.getElementById('auto-action-template').onchange = applyTemplateSelection;
     document.getElementById('auto-cron').oninput = function() {
       var c = this.value;
@@ -369,9 +389,19 @@
     }
     var actionType = document.getElementById('auto-action-type').value;
     var action = { type: actionType };
-    if (['launch-profile','stop-profile','agent-task'].includes(actionType)) {
+    if (['launch-profile','stop-profile'].includes(actionType)) {
       action.profileDirId = document.getElementById('auto-action-profile').value;
       if (!action.profileDirId) { toast(t('auto.error.select-profile','请选择 profile'), 'error'); return; }
+    } else if (actionType === 'agent-task') {
+      if (document.getElementById('auto-action-batch').checked) {
+        var opts = document.getElementById('auto-action-profiles').selectedOptions || [];
+        action.profileDirIds = [];
+        for (var i = 0; i < opts.length; i++) { if (opts[i].value) action.profileDirIds.push(opts[i].value); }
+        if (!action.profileDirIds.length) { toast(t('auto.error.select-profiles','请选择至少一个 profile'), 'error'); return; }
+      } else {
+        action.profileDirId = document.getElementById('auto-action-profile').value;
+        if (!action.profileDirId) { toast(t('auto.error.select-profile','请选择 profile'), 'error'); return; }
+      }
     }
     if (actionType === 'agent-task') {
       action.templateId = document.getElementById('auto-action-template').value || undefined;

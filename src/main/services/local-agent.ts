@@ -1774,7 +1774,7 @@ export const AGENT_TOOLS = [
     type: "function" as const,
     function: {
       name: "create_automation_rule",
-      description: "Create an automation rule. trigger: {type:'cron'|'once'|'event', cron, at, event, profileFilter}. action: {type:'launch-profile'|'stop-profile'|'agent-task'|'run-workflow'|'sync-push'|'sync-pull'|'custom-js', profileDirId, agentPrompt, jsCode, workflowId}. run-workflow needs profileDirId+workflowId.",
+      description: "Create an automation rule. trigger: {type:'cron'|'once'|'event', cron, at, event, profileFilter}. action: {type:'launch-profile'|'stop-profile'|'agent-task'|'run-workflow'|'sync-push'|'sync-pull'|'custom-js', profileDirId, profileDirIds, agentPrompt, jsCode, workflowId}. agent-task: profileDirId for one profile, or profileDirIds (array) to run the same prompt on multiple profiles as a batch (one run each).",
       parameters: {
         type: "object",
         properties: {
@@ -3004,7 +3004,7 @@ Available tools:
 - launch_profile(dirId) — Launch a browser profile (returns CDP port)
 - list_accounts() — List saved platform accounts
 - list_automation_rules() — List all automation rules (scheduled tasks / event triggers)
-- create_automation_rule(name, trigger, action, enabled?) — Create a scheduled task. trigger={type:'cron'|'once'|'event', cron:'0 9 * * *', at:epochMs, event:'profile:launched'|'profile:exited', profileFilter?}. action={type:'launch-profile'|'stop-profile'|'agent-task'|'sync-push'|'sync-pull'|'custom-js', profileDirId?, agentPrompt?, jsCode?}
+- create_automation_rule(name, trigger, action, enabled?) — Create a scheduled task. trigger={type:'cron'|'once'|'event', cron:'0 9 * * *', at:epochMs, event:'profile:launched'|'profile:exited', profileFilter?}. action={type:'launch-profile'|'stop-profile'|'agent-task'|'sync-push'|'sync-pull'|'custom-js', profileDirId?, profileDirIds?, agentPrompt?, jsCode?}. agent-task with profileDirIds (array) runs the same prompt on each profile as a batch (one run each).
 - delete_automation_rule(ruleId) — Delete an automation rule
 - get_automation_logs() — Get recent automation execution logs
 
@@ -3083,6 +3083,8 @@ export interface AgentChatOptions {
   runId?: string;
   webContents?: any;
   signal?: AbortSignal;
+  /** When set, the system prompt only advertises this profile (batch isolation). */
+  profileDirId?: string;
 }
 
 export async function agentChat(
@@ -3100,13 +3102,17 @@ export async function agentChat(
     return cleaned;
   });
 
+  const allRunning = listBrowserProfiles()
+    .filter((p) => p.running && p.cdpPort)
+    .map((p) => ({ name: p.name, dirId: p.dirId, cdpPort: p.cdpPort }));
+  // Batch isolation: when scoped to one profile, only that profile is advertised so
+  // the model targets the right browser instead of picking among every running profile.
+  const scopedRunning = options.profileDirId
+    ? allRunning.filter((p) => p.dirId === options.profileDirId)
+    : allRunning;
   const systemMsg: LlmMessage = {
     role: "system",
-    content: buildAgentSystemPrompt(
-      listBrowserProfiles()
-        .filter((p) => p.running && p.cdpPort)
-        .map((p) => ({ name: p.name, dirId: p.dirId, cdpPort: p.cdpPort })),
-    ),
+    content: buildAgentSystemPrompt(scopedRunning),
   };
   const fullMessages: LlmMessage[] = [systemMsg, ...cleanMessages];
   const allowedTools = getAllowedAgentTools();

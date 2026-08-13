@@ -364,7 +364,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   // ── Runs & Jobs ──
   if (method === "GET" && p === "/api/runs") {
     const limit = clampInt(url.searchParams.get("limit"), 50, 1, 200);
-    return { status: 200, body: { runs: agentRunRecorder.listRuns().slice(0, limit) } };
+    const dirId = url.searchParams.get("dirId") || undefined;
+    return { status: 200, body: { runs: agentRunRecorder.listRuns({ dirId }).slice(0, limit) } };
   }
   if (method === "GET" && p === "/api/jobs") {
     const status = url.searchParams.get("status") || undefined;
@@ -613,7 +614,7 @@ function buildOpenApi(): any {
       },
       "/api/accounts": { get: { summary: "List stored account usernames + platform URLs", responses: ok("Account list") } },
       "/api/automation/rules": { get: { summary: "List automation rules", responses: ok("Rule list") } },
-      "/api/runs": { get: { summary: "List recent agent runs (limit query param)", responses: ok("Run list") } },
+      "/api/runs": { get: { summary: "List recent agent runs (limit/dirId query params)", responses: ok("Run list") } },
       "/api/jobs": { get: { summary: "List automation jobs (status/limit query params)", responses: ok("Job list") } },
       "/api/audit": {
         get: { summary: "List audit entries (limit/category/target query params)", responses: ok("Audit list") },

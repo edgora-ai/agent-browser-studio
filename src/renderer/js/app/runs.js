@@ -55,6 +55,7 @@
         return '<div class="profile-card" data-run-id="' + escAttr(run.id) + '">' +
           '<div class="card-header"><span class="name">' + esc(run.name) + "</span>" + statusBadge(run) + "</div>" +
           '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
+          (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
           '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + run.stepCount + t("runs.row.steps-unit", " 步") + "</span></div>" +
           '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span><span>' + esc(dur) + "</span></div>" +
           (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
@@ -102,6 +103,7 @@
     document.getElementById("agent-run-title").textContent = run.name;
     var dur = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
     var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + dur;
+    if (run.dirId) meta += ' · <span style="font-family:var(--mono);">' + esc(run.dirId) + "</span>";
     if (run.startedAt) meta += " · " + new Date(run.startedAt).toLocaleString();
     if (run.error) meta += '<br><span style="color:var(--danger);">' + esc(run.error) + "</span>";
     document.getElementById("agent-run-meta").innerHTML = meta;

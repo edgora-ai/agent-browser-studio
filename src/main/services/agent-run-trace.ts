@@ -15,6 +15,7 @@ export interface StartRunParams {
   source: AgentRun["source"];
   name: string;
   summary?: string;
+  dirId?: string;
   webContents?: WebContents;
 }
 
@@ -97,6 +98,7 @@ class RunRecorder {
   startRun(p: StartRunParams): AgentRun {
     const run: AgentRun = {
       id: newRunId(),
+      dirId: p.dirId ? String(p.dirId).slice(0, 100) : undefined,
       name: String(p.name || "Agent run").slice(0, 160),
       summary: p.summary ? String(p.summary).slice(0, 500) : undefined,
       source: p.source,
@@ -190,9 +192,11 @@ class RunRecorder {
   }
 
   /** Newest first. */
-  listRuns(): AgentRun[] {
+  listRuns(opts?: { dirId?: string }): AgentRun[] {
     const cfg = getConfig() as any;
-    return ((cfg.agentRuns || []) as AgentRun[]).slice().reverse().map(safeRun);
+    const runs = ((cfg.agentRuns || []) as AgentRun[]).slice().reverse();
+    const filtered = opts?.dirId ? runs.filter((r) => r.dirId === opts.dirId) : runs;
+    return filtered.map(safeRun);
   }
 
   deleteRun(runId: string): boolean {

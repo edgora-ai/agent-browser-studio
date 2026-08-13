@@ -110,4 +110,17 @@ describe("RunRecorder", () => {
     }
     expect(getConfig().agentRuns!.length).toBe(200);
   });
+
+  it("startRun records dirId and listRuns filters by profile", () => {
+    const a = agentRunRecorder.startRun({ source: { type: "automation", ruleName: "r" }, name: "a", dirId: "p1" });
+    const b = agentRunRecorder.startRun({ source: { type: "automation", ruleName: "r" }, name: "b", dirId: "p2" });
+    expect(a.dirId).toBe("p1");
+    expect(b.dirId).toBe("p2");
+    const p1 = agentRunRecorder.listRuns({ dirId: "p1" });
+    expect(p1.length).toBe(1);
+    expect(p1[0].id).toBe(a.id);
+    expect(p1[0].dirId).toBe("p1");
+    expect(agentRunRecorder.listRuns({ dirId: "missing" }).length).toBe(0);
+    expect(agentRunRecorder.listRuns().length).toBe(2);
+  });
 });
