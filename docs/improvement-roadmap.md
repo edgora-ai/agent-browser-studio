@@ -859,3 +859,27 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测+smoke 634 例全绿（含 repair-message-sequence 单测，经 re-export 路径）；全量 e2e 75 passed / 4 skipped（79 文件，378 passed）
 
 **后续项**：agent REST 面（配置/会话/chat-simple/chat/run/db/审批）全部收口。引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。下一步候选：把 agent chat/run 能力补进 Python SDK 与 MCP 面（对外集成面进一步对齐 RoxyBrowser），或按引擎矩阵在真实 runner 上跑签名分发验证。
+## Slice 62 — Agent 能力补进 Python SDK 与 MCP 面
+
+**目标**：Slice 61 路线图点名的下一步——把 agent 配置/会话/chat-simple/chat/run/db/审批能力补进 Python SDK 与 MCP，对外集成面进一步对齐 RoxyBrowser。
+
+**Python SDK（sdk/python/agent_browser_client.py）**：
+- 底层补 put()/patch() 两个 HTTP 动词
+- LLM：llm_config() / save_llm_config()（apiKey 落盘加密）
+- 会话：list_conversations() / create_conversation() / get_conversation() / rename_conversation() / delete_conversation()
+- 聊天：chat_simple(messages) / chat(conversation_id, message, timeout_ms)（会话内 tool-calling）
+- Runs：agent_runs() / agent_run() / delete_agent_run() / clear_agent_runs()
+- DB：db_tables() / db_table() / db_query() / db_exec()
+- 审批：pending_approvals() / resolve_approval()
+- python3 -m py_compile 通过，4 空格缩进校验 0 异常
+
+**MCP（src/main/services/mcp-server.ts）**：
+- MCP_EXPANDED_TOOLS 新增 7 个工具：agent_browser_agent_chat / agent_browser_agent_chat_simple / agent_browser_conversations_list / agent_browser_conversation_create / agent_browser_conversation_get / agent_browser_agent_run_get / agent_browser_llm_config
+- executeMcpTool 新增对应 handler：agent_chat 复用 agentChat + agentRunRecorder.startRun/finishRun（与 REST chat 同构——超时 abort、错误 ❌ 持久化、toolCalls 返回 {name,redacted}）；chat_simple 走 llmChat 一次性对话
+- npx tsc --noEmit 通过
+
+**验证**：
+- e2e tests/e2e/j84-mcp-agent.test.ts 新增 5 例：tools/list 含 7 个新工具名；llm-config 可读（初始 null）+ 会话 create/list/get（含 404 路径）；saveLlmConfig 后 chat_simple 返回 MCP reply；mock 先回 set_var 工具调用再回最终答复——agent_chat 全链路（reply/toolCalls 含 {name,redacted}/runId 匹配 /^run_/、run trace status=done 且 steps 含 set_var、会话持久化 assistant 回复）；console 无意外错误
+- 回归：全量单测 634 例全绿；全量 e2e 76 passed / 4 skipped（80 文件，383 passed）
+
+**后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK 四个面。JS SDK（sdk/js/agent-browser.mjs）还没有 agent 面，是下一个对齐候选；引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
