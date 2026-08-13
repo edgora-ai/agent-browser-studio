@@ -6,6 +6,8 @@ one-call Playwright / Puppeteer adapters.
 - `agent-browser.mjs` — `AgentBrowserClient` (REST, mirrors the Python SDK) and
   `connectPlaywright` / `connectPuppeteer`.
 - `example.mjs` — Playwright drop-in demo.
+- `example-agent.mjs` — agent surface demo (LLM config, conversations, chat,
+  run traces, SQLite store and approvals).
 
 Works identically against the desktop app and the `--headless` server mode.
 

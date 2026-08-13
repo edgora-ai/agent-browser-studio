@@ -902,3 +902,10 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测 634 例全绿；全量 e2e 77 passed / 4 skipped（81 文件，388 passed）
 
 **后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。下一步候选：补 JS SDK 示例（example-agent.mjs）或按引擎矩阵在真实 runner 上跑签名分发验证。
+
+**补充（同 slice）**：新增 sdk/js/example-agent.mjs——用 AgentBrowserClient 演示 agent 面全流程
+（LLM 配置保存/读取、chat-simple、会话内 tool-calling chat + run trace、SQLite 表、审批列表），
+已在本机 headless 实例 + mock LLM 上实测通过（chat 返回 mock 回复、run status=done、会话持久化 2 条消息）。
+README 补充示例入口。
+
+**后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
