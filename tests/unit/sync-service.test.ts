@@ -689,6 +689,45 @@ describe("Sync merge strategy (mergeSectionById / mergeAccountSection / countAdo
     expect(merged.p3.name).toBe("l3");
     expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "remote")).toBe(1);
   });
+
+  it("per-entry resolutions override the global strategy on conflicts", () => {
+    const localMap = {
+      p1: { name: "local", updatedAt: 100 },
+      p2: { name: "local", updatedAt: 100 },
+      p3: { name: "local", updatedAt: 300 },
+    };
+    const remoteMap = {
+      p1: { name: "remote", updatedAt: 200 },
+      p2: { name: "remote", updatedAt: 200 },
+      p3: { name: "remote", updatedAt: 400 },
+    };
+    const resolutionFor = (id: string): "local" | "remote" | "newest" | null =>
+      id === "p1" ? "local" : id === "p2" ? "remote" : null;
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "newest", resolutionFor);
+    expect(merged.p1.name).toBe("local");
+    expect(merged.p2.name).toBe("remote");
+    expect(merged.p3.name).toBe("remote");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "newest", resolutionFor)).toBe(2);
+  });
+
+  it("per-entry local override keeps the local entry under a remote global strategy", () => {
+    const localMap = { p1: { name: "local", updatedAt: 100 } };
+    const remoteMap = { p1: { name: "remote", updatedAt: 200 } };
+    const resolutionFor = (): "local" | "remote" | "newest" | null => "local";
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "remote", resolutionFor);
+    expect(merged.p1.name).toBe("local");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "remote", resolutionFor)).toBe(0);
+  });
+
+  it("mergeAccountSection supports per-entry resolution by username @ url", () => {
+    const localAccs = [{ platformUrl: "https://a.com", platformUserName: "u1", tags: ["l"], updatedAt: 100 }];
+    const remoteAccs = [{ platformUrl: "https://a.com", platformUserName: "u1", tags: ["r"], updatedAt: 200 }];
+    const resolutionFor = (id: string): "local" | "remote" | "newest" | null =>
+      id === "u1\u0000https://a.com" ? "local" : null;
+    const merged = __syncTestHooks.mergeAccountSection(remoteAccs as any, localAccs as any, "remote", resolutionFor);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].tags).toEqual(["l"]);
+  });
 });
 
 describe("Sync team profile locks", () => {

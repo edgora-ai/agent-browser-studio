@@ -461,7 +461,11 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const opts = await readJson(req).catch(() => null);
     try {
       const strategy = opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local";
-      const r = await syncService.pull(undefined, strategy);
+      const resolutions: Record<string, "local" | "remote" | "newest"> = {};
+      for (const [key, value] of Object.entries(opts?.resolutions || {})) {
+        if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
+      }
+      const r = await syncService.pull(undefined, { strategy, resolutions });
       return { status: r.success ? 200 : 400, body: { ...r, strategy } };
     } catch (e: any) {
       return { status: 500, body: { success: false, message: e.message || String(e) } };
@@ -764,8 +768,8 @@ function buildOpenApi(): any {
       },
       "/api/sync/pull": {
         post: {
-          summary: "Pull + merge remote config (conflict strategy: local/remote/newest)",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "How to resolve conflicting id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." } } } } } },
+          summary: "Pull + merge remote config (global or per-entry conflict strategy)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
           responses: ok("Pull result with merge summary"),
         },
       },

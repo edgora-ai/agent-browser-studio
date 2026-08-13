@@ -76,7 +76,7 @@
     } catch (e) { return ''; }
   }
 
-  function diffSectionCard(title, section) {
+  function diffSectionCard(title, section, sectionName, globalStrategy, conflictSelectable) {
     section = section || { localOnly: [], remoteOnly: [], changed: [] };
     var chips = [];
     var lines = [];
@@ -89,7 +89,20 @@
     if (section.remoteOnly.length) {
       lines.push('<div style="font-size:11px;color:var(--warning);word-break:break-all;">远端独有: ' + esc(section.remoteOnly.slice(0, 12).join(', ')) + (section.remoteOnly.length > 12 ? ' (+' + (section.remoteOnly.length - 12) + ')' : '') + '</div>');
     }
-    if (section.changed.length) {
+    if (section.changed.length && conflictSelectable && sectionName) {
+      lines.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">逐条冲突决策（默认跟随全局策略，仅 Pull 生效）:</div>');
+      section.changed.forEach(function(c) {
+        var value = globalStrategy === 'remote' || globalStrategy === 'newest' ? globalStrategy : 'local';
+        var opts = ['local', 'remote', 'newest'].map(function(v) {
+          var label = v === 'local' ? '保留本地' : (v === 'remote' ? '采用远端' : '取较新');
+          return '<option value="' + v + '"' + (v === value ? ' selected' : '') + '>' + label + '</option>';
+        }).join('');
+        lines.push('<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px;word-break:break-all;">' +
+          '<select class="sync-entry-strategy" data-section="' + escAttr(sectionName) + '" data-id="' + escAttr(c.id) + '" style="flex:0 0 auto;font-size:11px;padding:2px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">' + opts + '</select>' +
+          '<span style="color:var(--text-muted);flex:1;">' + esc(c.id) + ' <span style="opacity:.7;">[' + esc((c.fields || []).join(', ')) + ']</span></span>' +
+        '</div>');
+      });
+    } else if (section.changed.length) {
       var changedLines = section.changed.slice(0, 8).map(function(c) {
         return esc(c.id) + ' [' + esc((c.fields || []).join(', ')) + ']';
       });
@@ -102,7 +115,7 @@
     '</div>';
   }
 
-  function renderSyncDiff(diff) {
+  function renderSyncDiff(diff, globalStrategy) {
     var messageEl = document.getElementById('sync-diff-message');
     var listEl = document.getElementById('sync-diff');
     if (!messageEl || !listEl) return;
@@ -132,16 +145,18 @@
       '<div class="card-header"><span class="name">远端数据工件</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);">远端 cookies: ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
-    cards.push(diffSectionCard('Profiles', diff.profiles));
-    cards.push(diffSectionCard('Proxies', diff.proxies));
-    cards.push(diffSectionCard('Accounts', diff.accounts));
-    cards.push(diffSectionCard('Extensions', diff.extensions));
+    cards.push(diffSectionCard('Profiles', diff.profiles, 'profiles', globalStrategy, true));
+    cards.push(diffSectionCard('Proxies', diff.proxies, 'proxies', globalStrategy, true));
+    cards.push(diffSectionCard('Accounts', diff.accounts, 'accounts', globalStrategy, true));
+    cards.push(diffSectionCard('Extensions', diff.extensions, 'extensions', globalStrategy, false));
     listEl.innerHTML = cards.join('');
   }
 
   function fetchSyncDiff() {
+    var strategySel = document.getElementById('sync-merge-strategy');
+    var strategy = strategySel ? strategySel.value : 'local';
     return api.sync.previewDiff().then(function(diff) {
-      renderSyncDiff(diff);
+      renderSyncDiff(diff, strategy);
       return diff;
     });
   }
@@ -200,13 +215,20 @@
     var reset = setButtonBusy('#tab-sync [data-cmd="syncPull"]', 'Checking...');
     var strategySel = document.getElementById('sync-merge-strategy');
     var strategy = strategySel ? strategySel.value : 'local';
+    var resolutions = {};
+    Array.prototype.forEach.call(document.querySelectorAll('#sync-diff .sync-entry-strategy'), function(sel) {
+      var section = sel.getAttribute('data-section');
+      var id = sel.getAttribute('data-id');
+      var value = sel.value;
+      if (section && id && value && value !== strategy) resolutions[section + ':' + id] = value;
+    });
     fetchPreview().then(function(preview) {
       var running = (preview && preview.runningProfiles) || [];
       if (running.length) {
         var ok = confirm(t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?'));
         if (!ok) { if (reset) reset(); return; }
       }
-      api.sync.pull({ strategy: strategy }).then(function(r) {
+      api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
         toast(r.message, r.success ? 'success' : 'error');
         if (!r.success) { agentBrowser.loadSyncPreview(); return; }
         return api.app.reloadConfig().then(function() {

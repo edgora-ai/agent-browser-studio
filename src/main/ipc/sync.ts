@@ -8,8 +8,14 @@ export function registerSyncHandlers(): void {
     return syncService.push(undefined, Boolean(opts?.force));
   });
 
-  ipcMain.handle("sync:pull", async (_event, opts?: { strategy?: string }): Promise<SyncResult> => {
-    return syncService.pull(undefined, (opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local"));
+  ipcMain.handle("sync:pull", async (_event, opts?: { strategy?: string; resolutions?: Record<string, string> }): Promise<SyncResult> => {
+    const strategy = (opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local");
+    const resolutions: Record<string, "local" | "remote" | "newest"> = {};
+    for (const [key, value] of Object.entries(opts?.resolutions || {})) {
+      if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
+    }
+   const result = await syncService.pull(undefined, { strategy, resolutions });
+    return result;
   });
 
   ipcMain.handle("sync:status", async () => {

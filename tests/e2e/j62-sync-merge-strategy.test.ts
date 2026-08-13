@@ -162,6 +162,46 @@ describe("J62 — sync pull merge strategy", () => {
     expect(r.message).not.toContain("merged (remote adopted)");
   }, 60000);
 
+  it("per-entry resolutions override the global strategy", async () => {
+    // Remote side: rename the profile (conflict) and add a remote-only proxy.
+    const { payload, data } = readRemoteData(s3);
+    data.browserProfiles[dirId].name = "J62-PerEntry-Remote";
+    data.browserProfiles[dirId].updatedAt = 9999999999999 + 2000;
+    data.browserProfiles[dirId].syncedAt = 9999999999999 + 2000;
+    data.proxies["entry_proxy"] = { type: "http", host: "10.1.1.1", port: 8080, updatedAt: 9999999999999 + 2000 };
+    writeRemoteData(s3, payload, data);
+
+    // Local conflict: rename the profile locally.
+    await h.page.evaluate((id) => (window as any).agentBrowser.api.profile.rename(id, "J62-PerEntry-Local"), dirId);
+
+    // Global strategy is remote, but this profile entry explicitly resolves local.
+    const r = await h.page.evaluate((id) => (window as any).agentBrowser.api.sync.pull({
+      strategy: "remote",
+      resolutions: { ["profiles:" + id]: "local" },
+   }), dirId);
+
+    expect(r.success).toBe(true);
+
+    // The per-entry local override must keep THIS profile's local name even
+    // though the global strategy is remote. (Other profiles without an
+    // override may still legitimately adopt the remote side.)
+    const profiles: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.profile.list());
+    expect(profiles.find((p) => p.dirId === dirId).name).toBe("J62-PerEntry-Local");
+    // Remote-only proxy is still adopted (no conflict, no override).
+    const proxies: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.proxy.list());
+    expect(proxies.some((p) => p.name === "entry_proxy")).toBe(true);
+  }, 60000);
+
+  it("diff view exposes a per-entry conflict strategy select", async () => {
+    // A conflict still exists (local name vs remote name), so the diff must
+    // render per-entry strategy selects for the profiles section.
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("sync"));
+    await h.page.evaluate(() => (window as any).agentBrowser.loadSyncDiff());
+    await h.page.waitForSelector("#sync-diff .sync-entry-strategy", { timeout: 8000 });
+    const count = await h.page.locator('#sync-diff .sync-entry-strategy[data-section="profiles"]').count();
+    expect(count).toBeGreaterThanOrEqual(1);
+  }, 30000);
+
   it("no unexpected console errors", () => {
     const c = filterKnownConsoleErrors(h.consoleErrors).filter((e: string) =>
       !/file is not a database|connect to 127.0.0.1 port 1/i.test(e));

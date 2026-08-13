@@ -258,7 +258,7 @@ export const syncService = {
   },
 
   // ── Pull ──
-  async pull(signal?: AbortSignal, strategy: MergeStrategy = "local"): Promise<SyncResult> {
+  async pull(signal?: AbortSignal, opts?: SyncPullOptions): Promise<SyncResult> {
     assertSyncNotAborted(signal);
     const sync = getSyncConfig();
     if (!sync.endpoint || !sync.bucket) {
@@ -386,20 +386,26 @@ export const syncService = {
       }
 
       const latestConfig = getConfig();
-      const mergeStrategy = normalizeMergeStrategy(strategy);
+      const mergeStrategy = normalizeMergeStrategy(opts?.strategy);
+      const resolutions = opts?.resolutions;
+      const profileResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "profiles", id);
+      const proxyResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "proxies", id);
+      const accountResolve = (id: string): MergeStrategy | null =>
+        resolutionFor(resolutions, "accounts", id.split("\u0000").join(" @ "));
       const localProfiles = latestConfig.browserProfiles || {};
       const remoteProfiles = remoteConfig.browserProfiles || {};
-      const mergedProfiles = mergeSectionById(localProfiles, remoteProfiles, mergeStrategy);
-      const mergedProxies = mergeSectionById(latestConfig.proxies || {}, remoteConfig.proxies || {}, mergeStrategy);
-      const mergedAccounts = mergeAccountSection((remoteConfig as any).accounts, (latestConfig as any).accounts, mergeStrategy);
-      const adoptedProfiles = countAdoptedFromRemote(localProfiles, mergedProfiles, mergeStrategy);
-      const adoptedProxies = countAdoptedFromRemote(latestConfig.proxies || {}, mergedProxies, mergeStrategy);
-      const adoptedAccounts = countAdoptedFromRemote(
-        accountMapOf((latestConfig as any).accounts),
-        accountMapOf(mergedAccounts),
-        mergeStrategy,
-      );
-      const merged = {
+      const mergedProfiles = mergeSectionById(localProfiles, remoteProfiles, mergeStrategy, profileResolve);
+      const mergedProxies = mergeSectionById(latestConfig.proxies || {}, remoteConfig.proxies || {}, mergeStrategy, proxyResolve);
+      const mergedAccounts = mergeAccountSection((remoteConfig as any).accounts, (latestConfig as any).accounts, mergeStrategy, accountResolve);
+      const adoptedProfiles = countAdoptedFromRemote(localProfiles, mergedProfiles, mergeStrategy, profileResolve);
+      const adoptedProxies = countAdoptedFromRemote(latestConfig.proxies || {}, mergedProxies, mergeStrategy, proxyResolve);
+     const adoptedAccounts = countAdoptedFromRemote(
+       accountMapOf((latestConfig as any).accounts),
+       accountMapOf(mergedAccounts),
+      mergeStrategy,
+      accountResolve,
+    );
+    const merged = {
         ...remoteConfig,
         ...latestConfig,
         defaultProxy: remoteConfig.defaultProxy || latestConfig.defaultProxy,
@@ -466,7 +472,7 @@ export const syncService = {
       if (adoptedProfiles > 0) adopted.push(`${adoptedProfiles} profiles`);
       if (adoptedProxies > 0) adopted.push(`${adoptedProxies} proxies`);
       if (adoptedAccounts > 0) adopted.push(`${adoptedAccounts} accounts`);
-      if (adopted.length) parts.push(adopted.join(", ") + " merged (remote adopted)");
+     if (adopted.length) parts.push(adopted.join(", ") + " merged (remote adopted)");
 
       return { success: true, message: `Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}` };
     } catch (e: any) {
@@ -1416,6 +1422,23 @@ function normalizeMergeStrategy(value: unknown): MergeStrategy {
   return value === "remote" || value === "newest" ? value : "local";
 }
 
+export interface SyncPullOptions {
+  strategy?: MergeStrategy;
+  /** Per-entry overrides keyed as "<section>:<id>", e.g. "profiles:ab_xyz" or "accounts:user @ https://a.com". */
+  resolutions?: Record<string, MergeStrategy>;
+}
+
+// Per-entry conflict resolution: an explicit override wins, otherwise null
+// (caller falls back to the global strategy).
+function resolutionFor(
+  resolutions: Record<string, MergeStrategy> | undefined,
+  section: string,
+  id: string,
+): MergeStrategy | null {
+  const value = resolutions?.[section + ":" + id];
+  return value === "local" || value === "remote" || value === "newest" ? value : null;
+}
+
 function entryUpdatedAt(entry: any): number {
   const ts = Number(entry?.updatedAt ?? entry?.syncedAt ?? 0);
   return Number.isFinite(ts) ? ts : 0;
@@ -1430,6 +1453,7 @@ function mergeSectionById(
   localMap: Record<string, any>,
   remoteMap: Record<string, any>,
   strategy: MergeStrategy,
+  resolutionFor?: (id: string) => MergeStrategy | null,
 ): Record<string, any> {
   const merged: Record<string, any> = {};
   for (const [id, entry] of Object.entries(localMap || {})) merged[id] = entry;
@@ -1440,9 +1464,10 @@ function mergeSectionById(
     }
     const localEntry = merged[id];
     if (changedTopFields(localEntry, remoteEntry, SYNC_BOOKKEEPING_FIELDS).length === 0) continue;
-    if (strategy === "remote") {
+    const effective = resolutionFor ? (resolutionFor(id) ?? strategy) : strategy;
+    if (effective === "remote") {
       merged[id] = remoteEntry;
-    } else if (strategy === "newest" && entryUpdatedAt(remoteEntry) > entryUpdatedAt(localEntry)) {
+    } else if (effective === "newest" && entryUpdatedAt(remoteEntry) > entryUpdatedAt(localEntry)) {
       merged[id] = remoteEntry;
     }
   }
@@ -1460,17 +1485,28 @@ function accountMapOf(accounts: any[]): Record<string, any> {
 }
 
 // Merge the accounts array (keyed by platformUserName + platformUrl) by strategy.
-function mergeAccountSection(remote: any[], local: any[], strategy: MergeStrategy): any[] {
-  return Object.values(mergeSectionById(accountMapOf(local), accountMapOf(remote), strategy));
+function mergeAccountSection(
+  remote: any[],
+  local: any[],
+  strategy: MergeStrategy,
+  resolutionFor?: (id: string) => MergeStrategy | null,
+): any[] {
+  return Object.values(mergeSectionById(accountMapOf(local), accountMapOf(remote), strategy, resolutionFor));
 }
 
 // Count conflicting entries (present on both sides, differing) that ended up
 // adopting the remote version. Remote-only entries are not conflicts.
-function countAdoptedFromRemote(localMap: Record<string, any>, mergedMap: Record<string, any>, strategy: MergeStrategy): number {
-  if (strategy === "local") return 0;
+function countAdoptedFromRemote(
+  localMap: Record<string, any>,
+  mergedMap: Record<string, any>,
+  strategy: MergeStrategy,
+  resolutionFor?: (id: string) => MergeStrategy | null,
+): number {
   let count = 0;
   for (const [id, entry] of Object.entries(mergedMap || {})) {
     if (!(id in (localMap || {}))) continue;
+    const effective = resolutionFor ? (resolutionFor(id) ?? strategy) : strategy;
+    if (effective === "local") continue;
     if (entry !== (localMap as any)[id]) count++;
   }
   return count;
