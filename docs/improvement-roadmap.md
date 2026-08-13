@@ -738,3 +738,26 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：j54（REST 全表面）+ j76（账号 IPC）+ j77（bulk-create）全绿；tsc/build 干净
 
 **后续项**：REST 其余模块写端点（/api/automation/rules、/api/extension-repository、/api/skills 等仍只读）；启动提速对标（3.9.2 5.5s→2s）；引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+
+
+### Slice 57 — 启动提速：geo 解析去重 + 竞速短路 + 按代理缓存（对标 RoxyBrowser 3.9.2 5.5s→2s）— ✅
+
+**背景**：RoxyBrowser 3.9.2 的 changelog 头条是启动提速（5.5s→2s）。本机实测基线：引擎冷启动（spawn→CDP 就绪）≈0.9s；显式身份 profile 的 launch IPC ≈0.5s；自动解析+默认 7890 代理 ≈1.2-1.4s（瓶颈是走代理的 geo-IP 检测，且同一代理被解析两次、还等最慢的提供商）。整体已低于 2s 目标，本切片把自动代理路径的剩余浪费收掉。
+
+**新增（proxy-detector.ts）**：
+- 竞速短路：detect 从 Promise.all（等最慢提供商，最坏 2s×3）改为 Promise.any（第一个成功即返回）——耗时由最慢变为最快提供商
+- 按代理身份缓存：成功检测按 type|host|port|username 缓存 10 分钟（仅缓存 success+exitIp，失败不缓存），重复启动同一代理跳过网络往返；测试钩子 remember/cached/reset 导出
+- browser-manager.ts：geo 去重——同一 launch 里 timezone/locale 与 WebRTC exit-IP 两个消费方共享一次 detect（原来冷缓存下会解析两次）
+
+**实测（本机 macOS arm64，默认 7890 代理）**：
+- 显式身份启动 launch IPC ≈ 477-570ms
+- 自动解析+代理首次启动 ≈ 1.2-1.9s（网络方差）
+- 同代理第二次启动（缓存命中）≈ 456-724ms（约 2.5-4x 提升）
+- 引擎冷启动本身 ≈ 0.9s（已达标）
+
+**验证**：
+- 单测 tests/unit/proxy-detector-cache.test.ts 4 例（同身份缓存命中、按身份隔离、失败/空出口不缓存、重置清空）
+- e2e tests/e2e/j80-launch-speed-cache.test.ts 3 例（同代理两次自动身份启动均成功、两次 --fingerprint-webrtc-ip 一致（缓存一致性）、无意外 console error）
+- 回归：j52 proxy-rotation + j58 env-risk + j70 proxy-health 全绿；tsc/build 干净
+
+**后续项**：REST 其余模块写端点（/api/automation/rules、/api/extension-repository、/api/skills）；引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）；app 冷启动（Electron boot→UI 就绪）计时与优化。
