@@ -814,3 +814,28 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测+smoke 628 例全绿；全量 e2e 74 passed / 4 skipped（78 文件）
 
 **后续项**：引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）；agent/data 模块其余只读 REST 面如需写端点再评估。
+
+### Slice 60 — Agent 模块 REST 端点（LLM 配置 / 会话 / chat / run trace / SQLite / 审批）— ✅
+
+**背景**：Slice 59 收尾点名的「agent/data 模块其余只读 REST 面如需写端点再评估」。此前 agent 相关能力（LLM 配置、多会话、聊天、run trace、agent SQLite store、审批门）全部只在 IPC 暴露，SDK/自动化无法程序化配置模型、读会话、跑 one-shot chat 或清理 run trace。本切片把 agent 模块的读+写面补齐到 loopback REST，与 UI/IPC 共用同一服务层。
+
+**新增（REST 端点）**：
+- LLM 配置：GET /api/agent/llm-config（apiKey 永远 redacted，只给 hasApiKey 布尔）、PUT /api/agent/llm-config（apiKey 加密落盘，空 key 保留旧值，无 key 400）
+- 会话：GET/POST /api/agent/conversations（创建可带 title）、GET /api/agent/conversations/{id}（含完整消息历史）、PATCH（改名）、DELETE（删→404 语义）
+- 聊天：POST /api/agent/chat-simple（{messages} → {reply}，无 LLM 配置 400，非法 role 400）
+- Run trace：GET /api/agent/runs（limit/dirId 过滤）、GET/DELETE /api/agent/runs/{runId}、DELETE /api/agent/runs（清空，返回 deleted 计数）
+- Agent SQLite store：GET /api/agent/db/tables（含 rowCount）、GET /api/agent/db/{table}（limit/offset，行数上限 1000）、POST /api/agent/db/query（只读 SELECT/WITH/PRAGMA/EXPLAIN，写语句 400）、POST /api/agent/db/exec（写/DDL）
+- 审批：GET /api/agent/approvals（当前挂起请求）、POST /api/agent/approvals/{id}/resolve（decision ∈ once/always/deny，非法 400，不存在 404）
+- 全部写操作：requireSettingsMutation 门控（团队开启且本地角色 viewer → 403，与 UI/RBAC 一致）、记录 audit（actor=api）、登记 OpenAPI 3.0；conversation/run/approval 的 not-found 统一映射 404
+
+**重构（消除 IPC/REST 双份逻辑）**：
+- 改 src/main/services/local-agent.ts — 新增 getLlmConfig / redactLlmConfig / saveLlmConfig（加密 + 审计逻辑从 ipc/agent.ts 上移），IPC 与 REST 共用，行为不变
+- 改 src/main/ipc/agent.ts — LLM 配置处理改走共享服务层，删除本地三份重复实现
+- 顺带修：saveLlmConfig 现在先校验再落内存——失败时不再留下「已置 llm 但未保存」的半残状态
+
+**验证**：
+- 单测 tests/unit/llm-config.test.ts 6 例（未配置返回 null、redact 剥 key 留 hasApiKey、保存持久化 provider/model/apiUrl/key、空 key 保留旧值、无 key 抛错且不留半残状态、已存配置优先于自动探测）
+- e2e tests/e2e/j83-agent-rest.test.ts 9 例：OpenAPI 登记全部 18 个新路径；LLM 配置 GET/PUT（缺 key 400、保存后 redacted 可读回）；会话 create→list→get→rename→chat-simple→delete→重复 delete 404；chat-simple payload 校验 400；SQLite 建表→插入→tables→table-data→只读 query→写 query 400→非法表名 400；用真实 chat-stream 播种 run trace 后 list/get/delete/clear 全链路；审批 list+resolve 404+非法 decision 400；viewer 下全部写 403（读仍开放）；无意外 console error
+- 回归：全量单测+smoke 634 例全绿；全量 e2e 75 passed / 4 skipped（79 文件，含新 j83 9 例）
+
+**后续项**：agent REST 面已收口；如需可再加 POST /api/agent/chat（会话内 tool-calling 模式，需 webContents 上下文，REST 语义需另行设计）。引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
