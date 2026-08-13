@@ -50,30 +50,147 @@
         el.innerHTML = '<div class="empty-state">' + t("runs.empty-state", "还没有运行记录。<br>在 Agent 里发一条消息,或让定时任务跑一次,记录会出现在这里。") + '</div>';
         return;
       }
-      el.innerHTML = list.map(function(run) {
-        var dur = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
-        return '<div class="profile-card" data-run-id="' + escAttr(run.id) + '">' +
-          '<div class="card-header"><span class="name">' + esc(run.name) + "</span>" + statusBadge(run) + "</div>" +
-          '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
-          (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
-          '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + run.stepCount + t("runs.row.steps-unit", " 步") + "</span></div>" +
-          '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span><span>' + esc(dur) + "</span></div>" +
-          (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
-          '<div class="card-actions">' +
-            '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
-            '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>' +
-          "</div>" +
-        "</div>";
+      el.innerHTML = groupRuns(list).map(function(item) {
+        return item.group ? renderGroupCard(item.group) : renderRunCard(item.single);
       }).join("");
       el.onclick = function(event) {
         var btn = event.target.closest("[data-run-action]");
         if (!btn || !el.contains(btn)) return;
         var card = btn.closest("[data-run-id]");
+        if (!card) return;
         var runId = card.dataset.runId;
         if (btn.dataset.runAction === "open") agentBrowser.runsOpen(runId);
         else if (btn.dataset.runAction === "delete") agentBrowser.runsDelete(runId);
+        else if (btn.dataset.runAction === "retry") agentBrowser.runsRetry(runId);
       };
     }).catch(function(e) { toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
+  };
+
+  // Batch runs from one automation job share source.jobId (one job = one batch
+  // execution). Group those into a single expandable card; everything else
+  // renders as its own card. The list is newest-first, so each group is placed
+  // at the position of its newest run.
+  function groupRuns(list) {
+    var byJob = {};
+    list.forEach(function(run) {
+      var jobId = run.source && run.source.type === "automation" && run.source.jobId ? run.source.jobId : "";
+      if (jobId) (byJob[jobId] = byJob[jobId] || []).push(run);
+    });
+    var isGroup = {};
+    Object.keys(byJob).forEach(function(jobId) {
+      if (byJob[jobId].length >= 2) isGroup[jobId] = true;
+    });
+    var items = [];
+    var seen = {};
+    list.forEach(function(run) {
+      var jobId = run.source && run.source.type === "automation" && run.source.jobId ? run.source.jobId : "";
+      if (jobId && isGroup[jobId]) {
+        if (seen[jobId]) return;
+        seen[jobId] = true;
+        items.push({ group: byJob[jobId] });
+      } else {
+        items.push({ single: run });
+      }
+    });
+    return items;
+  }
+
+  function canRetryRun(run) {
+    return !!run && run.status === "error" && !!run.dirId && !!run.source &&
+      run.source.type === "automation" && !!run.source.ruleId;
+  }
+
+  function retryButton(run) {
+    return canRetryRun(run)
+      ? '<button class="btn btn-primary btn-sm" data-run-action="retry">' + t("runs.btn.retry", "重试") + '</button>'
+      : "";
+  }
+
+  function renderRunCard(run) {
+    var dur = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
+    var name = esc(run.name);
+    if (run.source && run.source.retryOf) {
+      name += ' <span class="status-badge status-warn">' + esc(t("runs.retry-tag", "重试")) + '</span>';
+    }
+    return '<div class="profile-card" data-run-id="' + escAttr(run.id) + '">' +
+      '<div class="card-header"><span class="name">' + name + "</span>" + statusBadge(run) + "</div>" +
+      '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
+      (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
+      '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + run.stepCount + t("runs.row.steps-unit", " 步") + "</span></div>" +
+      '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span><span>' + esc(dur) + "</span></div>" +
+      (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
+      '<div class="card-actions">' +
+        '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
+        retryButton(run) +
+        '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>' +
+      "</div>" +
+    "</div>";
+  }
+
+  function groupSummary(runs) {
+    var ok = runs.filter(function(r) { return r.status === "done"; }).length;
+    var failed = runs.filter(function(r) { return r.status === "error"; }).length;
+    var running = runs.filter(function(r) { return r.status === "running"; }).length;
+    var parts = [];
+    if (ok > 0) parts.push(ok + " ok");
+    if (failed > 0) parts.push(failed + " " + t("runs.group.failed", "failed"));
+    if (running > 0) parts.push(running + " " + t("runs.group.running", "running"));
+    return parts.join(" / ") || "—";
+  }
+
+  function groupBadge(runs) {
+    var running = runs.some(function(r) { return r.status === "running"; });
+    var failed = runs.some(function(r) { return r.status === "error"; });
+    var cls = running ? "status-running" : (failed ? "status-stopped" : "status-done");
+    return '<span class="status-badge ' + cls + '">' + esc(groupSummary(runs)) + "</span>";
+  }
+
+  function renderGroupCard(runs) {
+    var first = runs[0];
+    var rows = runs.map(function(run) {
+      var durRow = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
+      var err = run.error
+        ? '<div style="color:var(--danger);font-size:11px;word-break:break-word;margin-top:4px;">' + esc(run.error).slice(0, 160) + "</div>"
+        : "";
+      return '<div class="run-group-row" data-run-id="' + escAttr(run.id) + '" style="border-top:1px solid var(--border);padding:8px 0;">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<span style="font-family:var(--mono);font-size:11px;word-break:break-all;">' + esc(run.dirId || "—") + "</span>" +
+          statusBadge(run) +
+          '<span style="color:var(--text-muted);font-size:11px;">' + run.stepCount + t("runs.row.steps-unit", " 步") + " · " + esc(durRow) + "</span>" +
+          '<span style="margin-left:auto;display:inline-flex;gap:6px;">' +
+            '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
+            retryButton(run) +
+            '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>' +
+          "</span>" +
+        "</div>" + err +
+      "</div>";
+    }).join("");
+    return '<div class="profile-card run-group-card">' +
+      '<div class="card-header"><span class="name">' + esc(first.name) +
+        ' <span style="color:var(--text-muted);font-size:11px;">× ' + runs.length + ' ' + t("runs.group.profiles", "profiles") + '</span></span>' +
+        groupBadge(runs) + "</div>" +
+      '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(first.source) + "</span></div>" +
+      (first.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(first.startedAt).toLocaleString() + "</span></div>" : "") +
+      '<details class="run-group-detail" open>' +
+        '<summary style="cursor:pointer;font-size:12px;color:var(--text-muted);padding:6px 0;">' +
+          t("runs.group.expand", "展开/收起 " + runs.length + " 个 profile 结果") + "</summary>" +
+        '<div class="run-group-rows">' + rows + "</div>" +
+      "</details>" +
+    "</div>";
+  }
+
+  agentBrowser.runsRetry = function(runId) {
+    if (!confirm(t("runs.confirm.retry", "重试这个 profile 的 agent 任务?（会重新启动浏览器并按规则提示词再跑一次）"))) return;
+    api.automation.retryRun(runId).then(function(r) {
+      if (!r.ok) {
+        toast(t("runs.toast.retry-failed", "重试失败: ") + (r.error || "unknown"), "error");
+        return;
+      }
+      toast(t("runs.toast.retried", "已重试") + (r.runId ? " · " + r.runId : ""), "success");
+      agentBrowser.loadRunsTab();
+    }).catch(function(e) {
+      toast(t("runs.toast.retry-failed", "重试失败: ") + (e.message || String(e)), "error");
+    });
   };
 
   agentBrowser.runsOpen = function(runId) {

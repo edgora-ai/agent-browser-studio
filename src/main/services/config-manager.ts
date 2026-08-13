@@ -1474,6 +1474,7 @@ function normalizeAgentRunSource(raw: any): AgentRunSource {
   if (typeof raw?.ruleId === "string") src.ruleId = raw.ruleId.slice(0, 100);
   if (typeof raw?.ruleName === "string") src.ruleName = raw.ruleName.slice(0, 120);
   if (typeof raw?.jobId === "string") src.jobId = raw.jobId.slice(0, 120);
+  if (typeof raw?.retryOf === "string") src.retryOf = raw.retryOf.slice(0, 100);
   return src;
 }
 

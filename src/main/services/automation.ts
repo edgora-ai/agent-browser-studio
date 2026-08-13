@@ -7,6 +7,7 @@ import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.j
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
 import { onEvent } from "./event-bus.js";
+import { resolveRetryTarget } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
 import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, getJob } from "./job-store.js";
 import { runSandboxed } from "./script-sandbox.js";
@@ -161,6 +162,7 @@ async function runAgentTaskOnProfile(
   dirId: string,
   action: AutomationAction,
   context: ExecuteActionContext,
+  sourceMeta?: { retryOf?: string },
 ): Promise<AgentTaskOutcome> {
   try {
     // 启动 profile(若未运行),让 agent 有 CDP target
@@ -170,9 +172,16 @@ async function runAgentTaskOnProfile(
     return { dirId, runId: "", ok: false, error: `launch failed: ${e?.message || String(e)}` };
   }
   assertActionNotAborted(context.signal);
+  const isRetry = Boolean(sourceMeta?.retryOf);
   const run = agentRunRecorder.startRun({
-    source: { type: "automation", ruleId: rule.id, ruleName: rule.name, jobId: context.jobId },
-    name: rule.name || "Automation agent task",
+    source: {
+      type: "automation",
+      ruleId: rule.id,
+      ruleName: rule.name,
+      jobId: context.jobId,
+      ...(isRetry ? { retryOf: sourceMeta?.retryOf } : {}),
+    },
+    name: isRetry ? (rule.name || "Automation agent task") + " (重试)" : (rule.name || "Automation agent task"),
     summary: String(action.agentPrompt || "").slice(0, 500),
     dirId,
   });
@@ -197,6 +206,20 @@ async function runAgentTaskOnProfile(
     agentRunRecorder.finishRun(run.id, "error", errMsg);
     return { dirId, runId: run.id, ok: false, error: errMsg };
   }
+}
+
+/** Manual retry of one failed automation run, scoped to its single profile.
+ *  Re-runs the rule's agent-task action on just that profile; the new run
+ *  carries source.retryOf = original run id. */
+export async function retryAgentRun(runId: string): Promise<{ ok: boolean; runId?: string; error?: string }> {
+  const resolved = resolveRetryTarget(runId);
+  if (!resolved.ok) return resolved;
+  const { rule, action, dirId } = resolved.target;
+  const config = getOrDetectLlmConfig();
+  if (!config) return { ok: false, error: "no LLM config" };
+  const outcome = await runAgentTaskOnProfile(rule, config, dirId, action, {}, { retryOf: runId });
+  if (outcome.ok) return { ok: true, runId: outcome.runId };
+  return { ok: false, error: outcome.error };
 }
 
 /**

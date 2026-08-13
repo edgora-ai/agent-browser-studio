@@ -268,6 +268,8 @@ export interface AgentRunSource {
   ruleId?: string;
   ruleName?: string;
   jobId?: string;
+  /** When set, this run is a manual retry of the referenced run (same profile). */
+  retryOf?: string;
 }
 
 export interface AgentRunStep {
