@@ -34,6 +34,9 @@ import {
   parseAccountsBulkText,
   bulkAddAccounts,
   bulkCreateProfilesWithAccounts,
+  addAccount,
+  updateAccount,
+  deleteAccount,
 } from "../../src/main/services/local-agent.js";
 import { requireAccountSecret, requireAccountMutation, initTeam } from "../../src/main/services/team.js";
 import { listBrowserProfiles } from "../../src/main/services/browser-manager.js";
@@ -131,6 +134,29 @@ describe("account service (real config)", () => {
     expect(updated!.profileIds).toEqual(["prof_abc", "prof_zzz"]);
     const cleared = setAccountProfileIds(0, []);
     expect(cleared!.profileIds).toBeUndefined();
+  });
+
+  it("single add/update encrypts passwords at rest like the bulk path (Slice 56)", () => {
+    addAccount({ platformUrl: "https://x.com", platformUserName: "alice", platformPassword: "s3cret" });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(isEncrypted(accounts[0].platformPassword)).toBe(true);
+    expect(getAccountPassword(0)).toBe("s3cret");
+    // A replacement password is re-encrypted.
+    const updated = updateAccount(0, { platformPassword: "newpass" });
+    expect(isEncrypted(updated!.platformPassword)).toBe(true);
+    expect(getAccountPassword(0)).toBe("newpass");
+    // An omitted/empty password keeps the stored encrypted value.
+    const kept = updateAccount(0, { tags: ["social"] });
+    expect(kept!.tags).toEqual(["social"]);
+    expect(getAccountPassword(0)).toBe("newpass");
+    // Never store plaintext in the config.
+    const raw = JSON.stringify(getAccounts());
+    expect(raw).not.toContain("s3cret");
+    expect(raw).not.toContain("newpass");
+    // Delete works on the index.
+    expect(deleteAccount(0)).toBe(true);
+    expect(getAccounts()).toHaveLength(0);
   });
 
   it("getAccountPassword returns null out of range / missing", () => {
