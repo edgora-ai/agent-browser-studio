@@ -1,0 +1,93 @@
+diff --git a/chrome/common/media/cdm_registration.cc b/chrome/common/media/cdm_registration.cc
+index 46293c0a15..ab47a13292 100644
+--- a/chrome/common/media/cdm_registration.cc
++++ b/chrome/common/media/cdm_registration.cc
+@@ -38,6 +38,9 @@
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/common/media/component_widevine_cdm_hint_file_linux.h"
+ #include "media/cdm/cdm_paths.h"  // nogncheck
++#elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#include "base/native_library.h"
++#include "media/cdm/cdm_paths.h"  // nogncheck
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #endif  // BUILDFLAG(ENABLE_WIDEVINE)
+ 
+@@ -60,9 +63,17 @@ namespace {
+ using Robustness = content::CdmInfo::Robustness;
+ 
+ #if BUILDFLAG(ENABLE_WIDEVINE)
+-#if (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||            \
+-     BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && \
+-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||                 \
++    ((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) &&       \
++     (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||                       \
++      BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)))
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++// Command-line switch that points Chromium at a Widevine CDM directory
++// (manifest.json + _platform_specific/<platform> library). Agent Browser
++// stages a managed copy per CDM version and passes it for DRM-enabled
++// profiles, mirroring how stock Chrome picks the CDM up at startup.
++constexpr char kWidevineCdmPathSwitch[] = "widevine-cdm-path";
++#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+ // Create a CdmInfo for a Widevine CDM, using |version|, |cdm_library_path|, and
+ // |capability|.
+ std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
+@@ -99,9 +110,8 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
+ 
+   return CreateWidevineCdmInfo(cdm_library_path, std::move(capability));
+ }
+-#endif  // (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||
+-        // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && (BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS))
++#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || (IS_LINUX ||
++        // IS_CHROMEOS) && (BUNDLE_WIDEVINE_CDM || ENABLE_WIDEVINE_CDM_COMPONENT)
+ 
+ #if BUILDFLAG(BUNDLE_WIDEVINE_CDM) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+@@ -245,6 +255,24 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
+       cdms->push_back(*hinted_widevine);
+     }
+   }
++#elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++  // Agent Browser: register a managed Widevine CDM supplied through
++  // --widevine-cdm-path. Stock Chromium registers no Widevine CDM on
++  // macOS/Windows (Google Chrome does it through the component updater at
++  // runtime), so the managed CDM staged by the app is registered here instead.
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  if (!command_line.HasSwitch(kWidevineCdmPathSwitch)) {
++    DVLOG(1) << "Widevine CDM path switch not set; not registering";
++    return;
++  }
++  std::unique_ptr<content::CdmInfo> info = CreateCdmInfoFromWidevineDirectory(
++      command_line.GetSwitchValuePath(kWidevineCdmPathSwitch));
++  if (info) {
++    VLOG(1) << "Registering Widevine CDM " << info->capability->version
++            << " from " << info->path;
++    cdms->push_back(*info);
++  }
+ #endif  // BUILDFLAG(IS_ANDROID)
+ }
+ 
+diff --git a/third_party/widevine/cdm/widevine.gni b/third_party/widevine/cdm/widevine.gni
+index 927b2e4809..0e31aa45ef 100644
+--- a/third_party/widevine/cdm/widevine.gni
++++ b/third_party/widevine/cdm/widevine.gni
+@@ -39,9 +39,13 @@ enable_library_widevine_cdm =
+ 
+ # Widevine CDM can be deployed as a component. Currently only supported on
+ # desktop platforms. The CDM can be bundled regardless whether it's a
+-# component. See below.
+-enable_widevine_cdm_component =
+-    enable_library_widevine_cdm && (is_win || is_mac || is_linux || is_chromeos)
++# component. See below. Agent Browser overrides this to false and supplies its
++# own managed CDM through --widevine-cdm-path, so no Google component update
++# download is attempted.
++declare_args() {
++  enable_widevine_cdm_component =
++      enable_library_widevine_cdm && (is_win || is_mac || is_linux || is_chromeos)
++}
+ 
+ # Enable (Windows) Media Foundation Widevine CDM component.
+ declare_args() {

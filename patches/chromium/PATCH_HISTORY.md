@@ -306,6 +306,36 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
 - Acceptance: `net_unittests` passes all 1108 DNS/NetworkService/DnsConfig
   tests, `check.sh` replays `0002–0044` cleanly on the pinned upstream index,
   and the replay tree is byte-identical to the annotated `0044` source commit.
-  HTTP and SOCKS5 proxy modes show zero direct connects, zero host-resolver
-  jobs, and zero out-of-proxy DNS traffic in the network log; see the
-  `verify-managed-doh` tool and the matching OSS release commit.
+ HTTP and SOCKS5 proxy modes show zero direct connects, zero host-resolver
+ jobs, and zero out-of-proxy DNS traffic in the network log; see the
+ `verify-managed-doh` tool and the matching OSS release commit.
+
+### `0045` — 2026-08-13
+
+- Chromium source commit:
+  `26aeffbdefd3964726fcb7aa7a5358793e4ac27a`
+  (`feat: register managed Widevine CDM from --widevine-cdm-path`).
+- Annotated Chromium source tag:
+  `agent-browser-chromium-150-patchset-0045`.
+- Patch SHA-256:
+  `6a3abc7e80b6feb3563bec6a33a3ca952ecdb0de53e345b9b430628fb673a9e6`.
+- Scope: enables Widevine key-system plumbing in the independent Chromium
+  build (`enable_widevine = true`) and registers a CDM supplied at runtime
+  through `--widevine-cdm-path`/`--widevine-cdm-version`. The Google
+  component updater is disabled (`enable_widevine_cdm_component = false`)
+  and `ignore_missing_widevine_signing_cert = true` keeps the build
+  reproducible without Google signing material, so the CDM is never bundled
+  and nothing phones home for it. Only profiles flagged DRM-enabled receive
+  the launch flags; unmanaged or plain launches keep upstream behavior.
+- Preservation: no byte in `0002–0044` or either immutable source payload
+  was rewritten. The next Chromium source change must be exported as
+  `0046-*`; do not amend, squash, rebase, or replace this source commit or
+  patch.
+- Acceptance: official ThinLTO build succeeds; `check.sh` replay and
+  installed binary keep all prior `agent-browser-*` contracts. Real EME
+  verification over CDP (`navigator.requestMediaKeySystemAccess`) returns
+  `com.widevine.alpha` when a DRM profile is launched with a host CDM
+  (Chrome 150 bundle, manifest `4.10.3050.0`) and `NotSupportedError`
+  for a plain profile, confirmed both from the build tree and the published
+  runtime binary; the OSS `j66-drm` e2e journey covers discovery,
+  per-profile enable, managed staging, and the real probe.

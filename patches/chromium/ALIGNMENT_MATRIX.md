@@ -91,11 +91,17 @@ the complete product rather than only the engine:
 
 - version-aware automatic updates with rollback;
 - Docker/server mode and Python/JavaScript/.NET integration surfaces;
-- Widevine/DRM discovery for persistent profiles;
+- Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
 - Windows and Linux production verification;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup;
 - proxy health/history/rotation as managed assets.
+
+### DRM / Widevine — verified
+
+| Capability | Current state | Target | Completion evidence |
+|---|---|---|---|
+| Widevine/DRM for persistent profiles | verified | Discover a host CDM, enable per profile, and register it in the independent build without bundling Google components | CDM discovery (Chrome/Brave/Edge/Chromium app bundles, user-data, configured override, managed copy); per-profile gating; real EME probe over CDP returning `com.widevine.alpha` for a DRM profile (host Chrome 150 CDM `4.10.3050.0`) and `NotSupportedError` for a plain profile; confirmed on the build-tree binary and the published runtime (`j66-drm` e2e) |
 
 CloakLite already has product capabilities that a browser wrapper alone does
 not provide: local profile management, encrypted credentials, approval gates,

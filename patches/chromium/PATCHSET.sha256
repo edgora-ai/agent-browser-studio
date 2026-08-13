@@ -1,4 +1,4 @@
-a2d5671c825e15df68badc2cff2c39333c6f1b40633cf61c5b2c46bee3e6b9e9  args.gn
+7c0dc474d00b1401d77dbb1666eba3fdf1064b331dd8197d3960584773126285  args.gn
 9cf1b581d5d8ca8094e8f5b0bc87ef64d188cfac98612607a92b14c146ef0fa7  files/third_party/blink/public/common/roxy_fingerprint_config.h
 c7db6ed403faa863bf5d331cbd787299b8fc4add9e0f179c2e663bb8e8e6a8f5  files/third_party/blink/public/common/roxy_webrtc_rewriter.h
 d6b910335e82c191ae802cc5ef9fe8f1c12dcc7f2f29dad73ae0b08ca8239f27  patches/0002-native-navigator-and-client-hints.patch
@@ -44,3 +44,4 @@ a111080791715db1fc6886e0b2607cc72ead8949e3343f4873a68d2102107d39  patches/0039-n
 52b7ad9fdd29ecc0e0a577cec54d5bf212413170012c458e9e4eb6a549d8787d  patches/0042-agent-browser-public-runtime-protocol.patch
 311c0d382160d93a091871390af6ccd9a9c697f8646df32203260d1c8c795762  patches/0043-agent-browser-google-api-key-infobar.patch
 c8e3755c1bfb5e2ddcc316ca3b4c034b7dbdb93a9d6a7477ea2d49e8f63382d9  patches/0044-agent-browser-managed-dns-locale-refresh.patch
+6a3abc7e80b6feb3563bec6a33a3ca952ecdb0de53e345b9b430628fb673a9e6  patches/0045-native-widevine-cdm-registration.patch

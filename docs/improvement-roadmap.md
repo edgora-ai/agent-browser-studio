@@ -462,3 +462,25 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 新增 `tests/e2e/j59-env-risk-launch-gate.test.ts`（6 例）；`tests/e2e/j54-rest-api.test.ts` +env-risk 端点断言
 
 **验证**：e2e J59 6 例全绿（默认 launch 返回 envCheck.high=true（本机有 CN 解析器 114.114.114.114 + Hiragino/STHeiti 字体）→ audit 有 env-risk-high → `blockOnEnvironmentRisk=true` 时 launch 被拦且无残留进程 → audit 有 env-risk-block → 关闭后放行）；unit/smoke 480 全绿；j54（含 env-risk REST）/j58/j55/j56/j57/j41 回归 34 例通过；whitespace audit 通过。
+
+
+### Slice 40 — Widevine/DRM 支持（P1，能力对齐）— ✅
+
+**范围**：让独立 Chromium 构建具备 Widevine/DRM 能力并按 profile 启用——发现主机 CDM（Chrome/Brave/Edge/Chromium 应用包 + user-data + 配置覆盖 + 托管副本）、按 profile 开关、真实 EME 验证。定制构建原本 `ENABLE_WIDEVINE=0`（禁用），且 Chrome 150 无 `--widevine-cdm-path` 开关，因此从补丁侧打通。
+
+**Chromium 补丁（0045）**：
+- `chrome/common/media/cdm_registration.cc` — macOS/Windows 分支检测 `--widevine-cdm-path`，存在时用 `CreateCdmInfoFromWidevineDirectory` 注册托管 CDM；编译门控扩展覆盖 mac/win（及 linux/chromeos bundle 分支），新增 `base/native_library.h` + `media/cdm/cdm_paths.h` include
+- `third_party/widevine/cdm/widevine.gni` — `enable_widevine_cdm_component` 改 `declare_args()`（可覆盖）
+- `args.gn` — `enable_widevine=true`、`enable_widevine_cdm_component=false`（禁用 Google 组件下载/回传）、`ignore_missing_widevine_signing_cert=true`
+- Chromium 源码 commit `26aeffbdef` + tag `agent-browser-chromium-150-patchset-0045`；官方 ThinLTO 构建成功并发布
+
+**应用层**：
+- 新增 `services/drm.ts` — CDM 发现（configured→chrome→user-data→managed 优先级）、`ensureManagedCdm` 托管到 `<appData>/cdm/widevine/<version>`、`drmLaunchArgs`、`probeDrmViaCdp`
+- IPC `drm:status` / `drm:set-profile` / `drm:set-cdm-path` / `drm:ensure` / `drm:probe`；`browser:create` / `browser:set-meta` 透传 `drm`；launch 时 `addDrmArgs`
+- REST/OpenAPI：`GET /api/drm/status`、`POST /api/drm/cdm-path`、`POST /api/drm/ensure`、`POST /api/profiles/{dirId}/drm`
+- UI：新建/编辑弹窗 DRM checkbox、Profile 卡 🎬 DRM badge、Browser tab Widevine/DRM 卡片（状态/重扫/CDM 路径保存）
+- 新增 `tests/unit/drm.test.ts`（7 例）+ `tests/e2e/j66-drm.test.ts`（8 例）
+
+**实测验证**：新构建 + 本机 Chrome Widevine CDM（manifest `4.10.3050.0`）——不带 flag 时 `requestMediaKeySystemAccess` 返回 `NotSupportedError`（不可用）；DRM profile 带 `--widevine-cdm-path` 时 `available:true, ks:"com.widevine.alpha"`（可用）；非 DRM profile 无该 key system（per-profile gating）。构建树与发布二进制均复测通过。
+
+**验证**：j66 8 例全绿（创建+badge、status 发现、ensure 托管 staging、编辑弹窗开关持久化、DRM profile 真实 EME 探测、非 DRM profile 无 Widevine、stop、无 console error）；j32 profile UI 回归 5 例；unit/smoke 44 文件 538 例全绿；tsc/build 干净。

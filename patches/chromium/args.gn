@@ -18,3 +18,11 @@ treat_warnings_as_errors = false
 # responsible for patent and distribution licensing in their jurisdictions.
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
+
+# Widevine/DRM: enable the key-system plumbing and register a managed CDM
+# passed via --widevine-cdm-path (patch 0045). The CDM itself is supplied at
+# runtime, never bundled; the Google component updater is disabled so nothing
+# phones home for the CDM.
+enable_widevine = true
+enable_widevine_cdm_component = false
+ignore_missing_widevine_signing_cert = true
