@@ -14,6 +14,7 @@ import {
   resolveProfileProxy, saveConfig, getAppDataDir,
 } from "./config-manager.js";
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
+import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getAccounts } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
 import { listJobs, type JobStatus } from "./job-store.js";
@@ -350,6 +351,29 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   }
   if (method === "GET" && p === "/api/proxies/health") {
     return { status: 200, body: { entries: listProxyHealth(), summary: proxyHealthSummary() } };
+  }
+  if (method === "POST" && p === "/api/proxies/import") {
+    const body = await readJson(req);
+    if (!body || typeof body.text !== "string") {
+      return { status: 400, body: { error: "text is required" } };
+    }
+    try {
+      const parsed = parseProxyText(body.text);
+      const report = importProxies(parsed.proxies, { replace: !!body.replace });
+      report.failed = report.failed.concat(parsed.errors.map((e) => ({ line: e.line, error: e.error })));
+      recordAudit({ category: "proxy", action: "import", target: report.imported.length + " proxies", actor: "api", detail: `imported ${report.imported.length}, skipped ${report.skipped.length}, failed ${report.failed.length}` });
+      return { status: 200, body: { success: true, report } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (method === "GET" && p === "/api/proxies/export") {
+    try {
+      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "api", detail: "exported CSV" });
+      return { status: 200, body: { success: true, csv: exportProxiesCsv() } };
+    } catch (e: any) {
+      return { status: 500, body: { error: e.message || String(e) } };
+    }
   }
   const mProxy = p.match(/^\/api\/proxies\/([^/]+)$/);
   const mProxyDefault = p.match(/^\/api\/proxies\/([^/]+)\/default$/);
@@ -718,6 +742,14 @@ function buildOpenApi(): any {
         },
       },
       "/api/proxies/health": { get: { summary: "Proxy health scores / risk / bindings / suggestions", responses: ok("Health entries + summary") } },
+      "/api/proxies/import": {
+        post: {
+          summary: "Bulk import proxies from URI lines or name,type,host,port,username,password CSV",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["text"], properties: { text: { type: "string", description: "Multi-line proxy list" }, replace: { type: "boolean", description: "Replace same-name proxies instead of auto-renaming" } } } } } },
+          responses: ok("Import report (imported / skipped / failed)"),
+        },
+      },
+      "/api/proxies/export": { get: { summary: "Export all proxies as a CSV document (passwords included for migration)", responses: ok("CSV text") } },
       "/api/proxies/{name}": {
         parameters: [nameParam],
         get: { summary: "Proxy detail", responses: ok("Proxy info") },

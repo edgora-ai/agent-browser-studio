@@ -174,6 +174,49 @@
         } else {
           api.proxy.add(name, config).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
         }
+      },
+
+  importProxies: function () {
+        document.getElementById("dlg-proxy-import-text").value = "";
+        document.getElementById("dlg-proxy-import-replace").checked = false;
+        document.getElementById("dlg-proxy-import-status").innerHTML = "";
+        document.getElementById("dlg-proxy-import").showModal();
+      },
+
+  doImportProxies: function () {
+        var text = document.getElementById("dlg-proxy-import-text").value.trim();
+        var replace = document.getElementById("dlg-proxy-import-replace").checked;
+        var statusEl = document.getElementById("dlg-proxy-import-status");
+        if (!text) { toast((window.i18n ? window.i18n.t("proxy.import.need-text", "请输入代理列表") : "请输入代理列表"), "error"); return; }
+        statusEl.innerHTML = (window.i18n ? window.i18n.t("proxy.import.progress", "导入中…") : "导入中…");
+        api.proxy.importText(text, replace).then(function (r) {
+          if (!r || r.success === false) { statusEl.innerHTML = "<span style='color:var(--danger)'>" + esc((r && r.error) || "Failed") + "</span>"; return; }
+          var rep = r.report || {};
+          var imported = (rep.imported || []).length;
+          var skipped = (rep.skipped || []).length;
+          var failed = (rep.failed || []).length;
+          var html = "<span style='color:var(--success)'>" + (window.i18n ? window.i18n.t("proxy.import.done", "已导入 {n} 个代理").replace("{n}", imported) : ("已导入 " + imported + " 个代理")) + "</span>";
+          if (skipped) html += "<br><span style='color:var(--warning)'>" + (window.i18n ? window.i18n.t("proxy.import.skipped", "跳过 {n}（重复或冲突）").replace("{n}", skipped) : ("跳过 " + skipped + "（重复或冲突）")) + "</span>";
+          if (failed) html += "<br><span style='color:var(--danger)'>" + (window.i18n ? window.i18n.t("proxy.import.failed", "失败 {n}").replace("{n}", failed) : ("失败 " + failed)) + "</span>";
+          statusEl.innerHTML = html;
+          if (imported) { setTimeout(function () { document.getElementById("dlg-proxy-import").close(); agentBrowser.refresh(); }, 1200); }
+        }).catch(function (e) { statusEl.innerHTML = "<span style='color:var(--danger)'>" + esc(e.message) + "</span>"; });
+      },
+
+  exportProxies: function () {
+        api.proxy.exportCsv().then(function (r) {
+          if (!r || r.success === false) { toast((r && r.error) || "Failed", "error"); return; }
+          var blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "proxies-" + new Date().toISOString().slice(0, 10) + ".csv";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+          toast((window.i18n ? window.i18n.t("toast.proxy.exported", "Proxies exported") : "Proxies exported"), "success");
+        }).catch(function (e) { toast(e.message, "error"); });
       }
   });
   function healthBadgeHtml(entry) {

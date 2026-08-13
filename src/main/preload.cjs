@@ -32,6 +32,8 @@ const api = {
     healthClear: (name) => ipcRenderer.invoke("proxy:health-clear", name),
     rotate: (name) => ipcRenderer.invoke("proxy:rotate", name),
     rotationInfo: (name) => ipcRenderer.invoke("proxy:rotation-info", name),
+    importText: (text, replace) => ipcRenderer.invoke("proxy:import-text", { text, replace }),
+    exportCsv: () => ipcRenderer.invoke("proxy:export-csv"),
   },
   detect: {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),

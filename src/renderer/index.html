@@ -88,6 +88,8 @@
  <div class="tab-header">
  <h2 data-i18n="proxy.title">Proxy Configurations</h2>
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="newProxy" data-i18n="proxy.add">+ Add Proxy</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="importProxies" data-i18n="proxy.import">📥 导入代理</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="exportProxies" data-i18n="proxy.export">📤 导出代理</button>
  </div>
  <div id="proxy-list" class="profile-grid">
  <div class="loading">Loading proxies...</div>
@@ -673,6 +675,21 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div class="form-row"><label>Fallback Proxies</label><input id="dlg-proxy-fallbacks" placeholder="optional, comma-separated proxy names used when this proxy is unhealthy"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.save">Save</button>
+ <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
+ </div>
+ </form>
+</dialog>
+
+<!-- ── Proxy Bulk Import Dialog ── -->
+<dialog id="dlg-proxy-import">
+ <form method="dialog" data-role="submit" data-submit-cmd="doImportProxies">
+ <h3 data-i18n="proxy.import.title">📥 导入代理</h3>
+ <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">每行一个代理：<code>type://user:pass@host:port</code>（http/socks5/socks5h）或 <code>host:port</code>；也支持 CSV 表头 <code>name,type,host,port,username,password</code>。以 # 开头的行会被忽略。</p>
+ <textarea id="dlg-proxy-import-text" rows="10" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="socks5://user:pass@1.2.3.4:1080&#10;5.6.7.8:8080&#10;# comment"></textarea>
+ <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;"><input type="checkbox" id="dlg-proxy-import-replace"> 同名时替换（否则自动加 -2/-3 后缀）</label>
+ <div id="dlg-proxy-import-status" style="margin-top:6px;font-size:11px;"></div>
+ <div class="btn-row">
+ <button type="submit" class="btn btn-primary" data-i18n="common.import">导入</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
  </form>

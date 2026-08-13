@@ -87,8 +87,8 @@ describe("J37 — activity / audit tab", () => {
     await h.page.locator('#dlg-agent-run [data-cmd="close-dialog"]').click();
 
     await h.page.locator('[data-activity-action="open-profile"]').first().click();
-    await h.page.waitForSelector('[data-dir-id="' + ids.profileId + '"]', { timeout: 5000 });
-    expect(await h.page.locator('[data-dir-id="' + ids.profileId + '"]').isVisible()).toBe(true);
+    await h.page.waitForSelector('.profile-card[data-dir-id="' + ids.profileId + '"]', { timeout: 5000 });
+    expect(await h.page.locator('.profile-card[data-dir-id="' + ids.profileId + '"]').isVisible()).toBe(true);
   }, 30000);
 
   it("the category filter narrows the list", async () => {

@@ -13,6 +13,7 @@ import {
 } from "../services/config-manager.js";
 import { clearProxyHealth, listProxyHealth, proxyHealthSummary, recordProxyRotation } from "../services/proxy-health.js";
 import { recordAudit } from "../services/audit-log.js";
+import { parseProxyText, importProxies, exportProxiesCsv } from "../services/proxy-import.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
 
 export function registerProxyHandlers(): void {
@@ -164,5 +165,35 @@ export function registerProxyHandlers(): void {
     const info = getProxyRotationInfo(name);
     if (!info) return { success: false, error: "Proxy not found" };
     return { success: true, info };
+  });
+
+  // Parse + import a bulk proxy list (URI lines or name,type,host,port,username,password CSV).
+  ipcMain.handle("proxy:import-text", async (_event, { text, replace }: { text: string; replace?: boolean }) => {
+    try {
+      const parsed = parseProxyText(String(text || ""));
+      const report = importProxies(parsed.proxies, { replace });
+      report.failed = report.failed.concat(parsed.errors.map((e) => ({ line: e.line, error: e.error })));
+      recordAudit({
+        category: "proxy",
+        action: "import",
+        target: report.imported.length + " proxies",
+        actor: "user",
+        detail: `imported ${report.imported.length}, skipped ${report.skipped.length}, failed ${report.failed.length}${replace ? " (replace)" : ""}`,
+      });
+      return { success: true, report };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  });
+
+  // Export the current proxy store as a CSV document (passwords included for migration).
+  ipcMain.handle("proxy:export-csv", async () => {
+    try {
+      const csv = exportProxiesCsv();
+      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "user", detail: `exported CSV` });
+      return { success: true, csv };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
   });
 }
