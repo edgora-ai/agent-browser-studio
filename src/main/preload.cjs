@@ -11,6 +11,8 @@ const api = {
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
     exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
     importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),
+    exportArchives: (dirIds, destDir) => ipcRenderer.invoke("profile:export-archives", { dirIds, destDir }),
+    importArchives: (zipPaths) => ipcRenderer.invoke("profile:import-archives", { zipPaths }),
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
     setCookie: (dirId, cookie) => ipcRenderer.invoke("profile:set-cookie", { dirId, ...cookie }),

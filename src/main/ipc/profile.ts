@@ -12,7 +12,7 @@ import {
 } from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
-import { exportProfileArchive, importProfileArchive } from "../services/profile-archive.js";
+import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../services/profile-archive.js";
 import type { GeolocationMode, ProfileInfo, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerProfileHandlers(): void {
@@ -128,6 +128,48 @@ export function registerProfileHandlers(): void {
       }
       const result = importProfileArchive(zipPath);
       return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  });
+
+  // ── Batch profile backup (export selected profiles / import many zips) ──
+  ipcMain.handle("profile:export-archives", async (_event, opts: { dirIds?: string[]; destDir?: string }): Promise<{
+    success: boolean; report?: import("../services/profile-archive.js").BatchExportReport; error?: string;
+  }> => {
+    try {
+      let destDir = opts?.destDir;
+      if (!destDir) {
+        const r = await dialog.showOpenDialog({
+          title: "Export Profile Backups",
+          properties: ["openDirectory", "createDirectory"],
+        });
+        if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
+        destDir = r.filePaths[0];
+      }
+      const report = await exportProfileArchives(opts?.dirIds || [], destDir);
+      return { success: true, report };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("profile:import-archives", async (_event, opts?: { zipPaths?: string[] }): Promise<{
+    success: boolean; report?: import("../services/profile-archive.js").BatchImportReport; error?: string;
+  }> => {
+    try {
+      let zipPaths = opts?.zipPaths;
+      if (!zipPaths || !zipPaths.length) {
+        const r = await dialog.showOpenDialog({
+          title: "Import Profile Backups",
+          properties: ["openFile", "multiSelections"],
+          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+        });
+        if (r.canceled || !r.filePaths?.length) return { success: false, error: "cancelled" };
+        zipPaths = r.filePaths;
+      }
+      const report = importProfileArchives(zipPaths);
+      return { success: true, report };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };
     }

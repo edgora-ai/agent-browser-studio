@@ -375,12 +375,18 @@
   };
 
   agentBrowser.importProfileArchive = function() {
-    api.profile.importArchive().then(function(r) {
+    api.profile.importArchives().then(function(r) {
       if (!r || !r.success) {
         toast(t("toast.profile.import-failed", "导入失败: ") + ((r && r.error) || "unknown"), "error");
         return;
       }
-      toast(t("toast.profile.imported", "已导入 profile: ") + esc(r.name), "success");
+      var rep = (r && r.report) || {};
+      var imported = (rep.imported || []).length;
+      var failed = (rep.failed || []).length;
+      if (imported === 0 && failed === 0) return;
+      var msg = t("toast.profile.imported", "已导入 profile: ") + imported + " 个";
+      if (failed) msg += t("toast.profile.import-failed-count", "，失败 ") + failed + " 个";
+      toast(msg, failed ? "error" : "success");
       loadProfiles();
     }).catch(function(e) {
       toast(t("toast.profile.import-failed", "导入失败: ") + (e.message || String(e)), "error");
@@ -535,6 +541,29 @@
       });
     });
   };
+
+  agentBrowser.batchExportSelected = function() {
+    var sel = selectedProfileIds();
+    if (!sel.length) return;
+    var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
+    api.profile.exportArchives(sel).then(function(r) {
+      if (!r || !r.success) {
+        toast(t("toast.profile.export-failed", "导出失败: ") + ((r && r.error) || "unknown"), "error");
+        return;
+      }
+      var rep = (r && r.report) || {};
+      var exported = (rep.exported || []).length;
+      var skipped = (rep.skipped || []).length;
+      var failed = (rep.failed || []).length;
+      var msg = t("toast.profile.exported-batch", "已导出 ") + exported + " 个 profile";
+      if (skipped) msg += "，跳过 " + skipped + "（运行中）";
+      if (failed) msg += "，失败 " + failed + " 个";
+      toast(msg, failed ? "error" : "success");
+    }).catch(function(e) {
+      toast(t("toast.profile.export-failed", "导出失败: ") + (e.message || String(e)), "error");
+    });
+  };
+
   agentBrowser.openRiskCheck = function(dirId) {
     var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
     api.browser.status(dirId).then(function(s) {

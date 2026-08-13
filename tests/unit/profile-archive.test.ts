@@ -16,7 +16,7 @@ vi.mock("electron", () => ({
 
 import { vi } from "vitest";
 import { createBrowserProfile, deleteBrowserProfile } from "../../src/main/services/browser-manager.js";
-import { exportProfileArchive, importProfileArchive } from "../../src/main/services/profile-archive.js";
+import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../../src/main/services/profile-archive.js";
 import { getProfilesDir, getProfileMeta, getConfig, reloadConfig } from "../../src/main/services/config-manager.js";
 import { writeZipArchive } from "../../src/main/services/zip-writer.js";
 
@@ -115,5 +115,40 @@ describe("profile archive export/import", () => {
     expect(meta.lock).toBeUndefined();
     expect(meta.syncedAt).toBeUndefined();
     expect(meta.platform).toBe("macos");
+  });
+
+  it("batch-exports several profiles into one directory, reporting failures per item", async () => {
+    const a = createBrowserProfile({ name: "Batch A", platform: "windows" });
+    const b = createBrowserProfile({ name: "Batch B", platform: "windows" });
+    fs.writeFileSync(path.join(profileDir(a.dirId), "a.txt"), "a-data");
+    fs.writeFileSync(path.join(profileDir(b.dirId), "b.txt"), "b-data");
+
+    const dest = path.join(ARCHIVES, "batch");
+    const report = await exportProfileArchives([a.dirId, b.dirId, "ab_missing_batch"], dest);
+    expect(report.exported.length).toBe(2);
+    expect(report.failed.length).toBe(1);
+    expect(report.failed[0].dirId).toBe("ab_missing_batch");
+    expect(fs.existsSync(path.join(dest, "Batch_A-" + a.dirId + ".zip"))).toBe(true);
+    expect(fs.existsSync(path.join(dest, "Batch_B-" + b.dirId + ".zip"))).toBe(true);
+  });
+
+  it("batch-imports several archives, reporting per-zip failures", async () => {
+    const a = createBrowserProfile({ name: "Multi A", platform: "windows" });
+    const b = createBrowserProfile({ name: "Multi B", platform: "windows" });
+    const dest = path.join(ARCHIVES, "multi");
+    fs.mkdirSync(dest, { recursive: true });
+    const za = path.join(dest, "a.zip");
+    const zb = path.join(dest, "b.zip");
+    await exportProfileArchive(a.dirId, za);
+    await exportProfileArchive(b.dirId, zb);
+    expect(deleteBrowserProfile(a.dirId)).toBe(true);
+    expect(deleteBrowserProfile(b.dirId)).toBe(true);
+
+    const report = importProfileArchives([za, zb, path.join(dest, "missing.zip")]);
+    expect(report.imported.length).toBe(2);
+    expect(report.failed.length).toBe(1);
+    expect(report.failed[0].zipPath).toBe(path.join(dest, "missing.zip"));
+    const names = report.imported.map((i) => i.name).sort();
+    expect(names).toEqual(["Multi A", "Multi B"]);
   });
 });

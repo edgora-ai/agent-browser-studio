@@ -26,7 +26,7 @@ import {
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
-import { exportProfileArchive, importProfileArchive } from "./profile-archive.js";
+import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "./profile-archive.js";
 import { syncService } from "./sync-service.js";
 import { retryAgentRun, retryJobRuns } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
@@ -243,6 +243,31 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const r = importProfileArchive(body.zipPath);
       recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + body.zipPath });
       return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  // Batch import of several profile backup ZIPs.
+  if (method === "POST" && p === "/api/profiles/import-batch") {
+    const body = await readJson(req).catch(() => null);
+    if (!body || !Array.isArray(body.zipPaths) || !body.zipPaths.length) {
+      return { status: 400, body: { error: "zipPaths (non-empty array) is required" } };
+    }
+    const report = importProfileArchives(body.zipPaths.filter((z: any) => typeof z === "string"));
+    recordAudit({ category: "profile", action: "import-batch", actor: "api", detail: "imported " + report.imported.length + ", failed " + report.failed.length });
+    return { status: 200, body: { success: true, report } };
+  }
+  // Batch export of several stopped profiles into one directory.
+  if (method === "POST" && p === "/api/profiles/export") {
+    try {
+      const body = await readJson(req).catch(() => null);
+      if (!body || !Array.isArray(body.dirIds) || !body.dirIds.length) {
+        return { status: 400, body: { error: "dirIds (non-empty array) is required" } };
+      }
+      const destDir = typeof body?.destDir === "string" && body.destDir.trim() ? body.destDir : defaultBackupPathForBatch();
+      const report = await exportProfileArchives(body.dirIds.filter((d: any) => typeof d === "string"), destDir);
+      recordAudit({ category: "profile", action: "export-batch", actor: "api", detail: "exported " + report.exported.length + ", skipped " + report.skipped.length + ", failed " + report.failed.length });
+      return { status: 200, body: { success: true, destDir, report } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -658,6 +683,20 @@ function buildOpenApi(): any {
           responses: ok("Import result with new dirId"),
         },
       },
+      "/api/profiles/import-batch": {
+        post: {
+          summary: "Import several profile backup ZIPs at once (per-archive success/failure report)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["zipPaths"], properties: { zipPaths: { type: "array", items: { type: "string" }, description: "Absolute paths to profile backup ZIPs" } } } } } },
+          responses: ok("Batch import report"),
+        },
+      },
+      "/api/profiles/export": {
+        post: {
+          summary: "Export several stopped profiles into one directory (running profiles are skipped)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["dirIds"], properties: { dirIds: { type: "array", items: { type: "string" }, description: "Profile dirIds to export" }, destDir: { type: "string", description: "Optional destination directory; defaults to <appData>/backups" } } } } } },
+          responses: ok("Batch export report"),
+        },
+      },
       "/api/profiles/{dirId}/export": {
         parameters: [dirIdParam],
         post: {
@@ -773,6 +812,12 @@ function defaultBackupPath(dirId: string): string {
   fs.mkdirSync(backupsDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(backupsDir, "profile-" + dirId + "-" + stamp + ".zip");
+}
+
+function defaultBackupPathForBatch(): string {
+  const backupsDir = path.join(getAppDataDir(), "backups");
+  fs.mkdirSync(backupsDir, { recursive: true });
+  return backupsDir;
 }
 
 function assertProfileExists(dirId: string): void {

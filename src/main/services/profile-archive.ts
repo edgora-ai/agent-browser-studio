@@ -40,6 +40,32 @@ export interface ImportProfileResult {
   bytes: number;
 }
 
+export interface BatchExportItem {
+  dirId: string;
+  filePath: string;
+  entries: number;
+  bytes: number;
+}
+
+export interface BatchExportReport {
+  exported: BatchExportItem[];
+  skipped: Array<{ dirId: string; reason: string }>;
+  failed: Array<{ dirId: string; error: string }>;
+}
+
+export interface BatchImportItem {
+  zipPath: string;
+  dirId: string;
+  name: string;
+  files: number;
+  bytes: number;
+}
+
+export interface BatchImportReport {
+  imported: BatchImportItem[];
+  failed: Array<{ zipPath: string; error: string }>;
+}
+
 function newDirId(): string {
   return PROFILE_ID_PREFIX + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 8);
 }
@@ -175,4 +201,49 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
+}
+
+/**
+ * Export several profiles into one destination directory. Running profiles are
+ * skipped (their browser data may be mid-write); missing/errored profiles are
+ * reported per item so a single bad profile never aborts the whole batch.
+ */
+export async function exportProfileArchives(dirIds: string[], destDir: string): Promise<BatchExportReport> {
+  fs.mkdirSync(destDir, { recursive: true });
+  const report: BatchExportReport = { exported: [], skipped: [], failed: [] };
+  for (const dirId of dirIds) {
+    try {
+      validateDirId(dirId);
+      const meta = getProfileMeta(dirId);
+      if (!meta) {
+        report.failed.push({ dirId, error: "Profile not found" });
+        continue;
+      }
+      if (statusBrowser(dirId).running) {
+        report.skipped.push({ dirId, reason: "running" });
+        continue;
+      }
+      const safeName = String(meta.name || dirId).replace(/[^A-Za-z0-9._-]/g, "_").trim() || dirId;
+      const filePath = path.join(destDir, safeName + "-" + dirId + ".zip");
+      const result = await exportProfileArchive(dirId, filePath);
+      report.exported.push({ dirId, filePath: result.filePath, entries: result.entries, bytes: result.bytes });
+    } catch (e: any) {
+      report.failed.push({ dirId, error: e?.message || String(e) });
+    }
+  }
+  return report;
+}
+
+/** Import several profile backup ZIPs, reporting per-archive success/failure. */
+export function importProfileArchives(zipPaths: string[]): BatchImportReport {
+  const report: BatchImportReport = { imported: [], failed: [] };
+  for (const zipPath of zipPaths) {
+    try {
+      const r = importProfileArchive(zipPath);
+      report.imported.push({ zipPath, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes });
+    } catch (e: any) {
+      report.failed.push({ zipPath, error: e?.message || String(e) });
+    }
+  }
+  return report;
 }

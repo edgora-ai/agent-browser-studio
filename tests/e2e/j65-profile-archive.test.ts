@@ -120,6 +120,8 @@ describe("J65 — profile backup export/import", () => {
     expect(await h.page.locator(".profile-card [data-action='export-archive']").count()).toBeGreaterThanOrEqual(1);
     // Toolbar import-backup button exists.
     expect(await h.page.locator('[data-cmd="importProfileArchive"]').count()).toBe(1);
+    // Batch bar exposes the export-selected action.
+    expect(await h.page.locator('[data-cmd="batchExportSelected"]').count()).toBe(1);
   }, 30000);
 
   it("exposes profile backup export/import over the REST API", async () => {
@@ -178,6 +180,58 @@ describe("J65 — profile backup export/import", () => {
     // Cleanup: remove the imported profile so later tests stay deterministic.
     const clean = await apiRequest(port, token, "DELETE", "/api/profiles/" + imp.body.dirId);
     expect(clean.status).toBe(200);
+  }, 60000);
+
+  it("batch exports/imports several profiles over the REST API", async () => {
+    const destDir = path.join(USERDATA, "rest-batch");
+    fs.rmSync(destDir, { recursive: true, force: true });
+    fs.mkdirSync(destDir, { recursive: true });
+    const mk = async (name: string): Promise<string> => {
+      const r = await apiRequest(port, token, "POST", "/api/profiles", { name, platform: "windows" });
+      expect(r.status).toBe(201);
+      return r.body.dirId;
+    };
+    const a = await mk("Batch REST A");
+    const b = await mk("Batch REST B");
+    const info = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), a);
+    fs.writeFileSync(path.join(info.path, "batch-a.txt"), "A-data");
+
+    const exp = await apiRequest(port, token, "POST", "/api/profiles/export", { dirIds: [a, b], destDir });
+    expect(exp.status, JSON.stringify(exp)).toBe(200);
+    expect(exp.body.success).toBe(true);
+    expect(exp.body.report.exported.length).toBe(2);
+    expect(exp.body.report.failed.length).toBe(0);
+    const files = fs.readdirSync(destDir).filter((f) => f.endsWith(".zip"));
+    expect(files.length).toBe(2);
+
+    // Delete both sources, then import the whole batch back.
+    expect((await apiRequest(port, token, "DELETE", "/api/profiles/" + a)).status).toBe(200);
+    expect((await apiRequest(port, token, "DELETE", "/api/profiles/" + b)).status).toBe(200);
+    const imp = await apiRequest(port, token, "POST", "/api/profiles/import-batch", {
+      zipPaths: files.map((f) => path.join(destDir, f)),
+    });
+    expect(imp.status, JSON.stringify(imp)).toBe(200);
+    expect(imp.body.report.imported.length).toBe(2);
+    expect(imp.body.report.failed.length).toBe(0);
+
+    // At least one of the imported profiles must carry the data file.
+    const dirIds = imp.body.report.imported.map((i: any) => i.dirId);
+    let found = false;
+    for (const d of dirIds) {
+      const ii = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), d);
+      if (fs.existsSync(path.join(ii.path, "batch-a.txt"))) { found = true; break; }
+    }
+    expect(found).toBe(true);
+
+    // Batch import without zipPaths is a client error.
+    const missing = await apiRequest(port, token, "POST", "/api/profiles/import-batch", {});
+    expect(missing.status).toBe(400);
+
+    // Cleanup imported profiles + temp dir.
+    for (const d of dirIds) {
+      expect((await apiRequest(port, token, "DELETE", "/api/profiles/" + d)).status).toBe(200);
+    }
+    fs.rmSync(destDir, { recursive: true, force: true });
   }, 60000);
 
   it("no unexpected console errors", () => {
