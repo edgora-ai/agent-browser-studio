@@ -690,6 +690,7 @@
         if (fp.mode !== "off" && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
         var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · Chromium " + (fp.browserVersion || fp.version || "auto");
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
+        var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
@@ -706,7 +707,7 @@
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>Fingerprint</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>Identity</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + '</span></div>' +
+          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + '</span></div>' +
           '<div class="info-row"><span>Sync</span><span class="' + syncCls + '" title="' + escAttr(syncTitle) + '"><button class="btn btn-xs" style="font-size:9px;color:var(--text-muted);" data-action="note">📝</button>' + syncIcon + ' ' + esc((p.syncStatus === "synced" ? "Synced" : p.syncStatus === "dirty" ? "Dirty" : "Never")) + '</span></div>' +
           '<div class="info-row"><span>Proxy</span><span>' + esc(proxyStr) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row"><span>Tags</span><span>' + tagHtml + '</span></div>' : '') +
@@ -749,6 +750,7 @@
       else if (action === "extensions") agentBrowser.showExtensions(dirId);
       else if (action === "delete") agentBrowser.delProfile(dirId);
       else if (action === "risk-check") agentBrowser.openRiskCheck(dirId);
+      else if (action === "drift-check") agentBrowser.checkDrift(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -762,6 +764,23 @@
       if (card && card.dataset.dirId) agentBrowser.proxyChanged(card.dataset.dirId, target);
     };
   }
+
+  agentBrowser.checkDrift = function(dirId) {
+    api.browser.checkDrift(dirId).then(function(r) {
+      if (!r || !r.ok) { toast((r && r.error) || "Fingerprint check failed", "error"); return; }
+      if (!r.hasBaseline) {
+        toast("No fingerprint baseline yet — launch and use Capture Baseline first", "info");
+        return;
+      }
+      if (!r.risky) {
+        toast("Fingerprint stable (" + ((r.drift || []).length) + " benign change(s))", "success");
+      } else {
+        var fields = (r.drift || []).map(function(d) { return d.field; }).slice(0, 6).join(", ");
+        toast("⚠ Risky fingerprint drift: " + fields + ((r.drift || []).length > 6 ? " (+" + ((r.drift || []).length - 6) + ")" : ""), "error");
+      }
+    }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
   agentBrowser.loadProfiles = loadProfiles;
 
 })();

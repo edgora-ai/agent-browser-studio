@@ -304,3 +304,33 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J54 全绿（含 journ
 ```
 
 9 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI）落地并验证。
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 454 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J55 全绿（含 journey 10/10 tab 切换）
+```
+
+10 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI / 19 指纹漂移启动阻断）落地并验证。
+
+### Slice 19 — 指纹漂移启动阻断（P0，信任地基）— ✅
+
+**范围**：竞品环境监测发现「DNS 解析器 ↔ IP 国家 / 中文字体 / RAF 帧间隔」等漂移类风险。Slice 19 把「事后对比」升级为「启动即把关」——每次启动后立刻用实时指纹与存储的 baseline 做 diff，高风险字段（webgl/webgl2 renderer、canvas 指纹、userAgent、语言、时区、屏幕分辨率、硬件并发等）漂移时**默认杀进程并阻断启动**，防止带着不一致指纹上线被平台识别；也提供只读的 check-drift IPC 供 UI/工具随时核验。
+
+**设计**：
+- baseline 存在且 `blockOnFingerprintDrift !== false`（默认阻断）时，`waitForCdpReady` 之后做 post-launch drift check
+- 捕获失败只告警不阻断（瞬时 CDP 抖动不能把合法启动打死）；阻断后 `waitForProcessExit`（SIGTERM→SIGKILL）确保不留活进程
+- 全部动作落 audit：`fingerprint-drift`（有变更即记录，actor=auto）、`fingerprint-drift-block`（高风险阻断，actor=auto）
+- `browser:launch` 返回体增加 `driftCheck`（checked/risky/drift/error）；新增只读 `browser:check-drift` IPC（无 baseline 返回 hasBaseline:false，未运行报错，否则实时 diff）
+- profiles 卡片 Hardware 行新增 🧬 Drift 按钮，toast 反馈 stable / risky / no-baseline
+
+**文件**：
+- 改 `services/fingerprint-baseline.ts` — 新增 `summarizeDrift(drift, limit=8)`（audit/UI 可读摘要）
+- 改 `types.ts` — `MgmtConfig.blockOnFingerprintDrift?: boolean`
+- 改 `services/browser-manager.ts` — `LaunchDriftCheck` 接口、launch 返回体、post-launch drift check + 阻断 + `waitForProcessExit`
+- 改 `ipc/browser.ts` + `preload.cjs` — `driftCheck` 透传、只读 `check-drift`
+- 改 `renderer/js/app/profiles.js` — 🧬 Drift 按钮 + `agentBrowser.checkDrift`
+- 新增 `tests/e2e/j55-drift-block.test.ts`（6 例）；`tests/unit/fingerprint-baseline.test.ts` +2 例
+
+**验证**：e2e J55 6 例全绿（无 baseline 直启→capture baseline→check stable→篡改高风险字段后启动被 block 且无残留进程→audit 有 fingerprint-drift-block→`blockOnFingerprintDrift=false` 时 risky 放行）；unit/smoke 454 全绿；j41（基线流程）/j54/j53 回归 18 例通过。

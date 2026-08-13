@@ -237,6 +237,8 @@ export interface MgmtConfig {
   agentFs?: AgentFsConfig;
   /** When true, pre-launch consistency blockers refuse the launch. Default false (warn only). */
   blockOnConsistencyConflict?: boolean;
+  /** When true (default), a post-launch fingerprint drift on high-risk fields stops the browser. */
+  blockOnFingerprintDrift?: boolean;
   /** Max automation jobs running concurrently. Default 3. */
   maxConcurrentJobs?: number;
 }

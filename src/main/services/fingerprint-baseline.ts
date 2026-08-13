@@ -249,3 +249,10 @@ export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
   ]);
   return drift.some((d) => risky.has(d.field));
 }
+
+/** Human-readable summary of drifted fields (capped for UI/audit). */
+export function summarizeDrift(drift: FingerprintDrift[], limit = 8): string {
+  if (!drift.length) return "none";
+  const head = drift.slice(0, limit).map((d) => d.field).join(", ");
+  return drift.length > limit ? head + " (+" + (drift.length - limit) + " more)" : head;
+}

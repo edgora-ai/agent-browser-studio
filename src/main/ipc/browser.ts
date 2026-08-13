@@ -104,9 +104,30 @@ export function registerBrowserHandlers(): void {
   }) => {
     try {
       const r = await launchBrowser(params.dirId);
-      return { success: true, pid: r.pid, cdpPort: r.cdpPort };
+      return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck };
     } catch (e: any) {
       return { success: false, error: e.message };
+    }
+  });
+
+  // Read-only fingerprint drift check against the stored baseline (no state change).
+  handleBrowser("check-drift", async (_event, dirId: string) => {
+    validateDirId(dirId);
+    const cfg = getConfig() as any;
+    const meta = cfg.browserProfiles?.[dirId];
+    if (!meta) return { ok: false, error: "Profile not found" };
+    if (!meta.fingerprintBaseline) {
+      return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
+    }
+    const st = statusBrowser(dirId);
+    if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
+    try {
+      const current = await captureFingerprint(st.cdpPort);
+      const drift = diffFingerprints(meta.fingerprintBaseline, current);
+      const risky = hasRiskyDrift(drift);
+      return { ok: true, checked: true, hasBaseline: true, risky, drift, fields: Object.keys(current).length };
+    } catch (e: any) {
+      return { ok: false, error: e.message || String(e) };
     }
   });
 

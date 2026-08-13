@@ -14,6 +14,10 @@ import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
 import { checkProfileConsistency } from "./consistency-check.js";
+import {
+  captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
+  type FingerprintDrift,
+} from "./fingerprint-baseline.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
@@ -342,7 +346,14 @@ export function listBrowserProfiles(): BrowserProfile[] {
 // Launch / Stop
 // ═══════════════════════════════════════════════════════════════
 
-export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPort: number }> {
+export interface LaunchDriftCheck {
+  checked: boolean;
+  risky?: boolean;
+  drift?: FingerprintDrift[];
+  error?: string;
+}
+
+export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck }> {
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a managed Chromium profile`);
@@ -364,7 +375,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   // Memory-map check with alive test
   const existing = runningProcesses.get(dirId);
   if (existing) {
-    try { process.kill(existing.pid, 0); return { pid: existing.pid, cdpPort: existing.port }; }
+    try { process.kill(existing.pid, 0); return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false } }; }
     catch { runningProcesses.delete(dirId); }
   }
 
@@ -372,7 +383,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
   const psFallback = findBrowserByProfile(dirId);
   if (psFallback) {
     runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort });
-    return { pid: psFallback.pid, cdpPort: psFallback.cdpPort };
+    return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false } };
   }
 
   const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
@@ -681,6 +692,43 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
     throw e;
   }
 
+  // Post-launch fingerprint drift check: a stored baseline that no longer
+  // matches the live fingerprint on high-risk fields can expose the real host
+  // or an unstable anti-detect layer. Blocks by default (blockOnFingerprintDrift);
+  // a failed capture only warns so a transient CDP issue never bricks a launch.
+  let driftCheck: LaunchDriftCheck = { checked: false };
+  if (!passThrough && meta.fingerprintBaseline) {
+    try {
+      const current = await captureFingerprint(cdpPort);
+      const drift = diffFingerprints(meta.fingerprintBaseline, current);
+      const risky = hasRiskyDrift(drift);
+      driftCheck = { checked: true, risky, drift };
+      if (drift.length) {
+        recordAudit({
+          category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
+          detail: drift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(drift),
+        });
+      }
+      if (risky && cfg.blockOnFingerprintDrift !== false) {
+        const reason = "Fingerprint drift blocked (" + summarizeDrift(drift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+        recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
+        const failedEntry = runningProcesses.get(dirId);
+        runningProcesses.delete(dirId);
+        await failedEntry?.proxyBridge?.close().catch(() => undefined);
+        try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
+        try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
+        await waitForProcessExit(pid);
+        const blockError: any = new Error(reason);
+        blockError.driftBlocked = true;
+        throw blockError;
+      }
+    } catch (e: any) {
+      if (e && e.driftBlocked) throw e;
+      console.warn("[agent-browser] fingerprint drift check failed for " + dirId.slice(0, 8) + ":", e.message || e);
+      driftCheck = { checked: false, error: (e && e.message) || String(e) };
+    }
+  }
+
   child.on("exit", () => {
     // Cancel pending SIGKILL timer if any — process exited naturally
     const entry = runningProcesses.get(dirId);
@@ -700,12 +748,23 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
 
   emitEvent("profile:launched", { dirId, pid, cdpPort });
   recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
-  return { pid, cdpPort };
+  return { pid, cdpPort, driftCheck };
   } finally {
     pendingNativeProxyAuth?.cleanup();
     await pendingProxyBridge?.close().catch(() => undefined);
     if (releaseLaunchLock) releaseLaunchLock();
   }
+}
+
+/** Wait for a spawned child to exit, escalating to SIGKILL so a "blocked"
+ *  launch never leaves a live process behind. */
+async function waitForProcessExit(pid: number, timeoutMs = 4000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try { process.kill(pid, 0); } catch { return; }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
 }
 
 export function stopBrowser(dirId: string): boolean {

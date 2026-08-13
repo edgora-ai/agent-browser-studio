@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffFingerprints, hasRiskyDrift, CAPTURE_EXPRESSION } from "../../src/main/services/fingerprint-baseline.js";
+import { diffFingerprints, hasRiskyDrift, summarizeDrift, CAPTURE_EXPRESSION } from "../../src/main/services/fingerprint-baseline.js";
 
 describe("fingerprint baseline diff", () => {
   it("returns no drift for identical fingerprints", () => {
@@ -53,5 +53,20 @@ describe("fingerprint baseline diff", () => {
     for (const field of ["workerIdentity", "webglCapabilityHash", "webgpuVendor", "webgpuCapabilityHash", "fontCapabilityHash", "speechVoices", "mediaDevices", "doNotTrack", "maxTouchPoints", "screenX", "outerWidth", "availTop", "systemColors", "preferredColorScheme"]) {
       expect(hasRiskyDrift([{ field, baseline: "a", current: "b" }]), field).toBe(true);
     }
+  });
+
+  it("summarizes drifted fields (capped)", () => {
+    const drift = [
+      { field: "userAgent", baseline: "a", current: "b" },
+      { field: "tz", baseline: "a", current: "b" },
+      { field: "glRenderer", baseline: "a", current: "b" },
+    ];
+    expect(summarizeDrift(drift)).toBe("userAgent, tz, glRenderer");
+    expect(summarizeDrift([])).toBe("none");
+  });
+
+  it("summarizeDrift caps long drift lists", () => {
+    const drift = Array.from({ length: 12 }, (_, i) => ({ field: "f" + i, baseline: "a", current: "b" }));
+    expect(summarizeDrift(drift, 5)).toBe("f0, f1, f2, f3, f4 (+7 more)");
   });
 });
