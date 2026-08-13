@@ -598,3 +598,15 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **结论**：headless + 完整指纹配置（`--agent-browser-fingerprint-config`）下 UA / screen / languages 全部伪装生效、Playwright click 稳定通过——JS SDK 作为 Playwright/Puppeteer 的 drop-in 替代闭环打通；headless 帧驱动与 stock Chrome 行为对齐（timer 60Hz）。
 
 **验证**：j73 4 例全绿；j71/j72 回归 10 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。
+
+### Slice 49 — 空闲 Profile 自动清理（P1，服务端资源收口）— ✅
+
+**背景**：上游 CloakBrowser cloakserve 有 idle cleanup（#352）——连接数归零后定时杀掉空闲的 seeded Chrome。我们的架构不同（profile 按需启动、CDP 直连，没有连接计数），但服务端/Docker 场景存在同样的资源泄漏问题：自动化跑完忘记 stop、或任务崩溃，运行中的 Chromium 一直占着内存与端口。本切片补上对等能力：按「活动」而非「连接数」判定空闲。
+
+**设计**：
+- browser-manager.ts 新增 idle 追踪：每个运行中 profile 记录 lastActivityAt；touchProfileActivity(dirId) / touchProfileActivityByPort(port) 刷新；sweepIdleProfiles(maxIdleMs) 停止超时未活动的 profile 并返回被停列表；setIdlePolicyTimeoutMs / getIdlePolicyTimeoutMs 管理策略（默认关闭，AGENT_BROWSER_IDLE_TIMEOUT_MS 启用，0 或未设置禁用——不打扰现有 GUI/headless 实例）。
+- 活动信号：REST 任意 /api/profiles/{dirId}* 请求（launch/stop/status/drift/env-risk/detail…，handleRequest 统一识别，未来新路由自动覆盖）；本地 agent 的 CDP 工具调用（getOrConnectCdp 中央入口按 port touch，长 agent 任务不会被误杀）；automation 启停动作与 agent-task 开始。
+- index.ts：启用时以 max(1s, min(timeout/2, 60s)) 周期清扫，unref() 不阻塞退出；headless 与 GUI 均仅在显式启用时生效。
+- REST/OpenAPI：GET /api/server/idle 返回 {enabled, timeoutMs, running:[{dirId,pid,cdpPort,idleMs}]}（不 touch，可安全轮询观察）；JS/Python SDK 各加 serverIdle() / server_idle()。
+
+**验证**：e2e tests/e2e/j74-idle-auto-stop.test.ts 3 例全绿（策略报告、launch 后 idle 追踪 + REST status touch 复位时钟、无活动 4s 后自动 stop 并从 running 列表消失）；j68/j73 回归 10 例全绿；全量单测 48 文件 587 例全绿；tsc/build 干净。
