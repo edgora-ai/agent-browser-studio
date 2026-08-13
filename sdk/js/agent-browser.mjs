@@ -211,6 +211,18 @@ export class AgentBrowserClient {
   resolveApproval(approvalId, decision) {
     return this.request('POST', '/api/agent/approvals/' + encodeURIComponent(approvalId) + '/resolve', { decision: decision });
   }
+
+  // ── skills ─────────────────────────────────────────────────────────────
+  listSkills(filter) {
+    const qs = filter ? '?' + new URLSearchParams({ filter: filter }).toString() : '';
+    return this.request('GET', '/api/skills' + qs).then((d) => d.skills || []);
+  }
+  installSkill(skillId) {
+    return this.request('POST', '/api/skills/' + encodeURIComponent(skillId) + '/install');
+  }
+  deleteSkill(skillId) {
+    return this.request('DELETE', '/api/skills/' + encodeURIComponent(skillId));
+  }
 }
 
 async function waitForCdp(baseUrl, port, timeoutMs) {

@@ -109,3 +109,4 @@ management (`listConversations` / `createConversation` / `getConversation` /
 conversation-scoped tool-calling `chat`), run traces (`agentRuns` / `agentRun` /
 `deleteAgentRun` / `clearAgentRuns`), the SQLite store (`dbTables` / `dbTable` /
 `dbQuery` / `dbExec`) and approvals (`pendingApprovals` / `resolveApproval`).
+Skills: `listSkills(filter)` / `installSkill(skillId)` / `deleteSkill(skillId)`.

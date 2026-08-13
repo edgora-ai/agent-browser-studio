@@ -15,6 +15,9 @@ import {
 } from "./extension-repository.js";
 import { validateDirId } from "./utils.js";
 import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, findRuntimeChromiumBinary, getRuntimeChromiumVersion } from "./browser-manager.js";
+import { listSkillRepository, getSkill, installSkill } from "./skill-repository.js";
+import { listPendingApprovals, resolveApproval } from "./approval-gate.js";
+import { agentDbTables } from "./agent-db.js";
 
 let server: http.Server | null = null;
 let serverListening = false;
@@ -169,6 +172,12 @@ const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
   { name: "agent_browser_conversation_get", description: "Get a conversation with its full message history", inputSchema: { type: "object", properties: { conversationId: { type: "string" } }, required: ["conversationId"] } },
   { name: "agent_browser_agent_run_get", description: "Get one agent run trace with its tool steps", inputSchema: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"] } },
   { name: "agent_browser_llm_config", description: "Read the saved LLM config (API key redacted; hasApiKey boolean)", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_skills_list", description: "List installed/marketplace agent skills (optional filter by id/name/title/tags)", inputSchema: { type: "object", properties: { filter: { type: "string" } } } },
+  { name: "agent_browser_skill_get", description: "Get one agent skill by id", inputSchema: { type: "object", properties: { skillId: { type: "string" } }, required: ["skillId"] } },
+  { name: "agent_browser_skill_install", description: "Install an agent skill by id (adds it to the local repository)", inputSchema: { type: "object", properties: { skillId: { type: "string" } }, required: ["skillId"] } },
+  { name: "agent_browser_approvals_list", description: "List pending approval requests (risky agent operations waiting on a decision)", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_approval_resolve", description: "Resolve a pending approval request; decision is once, always or deny", inputSchema: { type: "object", properties: { approvalId: { type: "string" }, decision: { type: "string", enum: ["once", "always", "deny"] } }, required: ["approvalId", "decision"] } },
+  { name: "agent_browser_db_tables", description: "List agent SQLite tables with row counts", inputSchema: { type: "object", properties: {} } },
 ];
 
 async function executeMcpTool(name: string, args: any): Promise<any> {
@@ -407,8 +416,41 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
         clearTimeout(timer);
       }
     }
-   default:
-      return { error: `Unknown tool: ${name}` };
+    case "agent_browser_skills_list": {
+      return { skills: listSkillRepository(args?.filter) };
+    }
+    case "agent_browser_skill_get": {
+      const skill = getSkill(args?.skillId);
+      if (!skill) return { error: "Skill not found" };
+      return { skill };
+    }
+    case "agent_browser_skill_install": {
+      try {
+        const skill = installSkill(args?.skillId);
+        return { success: true, skill };
+      } catch (e: any) {
+        return { error: e.message || String(e) };
+      }
+    }
+    case "agent_browser_approvals_list": {
+      return { approvals: listPendingApprovals() };
+    }
+    case "agent_browser_approval_resolve": {
+      const id = args?.approvalId;
+      const decision = args?.decision;
+      if (typeof id !== "string" || !id) return { error: "approvalId is required" };
+      if (decision !== "once" && decision !== "always" && decision !== "deny") {
+        return { error: "decision must be once, always or deny" };
+      }
+      const ok = resolveApproval(id, decision);
+      if (!ok) return { error: "Approval request not found" };
+      return { success: true, approvalId: id, decision };
+    }
+    case "agent_browser_db_tables": {
+      return { tables: agentDbTables() };
+    }
+  default:
+     return { error: `Unknown tool: ${name}` };
   }
 }
 

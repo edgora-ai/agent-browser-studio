@@ -239,3 +239,15 @@ class AgentBrowserClient:
 
     def resolve_approval(self, approval_id: str, decision: str) -> dict[str, Any]:
         return self.post("/api/agent/approvals/" + approval_id + "/resolve", {"decision": decision})
+
+    # ── skills ─────────────────────────────────────────────────────────────
+    def list_skills(self, filter_text: Optional[str] = None) -> list[dict[str, Any]]:
+        from urllib.parse import urlencode
+        qs = ("?" + urlencode({"filter": filter_text})) if filter_text else ""
+        return self.get("/api/skills" + qs).get("skills", [])
+
+    def install_skill(self, skill_id: str) -> dict[str, Any]:
+        return self.post("/api/skills/" + skill_id + "/install")
+
+    def delete_skill(self, skill_id: str) -> dict[str, Any]:
+        return self.delete("/api/skills/" + skill_id)

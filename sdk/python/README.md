@@ -48,6 +48,8 @@ conversation-scoped tool-calling `chat`), run traces (`agent_runs` / `agent_run`
 `delete_agent_run` / `clear_agent_runs`), the SQLite store (`db_tables` /
 `db_table` / `db_query` / `db_exec`) and approvals (`pending_approvals` /
 `resolve_approval`).
+Skills: `list_skills(filter_text)` / `install_skill(skill_id)` /
+`delete_skill(skill_id)`.
 
 ## Server mode
 
