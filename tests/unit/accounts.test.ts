@@ -33,8 +33,10 @@ import {
   setAccountProfileIds,
   parseAccountsBulkText,
   bulkAddAccounts,
+  bulkCreateProfilesWithAccounts,
 } from "../../src/main/services/local-agent.js";
 import { requireAccountSecret, requireAccountMutation, initTeam } from "../../src/main/services/team.js";
+import { listBrowserProfiles } from "../../src/main/services/browser-manager.js";
 import { isEncrypted, initializeSecretStorage, planSecretStorage, resetSecretStorageForTests } from "../../src/main/services/secrets.js";
 
 function freshConfig(): void {
@@ -167,5 +169,57 @@ describe("account service (real config)", () => {
       expect(requireAccountSecret().ok).toBe(true);
       expect(requireAccountMutation().ok).toBe(true);
     });
+  });
+});
+
+describe("bulk create profiles + accounts (RoxyBrowser 3.8.9 workflow)", () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_USER_DATA)) fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    fs.mkdirSync(TEST_USER_DATA, { recursive: true });
+    initializeSecretStorage(planSecretStorage({ userDataDir: TEST_USER_DATA, platform: "darwin", environment: {} }));
+    reloadConfig();
+    freshConfig();
+  });
+
+  afterEach(() => {
+    resetSecretStorageForTests();
+    if (fs.existsSync(TEST_USER_DATA)) fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+  });
+
+  it("creates a bound profile + account pair per valid line", () => {
+    const items = parseAccountsBulkText("https://twitter.com, alice, s3cret, social\nhttps://amazon.com, bob, hunter2");
+    const r = bulkCreateProfilesWithAccounts(items, { platform: "windows" });
+    expect(r.added).toBe(2);
+    expect(r.created).toBe(2);
+    expect(r.skipped).toBe(0);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(2);
+    const profiles = listBrowserProfiles();
+    expect(profiles.some((p: any) => p.name === "twitter.com · alice")).toBe(true);
+    expect(profiles.some((p: any) => p.name === "amazon.com · bob")).toBe(true);
+    // Each account is bound to its own created profile.
+    const prof = profiles.find((p: any) => p.name === "twitter.com · alice");
+    const acc = accounts[0];
+    expect(acc.profileIds).toEqual([prof.dirId]);
+    expect(isEncrypted(acc.platformPassword)).toBe(true);
+  });
+
+  it("reports malformed lines and never creates a half pair", () => {
+    const r = bulkCreateProfilesWithAccounts([{ url: "", username: "x" }, { url: "https://ok.com", username: "y" }]);
+    expect(r.added).toBe(1);
+    expect(r.created).toBe(1);
+    expect(r.skipped).toBe(1);
+    expect(r.errors.length).toBe(1);
+    expect(getAccounts()).toHaveLength(1);
+    expect(listBrowserProfiles().length).toBe(1);
+  });
+
+  it("dedupes profile names with a numeric suffix", () => {
+    const items = parseAccountsBulkText("https://x.com, alice\nhttps://y.com, alice");
+    const r = bulkCreateProfilesWithAccounts(items, {});
+    expect(r.created).toBe(2);
+    const names = listBrowserProfiles().map((p: any) => p.name);
+    expect(names.filter((n: string) => n.startsWith("x.com · alice") || n.startsWith("y.com · alice"))).toHaveLength(2);
+    expect(new Set(names)).toHaveProperty("size", 2);
   });
 });
