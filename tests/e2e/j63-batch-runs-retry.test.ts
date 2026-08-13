@@ -4,6 +4,7 @@
 // retried run is linked back via source.retryOf.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as http from "node:http";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { startMockLlm, MockLlmServer } from "./helpers/mock-llm.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
@@ -11,16 +12,55 @@ import { filterKnownConsoleErrors } from "./helpers/diag.js";
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j63");
 
+function apiRequest(
+  port: number, token: string, method: string, p: string, body?: any,
+): Promise<{ status: number; body: any }> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    headers.authorization = `Bearer ${token}`;
+    if (payload) headers["content-length"] = String(Buffer.byteLength(payload));
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: p, method, headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let parsed: any = null;
+          try { parsed = JSON.parse(text); } catch { parsed = text; }
+          resolve({ status: res.statusCode || 0, body: parsed });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 describe("J63 — batch run grouping + per-profile retry", () => {
   let h: TestAppHandle;
   let mock: MockLlmServer;
   let dirId1 = "";
   let dirId2 = "";
   let ruleId = "";
+  let apiPort = 0;
+  let apiToken = "";
 
   beforeAll(async () => {
     mock = await startMockLlm({ delayMs: 20 });
     h = await setupTestApp({ userDataDir: USERDATA });
+    const start = Date.now();
+    while (Date.now() - start < 15000) {
+      const st = await h.page.evaluate(() => (window as any).agentBrowser.api.apiRpc.status());
+      if (st && st.running && st.port > 0) { apiPort = st.port; break; }
+      await h.page.waitForTimeout(300);
+    }
+    expect(apiPort, "REST API server must be running").toBeGreaterThan(0);
+    const tok = await h.page.evaluate(() => (window as any).agentBrowser.api.apiRpc.revealToken());
+    apiToken = tok.token;
+    expect(apiToken).toBeTruthy();
     const a = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J63 Alpha", platform: "windows", fingerprintSeed: 63101 }));
     const b = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J63 Beta", platform: "windows", fingerprintSeed: 63102 }));
     dirId1 = a.dirId;
@@ -180,6 +220,37 @@ describe("J63 — batch run grouping + per-profile retry", () => {
     const retried = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.retryOf);
     expect(retried.length).toBeGreaterThanOrEqual(2);
     expect(retried.every((x: any) => x.status === "done")).toBe(true);
+  }, 90000);
+
+  it("REST run/job retry endpoints work end-to-end", async () => {
+    // Job-level retry of a fully-failed batch via POST /api/jobs/{jobId}/retry.
+    const jobId = await runAllFailedBatch();
+    const jobRetry = await apiRequest(apiPort, apiToken, "POST", "/api/jobs/" + encodeURIComponent(jobId) + "/retry");
+    expect(jobRetry.status).toBe(200);
+    expect(jobRetry.body.ok, JSON.stringify(jobRetry.body)).toBe(true);
+    expect(jobRetry.body.attempted).toBe(2);
+    expect(jobRetry.body.succeeded).toBe(2);
+    expect(jobRetry.body.failed).toHaveLength(0);
+    await h.page.waitForFunction((jid: string) => (async () => {
+      const runs: any[] = await (window as any).agentBrowser.api.agentRuns.list();
+      const originals = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.jobId === jid && !x.source.retryOf && x.status === "error");
+      return originals.length >= 2 && originals.every((x: any) =>
+        runs.some((y: any) => y.source && y.source.retryOf === x.id && y.status === "done"));
+    })(), jobId, { timeout: 30000 });
+
+    // Run-level retry of a single failed profile via POST /api/runs/{id}/retry.
+    const jobId2 = await runAllFailedBatch();
+    const runs: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.agentRuns.list());
+    const failed2 = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.jobId === jobId2 && !x.source.retryOf && x.status === "error");
+    expect(failed2.length).toBeGreaterThanOrEqual(2);
+    const runRetry = await apiRequest(apiPort, apiToken, "POST", "/api/runs/" + encodeURIComponent(failed2[0].id) + "/retry");
+    expect(runRetry.status).toBe(200);
+    expect(runRetry.body.ok, JSON.stringify(runRetry.body)).toBe(true);
+    expect(runRetry.body.runId).toBeTruthy();
+    await h.page.waitForFunction((rid: string) => (async () => {
+      const runs2: any[] = await (window as any).agentBrowser.api.agentRuns.list();
+      return runs2.some((x: any) => x.source && x.source.retryOf === rid && x.status === "done");
+    })(), failed2[0].id, { timeout: 30000 });
   }, 90000);
 
   it("no unexpected console errors", () => {

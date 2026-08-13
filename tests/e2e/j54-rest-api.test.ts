@@ -230,6 +230,23 @@ describe("J54 — local REST API + OpenAPI", () => {
     expect(push.body.message).toBeTruthy();
   }, 30000);
 
+  it("exposes run/job retry endpoints via REST/OpenAPI with sane error handling", async () => {
+    const spec = await apiRequest(port, token, "GET", "/openapi.json");
+    expect(spec.body.paths["/api/runs/{id}/retry"]).toBeTruthy();
+    expect(spec.body.paths["/api/jobs/{jobId}/retry"]).toBeTruthy();
+
+    // Unknown run → 400 with an error, no crash.
+    const runRetry = await apiRequest(port, token, "POST", "/api/runs/run_missing/retry");
+    expect(runRetry.status).toBe(400);
+    expect(runRetry.body.ok).toBe(false);
+    expect(runRetry.body.error).toBeTruthy();
+
+    // Unknown job → no candidates, so a harmless 200 with attempted: 0.
+    const jobRetry = await apiRequest(port, token, "POST", "/api/jobs/job_missing/retry");
+    expect(jobRetry.status).toBe(200);
+    expect(jobRetry.body.attempted).toBe(0);
+  }, 30000);
+
   it("no unexpected console errors", () => {
     const c = filterKnownConsoleErrors(h.consoleErrors).filter((e: string) =>
       !/file is not a database|connect to 127.0.0.1 port 1/i.test(e));

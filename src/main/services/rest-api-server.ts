@@ -25,6 +25,7 @@ import {
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
 import { syncService } from "./sync-service.js";
+import { retryAgentRun, retryJobRuns } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
 
 const API_VERSION = "1.0.0";
@@ -368,10 +369,20 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const dirId = url.searchParams.get("dirId") || undefined;
     return { status: 200, body: { runs: agentRunRecorder.listRuns({ dirId }).slice(0, limit) } };
   }
+  const mRunRetry = p.match(new RegExp("^/api/runs/([^/]+)/retry$"));
+  if (mRunRetry && method === "POST") {
+    const r = await retryAgentRun(mRunRetry[1]);
+    return { status: r.ok ? 200 : 400, body: r };
+  }
   if (method === "GET" && p === "/api/jobs") {
     const status = url.searchParams.get("status") || undefined;
     const limit = clampInt(url.searchParams.get("limit"), 50, 1, 200);
     return { status: 200, body: { jobs: listJobs({ status: status as JobStatus | undefined, limit }) } };
+  }
+  const mJobRetry = p.match(new RegExp("^/api/jobs/([^/]+)/retry$"));
+  if (mJobRetry && method === "POST") {
+    const r = await retryJobRuns(mJobRetry[1]);
+    return { status: r.ok ? 200 : 400, body: r };
   }
 
   // ── Sync (team workspace) ──
@@ -640,7 +651,21 @@ function buildOpenApi(): any {
       "/api/accounts": { get: { summary: "List stored account usernames + platform URLs", responses: ok("Account list") } },
       "/api/automation/rules": { get: { summary: "List automation rules", responses: ok("Rule list") } },
       "/api/runs": { get: { summary: "List recent agent runs (limit/dirId query params)", responses: ok("Run list") } },
+      "/api/runs/{id}/retry": {
+        post: {
+          summary: "Retry a failed automation run on its profile (re-runs the rule's agent task)",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: ok("Retry result with new runId"),
+        },
+      },
       "/api/jobs": { get: { summary: "List automation jobs (status/limit query params)", responses: ok("Job list") } },
+      "/api/jobs/{jobId}/retry": {
+        post: {
+          summary: "Retry every failed profile of a batch job",
+          parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
+          responses: ok("Batch retry summary (attempted/succeeded/failed)"),
+        },
+      },
       "/api/sync/status": { get: { summary: "Sync configuration / connectivity status", responses: ok("Sync status") } },
       "/api/sync/push": {
         post: {
