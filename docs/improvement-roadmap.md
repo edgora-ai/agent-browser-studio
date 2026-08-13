@@ -713,3 +713,28 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 单测 tests/unit/window-title-prefix.test.ts 5 例（默认取 profile 名、自定义原样、null 关闭、控制字符清洗/64 字符上限、空前缀返回 null）
 - e2e tests/e2e/j78-window-title-prefix.test.ts 6 例（默认/自定义/null 三档 argv 断言、document.title 不含前缀、无意外 console error）
 - 回归：journey + j32 profile UI e2e 全绿；tsc/build 干净
+
+
+### Slice 56 — REST 账号写操作端点（收口 Slice 53「后续项」，对齐 RoxyBrowser 3.8.9 账号模块 API 集成面）— ✅
+
+**背景**：Slice 53 把账号模块的增删改/绑定/批量/复制密码做在了 IPC + UI，REST 保持只读并在「后续项」里点名要补写端点。本切片把同一服务层暴露成 loopback REST，供 SDK/自动化直接管理账号，并顺带修掉一个存量安全漏洞：单条 add/update 的密码此前明文落盘（只有 bulk 路径加密）。
+
+**新增（REST 端点）**：
+- GET /api/accounts —— 列表扩展为 { index, url, username, tags, profileIds, hasPassword }，永不返回密码
+- POST /api/accounts —— { url, username, password?, profileIds?, tags? } → 201 + index；密码加密落盘
+- PATCH /api/accounts/{index} —— 部分更新（url/username/password/profileIds/tags）；密码省略或空串时保留已加密存量值；profileIds 复用白名单+去重+200 上限校验
+- DELETE /api/accounts/{index} —— 删除，越界 404
+- GET /api/accounts/{index}/password —— 解密返回密码（仅此端点能取明文）
+- POST /api/accounts/bulk —— { text, createProfiles?, platform? }：粘贴文本批量导入；createProfiles=true 时每条同时建一个绑定 profile（复用 Slice 54 工作流）
+- OpenAPI 3.0 全部登记；所有写操作记 audit（category=account, actor=api）
+
+**安全**：
+- 修真 bug：addAccount/updateAccount 密码未加密（IPC 单条路径明文落盘，与 bulk 不一致）。已改为统一 encryptSecret 落盘、getAccountPassword 解密；省略/空密码编辑保留存量；存量明文条目经 decryptSecret passthrough 兼容读取
+- RBAC 对齐 IPC：requireAccountMutation 门控所有写端点、requireAccountSecret 门控 password reveal——团队开启且本地角色为 viewer 时 REST 一律 403（与 UI 一致）
+
+**验证**：
+- 单测（accounts.test.ts +1 → 15 例）：单条 add/update 加密落盘、替换密码重新加密、省略密码保留存量、明文不出现在 config 序列化、delete
+- e2e tests/e2e/j79-rest-accounts.test.ts 9 例：空列表、POST 创建（201+index+加密）、password reveal、PATCH（改字段+绑定去重+保留密码）、400 校验、bulk 导入+bind profile 创建、DELETE（末位删除后重复 404）、viewer 全端点 403、无意外 console error
+- 回归：j54（REST 全表面）+ j76（账号 IPC）+ j77（bulk-create）全绿；tsc/build 干净
+
+**后续项**：REST 其余模块写端点（/api/automation/rules、/api/extension-repository、/api/skills 等仍只读）；启动提速对标（3.9.2 5.5s→2s）；引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
