@@ -499,3 +499,18 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - UI：Sync 标签页新增 Team Workspace (RBAC) 卡片——workspace 名/成员数/enforcement、成员名册（本机高亮 + 角色徽章 + 👑 owner）、admin 可加成员/改角色/移除、owner 可重命名、enforcement 开关
 
 **验证**：unit `tests/unit/team.test.ts` 13 例（角色层级、init 建 owner、add/remove/set-role 权限矩阵、viewer 禁 push/force-push/delete、enforcement 关闭放行、syncSafeTeam、mergeTeam 择优、未列名设备按 viewer 处理）；e2e `tests/e2e/j67-team-rbac.test.ts` 8 例（IPC init/add/去重、REST status/member/OpenAPI、UI 面板渲染、mock S3 push 携带 manifest、远端降级 viewer 后 pull 生效 push 被拦、恢复 owner 后放行）；全量单测 45 文件 551 例全绿；回归 j32/j43/j54/j56/j57/j62/j64 共 42 例全绿；tsc/build 干净。
+
+### Slice 42 — 无头 Server 模式 + Docker + Python SDK（P1，集成面收口）— ✅
+
+**范围**：ALIGNMENT_MATRIX 产品级缺口「Docker/server mode and Python/JavaScript/.NET integration surfaces」——让控制器可作为无窗口/无 tray 的 headless server 运行（scheduler + MCP + REST 全保留），并提供 Docker 镜像与 Python SDK 作为自动化/CI 集成面。
+
+**无头 server 模式**：
+- 新增 `src/main/services/server-mode.ts` — `isHeadlessMode()` 检测 `--headless` / `--server` / `AGENT_BROWSER_HEADLESS=1` / `CLOAK_HEADLESS=1`
+- `src/main/index.ts` — headless 分支跳过窗口和 tray，保留 scheduler + MCP + REST，打印 `[server] headless server mode` 日志
+- `rest-api-server.ts` — `GET /health` 返回 `mode: "headless"|"gui"`、version、profiles 数量、uptimeSeconds，作为编排就绪探针
+
+**Docker**：`Dockerfile`（golang:1.25 构建 masque bridge + node:22 运行层 + apt 共享库）、`docker-compose.yml`（数据卷持久化 + 26582 端口）、`.dockerignore`；容器以 `--headless --no-sandbox` 启动
+
+**Python SDK**：`sdk/python/agent_browser_client.py` 零依赖（stdlib-only）REST client——health/version/openapi、profiles（建/删/启停/status）、proxies、team RBAC、DRM、automation rules、runs/jobs；`example.py` + `README.md`
+
+**验证**：e2e `tests/e2e/j68-server-mode.test.ts` 6 例全绿（health mode=headless、REST 建 profile 201、launch 返回 cdpPort、status running、stop、`windows().length===0` 无 GUI）；回归 j54/j32/j67/j66/j1 共 39 例通过；全量单测 45 文件 551 例全绿；tsc 干净。Python SDK 已对真实 headless 实例实测（health → create → launch cdpPort 63981 → status → stop → team）。

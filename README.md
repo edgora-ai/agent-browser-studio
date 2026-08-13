@@ -231,6 +231,9 @@ Main resources:
 | GET | `/api/automation/rules` | Automation rules |
 | GET | `/api/runs` | `/api/jobs` | Agent runs / automation jobs |
 | GET/DELETE | `/api/audit` | Audit trail |
+| GET/POST | `/api/drm/status` `/api/drm/cdm-path` `/api/drm/ensure` | Widevine/DRM discovery + managed CDM staging |
+| GET | `/api/team` | Team workspace RBAC status (members, roles, enforcement) |
+| POST/DELETE/PUT | `/api/team/members{/deviceId}[/role]` | Add / remove / re-role workspace members |
 
 Example:
 
@@ -241,6 +244,41 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:26582/api/profiles
 
 The MCP server remains available on `26581` for AI tools (Claude Code,
 Cursor, etc.) and exposes the same browser/db/http capabilities.
+
+---
+
+## Server Mode & Docker
+
+Agent Browser Studio can run as a headless server (no window, no tray) for
+Linux VMs, containers and CI runners. The scheduler, MCP and REST API stay
+active, so automation keeps working without a desktop session.
+
+- **Start**: `npx electron . --headless` (or `--server`), or set
+  `AGENT_BROWSER_HEADLESS=1` / `CLOAK_HEADLESS=1`.
+- **Health**: `GET /health` reports `mode: "headless"`, version, profile
+  count and uptime - use it as the orchestration readiness probe.
+- **Docker**: the included `Dockerfile` and `docker-compose.yml` build a
+  controller image with the masque bridge and Node 22 runtime, run in
+  headless mode and expose the REST API on `26582`.
+
+```bash
+docker compose up --build -d
+curl -s http://127.0.0.1:26582/health
+```
+
+## Python SDK
+
+`sdk/python/agent_browser_client.py` is a zero-dependency (stdlib-only) REST
+client for the control API - profiles, proxies, DRM, team RBAC, runs and
+jobs. It works identically against the desktop app and headless server mode.
+
+```bash
+export AGENT_BROWSER_API_TOKEN=my-token
+python3 sdk/python/example.py --base-url http://127.0.0.1:26582 --token "$AGENT_BROWSER_API_TOKEN"
+```
+
+JavaScript/.NET consumers can generate clients from `GET /openapi.json`. See
+[sdk/python/README.md](sdk/python/README.md) for the full walkthrough.
 
 ---
 

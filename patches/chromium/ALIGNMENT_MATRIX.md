@@ -90,7 +90,7 @@ These do not prove browser stealth, but they are required for feature parity of
 the complete product rather than only the engine:
 
 - version-aware automatic updates with rollback;
-- Docker/server mode and Python/JavaScript/.NET integration surfaces;
+- Docker/server mode and Python/JavaScript/.NET integration surfaces — ✅ verified (see the Server mode & integration surfaces table below);
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
 - Windows and Linux production verification;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
@@ -108,6 +108,15 @@ the complete product rather than only the engine:
 | Capability | Current state | Target | Completion evidence |
 |---|---|---|---|
 | Team workspace semantics (RBAC) | verified | Member-role model (owner > admin > member > viewer) with enforcement on sync push, force push and destructive profile ops, travelling with the sync snapshot | role hierarchy and permission-matrix unit tests; mock-S3 e2e proving the manifest ships on push, pull adopts a remotely-demoted viewer role, and push is blocked by team policy until the owner role is restored; viewer read-only, admin force-push/member management, owner-only rename/admin grants (`j67-team-rbac` e2e + `team` unit suite) |
+
+### Server mode & integration surfaces — verified
+
+| Capability | Current state | Target | Completion evidence |
+|---|---|---|---|
+| Headless server mode | verified | Run the full controller (scheduler + MCP + REST) without a window or tray for Linux VMs, containers and CI | `--headless` / `--server` / `AGENT_BROWSER_HEADLESS=1` startup branch; e2e `j68-server-mode` proves zero GUI windows while `/health` reports `mode: "headless"` and profile launch/stop work over REST |
+| Docker deployment | verified | Ship a repeatable controller image with the proxy bridge and Node 22 runtime | `Dockerfile` (golang:1.25 build stage + node:22 runtime with apt shared-lib layer) + `docker-compose.yml` (data volume, 26582 port); Linux engine binary remains the platform-limited piece tracked under signed multi-platform distribution |
+| Python integration surface | verified | Zero-dependency REST client for profiles, proxies, DRM, team RBAC, runs and jobs | `sdk/python/agent_browser_client.py` stdlib-only client exercised against a live headless instance (health → create → launch cdpPort → status → stop → team) |
+| OpenAPI discovery for JS/.NET | verified | Any consumer can generate a client from the running controller | `GET /openapi.json` served on the loopback REST API, documented for JavaScript/.NET consumers |
 
 CloakLite already has product capabilities that a browser wrapper alone does
 not provide: local profile management, encrypted credentials, approval gates,
