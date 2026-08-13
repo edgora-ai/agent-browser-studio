@@ -7,6 +7,7 @@ vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
 import {
   applyManagedNativeRefreshRate,
+  buildRemoteDnsRule,
   parseBrowserProcessLine,
   patchThirdPartyCookieCompatibility,
   stripManagedFingerprintArgs,
@@ -57,6 +58,20 @@ describe("fingerprint pass-through launch mode", () => {
       "--remote-debugging-port=9222",
       "--proxy-server=socks5://127.0.0.1:1080",
     ]);
+  });
+
+  it("forces remote DNS for socks5h proxies (socks5h semantics in Chromium)", () => {
+    expect(buildRemoteDnsRule("proxy.example.com", null)).toBe(
+      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE proxy.example.com");
+    // Local bridge (authenticated SOCKS) — 127.0.0.1 appears once.
+    expect(buildRemoteDnsRule("127.0.0.1", null)).toBe(
+      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
+    // Existing rules (e.g. a MASQUE bridge map) are preserved, not clobbered.
+    expect(buildRemoteDnsRule("127.0.0.1", "MAP bridge 127.0.0.1")).toBe(
+      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1,MAP bridge 127.0.0.1");
+    // Empty connect host (defensive) still yields the base rule.
+    expect(buildRemoteDnsRule("", null)).toBe(
+      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
   });
 
   it("uses stock Chromium cookie preferences and restores the exact prior values", () => {

@@ -610,6 +610,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
         "--enable-quic",
       ]);
     } else {
+      let proxyConnectHost = activeProxy.host;
       if (activeProxy.username && isSocks) {
         const socksBridge = await startAuthenticatedSocksBridge(activeProxy);
         pendingProxyBridge = socksBridge;
@@ -621,10 +622,14 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
           username: undefined,
           password: undefined,
         };
+        proxyConnectHost = socksBridge.host;
       }
       args = dedupeChromeArgs([
         ...args,
         `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
+        ...(activeProxy.type === "socks5h"
+          ? [`--host-resolver-rules=${buildRemoteDnsRule(proxyConnectHost, getLaunchArgValue(args, "--host-resolver-rules"))}`]
+          : []),
         "--disable-quic",
       ]);
     }
@@ -1000,6 +1005,22 @@ function mergeCommaSeparatedValue(value: string, existing: string | null): strin
     .map((entry) => entry.trim())
     .filter(Boolean);
   return [...new Set(entries)].join(",");
+}
+
+/**
+ * Build the --host-resolver-rules value that makes Chromium resolve target
+ * hostnames through a SOCKS5 proxy (socks5h semantics) instead of locally.
+ * Chromium always resolves DNS locally for --proxy-server=socks5://; mapping
+ * every hostname to ~NOTFOUND forces it to hand the hostname to the proxy,
+ * which resolves at egress. The proxy connect host (and localhost) must stay
+ * resolvable, so they are excluded. Existing rules (e.g. a MASQUE bridge map)
+ * are preserved and merged.
+ */
+export function buildRemoteDnsRule(proxyConnectHost: string, existing: string | null): string {
+  const host = String(proxyConnectHost || "").trim();
+  const excludes = Array.from(new Set(["localhost", "127.0.0.1", host].filter((v) => v && v !== "*")));
+  const rule = `MAP * ~NOTFOUND${excludes.map((entry) => `, EXCLUDE ${entry}`).join("")}`;
+  return mergeCommaSeparatedValue(rule, existing);
 }
 
 const THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE = "ThrottleMainFrameTo60Hz";
