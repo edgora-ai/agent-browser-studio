@@ -234,6 +234,8 @@ Main resources:
 | GET/POST | `/api/drm/status` `/api/drm/cdm-path` `/api/drm/ensure` | Widevine/DRM discovery + managed CDM staging |
 | GET | `/api/team` | Team workspace RBAC status (members, roles, enforcement) |
 | POST/DELETE/PUT | `/api/team/members{/deviceId}[/role]` | Add / remove / re-role workspace members |
+| GET | `/api/updates/status` | Release store status (active / pinned / installed / history) |
+| POST | `/api/updates/check` `/install` `/activate` `/rollback` | Check manifest, stage, pin, or roll back a release |
 
 Example:
 

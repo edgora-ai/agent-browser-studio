@@ -89,7 +89,7 @@ Status meanings:
 These do not prove browser stealth, but they are required for feature parity of
 the complete product rather than only the engine:
 
-- version-aware automatic updates with rollback;
+- version-aware automatic updates with rollback — ✅ verified (see the Release store & rollback table below);
 - Docker/server mode and Python/JavaScript/.NET integration surfaces — ✅ verified (see the Server mode & integration surfaces table below);
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
 - Windows and Linux production verification;
@@ -117,6 +117,16 @@ the complete product rather than only the engine:
 | Docker deployment | verified | Ship a repeatable controller image with the proxy bridge and Node 22 runtime | `Dockerfile` (golang:1.25 build stage + node:22 runtime with apt shared-lib layer) + `docker-compose.yml` (data volume, 26582 port); Linux engine binary remains the platform-limited piece tracked under signed multi-platform distribution |
 | Python integration surface | verified | Zero-dependency REST client for profiles, proxies, DRM, team RBAC, runs and jobs | `sdk/python/agent_browser_client.py` stdlib-only client exercised against a live headless instance (health → create → launch cdpPort → status → stop → team) |
 | OpenAPI discovery for JS/.NET | verified | Any consumer can generate a client from the running controller | `GET /openapi.json` served on the loopback REST API, documented for JavaScript/.NET consumers |
+
+### Release store & rollback — verified
+
+| Capability | Current state | Target | Completion evidence |
+|---|---|---|---|
+| Version-aware update check | verified | Compare a release manifest against the running version and surface only installable releases | manifest parse/validate (product match, numeric version sort, sha256 format, duplicate rejection), `minSupported` gating, http(s)/file/local manifest sources; unit + REST e2e (`j69-updates`) |
+| Staged install with integrity | verified | Download + sha256-verify + atomically stage a payload without touching the active runtime | payload archives verified against the declared sha256 (mismatch rejected), zip extracted with path-traversal/size caps via the shared zip-writer, directory payloads copied; payload lands under `<appData>/updates/releases/<version>/payload` |
+| Version pin + manual rollback | verified | Keep the previous known-good release and switch back on demand | `activateVersion` pins the active version and remembers the previous; `rollback` restores it; both audited and persisted (`j69` + `update-manager` unit suite) |
+| Crash-loop auto-rollback | verified | After repeated abnormal starts, fall back to the previous known-good automatically | `noteAppCrashed`/`noteAppStarted`/`markAppHealthy` with a 3-strike threshold and 10-min cooldown to prevent flip-flopping; unit-tested |
+| Release retention & audit | verified | Keep active + previous + newest staged, record every transition | retention prunes to 3 payloads; install/activate/rollback/auto-rollback recorded in the audit log and persisted history |
 
 CloakLite already has product capabilities that a browser wrapper alone does
 not provide: local profile management, encrypted credentials, approval gates,

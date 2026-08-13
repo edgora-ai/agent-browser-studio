@@ -514,3 +514,23 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **Python SDK**：`sdk/python/agent_browser_client.py` 零依赖（stdlib-only）REST client——health/version/openapi、profiles（建/删/启停/status）、proxies、team RBAC、DRM、automation rules、runs/jobs；`example.py` + `README.md`
 
 **验证**：e2e `tests/e2e/j68-server-mode.test.ts` 6 例全绿（health mode=headless、REST 建 profile 201、launch 返回 cdpPort、status running、stop、`windows().length===0` 无 GUI）；回归 j54/j32/j67/j66/j1 共 39 例通过；全量单测 45 文件 551 例全绿；tsc 干净。Python SDK 已对真实 headless 实例实测（health → create → launch cdpPort 63981 → status → stop → team）。
+
+### Slice 43 — 版本感知自动更新 + 回滚（P1，产品级缺口收口）— ✅
+
+**范围**：ALIGNMENT_MATRIX 产品级能力「version-aware automatic updates with rollback」——补上控制器运行时的版本化发布存储：检查更新清单、下载+sha256 校验+暂存新版本、激活 pin、手动回滚、以及崩溃循环自动回滚。复用与独立 Chromium 版本存储（native-chromium-manager）一致的「保留 known-good + 版本 pin」模式。
+
+**核心服务 `services/update-manager.ts`**：
+- 清单解析/校验（product 匹配、版本号归一排序、sha256 格式、重复版本拒绝）+ 语义化点分版本比较（1.10.0 > 1.9.0）
+- `checkForUpdates()` — 支持 http(s):// / file:// / 本地路径清单，按「比当前新 + minSupported 门槛」过滤可用版本
+- `installRelease()` — 下载 zip（sha256 校验）或拷贝目录 payload 到 `<appData>/updates/releases/<version>/payload`，先 staging 后原子换入，路径穿越/大小上限防护（复用 zip-writer 安全解压）
+- `activateVersion()` / `rollback()` — 版本 pin + 保留上一 known-good；`noteAppStarted()`/`noteAppCrashed()`/`markAppHealthy()` 崩溃循环检测（连续 3 次异常退出自动回滚，10 分钟冷却防反复横跳）
+- 保留最近 3 个 release（active + previous + 最新 staged），每次动作写 audit + 持久化 history
+
+**接入面**：
+- IPC `updates:*`（status/check/install/activate/rollback）+ preload 暴露 `api.updates`
+- REST/OpenAPI：`GET /api/updates/status`、`POST /api/updates/check|install|activate|rollback`
+- UI：Browser Engine 标签页新增「🔄 App Updates」卡片（当前/活动/上一 known-good/通道/已安装/可用更新/历史 + Stage/Activate/Roll back 按钮），中英 i18n
+- `index.ts` 启动钩子：启动时 `noteAppStarted()`（自动回滚）+ 60s 后 `markAppHealthy()` + 异常退出计数
+- e2e helper `launchHeadlessApp` 支持 env/args 注入
+
+**验证**：unit `tests/unit/update-manager.test.ts` 14 例（版本比较、清单校验、check 可用性/minSupported/缺清单、目录与 zip payload 安装、sha256 拒绝、activate pin、手动回滚、崩溃循环自动回滚、markAppHealthy、audit+history）；e2e `tests/e2e/j69-updates.test.ts` 6 例（REST status/check/install/activate/rollback/history + payload 落盘）；全量单测 46 文件 565 例全绿；回归 j68/j54 16 例 + j67 8 例 + j61 3 例全绿；tsc/build 干净。
