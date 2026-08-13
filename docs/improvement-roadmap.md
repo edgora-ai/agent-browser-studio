@@ -912,6 +912,30 @@ Python SDK 侧同步补上 sdk/python/example_agent.py（同一套 agent 面全�
 headless + mock LLM 上实测通过；sdk/python/README.md 补充 agent 面与示例说明。
 
 **后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+## Slice 64 — MCP 补 skills/审批/db 表工具 + Python SDK e2e 闭环
+
+**目标**：RoxyBrowser 的 AI Agent 2.0 主打 Skills 编排；此前 MCP 面没有 skills / approvals / db_tables 工具——
+外部 AI 走 MCP 时看不到技能、也没法处理审批。本轮补上，并顺手把 Slice 62 遗留的 Python SDK e2e 缺口关掉。
+
+**MCP（src/main/services/mcp-server.ts）新增 6 个工具**：
+- agent_browser_skills_list（可选 filter）/ agent_browser_skill_get / agent_browser_skill_install
+- agent_browser_approvals_list / agent_browser_approval_resolve（decision: once/always/deny，错误路径校验）
+- agent_browser_db_tables（agent SQLite 表 + 行数）
+- 复用 skill-repository / approval-gate / agent-db 服务层，无新逻辑；npx tsc --noEmit 通过
+
+**SDK 补齐 skills（对齐 REST /api/skills）**：
+- Python：list_skills(filter_text) / install_skill(skill_id) / delete_skill(skill_id)
+- JS：listSkills(filter) / installSkill(skillId) / deleteSkill(skillId)
+- 两处 node --check / py_compile 通过，README 同步
+
+**验证**：
+- e2e tests/e2e/j86-mcp-agent-skills.test.ts 新增 5 例：tools/list 含 6 个新工具；skills list/get/install（含 404 路径）；db_tables + 经 passthrough 建表后可见；真实审批闭环——destructive db_exec 经 MCP 触发审批挂起 → approvals_list 出现 db-destroy 请求 → approval_resolve deny → db_exec 返回 skipped → approvals 清空；console 无意外错误
+- e2e tests/e2e/j87-python-sdk-agent.test.ts 新增 1 例：用真实 Python SDK 跑通 health → LLM 配置 → chat-simple → 会话内 tool-calling chat（set_var + run trace done）→ 会话读写删 → skills list/install/delete → db 建表读表 → approvals（闭环 Slice 62 遗留的 Python e2e 缺口）
+- 回归：全量单测 634 例全绿；全量 e2e 79 passed / 4 skipped（83 文件，394 passed）
+
+**后续项**：agent/集成面已覆盖 IPC / REST / MCP / Python SDK / JS SDK，且 MCP 现在能编排 skills 与审批。
+引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+
 
 **工具链修正（同 slice）**：patches/chromium/build-linux.sh 与 build-windows.sh 在 set -euo pipefail 下
 把 $1/$2 赋给变量后再判空——无参调用（文档宣称的默认 x64 / ./chromium-src-150）会直接 `unbound variable` 退出。
