@@ -16,6 +16,7 @@ import {
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
+import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled } from "./team.js";
 import { setDrmCdmPath } from "./config-manager.js";
 import { getAccounts } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
@@ -407,6 +408,66 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "POST" && p === "/api/drm/ensure") {
     const cdm = ensureManagedCdm();
     return { status: 200, body: { success: true, staged: !!cdm, status: getDrmStatus() } };
+  }
+
+
+  // ── Team workspace RBAC ──
+  if (method === "GET" && p === "/api/team") {
+    return { status: 200, body: { success: true, ...teamStatus() } };
+  }
+  if (method === "POST" && p === "/api/team/init") {
+    try {
+      const body = await readJson(req);
+      const team = initTeam(body?.name);
+      recordAudit({ category: "team", action: "team-init", target: team.ownerDeviceId, actor: "api" });
+      return { status: 200, body: { success: true, team } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/team/members") {
+    try {
+      const body = await readJson(req);
+      const r = addMember(body?.deviceId, body?.name, body?.role);
+      if (!r.ok) return { status: 403, body: { error: r.error } };
+      recordAudit({ category: "team", action: "member-add", target: body?.deviceId, actor: "api" });
+      return { status: 200, body: { success: true, team: r.team } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  const mTeamMember = p.match(/^\/api\/team\/members\/([^/]+)$/);
+  if (mTeamMember && method === "DELETE") {
+    try {
+      const r = removeMember(decodeURIComponent(mTeamMember[1]));
+      if (!r.ok) return { status: 403, body: { error: r.error } };
+      recordAudit({ category: "team", action: "member-remove", target: decodeURIComponent(mTeamMember[1]), actor: "api" });
+      return { status: 200, body: { success: true, team: r.team } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  const mTeamRole = p.match(/^\/api\/team\/members\/([^/]+)\/role$/);
+  if (mTeamRole && method === "PUT") {
+    try {
+      const body = await readJson(req);
+      const r = setMemberRole(decodeURIComponent(mTeamRole[1]), body?.role);
+      if (!r.ok) return { status: 403, body: { error: r.error } };
+      recordAudit({ category: "team", action: "member-role", target: decodeURIComponent(mTeamRole[1]), actor: "api" });
+      return { status: 200, body: { success: true, team: r.team } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/team/rename") {
+    try {
+      const body = await readJson(req);
+      const r = renameWorkspace(body?.name);
+      if (!r.ok) return { status: 403, body: { error: r.error } };
+      return { status: 200, body: { success: true, team: r.team } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
   }
   const mProxy = p.match(/^\/api\/proxies\/([^/]+)$/);
   const mProxyDefault = p.match(/^\/api\/proxies\/([^/]+)\/default$/);
@@ -800,6 +861,12 @@ function buildOpenApi(): any {
         },
       },
       "/api/drm/ensure": { post: { summary: "Stage the managed Widevine CDM copy", responses: ok("Staged status") } },
+      "/api/team": { get: { summary: "Team workspace RBAC status (members, roles, enforcement)", responses: ok("Team status") } },
+      "/api/team/init": { post: { summary: "Initialize the team workspace (local device becomes owner)", requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" } } } } } }, responses: ok("Team manifest") } },
+      "/api/team/members": { post: { summary: "Add a workspace member", requestBody: { content: { "application/json": { schema: { type: "object", required: ["deviceId", "role"], properties: { deviceId: { type: "string" }, name: { type: "string" }, role: { type: "string", enum: ["owner", "admin", "member", "viewer"] } } } } } }, responses: ok("Updated team manifest") } },
+      "/api/team/members/{deviceId}": { parameters: [{ name: "deviceId", in: "path", required: true, schema: { type: "string" } }], delete: { summary: "Remove a workspace member", responses: ok("Updated team manifest") } },
+      "/api/team/members/{deviceId}/role": { parameters: [{ name: "deviceId", in: "path", required: true, schema: { type: "string" } }], put: { summary: "Change a member role", requestBody: { content: { "application/json": { schema: { type: "object", required: ["role"], properties: { role: { type: "string", enum: ["owner", "admin", "member", "viewer"] } } } } } }, responses: ok("Updated team manifest") } },
+      "/api/team/rename": { post: { summary: "Rename the workspace (owner only)", requestBody: { content: { "application/json": { schema: { type: "object", required: ["name"], properties: { name: { type: "string" } } } } } }, responses: ok("Updated team manifest") } },
       "/api/proxies/{name}": {
         parameters: [nameParam],
         get: { summary: "Proxy detail", responses: ok("Proxy info") },

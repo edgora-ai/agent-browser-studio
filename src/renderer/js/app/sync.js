@@ -287,10 +287,174 @@
       var sk = document.getElementById('sync-sk-input');
       if (!sk.value) sk.placeholder = status.configured ? 'saved' : '';
       agentBrowser.loadSyncPreview();
+      agentBrowser.loadTeamPanel();
     }).catch(function(e) {
       toast((window.i18n ? window.i18n.t('toast.sync.load-failed', 'Failed to load sync config') : 'Failed to load sync config') + ': ' + e.message, 'error');
       agentBrowser.loadSyncPreview();
     });
   }
   agentBrowser.loadSyncConfig = loadSyncConfig;
+
+  // ══════ Team Workspace (RBAC) ══════
+  var ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
+  var ROLE_ORDER_LIST = ['viewer', 'member', 'admin', 'owner'];
+
+  function roleBadge(role) {
+    var color = role === 'owner' ? 'var(--success)' : role === 'admin' ? 'var(--primary)' : role === 'member' ? 'var(--warning)' : 'var(--text-muted)';
+    return '<span class="status-badge" style="color:' + color + ';border:1px solid ' + color + ';">' + (ROLE_LABEL[role] || role) + '</span>';
+  }
+
+  function shortId(id) {
+    if (!id) return '';
+    return id.length > 18 ? id.slice(0, 10) + '…' + id.slice(-6) : id;
+  }
+
+  function renderTeamPanel(status) {
+    var panel = document.getElementById('team-panel');
+    var badge = document.getElementById('team-local-badge');
+    if (!panel) return;
+    status = status || {};
+    var team = status.team || null;
+    var local = status.local || {};
+    var me = local.role || 'owner';
+    var canManage = me === 'owner' || me === 'admin';
+    var isOwner = me === 'owner';
+
+    if (badge) {
+      badge.style.display = 'inline-block';
+      badge.textContent = local.name + ' · ' + (ROLE_LABEL[me] || me);
+    }
+
+    if (!team) {
+      panel.innerHTML =
+        '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">No workspace initialized. Initialize one to manage member roles (owner / admin / member / viewer) and enforce read-only viewers on sync push and profile changes.</p>' +
+        '<div class="form-row"><label>Workspace name</label><input id="team-workspace-name" placeholder="My Workspace"></div>' +
+        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamInit" data-i18n="team.init">Initialize Workspace</button></div>';
+      return;
+    }
+
+    var rows = (team.members || []).map(function(m) {
+      var isMe = m.deviceId === local.deviceId;
+      var roleOptions = ROLE_ORDER_LIST.map(function(r) {
+        var disabled = '';
+        if (me !== 'owner' && (r === 'owner' || r === 'admin')) disabled = ' disabled';
+        if (me !== 'owner' && (m.role === 'owner' || m.role === 'admin')) disabled = ' disabled';
+        if (m.deviceId === team.ownerDeviceId) disabled = ' disabled';
+        return '<option value="' + r + '"' + (m.role === r ? ' selected' : '') + disabled + '>' + ROLE_LABEL[r] + '</option>';
+      }).join('');
+      var actions = '';
+      if (canManage && m.deviceId !== team.ownerDeviceId && !isMe) {
+        actions = '<select class="team-role-select" data-device-id="' + escAttr(m.deviceId) + '" style="font-size:11px;height:24px;">' + roleOptions + '</select> ' +
+          '<button class="btn btn-xs btn-danger" data-action="team-remove" data-device-id="' + escAttr(m.deviceId) + '">' + (window.i18n && window.i18n.t ? window.i18n.t('team.remove', 'Remove') : 'Remove') + '</button>';
+      }
+      var ownerMark = m.deviceId === team.ownerDeviceId ? ' 👑' : '';
+      return '<div class="profile-card" style="padding:8px;margin:6px 0;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color:var(--primary);">(this device)</em>' : '') + ownerMark + '</span>' +
+        '<div style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">' + esc(shortId(m.deviceId)) + '</div></div>' +
+        '<div style="display:flex;align-items:center;gap:6px;">' + roleBadge(m.role) + actions + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    var addForm = '';
+    if (canManage) {
+      addForm =
+        '<div class="form-row"><label>Device ID</label><input id="team-add-device-id" placeholder="device-id-from-another-install"></div>' +
+        '<div class="form-row"><label>Name</label><input id="team-add-name" placeholder="Optional display name"></div>' +
+        '<div class="form-row"><label>Role</label><select id="team-add-role">' +
+          ROLE_ORDER_LIST.map(function(r) {
+            var disabled = (!isOwner && (r === 'owner' || r === 'admin')) ? ' disabled' : '';
+            return '<option value="' + r + '"' + disabled + '>' + ROLE_LABEL[r] + '</option>';
+          }).join('') +
+        '</select></div>' +
+        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamAddMember" data-i18n="team.add-member">Add Member</button></div>';
+    }
+
+    var renameControl = isOwner
+      ? '<div class="form-row"><label>Rename workspace</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename" data-i18n="team.rename">Rename</button></div>'
+      : '';
+    var enableControl = canManage
+      ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="team-enabled"' + (team.enabled !== false ? ' checked' : '') + '> Enforce team RBAC (viewers read-only, member+ push/delete, admin+ force push)</label>'
+      : '';
+
+    panel.innerHTML =
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Workspace <strong>' + esc(team.name) + '</strong> · ' + (team.members || []).length + ' member(s) · enforcement ' + (team.enabled !== false ? 'on' : 'off') + '</div>' +
+      renameControl +
+      '<div style="margin:8px 0;">' + rows + '</div>' +
+      addForm +
+      enableControl;
+
+    // Event delegation for member actions.
+    panel.onclick = function (event) {
+      var target = event.target.closest('[data-action="team-remove"]');
+      if (!target || !panel.contains(target)) return;
+      var deviceId = target.dataset.deviceId;
+      if (!deviceId) return;
+      if (!window.confirm('Remove this member from the workspace?')) return;
+      api.team.removeMember(deviceId).then(function(r) {
+        if (!r || !r.success) { toast((r && r.error) || 'Remove failed', 'error'); return; }
+        toast('Member removed', 'success');
+        loadTeamPanel();
+      }).catch(function(e) { toast(e.message, 'error'); });
+    };
+    panel.onchange = function (event) {
+      var sel = event.target.closest('.team-role-select');
+      if (!sel || !panel.contains(sel)) return;
+      api.team.setRole(sel.dataset.deviceId, sel.value).then(function(r) {
+        if (!r || !r.success) { toast((r && r.error) || 'Role update failed', 'error'); loadTeamPanel(); return; }
+        toast('Role updated', 'success');
+        loadTeamPanel();
+      }).catch(function(e) { toast(e.message, 'error'); });
+    };
+    var enabledBox = document.getElementById('team-enabled');
+    if (enabledBox) {
+      enabledBox.onchange = function () {
+        api.team.setEnabled(enabledBox.checked).then(function(r) {
+          if (!r || !r.success) { toast((r && r.error) || 'Update failed', 'error'); }
+          loadTeamPanel();
+        }).catch(function(e) { toast(e.message, 'error'); });
+      };
+    }
+  }
+
+  function loadTeamPanel() {
+    api.team.status().then(function(status) {
+      renderTeamPanel(status);
+    }).catch(function(e) {
+      var panel = document.getElementById('team-panel');
+      if (panel) panel.innerHTML = '<div class="empty-state">Team panel failed: ' + esc(e.message || String(e)) + '</div>';
+    });
+  }
+  agentBrowser.loadTeamPanel = loadTeamPanel;
+
+  agentBrowser.teamInit = function() {
+    var name = (document.getElementById('team-workspace-name') || {}).value || '';
+    api.team.init(name).then(function(r) {
+      if (!r || !r.success) { toast((r && r.error) || 'Init failed', 'error'); return; }
+      toast('Workspace initialized', 'success');
+      loadTeamPanel();
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  agentBrowser.teamAddMember = function() {
+    var deviceId = (document.getElementById('team-add-device-id') || {}).value || '';
+    var name = (document.getElementById('team-add-name') || {}).value || '';
+    var role = (document.getElementById('team-add-role') || {}).value || 'member';
+    if (!deviceId) { toast('Device ID is required', 'error'); return; }
+    api.team.addMember(deviceId, name, role).then(function(r) {
+      if (!r || !r.success) { toast((r && r.error) || 'Add failed', 'error'); return; }
+      toast('Member added', 'success');
+      loadTeamPanel();
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  agentBrowser.teamRename = function() {
+    var name = (document.getElementById('team-workspace-rename') || {}).value || '';
+    api.team.rename(name).then(function(r) {
+      if (!r || !r.success) { toast((r && r.error) || 'Rename failed', 'error'); return; }
+      toast('Workspace renamed', 'success');
+      loadTeamPanel();
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
 })();

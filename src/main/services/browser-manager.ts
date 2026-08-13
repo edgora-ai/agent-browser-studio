@@ -29,6 +29,7 @@ import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
 import { buildChromiumProxyUrl, proxyDetector } from "./proxy-detector.js";
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
+import { requireProfileMutation } from "./team.js";
 import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
@@ -235,6 +236,9 @@ export function createBrowserProfile(opts: {
   tags?: string[];
   drm?: boolean;
 }): { dirId: string } {
+  // Team RBAC: viewers are read-only.
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
   const dirId = PROFILE_ID_PREFIX + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 8);
 
   const cfg = structuredClone(getConfig());
@@ -283,6 +287,10 @@ export function createBrowserProfile(opts: {
 }
 
 export function deleteBrowserProfile(dirId: string): boolean {
+  // Team RBAC: viewers are read-only.
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
+
   validateDirId(dirId);
   const st = statusBrowser(dirId);
   if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");

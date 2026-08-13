@@ -61,6 +61,15 @@ const api = {
     previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
     configure: (config) => ipcRenderer.invoke("sync:configure", config),
   },
+  team: {
+    status: () => ipcRenderer.invoke("team:status"),
+    init: (name) => ipcRenderer.invoke("team:init", { name }),
+    addMember: (deviceId, name, role) => ipcRenderer.invoke("team:add-member", { deviceId, name, role }),
+    removeMember: (deviceId) => ipcRenderer.invoke("team:remove-member", { deviceId }),
+    setRole: (deviceId, role) => ipcRenderer.invoke("team:set-role", { deviceId, role }),
+    rename: (name) => ipcRenderer.invoke("team:rename", { name }),
+    setEnabled: (enabled) => ipcRenderer.invoke("team:set-enabled", { enabled }),
+  },
   app: {
     paths: () => ipcRenderer.invoke("app:paths"),
     reloadConfig: () => ipcRenderer.invoke("app:reload-config"),

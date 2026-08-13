@@ -9,6 +9,7 @@ import { cdpCookieService } from "./cdp-cookie-service.js";
 import { listExtensions } from "./launch-args.js";
 import { acquireRestoreLock, isRestoreLocked } from "./profile-restore-lock.js";
 import { decryptSecretOr } from "./secrets.js";
+import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush } from "./team.js";
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { listExtensionRepository, getExtensionRepoEntryDir, restoreSyncedExtensionPackage } from "./extension-repository.js";
@@ -116,6 +117,12 @@ export const syncService = {
     const sync = getSyncConfig();
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
       return { success: false, message: "Sync not enabled or configured" };
+    }
+
+    // Team workspace RBAC: viewers are read-only; force push needs admin+.
+    const pushGate = force ? requireForcePush() : requireSyncPush();
+    if (!pushGate.ok) {
+      return { success: false, message: "Push blocked by team policy: " + pushGate.error };
     }
 
     try {
@@ -413,6 +420,7 @@ export const syncService = {
         accounts: mergedAccounts,
         sync: latestConfig.sync,
         browserProfiles: mergedProfiles,
+        team: mergeTeam((latestConfig as any).team, (remoteConfig as any).team),
       } as MgmtConfig;
 
       markRemoteProfilesSynced(merged, remoteConfig, pullTimestamp, {
@@ -1281,6 +1289,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
     browserProfiles: profiles,
     extensionRepository: extensionRepo,
     accounts,
+    team: sanitizeTeam((config as any).team),
   } as SyncSafeConfig;
 }
 

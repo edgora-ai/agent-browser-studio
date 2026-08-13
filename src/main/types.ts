@@ -218,6 +218,29 @@ export interface SyncConfig {
   secretKey: string;
 }
 
+export type TeamRole = "owner" | "admin" | "member" | "viewer";
+
+export interface TeamMember {
+  /** deviceId of the member device. */
+  deviceId: string;
+  /** Human-readable device name (deviceName). */
+  name: string;
+  role: TeamRole;
+  addedAt: number;
+}
+
+export interface TeamConfig {
+  /** Workspace display name. */
+  name: string;
+  /** deviceId of the workspace owner. */
+  ownerDeviceId: string;
+  /** Member roster (the owner is always the first entry). */
+  members: TeamMember[];
+  /** When false, team enforcement is dormant. Default true once initialized. */
+  enabled?: boolean;
+  updatedAt: number;
+}
+
 export interface LlmConfig {
   provider: "openai" | "claude" | "custom";
   apiKey: string;
@@ -263,6 +286,8 @@ export interface MgmtConfig {
   blockOnEnvironmentRisk?: boolean;
   /** Widevine/DRM discovery settings (managed CDM path override). */
   drm?: DrmConfig;
+  /** Team workspace RBAC (members, roles, enforcement). */
+  team?: TeamConfig;
   /** Max automation jobs running concurrently. Default 3. */
   maxConcurrentJobs?: number;
 }

@@ -14,6 +14,7 @@ import { registerAgentHandlers } from "./ipc/agent.js";
 import { registerMcpHandlers } from "./ipc/mcp.js";
 import { registerApiHandlers } from "./ipc/api.js";
 import { registerBrowserHandlers } from "./ipc/browser.js";
+import { registerTeamHandlers } from "./ipc/team.js";
 import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
@@ -176,6 +177,7 @@ function registerAllHandlers(): void {
   registerMcpHandlers();
   registerApiHandlers();
   registerBrowserHandlers();
+  registerTeamHandlers();
   registerAutomationHandlers();
   registerAuditHandlers();
   registerDataHandlers();
