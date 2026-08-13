@@ -93,18 +93,28 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
           if (!out.ok) throw new Error(`agent error: ${out.error} (run ${out.runId})`);
           return `agent done (run ${out.runId})`;
         }
-        // Batch mode: same prompt on every profile sequentially, one scoped run per profile.
-        // Per-profile failures are recorded as error runs; the job keeps going so the rest
-        // of the batch still completes, then the summary reports N ok / M failed.
-        const results: AgentTaskOutcome[] = [];
-        for (const dirId of dirIds) {
-          assertActionNotAborted(context.signal);
-          results.push(await runAgentTaskOnProfile(rule, config, dirId, a, context));
-          assertActionNotAborted(context.signal);
-        }
-        const okCount = results.filter((x) => x.ok).length;
-        const failed = results.filter((x) => !x.ok);
-        const runIds = results.map((x) => x.runId).filter(Boolean).join(",");
+        // Batch mode: same prompt on every profile, one scoped run per profile, with
+        // optional parallel workers (concurrency; default 1 = sequential). Per-profile
+        // failures are recorded as error runs; the job keeps going so the rest of the
+        // batch still completes, then the summary reports N ok / M failed.
+        const concurrency = Math.max(1, Math.min(a.concurrency ?? 1, 16));
+        const results: (AgentTaskOutcome | undefined)[] = new Array(dirIds.length);
+        let nextIdx = 0;
+        const workerCount = Math.min(concurrency, dirIds.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+          while (true) {
+            if (context.signal?.aborted) return;
+            const idx = nextIdx++;
+            if (idx >= dirIds.length) return;
+            results[idx] = await runAgentTaskOnProfile(rule, config, dirIds[idx], a, context);
+          }
+        });
+        await Promise.all(workers);
+        assertActionNotAborted(context.signal);
+        const outcomes = results.filter((x): x is AgentTaskOutcome => Boolean(x));
+        const okCount = outcomes.filter((x) => x.ok).length;
+        const failed = outcomes.filter((x) => !x.ok);
+        const runIds = outcomes.map((x) => x.runId).filter(Boolean).join(",");
         if (failed.length > 0) {
           return `agent batch: ${okCount} ok / ${failed.length} failed (runs ${runIds}; first error: ${failed[0].error})`;
         }

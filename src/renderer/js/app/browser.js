@@ -66,6 +66,49 @@
     }).catch(function (e) {
       card.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
+    loadLaunchGates();
+    wireLaunchGateEvents();
+  }
+
+  function gateEl(id) { return document.getElementById(id); }
+  function currentGates() {
+    return {
+      blockOnConsistencyConflict: gateEl("gate-consistency") ? gateEl("gate-consistency").checked : false,
+      blockOnFingerprintDrift: gateEl("gate-drift") ? gateEl("gate-drift").checked : true,
+      blockOnEnvironmentRisk: gateEl("gate-env-risk") ? gateEl("gate-env-risk").checked : false,
+    };
+  }
+  function loadLaunchGates() {
+    if (!api.settings || !api.settings.launchGates) return;
+    api.settings.launchGates().then(function (g) {
+      if (!g) return;
+      if (gateEl("gate-consistency")) gateEl("gate-consistency").checked = g.blockOnConsistencyConflict === true;
+      if (gateEl("gate-drift")) gateEl("gate-drift").checked = g.blockOnFingerprintDrift !== false;
+      if (gateEl("gate-env-risk")) gateEl("gate-env-risk").checked = g.blockOnEnvironmentRisk === true;
+    }).catch(function () { /* ignore */ });
+  }
+  function saveGates() {
+    if (!api.settings || !api.settings.setLaunchGates) return;
+    var gates = currentGates();
+    api.settings.setLaunchGates(gates).then(function (r) {
+      var statusEl = gateEl("gate-status");
+      if (!statusEl) return;
+      if (r && r.success === false) {
+        statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(r.error || "save failed") + '</span>';
+      } else {
+        statusEl.innerHTML = '<span style="color:var(--success);">' + (window.i18n ? window.i18n.t("browser.gate.saved", "saved") : "saved") + '</span>';
+        setTimeout(function () { statusEl.textContent = ""; }, 2500);
+      }
+    }).catch(function () { /* ignore */ });
+  }
+  function wireLaunchGateEvents() {
+    ["gate-consistency", "gate-drift", "gate-env-risk"].forEach(function (id) {
+      var el = gateEl(id);
+      if (el && !el.dataset.gateWired) {
+        el.dataset.gateWired = "1";
+        el.onchange = function () { saveGates(); };
+      }
+    });
   }
 
   function runBrowserBinaryAction(loadingText, action, doneText) {

@@ -1408,6 +1408,7 @@ function normalizeAutomationRules(raw: any): AutomationRule[] {
       }
       if (ids.length) action.profileDirIds = ids;
     }
+    if (Number.isInteger(a.concurrency)) action.concurrency = Math.min(Math.max(a.concurrency, 1), 16);
     if (typeof a.templateId === "string") action.templateId = sanitizeOptionalText(a.templateId, 80) || undefined;
     if (typeof a.agentPrompt === "string") action.agentPrompt = a.agentPrompt.slice(0, 8000);
     if (typeof a.jsCode === "string") action.jsCode = a.jsCode.slice(0, 50000);

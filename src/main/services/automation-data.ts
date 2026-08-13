@@ -44,6 +44,7 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
       }
       if (ids.length) action.profileDirIds = ids;
     }
+    if (Number.isInteger(a.concurrency)) action.concurrency = Math.min(Math.max(a.concurrency, 1), 16);
     if (typeof a.templateId === "string") action.templateId = a.templateId.slice(0, 80);
     if (typeof a.agentPrompt === "string") action.agentPrompt = a.agentPrompt.slice(0, 8000);
     if (typeof a.jsCode === "string") action.jsCode = a.jsCode.slice(0, 50000);

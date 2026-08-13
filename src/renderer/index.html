@@ -172,6 +172,14 @@
  </div>
  <div id="agent-browser-binary-action-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
  </div>
+ <div class="card">
+ <h3 data-i18n="browser.launch-gates">🛡 Launch Safety Gates</h3>
+ <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="browser.launch-gates-hint">Before each profile launch, safety checks run and can refuse the launch when high-risk conditions are detected. Toggles save automatically.</p>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-consistency"> <span data-i18n="browser.gate.consistency">Block on consistency conflict</span></label>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-drift"> <span data-i18n="browser.gate.drift">Block on fingerprint drift</span></label>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-env-risk"> <span data-i18n="browser.gate.env">Block on environment risk (DNS leak / CN fonts / proxy DNS)</span></label>
+ <div id="gate-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
+ </div>
  </section>
 
  <!-- ══════ Extensions Tab ══════ -->
@@ -833,6 +841,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div id="auto-action-profile-row" class="form-row"><label data-i18n="auto-editor.profile-label">Profile</label><select id="auto-action-profile"><option value="" data-i18n="auto-editor.profile-select">(select)</option></select></div>
  <div id="auto-action-batch-row" class="form-row" style="display:none;"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="auto-action-batch"> <span data-i18n="auto-editor.batch-label">Batch (multiple profiles)</span></label><div style="font-size:10px;color:var(--text-muted);margin-top:2px;" data-i18n="auto-editor.batch-hint">Run the same prompt on every selected profile — one run each, scoped to that profile</div></div>
  <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div style="font-size:10px;color:var(--text-muted);margin-top:2px;">Ctrl/Cmd+click to select multiple</div></div>
+ <div id="auto-action-concurrency-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.concurrency-label">Concurrency</label><input id="auto-action-concurrency" type="number" min="1" max="16" value="1" style="width:80px;"><div style="font-size:10px;color:var(--text-muted);margin-top:2px;" data-i18n="auto-editor.concurrency-hint">Profiles launched in parallel (default 1 = sequential)</div></div>
  <div id="auto-action-template-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.template-label">Task Template</label><select id="auto-action-template"><option value="" data-i18n="auto.no-template">(no template)</option></select><div id="auto-template-hint" style="font-size:10px;color:var(--text-muted);margin-top:4px;"></div></div>
  <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label>Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
  <div id="auto-action-js-row" class="form-row" style="display:none;"><label>JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>

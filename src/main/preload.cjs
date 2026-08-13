@@ -58,6 +58,8 @@ const api = {
     getLanguage: () => ipcRenderer.invoke("app:get-language"),
   },
   settings: {
+    launchGates: () => ipcRenderer.invoke("settings:launch-gates"),
+    setLaunchGates: (gates) => ipcRenderer.invoke("settings:launch-gates:set", gates),
     extensions: (dirId) => ipcRenderer.invoke("settings:extensions", dirId),
     extensionRepository: (filter) => ipcRenderer.invoke("settings:extension-repository", filter),
     addRepositoryExtension: (extId, options) => ipcRenderer.invoke("settings:add-repository-extension", { extId, ...(options || {}) }),

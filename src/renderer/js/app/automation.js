@@ -125,6 +125,7 @@
     document.getElementById('auto-action-profile-row').style.display = needsSingle ? '' : 'none';
     document.getElementById('auto-action-batch-row').style.display = isAgent ? '' : 'none';
     document.getElementById('auto-action-profiles-row').style.display = (isAgent && batch) ? '' : 'none';
+    document.getElementById('auto-action-concurrency-row').style.display = (isAgent && batch) ? '' : 'none';
     document.getElementById('auto-action-template-row').style.display = isAgent ? '' : 'none';
     document.getElementById('auto-action-prompt-row').style.display = isAgent ? '' : 'none';
     document.getElementById('auto-action-js-row').style.display = type === 'custom-js' ? '' : 'none';
@@ -335,6 +336,7 @@
     document.getElementById('auto-action-batch').checked = batchMode;
     fillProfileSelect('auto-action-profile', rule && rule.action.profileDirId);
     fillProfileMultiSelect('auto-action-profiles', rule && rule.action.profileDirIds);
+    document.getElementById('auto-action-concurrency').value = (rule && rule.action.concurrency) || 1;
     fillTemplateSelect();
     document.getElementById('auto-action-template').value = (rule && rule.action.templateId) || '';
     document.getElementById('auto-template-hint').textContent = '';
@@ -398,6 +400,9 @@
         action.profileDirIds = [];
         for (var i = 0; i < opts.length; i++) { if (opts[i].value) action.profileDirIds.push(opts[i].value); }
         if (!action.profileDirIds.length) { toast(t('auto.error.select-profiles','请选择至少一个 profile'), 'error'); return; }
+        var con = parseInt(document.getElementById('auto-action-concurrency').value, 10);
+        if (!con || isNaN(con)) con = 1;
+        action.concurrency = Math.max(1, Math.min(con, 16));
       } else {
         action.profileDirId = document.getElementById('auto-action-profile').value;
         if (!action.profileDirId) { toast(t('auto.error.select-profile','请选择 profile'), 'error'); return; }

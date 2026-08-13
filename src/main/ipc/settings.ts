@@ -22,6 +22,25 @@ import { validateDirId } from "../services/utils.js";
 
 export function registerSettingsHandlers(): void {
 
+  // ── Launch safety gates (blockOnConsistencyConflict / fingerprint drift / env risk) ──
+  ipcMain.handle("settings:launch-gates", async () => {
+    const cfg = getConfig() as any;
+    return {
+      blockOnConsistencyConflict: cfg.blockOnConsistencyConflict === true,
+      blockOnFingerprintDrift: cfg.blockOnFingerprintDrift !== false,
+      blockOnEnvironmentRisk: cfg.blockOnEnvironmentRisk === true,
+    };
+  });
+
+  ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
+    const cfg = getConfig() as any;
+    if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
+    if (typeof gates.blockOnFingerprintDrift === "boolean") cfg.blockOnFingerprintDrift = gates.blockOnFingerprintDrift;
+    if (typeof gates.blockOnEnvironmentRisk === "boolean") cfg.blockOnEnvironmentRisk = gates.blockOnEnvironmentRisk;
+    saveConfig(cfg);
+    return { success: true };
+  });
+
   // ── Extension repository + per-profile selection ──
   ipcMain.handle("settings:extensions", async (_event, dirId: string) => {
     validateDirId(dirId);

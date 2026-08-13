@@ -325,6 +325,7 @@ export interface AutomationAction {
   type: AutomationActionType;
   profileDirId?: string;    // launch/stop/agent (single)
   profileDirIds?: string[]; // batch agent-task: run the same prompt across these profiles
+  concurrency?: number;    // batch agent-task: profiles launched in parallel (default 1 = sequential)
   templateId?: string;      // agent-task built-in template id
   agentPrompt?: string;     // agent-task preset prompt
   jsCode?: string;          // custom-js
