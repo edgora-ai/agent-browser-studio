@@ -940,3 +940,30 @@ headless + mock LLM 上实测通过；sdk/python/README.md 补充 agent 面与�
 **工具链修正（同 slice）**：patches/chromium/build-linux.sh 与 build-windows.sh 在 set -euo pipefail 下
 把 $1/$2 赋给变量后再判空——无参调用（文档宣称的默认 x64 / ./chromium-src-150）会直接 `unbound variable` 退出。
 改为 `${1:-...}` / `${2:-x64}` 默认展开，bash -n 通过、默认与显式传参行为均验证；使「多平台构建路径已定义」更可落地。
+
+## Slice 65 — 一键 Quick Create 建号（RoxyBrowser 4.0.3 parity）
+
+**上游核对**：RoxyBrowser 最新 4.0.3（基线 4.0.2）的 changelog 共四块：
+- Revamped Profile Creation Flow（简化表单）——本地新建表单已多轮迭代，视为已覆盖；
+- One-Click Quick Creation（无表单一键建号）——本轮补齐；
+- Trackable Profile Activity（打开/关闭 Operation Logs）——已有 browser-manager launch/stop/idle auto-stop 审计 + Activity UI；
+- Quick Project Member Removal（成员列表直接移除）——已有 team-remove 内联按钮 + 确认。
+
+CloakBrowser 最新 chromium-v150.0.7871.114.6-pro（2026-08-11）为同基线 Chromium 150 的增量隐身构建，
+增量内容（更广 Windows 硬件身份、Windows 文本/字体/几何 fidelity、跨上下文一致性、网络身份、Docker 行为）
+在引擎对齐矩阵 `patches/chromium/ALIGNMENT_MATRIX.md` 中已逐项 verified，无新差距。
+
+**实现**：
+- Profiles 工具栏在「+ New Browser Profile」后新增 ⚡ Quick Create 按钮（data-cmd=quickCreateProfile），免表单一键建号；
+- profiles.js 新增 quickCreateProfile：以 i18n 默认名调 api.browser.create → 成功 toast + loadProfiles 刷新列表；
+  注意 create 返回 `{ dirId }` 而非 `{ success:true }`，成功判定改用 dirId（初版误用 success 导致建号成功但
+  提示失败且列表不刷新，已在 e2e 中抓出并修复）；
+- i18n 补 profiles.quick / profiles.quick-name / toast.profile.quick-created（zh/en）。
+
+**验证**：
+- e2e tests/e2e/j88-profile-quick-create.test.ts 新增 2 例：一键建号 → 列表 +1 → 名称按当前 UI 语言
+  从 i18n 读取断言 → dirId 前缀 → 新 profile 卡片渲染 → console 无意外错误；
+- 回归：全量单测 634 例全绿；全量 e2e 80 passed / 4 skipped（84 文件，396 passed），较上轮 +1 文件 +2 例。
+
+**后续项**：agent/集成面已覆盖 IPC / REST / MCP / Python SDK / JS SDK；RoxyBrowser 4.0.3 四个新特性已全部对齐。
+引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
