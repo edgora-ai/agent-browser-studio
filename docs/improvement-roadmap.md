@@ -1126,3 +1126,27 @@ Creation Flow**（简化表单、基础与高级配置分层）。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。RoxyBrowser 4.0.3 与
 CloakBrowser chromium-v150.0.7871.114.6-pro 的发布要点均已对齐。
+
+## Slice 71 — Profile 操作日志 + 浏览器日志尾部（RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs）
+
+**上游核对**：RoxyBrowser 4.0.2「rolling task logs」与 4.0.3「Trackable Profile Activity（Operation
+Logs for profile opening/closing）」。我们此前只有全局 Activity tab（审计日志）；本轮补齐 **按 profile
+ 维度** 的操作日志 + 该 profile 的 managed Chromium 启动日志尾部，直接在 profile 卡片一键查看。
+
+**实现**：
+- `src/main/services/browser-manager.ts`：导出 `getLaunchLogPath`（启动日志在
+  `<appData>/logs/browser-<dirId>.log`，写时已用 `maskSensitiveLaunchArgs` 脱敏，无代理凭据）；
+- `src/main/ipc/browser.ts`：新增 `browser:logs` handler——返回该 profile 最近 50 条审计
+  （`listAudit(50, { target: dirId })`，含 launch/stop/锁/漂移/一致性等）+ 启动日志尾部
+  （最大 256KB，去控制字符）；
+- `preload.cjs`：`browser.logs(dirId)` 桥接；
+- `src/renderer`：profile 卡片新增「📋」按钮，`dlg-profile-logs` 对话框分「Recent Activity」与
+  「Browser Launch Log (tail)」两栏 + 🔄 Refresh + Close；i18n 补文案。
+
+**验证**：
+- e2e `tests/e2e/j93-profile-logs.test.ts` 新增 5 例：创建+启动 profile → `browser:logs` 返回
+  logExists=true、尾部含 "Launching"、activity 含 launch → 从卡片点「📋」开对话框渲染 activity+
+  日志尾 → stop 后 Refresh 出现 stop 记录 → console 无意外错误；
+- 全量单测 636 例全绿；全量 e2e（见文末回归数）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
