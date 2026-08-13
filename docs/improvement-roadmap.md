@@ -1030,3 +1030,36 @@ RoxyBrowser 最新仍为 4.0.3。翻 3.9.x 历史 changelog 发现四个我们�
 
 **后续项**：PWA / Sub apps（3.9.2）与 WebRTC logs / performance diagnostics（3.9.2）留作候选；
 引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
+
+## Slice 68 — 浏览器内 WebRTC 诊断 + 历史记录（RoxyBrowser 3.9.2 parity）
+
+**上游核对**：CloakBrowser 最新仍为 chromium-v150.0.7871.114.6-pro，RoxyBrowser 最新 4.0.3。
+上一轮 roadmap 的四个候选已做完「代理一键绑定 + QR（3.9.1）」，本轮做「WebRTC logs / performance
+diagnostics（3.9.2）」——不是复用旧的 curl/STUN 网络层检测，而是在 **profile 自己的浏览器内通过 CDP
+跑真实 RTCPeerConnection 探针**，从浏览器表面验证引擎的 WebRTC 隐藏效果（ICE candidate 暴露的是
+mDNS 主机名还是原始本地 IP），并记录连接状态与 RTT。
+
+**实现**：
+- `src/main/services/webrtc-diagnostics.ts`（新增）：内嵌页面探针脚本，`new RTCPeerConnection` +
+  dataChannel + offer，监听 `onicecandidate` 分类 host（mDNS `.local` vs 原始 IP）/ srflx，
+  2.5s 后 `getStats()` 取 candidate-pair 的 currentRoundTripTime → RTT，9s 超时；auto-launch 未运行
+  profile，`rtcAvailable=false` 时先导航 `about:blank` 重试一次（特权页会隐藏 WebRTC）；
+  结果按 profile 持久化（上限 20 条）+ 记审计 `webrtc-diagnostic`；
+- `src/main/services/config-manager.ts`：`webrtcDiagnostics` 字段进入 DefaultConfig 与 mergeConfig
+  归一化（修复：该字段原本被 mergeConfig 末尾兜底循环跳过，导致保存时永远被丢弃、历史写不回去）；
+  新增 `get/set/clearWebRtcDiagnostics`；
+- `src/main/ipc/webrtc.ts`（新增）+ `preload.cjs` + `src/main/index.ts`：`webrtc:diag` /
+  `webrtc:diag-history` / `webrtc:diag-clear` 三个 IPC 与桥接；
+- `src/renderer/js/app/profiles.js` + `index.html` + `i18n.js`：Profile 卡片新增「📡 WebRTC」按钮，
+  `dlg-webrtc-diag` 对话框展示最近一次结果（candidate 分类 / 连接状态 / RTT / 摘要）与历史记录、
+  清除历史按钮。
+
+**验证**：
+- 单测 `tests/unit/config-manager.test.ts` 补 1 例：set → reload → get 持久化、25 条截断到 20、clear 归零；
+- e2e `tests/e2e/j90-webrtc-diag.test.ts` 新增 7 例：建 profile → 跑探针（断言 candidate/mdns/hostIp/
+  summary/at 字段）→ 历史持久化 → 卡片打开对话框（body 含 RTCPeerConnection、历史含"历史记录"）→
+  清除历史 → stop 清理 → console 无意外错误；
+- 初版 e2e 抓出持久化真 bug（mergeConfig 丢弃 webrtcDiagnostics）并修复，修复后 7 例全绿；
+- 全量单测 635 例全绿；全量 e2e（见文末回归数）。
+
+**后续项**：PWA / Sub apps（3.9.2）留作候选；引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
