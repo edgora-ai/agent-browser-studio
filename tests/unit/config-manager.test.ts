@@ -273,6 +273,23 @@ describe("Config Manager (real functions)", () => {
     expect(getProxyDetection("__proto__")).toBeNull();
   });
 
+  it("persists hosting/isProxy risk flags through save and reload (Slice 73)", () => {
+    addProxy("geo-risk", { type: "http", host: "8.8.8.8", port: 80 });
+    const ok = setProxyDetectionIfCurrent("geo-risk", { type: "http", host: "8.8.8.8", port: 80 }, {
+      detectedAt: Date.now(), success: true, exitIp: "152.70.241.120", country: "South Korea", countryCode: "KR",
+      timezone: "Asia/Seoul", provider: "unit", latencyMs: 12,
+      org: "Oracle Corporation", as: "AS31898", hosting: true, isProxy: false, error: null,
+    });
+    expect(ok).toBe(true);
+    reloadConfig();
+    const cached = getProxyDetection("geo-risk");
+    expect(cached).not.toBeNull();
+    expect(cached!.hosting).toBe(true);
+    expect(cached!.isProxy).toBe(false);
+    expect(cached!.org).toBe("Oracle Corporation");
+    expect(cached!.as).toBe("AS31898");
+  });
+
   it("setDefaultProxyName changes the default", () => {
     addProxy("primary", { type: "http", host: "1.1.1.1", port: 8080 });
     expect(setDefaultProxyName("primary")).toBe(true);

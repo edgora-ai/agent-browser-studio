@@ -148,4 +148,22 @@ describe("proxy health", () => {
     const fresh = { checks: 1, successes: 1, avgLatencyMs: 120, ipDriftCount: 0, geoDriftCount: 0, lastCheckedAt: Date.now() };
     expect(computeScore(fresh)).toBeGreaterThanOrEqual(80);
   });
+
+  it("suggests a non-IDC exit when the proxy is a hosting/IDC IP (Slice 73)", () => {
+    recordProxyDetection("p1", { ...BASE, hosting: true, isProxy: false, org: "Oracle Corporation", as: "AS31898" });
+    const entries = listProxyHealth();
+    const p1 = entries.find((e) => e.proxyName === "p1");
+    expect(p1).toBeTruthy();
+    expect(p1!.history[0].hosting).toBe(true);
+    expect(p1!.suggestion).toContain("机房/IDC");
+    expect(p1!.suggestion).toContain("Oracle Corporation");
+  });
+
+  it("records the public-proxy flag in history without an IDC suggestion (Slice 73)", () => {
+    recordProxyDetection("p1", { ...BASE, hosting: false, isProxy: true });
+    const p1 = listProxyHealth().find((e) => e.proxyName === "p1");
+    expect(p1!.history[0].isProxy).toBe(true);
+    expect(p1!.history[0].hosting).toBe(false);
+    expect(p1!.suggestion).not.toContain("机房/IDC");
+  });
 });

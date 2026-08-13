@@ -83,4 +83,35 @@ describe("checkProfileConsistency", () => {
     expect(r.ok).toBe(true);
     expect(r.warnings).toHaveLength(0);
   });
+
+  it("warns when the proxy exit is a hosting/IDC IP (Slice 73)", () => {
+    const r = checkProfileConsistency({
+      timezone: "Asia/Seoul", locale: "ko-KR", proxyMode: "named",
+      proxyGeo: { countryCode: "KR", timezone: "Asia/Seoul", hosting: true, org: "Oracle Corporation", as: "AS31898" },
+    });
+    expect(r.ok).toBe(true);
+    const idc = r.warnings.find((w) => w.code === "proxy-idc");
+    expect(idc).toBeTruthy();
+    expect(idc!.message).toContain("Oracle Corporation");
+    expect(idc!.message).toContain("AS31898");
+    expect(idc!.message.toLowerCase()).toContain("net.isidc");
+  });
+
+  it("warns when the proxy exit is flagged as a public proxy (Slice 73)", () => {
+    const r = checkProfileConsistency({
+      timezone: "Europe/London", locale: "en-GB", proxyMode: "named",
+      proxyGeo: { countryCode: "GB", timezone: "Europe/London", isProxy: true },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.warnings.some((w) => w.code === "proxy-anonymous")).toBe(true);
+  });
+
+  it("does not flag a clean residential exit as IDC", () => {
+    const r = checkProfileConsistency({
+      timezone: "America/New_York", locale: "en-US", proxyMode: "named",
+      proxyGeo: { countryCode: "US", timezone: "America/New_York", hosting: false, isProxy: false },
+    });
+    expect(r.warnings.some((w) => w.code === "proxy-idc")).toBe(false);
+    expect(r.warnings.some((w) => w.code === "proxy-anonymous")).toBe(false);
+  });
 });
