@@ -10,7 +10,8 @@ import * as http from "node:http";
 import * as https from "node:https";
 import * as dns from "node:dns/promises";
 import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
-import { encryptSecret } from "./secrets.js";
+import { encryptSecret, isEncrypted } from "./secrets.js";
+import { recordAudit } from "./audit-log.js";
 import { BUILTIN_SKILLS, getEnabledSkillPrompts } from "./skill-repository.js";
 import {
   buildHumanizedPointerPath,
@@ -95,6 +96,37 @@ export function getOrDetectLlmConfig(): LlmConfig | null {
     }
   }
   return detected;
+}
+
+/** Read the saved LLM config only (no auto-detect). */
+export function getLlmConfig(): LlmConfig | null {
+  const cfg = getConfig();
+  return cfg.llm || null;
+}
+
+/** Strip the API key; expose hasApiKey so callers never leak the secret. */
+export function redactLlmConfig(config: LlmConfig | null): (Omit<LlmConfig, "apiKey"> & { hasApiKey?: boolean }) | null {
+  if (!config) return null;
+  const { apiKey: _apiKey, ...safe } = config;
+  return { ...safe, hasApiKey: Boolean(_apiKey) };
+}
+
+/** Save the LLM config, encrypting the API key at rest. Shared by IPC + REST. */
+export function saveLlmConfig(config: LlmConfig): void {
+  const cfg = getConfig();
+  const previous = cfg.llm || ({} as Partial<LlmConfig>);
+  // Encrypt the API key at rest. If the caller sent no new key (redacted),
+  // keep the previously-encrypted one.
+  const incoming = config.apiKey && !isEncrypted(config.apiKey)
+    ? encryptSecret(config.apiKey)
+    : (config.apiKey || previous.apiKey || "");
+  const next = { ...config, apiKey: incoming };
+  // Validate before mutating the in-memory config so a failed save leaves no
+  // partial state behind.
+  if (!next.apiKey) throw new Error("LLM API key is required");
+  cfg.llm = next;
+  saveConfig(cfg);
+  recordAudit({ category: "llm", action: "save", detail: "provider=" + (cfg.llm.provider || "?") + " model=" + (cfg.llm.model || "?") });
 }
 
 // ═══════════════════════════════════════════════════════════════

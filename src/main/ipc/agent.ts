@@ -8,6 +8,7 @@ import {
   loadConversations, createConversation, getConversation, listConversations,
   deleteConversation, renameConversation, addMessage,
   getOrDetectLlmConfig,
+  getLlmConfig, redactLlmConfig, saveLlmConfig,
   getAllowedAgentTools,
   executeToolCall,
   buildAgentSystemPrompt,
@@ -28,42 +29,12 @@ import {
   removeSkill,
   setSkillMeta,
 } from "../services/skill-repository.js";
-import { getConfig, saveConfig } from "../services/config-manager.js";
-import { encryptSecret, isEncrypted } from "../services/secrets.js";
 import { recordAudit } from "../services/audit-log.js";
 import { TASK_TEMPLATES } from "../services/task-templates.js";
 import { requireAccountMutation, requireAccountSecret, type RoleCheck } from "../services/team.js";
 
 function gateAccount(r: RoleCheck): void {
   if (!r.ok) throw new Error(r.error);
-}
-
-function getLlmConfig(): LlmConfig | null {
-  const cfg = getConfig();
-  return cfg.llm || null;
-}
-
-function redactLlmConfig(config: LlmConfig | null): (Omit<LlmConfig, "apiKey"> & { hasApiKey?: boolean }) | null {
-  if (!config) return null;
-  const { apiKey: _apiKey, ...safe } = config;
-  return { ...safe, hasApiKey: Boolean(_apiKey) };
-}
-
-function saveLlmConfig(config: LlmConfig): void {
-  const cfg = getConfig();
-  const previous = cfg.llm || ({} as Partial<LlmConfig>);
-  // Encrypt the API key at rest. If the UI sent no new key (redacted), keep the
-  // previously-encrypted one.
-  const incoming = config.apiKey && !isEncrypted(config.apiKey)
-    ? encryptSecret(config.apiKey)
-    : (config.apiKey || previous.apiKey || "");
-  cfg.llm = {
-    ...config,
-    apiKey: incoming,
-  };
-  if (!cfg.llm.apiKey) throw new Error("LLM API key is required");
-  saveConfig(cfg);
-  recordAudit({ category: "llm", action: "save", detail: `provider=${cfg.llm.provider || "?"} model=${cfg.llm.model || "?"}` });
 }
 
 // Repair a chat history before sending to the LLM:

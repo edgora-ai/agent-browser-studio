@@ -24,9 +24,17 @@ import {
   getAccounts, getAccountPassword, addAccount, updateAccount, deleteAccount,
   parseAccountsBulkText, bulkAddAccounts, bulkCreateProfilesWithAccounts,
 } from "./local-agent.js";
+import {
+  getLlmConfig, getOrDetectLlmConfig, redactLlmConfig, saveLlmConfig,
+  listConversations, createConversation, getConversation, deleteConversation,
+  renameConversation, llmChat,
+  type LlmMessage,
+} from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
 import { listJobs, markCancelled, type JobStatus } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
+import { agentDbTables, agentDbTableData, agentDbQuery, agentDbExecScript } from "./agent-db.js";
+import { listPendingApprovals, resolveApproval } from "./approval-gate.js";
 import {
   listExtensionRepository, addOrUpdateChromeStoreExtension, installLocalExtension,
   updateRepositoryExtension, deleteRepositoryExtension, setRepositoryExtensionMeta,
@@ -147,6 +155,28 @@ function normalizeRestTags(value: unknown): string[] | undefined {
     value.filter((v) => typeof v === "string").map((v) => v.trim().slice(0, 40)).filter(Boolean),
   )].slice(0, 20);
   return clean.length ? clean : undefined;
+}
+
+function conversationSummary(c: any): any {
+  return {
+    id: c.id,
+    title: c.title,
+    messageCount: Array.isArray(c.messages) ? c.messages.length : 0,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  };
+}
+
+function normalizeLlmConfig(body: any): import("../types.js").LlmConfig | null {
+  if (!body || typeof body !== "object") return null;
+  const provider = body.provider === "openai" || body.provider === "claude" || body.provider === "custom"
+    ? body.provider
+    : "openai";
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey : "";
+  const apiUrl = typeof body.apiUrl === "string" && body.apiUrl.trim() ? body.apiUrl.trim() : undefined;
+  const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+  if (!apiKey) return null;
+  return { provider, apiKey, apiUrl, model };
 }
 
 
@@ -1000,6 +1030,174 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: r.ok ? 200 : 400, body: r };
   }
 
+  // ── Agent (LLM config / conversations / chat / runs / DB / approvals) ──
+  if (method === "GET" && p === "/api/agent/llm-config") {
+    return { status: 200, body: { config: redactLlmConfig(getLlmConfig()) } };
+  }
+  if (method === "PUT" && p === "/api/agent/llm-config") {
+    const body = await readJson(req);
+    const cfg = normalizeLlmConfig(body);
+    if (!cfg) {
+      return { status: 400, body: { error: "apiKey (and optionally provider/apiUrl/model) are required" } };
+    }
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      saveLlmConfig(cfg);
+      return { status: 200, body: { success: true, config: redactLlmConfig(getLlmConfig()) } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
+  if (method === "GET" && p === "/api/agent/conversations") {
+    return { status: 200, body: { conversations: listConversations().map(conversationSummary) } };
+  }
+  if (method === "POST" && p === "/api/agent/conversations") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const body = await readJson(req);
+    const title = typeof body?.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : undefined;
+    const c = createConversation(title);
+    recordAudit({ category: "llm", action: "conversation-create", target: c.id, actor: "api" });
+    return { status: 201, body: { success: true, conversation: conversationSummary(c) } };
+  }
+  const mConv = p.match(/^\/api\/agent\/conversations\/([^/]+)$/);
+  if (mConv && method === "GET") {
+    const c = getConversation(decodeURIComponent(mConv[1]));
+    if (!c) return { status: 404, body: { error: "Conversation not found" } };
+    return { status: 200, body: { conversation: c } };
+  }
+  if (mConv && method === "PATCH") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const body = await readJson(req);
+    if (!body || typeof body.title !== "string" || !body.title.trim()) {
+      return { status: 400, body: { error: "title is required" } };
+    }
+    const c = renameConversation(decodeURIComponent(mConv[1]), body.title.trim().slice(0, 200));
+    if (!c) return { status: 404, body: { error: "Conversation not found" } };
+    recordAudit({ category: "llm", action: "conversation-rename", target: c.id, actor: "api" });
+    return { status: 200, body: { success: true, conversation: conversationSummary(c) } };
+  }
+  if (mConv && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const id = decodeURIComponent(mConv[1]);
+    const ok = deleteConversation(id);
+    if (!ok) return { status: 404, body: { error: "Conversation not found" } };
+    recordAudit({ category: "llm", action: "conversation-delete", target: id, actor: "api" });
+    return { status: 200, body: { success: true } };
+  }
+
+  if (method === "POST" && p === "/api/agent/chat-simple") {
+    const body = await readJson(req);
+    if (!body || !Array.isArray(body.messages) || body.messages.length === 0) {
+      return { status: 400, body: { error: "messages array is required" } };
+    }
+    const config = getLlmConfig() || getOrDetectLlmConfig();
+    if (!config) {
+      return { status: 400, body: { error: "No LLM config. Configure an API key first." } };
+    }
+    const msgs: LlmMessage[] = [];
+    for (const m of body.messages) {
+      if (!m || (m.role !== "user" && m.role !== "assistant" && m.role !== "system") || typeof m.content !== "string") {
+        return { status: 400, body: { error: "each message needs a valid role and string content" } };
+      }
+      msgs.push({ role: m.role, content: m.content });
+    }
+    try {
+      const reply = await llmChat(config, msgs);
+      return { status: 200, body: { reply: reply.content } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
+  if (method === "GET" && p === "/api/agent/runs") {
+    const limit = clampInt(url.searchParams.get("limit"), 50, 1, 200);
+    const dirId = url.searchParams.get("dirId") || undefined;
+    return { status: 200, body: { runs: agentRunRecorder.listRuns({ dirId }).slice(0, limit) } };
+  }
+  if (method === "DELETE" && p === "/api/agent/runs") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const deleted = agentRunRecorder.clearRuns();
+    recordAudit({ category: "llm", action: "runs-clear", target: "", actor: "api", detail: "deleted=" + deleted });
+    return { status: 200, body: { success: true, deleted } };
+  }
+  const mAgentRun = p.match(/^\/api\/agent\/runs\/([^/]+)$/);
+  if (mAgentRun && method === "GET") {
+    const run = agentRunRecorder.getRun(decodeURIComponent(mAgentRun[1]));
+    if (!run) return { status: 404, body: { error: "Run not found" } };
+    return { status: 200, body: { run } };
+  }
+  if (mAgentRun && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const id = decodeURIComponent(mAgentRun[1]);
+    const ok = agentRunRecorder.deleteRun(id);
+    if (!ok) return { status: 404, body: { error: "Run not found" } };
+    recordAudit({ category: "llm", action: "run-delete", target: id, actor: "api" });
+    return { status: 200, body: { success: true } };
+  }
+
+  if (method === "GET" && p === "/api/agent/db/tables") {
+    return { status: 200, body: { tables: agentDbTables() } };
+  }
+  const mDbTable = p.match(/^\/api\/agent\/db\/([^/]+)$/);
+  if (mDbTable && method === "GET") {
+    try {
+      const limit = clampInt(url.searchParams.get("limit"), 100, 1, 1000);
+      const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1000000);
+      return { status: 200, body: agentDbTableData(decodeURIComponent(mDbTable[1]), limit, offset) };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/agent/db/query") {
+    const body = await readJson(req);
+    if (!body || typeof body.sql !== "string" || !body.sql.trim()) {
+      return { status: 400, body: { error: "sql is required" } };
+    }
+    try {
+      return { status: 200, body: { ok: true, ...agentDbQuery(body.sql) } };
+    } catch (e: any) {
+      return { status: 400, body: { ok: false, error: e.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/agent/db/exec") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const body = await readJson(req);
+    if (!body || typeof body.sql !== "string" || !body.sql.trim()) {
+      return { status: 400, body: { error: "sql is required" } };
+    }
+    const result = agentDbExecScript(body.sql);
+    if (!result.ok) return { status: 400, body: result };
+    recordAudit({ category: "db", action: "exec", target: "", actor: "api", detail: body.sql.trim().slice(0, 200) });
+    return { status: 200, body: { success: true } };
+  }
+
+  if (method === "GET" && p === "/api/agent/approvals") {
+    return { status: 200, body: { approvals: listPendingApprovals() } };
+  }
+  const mApprovalResolve = p.match(/^\/api\/agent\/approvals\/([^/]+)\/resolve$/);
+  if (mApprovalResolve && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const body = await readJson(req);
+    const decision = body?.decision;
+    if (decision !== "once" && decision !== "always" && decision !== "deny") {
+      return { status: 400, body: { error: "decision must be once, always or deny" } };
+    }
+    const id = decodeURIComponent(mApprovalResolve[1]);
+    const ok = resolveApproval(id, decision);
+    if (!ok) return { status: 404, body: { error: "Approval request not found" } };
+    recordAudit({ category: "approval", action: "resolve", target: id, actor: "api", detail: "decision=" + decision });
+    return { status: 200, body: { success: true } };
+  }
+
   // ── Sync (team workspace) ──
   if (method === "GET" && p === "/api/sync/status") {
     return { status: 200, body: syncService.getStatus() };
@@ -1452,6 +1650,80 @@ function buildOpenApi(): any {
       "/api/skills/{id}/install": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         post: { summary: "Install (enable) a skill (member+ when team enabled)", responses: ok("Installed skill") },
+      },
+      "/api/agent/llm-config": {
+        get: { summary: "Read the saved LLM config (API key redacted; hasApiKey boolean)", responses: ok("LLM config") },
+        put: {
+          summary: "Save the LLM config (member+ when team enabled); API key encrypted at rest",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["apiKey"], properties: { provider: { type: "string", enum: ["openai", "claude", "custom"] }, apiKey: { type: "string" }, apiUrl: { type: "string" }, model: { type: "string" } } } } } },
+          responses: ok("Saved config (redacted)"),
+        },
+      },
+      "/api/agent/conversations": {
+        get: { summary: "List agent conversations (summaries, newest first)", responses: ok("Conversation list") },
+        post: {
+          summary: "Create a conversation (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { title: { type: "string" } } } } } },
+          responses: created("Created conversation"),
+        },
+      },
+      "/api/agent/conversations/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: { summary: "Get a conversation with its full message history", responses: ok("Conversation") },
+        patch: {
+          summary: "Rename a conversation (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } } } } },
+          responses: ok("Renamed conversation"),
+        },
+        delete: { summary: "Delete a conversation (member+ when team enabled)", responses: ok("Delete result") },
+      },
+      "/api/agent/chat-simple": {
+        post: {
+          summary: "One-shot chat without tools (requires a saved LLM config)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["messages"], properties: { messages: { type: "array", items: { type: "object", required: ["role", "content"], properties: { role: { type: "string", enum: ["system", "user", "assistant"] }, content: { type: "string" } } } } } } } } },
+          responses: ok("Reply text"),
+        },
+      },
+      "/api/agent/runs": {
+        get: { summary: "List agent run traces (limit/dirId query params)", responses: ok("Run list") },
+        delete: { summary: "Clear all run traces (member+ when team enabled)", responses: ok("Clear result with deleted count") },
+      },
+      "/api/agent/runs/{runId}": {
+        parameters: [{ name: "runId", in: "path", required: true, schema: { type: "string" } }],
+        get: { summary: "Get one run trace with steps", responses: ok("Run detail") },
+        delete: { summary: "Delete one run trace (member+ when team enabled)", responses: ok("Delete result") },
+      },
+      "/api/agent/db/tables": {
+        get: { summary: "List agent SQLite store tables with row counts", responses: ok("Table list") },
+      },
+      "/api/agent/db/{table}": {
+        parameters: [{ name: "table", in: "path", required: true, schema: { type: "string" } }],
+        get: { summary: "Read table rows (limit/offset query params; capped at 1000)", responses: ok("Table data") },
+      },
+      "/api/agent/db/query": {
+        post: {
+          summary: "Run a read-only SQL query (SELECT/WITH/PRAGMA/EXPLAIN only)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["sql"], properties: { sql: { type: "string" } } } } } },
+          responses: ok("Query rows (capped at 1000)"),
+        },
+      },
+      "/api/agent/db/exec": {
+        post: {
+          summary: "Run a write SQL script (member+ when team enabled; INSERT/UPDATE/DELETE/DDL)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["sql"], properties: { sql: { type: "string" } } } } } },
+          responses: ok("Exec result"),
+        },
+      },
+      "/api/agent/approvals": {
+        get: { summary: "List pending risky-operation approval requests", responses: ok("Approval list") },
+      },
+      "/api/agent/approvals/{id}/resolve": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        post: {
+          summary: "Resolve a pending approval (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["decision"], properties: { decision: { type: "string", enum: ["once", "always", "deny"] } } } } } },
+          responses: ok("Resolve result"),
+        },
       },
       "/api/sync/status": { get: { summary: "Sync configuration / connectivity status", responses: ok("Sync status") } },
       "/api/sync/push": {
