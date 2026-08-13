@@ -1102,3 +1102,27 @@ mDNS 主机名还是原始本地 IP），并记录连接状态与 RTT。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。3.9.2 已对齐的功能点：
 启动提速（57）、Chrome 150 内核（52/66）、PWA/Sub-apps（69）、WebRTC logs/performance diagnostics（68）。
+
+## Slice 70 — 改造 Profile 创建流程：基础/高级分层（RoxyBrowser 4.0.3 parity）
+
+**上游核对**：RoxyBrowser 4.0.3（2026-08-13）四项中已覆盖三项——One-Click Quick Creation
+（Slice 65）、Trackable Profile Activity / Operation Logs（审计日志 + Activity tab 按 profile 跳转）、
+Quick Project Member Removal（团队成员列表内联移除）。本轮补齐唯一缺口：**Revamped Profile
+Creation Flow**（简化表单、基础与高级配置分层）。
+
+**实现**（纯前端，`src/renderer/index.html` + `src/renderer/js/app/profiles.js`）：
+- 创建对话框改为「基础优先」：常显 Name / Platform / Proxy（Platform 从高级区上移到基础区），
+  并加一行提示「只需填 Name 即可创建，更多选项在高级设置里，之后可在 Profile 编辑修改」；
+- 全部身份/指纹/网络选项（Fingerprint Mode、Seed、Timezone、Locale、WebRTC、Geolocation、
+  Hardware、DRM、第三方 Cookie、窗口标题等）收进 `<details id="new-profile-advanced">`，默认折叠；
+- `newProfile()` 每次打开对话框时把高级区重置为折叠，保证「基础优先」的新手路径稳定；
+- 适配既有 journey 测试：在点击 seed/Random 前先展开高级区（`#new-profile-advanced > summary`）。
+
+**验证**：
+- e2e `tests/e2e/j92-profile-create-flow.test.ts` 新增 5 例：打开对话框基础字段可见 + 高级区默认
+  折叠（seed 不可见）→ 展开后 seed/tz/locale/webrtc 可见 → 仅填 Name+Platform 即创建成功（managed
+  指纹 + 随机 seed 生效）→ 重新打开仍折叠 → console 无意外错误；
+- journey 全量 17 例（含创建流程）与 smoke 134 例全绿；全量单测 636 例全绿；全量 e2e（见文末回归数）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。RoxyBrowser 4.0.3 与
+CloakBrowser chromium-v150.0.7871.114.6-pro 的发布要点均已对齐。
