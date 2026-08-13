@@ -109,7 +109,7 @@ function parseOptions(argv: string[]): Options {
   let proxyType: Options["proxyType"] = "http";
   let runs = 1;
   let settleMs = 15000;
-  let waitTimeoutMs = 180000;
+  let waitTimeoutMs = 360000;
   let headless = false;
   let tag = "run";
   let outDir = "docs/verification";
