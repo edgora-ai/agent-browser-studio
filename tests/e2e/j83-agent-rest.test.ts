@@ -96,6 +96,7 @@ describe("J83 — Agent module REST endpoints", () => {
     expect(paths["/api/agent/conversations/{id}"].patch).toBeTruthy();
     expect(paths["/api/agent/conversations/{id}"].delete).toBeTruthy();
     expect(paths["/api/agent/chat-simple"].post).toBeTruthy();
+    expect(paths["/api/agent/chat"].post).toBeTruthy();
     expect(paths["/api/agent/runs"].get).toBeTruthy();
     expect(paths["/api/agent/runs"].delete).toBeTruthy();
     expect(paths["/api/agent/runs/{runId}"].get).toBeTruthy();
@@ -180,6 +181,45 @@ describe("J83 — Agent module REST endpoints", () => {
     expect(badRole.status).toBe(400);
   }, 20000);
 
+  it("runs conversation-scoped tool-calling chat over REST", async () => {
+    mock.setResponses([
+      { chunks: [], toolCalls: [{ id: "r1", name: "set_var", arguments: { key: "rest_probe", value: "ok" } }] },
+      { chunks: ["Final ", "rest ", "answer."] },
+    ]);
+    const conv = await apiRequest(port, token, "POST", "/api/agent/conversations", { title: "J83 tool chat" });
+    const convId = conv.body.conversation.id;
+
+    const badConv = await apiRequest(port, token, "POST", "/api/agent/chat", {
+      conversationId: "conv_missing", message: "hi",
+    });
+    expect(badConv.status).toBe(404);
+    const missingMsg = await apiRequest(port, token, "POST", "/api/agent/chat", { conversationId: convId });
+    expect(missingMsg.status).toBe(400);
+
+    const chat = await apiRequest(port, token, "POST", "/api/agent/chat", {
+      conversationId: convId, message: "run a tool then answer",
+    });
+    expect(chat.status).toBe(200);
+    expect(chat.body.reply).toContain("Final rest answer.");
+    expect(chat.body.toolCalls.length).toBeGreaterThan(0);
+    expect(chat.body.toolCalls[0].name).toBe("set_var");
+    expect(chat.body.toolCalls[0].redacted).toBe(true);
+    expect(chat.body.runId).toMatch(/^run_/);
+
+    const conv2 = await apiRequest(port, token, "GET", "/api/agent/conversations/" + convId);
+    expect(conv2.body.conversation.messages.some((m: any) =>
+      m.role === "assistant" && m.content.includes("Final rest answer."))).toBe(true);
+
+    const run = await apiRequest(port, token, "GET", "/api/agent/runs/" + chat.body.runId);
+    expect(run.status).toBe(200);
+    expect(run.body.run.status).toBe("done");
+    expect(run.body.run.steps.some((s: any) => s.tool === "set_var")).toBe(true);
+
+    const del = await apiRequest(port, token, "DELETE", "/api/agent/conversations/" + convId);
+    expect(del.status).toBe(200);
+    const delRun = await apiRequest(port, token, "DELETE", "/api/agent/runs/" + chat.body.runId);
+    expect(delRun.status).toBe(200);
+  }, 30000);
   it("browses and writes the agent SQLite store over REST", async () => {
     const tables0 = await apiRequest(port, token, "GET", "/api/agent/db/tables");
     expect(tables0.status).toBe(200);
@@ -292,6 +332,10 @@ describe("J83 — Agent module REST endpoints", () => {
     expect(putCfg.status).toBe(403);
     const createConv = await apiRequest(port, token, "POST", "/api/agent/conversations", { title: "nope" });
     expect(createConv.status).toBe(403);
+    const chat = await apiRequest(port, token, "POST", "/api/agent/chat", {
+      conversationId: "conv_missing", message: "nope",
+    });
+    expect(chat.status).toBe(403);
     const patchConv = await apiRequest(port, token, "PATCH", "/api/agent/conversations/conv_missing", { title: "nope" });
     expect(patchConv.status).toBe(403);
     const clearRuns = await apiRequest(port, token, "DELETE", "/api/agent/runs");
