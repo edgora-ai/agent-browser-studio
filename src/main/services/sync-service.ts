@@ -1223,6 +1223,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       ...(profile.lock && typeof profile.lock === "object" && profile.lock.owner
         ? { lock: { owner: String(profile.lock.owner).slice(0, 64), ownerName: String(profile.lock.ownerName || "").slice(0, 64), at: Number.isFinite(profile.lock.at) ? profile.lock.at : 0 } }
         : {}),
+      updatedAt: Number.isFinite(profile.updatedAt) ? profile.updatedAt : undefined,
       syncedAt: profile.syncedAt,
       syncedHash: profile.syncedHash,
     };
@@ -1234,6 +1235,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       type: proxy.type,
       host: proxy.host,
       port: proxy.port,
+      ...(Number.isFinite(proxy.updatedAt) ? { updatedAt: proxy.updatedAt } : {}),
       ...(Array.isArray(proxy.bypassList) ? { bypassList: proxy.bypassList } : {}),
     };
   }
@@ -1315,6 +1317,7 @@ function hashProfileMeta(profile: any, artifactHash?: string): string {
   const clean = JSON.parse(JSON.stringify(profile || {}));
   delete clean.syncedAt;
   delete clean.syncedHash;
+  delete clean.updatedAt;
   if (artifactHash) clean.__artifactHash = artifactHash;
   return createHash("sha256").update(JSON.stringify(sortKeys(clean))).digest("hex");
 }
@@ -1350,7 +1353,7 @@ export interface SyncDiffResult {
   pullNotes: string[];
 }
 
-const SYNC_BOOKKEEPING_FIELDS = new Set(["syncedAt", "syncedHash"]);
+const SYNC_BOOKKEEPING_FIELDS = new Set(["syncedAt", "syncedHash", "updatedAt"]);
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);

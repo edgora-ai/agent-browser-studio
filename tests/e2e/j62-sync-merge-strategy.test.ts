@@ -97,6 +97,7 @@ describe("J62 — sync pull merge strategy", () => {
     // add a remote-only profile + proxy.
     const { payload, data } = readRemoteData(s3);
     data.browserProfiles[dirId].name = "J62-Remote";
+    data.browserProfiles[dirId].updatedAt = 9999999999999;
     data.browserProfiles[dirId].syncedAt = 9999999999999;
     data.browserProfiles["cb_remote_only"] = { name: "RemoteOnly", fingerprintMode: "managed", fingerprintSeed: 7, platform: "windows", syncedAt: 9999999999998 };
     data.proxies["remote_proxy"] = { type: "http", host: "10.0.0.9", port: 3128 };
@@ -132,6 +133,7 @@ describe("J62 — sync pull merge strategy", () => {
     // Remote side: newer syncedAt + different name → newest adopts remote.
     const { payload, data } = readRemoteData(s3);
     data.browserProfiles[dirId].name = "J62-Newest-Remote";
+    data.browserProfiles[dirId].updatedAt = 9999999999999 + 1000;
     data.browserProfiles[dirId].syncedAt = 9999999999999 + 1000;
     writeRemoteData(s3, payload, data);
 
@@ -144,6 +146,7 @@ describe("J62 — sync pull merge strategy", () => {
     // Reverse: remote is older → newest keeps local.
     const { payload: p2, data: d2 } = readRemoteData(s3);
     d2.browserProfiles[dirId].name = "J62-Past-Remote";
+    d2.browserProfiles[dirId].updatedAt = 1;
     d2.browserProfiles[dirId].syncedAt = 1;
     writeRemoteData(s3, p2, d2);
     r = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.pull({ strategy: "newest" }));

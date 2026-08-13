@@ -261,6 +261,7 @@ export function createBrowserProfile(opts: {
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
     note: null,
     tags: normalizeTags(opts.tags),
+    updatedAt: Date.now(),
   };
   if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
   cfg.browserProfiles[dirId] = profile;

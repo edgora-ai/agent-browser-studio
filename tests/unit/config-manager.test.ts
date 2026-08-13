@@ -45,6 +45,7 @@ import {
   getProxyDetection,
   updateProxy,
   renameProxy,
+  setProfileMeta,
   normalizeProfileExtensionMap,
   migrateSecrets,
 } from "../../src/main/services/config-manager.js";
@@ -132,6 +133,33 @@ describe("Config Manager (real functions)", () => {
     expect(found).toBeDefined();
     expect(found!.config.hasAuth).toBe(true);
     expect((found!.config as any).password).toBeUndefined();
+  });
+
+  it("stamps updatedAt on proxy/profile edits and preserves it across saves", () => {
+    addProxy("ts-proxy", { type: "http", host: "10.0.0.1", port: 8080 });
+    const t1 = getConfig().proxies["ts-proxy"].updatedAt;
+    expect(typeof t1).toBe("number");
+
+    // An unrelated save must not strip the timestamp (normalize preserves it).
+    const cfg = getConfig();
+    cfg.llm = { provider: "openai", apiKey: "sk-x", model: "mock" };
+    saveConfig(cfg);
+    expect(getConfig().proxies["ts-proxy"].updatedAt).toBe(t1);
+
+    // updateProxy bumps it forward.
+    expect(updateProxy("ts-proxy", { type: "http", host: "10.0.0.2", port: 8081 })).toBe(true);
+    const t2 = getConfig().proxies["ts-proxy"].updatedAt;
+    expect(typeof t2).toBe("number");
+    expect(t2).toBeGreaterThanOrEqual(t1);
+
+    // Profile edits stamp updatedAt too.
+    const pc = getConfig();
+    pc.browserProfiles = pc.browserProfiles || {};
+    pc.browserProfiles["cb_ts"] = { name: "ts", fingerprintMode: "managed", fingerprintSeed: 123, platform: "windows" } as any;
+    saveConfig(pc);
+    setProfileMeta("cb_ts", { name: "ts-renamed" });
+    const pt = getConfig().browserProfiles["cb_ts"].updatedAt;
+    expect(typeof pt).toBe("number");
   });
 
   it("getProxy returns redacted config without password", () => {

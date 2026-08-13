@@ -170,6 +170,7 @@ export function addProxy(name: string, config: ProxyConfig): void {
   validateProxyName(name);
   const cfg = getConfig();
   cfg.proxies[name] = normalizeProxyConfig(config);
+  cfg.proxies[name].updatedAt = Date.now();
   if (cfg.proxies[name].fallbacks && cfg.proxies[name].fallbacks.includes(name)) {
     cfg.proxies[name].fallbacks = cfg.proxies[name].fallbacks.filter((f) => f !== name);
   }
@@ -188,6 +189,7 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
 
   const previous = cfg.proxies[oldName];
   const normalized = normalizeProxyConfig(config, previous);
+  normalized.updatedAt = Date.now();
   cfg.proxies[newName] = normalized;
 
   if (oldName === newName) {
@@ -302,6 +304,7 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   if (!Object.hasOwn(cfg.proxies, name)) return false;
   const previous = cfg.proxies[name];
   const normalized = normalizeProxyConfig(config, previous);
+  normalized.updatedAt = Date.now();
   cfg.proxies[name] = normalized;
   if (cfg.proxyDetections && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyDetections[name];
   if (cfg.proxyHealth && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyHealth[name];
@@ -470,6 +473,7 @@ export function setProfileProxyOnConfig(cfg: MgmtConfig, dirId: string, proxyNam
   }
   cp[dirId].proxyMode = nextMode;
   cp[dirId].proxyName = nextMode === "named" ? proxyName : null;
+  cp[dirId].updatedAt = Date.now();
   cfg.browserProfiles = cp;
 }
 
@@ -921,6 +925,7 @@ function normalizeProxyConfig(config: ProxyConfig, previous?: ProxyConfig): Prox
     ...(username ? { username, password } : {}),
     ...(bypassList.length ? { bypassList } : {}),
     ...(config.fallbacks && config.fallbacks.length ? { fallbacks: normalizeProxyFallbacks(config.fallbacks) } : {}),
+    ...(previous?.updatedAt ? { updatedAt: previous.updatedAt } : {}),
   };
 }
 
@@ -1093,6 +1098,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>)
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
 
+  next.updatedAt = Date.now();
   validateGeolocationMeta(next);
   if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next);
 
@@ -1229,7 +1235,12 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     merged.proxies = {};
     for (const [name, proxy] of Object.entries(rawProxies)) {
       validateProxyName(name);
-      merged.proxies[name] = normalizeProxyConfig(proxy as ProxyConfig);
+      const normalizedProxy = normalizeProxyConfig(proxy as ProxyConfig);
+      const rawProxyUpdatedAt = (proxy as any)?.updatedAt;
+      if (typeof rawProxyUpdatedAt === "number" && Number.isFinite(rawProxyUpdatedAt)) {
+        normalizedProxy.updatedAt = rawProxyUpdatedAt;
+      }
+      merged.proxies[name] = normalizedProxy;
     }
     if (!merged.proxies["default"]) {
       merged.proxies["default"] = { ...DefaultProxy };

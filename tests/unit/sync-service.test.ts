@@ -626,6 +626,44 @@ describe("Sync merge strategy (mergeSectionById / mergeAccountSection / countAdo
     }
   });
 
+  it("serializeSyncSafeConfig carries updatedAt for profiles and proxies", () => {
+    const safe = __syncTestHooks.serializeSyncSafeConfig({
+      version: 4,
+      defaultProxy: "default",
+      sync: { enabled: true, endpoint: "https://x", bucket: "b" },
+      browserProfiles: {
+        cb_a: { name: "a", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows", updatedAt: 1234, syncedAt: 5, syncedHash: "h" },
+      },
+      proxies: {
+        p1: { type: "http", host: "1.2.3.4", port: 8080, updatedAt: 5678 },
+      },
+      accounts: [],
+    } as any) as any;
+    expect(safe.browserProfiles.cb_a.updatedAt).toBe(1234);
+    expect(safe.proxies.p1.updatedAt).toBe(5678);
+  });
+
+  it("newest merge for profiles/proxies compares serialized updatedAt, not just syncedAt", () => {
+    const profileLocal = { p: { name: "l", updatedAt: 100 } };
+    const profileRemote = { p: { name: "r", updatedAt: 200 } };
+    expect(__syncTestHooks.mergeSectionById(profileLocal, profileRemote, "newest").p.name).toBe("r");
+
+    const proxyLocal = { default: { type: "http", host: "1.1.1.1", port: 80, updatedAt: 100 } };
+    const proxyRemote = { default: { type: "http", host: "2.2.2.2", port: 80, updatedAt: 200 } };
+    expect(__syncTestHooks.mergeSectionById(proxyLocal, proxyRemote, "newest").default.host).toBe("2.2.2.2");
+    expect(__syncTestHooks.countAdoptedFromRemote(proxyLocal, __syncTestHooks.mergeSectionById(proxyLocal, proxyRemote, "newest"), "newest")).toBe(1);
+  });
+
+  it("updatedAt-only differences are bookkeeping and never trigger remote adoption", () => {
+    const localMap = { p: { name: "x", updatedAt: 100, syncedAt: 1, syncedHash: "a" } };
+    const remoteMap = { p: { name: "x", updatedAt: 999, syncedAt: 2, syncedHash: "b" } };
+    for (const strategy of ["local", "remote", "newest"] as const) {
+      const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, strategy);
+      expect(merged.p.updatedAt).toBe(100);
+      expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, strategy)).toBe(0);
+    }
+  });
+
   it("mergeAccountSection merges accounts by username+url with strategy", () => {
     const localAccs = [
       { platformUrl: "https://a.com", platformUserName: "u1", tags: ["l"], updatedAt: 100 },

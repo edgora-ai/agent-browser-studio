@@ -9,6 +9,8 @@ export interface ProxyConfig {
   bypassList?: string[];
   /** Backup proxy names tried (in order) when this proxy is unhealthy. */
   fallbacks?: string[];
+  /** Last edit time (carried through sync for newest-merge). */
+  updatedAt?: number;
 }
 
 export interface ProxyDetectionCacheEntry {
@@ -126,6 +128,8 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   note?: string | null;
   tags?: string[];
   extensions?: Record<string, boolean>;
+  /** Last user edit time (carried through sync for newest-merge). */
+  updatedAt?: number;
   /** Team checkout lock: another device holds this profile (push protection). */
   lock?: ProfileLock;
 }
