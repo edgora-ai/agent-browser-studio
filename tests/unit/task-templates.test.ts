@@ -42,10 +42,13 @@ describe("task templates", () => {
     expect(getTemplate("nope")).toBeUndefined();
   });
 
-  it("covers the production template library (17 templates across all categories)", () => {
+  it("covers the production template library (22 templates across all categories)", () => {
     const ids = TASK_TEMPLATES.map((x) => x.id);
-    expect(ids.length).toBe(17);
+    expect(ids.length).toBe(22);
     for (const id of ["product-inventory", "order-sync", "review-monitor", "keyword-rank", "follower-growth", "comment-watch", "social-publish", "ad-campaign-health", "competitor-track", "session-check", "screenshot-archive", "table-extract"]) {
+      expect(ids).toContain(id);
+    }
+    for (const id of ["coupon-check", "stock-alert", "dm-response", "campaign-report", "proxy-rotation-check"]) {
       expect(ids).toContain(id);
     }
     const cat = new Set(TASK_TEMPLATES.map((x) => x.category));
