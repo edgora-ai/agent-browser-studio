@@ -73,6 +73,9 @@ export class AgentBrowserClient {
   post(path, body) { return this.request('POST', path, body); }
   delete(path) { return this.request('DELETE', path, undefined); }
 
+  put(path, body) { return this.request('PUT', path, body); }
+  patch(path, body) { return this.request('PATCH', path, body); }
+
   health() { return this.request('GET', '/health'); }
   version() { return this.request('GET', '/version'); }
   openapi() { return this.request('GET', '/openapi.json'); }
@@ -131,6 +134,82 @@ export class AgentBrowserClient {
   jobs(query) {
     const qs = query ? '?' + new URLSearchParams(query).toString() : '';
     return this.request('GET', '/api/jobs' + qs).then((d) => d.jobs || []);
+  }
+
+  // ── agent / LLM ───────────────────────────────────────────────────────
+  llmConfig() {
+    return this.request('GET', '/api/agent/llm-config');
+  }
+  saveLlmConfig({ provider, apiKey, apiUrl, model }) {
+    const body = { provider: provider, apiKey: apiKey };
+    if (apiUrl !== undefined) body.apiUrl = apiUrl;
+    if (model !== undefined) body.model = model;
+    return this.request('PUT', '/api/agent/llm-config', body);
+  }
+
+  // ── agent conversations ───────────────────────────────────────────────
+  listConversations() {
+    return this.request('GET', '/api/agent/conversations').then((d) => d.conversations || []);
+  }
+  createConversation(title) {
+    return this.request('POST', '/api/agent/conversations', title ? { title: title } : {});
+  }
+  getConversation(conversationId) {
+    return this.request('GET', '/api/agent/conversations/' + encodeURIComponent(conversationId));
+  }
+  renameConversation(conversationId, title) {
+    return this.request('PATCH', '/api/agent/conversations/' + encodeURIComponent(conversationId), { title: title });
+  }
+  deleteConversation(conversationId) {
+    return this.request('DELETE', '/api/agent/conversations/' + encodeURIComponent(conversationId));
+  }
+
+  // ── agent chat ────────────────────────────────────────────────────────
+  chatSimple(messages) {
+    return this.request('POST', '/api/agent/chat-simple', { messages: messages });
+  }
+  chat(conversationId, message, timeoutMs) {
+    const body = { conversationId: conversationId, message: message };
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    return this.request('POST', '/api/agent/chat', body);
+  }
+
+  // ── agent run traces ──────────────────────────────────────────────────
+  agentRuns(query) {
+    const qs = query ? '?' + new URLSearchParams(query).toString() : '';
+    return this.request('GET', '/api/agent/runs' + qs).then((d) => d.runs || []);
+  }
+  agentRun(runId) {
+    return this.request('GET', '/api/agent/runs/' + encodeURIComponent(runId));
+  }
+  deleteAgentRun(runId) {
+    return this.request('DELETE', '/api/agent/runs/' + encodeURIComponent(runId));
+  }
+  clearAgentRuns() {
+    return this.request('DELETE', '/api/agent/runs');
+  }
+
+  // ── agent SQLite store ────────────────────────────────────────────────
+  dbTables() {
+    return this.request('GET', '/api/agent/db/tables').then((d) => d.tables || []);
+  }
+  dbTable(table, query) {
+    const qs = query ? '?' + new URLSearchParams(query).toString() : '';
+    return this.request('GET', '/api/agent/db/' + encodeURIComponent(table) + qs);
+  }
+  dbQuery(sql) {
+    return this.request('POST', '/api/agent/db/query', { sql: sql });
+  }
+  dbExec(sql) {
+    return this.request('POST', '/api/agent/db/exec', { sql: sql });
+  }
+
+  // ── approval gate ─────────────────────────────────────────────────────
+  pendingApprovals() {
+    return this.request('GET', '/api/agent/approvals').then((d) => d.approvals || []);
+  }
+  resolveApproval(approvalId, decision) {
+    return this.request('POST', '/api/agent/approvals/' + encodeURIComponent(approvalId) + '/resolve', { decision: decision });
   }
 }
 

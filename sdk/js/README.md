@@ -100,3 +100,10 @@ the `j73` e2e suite.
 proxies, team workspace RBAC, DRM status, automation rules, runs and jobs.
 Every method returns the parsed JSON body; non-2xx responses raise
 `AgentBrowserError`.
+
+The agent surface is also mirrored: `llmConfig` / `saveLlmConfig`, conversation
+management (`listConversations` / `createConversation` / `getConversation` /
+`renameConversation` / `deleteConversation`), chat (`chatSimple` and the
+conversation-scoped tool-calling `chat`), run traces (`agentRuns` / `agentRun` /
+`deleteAgentRun` / `clearAgentRuns`), the SQLite store (`dbTables` / `dbTable` /
+`dbQuery` / `dbExec`) and approvals (`pendingApprovals` / `resolveApproval`).
