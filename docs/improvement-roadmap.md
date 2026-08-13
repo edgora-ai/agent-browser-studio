@@ -659,3 +659,22 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **修的真 bug（j59）**：全量 e2e 回归发现 j59-env-risk-launch-gate 6 例中 5 例失败——app 内置 DefaultConfig.defaultProxy="default" + proxies.default=http://127.0.0.1:7890，而 createBrowserProfile 默认 proxyMode="default"，因此测试里「没指定代理」的 profile 实际走了本地 7890 HTTP 代理，DNS 被接管 → env-risk 不再报 dns-resolver-leak 高危 → 测试断言过时。修复：j59 显式 proxyMode="none" 以测直连高危路径（这正是该测试的本意），6 例全绿。
 
 **验证**：smoke multiplatform-ci 4 例全绿；j59 6 例全绿；全量单测 + smoke 48 文件 579 例全绿；tsc 干净。全量 e2e 71 文件回归：除 j47 外全部通过——j47 硬性要求源码构建树（/Users/ahoo/workspace/chromium-build-150/src/out/Chromium.app），缺失时 beforeAll 抛错会让 CI 永远红，已改为 describe.skipIf 缺失时诚实跳过（构建树存在时仍全量执行）。引擎真实构建/生产 E2E 需 GitHub runner 执行 engine-verify（本机为 macOS arm64，无法本地验证 Windows/Linux 构建产物）。
+
+### Slice 53 — 账号模块升级：列表快捷复制 / 账号↔profile 绑定 / 批量导入 / 角色权限（对齐 RoxyBrowser 3.8.9）— ✅
+
+**背景**：RoxyBrowser 3.8.9 的账号模块有一批产品能力：列表内快捷编辑/复制账号信息、账号↔profile 快速绑定、模板批量导入账号、按角色控制「查看/批量导出账号密码」权限。我们的账号模块此前只有最基础的增删改弹窗 + agent 只读查询，列表没有复制/绑定/批量入口，IPC 无角色门控。本轮补齐这些能力，并在安全上比上游更保守：明文密码永远不进入 renderer，批量导出只含元数据。
+
+**新增**：
+- 服务层（local-agent.ts）：getAccountPassword（主进程解密，仅用于写剪贴板）、setAccountProfileIds（绑定/解绑，去重+白名单校验）、parseAccountsBulkText（纯解析：可选 header url,username,password,tags，兜底位置格式，行内过滤畸形行）、bulkAddAccounts（批量落库，密码 encryptSecret 加密）
+- RBAC（team.ts）：requireAccountSecret / requireAccountMutation —— 无 workspace 时不拦截；有 workspace 时 viewer 不能读密码/改账号，member+ 全权
+- IPC（agent.ts）：copy-username / copy-password（主进程 clipboard.writeText，密码明文不跨进 renderer；copy-password 走 requireAccountSecret）；bind（改 profileIds，requireAccountMutation）；bulk-add（粘贴文本→解析→落库，requireAccountMutation）；既有 add/update/delete 全部补上 requireAccountMutation 门控；所有账号动作记 audit
+- preload：accounts.copyUsername / copyPassword / bind / bulkAdd
+- UI（accounts.js + index.html）：账号卡片新增 👤 复制用户名、🔑 复制密码（有密码且 member+ 才显示）、🔗 绑定 profiles、绑定对话框（勾选 profile 多选）、📥 Bulk Import 对话框（粘贴批量文本 + 结果反馈）、⬇ Export CSV（仅元数据 url/username/tags/profile_ids，永不含密码）；绑定后的 profile 以绿色 chip 显示在卡片上；viewer 角色隐藏 Add/Bulk/Export/复制密码/绑定按钮
+- REST：保持 /api/accounts 只读元数据（本轮不动，见「后续项」）
+
+**验证**：
+- 单测 tests/unit/accounts.test.ts 11 例（解析器 header/位置/畸形行/标签去重；bulkAdd 加密落库+明文不入库；绑定去重/校验/清空；密码越界返回 null；RBAC 无团队放行/viewer 拒绝/member+ 放行/workspace 休眠放行）
+- e2e tests/e2e/j76-accounts.test.ts 8 例（列表红act、复制用户名→剪贴板、复制密码→剪贴板、绑定→forProfile 解析、批量导入计数、账号页渲染复制/绑定按钮+导出可见、viewer 拒绝复制密码/批量导入/新增、无意外 console error）
+- 回归：全量单测 + smoke 50 文件 607 例全绿；tsc/build 干净
+
+**后续项**：REST 账号写操作端点（POST/PATCH/DELETE /api/accounts + bulk），以及「模板批量导入账号→批量建 profile」工作流（RoxyBrowser 3.8.9 的配套能力）；窗口任务栏显示 profile 名（3.8.9 Settings>Taskbar Icon Display）；启动提速对标（3.9.2 5.5s→2s）。
