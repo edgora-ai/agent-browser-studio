@@ -35,6 +35,13 @@ const api = {
     importText: (text, replace) => ipcRenderer.invoke("proxy:import-text", { text, replace }),
     exportCsv: () => ipcRenderer.invoke("proxy:export-csv"),
   },
+  drm: {
+    status: () => ipcRenderer.invoke("drm:status"),
+    setProfile: (dirId, enabled) => ipcRenderer.invoke("drm:set-profile", { dirId, enabled }),
+    setCdmPath: (cdmPath) => ipcRenderer.invoke("drm:set-cdm-path", cdmPath),
+    ensure: () => ipcRenderer.invoke("drm:ensure"),
+    probe: (dirId) => ipcRenderer.invoke("drm:probe", dirId),
+  },
   detect: {
     proxy: (config) => ipcRenderer.invoke("detect:proxy", config),
     proxyPing: (config) => ipcRenderer.invoke("detect:proxy-ping", config),

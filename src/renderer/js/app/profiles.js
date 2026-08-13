@@ -129,6 +129,7 @@
             fingerprintMode: p.fingerprintMode || "managed",
             browserVersion: p.browserVersion || "",
             allowThirdPartyCookies: p.allowThirdPartyCookies === true,
+            drm: p.drm === true,
             seed: p.fingerprintSeed || 12345,
             platform: p.platform || 'windows',
             timezone: p.timezone || '',
@@ -155,6 +156,7 @@
           document.getElementById("agent-browser-meta-fingerprint-mode").value = metaData.fingerprintMode;
           populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion);
           document.getElementById("agent-browser-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
+          document.getElementById("agent-browser-meta-drm").checked = metaData.drm;
           document.getElementById("agent-browser-meta-name").value = metaData.name;
           document.getElementById("agent-browser-meta-seed").value = metaData.seed;
           document.getElementById("agent-browser-meta-platform").value = metaData.platform;
@@ -227,6 +229,7 @@
         document.getElementById("new-agent-browser-fingerprint-mode").value = "managed";
         populateChromiumVersionSelect("new-agent-browser-browser-version", "");
         document.getElementById("new-agent-browser-allow-third-party-cookies").checked = false;
+        document.getElementById("new-agent-browser-drm").checked = false;
         document.getElementById("new-agent-browser-seed").value = "";
         document.getElementById("new-agent-browser-platform").value = "windows";
         document.getElementById("new-agent-browser-timezone").value = "";
@@ -267,6 +270,7 @@
         var fingerprintMode = document.getElementById("new-agent-browser-fingerprint-mode").value || "managed";
         var browserVersion = document.getElementById("new-agent-browser-browser-version").value || null;
         var allowThirdPartyCookies = document.getElementById("new-agent-browser-allow-third-party-cookies").checked;
+        var drm = document.getElementById("new-agent-browser-drm").checked;
         var seedRaw = document.getElementById("new-agent-browser-seed").value.trim();
         var seed = seedRaw ? Number(seedRaw) : undefined;
         if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
@@ -284,6 +288,7 @@
           fingerprintMode: fingerprintMode,
           browserVersion: browserVersion,
           allowThirdPartyCookies: allowThirdPartyCookies,
+          drm: drm,
           fingerprintSeed: seed,
           platform: browserPlatform,
           timezone: tz,
@@ -610,6 +615,7 @@
     var fingerprintMode = document.getElementById("agent-browser-meta-fingerprint-mode").value || "managed";
     var browserVersion = document.getElementById("agent-browser-meta-browser-version").value || null;
     var allowThirdPartyCookies = document.getElementById("agent-browser-meta-allow-third-party-cookies").checked;
+    var drm = document.getElementById("agent-browser-meta-drm").checked;
     var seed = Number(document.getElementById("agent-browser-meta-seed").value);
     var platform = document.getElementById("agent-browser-meta-platform").value;
     var timezone = document.getElementById("agent-browser-meta-timezone").value || null;
@@ -628,6 +634,7 @@
     promises.push(api.browser.setMeta(dirId, Object.assign({
       name: name, fingerprintMode: fingerprintMode, browserVersion: browserVersion,
       allowThirdPartyCookies: allowThirdPartyCookies,
+      drm: drm,
       fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
       proxyMode: proxySelection.mode, proxyName: proxySelection.name
@@ -753,6 +760,7 @@
         var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
+        var drmBadge = p.drm ? '<span class="status-badge" style="background:var(--primary-bg);color:var(--primary);" title="Widevine/DRM enabled">🎬 DRM</span>' : '';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
@@ -765,6 +773,7 @@
             '<span class="name" title="Click to rename" data-action="rename">' + esc(p.name) + '</span>' +
             '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
             lockBadge +
+            drmBadge +
           '</div>' +
           '<div class="info-row"><span>Browser</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +

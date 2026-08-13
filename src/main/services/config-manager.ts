@@ -14,7 +14,7 @@ import {
   migrateSecret,
   usingEncryption,
 } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
@@ -60,6 +60,7 @@ const DefaultConfig: MgmtConfig = {
   automation: [],
   agentRuns: [],
   agentFs: { mode: "sandbox", allowlist: [] },
+  drm: { cdmPath: null },
 };
 
 // ── In-memory config cache ──
@@ -1097,6 +1098,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>)
   if (meta.taskbarHeight !== undefined) next.taskbarHeight = sanitizeOptionalInteger(meta.taskbarHeight, 0, 500);
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
+  if (meta.drm !== undefined) next.drm = sanitizeBoolean(meta.drm, "drm");
 
   next.updatedAt = Date.now();
   validateGeolocationMeta(next);
@@ -1563,4 +1565,21 @@ function normalizeAgentFs(raw: any): AgentFsConfig {
     }
   }
   return { mode, allowlist };
+}
+
+// ── Widevine/DRM config ──
+export function getDrmConfig(): DrmConfig {
+  const cfg = getConfig();
+  return { cdmPath: null, ...(cfg.drm || {}) };
+}
+
+export function setDrmConfig(patch: Partial<DrmConfig>): DrmConfig {
+  const cfg = structuredClone(getConfig());
+  cfg.drm = { cdmPath: null, ...(cfg.drm || {}), ...patch };
+  saveConfig(cfg);
+  return cfg.drm;
+}
+
+export function setDrmCdmPath(cdmPath: string | null): DrmConfig {
+  return setDrmConfig({ cdmPath: cdmPath && cdmPath.trim() ? cdmPath.trim() : null });
 }

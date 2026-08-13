@@ -54,6 +54,18 @@
   checkUpdates: function () {
         updateBrowserStatus();
         toast((window.i18n ? window.i18n.t("toast.browser.refreshed", "Managed Chromium status refreshed") : "Managed Chromium status refreshed"), "success");
+      },
+
+  refreshDrmStatus: function () { loadDrmStatus(true); },
+
+  saveDrmCdmPath: function () {
+        var input = document.getElementById("drm-cdm-path-input");
+        var value = input ? input.value.trim() : "";
+        api.drm.setCdmPath(value || null).then(function (r) {
+          if (r && r.success === false) { toast((r.error) || "Failed", "error"); return; }
+          toast((window.i18n ? window.i18n.t("toast.drm.cdm-path-saved", "CDM path saved") : "CDM path saved"), "success");
+          loadDrmStatus(true);
+        }).catch(function (e) { toast(e.message, "error"); });
       }
   });
   function loadBrowserTab() {
@@ -68,6 +80,36 @@
     });
     loadLaunchGates();
     wireLaunchGateEvents();
+    loadDrmStatus(false);
+  }
+
+  function loadDrmStatus(forceRescan) {
+    var card = document.getElementById("agent-browser-drm-card");
+    if (!card) return;
+    var statusEl = document.getElementById("drm-status");
+    var doRender = function (status) {
+      if (!status) return;
+      var cdm = status.cdm || null;
+      var availHtml = cdm
+        ? '<span style="color:var(--success);">✅ Widevine CDM available</span>'
+        : '<span style="color:var(--warning);">⚠ No Widevine CDM found (install Chrome or set a path)</span>';
+      var versionHtml = cdm ? '<div class="info-row"><span>Version</span><span>' + esc(cdm.version) + '</span></div>' : '';
+      var sourceHtml = cdm ? '<div class="info-row"><span>Source</span><span>' + esc(cdm.source) + '</span></div>' : '';
+      var pathHtml = cdm ? '<div class="info-row"><span>Path</span><span title="' + escAttr(cdm.path) + '">' + esc(shortPath(cdm.path)) + '</span></div>' : '';
+      var profilesHtml = (status.profilesWithDrm && status.profilesWithDrm.length)
+        ? '<div class="info-row"><span>DRM profiles</span><span>' + esc(status.profilesWithDrm.length + '') + '</span></div>' : '';
+      card.innerHTML = '<div class="info-row"><span>Status</span><span>' + availHtml + '</span></div>' + versionHtml + sourceHtml + pathHtml + profilesHtml;
+      var input = document.getElementById("drm-cdm-path-input");
+      if (input && input.value === "") input.value = status.configuredPath || "";
+      if (statusEl) statusEl.textContent = "";
+    };
+    var p = forceRescan ? api.drm.ensure() : api.drm.status();
+    p.then(function (r) {
+      if (!r || r.success === false) { card.innerHTML = '<div class="empty-state">' + esc((r && r.error) || "Failed") + '</div>'; return; }
+      doRender(r.status || r);
+    }).catch(function (e) {
+      card.innerHTML = '<div class="empty-state">' + esc(e.message || String(e)) + '</div>';
+    });
   }
 
   function gateEl(id) { return document.getElementById(id); }

@@ -15,6 +15,8 @@ import {
 } from "./config-manager.js";
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
+import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
+import { setDrmCdmPath } from "./config-manager.js";
 import { getAccounts } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
 import { listJobs, type JobStatus } from "./job-store.js";
@@ -332,6 +334,21 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     }
   }
 
+  const mProfileDrm = p.match(/^\/api\/profiles\/([^/]+)\/drm$/);
+  if (mProfileDrm && method === "POST") {
+    try {
+      const dirId = mProfileDrm[1];
+      const body = await readJson(req);
+      validateDirId(dirId);
+      const enabled = !!(body && body.enabled);
+      setProfileDrm(dirId, enabled);
+      recordAudit({ category: "profile", action: enabled ? "drm-enable" : "drm-disable", target: dirId, actor: "api" });
+      return { status: 200, body: { success: true, dirId, enabled } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
   // ── Proxies ──
   if (method === "GET" && p === "/api/proxies") {
     return { status: 200, body: { proxies: getProxyList() } };
@@ -374,6 +391,22 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     } catch (e: any) {
       return { status: 500, body: { error: e.message || String(e) } };
     }
+  }
+
+  // ── Widevine/DRM ──
+  if (method === "GET" && p === "/api/drm/status") {
+    return { status: 200, body: { success: true, status: getDrmStatus() } };
+  }
+  if (method === "POST" && p === "/api/drm/cdm-path") {
+    const body = await readJson(req);
+    const cdmPath = body && typeof body.cdmPath === "string" ? body.cdmPath : null;
+    const cfg = setDrmCdmPath(cdmPath);
+    recordAudit({ category: "settings", action: "drm-cdm-path", target: cfg.cdmPath || "auto", actor: "api" });
+    return { status: 200, body: { success: true, configuredPath: cfg.cdmPath || null } };
+  }
+  if (method === "POST" && p === "/api/drm/ensure") {
+    const cdm = ensureManagedCdm();
+    return { status: 200, body: { success: true, staged: !!cdm, status: getDrmStatus() } };
   }
   const mProxy = p.match(/^\/api\/proxies\/([^/]+)$/);
   const mProxyDefault = p.match(/^\/api\/proxies\/([^/]+)\/default$/);
@@ -692,6 +725,14 @@ function buildOpenApi(): any {
         parameters: [dirIdParam],
         post: { summary: "Stop the profile's managed Chromium", responses: ok("Stop result") },
       },
+      "/api/profiles/{dirId}/drm": {
+        parameters: [dirIdParam],
+        post: {
+          summary: "Enable or disable Widevine/DRM for a profile",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["enabled"], properties: { enabled: { type: "boolean" } } } } } },
+          responses: ok("Profile DRM state"),
+        },
+      },
       "/api/profiles/{dirId}/extensions": {
         parameters: [dirIdParam],
         get: { summary: "List extension repository + per-profile enabled state", responses: ok("Extension list") },
@@ -750,6 +791,15 @@ function buildOpenApi(): any {
         },
       },
       "/api/proxies/export": { get: { summary: "Export all proxies as a CSV document (passwords included for migration)", responses: ok("CSV text") } },
+      "/api/drm/status": { get: { summary: "Widevine/DRM availability + per-profile DRM state", responses: ok("DRM status") } },
+      "/api/drm/cdm-path": {
+        post: {
+          summary: "Override (or clear, with null) the Widevine CDM path",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { cdmPath: { type: "string", nullable: true } } } } } },
+          responses: ok("Configured CDM path"),
+        },
+      },
+      "/api/drm/ensure": { post: { summary: "Stage the managed Widevine CDM copy", responses: ok("Staged status") } },
       "/api/proxies/{name}": {
         parameters: [nameParam],
         get: { summary: "Proxy detail", responses: ok("Proxy info") },

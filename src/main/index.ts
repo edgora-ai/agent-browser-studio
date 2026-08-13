@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { registerProfileHandlers } from "./ipc/profile.js";
 import { registerProxyHandlers } from "./ipc/proxy.js";
+import { registerDrmHandlers } from "./ipc/drm.js";
 import { registerStorageHandlers } from "./ipc/storage.js";
 import { registerSyncHandlers } from "./ipc/sync.js";
 import { registerAppHandlers } from "./ipc/app.js";
@@ -165,6 +166,7 @@ function createWindow(): void {
 function registerAllHandlers(): void {
   registerProfileHandlers();
   registerProxyHandlers();
+  registerDrmHandlers();
   registerStorageHandlers();
   registerSyncHandlers();
   registerAppHandlers();

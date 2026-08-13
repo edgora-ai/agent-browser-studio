@@ -123,6 +123,8 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   proxyMode?: ProxyMode;
   proxyName?: string | null;
+  /** When true, the profile launches with Widevine/DRM enabled when a CDM is available. */
+  drm?: boolean;
   syncedAt?: number;
   syncedHash?: string;
   note?: string | null;
@@ -259,8 +261,19 @@ export interface MgmtConfig {
   blockOnFingerprintDrift?: boolean;
   /** When true, launch is refused when the host environment check finds high-risk findings (DNS leak / CN fonts / SOCKS5 DNS). Default false (warn only). */
   blockOnEnvironmentRisk?: boolean;
+  /** Widevine/DRM discovery settings (managed CDM path override). */
+  drm?: DrmConfig;
   /** Max automation jobs running concurrently. Default 3. */
   maxConcurrentJobs?: number;
+}
+
+export interface DrmConfig {
+  /** Explicit Widevine CDM directory override (auto-detected when unset). */
+  cdmPath?: string | null;
+  /** Epoch ms of the last successful CDM detection. */
+  detectedAt?: number;
+  /** Version string of the last detected CDM. */
+  detectedVersion?: string;
 }
 
 // ── Agent Runs (inspectable trace of each agent task execution) ──

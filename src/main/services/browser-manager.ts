@@ -14,6 +14,7 @@ import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
 import { checkProfileConsistency } from "./consistency-check.js";
+import { drmLaunchArgs } from "./drm.js";
 import {
   captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
   type FingerprintDrift,
@@ -64,6 +65,7 @@ export interface BrowserProfile {
   browserVersion: string | null; // exact installed version pin, or auto
   fingerprintMode: FingerprintMode;
   allowThirdPartyCookies: boolean;
+  drm: boolean;
   fingerprintSeed: number; // integer seed for deterministic fingerprint
   platform: "windows" | "macos";
   timezone: string | null;  // IANA timezone (e.g. 'Asia/Shanghai', 'America/New_York')
@@ -231,6 +233,7 @@ export function createBrowserProfile(opts: {
   proxyMode?: "none" | "default" | "named";
   proxyName?: string | null;
   tags?: string[];
+  drm?: boolean;
 }): { dirId: string } {
   const dirId = PROFILE_ID_PREFIX + Date.now().toString(36) + "_" + Math.random().toString(36).substring(2, 8);
 
@@ -259,6 +262,7 @@ export function createBrowserProfile(opts: {
     ...normalizeHardwareFingerprintMeta(opts),
     proxyMode,
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
+    drm: normalizeBoolean(opts.drm, "drm"),
     note: null,
     tags: normalizeTags(opts.tags),
     updatedAt: Date.now(),
@@ -311,6 +315,7 @@ export function listBrowserProfiles(): BrowserProfile[] {
       browserVersion: normalizeManagedChromiumVersion(m.browserVersion),
       fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
       allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
+      drm: normalizeBoolean(m.drm, "drm"),
       fingerprintSeed: m.fingerprintSeed || 12345,
       platform: m.platform || "windows",
       timezone: m.timezone || null,
@@ -650,6 +655,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
     }
   }
   addExtensionArgs(args, dirId, runtimeExtensionPaths);
+  addDrmArgs(args, dirId);
 
   // If bounded egress resolution is unavailable, use a deterministic locale
   // fallback instead of leaking the host UI language.
@@ -1061,6 +1067,11 @@ function addExtensionArgs(args: string[], dirId: string, runtimeExtensionPaths: 
   const joined = paths.join(",");
   args.push(`--load-extension=${joined}`);
   args.push(`--disable-extensions-except=${joined}`);
+}
+
+function addDrmArgs(args: string[], dirId: string): void {
+  const drmArgs = drmLaunchArgs(dirId);
+  for (const a of drmArgs) args.push(a);
 }
 
 function addHardwareFingerprintArgs(args: string[], meta: any): void {
