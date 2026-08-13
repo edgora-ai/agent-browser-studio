@@ -196,6 +196,52 @@ resources/                app icons
 
 ---
 
+## Local REST API (loopback)
+
+Agent Browser Studio ships a loopback-only JSON REST API for tooling, CI and
+automation, alongside the MCP server. It reuses the same service layer, so
+everything you can do in the UI you can script.
+
+- **Port**: `26582` by default (override with `AGENT_BROWSER_API_PORT` or
+  `CLOAK_API_PORT`); falls back to an ephemeral loopback port when busy.
+- **Auth**: every endpoint except `GET /health` and `GET /openapi.json`
+  requires the bearer token from `AGENT_BROWSER_API_TOKEN` (or `CLOAK_API_TOKEN`).
+  When unset, a random token is generated and can be revealed from the app's
+  developer surface. Send it as `Authorization: Bearer <token>` or
+  `X-Agent-Browser-Token: <token>`.
+- **Discoverability**: `GET /openapi.json` serves an OpenAPI 3.0 document you
+  can feed to Swagger UI, Postman, or an SDK generator.
+
+Main resources:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/profiles` | List managed Chromium profiles |
+| POST | `/api/profiles` | Create a profile |
+| GET/DELETE | `/api/profiles/{dirId}` | Profile detail / delete (stopped only) |
+| POST | `/api/profiles/{dirId}/launch` | `/stop` | Start / stop the profile's Chromium |
+| GET | `/api/profiles/{dirId}/status` | Running state + CDP port |
+| GET/POST | `/api/proxies` | List / add proxies |
+| PATCH/DELETE | `/api/proxies/{name}` | Update / delete a proxy |
+| GET | `/api/proxies/health` | Health score / risk / bindings / suggestions |
+| POST | `/api/proxies/{name}/rotate` | Manually rotate to the first healthy fallback |
+| GET | `/api/accounts` | Stored account usernames + platform URLs |
+| GET | `/api/automation/rules` | Automation rules |
+| GET | `/api/runs` | `/api/jobs` | Agent runs / automation jobs |
+| GET/DELETE | `/api/audit` | Audit trail |
+
+Example:
+
+```bash
+TOKEN="$(export AGENT_BROWSER_API_TOKEN=my-token; echo my-token)"
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:26582/api/profiles
+```
+
+The MCP server remains available on `26581` for AI tools (Claude Code,
+Cursor, etc.) and exposes the same browser/db/http capabilities.
+
+---
+
 ## Security, Privacy, and Compliance
 
 Agent Browser Studio handles sensitive local data, including browser profile state, cookies, localStorage, proxy credentials, LLM API keys, sync credentials, audit logs, screenshots, and agent traces.
@@ -210,7 +256,7 @@ Security controls include:
 - local/private/link-local/CGNAT blocking for agent HTTP requests
 - bounded HTTP/LLM response handling
 - safe ZIP/CRX extraction and extension package hash verification
-- loopback-only MCP server with bearer-token authentication
+- loopback-only MCP server and REST API with bearer-token authentication
 
 Read before use:
 

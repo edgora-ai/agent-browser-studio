@@ -278,3 +278,29 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J53 全绿（含 journ
 ```
 
 8 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台）落地并验证。
+
+### Slice 18 — 本地 REST API + OpenAPI（P1，开发者集成）— ✅
+
+**范围**：把 MCP 之外补上开发者最需要的 HTTP 面——loopback REST API，覆盖 profiles/proxies/accounts/extensions/automation/runs/jobs/audit，自带 OpenAPI 3.0 文档，可接 Swagger/Postman/SDK 生成器，面向 CI 与自建工具链（竞品对标「开发者集成」场景的 API 短板）。
+
+**设计**：与 MCP 同一服务层（browser-manager / config-manager / proxy-health / local-agent / job-store / audit-log），不复写逻辑；Bearer token 鉴权（`AGENT_BROWSER_API_TOKEN`，未设置则生成随机 token），仅 `/health` 与 `/openapi.json` 开放；端口 `26582`（`AGENT_BROWSER_API_PORT`），占用时回退临时端口；写操作（create/launch/stop/delete/add/update/rotate/clear）统一落 audit（actor=api）。
+
+**文件**：
+- 新增 `services/rest-api-server.ts` — 路由/鉴权/OpenAPI/生命周期（start/stop/getPort/getToken）
+- 新增 `ipc/api.ts` + `preload.cjs` `api.apiRpc` — 渲染层暴露 status/restart/reveal-token（对齐 mcp 的 status/reveal-token）
+- 改 `index.ts` — 启动/关闭 REST API（与 MCP 并列）
+- 改 `README.md` — REST API 端点表 + 鉴权 + 示例 + 安全清单更新
+- 新增 `tests/e2e/j54-rest-api.test.ts`（8 例）
+
+**验证**：e2e J54 8 例全绿（/health + /openapi.json 免鉴权、无 token 401、/version、profile 增查删、launch→running→stop、proxy 增查改删 + health、accounts/automation/runs/jobs/audit 只读 + actor=api 审计）；unit/smoke 452 全绿；J38/J2 回归通过。
+
+---
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 452 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J54 全绿（含 journey 10/10 tab 切换）
+```
+
+9 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI）落地并验证。

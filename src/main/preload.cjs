@@ -88,6 +88,11 @@ const api = {
     restart: () => ipcRenderer.invoke("mcp:restart"),
     revealToken: () => ipcRenderer.invoke("mcp:reveal-token"),
   },
+  apiRpc: {
+    status: () => ipcRenderer.invoke("api:status"),
+    restart: () => ipcRenderer.invoke("api:restart"),
+    revealToken: () => ipcRenderer.invoke("api:reveal-token"),
+  },
   browser: {
     list: () => ipcRenderer.invoke("browser:list"),
     binary: () => ipcRenderer.invoke("browser:binary"),

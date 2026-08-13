@@ -11,12 +11,14 @@ import { registerDetectHandlers } from "./ipc/detect.js";
 import { registerSettingsHandlers } from "./ipc/settings.js";
 import { registerAgentHandlers } from "./ipc/agent.js";
 import { registerMcpHandlers } from "./ipc/mcp.js";
+import { registerApiHandlers } from "./ipc/api.js";
 import { registerBrowserHandlers } from "./ipc/browser.js";
 import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
 import { startScheduler } from "./services/automation.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
+import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
 import { stopAllBrowserProfiles } from "./services/browser-manager.js";
 import { migrateSecrets } from "./services/config-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
@@ -170,6 +172,7 @@ function registerAllHandlers(): void {
   registerSettingsHandlers();
   registerAgentHandlers();
   registerMcpHandlers();
+  registerApiHandlers();
   registerBrowserHandlers();
   registerAutomationHandlers();
   registerAuditHandlers();
@@ -227,6 +230,10 @@ app.whenReady().then(async () => {
   const mcp = startMcpServer();
   mcp.ready.catch((e) => console.error("[mcp] failed to start:", e));
 
+  // Loopback REST API (profiles / proxies / accounts / automation / audit + OpenAPI).
+  const api = startRestApiServer();
+  api.ready.catch((e) => console.error("[api] failed to start:", e));
+
   // Periodically refresh tray menu to show updated profile status
   setInterval(() => refreshTrayMenu(() => mainWindow, {
     onShow: () => createWindow(),
@@ -277,4 +284,8 @@ app.on("before-quit", async (event) => {
     stopMcpServer(),
     new Promise(resolve => setTimeout(resolve, 500)),
   ]).catch((e) => console.error("[shutdown] failed to stop MCP server:", e));
+  Promise.race([
+    stopRestApiServer(),
+    new Promise(resolve => setTimeout(resolve, 500)),
+  ]).catch((e) => console.error("[shutdown] failed to stop REST API server:", e));
 });
