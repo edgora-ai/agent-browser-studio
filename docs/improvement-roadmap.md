@@ -484,3 +484,18 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **实测验证**：新构建 + 本机 Chrome Widevine CDM（manifest `4.10.3050.0`）——不带 flag 时 `requestMediaKeySystemAccess` 返回 `NotSupportedError`（不可用）；DRM profile 带 `--widevine-cdm-path` 时 `available:true, ks:"com.widevine.alpha"`（可用）；非 DRM profile 无该 key system（per-profile gating）。构建树与发布二进制均复测通过。
 
 **验证**：j66 8 例全绿（创建+badge、status 发现、ensure 托管 staging、编辑弹窗开关持久化、DRM profile 真实 EME 探测、非 DRM profile 无 Widevine、stop、无 console error）；j32 profile UI 回归 5 例；unit/smoke 44 文件 538 例全绿；tsc/build 干净。
+
+
+### Slice 41 — 团队工作区 RBAC（P1，团队协作收口）— ✅
+
+**范围**：ALIGNMENT_MATRIX 产品级缺口「team workspace semantics (RBAC, locks, conflict handling)」中的 RBAC 落地——在现有 deviceId / sync / 签出锁 / 冲突解决之上加成员-角色模型，并随同步传播。锁与冲突解决此前已完成，本切片补上成员与权限。
+
+**设计**：
+- 角色层级 owner > admin > member > viewer；workspace manifest（`team`）含 workspace 名、ownerDeviceId、成员名册（deviceId/name/role/addedAt）、enabled、updatedAt
+- 门控（团队启用时生效，本地 best-effort，与签出锁模型一致）：viewer 只读（禁 push/force-push/删 profile/建 profile）；member 可 push/建删；admin 可 force-push + 管理 member/viewer 角色与成员；owner 可设 admin/owner 角色、重命名、移除 admin；owner 永不可移除
+- sync 集成：manifest 随 push 快照传播（`sanitizeTeam` 纯函数，脱敏序列化），pull 按 updatedAt 择优采纳远程名册——远端把本设备降为 viewer 后 pull 即生效、push 被「team policy」拦截
+- 新增 `services/team.ts`（纯函数 + 配置读写）、`ipc/team.ts`（team:status/init/add-member/remove-member/set-role/rename/set-enabled）
+- REST/OpenAPI：`GET /api/team`、`POST /api/team/init`、`POST /api/team/members`、`DELETE /api/team/members/{deviceId}`、`PUT /api/team/members/{deviceId}/role`、`POST /api/team/rename`
+- UI：Sync 标签页新增 Team Workspace (RBAC) 卡片——workspace 名/成员数/enforcement、成员名册（本机高亮 + 角色徽章 + 👑 owner）、admin 可加成员/改角色/移除、owner 可重命名、enforcement 开关
+
+**验证**：unit `tests/unit/team.test.ts` 13 例（角色层级、init 建 owner、add/remove/set-role 权限矩阵、viewer 禁 push/force-push/delete、enforcement 关闭放行、syncSafeTeam、mergeTeam 择优、未列名设备按 viewer 处理）；e2e `tests/e2e/j67-team-rbac.test.ts` 8 例（IPC init/add/去重、REST status/member/OpenAPI、UI 面板渲染、mock S3 push 携带 manifest、远端降级 viewer 后 pull 生效 push 被拦、恢复 owner 后放行）；全量单测 45 文件 551 例全绿；回归 j32/j43/j54/j56/j57/j62/j64 共 42 例全绿；tsc/build 干净。

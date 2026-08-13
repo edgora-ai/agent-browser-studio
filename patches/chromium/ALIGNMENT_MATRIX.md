@@ -94,7 +94,7 @@ the complete product rather than only the engine:
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
 - Windows and Linux production verification;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
-  storage backup;
+  storage backup — ✅ verified (see the Team RBAC table below);
 - proxy health/history/rotation as managed assets.
 
 ### DRM / Widevine — verified
@@ -102,6 +102,12 @@ the complete product rather than only the engine:
 | Capability | Current state | Target | Completion evidence |
 |---|---|---|---|
 | Widevine/DRM for persistent profiles | verified | Discover a host CDM, enable per profile, and register it in the independent build without bundling Google components | CDM discovery (Chrome/Brave/Edge/Chromium app bundles, user-data, configured override, managed copy); per-profile gating; real EME probe over CDP returning `com.widevine.alpha` for a DRM profile (host Chrome 150 CDM `4.10.3050.0`) and `NotSupportedError` for a plain profile; confirmed on the build-tree binary and the published runtime (`j66-drm` e2e) |
+
+### Team workspace RBAC — verified
+
+| Capability | Current state | Target | Completion evidence |
+|---|---|---|---|
+| Team workspace semantics (RBAC) | verified | Member-role model (owner > admin > member > viewer) with enforcement on sync push, force push and destructive profile ops, travelling with the sync snapshot | role hierarchy and permission-matrix unit tests; mock-S3 e2e proving the manifest ships on push, pull adopts a remotely-demoted viewer role, and push is blocked by team policy until the owner role is restored; viewer read-only, admin force-push/member management, owner-only rename/admin grants (`j67-team-rbac` e2e + `team` unit suite) |
 
 CloakLite already has product capabilities that a browser wrapper alone does
 not provide: local profile management, encrypted credentials, approval gates,
