@@ -6,7 +6,7 @@ import * as http from "node:http";
 import { randomBytes } from "node:crypto";
 import { listProfiles, getProfileInfo } from "./profile-manager.js";
 import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig } from "./config-manager.js";
-import { getAccounts, executeToolCall, AGENT_TOOLS } from "./local-agent.js";
+import { getAccounts, executeToolCall, AGENT_TOOLS, agentChat, llmChat, getLlmConfig, getOrDetectLlmConfig, redactLlmConfig, createConversation, getConversation, listConversations, deleteConversation, renameConversation, addMessage, repairMessageSequence, type LlmMessage } from "./local-agent.js";
 import { listJobs } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import {
@@ -159,9 +159,16 @@ const MCP_PASSTHROUGH_DEFS = MCP_PASSTHROUGH.map((toolName) => {
   };
 });
 const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
-  { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
-  { name: "agent_browser_runs_list", description: "List recent agent runs (optionally filtered by profile dirId)", inputSchema: { type: "object", properties: { limit: { type: "number" }, dirId: { type: "string" } } } },
-  { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
+ { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
+ { name: "agent_browser_runs_list", description: "List recent agent runs (optionally filtered by profile dirId)", inputSchema: { type: "object", properties: { limit: { type: "number" }, dirId: { type: "string" } } } },
+ { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
+  { name: "agent_browser_agent_chat", description: "Run a conversation-scoped tool-calling chat against the local agent (persists messages, executes tools, records a run trace); requires a saved LLM config", inputSchema: { type: "object", properties: { conversationId: { type: "string" }, message: { type: "string" }, timeoutMs: { type: "number" } }, required: ["conversationId", "message"] } },
+  { name: "agent_browser_agent_chat_simple", description: "One-shot chat without tools; messages is an array of {role, content}", inputSchema: { type: "object", properties: { messages: { type: "array", items: { type: "object" } } }, required: ["messages"] } },
+  { name: "agent_browser_conversations_list", description: "List agent conversations (summaries, newest first)", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_conversation_create", description: "Create a new agent conversation (optional title)", inputSchema: { type: "object", properties: { title: { type: "string" } } } },
+  { name: "agent_browser_conversation_get", description: "Get a conversation with its full message history", inputSchema: { type: "object", properties: { conversationId: { type: "string" } }, required: ["conversationId"] } },
+  { name: "agent_browser_agent_run_get", description: "Get one agent run trace with its tool steps", inputSchema: { type: "object", properties: { runId: { type: "string" } }, required: ["runId"] } },
+  { name: "agent_browser_llm_config", description: "Read the saved LLM config (API key redacted; hasApiKey boolean)", inputSchema: { type: "object", properties: {} } },
 ];
 
 async function executeMcpTool(name: string, args: any): Promise<any> {
@@ -299,10 +306,108 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
     case "agent_browser_runs_list": {
       return { runs: agentRunRecorder.listRuns({ dirId: args?.dirId }).slice(0, Math.max(1, Math.min(args?.limit ?? 50, 200))) };
     }
-    case "agent_browser_jobs_list": {
-      return { jobs: listJobs({ status: args?.status, limit: args?.limit }) };
+   case "agent_browser_jobs_list": {
+     return { jobs: listJobs({ status: args?.status, limit: args?.limit }) };
+   }
+    case "agent_browser_llm_config": {
+      return { config: redactLlmConfig(getLlmConfig()) };
     }
-    default:
+    case "agent_browser_conversations_list": {
+      return {
+        conversations: listConversations().map((c: any) => ({
+          id: c.id, title: c.title, messageCount: c.messages.length, createdAt: c.createdAt, updatedAt: c.updatedAt,
+        })),
+      };
+    }
+    case "agent_browser_conversation_create": {
+      const title = typeof args?.title === "string" && args.title.trim()
+        ? args.title.trim().slice(0, 200) : undefined;
+      const c = createConversation(title);
+      return { conversation: { id: c.id, title: c.title, messageCount: 0, createdAt: c.createdAt, updatedAt: c.updatedAt } };
+    }
+    case "agent_browser_conversation_get": {
+      const c = getConversation(args?.conversationId);
+      if (!c) return { error: "Conversation not found" };
+      return { conversation: c };
+    }
+    case "agent_browser_agent_run_get": {
+      const run = agentRunRecorder.getRun(args?.runId);
+      if (!run) return { error: "Run not found" };
+      return { run };
+    }
+    case "agent_browser_agent_chat_simple": {
+      const msgsIn = args?.messages;
+      if (!Array.isArray(msgsIn) || msgsIn.length === 0) return { error: "messages array is required" };
+      const config = getLlmConfig() || getOrDetectLlmConfig();
+      if (!config) return { error: "No LLM config. Configure an API key first." };
+      const msgs: LlmMessage[] = [];
+      for (const m of msgsIn) {
+        if (!m || (m.role !== "user" && m.role !== "assistant" && m.role !== "system") || typeof m.content !== "string") {
+          return { error: "each message needs a valid role and string content" };
+        }
+        msgs.push({ role: m.role, content: m.content });
+      }
+      try {
+        const reply = await llmChat(config, msgs);
+        return { reply: reply.content };
+      } catch (e: any) {
+        return { error: e.message || String(e) };
+      }
+    }
+    case "agent_browser_agent_chat": {
+      const conversationId = args?.conversationId;
+      const message = args?.message;
+      if (typeof conversationId !== "string" || !conversationId || typeof message !== "string" || !message) {
+        return { error: "conversationId and message are required" };
+      }
+      const config = getLlmConfig() || getOrDetectLlmConfig();
+      if (!config) return { error: "No LLM config. Configure an API key first." };
+      const conv = getConversation(conversationId);
+      if (!conv) return { error: "Conversation not found" };
+
+      addMessage(conversationId, "user", message);
+      const recentMsgs = conv.messages
+        .filter((m: any) => m.role === "user" || m.role === "assistant")
+        .slice(-40);
+      const llmMsgs: LlmMessage[] = recentMsgs.map((m: any) => ({ role: m.role, content: m.content }));
+      llmMsgs.push({ role: "user", content: message });
+      const repaired = repairMessageSequence(llmMsgs);
+
+      const timeoutMs = Math.max(1000, Math.min(Number(args?.timeoutMs) || 120000, 600000));
+      const run = agentRunRecorder.startRun({
+        source: { type: "chat", conversationId },
+        name: message.slice(0, 120),
+      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const result = await agentChat(config, repaired, { runId: run.id, signal: controller.signal });
+        agentRunRecorder.finishRun(run.id, "done");
+        if (result.error) {
+          addMessage(conversationId, "assistant", "❌ " + result.error, []);
+          return { error: result.error, runId: run.id };
+        }
+        const finalMsg = [...result.messages].reverse().find((m: any) => m.role === "assistant" && m.content);
+        if (!finalMsg?.content) {
+          addMessage(conversationId, "assistant", "❌ Agent did not return a final response.", []);
+          return { error: "Agent did not return a final response.", runId: run.id };
+        }
+        const redactedToolCalls = result.messages.flatMap((m: any) =>
+          m.tool_calls?.map((tc: any) => ({ name: tc.function.name, redacted: true })) || []);
+        addMessage(conversationId, "assistant", finalMsg.content, redactedToolCalls);
+        return { reply: finalMsg.content, toolCalls: redactedToolCalls, runId: run.id, conversationId };
+      } catch (e: any) {
+        const errMsg = controller.signal.aborted
+          ? "Agent chat timed out after " + timeoutMs + "ms"
+          : (e.message || String(e));
+        agentRunRecorder.finishRun(run.id, "error", errMsg);
+        addMessage(conversationId, "assistant", "❌ " + errMsg, []);
+        return { error: errMsg, runId: run.id };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+   default:
       return { error: `Unknown tool: ${name}` };
   }
 }
