@@ -12,6 +12,7 @@ import {
   getAllowedAgentTools,
   executeToolCall,
   buildAgentSystemPrompt,
+  repairMessageSequence,
 } from "../services/local-agent.js";
 import { agentRunRecorder } from "../services/agent-run-trace.js";
 import { agentDbTables, agentDbTableData, agentDbQuery, agentDbExecScript } from "../services/agent-db.js";
@@ -37,54 +38,7 @@ function gateAccount(r: RoleCheck): void {
   if (!r.ok) throw new Error(r.error);
 }
 
-// Repair a chat history before sending to the LLM:
-// (1) collapse consecutive same-role turns (Claude/Anthropic rejects them — and
-//     a history poisoned by prior failed runs can legitimately contain
-//     back-to-back user messages, since we used to write only the user side).
-// (2) drop trailing tool messages whose tool_call_id no longer has a matching
-//     assistant tool_call earlier in the window. This produced the
-//     "tool_use ids were found without tool_result" 400s.
-export function repairMessageSequence(msgs: LlmMessage[]): LlmMessage[] {
-  const out: LlmMessage[] = [];
-  const seenCallIds = new Set<string>();
-  for (const m of msgs) {
-    if (m.role === "assistant" && Array.isArray(m.tool_calls)) {
-      for (const tc of m.tool_calls) if (tc.id) seenCallIds.add(tc.id);
-    }
-    if (m.role === "tool") {
-      const cid = (m as any).tool_call_id || (m as any).call_id;
-      // Skip orphaned tool results — no corresponding tool_use upstream.
-      if (!cid || !seenCallIds.has(cid)) continue;
-    }
-    const prev = out[out.length - 1];
-    if (prev && prev.role === m.role && (m.role === "user" || m.role === "assistant")) {
-      // Merge into the previous turn so we don't violate strict alternation.
-      const a = (prev.content || "").trim();
-      const b = (m.content || "").trim();
-      prev.content = a && b ? `${a}\n\n${b}` : a || b;
-      if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
-        (prev as any).tool_calls = [
-          ...((prev as any).tool_calls || []),
-          ...(m as any).tool_calls,
-        ];
-      }
-      continue;
-    }
-    out.push({ ...m });
-  }
-  // Drop a trailing assistant that has tool_calls without any tool results
-  // (truncated by an earlier crash) — the next user turn won't be able to
-  // satisfy it without re-running the tools.
-  while (out.length) {
-    const last = out[out.length - 1];
-    if (last.role === "assistant" && Array.isArray((last as any).tool_calls) && (last as any).tool_calls.length > 0) {
-      out.pop();
-      continue;
-    }
-    break;
-  }
-  return out;
-}
+export { repairMessageSequence };
 
 export function registerAgentHandlers(): void {
 

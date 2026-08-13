@@ -27,7 +27,7 @@ import {
 import {
   getLlmConfig, getOrDetectLlmConfig, redactLlmConfig, saveLlmConfig,
   listConversations, createConversation, getConversation, deleteConversation,
-  renameConversation, llmChat,
+  renameConversation, llmChat, agentChat, addMessage, repairMessageSequence,
   type LlmMessage,
 } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
@@ -1106,14 +1106,79 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       }
       msgs.push({ role: m.role, content: m.content });
     }
+   try {
+     const reply = await llmChat(config, msgs);
+     return { status: 200, body: { reply: reply.content } };
+   } catch (e: any) {
+     return { status: 400, body: { error: e.message || String(e) } };
+   }
+ }
+
+  // Conversation-scoped tool-calling chat over REST. Mirrors the IPC agent:chat
+  // loop (persists messages, executes tools) and also records a run trace so
+  // API automation gets the same observability as the UI chat-stream.
+  if (method === "POST" && p === "/api/agent/chat") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const body = await readJson(req);
+    if (!body || typeof body.conversationId !== "string" || !body.conversationId.trim()
+      || typeof body.message !== "string" || !body.message.trim()) {
+      return { status: 400, body: { error: "conversationId and message are required" } };
+    }
+    const conversationId = body.conversationId.trim();
+    const message = body.message;
+    const config = getLlmConfig() || getOrDetectLlmConfig();
+    if (!config) {
+      return { status: 400, body: { error: "No LLM config. Configure an API key first." } };
+    }
+    const conv = getConversation(conversationId);
+    if (!conv) return { status: 404, body: { error: "Conversation not found" } };
+
+    addMessage(conversationId, "user", message);
+    const recentMsgs = conv.messages
+      .filter((m: any) => m.role === "user" || m.role === "assistant")
+      .slice(-40);
+    const llmMsgs: LlmMessage[] = recentMsgs.map((m: any) => ({ role: m.role, content: m.content }));
+    llmMsgs.push({ role: "user", content: message });
+    const repaired = repairMessageSequence(llmMsgs);
+
+    const timeoutMs = clampInt(String(body.timeoutMs ?? 120000), 120000, 1000, 600000);
+    const run = agentRunRecorder.startRun({
+      source: { type: "chat", conversationId },
+      name: message.slice(0, 120),
+    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const reply = await llmChat(config, msgs);
-      return { status: 200, body: { reply: reply.content } };
+      const result = await agentChat(config, repaired, { runId: run.id, signal: controller.signal });
+      agentRunRecorder.finishRun(run.id, "done");
+      if (result.error) {
+        addMessage(conversationId, "assistant", "❌ " + result.error, []);
+        return { status: 400, body: { error: result.error, runId: run.id } };
+      }
+      const finalMsg = [...result.messages].reverse().find((m: any) => m.role === "assistant" && m.content);
+      if (!finalMsg?.content) {
+        addMessage(conversationId, "assistant", "❌ Agent did not return a final response.", []);
+        return { status: 400, body: { error: "Agent did not return a final response.", runId: run.id } };
+      }
+      const redactedToolCalls = result.messages.flatMap((m: any) =>
+        m.tool_calls?.map((tc: any) => ({ name: tc.function.name, redacted: true })) || []);
+      addMessage(conversationId, "assistant", finalMsg.content, redactedToolCalls);
+      return {
+        status: 200,
+        body: { reply: finalMsg.content, toolCalls: redactedToolCalls, runId: run.id, conversationId },
+      };
     } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      const errMsg = controller.signal.aborted
+        ? "Agent chat timed out after " + timeoutMs + "ms"
+        : (e.message || String(e));
+      agentRunRecorder.finishRun(run.id, "error", errMsg);
+      addMessage(conversationId, "assistant", "❌ " + errMsg, []);
+      return { status: 400, body: { error: errMsg, runId: run.id } };
+    } finally {
+      clearTimeout(timer);
     }
   }
-
   if (method === "GET" && p === "/api/agent/runs") {
     const limit = clampInt(url.searchParams.get("limit"), 50, 1, 200);
     const dirId = url.searchParams.get("dirId") || undefined;
@@ -1677,11 +1742,18 @@ function buildOpenApi(): any {
         },
         delete: { summary: "Delete a conversation (member+ when team enabled)", responses: ok("Delete result") },
       },
-      "/api/agent/chat-simple": {
+     "/api/agent/chat-simple": {
+       post: {
+         summary: "One-shot chat without tools (requires a saved LLM config)",
+         requestBody: { content: { "application/json": { schema: { type: "object", required: ["messages"], properties: { messages: { type: "array", items: { type: "object", required: ["role", "content"], properties: { role: { type: "string", enum: ["system", "user", "assistant"] }, content: { type: "string" } } } } } } } } },
+         responses: ok("Reply text"),
+       },
+     },
+      "/api/agent/chat": {
         post: {
-          summary: "One-shot chat without tools (requires a saved LLM config)",
-          requestBody: { content: { "application/json": { schema: { type: "object", required: ["messages"], properties: { messages: { type: "array", items: { type: "object", required: ["role", "content"], properties: { role: { type: "string", enum: ["system", "user", "assistant"] }, content: { type: "string" } } } } } } } } },
-          responses: ok("Reply text"),
+          summary: "Conversation-scoped tool-calling chat (member+ when team enabled); persists to the conversation and records a run trace",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["conversationId", "message"], properties: { conversationId: { type: "string" }, message: { type: "string" }, timeoutMs: { type: "integer", description: "Abort timeout in ms (default 120000)" } } } } } },
+          responses: ok("Reply, redacted tool calls and runId"),
         },
       },
       "/api/agent/runs": {

@@ -2792,6 +2792,50 @@ export interface LlmMessage {
   name?: string;
 }
 
+// Repair a chat history before sending to the LLM:
+// (1) collapse consecutive same-role turns (Claude/Anthropic rejects them, and
+//     a history poisoned by prior failed runs can legitimately contain
+//     back-to-back user messages since we used to write only the user side).
+// (2) drop trailing tool messages whose tool_call_id no longer has a matching
+//     assistant tool_call earlier in the window. This produced the
+//     tool_use-without-tool_result 400s.
+export function repairMessageSequence(msgs: LlmMessage[]): LlmMessage[] {
+  const out: LlmMessage[] = [];
+  const seenCallIds = new Set<string>();
+  for (const m of msgs) {
+    if (m.role === "assistant" && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) if (tc.id) seenCallIds.add(tc.id);
+    }
+    if (m.role === "tool") {
+      const cid = (m as any).tool_call_id || (m as any).call_id;
+      if (!cid || !seenCallIds.has(cid)) continue;
+    }
+    const prev = out[out.length - 1];
+    if (prev && prev.role === m.role && (m.role === "user" || m.role === "assistant")) {
+      const a = (prev.content || "").trim();
+      const b = (m.content || "").trim();
+      prev.content = a && b ? a + "\n\n" + b : a || b;
+      if (m.role === "assistant" && Array.isArray((m as any).tool_calls)) {
+        (prev as any).tool_calls = [
+          ...((prev as any).tool_calls || []),
+          ...(m as any).tool_calls,
+        ];
+      }
+      continue;
+    }
+    out.push({ ...m });
+  }
+  while (out.length) {
+    const last = out[out.length - 1];
+    if (last.role === "assistant" && Array.isArray((last as any).tool_calls) && (last as any).tool_calls.length > 0) {
+      out.pop();
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
 export async function llmChat(config: LlmConfig, messages: LlmMessage[], tools?: any[], signal?: AbortSignal): Promise<LlmMessage> {
   assertNotAborted(signal);
   if (config.provider === "claude") {
