@@ -29,6 +29,7 @@ import {
   listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
   createBrowserProfile, deleteBrowserProfile,
   findRuntimeChromiumBinary, getRuntimeChromiumVersion,
+  touchProfileActivity, listRunningProfileIdle, getIdlePolicyTimeoutMs,
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
@@ -90,6 +91,13 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   const method = req.method || "GET";
   const p = url.pathname || "/";
 
+  // Any REST interaction with a profile counts as activity so the server/headless
+  // idle sweep never stops a profile a client is still using.
+  const mProfileRoute = p.match(/^\/api\/profiles\/([^/]+)(\/|$)/);
+  if (mProfileRoute && mProfileRoute[1] !== "import" && mProfileRoute[1] !== "import-batch" && mProfileRoute[1] !== "export") {
+    try { touchProfileActivity(mProfileRoute[1]); } catch { /* best effort */ }
+  }
+
   if (method === "GET" && p === "/health") {
     return {
       status: 200,
@@ -101,6 +109,17 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
         version: API_VERSION,
         profiles: Object.keys(getConfig().browserProfiles || {}).length,
         uptimeSeconds: Math.floor(process.uptime()),
+      },
+    };
+  }
+  if (method === "GET" && p === "/api/server/idle") {
+    const timeoutMs = getIdlePolicyTimeoutMs();
+    return {
+      status: 200,
+      body: {
+        enabled: timeoutMs > 0,
+        timeoutMs,
+        running: listRunningProfileIdle(),
       },
     };
   }
@@ -808,6 +827,9 @@ function buildOpenApi(): any {
       "/health": { get: { summary: "Liveness probe", responses: ok("Service status") } },
       "/openapi.json": { get: { summary: "OpenAPI document", responses: ok("OpenAPI 3.0 spec") } },
       "/version": { get: { summary: "Product + runtime Chromium version", responses: ok("Version info") } },
+      "/api/server/idle": {
+        get: { summary: "Idle auto-stop policy + per-profile idle times", responses: ok("Idle policy") },
+      },
       "/api/profiles": {
         get: { summary: "List managed Chromium profiles", responses: ok("Profile list") },
         post: {

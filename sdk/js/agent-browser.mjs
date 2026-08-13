@@ -119,6 +119,7 @@ export class AgentBrowserClient {
   }
 
   drmStatus() { return this.request('GET', '/api/drm/status'); }
+  serverIdle() { return this.request('GET', '/api/server/idle'); }
 
   automationRules() {
     return this.request('GET', '/api/automation/rules').then((d) => d.rules || []);

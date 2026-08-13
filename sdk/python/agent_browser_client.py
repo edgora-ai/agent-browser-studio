@@ -129,6 +129,10 @@ class AgentBrowserClient:
     def drm_status(self) -> dict[str, Any]:
         return self.get("/api/drm/status")
 
+    def server_idle(self) -> dict[str, Any]:
+        """Idle auto-stop policy + per-profile idle times (server/headless)."""
+        return self.get("/api/server/idle")
+
     # ── automation / runs / jobs ───────────────────────────────────────────
     def automation_rules(self) -> list[dict[str, Any]]:
         return self.get("/api/automation/rules").get("rules", [])

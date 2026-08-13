@@ -1915,7 +1915,7 @@ export const AGENT_TOOLS = [
 // 5. Tool Execution Engine
 // ═══════════════════════════════════════════════════════════════
 
-import { launchBrowser, listBrowserProfiles } from "./browser-manager.js";
+import { launchBrowser, listBrowserProfiles, touchProfileActivityByPort } from "./browser-manager.js";
 import { listProfiles } from "./profile-manager.js";
 import { getProfileMeta } from "./config-manager.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
@@ -1947,6 +1947,9 @@ function assertManagedCdpPort(port: number): void {
 
 async function getOrConnectCdp(port: number): Promise<CdpClient> {
   assertManagedCdpPort(port);
+  // Any CDP tool use counts as profile activity so idle auto-stop never kills
+  // a profile mid-task (server/headless idle sweep).
+  try { touchProfileActivityByPort(port); } catch { /* best effort */ }
   let client = cdpClients.get(port);
   if (client) {
     try { await cdpEvaluate(client, "1"); return client; } // Test connection

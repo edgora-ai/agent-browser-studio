@@ -2,7 +2,7 @@
 // 复用 launchBrowser/stopBrowser/agentChat/syncService 执行动作。
 import type { AutomationRule, AutomationAction } from "../types.js";
 import { getConfig, saveConfig } from "./config-manager.js";
-import { launchBrowser, stopBrowser, statusBrowser } from "./browser-manager.js";
+import { launchBrowser, stopBrowser, statusBrowser, touchProfileActivity } from "./browser-manager.js";
 import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
@@ -72,11 +72,13 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
       case "launch-profile": {
         if (!a.profileDirId) throw new Error("missing profileDirId");
         const r = await launchBrowser(a.profileDirId);
+        touchProfileActivity(a.profileDirId);
         assertActionNotAborted(context.signal);
         return `launched pid=${r.pid} cdpPort=${r.cdpPort}`;
       }
       case "stop-profile": {
         if (!a.profileDirId) throw new Error("missing profileDirId");
+        touchProfileActivity(a.profileDirId);
         const ok = stopBrowser(a.profileDirId);
         assertActionNotAborted(context.signal);
         return ok ? "stopped" : "not running";
@@ -168,6 +170,7 @@ async function runAgentTaskOnProfile(
     // 启动 profile(若未运行),让 agent 有 CDP target
     const st = statusBrowser(dirId);
     if (!st.running) await launchBrowser(dirId);
+    touchProfileActivity(dirId);
   } catch (e: any) {
     return { dirId, runId: "", ok: false, error: `launch failed: ${e?.message || String(e)}` };
   }

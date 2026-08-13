@@ -103,6 +103,7 @@ const runningProcesses = new Map<string, {
   pid: number;
   process: any;
   port: number;
+  lastActivityAt: number;
   killTimer?: ReturnType<typeof setTimeout>;
   proxyBridge?: { close: () => Promise<void> };
 }>();
@@ -409,7 +410,7 @@ export async function launchBrowser(
   // ps fallback: survive app restarts
   const psFallback = findBrowserByProfile(dirId);
   if (psFallback) {
-    runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort });
+    runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort, lastActivityAt: Date.now() });
     return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
   }
 
@@ -705,6 +706,7 @@ export async function launchBrowser(
     pid,
     process: child,
     port: cdpPort,
+    lastActivityAt: Date.now(),
     ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
   });
   pendingProxyBridge = null;
@@ -902,7 +904,7 @@ export function stopBrowser(dirId: string): boolean {
   if (entry) {
     entry.killTimer = killTimer;
   } else {
-    runningProcesses.set(dirId, { pid: pids[0], process: null, port: 0, killTimer });
+    runningProcesses.set(dirId, { pid: pids[0], process: null, port: 0, lastActivityAt: Date.now(), killTimer });
   }
 
   recordAudit({ category: "profile", action: "stop", target: dirId, actor: "user" });
@@ -924,10 +926,87 @@ export function statusBrowser(dirId: string): { running: boolean; pid: number | 
   // ps fallback
   const psFound = findBrowserByProfile(dirId);
   if (psFound) {
-    runningProcesses.set(dirId, { pid: psFound.pid, process: null, port: psFound.cdpPort });
+    runningProcesses.set(dirId, { pid: psFound.pid, process: null, port: psFound.cdpPort, lastActivityAt: Date.now() });
     return { running: true, pid: psFound.pid, cdpPort: psFound.cdpPort };
   }
   return { running: false, pid: null, cdpPort: null };
+}
+
+// ── Idle tracking (server/headless profile auto-stop) ──
+
+let idlePolicyTimeoutMs = 0;
+
+/** Configure the idle auto-stop timeout (0 disables). Called once at startup. */
+export function setIdlePolicyTimeoutMs(ms: number): void {
+  idlePolicyTimeoutMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 0;
+}
+
+export function getIdlePolicyTimeoutMs(): number {
+  return idlePolicyTimeoutMs;
+}
+
+/** Mark a running profile as active (called on any interaction that touches it). */
+export function touchProfileActivity(dirId: string): void {
+  if (typeof dirId !== "string" || !dirId) return;
+  const entry = runningProcesses.get(dirId);
+  if (entry) entry.lastActivityAt = Date.now();
+}
+
+/** Mark the profile owning the given CDP port as active. */
+export function touchProfileActivityByPort(port: number): void {
+  if (!Number.isInteger(port) || port < 1) return;
+  for (const [dirId, entry] of runningProcesses) {
+    if (entry.port === port) {
+      entry.lastActivityAt = Date.now();
+      return;
+    }
+  }
+}
+
+/** Milliseconds since the profile was last active, or null when not running. */
+export function getProfileIdleMs(dirId: string): number | null {
+  if (typeof dirId !== "string" || !dirId) return null;
+  const entry = runningProcesses.get(dirId);
+  if (!entry) return null;
+  return Math.max(0, Date.now() - entry.lastActivityAt);
+}
+
+/** Snapshot of every running profile with its current idle time (for /api/server/idle). */
+export function listRunningProfileIdle(): Array<{ dirId: string; pid: number; cdpPort: number; idleMs: number }> {
+  const out: Array<{ dirId: string; pid: number; cdpPort: number; idleMs: number }> = [];
+  for (const [dirId, entry] of runningProcesses) {
+    // Skip entries that are mid-stop (killTimer pending) — they are already going away.
+    if (entry.killTimer) continue;
+    try { process.kill(entry.pid, 0); } catch { continue; }
+    out.push({ dirId, pid: entry.pid, cdpPort: entry.port, idleMs: Math.max(0, Date.now() - entry.lastActivityAt) });
+  }
+  return out;
+}
+
+/**
+ * Stop every running profile that has been idle (no REST/CDP/automation activity)
+ * for longer than maxIdleMs. Returns the stopped dirIds. Mirrors upstream
+ * CloakBrowser cloakserve idle cleanup (#352) for our on-demand profile model.
+ */
+export function sweepIdleProfiles(maxIdleMs: number): string[] {
+  if (!Number.isFinite(maxIdleMs) || maxIdleMs <= 0) return [];
+  const stopped: string[] = [];
+  for (const [dirId, entry] of runningProcesses) {
+    if (entry.killTimer) continue; // already stopping
+    try { process.kill(entry.pid, 0); } catch { continue; }
+    if (Date.now() - entry.lastActivityAt >= maxIdleMs) {
+      try {
+        const ok = stopBrowser(dirId);
+        if (ok) {
+          stopped.push(dirId);
+          recordAudit({ category: "profile", action: "stop", target: dirId, actor: "auto", detail: "idle timeout" });
+        }
+      } catch (error) {
+        console.error("[agent-browser] idle sweep failed for " + dirId.slice(0, 8) + ":", error);
+      }
+    }
+  }
+  return stopped;
 }
 
 export async function getCdpWebSocketUrl(port: number): Promise<string | null> {

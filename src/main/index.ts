@@ -23,7 +23,7 @@ import { startScheduler } from "./services/automation.js";
 import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
-import { stopAllBrowserProfiles } from "./services/browser-manager.js";
+import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs } from "./services/browser-manager.js";
 import { migrateSecrets } from "./services/config-manager.js";
 import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
@@ -234,6 +234,27 @@ app.whenReady().then(async () => {
     createWindow();
   }
   startScheduler();
+
+  // Idle auto-stop for running profiles: stops profiles with no REST/CDP/
+  // automation activity for the timeout. Opt-in via AGENT_BROWSER_IDLE_TIMEOUT_MS
+  // (0 or unset disables) so existing GUI/headless instances are never
+  // surprised; set it in server/Docker deployments to reclaim leaked profiles.
+  // Mirrors upstream cloakserve idle cleanup (#352).
+  const idleEnv = Number.parseInt(process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || "", 10);
+  const idleTimeoutMs = Number.isFinite(idleEnv) && idleEnv > 0 ? idleEnv : 0;
+  setIdlePolicyTimeoutMs(idleTimeoutMs);
+  if (idleTimeoutMs > 0) {
+    const sweepEveryMs = Math.max(1000, Math.min(Math.floor(idleTimeoutMs / 2), 60_000));
+    setInterval(() => {
+      try {
+        const stopped = sweepIdleProfiles(getIdlePolicyTimeoutMs());
+        if (stopped.length) console.log("[server] idle sweep stopped " + stopped.length + " profile(s): " + stopped.join(", "));
+      } catch (error) {
+        console.error("[server] idle sweep failed:", error);
+      }
+    }, sweepEveryMs).unref();
+    console.log("[server] idle profile auto-stop enabled (timeout=" + idleTimeoutMs + "ms, sweep every " + sweepEveryMs + "ms)");
+  }
 
   if (!headless) {
     // Create system tray
