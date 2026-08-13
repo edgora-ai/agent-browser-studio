@@ -544,3 +544,17 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 检测完成或清除健康后若时间线已展开则自动刷新内容
 
 **验证**：e2e `tests/e2e/j70-proxy-health-history.test.ts` 5 例（加代理+fallback、对关闭端口快速失败的代理做 Detect 记录失败观测、轮换建议 healthy fallback 并记录切换、历史时间线展开显示 ❌ 再收起、无意外 console error）；回归 j29（proxy UI CRUD）5 例；全量单测 46 文件 565 例全绿；tsc/build 干净。
+
+### Slice 45 — Linux 引擎构建路径 + 多平台打包配置（P1，平台缺口推进）— 🟡
+
+**范围**：ALIGNMENT_MATRIX 剩余的硬缺口是签名多平台分发 / Windows-Linux 生产验证。上游 CloakBrowser 已发布 Linux Chromium 150 构建（v0.5.2），本切片把我们的独立 Linux 构建路径与多平台打包配置落到仓库里，让 Linux/CI 主机一步即可产出引擎并接入 headless Docker 镜像。
+
+**新增/修改**：
+- `patches/chromium/args.gn.linux` — Linux 官方构建参数（target_os=linux、ThinLTO 官方构建、Chrome FFmpeg branding、Widevine key-system 管线 + 运行时托管 CDM、enable_nacl=false / use_custom_libcxx / is_clang）
+- `patches/chromium/build-linux.sh` — 一键构建：缺省克隆到 pin 定 commit → `gclient sync` → `apply.sh` 打补丁 → 写入 args.gn.linux + target_cpu → `gn gen` + `autoninja chrome`；输出 `out/AgentBrowserRelease/chrome` 并打印接入方式
+- `patches/chromium/README.md` — 新增 Linux 构建章节（含 install-build-deps 指引）
+- `electron-builder.yml` — 新增 `linux` 目标（AppImage x64/arm64）+ mac/win 签名/公证 env 说明（本地构建保持未签名）
+- `Dockerfile` / `docker-compose.yml` — 镜像声明 `AGENT_BROWSER_CHROMIUM_BINARY_PATH=/opt/chromium/chrome`，compose 挂载 `./chromium:/opt/chromium`，运行时缺二进制即 fail-closed（无 wrapper 回退）
+- `tests/smoke/linux-build.test.ts` — 5 例：args.gn.linux 表面与键值行可解析、build-linux.sh 存在且可执行且 `bash -n` 通过、electron-builder mac/win/linux 目标齐全、Dockerfile/compose 引擎接线正确
+
+**验证**：smoke 5 例全绿；全量单测/tsc 不受影响（见下方回归）。真实 Linux 构建与生产 E2E 仍需 Linux 构建主机，矩阵该行从 `missing` 更新为 `partial` 并注明已定义路径。

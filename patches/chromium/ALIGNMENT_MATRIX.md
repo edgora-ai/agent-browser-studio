@@ -82,7 +82,7 @@ Status meanings:
 | Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 53-surface fresh-directory, same-directory restart and independent-directory comparison |
 | Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 53-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
-| Signed multi-platform distribution | missing | macOS arm64/x64, Windows x64, Linux x64/arm64 | reproducible build metadata, checksums/signatures and platform E2E |
+| Signed multi-platform distribution | partial | macOS arm64/x64, Windows x64, Linux x64/arm64 | macOS arm64 engine + controller are verified and packaged; the Linux engine build path (`patches/chromium/build-linux.sh` + `args.gn.linux`) and multi-platform packaging config (`electron-builder.yml` mac/win/linux targets, opt-in signing env) are now defined; Windows/Linux production E2E and checksums/signatures still require platform build hosts |
 
 ## Product-level capabilities
 
@@ -92,7 +92,7 @@ the complete product rather than only the engine:
 - version-aware automatic updates with rollback — ✅ verified (see the Release store & rollback table below);
 - Docker/server mode and Python/JavaScript/.NET integration surfaces — ✅ verified (see the Server mode & integration surfaces table below);
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
-- Windows and Linux production verification;
+- Windows and Linux production verification — Linux engine build path and multi-platform packaging are defined (see Signed multi-platform distribution); full production E2E still pending platform hosts;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup — ✅ verified (see the Team RBAC table below);
 - proxy health/history/rotation as managed assets — ✅ verified (see the Proxy health assets table below).

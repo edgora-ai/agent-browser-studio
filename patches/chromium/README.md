@@ -232,3 +232,26 @@ login. J50 additionally passes the two-level cross-origin frame, late-layout,
 occlusion and explicit key-delay corpus against both source and installed
 Chromium 150. J51 proves that legacy wrapper variables cannot select or
 download a fallback browser.
+
+## Build configuration — Linux
+
+A one-command Linux build path is checked in so the headless Docker image has
+a first-party engine (the upstream CloakBrowser project already ships Linux
+Chromium 150 builds; this repo keeps the independent path):
+
+```bash
+./patches/chromium/build-linux.sh /path/to/chromium/src x64
+```
+
+This applies the same patch chain (`apply.sh`), copies `args.gn.linux` into
+`out/AgentBrowserRelease/args.gn`, and runs `gn gen` + `autoninja chrome`. The
+resulting `out/AgentBrowserRelease/chrome` is wired into the Docker image via
+`docker-compose.yml` (`./chromium:/opt/chromium` +
+`AGENT_BROWSER_CHROMIUM_BINARY_PATH=/opt/chromium/chrome`). The runtime image
+carries the Chromium shared-library and font packages the Linux binary needs.
+
+On Debian/Ubuntu hosts, install build deps once before building:
+
+```bash
+sudo ./chromium-src-150/build/install-build-deps.sh --no-prompt
+```
