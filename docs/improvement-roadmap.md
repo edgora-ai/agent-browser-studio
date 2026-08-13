@@ -839,3 +839,23 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测+smoke 634 例全绿；全量 e2e 75 passed / 4 skipped（79 文件，含新 j83 9 例）
 
 **后续项**：agent REST 面已收口；如需可再加 POST /api/agent/chat（会话内 tool-calling 模式，需 webContents 上下文，REST 语义需另行设计）。引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+
+### Slice 61 — REST 会话内 tool-calling chat（POST /api/agent/chat）— ✅
+
+**背景**：Slice 60 收尾点名的「如需可再加 POST /api/agent/chat（会话内 tool-calling 模式，需 webContents 上下文，REST 语义需另行设计）」。此前 REST 只有 one-shot chat-simple（无工具、无持久化），完整的多轮 tool-calling Agent 会话只能在 UI 里跑。本切片把与 IPC agent:chat 同等的会话内工具循环暴露到 loopback REST：LLM 多轮调用工具 → 执行 → 回喂 → 收尾，消息持久化到会话，并额外记录 run trace 让 API 自动化获得与 UI chat-stream 一致的观测性。
+
+**新增（REST 端点）**：
+- POST /api/agent/chat —— body { conversationId, message, timeoutMs? }（timeoutMs 默认 120000，范围 1s-10min，超时 abort 并落 error run）；会话不存在 404、缺字段 400、无 LLM 配置 400；成功返回 { reply, toolCalls:[{name,redacted}], runId, conversationId }
+- 写操作 requireSettingsMutation 门控（viewer → 403，与其余会话写一致）、记录 audit（conversation/run 增删）、登记 OpenAPI 3.0
+- 错误路径：Agent 错误/超时/无最终回复都会把 ❌ 回复持久化到会话（保证下轮历史是合法 user/assistant 对），run trace 以 error 状态收尾并在错误响应里带 runId
+
+**重构（消除 IPC/REST 双份逻辑）**：
+- 改 src/main/services/local-agent.ts — repairMessageSequence（历史修复：合并连续同角色轮、丢弃孤立 tool 结果）从 ipc/agent.ts 上移到服务层，IPC chat / chat-stream 与 REST chat 共用
+- 改 src/main/ipc/agent.ts — 删除本地实现，改从服务层 import 并 re-export（对外导入路径不变，单测不受影响）
+- REST chat 复用 agentChat（无 webContents 也能跑——审批弹窗缺省广播到所有窗口），run 包装与 chat-stream 同构
+
+**验证**：
+- e2e tests/e2e/j83-agent-rest.test.ts 新增 1 例（共 10 例）：mock 先回 set_var 工具调用再回最终答复——REST chat 全链路（回复包含最终答案、toolCalls 返回 {name,redacted}、runId 匹配 /^run_/、会话持久化了 assistant 消息、run trace status=done 且 steps 含 set_var）；404（会话不存在）、400（缺 message）；OpenAPI 登记 /api/agent/chat；viewer 下 POST /api/agent/chat → 403
+- 回归：全量单测+smoke 634 例全绿（含 repair-message-sequence 单测，经 re-export 路径）；全量 e2e 75 passed / 4 skipped（79 文件，378 passed）
+
+**后续项**：agent REST 面（配置/会话/chat-simple/chat/run/db/审批）全部收口。引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。下一步候选：把 agent chat/run 能力补进 Python SDK 与 MCP 面（对外集成面进一步对齐 RoxyBrowser），或按引擎矩阵在真实 runner 上跑签名分发验证。
