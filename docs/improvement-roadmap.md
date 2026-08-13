@@ -883,3 +883,22 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测 634 例全绿；全量 e2e 76 passed / 4 skipped（80 文件，383 passed）
 
 **后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK 四个面。JS SDK（sdk/js/agent-browser.mjs）还没有 agent 面，是下一个对齐候选；引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+## Slice 63 — JS SDK 补齐 agent 面
+
+**目标**：Slice 62 路线图点名的下一步——把 agent 配置/会话/chat/run/db/审批能力补进 JS SDK（sdk/js/agent-browser.mjs），使 agent 能力覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。
+
+**实现（sdk/js/agent-browser.mjs）**：
+- 底层补 put()/patch() 两个 HTTP 动词（与 Python SDK 对齐）
+- LLM：llmConfig() / saveLlmConfig({provider, apiKey, apiUrl, model})
+- 会话：listConversations() / createConversation(title) / getConversation() / renameConversation() / deleteConversation()
+- 聊天：chatSimple(messages) / chat(conversationId, message, timeoutMs)（会话内 tool-calling）
+- Runs：agentRuns(query) / agentRun() / deleteAgentRun() / clearAgentRuns()
+- DB：dbTables() / dbTable(table, query) / dbQuery(sql) / dbExec(sql)
+- 审批：pendingApprovals() / resolveApproval(approvalId, decision)
+- node --check 通过；README 补充 agent 面说明
+
+**验证**：
+- e2e tests/e2e/j85-js-sdk-agent.test.ts 新增 5 例：agent 方法面存在性；saveLlmConfig 后 chatSimple 返回 mock 回复（config 读取 hasApiKey 且 apiKey 脱敏）；会话 create/list/get/rename/delete（删除后 404 且抛 AgentBrowserError 含 404）；mock 先回 set_var 再回最终答复——chat 全链路（reply/toolCalls/runId、run trace done 且 steps 含 set_var、会话持久化 assistant 回复、run 删除+清空）；dbTables/dbExec/dbTable/dbQuery 读写 agent SQLite 与审批列表
+- 回归：全量单测 634 例全绿；全量 e2e 77 passed / 4 skipped（81 文件，388 passed）
+
+**后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。下一步候选：补 JS SDK 示例（example-agent.mjs）或按引擎矩阵在真实 runner 上跑签名分发验证。
