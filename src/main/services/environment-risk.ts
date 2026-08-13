@@ -108,21 +108,76 @@ export function getDnsResolvers(): string[] {
   }
 }
 
-const CN_FONT_MARKERS: Array<{ match: RegExp; name: string }> = [
+// Chinese fonts split by what they actually signal on a non-CN machine:
+// - windows-only: only present on a Chinese Windows install; loading one on a
+//   US-declared profile is a genuine leak signal. These are the fonts ping0.cc
+//   and Amazon/eBay risk engines look for.
+// - macos-universal: shipped on every real macOS (STHeiti / PingFang / Songti /
+//   Hiragino / Noto CJK), so a macOS profile exposing them matches a real US Mac;
+//   they are NOT a leak signal for macOS profiles and are engine-isolated for
+//   Windows profiles.
+const WINDOWS_CN_FONT_MARKERS: Array<{ match: RegExp; name: string }> = [
   { match: /simsun/i, name: "SimSun (宋体)" },
   { match: /simhei/i, name: "SimHei (黑体)" },
   { match: /msyh|yahei|微软雅黑/i, name: "Microsoft YaHei (微软雅黑)" },
   { match: /simkai|kaiti|楷体/i, name: "KaiTi (楷体)" },
   { match: /simfang|fangsong|仿宋/i, name: "FangSong (仿宋)" },
   { match: /dengxian|等线/i, name: "DengXian (等线)" },
+  { match: /huawen|华文/i, name: "华文字体 (Huawen)" },
+  { match: /founder|方正/i, name: "方正字体 (Founder)" },
+];
+
+const MACOS_UNIVERSAL_CN_FONT_MARKERS: Array<{ match: RegExp; name: string }> = [
   { match: /pingfang|苹方/i, name: "PingFang SC (苹方)" },
   { match: /stheit|heiti/i, name: "STHeiti (黑体-简)" },
   { match: /songti|宋体/i, name: "Songti SC (宋体-简)" },
   { match: /hiragino.*gb|冬青黑/i, name: "Hiragino Sans GB" },
-  { match: /huawen|华文/i, name: "华文字体 (Huawen)" },
-  { match: /founder|方正/i, name: "方正字体 (Founder)" },
   { match: /nanum.*cjk|noto.*cjk.*sc/i, name: "Noto Sans CJK SC" },
 ];
+
+const CN_FONT_MARKERS = [...WINDOWS_CN_FONT_MARKERS, ...MACOS_UNIVERSAL_CN_FONT_MARKERS];
+
+/** Display name → concrete CSS font families to probe over CDP. */
+const CN_FONT_FAMILIES: Record<string, string[]> = {
+  "SimSun (宋体)": ["SimSun", "NSimSun"],
+  "SimHei (黑体)": ["SimHei"],
+  "Microsoft YaHei (微软雅黑)": ["Microsoft YaHei", "微软雅黑"],
+  "KaiTi (楷体)": ["KaiTi", "楷体"],
+  "FangSong (仿宋)": ["FangSong", "仿宋"],
+  "DengXian (等线)": ["DengXian", "等线"],
+  "华文字体 (Huawen)": ["STZhongsong", "STXihei", "STKaiti"],
+  "方正字体 (Founder)": ["FZXiaoBiaoSong-B05S", "FangSong_GB2312"],
+  "PingFang SC (苹方)": ["PingFang SC"],
+  "STHeiti (黑体-简)": ["STHeiti", "Heiti SC"],
+  "Songti SC (宋体-简)": ["Songti SC"],
+  "Hiragino Sans GB": ["Hiragino Sans GB"],
+  "Noto Sans CJK SC": ["Noto Sans CJK SC", "Noto Sans SC"],
+};
+
+/** Classify a scanned CN font display name: windows-only leak signal or macOS-universal. */
+export function classifyCnFontDisplayName(name: string): "windows-only" | "macos-universal" | null {
+  if (WINDOWS_CN_FONT_MARKERS.some((m) => m.name === name)) return "windows-only";
+  if (MACOS_UNIVERSAL_CN_FONT_MARKERS.some((m) => m.name === name)) return "macos-universal";
+  return null;
+}
+
+const CN_FONT_FAMILY_CATEGORY: Record<string, "windows-only" | "macos-universal"> = {};
+for (const marker of WINDOWS_CN_FONT_MARKERS) {
+  for (const fam of CN_FONT_FAMILIES[marker.name] || []) CN_FONT_FAMILY_CATEGORY[fam] = "windows-only";
+}
+for (const marker of MACOS_UNIVERSAL_CN_FONT_MARKERS) {
+  for (const fam of CN_FONT_FAMILIES[marker.name] || []) CN_FONT_FAMILY_CATEGORY[fam] = "macos-universal";
+}
+
+/** Classify a CSS font family name (runtime exposure probe) into its leak category. */
+export function classifyCnFontFamily(family: string): "windows-only" | "macos-universal" | null {
+  return CN_FONT_FAMILY_CATEGORY[family] || null;
+}
+
+/** Classify either a display name (static scan) or a CSS family (runtime probe). */
+function classifyCnFont(name: string): "windows-only" | "macos-universal" | null {
+  return classifyCnFontDisplayName(name) ?? classifyCnFontFamily(name);
+}
 
 const FONT_EXT_RE = /\.(?:ttf|ttc|otf)$/i;
 
@@ -248,10 +303,67 @@ export async function measureRaf(cdpPort: number): Promise<EnvRafResult | null> 
   }
 }
 
+export const FONT_EXPOSURE_EXPRESSION = `(async () => {
+  const list = globalThis.__agentBrowserFontProbeList || [];
+  const out = {};
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const text = "CHINESE\u4E2D\u6587\u5B57\u4F53\u6837\u5F0F test";
+  const base = "16px";
+  const measure = (fam) => { ctx.font = base + " " + JSON.stringify(fam); return ctx.measureText(text).width; };
+  for (const fam of list) {
+    try {
+      const w = measure(fam);
+      const generics = ["sans-serif", "serif", "monospace"];
+      const widths = generics.map(measure);
+      const check = document.fonts.check(base + " " + JSON.stringify(fam));
+      out[fam] = check && widths.every((g) => Math.abs(w - g) > 0.5);
+    } catch (e) { out[fam] = false; }
+  }
+  return out;
+})()`;
+
+/**
+ * Measure which Chinese font families are ACTUALLY loadable inside a running
+ * profile (FontFaceSet.check + rendered-width-vs-generic-fallback evidence, the
+ * same method the FONT_CORPUS acceptance gate uses). Returns the loadable family
+ * names. On any CDP failure returns the full candidate list (conservative: keep
+ * the static risk rather than under-report).
+ */
+export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames: string[]): Promise<string[]> {
+  const families: string[] = [];
+  const seen = new Set<string>();
+  for (const name of fontDisplayNames) {
+    for (const fam of CN_FONT_FAMILIES[name] || []) {
+      if (!seen.has(fam)) { seen.add(fam); families.push(fam); }
+    }
+  }
+  if (!families.length) return [];
+  const expression = FONT_EXPOSURE_EXPRESSION.replace("globalThis.__agentBrowserFontProbeList || []", JSON.stringify(families));
+  try {
+    const { cdpConnect, cdpEvaluate } = await import("./local-agent.js");
+    const client = await cdpConnect(cdpPort);
+    try {
+      const raw = await cdpEvaluate(client, expression);
+      const value = typeof raw === "string" ? JSON.parse(raw) : raw?.value || raw;
+      if (!value || typeof value !== "object") return families;
+      return families.filter((fam) => value[fam] === true);
+    } finally {
+      try { (client as any).ws?.close?.(); } catch { /* ignore */ }
+    }
+  } catch (e) {
+    return families; // conservative: assume exposed when verification fails
+  }
+}
+
 export interface EnvCheckOptions {
   /** Also measure rAF over a running profile (requires cdpPort). */
   runtime?: boolean;
   cdpPort?: number | null;
+  /** CN font families actually measured as loadable over CDP. When provided,
+   *  the font finding uses runtime evidence instead of host presence: a host
+   *  may have a Chinese font installed while the engine isolates it. */
+  exposedFonts?: string[];
   /** Proxy override for unit tests (defaults to resolving from config). */
   proxy?: (Pick<ResolvedProfileProxy, "mode"> & { config?: { type?: string } | null }) | null;
   /** Host locale override for unit tests. */
@@ -276,6 +388,8 @@ export function checkEnvironmentRisk(profile: {
   const profileCountry = (profile.locale || "").match(/[-_]([a-zA-Z]{2})$/)?.[1]?.toUpperCase() || null;
   const profileIsCn = profileCountry === "CN" || profileCountry === null;
   const hostIsCnLocale = /^zh-/.test(hostLocale);
+  const declaredPlatform = (profile.platform || "").toLowerCase();
+  const declaredMac = declaredPlatform.includes("mac") || declaredPlatform.includes("darwin") || declaredPlatform.includes("intel");
 
   const findings: EnvRiskFinding[] = [];
   const cnResolvers = resolvers.filter((r) => r.isCn);
@@ -288,12 +402,22 @@ export function checkEnvironmentRisk(profile: {
         message: `DNS 解析器 ${cnResolvers.map((r) => r.address + (r.label ? " (" + r.label + ")" : "")).join(", ")} 为国内解析器，与中文 profile 一致`,
         fix: "无（与 profile 国家一致）",
       });
+    } else if (proxy.dnsLeakRisk === "low") {
+      // HTTP / socks5h proxies take over DNS: the browser resolves through the
+      // proxy (managed profiles additionally route DoH through it), so the host
+      // system resolvers never see browser DNS traffic.
+      findings.push({
+        severity: "info",
+        code: "dns-resolver-proxy-takeover",
+        message: `宿主解析器含国内解析器 ${cnResolvers.map((r) => r.address + (r.label ? " (" + r.label + ")" : "")).join(", ")}，但当前代理（HTTP/socks5h）已接管 DNS，浏览器查询走代理端，不构成泄漏`,
+        fix: "无（代理已接管 DNS）",
+      });
     } else {
       findings.push({
         severity: "high",
         code: "dns-resolver-leak",
         message: `DNS 解析器包含国内解析器 ${cnResolvers.map((r) => r.address + (r.label ? " (" + r.label + ")" : "")).join(", ")}，与 profile 出口国家不一致，平台可通过 DNS 探测定位真实区域`,
-        fix: "把系统 DNS 改为 8.8.8.8 / 1.1.1.1 等海外解析器，或让代理接管 DNS（HTTP/socks5h）",
+        fix: "直连：把系统 DNS 改为 8.8.8.8 / 1.1.1.1 等海外解析器；或给 profile 配 HTTP/socks5h 代理让代理接管 DNS",
       });
     }
   } else if (!foreignResolvers.length) {
@@ -304,12 +428,25 @@ export function checkEnvironmentRisk(profile: {
     if (profileIsCn) {
       findings.push({ severity: "info", code: "cn-fonts-match", message: `检测到中文字体 ${cnFonts.join(", ")}，与中文 profile 一致`, fix: "无" });
     } else {
-      findings.push({
-        severity: "high",
-        code: "cn-fonts-exposed",
-        message: `本机装有中文字体 ${cnFonts.join(", ")}，但 profile 为非中文国家；Amazon/eBay 等风控会用字体表验证真实系统语言`,
-        fix: "在非中文 profile 中使用字体目录隔离（fontsDir），或卸载/隐藏中文字体",
-      });
+      const exposedWindowsOnly = (opts.exposedFonts ?? cnFonts).filter((n) => classifyCnFont(n) === "windows-only");
+      const hasRuntimeEvidence = Array.isArray(opts.exposedFonts);
+      if (exposedWindowsOnly.length) {
+        findings.push({
+          severity: "high",
+          code: "cn-fonts-exposed",
+          message: `本机装有 Windows 中文字体 ${exposedWindowsOnly.join(", ")}${hasRuntimeEvidence ? " 且实测可在浏览器内加载" : ""}，但 profile 为非中文国家；Amazon/eBay 等风控会用字体表验证真实系统语言`,
+          fix: hasRuntimeEvidence ? "引擎未隔离该字体：为 profile 配置隔离字体目录（fontsDir），或卸载/隐藏中文字体" : "运行中会实测字体是否真的可加载；Windows profile 通常已由引擎隔离",
+        });
+      }
+      const macUniversal = (opts.exposedFonts ?? cnFonts).filter((n) => classifyCnFont(n) === "macos-universal");
+      if (macUniversal.length) {
+        findings.push({
+          severity: "info",
+          code: "cn-fonts-macos-universal",
+          message: declaredMac ? `检测到 macOS 系统字体 ${macUniversal.join(", ")}（所有真实 Mac 均自带），与 macOS profile 一致，不构成泄漏` : `检测到 macOS 系统字体 ${macUniversal.join(", ")}；Windows profile 由引擎隔离，实测确认不可加载`,
+          fix: "无",
+        });
+      }
     }
   }
 
@@ -355,9 +492,19 @@ export async function checkEnvironmentRiskRuntime(profile: {
   locale?: string | null;
   platform?: string | null;
 }, cdpPort: number, opts: Omit<EnvCheckOptions, "runtime" | "cdpPort"> = {}): Promise<EnvironmentRiskResult> {
+  // Static host scan first, then verify actual in-browser font exposure over
+  // CDP. A host may have Chinese fonts installed while the engine isolates them
+  // (Windows profiles), so the report uses runtime evidence when available.
   const base = checkEnvironmentRisk(profile, { ...opts, runtime: false });
+  let exposedFonts: string[] = [];
+  if (base.cnFonts.length && base.findings.some((f) => f.code === "cn-fonts-exposed" || f.code === "cn-fonts-macos-universal")) {
+    exposedFonts = await verifyFontExposureViaCdp(cdpPort, base.cnFonts);
+  }
+  const result = exposedFonts.length || base.findings.some((f) => f.code === "cn-fonts-exposed")
+    ? checkEnvironmentRisk(profile, { ...opts, runtime: false, exposedFonts })
+    : base;
   const raf = await measureRaf(cdpPort);
-  const result = { ...base, raf };
+  result.raf = raf;
   if (raf && raf.samples > 0 && !raf.standard) {
     result.findings.push({
       severity: "medium",

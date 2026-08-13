@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   classifyResolver, scanSystemFonts, proxyDnsLeak, classifyRaf,
-  checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings,
+  checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, classifyCnFontDisplayName,
 } from "../../src/main/services/environment-risk.js";
 
 const TMP = path.join(os.tmpdir(), "agent-browser-envrisk-test-" + Date.now());
@@ -47,6 +47,14 @@ describe("environment risk — font scanning", () => {
     const empty = path.join(TMP, "empty");
     fs.mkdirSync(empty, { recursive: true });
     expect(scanSystemFonts([empty])).toEqual([]);
+  });
+
+  it("classifies scanned CN font display names into leak-signal categories", () => {
+    expect(classifyCnFontDisplayName("SimSun (宋体)")).toBe("windows-only");
+    expect(classifyCnFontDisplayName("Microsoft YaHei (微软雅黑)")).toBe("windows-only");
+    expect(classifyCnFontDisplayName("STHeiti (黑体-简)")).toBe("macos-universal");
+    expect(classifyCnFontDisplayName("PingFang SC (苹方)")).toBe("macos-universal");
+    expect(classifyCnFontDisplayName("Arial")).toBeNull();
   });
 });
 
@@ -124,6 +132,48 @@ describe("environment risk — assembled findings", () => {
       { resolvers: ["8.8.8.8"], hostLocale: "zh-CN", proxy: { mode: "none", config: null } as any },
     );
     expect(res.findings.some((f) => f.code === "host-locale-leak" && f.severity === "medium")).toBe(true);
+  });
+
+  it("does NOT flag a CN host resolver as a leak when an HTTP/socks5h proxy takes over DNS", () => {
+    for (const type of ["http", "socks5h"]) {
+      const res = checkEnvironmentRisk(
+        { locale: "en-US" },
+        { resolvers: ["223.5.5.5"], hostLocale: "en-US", proxy: { mode: "named", config: { type, host: "1.2.3.4", port: 1080 } } as any },
+      );
+      expect(res.findings.some((f) => f.code === "dns-resolver-leak" && f.severity === "high")).toBe(false);
+      expect(res.findings.some((f) => f.code === "dns-resolver-proxy-takeover" && f.severity === "info")).toBe(true);
+      expect(res.ok).toBe(true);
+    }
+  });
+
+  it("does NOT flag macOS-universal fonts on a macOS profile", () => {
+    const fontDir = path.join(TMP, "macfonts");
+    fs.mkdirSync(fontDir, { recursive: true });
+    fs.writeFileSync(path.join(fontDir, "STHeiti Light.ttc"), "");
+    const res = checkEnvironmentRisk(
+      { locale: "en-US", platform: "macOS" },
+      { resolvers: ["8.8.8.8"], fontDirs: [fontDir], hostLocale: "en-US", proxy: { mode: "none", config: null } as any },
+    );
+    expect(res.findings.some((f) => f.code === "cn-fonts-exposed" && f.severity === "high")).toBe(false);
+    expect(res.findings.some((f) => f.code === "cn-fonts-macos-universal")).toBe(true);
+    expect(res.ok).toBe(true);
+  });
+
+  it("uses runtime font exposure evidence to clear a host-only false positive", () => {
+    const fontDir = path.join(TMP, "winfonts");
+    fs.mkdirSync(fontDir, { recursive: true });
+    fs.writeFileSync(path.join(fontDir, "simsun.ttc"), "");
+    const opts = { resolvers: ["8.8.8.8"], fontDirs: [fontDir], hostLocale: "en-US", proxy: { mode: "none", config: null } as any };
+    // Static host scan says the font is installed -> high. Runtime evidence that
+    // nothing is actually loadable clears it.
+    const staticRes = checkEnvironmentRisk({ locale: "en-US", platform: "windows" }, opts);
+    expect(staticRes.findings.some((f) => f.code === "cn-fonts-exposed" && f.severity === "high")).toBe(true);
+    const runtimeRes = checkEnvironmentRisk({ locale: "en-US", platform: "windows" }, { ...opts, exposedFonts: [] });
+    expect(runtimeRes.findings.some((f) => f.code === "cn-fonts-exposed" && f.severity === "high")).toBe(false);
+    expect(runtimeRes.ok).toBe(true);
+    // If the same font IS actually loadable, the high finding stays.
+    const exposedRes = checkEnvironmentRisk({ locale: "en-US", platform: "windows" }, { ...opts, exposedFonts: ["SimSun"] });
+    expect(exposedRes.findings.some((f) => f.code === "cn-fonts-exposed" && f.severity === "high")).toBe(true);
   });
 });
 
