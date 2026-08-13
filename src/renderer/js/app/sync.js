@@ -198,44 +198,15 @@
 
   agentBrowser.syncPull = function() {
     var reset = setButtonBusy('#tab-sync [data-cmd="syncPull"]', 'Checking...');
-    fetchPreview().then(function(preview) {
-      var running = (preview && preview.runningProfiles) || [];
-      if (running.length) {
-        var ok = confirm(t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?'));
-        if (!ok) { if (reset) reset(); return null; }
-      }
-      return fetchSyncDiff().catch(function(e) {
-        toast(t('sync.toast.preview-failed','Preview failed: ') + (e.message || String(e)), 'error');
-        return null;
-      }).then(function() {
-        return api.sync.pull();
-      });
-    }).then(function(r) {
-      if (!r) return;
-      toast(r.message, r.success ? 'success' : 'error');
-      if (!r.success) { agentBrowser.loadSyncPreview(); return; }
-      return api.app.reloadConfig().then(function() {
-        agentBrowser.loadSyncConfig();
-      }).catch(function(e) {
-        toast(t('sync.toast.reload-failed','Reload config failed: ') + (e.message || String(e)), 'error');
-        agentBrowser.loadSyncConfig();
-      });
-    }).catch(function(e) {
-      toast(t('sync.toast.pull-failed','Pull failed: ') + (e.message || String(e)), 'error');
-    }).finally(function() {
-      if (reset) reset();
-    });
-  };
-
-  agentBrowser.syncPull = function() {
-    var reset = setButtonBusy('#tab-sync [data-cmd="syncPull"]', 'Checking...');
+    var strategySel = document.getElementById('sync-merge-strategy');
+    var strategy = strategySel ? strategySel.value : 'local';
     fetchPreview().then(function(preview) {
       var running = (preview && preview.runningProfiles) || [];
       if (running.length) {
         var ok = confirm(t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?'));
         if (!ok) { if (reset) reset(); return; }
       }
-      api.sync.pull().then(function(r) {
+      api.sync.pull({ strategy: strategy }).then(function(r) {
         toast(r.message, r.success ? 'success' : 'error');
         if (!r.success) { agentBrowser.loadSyncPreview(); return; }
         return api.app.reloadConfig().then(function() {

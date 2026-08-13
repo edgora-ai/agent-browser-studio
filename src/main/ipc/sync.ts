@@ -8,8 +8,8 @@ export function registerSyncHandlers(): void {
     return syncService.push(undefined, Boolean(opts?.force));
   });
 
-  ipcMain.handle("sync:pull", async (): Promise<SyncResult> => {
-    return syncService.pull();
+  ipcMain.handle("sync:pull", async (_event, opts?: { strategy?: string }): Promise<SyncResult> => {
+    return syncService.pull(undefined, (opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local"));
   });
 
   ipcMain.handle("sync:status", async () => {

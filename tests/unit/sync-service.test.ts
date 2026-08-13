@@ -573,6 +573,86 @@ describe("Sync diff preview (buildSyncDiff)", () => {
   });
 });
 
+describe("Sync merge strategy (mergeSectionById / mergeAccountSection / countAdoptedFromRemote)", () => {
+  it("normalizeMergeStrategy accepts only remote/newest, defaulting to local", () => {
+    expect(__syncTestHooks.normalizeMergeStrategy("remote")).toBe("remote");
+    expect(__syncTestHooks.normalizeMergeStrategy("newest")).toBe("newest");
+    expect(__syncTestHooks.normalizeMergeStrategy("local")).toBe("local");
+    expect(__syncTestHooks.normalizeMergeStrategy(undefined)).toBe("local");
+    expect(__syncTestHooks.normalizeMergeStrategy("bogus" as any)).toBe("local");
+  });
+
+  it("local strategy keeps local entries on conflict and adopts remote-only ids", () => {
+    const localMap = { p1: { name: "local", updatedAt: 100 }, p2: { name: "local-only", updatedAt: 100 } };
+    const remoteMap = { p1: { name: "remote", updatedAt: 200 }, p3: { name: "remote-only", updatedAt: 300 } };
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "local");
+    expect(merged.p1.name).toBe("local");
+    expect(merged.p2.name).toBe("local-only");
+    expect(merged.p3.name).toBe("remote-only");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "local")).toBe(0);
+  });
+
+  it("remote strategy adopts remote entries on conflict", () => {
+    const localMap = { p1: { name: "local", updatedAt: 100 } };
+    const remoteMap = { p1: { name: "remote", updatedAt: 200 } };
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "remote");
+    expect(merged.p1.name).toBe("remote");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "remote")).toBe(1);
+  });
+
+  it("newest strategy adopts the side with the newer updatedAt", () => {
+    const localMap = { p1: { name: "local", updatedAt: 300 }, p2: { name: "local", updatedAt: 500 } };
+    const remoteMap = { p1: { name: "remote", updatedAt: 400 }, p2: { name: "remote", updatedAt: 400 } };
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "newest");
+    expect(merged.p1.name).toBe("remote");
+    expect(merged.p2.name).toBe("local");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "newest")).toBe(1);
+  });
+
+  it("newest strategy falls back to syncedAt when updatedAt is missing", () => {
+    const localMap = { p1: { name: "local", syncedAt: 100 } };
+    const remoteMap = { p1: { name: "remote", syncedAt: 200 } };
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "newest");
+    expect(merged.p1.name).toBe("remote");
+  });
+
+  it("identical entries (ignoring bookkeeping) are never treated as remote-adopted", () => {
+    const localMap = { p1: { name: "same", updatedAt: 100, syncedAt: 1, syncedHash: "a" } };
+    const remoteMap = { p1: { name: "same", updatedAt: 100, syncedAt: 2, syncedHash: "b" } };
+    for (const strategy of ["local", "remote", "newest"] as const) {
+      const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, strategy);
+      expect(merged.p1.syncedAt).toBe(1);
+      expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, strategy)).toBe(0);
+    }
+  });
+
+  it("mergeAccountSection merges accounts by username+url with strategy", () => {
+    const localAccs = [
+      { platformUrl: "https://a.com", platformUserName: "u1", tags: ["l"], updatedAt: 100 },
+      { platformUrl: "https://c.com", platformUserName: "u3" },
+    ];
+    const remoteAccs = [
+      { platformUrl: "https://a.com", platformUserName: "u1", tags: ["r"], updatedAt: 200 },
+      { platformUrl: "https://b.com", platformUserName: "u2" },
+    ];
+    const merged = __syncTestHooks.mergeAccountSection(remoteAccs as any, localAccs as any, "newest");
+    expect(merged).toHaveLength(3);
+    expect(merged.find((a: any) => a.platformUrl === "https://a.com").tags).toEqual(["r"]);
+    expect(merged.some((a: any) => a.platformUrl === "https://b.com")).toBe(true);
+    expect(merged.some((a: any) => a.platformUrl === "https://c.com")).toBe(true);
+  });
+
+  it("countAdoptedFromRemote only counts conflicting ids that adopted the remote instance", () => {
+    const localMap = { p1: { name: "l" }, p2: { name: "same" }, p3: { name: "l3" } };
+    const remoteMap = { p1: { name: "r" }, p2: { name: "same" } };
+    const merged = __syncTestHooks.mergeSectionById(localMap, remoteMap, "remote");
+    expect(merged.p1.name).toBe("r");
+    expect(merged.p2.name).toBe("same");
+    expect(merged.p3.name).toBe("l3");
+    expect(__syncTestHooks.countAdoptedFromRemote(localMap, merged, "remote")).toBe(1);
+  });
+});
+
 describe("Sync team profile locks", () => {
   it("serializeSyncSafeConfig carries profile locks", () => {
     const safe = __syncTestHooks.serializeSyncSafeConfig({

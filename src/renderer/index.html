@@ -125,6 +125,11 @@
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncPush" data-i18n="sync.push">Push</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="syncPull" data-i18n="sync.pull">Pull</button>
+ <select id="sync-merge-strategy" data-i18n-title="sync.strategy" title="Merge strategy on pull" style="margin-left:4px;font-size:12px;height:28px;">
+   <option value="local" data-i18n="sync.strategy.local">Local wins</option>
+   <option value="remote" data-i18n="sync.strategy.remote">Remote wins</option>
+   <option value="newest" data-i18n="sync.strategy.newest">Newest wins</option>
+ </select>
  </div>
  </div>
  <div class="card">

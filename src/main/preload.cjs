@@ -42,7 +42,7 @@ const api = {
   },
   sync: {
     push: (opts) => ipcRenderer.invoke("sync:push", opts),
-    pull: () => ipcRenderer.invoke("sync:pull"),
+    pull: (opts) => ipcRenderer.invoke("sync:pull", opts),
     status: () => ipcRenderer.invoke("sync:status"),
     preview: () => ipcRenderer.invoke("sync:preview"),
     previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
