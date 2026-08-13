@@ -5,6 +5,8 @@
   var api = agentBrowser.api;
   var R = agentBrowser.R;
   var state = agentBrowser.state;
+  var profileFilter = { status: "all", tags: [] };
+  var profileSelection = {};
   var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
@@ -379,6 +381,130 @@
     }).catch(function(){});
   };
 
+  // ── Batch operations console (filter / select / batch actions) ──
+
+  function selectedProfileIds() {
+    return Object.keys(profileSelection).filter(function (dirId) { return profileSelection[dirId]; });
+  }
+
+  function updateBatchBar(proxies) {
+    var count = selectedProfileIds().length;
+    var bar = document.getElementById("profile-batch-actions");
+    var counter = document.getElementById("profile-selected-count");
+    if (bar) bar.style.display = count > 0 ? "" : "none";
+    if (counter) counter.textContent = String(count);
+    var sel = document.getElementById("batch-assign-proxy");
+    if (sel && proxies && proxies.length) {
+      var prev = sel.value;
+      var html = '<option value="">(默认代理)</option>';
+      (proxies || []).forEach(function (p) {
+        html += '<option value="' + escAttr(p.name) + '">' + esc(p.name) + '</option>';
+      });
+      sel.innerHTML = html;
+      if (prev && sel.querySelector('option[value="' + prev + '"]')) sel.value = prev;
+    }
+    var all = document.getElementById("profile-select-all");
+    if (all) {
+      var cards = document.querySelectorAll('#profile-list .profile-card');
+      var selVisible = 0;
+      Array.prototype.forEach.call(cards, function (card) { if (profileSelection[card.dataset.dirId]) selVisible++; });
+      all.checked = cards.length > 0 && selVisible === cards.length;
+    }
+  }
+
+  agentBrowser.onProfileFilterChange = function() {
+    profileFilter.status = (document.getElementById("profile-status-filter") || {}).value || "all";
+    profileFilter.tags = parseTagInput(document.getElementById("profile-tag-filter").value);
+    profileSelection = {};
+    loadProfiles();
+  };
+
+  agentBrowser.clearProfileFilters = function() {
+    profileFilter = { status: "all", tags: [] };
+    var s = document.getElementById("profile-status-filter"); if (s) s.value = "all";
+    var t = document.getElementById("profile-tag-filter"); if (t) t.value = "";
+    profileSelection = {};
+    loadProfiles();
+  };
+
+  agentBrowser.onProfileSelectAllChange = function() {
+    var all = document.getElementById("profile-select-all");
+    var checked = all && all.checked;
+    var cards = document.querySelectorAll('#profile-list .profile-card');
+    Array.prototype.forEach.call(cards, function (card) {
+      if (checked) profileSelection[card.dataset.dirId] = true; else delete profileSelection[card.dataset.dirId];
+      var cb = card.querySelector(".profile-select-checkbox");
+      if (cb) cb.checked = !!checked;
+    });
+    updateBatchBar();
+  };
+
+  agentBrowser.toggleProfileSelect = function(dirId, checked) {
+    if (checked) profileSelection[dirId] = true;
+    else delete profileSelection[dirId];
+    updateBatchBar();
+  };
+
+  agentBrowser.batchStartSelected = function() {
+    var sel = selectedProfileIds();
+    if (!sel.length) return;
+    toast("Starting " + sel.length + " selected profiles...", "success");
+    sel.forEach(function (dirId, i) {
+      setTimeout(function () {
+        agentBrowser.launch(dirId);
+        if (i === sel.length - 1) { toast(sel.length + " profiles started", "success"); setTimeout(agentBrowser.refresh, 2500); }
+      }, i * 500);
+    });
+  };
+
+  agentBrowser.batchStopSelected = function() {
+    var sel = selectedProfileIds();
+    if (!sel.length) return;
+    toast("Stopping " + sel.length + " selected profiles...", "success");
+    sel.forEach(function (dirId) { agentBrowser.stop(dirId); });
+    setTimeout(agentBrowser.refresh, 2000);
+  };
+
+  agentBrowser.batchAssignProxy = function() {
+    var sel = selectedProfileIds();
+    if (!sel.length) return;
+    var proxyEl = document.getElementById("batch-assign-proxy");
+    var proxyValue = proxyEl ? proxyEl.value : "";
+    var mode = proxyValue ? "named" : "default";
+    var proxyName = proxyValue || null;
+    var total = sel.length, done = 0, errors = 0;
+    sel.forEach(function (dirId) {
+      api.proxy.setProfile(dirId, proxyName, mode).then(function (r) {
+        done++;
+        if (r && r.success === false) errors++;
+        if (done === total) {
+          if (errors) toast("已分配 " + (total - errors) + "/" + total + " 个 profile（" + errors + " 个失败）", "error");
+          else toast("已分配代理到 " + total + " 个 profile", "success");
+          loadProfiles();
+        }
+      }).catch(function () { done++; errors++; if (done === total) { toast("已分配 " + (total - errors) + "/" + total + " 个 profile", "error"); loadProfiles(); } });
+    });
+  };
+
+  agentBrowser.batchDeleteSelected = function() {
+    var sel = selectedProfileIds();
+    if (!sel.length) return;
+    agentBrowser.confirm('Delete ' + sel.length + ' selected profile(s)?', function () {
+      var total = sel.length, done = 0, errors = 0;
+      sel.forEach(function (dirId) {
+        api.profile.delete(dirId).then(function (r) {
+          done++;
+          if (r && r.success === false) errors++;
+          if (done === total) {
+            sel.forEach(function (d) { delete profileSelection[d]; });
+            if (errors) toast("已删除 " + (total - errors) + "/" + total + " 个 profile（" + errors + " 个失败）", "error");
+            else toast("已删除 " + total + " 个 profile", "success");
+            loadProfiles();
+          }
+        }).catch(function () { done++; errors++; if (done === total) { sel.forEach(function (d) { delete profileSelection[d]; }); toast("已删除 " + (total - errors) + "/" + total + " 个 profile", "error"); loadProfiles(); } });
+      });
+    });
+  };
   agentBrowser.openRiskCheck = function(dirId) {
     var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
     api.browser.status(dirId).then(function(s) {
@@ -513,9 +639,21 @@
         }
         if (override.pending) { p.running = override.running; p.pid = override.pid; }
       });
+      // Apply status + tag filters (batch operations console).
+      if (profileFilter.status === "running") profiles = profiles.filter(function (p) { return p.running; });
+      else if (profileFilter.status === "stopped") profiles = profiles.filter(function (p) { return !p.running; });
+      if (profileFilter.tags && profileFilter.tags.length) {
+        profiles = profiles.filter(function (p) {
+          var tags = (p.tags || []).map(function (t) { return String(t).toLowerCase(); });
+          return profileFilter.tags.some(function (tag) { return tags.indexOf(tag) !== -1; });
+        });
+      }
 
       if (!profiles || profiles.length === 0) {
-        container.innerHTML = '<div class="empty-state">No profiles.<br>Click "+ New Profile" to get started.</div>';
+        var filtered = profileFilter.status !== "all" || (profileFilter.tags && profileFilter.tags.length);
+        container.innerHTML = filtered
+          ? '<div class="empty-state">No profiles match the current filter.</div>'
+          : '<div class="empty-state">No profiles.<br>Click "+ New Profile" to get started.</div>';
         return;
       }
 
@@ -560,6 +698,7 @@
 
         return '<div class="profile-card' + (isRunning ? ' running' : '') + '" data-dir-id="' + escAttr(p.dirId) + '">' +
           '<div class="card-header">' +
+            '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
             '<span class="name" title="Click to rename" data-action="rename">' + esc(p.name) + '</span>' +
             '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
           '</div>' +
@@ -586,6 +725,7 @@
         '</div>';
       }).join("");
       attachProfileCardHandlers(container);
+      updateBatchBar(proxies);
     }).catch(function (e) {
       container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
@@ -612,6 +752,11 @@
     };
     container.onchange = function (event) {
       var target = event.target;
+      if (target && target.classList && target.classList.contains("profile-select-checkbox")) {
+        var card = target.closest(".profile-card");
+        if (card && card.dataset.dirId) agentBrowser.toggleProfileSelect(card.dataset.dirId, target.checked);
+        return;
+      }
       if (!target || target.dataset.action !== "proxy") return;
       var card = target.closest(".profile-card");
       if (card && card.dataset.dirId) agentBrowser.proxyChanged(card.dataset.dirId, target);

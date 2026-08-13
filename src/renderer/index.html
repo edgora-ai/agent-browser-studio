@@ -53,6 +53,25 @@
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkStop" data-i18n="profiles.stop-all">⏹ Stop All</button>
  </div>
  </div>
+  <div id="profile-batch-bar" class="batch-bar">
+  <label class="batch-filter"><span>状态</span>
+  <select id="profile-status-filter" data-role="change" data-change-cmd="onProfileFilterChange">
+  <option value="all">全部</option><option value="running">运行中</option><option value="stopped">已停止</option>
+  </select></label>
+  <label class="batch-filter"><span>标签</span>
+  <input id="profile-tag-filter" data-role="input" data-input-cmd="onProfileFilterChange" placeholder="tag1,tag2（任一匹配）" style="width:180px;">
+  </label>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="clearProfileFilters">✕ 清除筛选</button>
+  <label class="batch-filter" style="margin-left:auto;"><input type="checkbox" id="profile-select-all" data-role="change" data-change-cmd="onProfileSelectAllChange"> 全选可见</label>
+  </div>
+  <div id="profile-batch-actions" class="batch-actions" style="display:none">
+  <span><b id="profile-selected-count">0</b> 个已选</span>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStartSelected">▶ 启动选中</button>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStopSelected">⏹ 停止选中</button>
+  <select id="batch-assign-proxy" title="给选中 profile 分配代理"><option value="">(默认代理)</option></select>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchAssignProxy">🔌 分配代理</button>
+  <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="batchDeleteSelected">🗑 删除选中</button>
+  </div>
  <div id="import-section" class="card" style="display:none">
  <h3>Import Existing Profiles</h3>
  <div id="import-list"></div>

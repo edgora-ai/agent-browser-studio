@@ -253,3 +253,28 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J52 全绿（含 journ
 ```
 
 7 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换）落地并验证。
+
+### Slice 17 — 批量运营台：筛选/勾选/批量动作（P1，运营效率）— ✅
+
+**范围**：把 profiles tab 从「逐个管理」升级为「运营台」——按状态/标签筛选、勾选多行、批量启动/停止/分配代理/删除，全部在 UI 上完成。
+
+**设计**：筛选即视图——改筛选（状态/标签）时自动清空已选，避免「选中被隐藏的行」被批量动作误伤；「全选可见」只作用于当前筛选后的可见卡片，防止批量删除误删筛选外 profile。
+
+**文件**：
+- 改 `index.html` — `#profile-batch-bar`（状态 select + 标签 input + 清除筛选 + 全选可见）+ `#profile-batch-actions`（已选计数、批量启动/停止/分配代理/删除）
+- 改 `style.css` — `.batch-bar/.batch-filter/.batch-actions/.profile-select-checkbox`
+- 改 `profiles.js` — `profileFilter/profileSelection` 状态；`updateBatchBar`（计数+代理下拉，仅在传入 proxies 时重灌并保留当前选中项）；`onProfileFilterChange/clearProfileFilters`（重置已选）；`onProfileSelectAllChange/toggleProfileSelect`；`batchStartSelected/batchStopSelected/batchAssignProxy/batchDeleteSelected`；卡片头勾选框
+- 新增 `tests/e2e/j53-batch-console.test.ts`（6 例）
+
+**验证**：unit/smoke 452 全绿；e2e J53 6 例（导入带标签 profile → 标签/状态筛选 → 全选可见计数 → 批量分配代理落盘 config.json → 确认框批量删除）；J2/J29/J42/J52 回归 17 例通过。
+
+---
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 452 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J53 全绿（含 journey 10/10 tab 切换）
+```
+
+8 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台）落地并验证。
