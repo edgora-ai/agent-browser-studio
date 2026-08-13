@@ -789,3 +789,28 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测 + smoke + e2e 见文末
 
 **注意（升级权衡）**：迁移是阻塞式的，升级后首次启动会多花 ~2.5-4s（读旧 localStorage 的代价），后续启动快。若希望首启也快，可改为「先建窗、后台迁移」（牺牲首屏主题/语言默认值）。
+
+### Slice 59 — REST 写端点收口：automation rules / extension-repository / skills（对齐 RoxyBrowser API 集成面）— ✅
+
+**背景**：Slice 56/57/58 收尾时反复点名的「后续项」——REST 其余模块写端点。此前 /api/automation/rules 只读，extension-repository 与 skills 完全没有 REST 暴露；SDK/自动化只能读不能改，只能回 UI 操作。本切片把这三个模块的写操作补齐到 loopback REST，覆盖 RoxyBrowser 式「API 直接管理自动化规则 / 扩展仓库 / Agent 技能」的集成面。
+
+**新增（REST 端点）**：
+- Automation rules：POST /api/automation/rules（创建，cron 校验）、PATCH/DELETE /api/automation/rules/{ruleId}、POST /api/automation/rules/{ruleId}/test-run（立即试跑）、POST /api/jobs/{jobId}/cancel（取消排队/运行中的任务）
+- Extension repository：GET /api/extension-repository（filter 查询）、POST（Chrome Web Store 添加）、POST /api/extension-repository/local（本地 CRX/ZIP/解包目录安装）、PATCH /api/extension-repository/{extId}（shared/tags）、DELETE /api/extension-repository/{extId}、POST /api/extension-repository/{extId}/update（按来源刷新；本地扩展返回 400 提示不可自动更新）
+- Skills：GET /api/skills、POST /api/skills（新增/更新）、PATCH /api/skills/{id}（shared/enabled/tags）、DELETE /api/skills/{id}、POST /api/skills/{id}/install（启用）
+- 全部写操作：requireSettingsMutation 门控（团队开启且本地角色 viewer → 403，与 UI/RBAC 一致）、记录 audit（actor=api）、登记 OpenAPI 3.0；服务层「not found」错误映射为 404 而非 400
+
+**重构（消除 IPC/REST 双份逻辑）**：
+- 新增 src/main/services/automation-rules.ts — create/update/delete 规则 CRUD（纯 config 操作，只依赖 config-manager + cron-validate），IPC 与 REST 共用
+- 新增 src/main/services/cron-validate.ts — 把 validateCron/parseCronField 从 automation.ts 抽成纯模块（无 Electron/IO 依赖，可单测），automation.ts 复用并 re-export
+- 改 src/main/ipc/automation.ts — create/update/delete 改走共享服务层（行为不变）
+- 改 src/main/services/team.ts — 新增 requireSettingsMutation（member+ 当团队启用）
+
+**顺带修的真 bug**：parseCronField 的存量缺陷——范围分支不校验边界（「60-90」这类越界 cron 被当成合法）、步长为 0 会死循环。已加边界/步长校验并补单测。
+
+**验证**：
+- 单测 tests/unit/automation-rules.test.ts 5 例（创建默认值/持久化、enabled=false + runTimeoutMs/maxRetries 保留、非法 cron 拒绝、更新+缺失报错、删除+重复删除 false）+ tests/unit/cron-validate.test.ts 4 例（合法表达式、字段数、越界、越界范围/零步长）
+- e2e tests/e2e/j82-rest-mutation.test.ts 7 例：OpenAPI 登记全部新端点；automation 创建→列表→PATCH→DELETE→重复 DELETE 404；payload 校验 400 + not-found 404 + job cancel 404；skills 增→查→改 meta→install→删→重复删 404→缺 prompt 400；本地扩展安装（无网络 fixture 目录）→改 meta→本地不可 update 400→删→重复删 404→非法 extId 400；viewer 下三类写全部 403（读仍开放）；无意外 console error
+- 回归：全量单测+smoke 628 例全绿；全量 e2e 74 passed / 4 skipped（78 文件）
+
+**后续项**：引擎对齐矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）；agent/data 模块其余只读 REST 面如需写端点再评估。
