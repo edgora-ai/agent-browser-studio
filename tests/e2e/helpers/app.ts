@@ -102,6 +102,25 @@ export interface TestAppHandle {
   cdpPids: number[];
 }
 
+// The app may briefly create hidden helper windows before the main window
+// (e.g. the one-time renderer-storage migration in Slice 58). firstWindow()
+// can grab such a window right before it is destroyed, so wait for the real
+// UI window by its URL instead.
+async function waitForMainWindow(app: ElectronApplication, timeoutMs = 20000): Promise<Page> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    for (const win of app.windows()) {
+      try {
+        if (win.url().includes("index.html")) return win;
+      } catch {
+        /* window closed between listing and url(); keep polling */
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("main window (index.html) did not appear within " + timeoutMs + "ms");
+}
+
 export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHandle> {
   if (opts.resetUserData !== false) {
     fs.rmSync(opts.userDataDir, { recursive: true, force: true });
@@ -139,7 +158,7 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     app.process().stderr?.on("data", (chunk) => process.stderr.write(`[electron:stderr] ${chunk}`));
   }
 
-  const page = await app.firstWindow({ timeout: 20000 });
+  const page = await waitForMainWindow(app);
   page.on("console", (msg) => {
     if (msg.type() === "error") consoleErrors.push(msg.text());
   });
