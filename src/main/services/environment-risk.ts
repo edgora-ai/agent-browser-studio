@@ -237,7 +237,11 @@ export function proxyDnsLeak(proxy: Pick<ResolvedProfileProxy, "mode"> & { confi
   }
   const type = proxy.config.type;
   if (type === "socks5") {
-    return { mode: proxy.mode, type, dnsLeakRisk: "high", note: "SOCKS5 由本地解析 DNS，真实 DNS 流量可见；请改用 socks5h 让代理端解析" };
+    // On current engines (Chromium 150 + MASQUE bridge) SOCKS5 targets are
+    // forwarded as domain names (ATYP=domain) to the proxy, which resolves at
+    // egress — i.e. proxy-side DNS. Chromium's stock socks5:// path would
+    // resolve locally, but managed profiles never use it on these builds.
+    return { mode: proxy.mode, type, dnsLeakRisk: "low", note: "SOCKS5 经受管桥以代理端 DNS 转发（当前引擎），浏览器查询走代理，泄漏风险低" };
   }
   return { mode: proxy.mode, type, dnsLeakRisk: "low", note: "HTTP/SOCKS5h 由代理端解析 DNS，泄漏风险低" };
 }

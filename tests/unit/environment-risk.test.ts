@@ -59,9 +59,9 @@ describe("environment risk — font scanning", () => {
 });
 
 describe("environment risk — proxy DNS leak", () => {
-  it("flags SOCKS5 as high risk", () => {
+  it("treats SOCKS5 as low risk under the managed bridge", () => {
     const r = proxyDnsLeak({ mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any);
-    expect(r.dnsLeakRisk).toBe("high");
+    expect(r.dnsLeakRisk).toBe("low");
   });
   it("treats HTTP / socks5h as low risk", () => {
     expect(proxyDnsLeak({ mode: "named", config: { type: "http", host: "1.2.3.4", port: 8080 } } as any).dnsLeakRisk).toBe("low");
@@ -92,14 +92,14 @@ describe("environment risk — rAF classification", () => {
 });
 
 describe("environment risk — assembled findings", () => {
-  it("flags CN resolver + CN fonts + SOCKS5 for a non-CN profile", () => {
+  it("flags CN resolver + CN fonts for a non-CN profile on direct connection", () => {
     const res = checkEnvironmentRisk(
       { locale: "en-US", timezone: "America/New_York", platform: "windows" },
       {
         resolvers: ["223.5.5.5", "8.8.8.8"],
         fontDirs: [path.join(TMP, "cnfonts")],
         hostLocale: "en-US",
-        proxy: { mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any,
+        proxy: { mode: "none", config: null } as any,
       },
     );
     // prep a CN font fixture
@@ -107,11 +107,10 @@ describe("environment risk — assembled findings", () => {
     fs.writeFileSync(path.join(TMP, "cnfonts", "simsun.ttc"), "");
     const res2 = checkEnvironmentRisk(
       { locale: "en-US" },
-      { resolvers: ["223.5.5.5", "8.8.8.8"], fontDirs: [path.join(TMP, "cnfonts")], hostLocale: "en-US", proxy: { mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any },
+      { resolvers: ["223.5.5.5", "8.8.8.8"], fontDirs: [path.join(TMP, "cnfonts")], hostLocale: "en-US", proxy: { mode: "none", config: null } as any },
     );
     expect(res2.findings.some((f) => f.code === "dns-resolver-leak" && f.severity === "high")).toBe(true);
     expect(res2.findings.some((f) => f.code === "cn-fonts-exposed" && f.severity === "high")).toBe(true);
-    expect(res2.findings.some((f) => f.code === "proxy-dns-leak" && f.severity === "high")).toBe(true);
     expect(res2.ok).toBe(false);
     void res;
   });
@@ -134,8 +133,8 @@ describe("environment risk — assembled findings", () => {
     expect(res.findings.some((f) => f.code === "host-locale-leak" && f.severity === "medium")).toBe(true);
   });
 
-  it("does NOT flag a CN host resolver as a leak when an HTTP/socks5h proxy takes over DNS", () => {
-    for (const type of ["http", "socks5h"]) {
+  it("does NOT flag a CN host resolver as a leak when a managed proxy takes over DNS", () => {
+    for (const type of ["http", "socks5h", "socks5"]) {
       const res = checkEnvironmentRisk(
         { locale: "en-US" },
         { resolvers: ["223.5.5.5"], hostLocale: "en-US", proxy: { mode: "named", config: { type, host: "1.2.3.4", port: 1080 } } as any },
@@ -144,6 +143,15 @@ describe("environment risk — assembled findings", () => {
       expect(res.findings.some((f) => f.code === "dns-resolver-proxy-takeover" && f.severity === "info")).toBe(true);
       expect(res.ok).toBe(true);
     }
+  });
+
+  it("does NOT flag SOCKS5 as a proxy DNS leak on managed engines", () => {
+    const res = checkEnvironmentRisk(
+      { locale: "en-US" },
+      { resolvers: ["8.8.8.8"], hostLocale: "en-US", proxy: { mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any },
+    );
+    expect(res.findings.some((f) => f.code === "proxy-dns-leak")).toBe(false);
+    expect(res.ok).toBe(true);
   });
 
   it("does NOT flag macOS-universal fonts on a macOS profile", () => {
