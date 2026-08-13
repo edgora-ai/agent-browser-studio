@@ -998,3 +998,35 @@ ping0 自动化跑分时若窗口被遮挡/后台，rAF 会被节流到 ~100ms �
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial，其中可本地关账部分（脚本/YAML/打包配置）已在本轮补齐；
 macOS/Windows/Linux 三个平台的真实 runner 构建、签名、公证与完整 e2e 仍需平台 runner 执行。
+
+## Slice 67 — 代理一键绑定 Profile + 二维码导出（RoxyBrowser 3.9.1 parity）
+
+**上游核对**：CloakBrowser 最新仍为 chromium-v150.0.7871.114.6-pro（2026-08-11，无新版本）；
+RoxyBrowser 最新仍为 4.0.3。翻 3.9.x 历史 changelog 发现四个我们未覆盖的具体功能点：
+- **Export Proxy via QR Code（3.9.1）**——本轮补齐：微信/手机扫码直接拿到完整代理配置（含账号密码）；
+- **"One-Click Link to Profile" Added to Proxy List（3.9.1）**——本轮补齐：代理卡片一键勾选并批量绑定 profile；
+- PWA / Sub apps（3.9.2）——后续候选；
+- WebRTC logs / performance diagnostics（3.9.2）——后续候选。
+后端绑定能力（`proxy:set-profile` / `setProfileProxy`）此前已存在，本轮只需纯 UI 改动；QR 走主进程新 IPC。
+
+**实现**：
+- `src/main/ipc/proxy.ts`：新增 `proxy:qrcode` handler，用 `getProxySecret` 解密密码后拼标准代理 URI
+  （`type://user:pass@host:port`，IPv6 加括号、账号密码 URL 编码），`qrcode` 包生成 512px PNG data URL，并记审计；
+- `src/main/qrcode.d.ts`：为无类型的 CommonJS `qrcode` 包补最小 ambient 类型（tsc strict 通过）；
+- `src/main/preload.cjs`：`api.proxy.qrcode(name)` 桥接；
+- `src/renderer/js/app/proxies.js`：代理卡片新增「📎 绑定」「📱 二维码」按钮；
+  `bindProxyToProfiles` 弹对话框列出全部 profile（含当前绑定），勾选后逐个 `api.proxy.setProfile(dirId, name, "named")`，
+  完成 toast + 刷新代理/Profile 列表；`qrcodeProxy` 弹对话框显示 data URL 图片 + 明文 URI；
+- `src/renderer/index.html`：新增 `dlg-proxy-bind` / `dlg-proxy-qr` 两个 dialog；CSP 增加 `img-src 'self' data:`（否则 QR 图片被拦）；
+- `src/renderer/css/style.css`：`.proxy-bind-item` / `.proxy-bind-current` 列表样式；
+- `src/renderer/js/i18n.js`：zh/en 补 proxy.bind.* / proxy.qr.* / toast.proxy.bound 等文案。
+
+**验证**：
+- e2e `tests/e2e/j89-proxy-bind-qr.test.ts` 新增 5 例：种 2 个 profile + 1 个带认证代理 → 卡片渲染两个新按钮 →
+  一键勾选绑定后 `api.browser.list()` 断言 proxyName/proxyMode → QR dialog 出现 `data:image/png;base64` 且 URI 含账号与出口 → console 无意外错误；
+- 初版 e2e 抓出两个真 bug 并修复：`browser.create` 收单对象参（测试误用 `(name, opts)` 导致 profile 无名字）、
+  CSP 未放行 `data:` 图片导致 QR 图被拦；
+- 全量单测 634 例全绿；全量 e2e（见下文回归数）。
+
+**后续项**：PWA / Sub apps（3.9.2）与 WebRTC logs / performance diagnostics（3.9.2）留作候选；
+引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
