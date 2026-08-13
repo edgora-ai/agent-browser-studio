@@ -15,6 +15,12 @@ Run the example:
 
     python3 sdk/python/example.py --base-url http://127.0.0.1:26582 --token my-token
 
+Run the agent-surface example (LLM config, conversations, chat, run traces,
+SQLite store, approvals):
+
+    python3 sdk/python/example_agent.py --base-url http://127.0.0.1:26582 \
+        --token my-token --llm-api-key sk-...
+
 ## Client
 
 ```python
@@ -35,9 +41,16 @@ The client covers: `health` / `version` / `openapi`, profiles
 DRM status, automation rules, runs and jobs. Every method returns the parsed
 JSON body; non-2xx responses raise `AgentBrowserError`.
 
+The agent surface is also covered: `llm_config` / `save_llm_config`,
+conversations (`list_conversations` / `create_conversation` / `get_conversation` /
+`rename_conversation` / `delete_conversation`), chat (`chat_simple` and the
+conversation-scoped tool-calling `chat`), run traces (`agent_runs` / `agent_run` /
+`delete_agent_run` / `clear_agent_runs`), the SQLite store (`db_tables` /
+`db_table` / `db_query` / `db_exec`) and approvals (`pending_approvals` /
+`resolve_approval`).
+
 ## Server mode
 
 See `README.md` → *Server mode & Docker* for the `--headless` flag,
 the Dockerfile and compose example. JavaScript/.NET consumers can use the
 same endpoints directly from `/openapi.json`.
-

@@ -908,4 +908,7 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 已在本机 headless 实例 + mock LLM 上实测通过（chat 返回 mock 回复、run status=done、会话持久化 2 条消息）。
 README 补充示例入口。
 
+Python SDK 侧同步补上 sdk/python/example_agent.py（同一套 agent 面全流程演示），同样在本机
+headless + mock LLM 上实测通过；sdk/python/README.md 补充 agent 面与示例说明。
+
 **后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
