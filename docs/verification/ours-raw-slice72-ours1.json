@@ -1,0 +1,104 @@
+{
+  "launch": {
+    "runId": "slice72-ours1",
+    "roxy": "",
+    "profile": "",
+    "ours": "/Users/ahoo/.agent-browser-studio/chromium-150.0.7871.114/Chromium.app",
+    "proxy": {
+      "type": "http",
+      "host": "127.0.0.1",
+      "port": 7890
+    },
+    "cdpVersion": {
+      "Browser": "Chrome/150.0.7871.114",
+      "Protocol-Version": "1.3",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+      "V8-Version": "15.0.245.15",
+      "WebKit-Version": "537.36 (@f405107495a07cb1bfcf687d4af8d91117098db6)",
+      "webSocketDebuggerUrl": "ws://127.0.0.1:64499/devtools/browser/706c4ca9-ed12-4054-accc-b055eaca8106"
+    },
+    "headless": false
+  },
+  "state": null,
+  "raw": {
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+    "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.114 Safari/537.36",
+    "platform": "Win32",
+    "vendor": "Google Inc.",
+    "language": "ko-KR",
+    "languages": [
+      "ko-KR"
+    ],
+    "webdriver": false,
+    "hardwareConcurrency": 12,
+    "deviceMemory": 16,
+    "maxTouchPoints": 0,
+    "oscpu": null,
+    "uaDataHighEntropy": {},
+    "screen": [
+      1920,
+      1080,
+      1920,
+      1032
+    ],
+    "dpr": 1,
+    "colorDepth": 24,
+    "tz": "Asia/Seoul",
+    "intlLocales": "ko-KR",
+    "webglVendor": "WebKit",
+    "webglRenderer": "WebKit WebGL",
+    "webglUnmaskedVendor": "Google Inc. (NVIDIA)",
+    "webglUnmaskedRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "canvasHash": "2a6b62e3",
+    "audioHash": "f5cc3f4",
+    "fonts": [
+      "Arial",
+      "Arial Black",
+      "Arial Narrow",
+      "Calibri",
+      "Cambria",
+      "Comic Sans MS",
+      "Courier New",
+      "Georgia",
+      "Helvetica",
+      "Impact",
+      "Lucida Console",
+      "Segoe UI",
+      "Tahoma",
+      "Times New Roman",
+      "Trebuchet MS",
+      "Verdana",
+      "SimSun",
+      "SimHei",
+      "Microsoft YaHei",
+      "PingFang SC",
+      "Hiragino Sans GB",
+      "Noto Sans CJK SC",
+      "SF Pro SC",
+      "Songti SC",
+      "Heiti SC",
+      "STHeiti",
+      "Apple LiGothic",
+      "PMingLiU",
+      "DFKai-SB",
+      "WenQuanYi Micro Hei",
+      "Droid Sans Fallback"
+    ],
+    "plugins": [
+      "PDF Viewer",
+      "Chrome PDF Viewer",
+      "Chromium PDF Viewer",
+      "Microsoft Edge PDF Viewer",
+      "WebKit built-in PDF"
+    ],
+    "mimeTypes": [
+      "application/pdf",
+      "text/pdf"
+    ],
+    "webrtcLocalCandidates": [
+      "11099aa1-0157-410f-9019-dd736b7e5e61.local"
+    ],
+    "webrtcError": null,
+    "connection": "4g"
+  }
+}
