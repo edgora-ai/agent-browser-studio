@@ -678,3 +678,20 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - 回归：全量单测 + smoke 50 文件 607 例全绿；tsc/build 干净
 
 **后续项**：REST 账号写操作端点（POST/PATCH/DELETE /api/accounts + bulk），以及「模板批量导入账号→批量建 profile」工作流（RoxyBrowser 3.8.9 的配套能力）；窗口任务栏显示 profile 名（3.8.9 Settings>Taskbar Icon Display）；启动提速对标（3.9.2 5.5s→2s）。
+
+### Slice 54 — 批量导入账号 → 批量创建 profile 并自动绑定（RoxyBrowser 3.8.9「模板批量导入→批量建 profile」工作流）— ✅
+
+**背景**：RoxyBrowser 3.8.9 的账号模块配套能力是「模板批量导入账号 → 批量创建 profile」：一批账号导入的同时，按模板为每个账号建一个 profile 并绑定，避免逐个手动创建。Slice 53 已完成账号批量导入，本切片把它升级为「导入即建号」的完整工作流。
+
+**新增**：
+- 服务层（local-agent.ts）：bulkCreateProfilesWithAccounts —— 对每条合法账号：deriveProfileName（"host · username" 格式，冲突自动加 "#N" 后缀）→ createBrowserProfile（platform 可选 windows/macos，默认 windows，携带 tags）→ 写入账号并把新 profile 的 dirId 绑定到 profileIds；profile 创建失败则该行整体跳过（不会产生「有 profile 无账号」的半对）；复用 requireProfileMutation 的 profile 级 RBAC
+- IPC（agent.ts）：agent:accounts:bulk-create（{text, options:{platform}}），requireAccountMutation 门控 + audit「bulk-create-profiles」
+- preload：accounts.bulkCreate(text, options)
+- UI（accounts.js + index.html）：批量导入对话框新增「Also create a bound profile for each account」勾选 + 平台选择（Windows/macOS），勾选后选项区展开（CSP 安全：change 监听走 addEventListener，不用内联 onchange——修复了一个本轮引入的 CSP 违规）；执行时按勾选走 bulk-create 或原 bulk-add，结果提示包含 created 数量；创建后同时刷新账号列表与 profile 列表
+
+**修的真 bug**：初版在对话框里用了内联 onchange="..."，被 app 的 CSP（script-src 'self'，无 unsafe-inline）拦截——e2e 直接暴露 console error。已改为 accounts.js 里的 addEventListener 绑定。
+
+**验证**：
+- 单测（accounts.test.ts +3 → 14 例）：批量创建生成 profile+account 对并绑定、密码加密、畸形行不产生半对、重名自动加后缀
+- e2e tests/e2e/j77-bulk-create-profiles.test.ts 4 例（IPC 批量创建→profile 名称/绑定/forProfile 回查、对话框勾选+选项展开、viewer 拒绝 bulk-create、无意外 console error）
+- 回归：全量单测 + smoke 50 文件 610 例全绿；tsc/build 干净；全量 e2e 见文末（72 文件 68 passed/4 skipped）
