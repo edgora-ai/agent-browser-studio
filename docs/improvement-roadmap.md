@@ -644,3 +644,18 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - ping0 的 header 回显端点 r-*.d.ping0.cc/probe 经 7890 代理极慢（curl 50s 无响应），导致 headers.*/xc.* 聚合项 pending——是 ping0 服务端/代理链路慢，非浏览器问题；已完成探针全过、score=100、level=green、findings=0。
 
 **验证**：node dist/tools/verify-ping0.js --browser=<engine> --tag=slice51 --runs=1 --settle-ms=15000 --wait-timeout-ms=300000 → score=100 / green / 0 findings（partial capture，status=timeout，仅 headers/聚合探针因上游慢未回）；与 docs/verification/ping0-official-run*.json 一致。回归：全量单测 43 文件 428 例全绿；smoke 147 例全绿；tsc 干净。
+
+### Slice 52 — 多平台生产验证 CI + Windows 引擎构建路径（对齐矩阵最后一行收口）— 🟡
+
+**背景**：对齐矩阵 35/36 行 verified，唯一 partial 行是「签名多平台分发」。Slice 45 只定义了 Linux 构建路径与多平台打包配置，真实 Windows/Linux 生产 E2E 与校验和仍未闭环。本轮补上 Windows 引擎构建路径 + 可执行的多平台 CI 生产验证工作流，把「Windows/Linux 生产验证」从「仅配置」推进到「可执行路径 + 校验和产出」。
+
+**新增**：
+- patches/chromium/args.gn.win — Windows 官方构建参数（target_os=win、is_official_build=true、Chrome FFmpeg branding、Widevine key-system 管线 + 运行时托管 CDM、无 PGO）
+- patches/chromium/build-windows.sh — Windows 引擎一键构建（Git Bash 兼容：pin 定 commit → gclient sync → apply.sh → args.gn.win → gn gen → autoninja chrome → chrome.exe），并设置 DEPOT_TOOLS_WIN_TOOLCHAIN=0（官方构建走本机 VS2022，不下载 Chrome 专用工具链）
+- .github/workflows/ci.yml — 新增 checks-windows 门禁（windows-latest 跑 tsc/build/unit/smoke，bash shell 处理 POSIX 命令 + setup-go 编译 masque bridge）；macOS e2e 改为「无引擎时显式跳过」而不是静默失败（真正的 e2e 由 engine-verify 在构建引擎后执行）
+- .github/workflows/engine-verify.yml — 重型多平台生产验证（workflow_dispatch / 每周 / tag 触发）：Linux x64 与 Windows x64 各一个 job——clone+sync pin 定 Chromium 150 commit → 构建独立引擎 → 对刚构建的二进制跑 53 面严格验证器 → 全量 e2e（Linux 用 xvfb）→ electron-builder 打包（AppImage/NSIS）→ sha256 校验和 + BUILD.txt → 上传 artifact；签名通过标准 electron-builder secrets 可选启用
+- tests/smoke/multiplatform-ci.test.ts — 4 例：args.gn.win 表面、build-windows.sh 存在/可执行/bash -n/自包含、ci.yml 与 engine-verify.yml 用 js-yaml 解析并断言关键 job/步骤
+
+**修的真 bug（j59）**：全量 e2e 回归发现 j59-env-risk-launch-gate 6 例中 5 例失败——app 内置 DefaultConfig.defaultProxy="default" + proxies.default=http://127.0.0.1:7890，而 createBrowserProfile 默认 proxyMode="default"，因此测试里「没指定代理」的 profile 实际走了本地 7890 HTTP 代理，DNS 被接管 → env-risk 不再报 dns-resolver-leak 高危 → 测试断言过时。修复：j59 显式 proxyMode="none" 以测直连高危路径（这正是该测试的本意），6 例全绿。
+
+**验证**：smoke multiplatform-ci 4 例全绿；j59 6 例全绿；全量单测 + smoke 48 文件 579 例全绿；tsc 干净。引擎真实构建/生产 E2E 需 GitHub runner 执行 engine-verify（本机为 macOS arm64，无法本地验证 Windows/Linux 构建产物）。

@@ -73,7 +73,7 @@ jobs:
           npm run dist
           cd release
           sha256sum *.AppImage > SHA256SUMS.txt
-          printf engine=chromium-150.0.7871.114ncommit=%sn "${{ github.sha }}" > BUILD.txt
+          printf 'engine=chromium-150.0.7871.114\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
           name: agent-browser-linux-x64
@@ -132,7 +132,7 @@ jobs:
           npm run dist
           cd release
           sha256sum *.exe > SHA256SUMS.txt
-          printf engine=chromium-150.0.7871.114ncommit=%sn "${{ github.sha }}" > BUILD.txt
+          printf 'engine=chromium-150.0.7871.114\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
           name: agent-browser-windows-x64

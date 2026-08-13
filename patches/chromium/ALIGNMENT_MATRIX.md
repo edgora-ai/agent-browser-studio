@@ -82,7 +82,7 @@ Status meanings:
 | Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 53-surface fresh-directory, same-directory restart and independent-directory comparison |
 | Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 53-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
-| Signed multi-platform distribution | partial | macOS arm64/x64, Windows x64, Linux x64/arm64 | macOS arm64 engine + controller are verified and packaged; the Linux engine build path (`patches/chromium/build-linux.sh` + `args.gn.linux`) and multi-platform packaging config (`electron-builder.yml` mac/win/linux targets, opt-in signing env) are now defined; Windows/Linux production E2E and checksums/signatures still require platform build hosts |
+| Signed multi-platform distribution | partial | macOS arm64/x64, Windows x64, Linux x64/arm64 | macOS arm64 engine + controller are verified and packaged; Linux (`patches/chromium/build-linux.sh` + `args.gn.linux`) and Windows (`patches/chromium/build-windows.sh` + `args.gn.win`) engine build paths are defined; `.github/workflows/engine-verify.yml` builds the pinned engine, runs the 53-surface strict verifier + full e2e against the freshly built binary, packages (AppImage/NSIS) and publishes sha256 checksums on Linux x64 and Windows x64 with opt-in signing; `ci.yml` also gates tsc/build/unit/smoke on Windows; checksums/signatures still require real platform runners (Slice 52) |
 
 ## Product-level capabilities
 
@@ -92,7 +92,7 @@ the complete product rather than only the engine:
 - version-aware automatic updates with rollback — ✅ verified (see the Release store & rollback table below);
 - Docker/server mode and Python/JavaScript/.NET integration surfaces — ✅ verified (see the Server mode & integration surfaces table below);
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
-- Windows and Linux production verification — Linux engine build path and multi-platform packaging are defined (see Signed multi-platform distribution); full production E2E still pending platform hosts;
+- Windows and Linux production verification — Linux and Windows engine build paths + multi-platform CI (`ci.yml` Windows gate; `engine-verify.yml` build → 53-surface verify → e2e → package → checksums on Linux x64 and Windows x64) are defined (see Signed multi-platform distribution); full production E2E still requires real platform runners;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup — ✅ verified (see the Team RBAC table below);
 - proxy health/history/rotation as managed assets — ✅ verified (see the Proxy health assets table below).
@@ -194,9 +194,10 @@ Installing the updated App leaves the existing CloakLite config and six-profile
 tree byte-for-byte unchanged.
 
 Using the stage labels in this matrix, 35 of 36 engine/network/lifecycle rows
-are currently `verified`, none is `partial`, and 1 is `missing`. The remaining
-hard missing row is signed multi-platform distribution. These counts are
-workflow gates, not a browser quality percentage.
+are currently `verified`, 1 is `partial`, and none is `missing`. The remaining
+partial row is signed multi-platform distribution (defined build paths + CI
+workflows; checksums/signatures still require real platform runners). These
+counts are workflow gates, not a browser quality percentage.
 
 ## Completion gates
 
