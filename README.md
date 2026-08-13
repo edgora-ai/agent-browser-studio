@@ -219,7 +219,7 @@ Main resources:
 | GET | `/api/profiles` | List managed Chromium profiles |
 | POST | `/api/profiles` | Create a profile |
 | GET/DELETE | `/api/profiles/{dirId}` | Profile detail / delete (stopped only) |
-| POST | `/api/profiles/{dirId}/launch` | `/stop` | Start / stop the profile's Chromium |
+| POST | `/api/profiles/{dirId}/launch` | `/stop` | Start / stop the profile's Chromium (body `{"headless": true}` launches headless) |
 | GET | `/api/profiles/{dirId}/status` | Running state + CDP port |
 | GET | `/api/profiles/{dirId}/drift` | Read-only fingerprint drift check vs stored baseline |
 | GET | `/api/profiles/{dirId}/env-risk` | Host environment risk report (DNS / CN fonts / proxy DNS / rAF) |
@@ -281,6 +281,24 @@ python3 sdk/python/example.py --base-url http://127.0.0.1:26582 --token "$AGENT_
 
 JavaScript/.NET consumers can generate clients from `GET /openapi.json`. See
 [sdk/python/README.md](sdk/python/README.md) for the full walkthrough.
+
+## JavaScript SDK
+
+`sdk/js/agent-browser.mjs` is a zero-dependency JS client with one-call
+Playwright / Puppeteer adapters: `connectPlaywright` / `connectPuppeteer`
+create and launch a managed profile, wait for its CDP endpoint, and return a
+real Playwright `Browser` (or Puppeteer `Browser`) — swap the import and keep
+your existing automation code. Profiles launch headless by default so rAF and
+actionability checks stay unthrottled; pass `headless: false` for a visible
+window. The fingerprint (UA / screen / languages / timezone / webdriver)
+comes from the C++-level profile config, verified by the `j73` e2e suite.
+
+```bash
+export AGENT_BROWSER_API_TOKEN=my-token
+node sdk/js/example.mjs
+```
+
+See [sdk/js/README.md](sdk/js/README.md) for the full walkthrough.
 
 ---
 

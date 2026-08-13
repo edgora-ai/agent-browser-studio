@@ -90,8 +90,11 @@ class AgentBrowserClient:
     def delete_profile(self, dir_id: str) -> dict[str, Any]:
         return self.delete(f"/api/profiles/{dir_id}")
 
-    def launch_profile(self, dir_id: str) -> dict[str, Any]:
-        return self.post(f"/api/profiles/{dir_id}/launch")
+    def launch_profile(self, dir_id: str, headless: Optional[bool] = None) -> dict[str, Any]:
+        """Launch a profile. Pass headless=True/False to override the server default;
+        omit to keep the controller's default (GUI)."""
+        body = {} if headless is None else {"headless": bool(headless)}
+        return self.post(f"/api/profiles/{dir_id}/launch", body)
 
     def stop_profile(self, dir_id: str) -> dict[str, Any]:
         return self.post(f"/api/profiles/{dir_id}/stop")
@@ -139,4 +142,3 @@ class AgentBrowserClient:
         from urllib.parse import urlencode
         qs = ("?" + urlencode(query)) if query else ""
         return self.get("/api/jobs" + qs).get("jobs", [])
-
