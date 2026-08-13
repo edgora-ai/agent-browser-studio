@@ -618,8 +618,10 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 
 **设计**：
 - 字体分两类：windows-only（SimSun/SimHei/YaHei/KaiTi/FangSong/DengXian/Huawen/Founder，中文 Windows 才有，是真泄漏信号）与 macos-universal（PingFang/STHeiti/Songti/Hiragino/Noto CJK，真 Mac 都有）。新增 classifyCnFontDisplayName / classifyCnFontFamily。
-- DNS：代理接管判定——proxy 为 HTTP/socks5h 时（dnsLeakRisk=low）宿主解析器不再报高危，改为 info「代理已接管 DNS」；直连或 SOCKS5 保持高危（SOCKS5 本地解析，proxy-dns-leak 仍覆盖）。
+- DNS：代理接管判定——HTTP/socks5h/socks5 都算代理接管（当前引擎 Chromium 150 + MASQUE 桥把 SOCKS5 目标按 ATYP=domain 透传、代理端解析，dnsLeakRisk=low），宿主解析器不再报高危，改为 info「代理已接管 DNS」；仅直连保持高危（dns-resolver-leak）。
 - 运行时证据：新增 verifyFontExposureViaCdp(cdpPort, fontNames)——按 FONT_CORPUS 同款方法（FontFaceSet.check + 与 sans-serif/serif/monospace 的渲染宽度差）在运行中 profile 内实测哪些中文字体真的可加载；checkEnvironmentRiskRuntime 用实测结果重算字体判定，只有 windows-only 字体真能加载才报高危。CDP 失败时保守回落（按静态假设报）。
 - REST /api/profiles/{dirId}/env-risk 在运行中即返回证据化报告。
 
-**验证**：unit environment-risk 19 例全绿（新增：字体分类、HTTP/socks5h 接管降级、macOS profile + STHeiti 不报高危、exposedFonts 实测清误报/保留真实暴露）；e2e j75 新增运行时报告断言——Windows profile 直接实测 STHeiti 宿主字体不可加载，且 env-risk 报告无 cn-fonts-exposed 高危；j68/j73/j74 回归 13 例全绿；全量单测 48 文件 591 例全绿；tsc/build 干净。
+**验证**：unit environment-risk 20 例全绿（新增：字体分类、HTTP/socks5h/socks5 接管降级、macOS profile + STHeiti 不报高危、exposedFonts 实测清误报/保留真实暴露）；e2e j75 新增运行时报告断言——Windows profile 直接实测 STHeiti 宿主字体不可加载，且 env-risk 报告无 cn-fonts-exposed 高危；j68/j73/j74 回归 13 例全绿；全量单测 48 文件 592 例全绿；tsc/build 干净。
+
+**补记（SOCKS5 误报修正）**：收尾时发现 SOCKS5 也被误报为 high——proxyDnsLeak 按 stock Chromium 的 socks5:// 本地解析假设打分，但受管引擎（Chromium 150 + MASQUE 桥）实际把 SOCKS5 目标按 ATYP=domain 透传代理端解析（见 native/agent-browser-masque-bridge/socks5.go 的 encodeSOCKSAddress；browser-manager.ts 仅旧引擎/直连才用 --proxy-server=socks5://，受管引擎全走 quic:// + MASQUE 桥）。已把 socks5 降为 low，并新增「socks5 不再报 proxy-dns-leak」用例；assemble 组改为直连场景验证 dns-resolver-leak 高危仍成立。
