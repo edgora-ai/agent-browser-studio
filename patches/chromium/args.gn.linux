@@ -1,0 +1,42 @@
+# Reproducible Linux release defaults for the independent Chromium engine.
+# Copy this file into out/AgentBrowserRelease/args.gn on a Linux build host,
+# then run `gn gen out/AgentBrowserRelease` and `autoninja -C out/AgentBrowserRelease chrome`.
+#
+# The resulting binary is `out/AgentBrowserRelease/chrome`. Point the controller
+# at it via AGENT_BROWSER_CHROMIUM_BINARY_PATH, or mount it at /opt/chromium/chrome
+# in the headless Docker image (see Dockerfile / docker-compose.yml).
+#
+# Same surface as args.gn (macOS): official build, Chrome FFmpeg branding,
+# no PGO, and Widevine key-system plumbing with a runtime-supplied managed CDM.
+
+target_os = "linux"
+
+is_debug = false
+is_component_build = false
+is_official_build = true
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+enable_dsyms = false
+chrome_pgo_phase = 0
+use_remoteexec = false
+use_siso = false
+treat_warnings_as_errors = false
+
+# Match the codec surface of a normal Chrome install. Redistributors are
+# responsible for patent and distribution licensing in their jurisdictions.
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Widevine/DRM: enable the key-system plumbing and register a managed CDM
+# passed via --widevine-cdm-path (patch 0045 covers the Linux bundle branch).
+# The CDM itself is supplied at runtime, never bundled; the Google component
+# updater is disabled so nothing phones home for the CDM.
+enable_widevine = true
+enable_widevine_cdm_component = false
+ignore_missing_widevine_signing_cert = true
+
+# Linux official-build defaults that keep the binary self-contained.
+enable_nacl = false
+use_custom_libcxx = true
+is_clang = true

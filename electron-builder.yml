@@ -19,6 +19,20 @@ win:
       arch: [x64]
   artifactName: Agent-Browser-Studio-${version}-win-${arch}.${ext}
 
+linux:
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+  category: Network
+  maintainer: ahoo
+  artifactName: Agent-Browser-Studio-${version}-linux-${arch}.${ext}
+
+# Signing is opt-in and driven by standard electron-builder env vars so local
+# builds stay unsigned:
+#   macOS notarization: set mac.notarize=true plus APPLE_ID /
+#     APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (and CSC_LINK for signing).
+#   Windows code signing: set CSC_LINK (pfx) + CSC_KEY_PASSWORD.
+
 nsis:
   oneClick: false
   perMachine: false
