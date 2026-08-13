@@ -1,0 +1,143 @@
+name: Engine production verify (multi-platform)
+
+# Heavy multi-platform gate for the last alignment row (signed multi-platform
+# distribution): builds the independent Chromium 150 engine from the pinned
+# upstream commit, runs the strict 53-surface native verifier and the full e2e
+# suite against the freshly built engine, then packages the controller and
+# publishes sha256 checksums. Code signing is opt-in via the standard
+# electron-builder secrets (CSC_LINK / CSC_KEY_PASSWORD on Windows, and on
+# macOS notarization env vars).
+#
+# Note: a Chromium official build is large. Prefer a runner with >= 16 GB RAM
+# for the link step (e.g. GitHub larger runners or self-hosted); the default
+# ubuntu/windows-latest labels are used here as a baseline.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHROMIUM_COMMIT: f405107495a07cb1bfcf687d4af8d91117098db6
+
+jobs:
+  linux-x64:
+    name: Linux x64 · build → verify → e2e → package
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
+      - name: Clone + sync pinned Chromium source
+        run: |
+          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-150
+          git -C chromium-src-150 checkout "$CHROMIUM_COMMIT"
+          cd chromium-src-150 && gclient sync -D
+      - name: Install Linux build deps
+        run: |
+          cd chromium-src-150
+          sudo bash ./build/install-build-deps.sh --no-nacl --no-prompt
+      - name: Build independent engine
+        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-150" x64
+      - name: npm ci + build
+        run: |
+          npm ci
+          npm run build
+      - name: Strict native verifier (53 surfaces)
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome"
+      - name: E2E suite (xvfb)
+        env:
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome
+        run: xvfb-run -a npm run test:e2e
+      - name: Package AppImage + checksums
+        run: |
+          npm run dist
+          cd release
+          sha256sum *.AppImage > SHA256SUMS.txt
+          printf engine=chromium-150.0.7871.114ncommit=%sn "${{ github.sha }}" > BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-linux-x64
+          path: |
+            release/*.AppImage
+            release/SHA256SUMS.txt
+            release/BUILD.txt
+          if-no-files-found: error
+
+  windows-x64:
+    name: Windows x64 · build → verify → e2e → package
+    runs-on: windows-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
+      - name: Clone + sync pinned Chromium source
+        run: |
+          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-150
+          git -C chromium-src-150 checkout "$CHROMIUM_COMMIT"
+          cd chromium-src-150 && gclient sync -D
+      - name: Build independent engine
+        run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium-src-150" x64
+      - name: npm ci + controller build (bash)
+        run: |
+          npm ci
+          rm -rf dist
+          npx tsc
+          mkdir -p dist/renderer dist/resources
+          cp -r src/renderer/index.html src/renderer/css src/renderer/js dist/renderer/
+          cp src/main/preload.cjs dist/main/
+          cp resources/tray-icon-Template.png dist/resources/
+          cp resources/icon.icns dist/resources/
+          node scripts/build-masque-bridge.mjs
+      - name: Strict native verifier (53 surfaces)
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome.exe"
+      - name: E2E suite
+        env:
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome.exe
+        run: npm run test:e2e
+      - name: Package NSIS + checksums
+        run: |
+          npm run dist
+          cd release
+          sha256sum *.exe > SHA256SUMS.txt
+          printf engine=chromium-150.0.7871.114ncommit=%sn "${{ github.sha }}" > BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-windows-x64
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
+            release/BUILD.txt
+          if-no-files-found: error

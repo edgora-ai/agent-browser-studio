@@ -27,7 +27,9 @@ describe("Smoke — Linux engine build path", () => {
     const p = path.join(ROOT, "patches/chromium/build-linux.sh");
     expect(fs.existsSync(p)).toBe(true);
     const mode = fs.statSync(p).mode;
+    if (process.platform !== "win32") {
     expect(mode & 0o111, "build-linux.sh must be executable").not.toBe(0);
+    }
     // bash -n must pass (dry syntax check).
     expect(() => execFileSync("bash", ["-n", p], { stdio: "pipe" })).not.toThrow();
     const src = fs.readFileSync(p, "utf8");

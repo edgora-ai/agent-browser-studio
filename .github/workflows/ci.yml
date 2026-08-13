@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Build + unit/smoke tests
+    name: Build + unit/smoke (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: "22.16.0"
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
       - run: npm ci
       - name: Type-check
         run: npx tsc --noEmit
@@ -32,8 +35,40 @@ jobs:
       - name: Unit + smoke tests
         run: npx vitest run tests/unit tests/smoke
 
+  checks-windows:
+    name: Build + unit/smoke (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build (bash on Windows)
+        run: |
+          rm -rf dist
+          npx tsc
+          mkdir -p dist/renderer dist/resources
+          cp -r src/renderer/index.html src/renderer/css src/renderer/js dist/renderer/
+          cp src/main/preload.cjs dist/main/
+          cp resources/tray-icon-Template.png dist/resources/
+          cp resources/icon.icns dist/resources/
+          node scripts/build-masque-bridge.mjs
+      - name: Unit + smoke tests
+        run: npx vitest run tests/unit tests/smoke
+
   e2e-macos:
-    name: E2E (macOS, non-blocking)
+    name: E2E (macOS, needs locally built engine — see engine-verify)
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -43,6 +78,12 @@ jobs:
           node-version: "22.16.0"
           cache: npm
       - run: npm ci
-      - name: E2E
-        run: npm run test:e2e
-        continue-on-error: true
+      - name: E2E (skipped without an engine binary)
+        run: |
+          if [ -n "$AGENT_BROWSER_CHROMIUM_BINARY_PATH" ] || [ -n "$AGENT_BROWSER_CHROMIUM_CACHE_DIR" ]; then
+            npm run test:e2e
+          else
+            echo "no independent engine present; e2e runs in the engine-verify workflow (macOS/large runner)"
+          fi
+        env:
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ secrets.AGENT_BROWSER_CHROMIUM_BINARY_PATH }}
