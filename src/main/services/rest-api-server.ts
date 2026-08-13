@@ -24,6 +24,7 @@ import {
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
+import { syncService } from "./sync-service.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
 
 const API_VERSION = "1.0.0";
@@ -373,6 +374,30 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { jobs: listJobs({ status: status as JobStatus | undefined, limit }) } };
   }
 
+  // ── Sync (team workspace) ──
+  if (method === "GET" && p === "/api/sync/status") {
+    return { status: 200, body: syncService.getStatus() };
+  }
+  if (method === "POST" && p === "/api/sync/push") {
+    const opts = await readJson(req).catch(() => null);
+    try {
+      const r = await syncService.push(undefined, Boolean(opts?.force));
+      return { status: r.success ? 200 : 400, body: r };
+    } catch (e: any) {
+      return { status: 500, body: { success: false, message: e.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/sync/pull") {
+    const opts = await readJson(req).catch(() => null);
+    try {
+      const strategy = opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local";
+      const r = await syncService.pull(undefined, strategy);
+      return { status: r.success ? 200 : 400, body: { ...r, strategy } };
+    } catch (e: any) {
+      return { status: 500, body: { success: false, message: e.message || String(e) } };
+    }
+  }
+
   // ── Audit ──
   if (method === "GET" && p === "/api/audit") {
     const limit = clampInt(url.searchParams.get("limit"), 200, 1, 2000);
@@ -616,6 +641,21 @@ function buildOpenApi(): any {
       "/api/automation/rules": { get: { summary: "List automation rules", responses: ok("Rule list") } },
       "/api/runs": { get: { summary: "List recent agent runs (limit/dirId query params)", responses: ok("Run list") } },
       "/api/jobs": { get: { summary: "List automation jobs (status/limit query params)", responses: ok("Job list") } },
+      "/api/sync/status": { get: { summary: "Sync configuration / connectivity status", responses: ok("Sync status") } },
+      "/api/sync/push": {
+        post: {
+          summary: "Push local config + artifacts to the team workspace",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { force: { type: "boolean", description: "Force push past remote profile locks" } } } } } },
+          responses: ok("Push result"),
+        },
+      },
+      "/api/sync/pull": {
+        post: {
+          summary: "Pull + merge remote config (conflict strategy: local/remote/newest)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "How to resolve conflicting id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." } } } } } },
+          responses: ok("Pull result with merge summary"),
+        },
+      },
       "/api/audit": {
         get: { summary: "List audit entries (limit/category/target query params)", responses: ok("Audit list") },
         delete: { summary: "Clear the audit log", responses: ok("Clear result") },

@@ -207,6 +207,29 @@ describe("J54 — local REST API + OpenAPI", () => {
     expect(audit.body.audit.some((e: any) => e.actor === "api")).toBe(true);
   }, 30000);
 
+  it("exposes sync endpoints via REST/OpenAPI (strategy param + unconfigured errors)", async () => {
+    const spec = await apiRequest(port, token, "GET", "/openapi.json");
+    expect(spec.body.paths["/api/sync/status"]).toBeTruthy();
+    expect(spec.body.paths["/api/sync/push"]).toBeTruthy();
+    expect(spec.body.paths["/api/sync/pull"]).toBeTruthy();
+    const strategyProp = spec.body.paths["/api/sync/pull"].post.requestBody.content["application/json"].schema.properties.strategy;
+    expect(strategyProp.enum).toEqual(["local", "remote", "newest"]);
+    expect(strategyProp.default).toBe("local");
+
+    const st = await apiRequest(port, token, "GET", "/api/sync/status");
+    expect(st.status).toBe(200);
+    expect(typeof st.body.configured).toBe("boolean");
+
+    // Unconfigured sync → push/pull return a 400 with a message (not a crash).
+    const pull = await apiRequest(port, token, "POST", "/api/sync/pull", { strategy: "newest" });
+    expect(pull.status).toBe(400);
+    expect(pull.body.strategy).toBe("newest");
+    expect(pull.body.message).toBeTruthy();
+    const push = await apiRequest(port, token, "POST", "/api/sync/push", { force: false });
+    expect(push.status).toBe(400);
+    expect(push.body.message).toBeTruthy();
+  }, 30000);
+
   it("no unexpected console errors", () => {
     const c = filterKnownConsoleErrors(h.consoleErrors).filter((e: string) =>
       !/file is not a database|connect to 127.0.0.1 port 1/i.test(e));
