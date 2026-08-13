@@ -377,7 +377,10 @@ export interface LaunchEnvCheck {
   error?: string;
 }
 
-export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
+export async function launchBrowser(
+  dirId: string,
+  opts?: { headless?: boolean },
+): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a managed Chromium profile`);
@@ -494,6 +497,7 @@ export async function launchBrowser(dirId: string): Promise<{ pid: number; cdpPo
     platform,
     cdpPort,
     fingerprintMode,
+    headless: opts?.headless,
   });
   let effectiveTimezone = passThrough ? null : normalizeOptionalTimezone(meta.timezone);
   let effectiveLocale = passThrough ? null : normalizeOptionalLocale(meta.locale);
@@ -961,6 +965,7 @@ function buildBrowserLaunchArgs(opts: {
   platform: string;
   cdpPort: number;
   fingerprintMode: FingerprintMode;
+  headless?: boolean;
 }): string[] {
   const args = [
     `--user-data-dir=${opts.profileDir}`,
@@ -971,6 +976,10 @@ function buildBrowserLaunchArgs(opts: {
     "--no-default-browser-check",
     "--disable-sync",
   ];
+  // Automation launches headless so there is no window to focus; the headless
+  // compositor drives BeginFrames with the timer (60 Hz) so rAF, screenshots
+  // and Playwright/Puppeteer actionability checks keep working.
+  if (opts.headless) args.push("--headless=new");
   if (opts.fingerprintMode === "managed") {
     args.push(`--fingerprint=${opts.seed}`, `--fingerprint-platform=${opts.platform}`);
   }

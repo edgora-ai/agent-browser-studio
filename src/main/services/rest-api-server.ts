@@ -193,7 +193,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     try {
       const dirId = mLaunch[1];
       validateDirId(dirId);
-      const r = await launchBrowser(dirId);
+      const opts = await readJson(req);
+      const r = await launchBrowser(dirId, { headless: Boolean(opts && opts.headless) });
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
       return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck } };
     } catch (e: any) {
