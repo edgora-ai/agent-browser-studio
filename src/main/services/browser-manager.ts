@@ -1410,7 +1410,7 @@ function writeProxyAuthExtension(dirId: string, proxy: ProxyConfig): string {
   return extDir;
 }
 
-function getLaunchLogPath(dirId: string): string {
+export function getLaunchLogPath(dirId: string): string {
   const logDir = path.join(getAppDataDir(), "logs");
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
   return path.join(logDir, `browser-${dirId}.log`);

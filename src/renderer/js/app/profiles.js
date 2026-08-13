@@ -826,6 +826,7 @@
             '<button class="btn btn-secondary btn-sm" data-action="extensions" title="Extensions">🧩</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="export-archive" title="Export backup">📦</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="lock" title="' + (isLocked ? 'Release lock (uncheckout)' : 'Check out / lock to this device') + '">' + (isLocked ? '🔓' : '🔒') + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="logs" title="Operation logs + browser log tail (RoxyBrowser-style)">📋</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete">🗑</button>' +
           '</div>' +
           '<div style="margin-top:4px;">' +
@@ -864,6 +865,7 @@
       else if (action === "env-risk") agentBrowser.openEnvRisk(dirId);
       else if (action === "webrtc-diag") agentBrowser.openWebRtcDiag(dirId);
       else if (action === "open-app") agentBrowser.openApp(dirId);
+      else if (action === "logs") agentBrowser.showProfileLogs(dirId);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -1025,6 +1027,54 @@
         }
       }).catch(function(e) { toast(e.message || String(e), "error"); });
     }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
+  function renderProfileLogs(r) {
+    var activityEl = document.getElementById("profile-logs-activity");
+    var tailEl = document.getElementById("profile-logs-tail");
+    if (!activityEl || !tailEl) return;
+    if (!r || !r.success) {
+      activityEl.innerHTML = '<div class="empty-state">' + esc((r && r.error) || "Failed to load logs") + '</div>';
+      tailEl.textContent = "";
+      return;
+    }
+    var entries = r.activity || [];
+    if (!entries.length) {
+      activityEl.innerHTML = '<div class="empty-state">' + esc(t("logs.no-activity", "暂无操作记录")) + '</div>';
+    } else {
+      activityEl.innerHTML = entries.map(function(e) {
+        var when = e.at ? new Date(e.at).toLocaleString() : "?";
+        var icon = e.category === "profile" ? "📦" : "•";
+        return '<div style="padding:4px 6px;border-bottom:1px solid var(--border);">' +
+          '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + esc(when) + '</span> ' +
+          icon + ' <strong>' + esc(e.action || "?") + '</strong>' +
+          (e.detail ? ' <span style="color:var(--text-muted);font-size:11px;">— ' + esc(String(e.detail).slice(0, 140)) + '</span>' : '') +
+          '</div>';
+      }).join("");
+    }
+    tailEl.textContent = r.logTail || (t("logs.no-tail", "暂无浏览器日志（启动 profile 后生成）"));
+  }
+
+  agentBrowser.showProfileLogs = function(dirId) {
+    document.getElementById("profile-logs-dir-id").value = dirId;
+    var dlg = document.getElementById("dlg-profile-logs");
+    if (!dlg) { toast(t("logs.unavailable", "日志对话框不可用"), "error"); return; }
+    dlg.showModal();
+    agentBrowser.refreshProfileLogs();
+  };
+
+  agentBrowser.refreshProfileLogs = function() {
+    var dirId = document.getElementById("profile-logs-dir-id").value;
+    if (!dirId) return;
+    var activityEl = document.getElementById("profile-logs-activity");
+    var tailEl = document.getElementById("profile-logs-tail");
+    if (activityEl) activityEl.innerHTML = '<div class="loading">Loading...</div>';
+    if (tailEl) tailEl.textContent = "Loading...";
+    api.browser.logs(dirId).then(function(r) {
+      renderProfileLogs(r || { success: false, error: "unknown" });
+    }).catch(function(e) {
+      renderProfileLogs({ success: false, error: e.message || String(e) });
+    });
   };
 
   agentBrowser.toggleLock = function(dirId, card) {

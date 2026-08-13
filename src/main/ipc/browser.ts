@@ -4,7 +4,10 @@ import {
   getRuntimeChromiumStatus, verifyRuntimeChromium,
   getRuntimeChromiumVersion, isRuntimeChromiumInstalled,
   createBrowserProfile, deleteBrowserProfile,
+  getLaunchLogPath,
 } from "../services/browser-manager.js";
+import * as fs from "node:fs";
+import { listAudit } from "../services/audit-log.js";
 import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
 import { checkProfileConsistency } from "../services/consistency-check.js";
 import { captureFingerprint, diffFingerprints, hasRiskyDrift } from "../services/fingerprint-baseline.js";
@@ -377,6 +380,42 @@ export function registerBrowserHandlers(): void {
       return { success: false, error: e.message || String(e) };
     } finally {
       if (client) { try { cdpDisconnect(client); } catch (e) { /* ignore */ } }
+    }
+  });
+
+  // Per-profile operation logs + rolling browser log tail (RoxyBrowser 4.0.3
+  // "Trackable Profile Activity" / 4.0.2 "rolling logs" parity): return recent
+  // audit entries for this profile plus the tail of its managed Chromium
+  // launch log. The launch log is masked at write time (no proxy credentials).
+  handleBrowser("logs", async (_event, dirId: string) => {
+    try {
+      validateDirId(dirId);
+      const activity = listAudit(50, { target: dirId });
+      const logFile = getLaunchLogPath(dirId);
+      let logTail = "";
+      let logExists = false;
+      let logBytes = 0;
+      try {
+        const stat = fs.statSync(logFile);
+        logExists = true;
+        logBytes = stat.size;
+        const maxBytes = 256 * 1024;
+        const fd = fs.openSync(logFile, "r");
+        try {
+          const start = Math.max(0, stat.size - maxBytes);
+          const length = stat.size - start;
+          const buf = Buffer.alloc(length);
+          fs.readSync(fd, buf, 0, length, start);
+          logTail = buf.toString("utf-8").replace(/[ --]/g, "");
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch {
+        /* no log file yet */
+      }
+      return { success: true, dirId, activity, logTail, logExists, logBytes };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
     }
   });
 }

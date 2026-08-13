@@ -505,6 +505,22 @@
  </div>
 </dialog>
 
+<!-- ── Profile Logs Dialog (RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs) ── -->
+<dialog id="dlg-profile-logs" style="max-width:760px;width:96%;">
+ <div>
+  <h3 style="margin:0 0 10px;">📋 Profile Operation Logs &amp; Browser Tail</h3>
+  <input type="hidden" id="profile-logs-dir-id">
+  <h4 style="font-size:13px;margin:6px 0 4px;">Recent Activity</h4>
+  <div id="profile-logs-activity" style="max-height:26vh;overflow:auto;font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;">Loading...</div>
+  <h4 style="font-size:13px;margin:10px 0 4px;">Browser Launch Log (tail)</h4>
+  <pre id="profile-logs-tail" style="max-height:30vh;overflow:auto;font-size:11px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-all;">Loading...</pre>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="refreshProfileLogs">🔄 Refresh</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+  </div>
+ </div>
+</dialog>
+
 <dialog id="dlg-bulk-import">
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
  <h3>📥 Bulk Import Profiles</h3>
