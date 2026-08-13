@@ -178,6 +178,10 @@ const api = {
       update: (index, account) => ipcRenderer.invoke("agent:accounts:update", { index, account }),
       delete: (index) => ipcRenderer.invoke("agent:accounts:delete", index),
       forProfile: (dirId) => ipcRenderer.invoke("agent:accounts:profile", dirId),
+      copyUsername: (index) => ipcRenderer.invoke("agent:accounts:copy-username", index),
+      copyPassword: (index) => ipcRenderer.invoke("agent:accounts:copy-password", index),
+      bind: (index, profileIds) => ipcRenderer.invoke("agent:accounts:bind", { index, profileIds }),
+      bulkAdd: (text) => ipcRenderer.invoke("agent:accounts:bulk-add", text),
     },
   },
   automation: {

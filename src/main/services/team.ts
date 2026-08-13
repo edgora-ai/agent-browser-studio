@@ -70,6 +70,18 @@ export function requireProfileMutation(): RoleCheck {
   return requireRole("member");
 }
 
+/** Reading account secrets (reveal/copy password) — member+ when team enabled. */
+export function requireAccountSecret(): RoleCheck {
+  if (!teamEnabled()) return { ok: true };
+  return requireRole("member");
+}
+
+/** Mutating accounts (add/update/delete/bind/bulk import/export) — member+ when team enabled. */
+export function requireAccountMutation(): RoleCheck {
+  if (!teamEnabled()) return { ok: true };
+  return requireRole("member");
+}
+
 function saveTeam(team: TeamConfig): void {
   const cfg = getConfig();
   cfg.team = team;

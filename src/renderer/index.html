@@ -248,6 +248,8 @@
  <div class="tab-header">
  <h2 data-i18n="acct.title">Account Management</h2>
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentAddAccount" data-i18n="acct.add">+ Add Account</button>
+ <button id="acct-bulk-import-btn" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentImportAccounts">📥 Bulk Import</button>
+ <button id="acct-export-btn" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentExportAccounts">⬇ Export CSV</button>
  </div>
  <div class="card">
  <p style="font-size:12px;color:var(--text-muted);margin:0;">Saved accounts are redacted in the UI and can be used by the local agent for form filling.</p>
@@ -792,6 +794,29 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </form>
 </dialog>
+<dialog id="dlg-account-bind">
+ <h3>Bind Account to Profiles</h3>
+ <input type="hidden" id="acct-bind-index" value="-1">
+ <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">Select the profiles that should auto-fill with this account.</p>
+ <div id="acct-bind-list" style="max-height:280px;overflow-y:auto;margin-bottom:10px;">
+ <div class="loading">Loading profiles...</div>
+ </div>
+ <div class="btn-row">
+ <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveAccountBind">Save</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog">Cancel</button>
+ </div>
+</dialog>
+<dialog id="dlg-account-import" class="dialog-wide">
+ <h3>📥 Bulk Import Accounts</h3>
+ <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
+ <textarea id="acct-import-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;" placeholder="https://twitter.com, alice, s3cret, social"></textarea>
+ <div id="acct-import-status" style="font-size:12px;margin:6px 0;"></div>
+ <div class="btn-row">
+ <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentRunAccountImport">Import</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog">Cancel</button>
+ </div>
+</dialog>
+
 <dialog id="dlg-skill-market" class="dialog-wide">
  <h3>🧩 Skill Marketplace</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Local/private marketplace of Agent automation prompt/tool recipes. These are not Chrome extensions; enabled skills are appended to the Agent system prompt.</p>

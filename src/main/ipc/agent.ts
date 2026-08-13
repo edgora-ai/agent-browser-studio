@@ -1,7 +1,8 @@
-import { ipcMain } from "electron";
+import { ipcMain, clipboard } from "electron";
 import { randomUUID } from "node:crypto";
 import {
   getAccounts, getRedactedAccounts, addAccount, updateAccount, deleteAccount, getProfileAccounts,
+  getAccountPassword, setAccountProfileIds, parseAccountsBulkText, bulkAddAccounts,
   llmChat, llmStreamChat, agentChat,
   loadConversations, createConversation, getConversation, listConversations,
   deleteConversation, renameConversation, addMessage,
@@ -30,6 +31,11 @@ import { getConfig, saveConfig } from "../services/config-manager.js";
 import { encryptSecret, isEncrypted } from "../services/secrets.js";
 import { recordAudit } from "../services/audit-log.js";
 import { TASK_TEMPLATES } from "../services/task-templates.js";
+import { requireAccountMutation, requireAccountSecret, type RoleCheck } from "../services/team.js";
+
+function gateAccount(r: RoleCheck): void {
+  if (!r.ok) throw new Error(r.error);
+}
 
 function getLlmConfig(): LlmConfig | null {
   const cfg = getConfig();
@@ -504,6 +510,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle("agent:accounts:add", async (_event, account: PlatformAccount) => {
+    gateAccount(requireAccountMutation());
     const added = addAccount(account);
     const { platformPassword: _platformPassword, ...safe } = added;
     return { ...safe, hasPassword: Boolean(_platformPassword) };
@@ -512,6 +519,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle("agent:accounts:update", async (_event, params: {
     index: number; account: Partial<PlatformAccount>;
   }) => {
+    gateAccount(requireAccountMutation());
     const updated = updateAccount(params.index, params.account);
     if (!updated) return null;
     const { platformPassword: _platformPassword, ...safe } = updated;
@@ -519,6 +527,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle("agent:accounts:delete", async (_event, index: number) => {
+    gateAccount(requireAccountMutation());
     return deleteAccount(index);
   });
 
@@ -527,6 +536,50 @@ export function registerAgentHandlers(): void {
       ...account,
       hasPassword: Boolean(_platformPassword),
     }));
+  });
+
+  // Copy username to the system clipboard (no secret involved).
+  ipcMain.handle("agent:accounts:copy-username", async (_event, index: number) => {
+    const accounts = getAccounts();
+    if (index < 0 || index >= accounts.length) return { ok: false, error: "account not found" };
+    const username = accounts[index].platformUserName || "";
+    if (!username) return { ok: false, error: "account has no username" };
+    clipboard.writeText(username);
+    recordAudit({ category: "account", action: "copy-username", target: accounts[index].platformUrl.slice(0, 200), actor: "user" });
+    return { ok: true };
+  });
+  // Reveal + copy password — member+ only. The plaintext never crosses into
+  // the renderer; the main process writes the clipboard directly.
+  ipcMain.handle("agent:accounts:copy-password", async (_event, index: number) => {
+    gateAccount(requireAccountSecret());
+    const accounts = getAccounts();
+    if (index < 0 || index >= accounts.length) return { ok: false, error: "account not found" };
+    const password = getAccountPassword(index);
+    if (!password) return { ok: false, error: "account has no password" };
+    clipboard.writeText(password);
+    recordAudit({ category: "account", action: "copy-password", target: accounts[index].platformUrl.slice(0, 200), actor: "user" });
+    return { ok: true };
+  });
+
+  // Bind an account to a set of profiles (replaces the profileIds list).
+  ipcMain.handle("agent:accounts:bind", async (_event, params: {
+    index: number; profileIds: string[];
+  }) => {
+    gateAccount(requireAccountMutation());
+    const updated = setAccountProfileIds(params.index, params.profileIds);
+    if (!updated) return null;
+    const { platformPassword: _platformPassword, ...safe } = updated;
+    recordAudit({ category: "account", action: "bind", target: safe.platformUrl.slice(0, 200), actor: "user", detail: "profiles=" + (safe.profileIds || []).length });
+    return { ...safe, hasPassword: Boolean(_platformPassword) };
+  });
+
+  // Bulk import pasted account lines (url, username, password, tags).
+  ipcMain.handle("agent:accounts:bulk-add", async (_event, text: string) => {
+    gateAccount(requireAccountMutation());
+    const items = parseAccountsBulkText(String(text || ""));
+    const result = bulkAddAccounts(items);
+    recordAudit({ category: "account", action: "bulk-add", target: "", actor: "user", detail: "added=" + result.added + " skipped=" + result.skipped });
+    return result;
   });
 
   // ════════════════════════════════════════════════════════

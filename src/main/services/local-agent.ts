@@ -10,6 +10,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import * as dns from "node:dns/promises";
 import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
+import { encryptSecret } from "./secrets.js";
 import { BUILTIN_SKILLS, getEnabledSkillPrompts } from "./skill-repository.js";
 import {
   buildHumanizedPointerPath,
@@ -274,6 +275,119 @@ export function deleteAccount(index: number): boolean {
 
 export function getProfileAccounts(dirId: string): PlatformAccount[] {
   return getAccounts().filter(a => !a.profileIds || a.profileIds.includes(dirId));
+}
+
+/** Reveal a single account's decrypted password (never serialized to config). */
+export function getAccountPassword(index: number): string | null {
+  const accounts = getAccounts();
+  if (index < 0 || index >= accounts.length) return null;
+  const stored = accounts[index].platformPassword;
+  if (!stored) return null;
+  const plain = decryptSecretOr(stored, "");
+  return plain || null;
+}
+
+/** Rebind an account to a set of profiles (replaces profileIds, dedupes). */
+export function setAccountProfileIds(index: number, profileIds: string[]): PlatformAccount | null {
+  const accounts = getAccounts();
+  if (index < 0 || index >= accounts.length) return null;
+  const seen = new Set<string>();
+  const clean = (Array.isArray(profileIds) ? profileIds : [])
+    .filter((p) => typeof p === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(p))
+    .filter((p) => !seen.has(p) && (seen.add(p), true))
+    .slice(0, 200);
+  const next = { ...accounts[index], profileIds: clean.length ? clean : undefined, updatedAt: Date.now() };
+  accounts[index] = next;
+  saveAccounts(accounts);
+  return accounts[index];
+}
+
+export interface ParsedAccountLine {
+  url: string;
+  username: string;
+  password?: string;
+  tags?: string[];
+}
+
+const ACCOUNT_HEADER_ALIASES: Record<string, keyof ParsedAccountLine> = {
+  url: "url", site: "url", website: "url", platform: "url", domain: "url",
+  username: "username", user: "username", account: "username", name: "username", login: "username",
+  password: "password", pass: "password", pwd: "password",
+  tags: "tags", tag: "tags",
+};
+
+function splitAccountCsvLine(line: string): string[] {
+  // Simple CSV split (no quoted commas) — sufficient for this import flow.
+  return line.split(",").map((s) => s.trim());
+}
+
+function normalizeAccountTags(value: string): string[] {
+  return [...new Set(value.split(/[;|]/).map((t) => t.trim()).filter(Boolean).map((t) => t.slice(0, 40)))].slice(0, 20);
+}
+
+/** Parse pasted account text into lines. Supports an optional header row
+ *  (url,username,password,tags) and falls back to positional. Pure → testable. */
+export function parseAccountsBulkText(text: string): ParsedAccountLine[] {
+  if (!text || !text.trim()) return [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return [];
+  const first = splitAccountCsvLine(lines[0]).map((c) => c.toLowerCase().replace(/[\s-]/g, ""));
+  const hasHeader = first.some((c) => c in ACCOUNT_HEADER_ALIASES);
+  const colMap = hasHeader ? first.map((c) => ACCOUNT_HEADER_ALIASES[c] || null) : ["url", "username", "password", "tags"];
+  const start = hasHeader ? 1 : 0;
+
+  const out: ParsedAccountLine[] = [];
+  for (let i = start; i < lines.length; i++) {
+    const cells = splitAccountCsvLine(lines[i]);
+    const item: Record<string, unknown> = {};
+    cells.forEach((cell, ci) => {
+      const key = colMap[ci];
+      if (!key || cell === "") return;
+      if (key === "tags") item.tags = normalizeAccountTags(cell);
+      else item[key] = cell;
+    });
+    const url = typeof item.url === "string" ? item.url.trim().slice(0, 1000) : "";
+    const username = typeof item.username === "string" ? item.username.trim().slice(0, 200) : "";
+    if (!url || !username) continue;
+    const password = typeof item.password === "string" && item.password.trim() ? item.password.trim().slice(0, 4096) : undefined;
+    const entry: ParsedAccountLine = { url, username };
+    if (password !== undefined) entry.password = password;
+    if (Array.isArray(item.tags) && item.tags.length) entry.tags = item.tags as string[];
+    out.push(entry);
+  }
+  return out;
+}
+
+export interface BulkAccountResult {
+  added: number;
+  skipped: number;
+  errors: { line?: number; error: string }[];
+}
+
+/** Bulk add parsed account lines; passwords are encrypted at rest. */
+export function bulkAddAccounts(items: ParsedAccountLine[]): BulkAccountResult {
+  const accounts = getAccounts();
+  const errors: BulkAccountResult["errors"] = [];
+  let added = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it || !it.url || !it.username) {
+      errors.push({ line: i + 1, error: "missing url or username" });
+      continue;
+    }
+    const entry: PlatformAccount = {
+      platformUrl: it.url.slice(0, 1000),
+      platformUserName: it.username.slice(0, 200),
+      platformPassword: it.password ? encryptSecret(it.password) : "",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as PlatformAccount;
+    if (Array.isArray(it.tags) && it.tags.length) entry.tags = it.tags;
+    accounts.push(entry);
+    added++;
+  }
+  if (added) saveAccounts(accounts);
+  return { added, skipped: items.length - added, errors };
 }
 
 // ═══════════════════════════════════════════════════════════════

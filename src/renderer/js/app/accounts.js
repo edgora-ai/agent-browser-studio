@@ -9,51 +9,49 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
-  var fmt = helpers.fmt;
-  var shortPath = helpers.shortPath;
-  var renderChatMarkdown = helpers.renderChatMarkdown;
-  var renderInlineMarkdown = helpers.renderInlineMarkdown;
-  var safeCodeLanguage = helpers.safeCodeLanguage;
-  var hardwareSummary = helpers.hardwareSummary;
-  var shortenGpu = helpers.shortenGpu;
-  var fingerprintCompleteness = helpers.fingerprintCompleteness;
-  var platformIcon = helpers.platformIcon;
-  var parseTagInput = helpers.parseTagInput;
-  var parseListInput = helpers.parseListInput;
-  var closeDialogIfOpen = helpers.closeDialogIfOpen;
-  var clearSkillEditor = helpers.clearSkillEditor;
-  var refreshSkillViews = helpers.refreshSkillViews;
-  var skillSourceLabel = helpers.skillSourceLabel;
-  var renderSkillTags = helpers.renderSkillTags;
-  var renderSkillCard = helpers.renderSkillCard;
-  var bindSkillCardActions = helpers.bindSkillCardActions;
-  var readHardwareFields = helpers.readHardwareFields;
-  var writeHardwareFields = helpers.writeHardwareFields;
-  var renderProxyOptions = helpers.renderProxyOptions;
-  var proxySelectionValue = helpers.proxySelectionValue;
-  var profileProxySelectionValue = helpers.profileProxySelectionValue;
-  var proxyDisplayLabel = helpers.proxyDisplayLabel;
-  var parseProxySelection = helpers.parseProxySelection;
-  var extractChromeExtensionId = helpers.extractChromeExtensionId;
-  var getSyncStatus = helpers.getSyncStatus;
-  var markProfileRuntime = helpers.markProfileRuntime;
-  var clearProfileRuntime = helpers.clearProfileRuntime;
-  var scheduleProfilesRefresh = helpers.scheduleProfilesRefresh;
-  var getBrowserDisplay = helpers.getBrowserDisplay;
-  var chromeOsFromPlatform = helpers.chromeOsFromPlatform;
-  var uaPlatformFromPlatform = helpers.uaPlatformFromPlatform;
-  var platformFromOsName = helpers.platformFromOsName;
-  var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
-  var updateBrowserStatus = helpers.updateBrowserStatus;
-  var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+
+  var _role = null;
+  var _rolePromise = null;
+
+  function loadAccountRole() {
+    if (_role) return Promise.resolve(_role);
+    if (_rolePromise) return _rolePromise;
+    _rolePromise = api.team.status().then(function(st) {
+      _role = (st && st.local && st.local.role) || 'owner';
+      return _role;
+    }).catch(function() { _role = 'owner'; return _role; });
+    return _rolePromise;
+  }
+
+  function profileNameById() {
+    return api.browser.list().catch(function() { return []; }).then(function(profiles) {
+      var m = {};
+      (profiles || []).forEach(function(p) { if (p && p.dirId) m[p.dirId] = p.name || p.dirId; });
+      return m;
+    });
+  }
+
+  function boundChips(profileIds, nameById) {
+    if (!profileIds || !profileIds.length) return '';
+    return profileIds.map(function(id) {
+      var name = nameById[id] || id;
+      return '<span style="background:#eafaf1;border:1px solid #b7e4c7;padding:1px 6px;border-radius:3px;font-size:10px;margin-right:4px;" title="' + escAttr(id) + '">🔗 ' + esc(name) + '</span>';
+    }).join('');
+  }
+
   function loadAccountsTab() {
     renderAccountsList('accounts-tab-list');
   }
   agentBrowser.loadAccountsTab = loadAccountsTab;
+
   function renderAccountsList(targetId) {
-    R.agent.accounts.list().then(function(accounts) {
-      var el = document.getElementById(targetId);
-      if (!el) return;
+    var el = document.getElementById(targetId);
+    if (!el) return;
+    Promise.all([R.agent.accounts.list(), profileNameById(), loadAccountRole()]).then(function(res) {
+      var accounts = res[0] || [];
+      var nameById = res[1] || {};
+      var role = res[2];
+      var canManage = role !== 'viewer';
       if (!accounts || accounts.length === 0) {
         el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No accounts saved yet.</div>';
         return;
@@ -62,8 +60,13 @@
       for (var i = 0; i < accounts.length; i++) {
         var a = accounts[i];
         var tagsHtml = (a.tags || []).map(function(t) { return '<span style="background:#e8f4fd;padding:1px 6px;border-radius:3px;font-size:10px;">' + esc(t) + '</span>'; }).join(' ');
+        var chips = boundChips(a.profileIds, nameById);
+        var passBtn = (a.hasPassword && canManage)
+          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="Copy password">🔑</button> '
+          : '';
+        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="Bind to profiles">🔗</button> ' : '';
         html += '<div class="card" style="padding:10px;">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">';
         html += '<div style="min-width:0;">';
         html += '<strong>' + esc(a.platformUserName || '?') + '</strong>';
         html += ' <span style="color:var(--text-muted);font-size:11px;">@ ' + esc(a.platformUrl || '') + '</span>';
@@ -71,10 +74,15 @@
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';
-        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-right:4px;">Edit</button>';
+        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="Copy username">👤</button> ';
+        html += passBtn;
+        html += bindBtn;
+        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">Edit</button>';
         html += '<button class="btn btn-danger btn-sm" onclick="agentBrowser.agentDeleteAccount(' + i + ')">Del</button>';
         html += '</div>';
-        html += '</div></div>';
+        html += '</div>';
+        if (chips) html += '<div style="margin-top:6px;">' + chips + '</div>';
+        html += '</div>';
       }
       html += '</div>';
       el.innerHTML = html;
@@ -87,7 +95,21 @@
   agentBrowser.agentLoadAccounts = function() {
     renderAccountsList('agent-accounts-list');
     if (state.currentTab === 'accounts') renderAccountsList('accounts-tab-list');
+    applyAccountRoleToToolbar();
   };
+
+  function applyAccountRoleToToolbar() {
+    loadAccountRole().then(function(role) {
+      var canManage = role !== 'viewer';
+      var addBtn = document.querySelector('#tab-accounts [data-cmd="agentAddAccount"]');
+      var importBtn = document.getElementById('acct-bulk-import-btn');
+      var exportBtn = document.getElementById('acct-export-btn');
+      if (addBtn) addBtn.style.display = canManage ? '' : 'none';
+      if (importBtn) importBtn.style.display = canManage ? '' : 'none';
+      if (exportBtn) exportBtn.style.display = canManage ? '' : 'none';
+    });
+  }
+
 
   agentBrowser.agentAddAccount = function() {
     document.getElementById('dlg-account-title').textContent = 'Add Account';
@@ -142,6 +164,100 @@
     if (!confirm('Delete this account?')) return;
     R.agent.accounts.delete(index).then(function(r) {
       if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); agentBrowser.agentLoadAccounts(); }
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  // ── Quick copy (main process writes the clipboard; secrets never cross) ──
+  agentBrowser.agentCopyAccountUsername = function(index) {
+    R.agent.accounts.copyUsername(index).then(function(r) {
+      if (r && r.ok) toast('Username copied to clipboard', 'success');
+      else toast((r && r.error) || 'Copy failed', 'error');
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  agentBrowser.agentCopyAccountPassword = function(index) {
+    R.agent.accounts.copyPassword(index).then(function(r) {
+      if (r && r.ok) toast('Password copied to clipboard', 'success');
+      else toast((r && r.error) || 'Copy failed', 'error');
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  // ── Account ↔ profile binding ──
+  agentBrowser.agentBindAccounts = function(index) {
+    R.agent.accounts.list().then(function(accounts) {
+      var a = accounts[index];
+      if (!a) return;
+      document.getElementById('acct-bind-index').value = index;
+      return api.browser.list().catch(function() { return []; }).then(function(profiles) {
+        var listEl = document.getElementById('acct-bind-list');
+        var bound = a.profileIds || [];
+        if (!profiles || profiles.length === 0) {
+          listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No profiles yet. Create a profile first.</div>';
+        } else {
+          listEl.innerHTML = profiles.map(function(p) {
+            var checked = bound.indexOf(p.dirId) >= 0 ? ' checked' : '';
+            return '<label style="display:block;padding:4px 0;font-size:13px;"><input type="checkbox" class="acct-bind-cb" value="' + escAttr(p.dirId) + '"' + checked + '> ' + esc(p.name || p.dirId) + '</label>';
+          }).join('');
+        }
+        document.getElementById('dlg-account-bind').showModal();
+      });
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  agentBrowser.agentSaveAccountBind = function() {
+    var index = parseInt(document.getElementById('acct-bind-index').value);
+    var cbs = document.querySelectorAll('#acct-bind-list .acct-bind-cb:checked');
+    var profileIds = [];
+    cbs.forEach(function(cb) { profileIds.push(cb.value); });
+    R.agent.accounts.bind(index, profileIds).then(function(r) {
+      document.getElementById('dlg-account-bind').close();
+      toast('Account profiles updated', 'success');
+      agentBrowser.agentLoadAccounts();
+    }).catch(function(e) { toast(e.message, 'error'); });
+  };
+
+  // ── Bulk import (url, username, password, tags per line) ──
+  agentBrowser.agentImportAccounts = function() {
+    document.getElementById('acct-import-text').value = '';
+    document.getElementById('acct-import-status').innerHTML = '';
+    document.getElementById('dlg-account-import').showModal();
+  };
+
+  agentBrowser.agentRunAccountImport = function() {
+    var text = document.getElementById('acct-import-text').value || '';
+    var statusEl = document.getElementById('acct-import-status');
+    statusEl.innerHTML = '<span style="color:var(--text-muted);">Importing...</span>';
+    R.agent.accounts.bulkAdd(text).then(function(r) {
+      var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
+      if (r.skipped) msg += ', skipped ' + r.skipped;
+      statusEl.innerHTML = '<span style="color:var(--success);">' + esc(msg) + '</span>';
+      toast(msg, r.added ? 'success' : 'error');
+      if (r.added) agentBrowser.agentLoadAccounts();
+    }).catch(function(e) {
+      statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(e.message) + '</span>';
+    });
+  };
+
+  // ── Export CSV — metadata only; passwords never leave the vault ──
+  agentBrowser.agentExportAccounts = function() {
+    R.agent.accounts.list().then(function(accounts) {
+      var rows = [['url', 'username', 'tags', 'profile_ids']];
+      (accounts || []).forEach(function(a) {
+        rows.push([a.platformUrl || '', a.platformUserName || '', (a.tags || []).join(';'), (a.profileIds || []).join(';')]);
+      });
+      var csv = rows.map(function(r) {
+        return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+      }).join('\n');
+      var blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "accounts-" + new Date().toISOString().slice(0, 10) + ".csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      toast((window.i18n ? window.i18n.t("toast.account.exported", "Accounts exported (metadata only)") : "Accounts exported (metadata only)"), "success");
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 })();
