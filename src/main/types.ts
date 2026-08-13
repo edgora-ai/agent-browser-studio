@@ -108,6 +108,15 @@ export interface BrowserFingerprintMeta {
   fingerprintBaseline?: Record<string, unknown>;
 }
 
+export interface ProfileLock {
+  /** deviceId of the device that checked this profile out. */
+  owner: string;
+  /** hostname of the owning device (human-readable). */
+  ownerName: string;
+  /** epoch ms when the lock was taken. */
+  at: number;
+}
+
 export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   proxyMode?: ProxyMode;
@@ -117,6 +126,8 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   note?: string | null;
   tags?: string[];
   extensions?: Record<string, boolean>;
+  /** Team checkout lock: another device holds this profile (push protection). */
+  lock?: ProfileLock;
 }
 
 export interface ExtensionRepositoryEntry {
@@ -220,6 +231,9 @@ export interface PlatformAccount {
 
 export interface MgmtConfig {
   version: number;
+  /** Stable per-install device identity used for team profile locks. */
+  deviceId?: string;
+  deviceName?: string;
   chromiumBin?: string;
   defaultProxy: string;
   proxies: Record<string, ProxyConfig>;

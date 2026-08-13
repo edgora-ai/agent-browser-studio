@@ -91,7 +91,7 @@ export const syncService = {
       if (!fetched.ok) {
         if (fetched.message.startsWith("HTTP 404")) {
           const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
-          const body = buildSyncDiff(localSnapshot, { browserProfiles: {}, proxies: {}, extensionRepository: {}, accounts: [] } as any, {});
+          const body = buildSyncDiff(localSnapshot, { browserProfiles: {}, proxies: {}, extensionRepository: {}, accounts: [] } as any, {}, getConfig().deviceId);
           return { ok: true, firstPush: true, remoteTimestamp: null, ...body };
         }
         return { ok: false, message: fetched.message, ...emptySyncDiff() };
@@ -100,7 +100,7 @@ export const syncService = {
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
       const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
       const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
-      const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload);
+      const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload, getConfig().deviceId);
       return {
         ok: true,
         remoteTimestamp: typeof payload.timestamp === "number" ? payload.timestamp : null,
@@ -111,7 +111,7 @@ export const syncService = {
     }
   },
   // ── Push ──
-  async push(signal?: AbortSignal): Promise<SyncResult> {
+  async push(signal?: AbortSignal, force = false): Promise<SyncResult> {
     assertSyncNotAborted(signal);
     const sync = getSyncConfig();
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
@@ -119,6 +119,12 @@ export const syncService = {
     }
 
     try {
+      if (!force) {
+        const lockBlock = await collectRemoteLocksBlockingPush(sync, signal);
+        if (lockBlock.length) {
+          return { success: false, message: "Push blocked: " + lockBlock.length + " profile(s) locked by another device (" + lockBlock.map((x) => x.ownerName).filter((v, i, a) => a.indexOf(v) === i).join(", ") + "): " + lockBlock.map((x) => x.id).slice(0, 8).join(", ") + ". Release the lock on that device or pull first (or force push)." };
+        }
+      }
       const now = Date.now();
       const latestConfig = getConfig();
       const syncSnapshot = sanitizeConfigForSync(cloneConfig(latestConfig));
@@ -802,6 +808,27 @@ function isPathInside(childPath: string, basePath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+async function collectRemoteLocksBlockingPush(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<Array<{ id: string; ownerName: string }>> {
+  const myDevice = getConfig().deviceId || "local";
+  try {
+    const fetched = await fetchSyncConfig(sync, signal);
+    if (!fetched.ok) return [];
+    const raw = gunzipBase64Field(fetched.payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
+    const remoteCfg = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+    const out: Array<{ id: string; ownerName: string }> = [];
+    for (const [id, p] of Object.entries(remoteCfg.browserProfiles || {}) as Array<[string, any]>) {
+      const lock = p?.lock;
+      if (lock && typeof lock.owner === "string" && lock.owner && lock.owner !== myDevice) {
+        out.push({ id, ownerName: String(lock.ownerName || lock.owner) });
+      }
+    }
+    return out;
+  } catch (e: any) {
+    if (signal?.aborted) throw e;
+    return [];
+  }
+}
+
 async function fetchSyncConfig(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
   const payload = await fetchSyncPayload(sync, SYNC_CONFIG_KEY, false, signal);
   if (payload.ok || !payload.message.startsWith("HTTP 404")) return payload;
@@ -1175,6 +1202,9 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       proxyName: profile.proxyName || null,
       note: profile.note || null,
       extensions: profile.extensions || {},
+      ...(profile.lock && typeof profile.lock === "object" && profile.lock.owner
+        ? { lock: { owner: String(profile.lock.owner).slice(0, 64), ownerName: String(profile.lock.ownerName || "").slice(0, 64), at: Number.isFinite(profile.lock.at) ? profile.lock.at : 0 } }
+        : {}),
       syncedAt: profile.syncedAt,
       syncedHash: profile.syncedHash,
     };
@@ -1297,6 +1327,7 @@ export interface SyncDiffResult {
   extensions: SyncDiffSection;
   defaultProxy: { local: string | null; remote: string | null };
   artifacts: { cookies: string[]; localStorage: string[]; preferences: string[] };
+  remoteLocks: Array<{ id: string; ownerName: string }>;
   pushWarnings: string[];
   pullNotes: string[];
 }
@@ -1390,19 +1421,32 @@ function emptySyncDiff(): Omit<SyncDiffResult, "ok" | "message"> {
     extensions: { localOnly: [], remoteOnly: [], changed: [] },
     defaultProxy: { local: null, remote: null },
     artifacts: { cookies: [], localStorage: [], preferences: [] },
+    remoteLocks: [],
     pushWarnings: [],
     pullNotes: [],
   };
 }
 
-function buildSyncDiff(local: any, remote: any, payload: any): Omit<SyncDiffResult, "ok" | "message" | "remoteTimestamp"> {
+function buildSyncDiff(local: any, remote: any, payload: any, myDeviceId?: string): Omit<SyncDiffResult, "ok" | "message" | "remoteTimestamp"> {
   const profiles = diffSectionById(local?.browserProfiles || {}, remote?.browserProfiles || {});
   const proxies = diffSectionById(local?.proxies || {}, remote?.proxies || {});
   const extensions = diffSectionById(local?.extensionRepository || {}, remote?.extensionRepository || {});
   const accounts = diffAccountArrays(local?.accounts || [], remote?.accounts || []);
 
+  const remoteLocks: Array<{ id: string; ownerName: string }> = [];
+  for (const [id, p] of Object.entries(remote?.browserProfiles || {}) as Array<[string, any]>) {
+    const lock = p?.lock;
+    if (lock && typeof lock.owner === "string" && lock.owner && (!myDeviceId || lock.owner !== myDeviceId)) {
+      remoteLocks.push({ id, ownerName: String(lock.ownerName || lock.owner) });
+    }
+  }
+  remoteLocks.sort((a, b) => a.id.localeCompare(b.id));
+
   const pushWarnings: string[] = [];
   const pullNotes: string[] = [];
+  if (remoteLocks.length) {
+    pushWarnings.push("远端 " + remoteLocks.length + " 个 profile 被其他设备锁定，Push 会被拒绝（除非强制）: " + remoteLocks.map((l) => l.id).slice(0, 8).join(", ") + "（" + remoteLocks.map((l) => l.ownerName).filter((v, i, a) => a.indexOf(v) === i).slice(0, 3).join(", ") + "）");
+  }
   if (profiles.remoteOnly.length) {
     pushWarnings.push("Push 会把 " + profiles.remoteOnly.length + " 个远端独有的 profile 从远端移除（本地不存在）: " + profiles.remoteOnly.slice(0, 8).join(", ") + (profiles.remoteOnly.length > 8 ? " (+" + (profiles.remoteOnly.length - 8) + ")" : ""));
   }
@@ -1436,6 +1480,7 @@ function buildSyncDiff(local: any, remote: any, payload: any): Omit<SyncDiffResu
       localStorage: Object.keys(payload?.localStorage || {}).sort(),
       preferences: Object.keys(payload?.preferences || {}).sort(),
     },
+    remoteLocks,
     pushWarnings,
     pullNotes,
   };
@@ -1480,4 +1525,5 @@ export const __syncTestHooks = {
   buildSyncDiff,
   stableStringify,
   mergeAccountArrays,
+  collectRemoteLocksBlockingPush,
 };

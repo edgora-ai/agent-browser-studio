@@ -175,8 +175,19 @@
       return api.sync.push();
     }).then(function(r) {
       if (!r) return;
+      if (!r.success && /locked by another device/i.test(r.message || '')) {
+        var forceOk = confirm('Push 被锁定保护拦截:\n\n' + r.message + '\n\n强制覆盖并继续?');
+        if (!forceOk) { if (reset) reset(); return null; }
+        return api.sync.push({ force: true });
+      }
       toast(r.message, r.success ? 'success' : 'error');
       if (r.success) agentBrowser.loadSyncConfig();
+      else agentBrowser.loadSyncPreview();
+      return null;
+    }).then(function(r2) {
+      if (!r2) return;
+      toast(r2.message, r2.success ? 'success' : 'error');
+      if (r2.success) agentBrowser.loadSyncConfig();
       else agentBrowser.loadSyncPreview();
     }).catch(function(e) {
       toast(t('sync.toast.push-failed','Push failed: ') + (e.message || String(e)), 'error');

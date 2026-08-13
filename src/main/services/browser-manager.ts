@@ -53,7 +53,7 @@ import {
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
-import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode } from "../types.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock } from "../types.js";
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
 
 export interface BrowserProfile {
@@ -89,6 +89,7 @@ export interface BrowserProfile {
   syncedAt: number | null;
   syncStatus: "synced" | "dirty" | "never";
   lastModified: number;
+  lock: ProfileLock | null;
   running: boolean;
   pid: number | null;
   cdpPort: number | null;
@@ -334,6 +335,7 @@ export function listBrowserProfiles(): BrowserProfile[] {
       syncedAt,
       syncStatus,
       lastModified,
+      lock: m.lock || null,
       running: st.running,
       pid: st.pid,
       cdpPort: st.cdpPort,

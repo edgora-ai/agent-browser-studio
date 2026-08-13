@@ -691,17 +691,20 @@
         var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · Chromium " + (fp.browserVersion || fp.version || "auto");
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
         var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
+        var isLocked = !!(p.lock && p.lock.owner);
+        var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
 
         var proxyOptsHtml = renderProxyOptions(proxies, profileProxySelectionValue(p, "none"), true);
 
-        return '<div class="profile-card' + (isRunning ? ' running' : '') + '" data-dir-id="' + escAttr(p.dirId) + '">' +
+        return '<div class="profile-card' + (isRunning ? ' running' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '">' +
           '<div class="card-header">' +
             '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
             '<span class="name" title="Click to rename" data-action="rename">' + esc(p.name) + '</span>' +
             '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
+            lockBadge +
           '</div>' +
           '<div class="info-row"><span>Browser</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
           '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
@@ -718,6 +721,7 @@
             '<button class="btn btn-secondary btn-sm" data-action="edit">✎ Edit</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="cookies" title="Cookies">🍪</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="extensions" title="Extensions">🧩</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="lock" title="' + (isLocked ? 'Release lock (uncheckout)' : 'Check out / lock to this device') + '">' + (isLocked ? '🔓' : '🔒') + '</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete">🗑</button>' +
           '</div>' +
           '<div style="margin-top:4px;">' +
@@ -751,6 +755,7 @@
       else if (action === "delete") agentBrowser.delProfile(dirId);
       else if (action === "risk-check") agentBrowser.openRiskCheck(dirId);
       else if (action === "drift-check") agentBrowser.checkDrift(dirId);
+      else if (action === "lock") agentBrowser.toggleLock(dirId, card);
     };
     container.onchange = function (event) {
       var target = event.target;
@@ -779,6 +784,19 @@
         toast("⚠ Risky fingerprint drift: " + fields + ((r.drift || []).length > 6 ? " (+" + ((r.drift || []).length - 6) + ")" : ""), "error");
       }
     }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
+  agentBrowser.toggleLock = function(dirId, card) {
+    var locked = card ? card.dataset.lock === "1" : false;
+    if (!locked) {
+      var ok = confirm('锁定这个 profile 到当前设备？其他设备 Push 时将无法覆盖它（可强制覆盖）。\n\n锁定后记得 Push 一次，把锁同步到远端。');
+      if (!ok) return;
+    }
+    api.browser.setLock(dirId, !locked).then(function(r) {
+      if (!r || !r.success) { toast((r && r.error) || 'Lock failed', 'error'); return; }
+      toast(locked ? '🔓 已解锁（记得 Push 同步）' : '🔒 已锁定到本设备（记得 Push 同步）', 'success');
+      agentBrowser.loadProfiles();
+    }).catch(function(e) { toast(e.message || String(e), 'error'); });
   };
 
   agentBrowser.loadProfiles = loadProfiles;

@@ -115,6 +115,28 @@ export function registerBrowserHandlers(): void {
     return checkFingerprintDrift(dirId);
   });
 
+  // Team checkout lock: lock/unlock a profile to the current device so a
+  // sync push from another device refuses to overwrite it.
+  handleBrowser("set-lock", async (_event, params: { dirId: string; locked: boolean }) => {
+    try {
+      validateDirId(params.dirId);
+      const cfg = getConfig() as any;
+      const meta = cfg.browserProfiles?.[params.dirId];
+      if (!meta) return { success: false, error: "Profile not found" };
+      if (params.locked) {
+        meta.lock = { owner: cfg.deviceId || "local", ownerName: cfg.deviceName || "device", at: Date.now() };
+        recordAudit({ category: "profile", action: "lock", target: params.dirId, actor: "user", detail: "locked by " + meta.lock.ownerName + " (" + meta.lock.owner + ")" });
+      } else {
+        delete meta.lock;
+        recordAudit({ category: "profile", action: "unlock", target: params.dirId, actor: "user", detail: "released" });
+      }
+      saveConfig(cfg);
+      return { success: true, lock: meta.lock || null };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
   handleBrowser("stop", async (_event, dirId: string) => {
     return { success: stopBrowser(dirId) };
   });

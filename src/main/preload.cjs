@@ -41,7 +41,7 @@ const api = {
     availableDisk: () => ipcRenderer.invoke("storage:available-disk"),
   },
   sync: {
-    push: () => ipcRenderer.invoke("sync:push"),
+    push: (opts) => ipcRenderer.invoke("sync:push", opts),
     pull: () => ipcRenderer.invoke("sync:pull"),
     status: () => ipcRenderer.invoke("sync:status"),
     preview: () => ipcRenderer.invoke("sync:preview"),
@@ -106,6 +106,7 @@ const api = {
     consistencyCheck: (dirId) => ipcRenderer.invoke("browser:consistency-check", dirId),
     captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
+    setLock: (dirId, locked) => ipcRenderer.invoke("browser:set-lock", { dirId, locked }),
     parseBulkCsv: (text) => ipcRenderer.invoke("browser:parse-bulk-csv", text),
     setSeed: (dirId, seed) => ipcRenderer.invoke("browser:set-seed", { dirId, seed }),
     setMeta: (dirId, meta) => ipcRenderer.invoke("browser:set-meta", { dirId, ...meta }),

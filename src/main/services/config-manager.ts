@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as net from "node:net";
+import * as os from "node:os";
+import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
@@ -68,8 +70,17 @@ let config: MgmtConfig | null = null;
 export function getConfig(): MgmtConfig {
   if (!config) {
     config = loadConfig();
+    ensureDeviceIdentity(config);
   }
   return config;
+}
+
+/** Assign a stable per-install device identity (used for team profile locks). */
+function ensureDeviceIdentity(cfg: MgmtConfig): void {
+  if (cfg.deviceId) return;
+  cfg.deviceId = randomUUID();
+  cfg.deviceName = (os.hostname() || "device").slice(0, 40);
+  saveConfig(cfg);
 }
 
 export function getConfigPath(): string {

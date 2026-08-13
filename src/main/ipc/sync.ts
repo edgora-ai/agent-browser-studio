@@ -4,8 +4,8 @@ import { getSyncConfig, setSyncConfig } from "../services/config-manager.js";
 import type { SyncResult, SyncConfig } from "../types.js";
 
 export function registerSyncHandlers(): void {
-  ipcMain.handle("sync:push", async (): Promise<SyncResult> => {
-    return syncService.push();
+  ipcMain.handle("sync:push", async (_event, opts?: { force?: boolean }): Promise<SyncResult> => {
+    return syncService.push(undefined, Boolean(opts?.force));
   });
 
   ipcMain.handle("sync:pull", async (): Promise<SyncResult> => {

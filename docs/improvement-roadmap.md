@@ -366,3 +366,38 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J56 全绿（含 journ
 - 新增 `tests/e2e/j56-sync-diff-preview.test.ts`（5 例，本地 mock S3）
 
 **验证**：e2e J56 5 例全绿（首次 preview firstPush+localOnly → push 落盘 → push 后 clean+remoteTimestamp → 注入远端独有 profile 后 pushWarnings/pullNotes 出现）；unit/smoke 461 全绿；j55/j54/j41 回归 18 例通过；whitespace audit 通过。
+
+## 当前总验证状态
+
+```
+$ npx vitest run tests/unit tests/smoke          → 38 files, 465 passed
+$ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J57 全绿（含 journey 10/10 tab 切换）
+```
+
+12 个切片（1 自动化硬化 / 2 凭据保险库+审计 / 3 一致性检查 / 4 durable queue / 5 审计 UI / 15 代理资产化 / 16 代理轮换 / 17 批量运营台 / 18 REST API+OpenAPI / 19 指纹漂移启动阻断 / 20 sync 团队 diff 预览 / 21 团队 profile 签出锁定）落地并验证。
+
+### Slice 21 — 团队 profile 签出锁定（P1，团队协作护栏）— ✅
+
+**范围**：diff 预览只解决「看得见」，锁解决「拦得住」——设备可以把 profile 签出（lock）到本机，其他设备的 push 会被硬拦截，防止两个人盲推互相覆盖 cookies/localStorage/preferences（团队协作数据丢失的头号来源）。这是轻量团队工作区的第二个增量。
+
+**设计**：
+- 设备身份：`MgmtConfig.deviceId`（randomUUID）+ `deviceName`（hostname），首次 `getConfig()` 时自动生成并持久化
+- Profile 锁：`BrowserProfileMeta.lock = { owner: deviceId, ownerName, at }`；IPC `browser:set-lock(dirId, locked)` 锁定/解锁，落 audit（lock/unlock）
+- 锁随 sync 快照同步（`serializeSyncSafeConfig` 透传 lock）
+- `previewDiff` 新增 `remoteLocks`（远端被其他设备锁定的 profile 列表）+ pushWarnings 提示「被其他设备锁定，Push 会被拒绝」
+- **push 硬保护**：`push()` 上传前拉取远端 config，若有远端 profile 被其他设备锁定 → 拒绝（`force=true` 可绕过）；`sync:push` 支持 `{ force }`
+- UI：profile 卡片新增 🔒 锁定/🔓 解锁按钮 + 头部锁定徽章（显示 ownerName）；Push 被锁拦截时弹「强制覆盖?」确认后带 force 重试
+
+**文件**：
+- 改 `types.ts` — `ProfileLock`、`BrowserProfileMeta.lock`、`MgmtConfig.deviceId/deviceName`
+- 改 `config-manager.ts` — `ensureDeviceIdentity()`（首次生成 deviceId/deviceName）
+- 改 `browser-manager.ts` — `BrowserProfile.lock` 透出
+- 改 `ipc/browser.ts` + `preload.cjs` — `browser:set-lock`
+- 改 `sync-service.ts` — lock 透传、`remoteLocks` diff、`collectRemoteLocksBlockingPush` + push force 保护
+- 改 `ipc/sync.ts` + `preload.cjs` — `sync:push({ force })`
+- 改 `renderer/js/app/profiles.js` — 锁按钮/徽章/`toggleLock`
+- 改 `renderer/js/app/sync.js` — 锁拦截时强制推送确认
+- 改 `tests/unit/sync-service.test.ts` — +4 例（lock 透传、remoteLocks、自己锁不拦、collect 阻断）
+- 新增 `tests/e2e/j57-sync-lock.test.ts`（7 例，mock S3）
+
+**验证**：e2e J57 7 例全绿（锁定→push 携带锁→注入他人锁定后 previewDiff 标出 remoteLocks→push 被拦→force 绕过→解锁）；unit/smoke 465 全绿；j56/j55/j54/j41 回归 23 例通过；whitespace audit 通过。

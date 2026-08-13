@@ -17,7 +17,7 @@ vi.mock("electron", () => {
 });
 
 import { __syncTestHooks, signV2, signS3Request } from "../../src/main/services/sync-service.js";
-import { getProfilesDir } from "../../src/main/services/config-manager.js";
+import { getProfilesDir, getConfig } from "../../src/main/services/config-manager.js";
 
 const TEST_HOME = path.join(os.tmpdir(), "agent-browser-sync-test-home");
 
@@ -570,5 +570,81 @@ describe("Sync diff preview (buildSyncDiff)", () => {
     expect(safe.accounts[0].platformUserName).toBe("alice");
     expect(safe.accounts[0].platformPassword).toBeUndefined();
     expect(JSON.stringify(safe)).not.toContain("s3cr3t");
+  });
+});
+
+describe("Sync team profile locks", () => {
+  it("serializeSyncSafeConfig carries profile locks", () => {
+    const safe = __syncTestHooks.serializeSyncSafeConfig({
+      version: 4,
+      defaultProxy: "default",
+      sync: { enabled: true, endpoint: "https://x", bucket: "b", accessKey: "AK", secretKey: "SK" },
+      browserProfiles: {
+        cb_locked: { name: "Locked", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows", lock: { owner: "d1", ownerName: "mac", at: 5 } },
+      },
+    } as any) as any;
+    expect(safe.browserProfiles.cb_locked.lock).toEqual({ owner: "d1", ownerName: "mac", at: 5 });
+  });
+
+  it("buildSyncDiff flags profiles locked by other devices", () => {
+    const local = {
+      defaultProxy: "default",
+      browserProfiles: { cb_a: { name: "A", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows" } },
+    };
+    const remote = {
+      defaultProxy: "default",
+      browserProfiles: {
+        cb_a: { name: "A", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows" },
+        cb_b: { name: "B", fingerprintMode: "managed", fingerprintSeed: 2, platform: "windows", lock: { owner: "other-device", ownerName: "Colleague Mac", at: 1 } },
+        cb_c: { name: "C", fingerprintMode: "managed", fingerprintSeed: 3, platform: "windows", lock: { owner: "my-device", ownerName: "Me", at: 1 } },
+      },
+    };
+    const diff = __syncTestHooks.buildSyncDiff(local, remote, {}, "my-device");
+    expect(diff.remoteLocks).toEqual([{ id: "cb_b", ownerName: "Colleague Mac" }]);
+    expect(diff.pushWarnings.some((w: string) => w.includes("锁定"))).toBe(true);
+    expect(diff.pushWarnings.some((w: string) => w.includes("cb_b"))).toBe(true);
+  });
+
+  it("buildSyncDiff does not flag own-device locks", () => {
+    const remote = {
+      defaultProxy: "default",
+      browserProfiles: {
+        cb_x: { name: "X", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows", lock: { owner: "my-device", ownerName: "Me", at: 1 } },
+      },
+    };
+    const diff = __syncTestHooks.buildSyncDiff({ defaultProxy: "default", browserProfiles: {} }, remote, {}, "my-device");
+    expect(diff.remoteLocks).toEqual([]);
+  });
+
+  it("collectRemoteLocksBlockingPush returns profiles locked by another device", async () => {
+    const cfg = getConfig();
+    const myDevice = cfg.deviceId || "";
+    const remoteCfg = {
+      version: 4,
+      defaultProxy: "default",
+      proxies: {},
+      browserProfiles: {
+        cb_other: { name: "A", fingerprintMode: "managed", fingerprintSeed: 1, platform: "windows", lock: { owner: "other-device", ownerName: "Colleague Mac", at: 1 } },
+        cb_me: { name: "B", fingerprintMode: "managed", fingerprintSeed: 2, platform: "windows", lock: { owner: myDevice, ownerName: "Me", at: 1 } },
+      },
+    };
+    const payload = JSON.stringify({ version: 4, timestamp: 123, data: zlib.gzipSync(JSON.stringify(remoteCfg)).toString("base64"), cookies: {}, localStorage: {}, preferences: {} });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/agent-browser-studio-config.json")) return new Response(payload, { status: 200, headers: { "content-length": String(Buffer.byteLength(payload)) } });
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const blocked = await __syncTestHooks.collectRemoteLocksBlockingPush({
+        enabled: true,
+        endpoint: "https://sync.example.test",
+        bucket: "bucket",
+        accessKey: "AK",
+        secretKey: "SK",
+      });
+      expect(blocked).toEqual([{ id: "cb_other", ownerName: "Colleague Mac" }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
