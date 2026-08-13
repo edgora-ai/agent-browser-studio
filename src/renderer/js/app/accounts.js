@@ -220,23 +220,41 @@
   agentBrowser.agentImportAccounts = function() {
     document.getElementById('acct-import-text').value = '';
     document.getElementById('acct-import-status').innerHTML = '';
+    var cb = document.getElementById('acct-import-create-profiles');
+    if (cb) { cb.checked = false; document.getElementById('acct-import-create-options').style.display = 'none'; }
     document.getElementById('dlg-account-import').showModal();
   };
 
   agentBrowser.agentRunAccountImport = function() {
     var text = document.getElementById('acct-import-text').value || '';
     var statusEl = document.getElementById('acct-import-status');
+    var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
+    var platform = document.getElementById('acct-import-platform') ? document.getElementById('acct-import-platform').value : 'windows';
     statusEl.innerHTML = '<span style="color:var(--text-muted);">Importing...</span>';
-    R.agent.accounts.bulkAdd(text).then(function(r) {
+    var p = createProfiles
+      ? R.agent.accounts.bulkCreate(text, { platform: platform })
+      : R.agent.accounts.bulkAdd(text);
+    p.then(function(r) {
       var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
+      if (createProfiles && r.created) msg += ', created ' + r.created + ' profile' + (r.created === 1 ? '' : 's');
       if (r.skipped) msg += ', skipped ' + r.skipped;
       statusEl.innerHTML = '<span style="color:var(--success);">' + esc(msg) + '</span>';
       toast(msg, r.added ? 'success' : 'error');
-      if (r.added) agentBrowser.agentLoadAccounts();
+      if (r.added) { agentBrowser.agentLoadAccounts(); if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true); }
     }).catch(function(e) {
       statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(e.message) + '</span>';
     });
   };
+
+
+  (function wireImportCreateToggle() {
+    var cb = document.getElementById('acct-import-create-profiles');
+    if (!cb) return;
+    cb.addEventListener('change', function() {
+      var opts = document.getElementById('acct-import-create-options');
+      if (opts) opts.style.display = cb.checked ? '' : 'none';
+    });
+  })();
 
   // ── Export CSV — metadata only; passwords never leave the vault ──
   agentBrowser.agentExportAccounts = function() {

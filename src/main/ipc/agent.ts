@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   getAccounts, getRedactedAccounts, addAccount, updateAccount, deleteAccount, getProfileAccounts,
   getAccountPassword, setAccountProfileIds, parseAccountsBulkText, bulkAddAccounts,
+  bulkCreateProfilesWithAccounts,
   llmChat, llmStreamChat, agentChat,
   loadConversations, createConversation, getConversation, listConversations,
   deleteConversation, renameConversation, addMessage,
@@ -579,6 +580,18 @@ export function registerAgentHandlers(): void {
     const items = parseAccountsBulkText(String(text || ""));
     const result = bulkAddAccounts(items);
     recordAudit({ category: "account", action: "bulk-add", target: "", actor: "user", detail: "added=" + result.added + " skipped=" + result.skipped });
+    return result;
+  });
+
+  // Bulk import accounts AND create a bound profile per account.
+  ipcMain.handle("agent:accounts:bulk-create", async (_event, params: {
+    text: string;
+    options?: { platform?: "windows" | "macos" };
+  }) => {
+    gateAccount(requireAccountMutation());
+    const items = parseAccountsBulkText(String(params?.text || ""));
+    const result = bulkCreateProfilesWithAccounts(items, params?.options || {});
+    recordAudit({ category: "account", action: "bulk-create-profiles", target: "", actor: "user", detail: "added=" + result.added + " created=" + result.created + " skipped=" + result.skipped });
     return result;
   });
 

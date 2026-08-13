@@ -182,6 +182,7 @@ const api = {
       copyPassword: (index) => ipcRenderer.invoke("agent:accounts:copy-password", index),
       bind: (index, profileIds) => ipcRenderer.invoke("agent:accounts:bind", { index, profileIds }),
       bulkAdd: (text) => ipcRenderer.invoke("agent:accounts:bulk-add", text),
+      bulkCreate: (text, options) => ipcRenderer.invoke("agent:accounts:bulk-create", { text, options }),
     },
   },
   automation: {

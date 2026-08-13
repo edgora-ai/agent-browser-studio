@@ -390,6 +390,71 @@ export function bulkAddAccounts(items: ParsedAccountLine[]): BulkAccountResult {
   return { added, skipped: items.length - added, errors };
 }
 
+export interface BulkCreateProfilesOptions {
+  platform?: "windows" | "macos";
+}
+
+/** Derive a readable, collision-free profile name from account identity. */
+export function deriveProfileName(url: string, username: string, existing: Set<string>): string {
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { host = String(url).split("/")[0] || ""; }
+  const base = (host ? host + " · " : "") + username;
+  let name = base.slice(0, 80);
+  let n = 2;
+  while (existing.has(name)) { name = (base + " #" + n).slice(0, 80); n++; }
+  return name;
+}
+
+/** Bulk import accounts AND create a bound profile for each (RoxyBrowser 3.8.9
+ *  "template bulk import → bulk create profiles" workflow). The profile is
+ *  created before its account, so a profile-create error skips the account
+ *  entirely — no half-created (profile-without-account) pairs. */
+export function bulkCreateProfilesWithAccounts(
+  items: ParsedAccountLine[],
+  options: BulkCreateProfilesOptions = {},
+): BulkAccountResult & { created: number } {
+  const accounts = getAccounts();
+  const errors: BulkAccountResult["errors"] = [];
+  const existingNames = new Set<string>();
+  for (const p of listBrowserProfiles()) existingNames.add(p.name);
+  let added = 0;
+  let created = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it || !it.url || !it.username) {
+      errors.push({ line: i + 1, error: "missing url or username" });
+      continue;
+    }
+    let dirId: string;
+    try {
+      const name = deriveProfileName(it.url, it.username, existingNames);
+      const r = createBrowserProfile({
+        name,
+        platform: options.platform || "windows",
+        ...(Array.isArray(it.tags) && it.tags.length ? { tags: it.tags } : {}),
+      });
+      dirId = r.dirId;
+      existingNames.add(name);
+    } catch (e) {
+      errors.push({ line: i + 1, error: (e instanceof Error ? e.message : String(e)) });
+      continue;
+    }
+    accounts.push({
+      platformUrl: it.url.slice(0, 1000),
+      platformUserName: it.username.slice(0, 200),
+      platformPassword: it.password ? encryptSecret(it.password) : "",
+      profileIds: [dirId],
+      ...(Array.isArray(it.tags) && it.tags.length ? { tags: it.tags } : {}),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as PlatformAccount);
+    added++;
+    created++;
+  }
+  if (added) saveAccounts(accounts);
+  return { added, skipped: items.length - added, created, errors };
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 3. Complete CDP Browser Commands
 // ═══════════════════════════════════════════════════════════════
@@ -2029,7 +2094,7 @@ export const AGENT_TOOLS = [
 // 5. Tool Execution Engine
 // ═══════════════════════════════════════════════════════════════
 
-import { launchBrowser, listBrowserProfiles, touchProfileActivityByPort } from "./browser-manager.js";
+import { launchBrowser, listBrowserProfiles, touchProfileActivityByPort, createBrowserProfile } from "./browser-manager.js";
 import { listProfiles } from "./profile-manager.js";
 import { getProfileMeta } from "./config-manager.js";
 import { agentRunRecorder } from "./agent-run-trace.js";

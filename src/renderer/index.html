@@ -810,6 +810,13 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <h3>📥 Bulk Import Accounts</h3>
  <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
  <textarea id="acct-import-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;" placeholder="https://twitter.com, alice, s3cret, social"></textarea>
+ <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0 4px;">
+ <input type="checkbox" id="acct-import-create-profiles"> Also create a bound profile for each account
+ </label>
+ <div id="acct-import-create-options" style="display:none;font-size:12px;color:var(--text-muted);margin-bottom:6px;">
+ Platform: <select id="acct-import-platform" style="font-size:12px;"><option value="windows">Windows</option><option value="macos">macOS</option></select> — profiles are named <code>host · username</code> and auto-bound to the account.
+ </div>
+
  <div id="acct-import-status" style="font-size:12px;margin:6px 0;"></div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentRunAccountImport">Import</button>
