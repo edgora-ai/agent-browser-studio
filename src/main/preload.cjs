@@ -9,6 +9,8 @@ const api = {
     create: (name, options) => ipcRenderer.invoke("browser:create", { name, ...(options || {}) }),
     delete: (dirId) => ipcRenderer.invoke("profile:delete", dirId),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
+    exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
+    importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
     setCookie: (dirId, cookie) => ipcRenderer.invoke("profile:set-cookie", { dirId, ...cookie }),

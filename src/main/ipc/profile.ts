@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { ipcMain, dialog } from "electron";
 import {
   getProfileInfo,
   listCookies,
@@ -12,6 +12,7 @@ import {
 } from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
+import { exportProfileArchive, importProfileArchive } from "../services/profile-archive.js";
 import type { GeolocationMode, ProfileInfo, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerProfileHandlers(): void {
@@ -86,6 +87,49 @@ export function registerProfileHandlers(): void {
       return { success: result };
     } catch (e: any) {
       return { success: false, error: e.message };
+    }
+  });
+
+  // ── Profile backup / transfer ──
+  ipcMain.handle("profile:export-archive", async (_event, opts: { dirId: string; destPath?: string }): Promise<{
+    success: boolean; filePath?: string; entries?: number; bytes?: number; error?: string;
+  }> => {
+    try {
+      let destPath = opts?.destPath;
+      if (!destPath) {
+        const r = await dialog.showSaveDialog({
+          title: "Export Profile Backup",
+          defaultPath: "profile-backup.zip",
+          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+        });
+        if (r.canceled || !r.filePath) return { success: false, error: "cancelled" };
+        destPath = r.filePath;
+      }
+      const result = await exportProfileArchive(opts?.dirId, destPath);
+      return { success: true, filePath: result.filePath, entries: result.entries, bytes: result.bytes };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  });
+
+  ipcMain.handle("profile:import-archive", async (_event, opts?: { zipPath?: string }): Promise<{
+    success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; error?: string;
+  }> => {
+    try {
+      let zipPath = opts?.zipPath;
+      if (!zipPath) {
+        const r = await dialog.showOpenDialog({
+          title: "Import Profile Backup",
+          properties: ["openFile"],
+          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+        });
+        if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
+        zipPath = r.filePaths[0];
+      }
+      const result = importProfileArchive(zipPath);
+      return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
     }
   });
 

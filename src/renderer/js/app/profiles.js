@@ -11,6 +11,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -359,6 +360,31 @@
       }
       processNext(0);
     }).catch(function(e) { statusEl.innerHTML = '<span style="color:var(--danger);">' + esc((e && e.message) || e) + '</span>'; });
+  };
+
+  agentBrowser.exportProfileArchive = function(dirId) {
+    api.profile.exportArchive(dirId).then(function(r) {
+      if (!r || !r.success) {
+        toast(t("toast.profile.export-failed", "导出失败: ") + ((r && r.error) || "unknown"), "error");
+        return;
+      }
+      toast(t("toast.profile.exported", "已导出备份: ") + esc(r.filePath), "success");
+    }).catch(function(e) {
+      toast(t("toast.profile.export-failed", "导出失败: ") + (e.message || String(e)), "error");
+    });
+  };
+
+  agentBrowser.importProfileArchive = function() {
+    api.profile.importArchive().then(function(r) {
+      if (!r || !r.success) {
+        toast(t("toast.profile.import-failed", "导入失败: ") + ((r && r.error) || "unknown"), "error");
+        return;
+      }
+      toast(t("toast.profile.imported", "已导入 profile: ") + esc(r.name), "success");
+      loadProfiles();
+    }).catch(function(e) {
+      toast(t("toast.profile.import-failed", "导入失败: ") + (e.message || String(e)), "error");
+    });
   };
 
   agentBrowser.bulkStart = function() {
@@ -726,6 +752,7 @@
             '<button class="btn btn-secondary btn-sm" data-action="edit">✎ Edit</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="cookies" title="Cookies">🍪</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="extensions" title="Extensions">🧩</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="export-archive" title="Export backup">📦</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="lock" title="' + (isLocked ? 'Release lock (uncheckout)' : 'Check out / lock to this device') + '">' + (isLocked ? '🔓' : '🔒') + '</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete">🗑</button>' +
           '</div>' +
@@ -757,6 +784,7 @@
       else if (action === "edit") agentBrowser.editProfile(dirId);
       else if (action === "cookies") agentBrowser.showCookies(dirId);
       else if (action === "extensions") agentBrowser.showExtensions(dirId);
+      else if (action === "export-archive") agentBrowser.exportProfileArchive(dirId);
       else if (action === "delete") agentBrowser.delProfile(dirId);
       else if (action === "risk-check") agentBrowser.openRiskCheck(dirId);
       else if (action === "drift-check") agentBrowser.checkDrift(dirId);
