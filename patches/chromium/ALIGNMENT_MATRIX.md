@@ -161,6 +161,13 @@ same macOS window-decoration `screenY` and `innerHeight` differences measured
 from Stock Chrome 150 and the managed binary's no-config path. A further 61
 checks cover preferred/light/dark CSS system colors and actual selection
 screenshot pixels for both declared platforms. Verified runtime surfaces include
+
+Slice 48 fixes headless BeginFrame production on macOS: under `--headless`
+the CVDisplayLink begin frame source is bypassed and the 60 Hz timer drives
+frames, so `requestAnimationFrame`, screenshots and Playwright/Puppeteer
+actionability all work headless with the full managed fingerprint applied.
+Verified by `tests/e2e/j73-js-sdk-playwright.test.ts` (REST mirror, managed
+fingerprint + click, driver fast-fail, dirId attach).
 Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
 audio capture, native modern/Buckets/legacy storage quota and OPFS/FileSystem
 persistent/incognito parity, WebAuthn, media-device remapping,

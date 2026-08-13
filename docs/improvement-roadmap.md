@@ -580,3 +580,21 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **结论**：进程级证据确认 managed 启动只比 stock 对照多一项文档化的刷新率设置，其余特性集与 stock Chrome 一致；上游 v0.5.3 那类「特性集偏离 stock」的回归被永久护栏覆盖。
 
 **验证**：j72 6 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。
+
+### Slice 48 — JS SDK（Playwright/Puppeteer CDP drop-in）+ headless 帧驱动修复（P1，开发者集成）— ✅
+
+**背景**：开发者集成一直是评测短板——`browser_*` 暴露浅、没有可一键替换的自动化入口。本切片落地 `sdk/js/agent-browser.mjs`（零依赖 REST client + `connectPlaywright`/`connectPuppeteer`），把「换 import 就能从 Playwright/Puppeteer 驱动带 C++ 级指纹的 profile」变成一行配置。过程中发现并修掉一个底层 bug：headless 模式下 rAF 永不触发。
+
+**根因**：macOS 上 `ExternalBeginFrameSourceMac` 在 `--headless=new` 下仍为物理显示器创建 CVDisplayLink begin frame source（display_id=1），但 headless 进程收不到 vsync 回调 → 不再产 BeginFrame → `requestAnimationFrame` 永不回调、`page.screenshot()` 挂起、Playwright 非 force click 因「元素不稳定」30s 超时。实证：`--enable-features=ForceMacVSyncTimerForDebugging` 一开 rAF 立即恢复（9ms）；stock Chrome 151 headless 走 timer 路径因此正常。
+
+**修复**（Chromium patch，`chromium-build-150` 提交 `494a3398d5`，已留存）：`ExternalBeginFrameSourceMac::SetVSyncDisplayID` 检测到 `--headless` 时销毁 display link，回退到 `DelayBasedTimeSource` 定时器（60Hz）。验证：重建引擎并安装后，headless rAF 首次触发 ~9-256ms、连续帧间隔稳定 16.7ms。
+
+**新增**：
+- `sdk/js/agent-browser.mjs` — REST client（/health /version /openapi /profiles /proxies …）+ `connectPlaywright`（`connectOverCDP`）/ `connectPuppeteer`（browserWSEndpoint）+ attach 模式（按 dirId 重连）；无 dirId 时 create+launch，驱动缺失快速失败不留孤儿 profile。
+- `sdk/js/example.mjs` / `sdk/js/README.md` — 用法文档。
+- `src/main/services/browser-manager.ts` + `rest-api-server.ts` — `POST /api/profiles/{dirId}/launch` 支持 `{ headless?: boolean }`，headless 时加 `--headless=new`（自动化默认 headless，避免无焦点窗口节流 rAF）。
+- `tests/e2e/j73-js-sdk-playwright.test.ts` — 4 例：REST 镜像；connectPlaywright 指纹完整（webdriver=false / Windows UA / 1920x1080 / en-US）+ fill/click 端到端；connectPuppeteer 驱动缺失快速失败且无孤儿 profile；attach 按 dirId 重连同端口。
+
+**结论**：headless + 完整指纹配置（`--agent-browser-fingerprint-config`）下 UA / screen / languages 全部伪装生效、Playwright click 稳定通过——JS SDK 作为 Playwright/Puppeteer 的 drop-in 替代闭环打通；headless 帧驱动与 stock Chrome 行为对齐（timer 60Hz）。
+
+**验证**：j73 4 例全绿；j71/j72 回归 10 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。
