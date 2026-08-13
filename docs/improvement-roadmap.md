@@ -1150,3 +1150,18 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 全量单测 636 例全绿；全量 e2e（见文末回归数）。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
+
+## Slice 72 — 真实反检测质量端到端验证：ping0 复测 + 与本机真实 RoxyBrowser 横向对比
+
+**上游核对**：CloakBrowser 最新仍 chromium-v150.0.7871.114.6-pro（2026-08-11），RoxyBrowser 最新 4.0.3（2026-08-13），均无新发布。本轮不是功能对齐，而是把「验证效果是否提升 / 和 roxybrowser 还有多大差距」从功能层面推进到**真实检测质量层面**：复测 ping0 基线 + 首次用同一套方法对真实 RoxyBrowser 引擎跑完整 ping0。
+
+**实现**：
+- `src/tools/compare-roxy-ping0.ts`（新增，npm script `compare:roxy`）：驱动真实 RoxyChrome 引擎（`chrome-bin/149/RoxyChrome.app`）+ 真实 RoxyBrowser profile（复制到临时目录，不触碰原数据，引擎自带 `fingerprint_inject` 注入生效），与 verify-ping0 同款「等 finished 再静置、bringToFront」逻辑跑 ping0，并抓取约 30 项原始指纹表面；支持 `--ours` 模式用同一探针抓我方引擎的原始表面（`--raw-only` 跳过 ping0）；
+- `src/tools/verify-ping0.ts`：默认等待 180s → 360s——我方引擎完整跑完 ping0 末尾交叉检查约需 3-6 分钟，180s 常超时导致只抓到「部分评估假 100」；这正是「页面别关太快、要等监测结果出完」的工程化保障。
+
+**验证（2026-08-14，同一代理 127.0.0.1:7890，同一检测页 ping0.cc/env，双方均完整跑完）**：
+- 我方引擎（Chromium 150，Win/KR 身份，出口 KR Oracle IDC）：**92/green**，唯一扣分 `net.isidc`（Oracle IDC 出口，weight 8，代理属性非浏览器泄漏）；stealth.webdriver/cdc/selenium 全 false，`has_cn_fonts=false`（fonts_count=10），DNS 解析器仅 [KR] 与出口同国，tz/locale/voices 自洽，rAF/canvas/audio 稳定；
+- 真实 RoxyChrome 149 + 真实 US/macOS profile（出口 US，身份↔IP 自洽）：**82/yellow**（两轮复测稳定），唯一两处扣分恰好是用户此前给我们点名的两类问题——`xc.ip_fonts_cn`（has_cn_fonts=true，继承宿主机 337 个字体含 30+ 中文字体，不剥离）+ `xc.dns_ip_country`（系统/Google DNS 解析到印度 172.253.244.x，与 US 出口不一致，真·DNS 泄漏）；浏览器侧 stealth 检查同样全过；
+- 结论：浏览器侧双方都干净；在「中文字体剥离」与「DNS 走代理/DoH」两个面上我方引擎比真实 RoxyBrowser 更干净。RoxyBrowser「什么问题都没有」的印象，与本机同代理实测不符——其扣分正是用户之前给我们提的那两类。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。ping0 我方侧唯一可变分项是代理出口是否 IDC——换住宅/非 IDC 出口即回 100。
