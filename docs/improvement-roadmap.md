@@ -625,3 +625,22 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 **验证**：unit environment-risk 20 例全绿（新增：字体分类、HTTP/socks5h/socks5 接管降级、macOS profile + STHeiti 不报高危、exposedFonts 实测清误报/保留真实暴露）；e2e j75 新增运行时报告断言——Windows profile 直接实测 STHeiti 宿主字体不可加载，且 env-risk 报告无 cn-fonts-exposed 高危；j68/j73/j74 回归 13 例全绿；全量单测 48 文件 592 例全绿；tsc/build 干净。
 
 **补记（SOCKS5 误报修正）**：收尾时发现 SOCKS5 也被误报为 high——proxyDnsLeak 按 stock Chromium 的 socks5:// 本地解析假设打分，但受管引擎（Chromium 150 + MASQUE 桥）实际把 SOCKS5 目标按 ATYP=domain 透传代理端解析（见 native/agent-browser-masque-bridge/socks5.go 的 encodeSOCKSAddress；browser-manager.ts 仅旧引擎/直连才用 --proxy-server=socks5://，受管引擎全走 quic:// + MASQUE 桥）。已把 socks5 降为 low，并新增「socks5 不再报 proxy-dns-leak」用例；assemble 组改为直连场景验证 dns-resolver-leak 高危仍成立。
+
+
+### Slice 51 — ping0 环境一致性验证工具固化（反检测可信闭环）— ✅
+
+**背景**：用户反馈「页面别关太快，监测结果可能没出来」，并要求把 ping0.cc 环境一致性验证从临时脚本固化为仓库内可重复工具。此前的临时验证脚本存在两个污染源：(1) 用 Playwright chromium.launch 启动会注入自动化信号，导致 ping0 报 webdriver=true、WebRTC 暴露宿主真 IP（120.244.45.231）→ 50 分/red/154 findings 的假阳性；(2) 只在 DOM 加载后立即截取状态，经常抓到 finished=false 的半成品结果。
+
+**新增**：
+- src/tools/verify-ping0.ts + npm script verify:ping0 —— 完全复用 app 的启动方式：直接 spawn 受管引擎 + --remote-debugging-port（不经 Playwright launch，无自动化信号）+ chromium.connectOverCDP 连接。
+- 经代理 geo 检测（ipwho.is）→ 自动对齐 timezone/locale/webrtcIp（webrtcIp 默认设出口 IP），platform=windows 指纹 seed。
+- 等 ping0 Vue finished===true（轮询 phase/progress/pending 探针，打印卡点诊断），再静置默认 15s 捕获——「结果没出来就等」的保证。
+- 超时兜底：300s 未完成时捕获部分状态，报告 state.status="timeout"，退出码 2 标注；不会用半成品冒充完整结果。
+- 写 JSON 报告到 docs/verification/ping0-<tag>-<n>.json + 汇总表打印。
+
+**关键坑**：
+- Playwright launch 的自动化信号是假阳性根因——必须 spawn + connectOverCDP。
+- --user-data-dir 由 spawn 参数传入（Playwright chromium.launch 无此选项）。
+- ping0 的 header 回显端点 r-*.d.ping0.cc/probe 经 7890 代理极慢（curl 50s 无响应），导致 headers.*/xc.* 聚合项 pending——是 ping0 服务端/代理链路慢，非浏览器问题；已完成探针全过、score=100、level=green、findings=0。
+
+**验证**：node dist/tools/verify-ping0.js --browser=<engine> --tag=slice51 --runs=1 --settle-ms=15000 --wait-timeout-ms=300000 → score=100 / green / 0 findings（partial capture，status=timeout，仅 headers/聚合探针因上游慢未回）；与 docs/verification/ping0-official-run*.json 一致。回归：全量单测 43 文件 428 例全绿；smoke 147 例全绿；tsc 干净。
