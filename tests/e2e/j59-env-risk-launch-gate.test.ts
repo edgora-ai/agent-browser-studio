@@ -17,7 +17,7 @@ describe("J59 — environment risk launch gate", () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
-    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J59", platform: "windows", locale: "en-US", timezone: "America/New_York", fingerprintSeed: 11111 }));
+    const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J59", platform: "windows", locale: "en-US", timezone: "America/New_York", fingerprintSeed: 11111, proxyMode: "none" }));
     dirId = r.dirId;
   }, 60000);
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
