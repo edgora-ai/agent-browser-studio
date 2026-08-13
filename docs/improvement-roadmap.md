@@ -534,3 +534,13 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - e2e helper `launchHeadlessApp` 支持 env/args 注入
 
 **验证**：unit `tests/unit/update-manager.test.ts` 14 例（版本比较、清单校验、check 可用性/minSupported/缺清单、目录与 zip payload 安装、sha256 拒绝、activate pin、手动回滚、崩溃循环自动回滚、markAppHealthy、audit+history）；e2e `tests/e2e/j69-updates.test.ts` 6 例（REST status/check/install/activate/rollback/history + payload 落盘）；全量单测 46 文件 565 例全绿；回归 j68/j54 16 例 + j67 8 例 + j61 3 例全绿；tsc/build 干净。
+
+### Slice 44 — 代理健康/历史/轮换作为受管资产收口（P0，代理资产）— ✅
+
+**范围**：ALIGNMENT_MATRIX 产品级能力「proxy health/history/rotation as managed assets」——服务层（健康分/风险分层/历史/IP漂移/绑定/冷却/轮换）此前已实现并有单测，本切片补齐最后一块：UI 历史时间线，并用 e2e 把「检测 → 劣化 → 轮换 → 历史」全流程验证归档。
+
+**UI（`src/renderer/js/app/proxies.js`）**：
+- 每个 proxy 卡片新增 `📈 历史` 按钮 + 可展开历史时间线（`proxy-history-row`）：最近 8 条检测记录，成功行显示时间/IP/国家/tz/provider/延迟，失败行显示时间与错误；再次点击收起
+- 检测完成或清除健康后若时间线已展开则自动刷新内容
+
+**验证**：e2e `tests/e2e/j70-proxy-health-history.test.ts` 5 例（加代理+fallback、对关闭端口快速失败的代理做 Detect 记录失败观测、轮换建议 healthy fallback 并记录切换、历史时间线展开显示 ❌ 再收起、无意外 console error）；回归 j29（proxy UI CRUD）5 例；全量单测 46 文件 565 例全绿；tsc/build 干净。

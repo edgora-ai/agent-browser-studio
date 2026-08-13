@@ -95,7 +95,7 @@ the complete product rather than only the engine:
 - Windows and Linux production verification;
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup — ✅ verified (see the Team RBAC table below);
-- proxy health/history/rotation as managed assets.
+- proxy health/history/rotation as managed assets — ✅ verified (see the Proxy health assets table below).
 
 ### DRM / Widevine — verified
 
@@ -127,6 +127,15 @@ the complete product rather than only the engine:
 | Version pin + manual rollback | verified | Keep the previous known-good release and switch back on demand | `activateVersion` pins the active version and remembers the previous; `rollback` restores it; both audited and persisted (`j69` + `update-manager` unit suite) |
 | Crash-loop auto-rollback | verified | After repeated abnormal starts, fall back to the previous known-good automatically | `noteAppCrashed`/`noteAppStarted`/`markAppHealthy` with a 3-strike threshold and 10-min cooldown to prevent flip-flopping; unit-tested |
 | Release retention & audit | verified | Keep active + previous + newest staged, record every transition | retention prunes to 3 payloads; install/activate/rollback/auto-rollback recorded in the audit log and persisted history |
+
+### Proxy health assets — verified
+
+| Capability | Current state | Target | Completion evidence |
+|---|---|---|---|
+| Rolling health score + risk tiers | verified | Turn proxies from config entries into risk-managed assets | per-proxy score (checks/successes/latency/drift), good/watch/poor tiers, cooldown after repeated failures, persisted history of up to 20 detection points (IP/country/tz/provider/latency/error) and suggestion text; `proxy-health` unit suite |
+| Exit-IP / geo drift + bindings | verified | Detect proxy churn and which profiles use a proxy | distinct-exit-IP and geo-drift counters plus per-profile binding computation surfaced in REST/UI; unit-tested |
+| Rotation with healthy fallbacks | verified | Automatically route around an unhealthy proxy to a healthy fallback | `pickRotationFallback` skips unhealthy/self names, `recordProxyRotation` persists the switch and audits it; REST rotate/rotation + UI badge; e2e `j70` rotates an unhealthy proxy to `fallback-a` |
+| Managed-assets UI (history timeline) | verified | Operators can inspect a proxy risk asset, its history and fallback state in-app | Proxy tab health badge/summary/bindings/rotation row plus an expandable 📈 history timeline rendering recent success/failure detections; e2e `j70` (detect -> poor -> rotate -> history) + `j29` regression |
 
 CloakLite already has product capabilities that a browser wrapper alone does
 not provide: local profile management, encrypted credentials, approval gates,
