@@ -1063,3 +1063,42 @@ mDNS 主机名还是原始本地 IP），并记录连接状态与 RTT。
 - 全量单测 635 例全绿；全量 e2e（见文末回归数）。
 
 **后续项**：PWA / Sub apps（3.9.2）留作候选；引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。
+
+## Slice 69 — Profile Web App 模式（PWA / Sub-apps，RoxyBrowser 3.9.2 parity）
+
+**上游核对**：CloakBrowser 最新仍为 chromium-v150.0.7871.114.6-pro，RoxyBrowser 最新 4.0.3。
+3.9.2 内核（Chrome 150）changelog 的四项「PWA, Sub apps, WebRTC logs, performance diagnostics」
+已全部落地：WebRTC logs/performance diagnostics（Slice 68）+ 本轮 Web App 模式。我们的引擎是
+同源 Chromium 150 独立构建，PWA 安装/清单能力随内核自带；本轮补齐的是产品面——让一个 profile
+能以 **独立应用窗口（--app=<url>）** 直接打开某个站点，并携带完整 managed 指纹身份，即
+「Sub-apps / 把站点跑成专属 App 窗口」的使用形态。
+
+**实现**：
+- `src/main/types.ts` / `browser-manager.ts`：`BrowserProfileMeta`/`BrowserProfile` 新增 `appUrl`；
+  `createBrowserProfile` 支持 appUrl，`listBrowserProfiles` 透出；
+- `src/main/services/config-manager.ts`：新增 `sanitizeAppUrl`（仅 http/https/data，去控制字符、
+  上限 2048），`setProfileMeta` 与 `mergeConfig` profile 循环都归一化 appUrl（拒绝 file:/chrome: 等
+  危险 scheme）；
+- `src/main/services/browser-manager.ts`：`launchBrowser` 在最终参数里追加 `--app=<appUrl>`，
+  独立窗口直接打开应用站点；
+- `src/main/ipc/browser.ts`：`browser:set-meta` 支持 appUrl；新增 `browser:open-app`（未运行则
+  auto-launch，再导航到 appUrl，覆盖「已普通启动的 profile 一键切到 Web App」场景）；
+- `src/main/services/rest-api-server.ts`：`POST /api/profiles` 的 `sanitizeProfileOpts` 白名单加
+  appUrl；
+- `preload.cjs`：`browser.openApp(dirId, url?)` 桥接；
+- `src/renderer`：Profile 编辑对话框新增「🖥 Web App URL」字段（保存走 set-meta）；Profile 卡片
+  在有 appUrl 时显示 `🖥 App` 徽标 + 「🖥 App」按钮（一键以 Web App 打开）；i18n 补文案。
+
+**验证**：
+- 单测 `tests/unit/config-manager.test.ts` 补 1 例：sanitizeAppUrl（trim/空/data:/拒绝 file:/chrome:）
+  + setProfileMeta appUrl 持久化/清空；
+- e2e `tests/e2e/j91-webapp-mode.test.ts` 新增 6 例：创建带 appUrl 的 profile（list 透出）→ 启动
+  进程参数含 `--app=`（指向应用 URL）→ CDP 连到 app 窗口验证 location/body 是应用页 + managed
+  身份（Windows UA、webdriver=false、无 HeadlessChrome）→ open-app 一键打开 → 清空 appUrl 后
+  重启回普通浏览器（无 `--app=`）→ console 无意外错误；
+- 初版 e2e 抓出两个测试侧问题并修复：stop 后立刻 relaunch 会被 ps 兜底复用旧进程（需等端口关闭）；
+  `--app=` 模式存在 about:blank 目标，需按 URL 匹配 app 窗口（connectPageCdp matcher）；
+- 全量单测 636 例全绿；全量 e2e（见文末回归数）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。3.9.2 已对齐的功能点：
+启动提速（57）、Chrome 150 内核（52/66）、PWA/Sub-apps（69）、WebRTC logs/performance diagnostics（68）。
