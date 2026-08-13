@@ -96,6 +96,7 @@ the complete product rather than only the engine:
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup — ✅ verified (see the Team RBAC table below);
 - proxy health/history/rotation as managed assets — ✅ verified (see the Proxy health assets table below).
+- runtime-evidenced host environment risk report — ✅ verified (see the Host environment risk evidence table below): the env-risk report distinguishes host-only false positives from genuine exposure — HTTP/socks5h proxy takeover downgrades a CN host resolver, macOS-universal fonts (STHeiti/PingFang/Songti) are expected on a real Mac, and a running profile is probed over CDP (FontFaceSet.check + width-vs-generic-fallback) so the cn-fonts-exposed finding is only reported when a Windows-only Chinese font is actually loadable (Slice 50, e2e j75-cn-font-exposure).
 
 ### DRM / Widevine — verified
 

@@ -610,3 +610,16 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - REST/OpenAPI：GET /api/server/idle 返回 {enabled, timeoutMs, running:[{dirId,pid,cdpPort,idleMs}]}（不 touch，可安全轮询观察）；JS/Python SDK 各加 serverIdle() / server_idle()。
 
 **验证**：e2e tests/e2e/j74-idle-auto-stop.test.ts 3 例全绿（策略报告、launch 后 idle 追踪 + REST status touch 复位时钟、无活动 4s 后自动 stop 并从 running 列表消失）；j68/j73 回归 10 例全绿；全量单测 48 文件 587 例全绿；tsc/build 干净。
+
+
+### Slice 50 — 环境风控证据化（消除误报，运行时实测真实暴露）— ✅
+
+**背景**：用户用 ping0.cc 等扫描器给 US profile 打「DNS 泄漏 + 中文字体暴露」高危，但其中一部分是误报——检测模块基于「宿主环境」静态判断，而不是「浏览器内真实可观测」：(1) 宿主装有中文字体时，即使引擎已把字体隔离（Windows profile 实测加载不到），仍报 cn-fonts-exposed 高危；(2) 宿主 DNS 是国内解析器时，即使 profile 走 HTTP/socks5h 代理、DNS 已由代理接管，仍报 dns-resolver-leak 高危；(3) macOS 通用字体（STHeiti/PingFang/Songti，所有真实 Mac 都自带）被当成中文系统泄漏信号。
+
+**设计**：
+- 字体分两类：windows-only（SimSun/SimHei/YaHei/KaiTi/FangSong/DengXian/Huawen/Founder，中文 Windows 才有，是真泄漏信号）与 macos-universal（PingFang/STHeiti/Songti/Hiragino/Noto CJK，真 Mac 都有）。新增 classifyCnFontDisplayName / classifyCnFontFamily。
+- DNS：代理接管判定——proxy 为 HTTP/socks5h 时（dnsLeakRisk=low）宿主解析器不再报高危，改为 info「代理已接管 DNS」；直连或 SOCKS5 保持高危（SOCKS5 本地解析，proxy-dns-leak 仍覆盖）。
+- 运行时证据：新增 verifyFontExposureViaCdp(cdpPort, fontNames)——按 FONT_CORPUS 同款方法（FontFaceSet.check + 与 sans-serif/serif/monospace 的渲染宽度差）在运行中 profile 内实测哪些中文字体真的可加载；checkEnvironmentRiskRuntime 用实测结果重算字体判定，只有 windows-only 字体真能加载才报高危。CDP 失败时保守回落（按静态假设报）。
+- REST /api/profiles/{dirId}/env-risk 在运行中即返回证据化报告。
+
+**验证**：unit environment-risk 19 例全绿（新增：字体分类、HTTP/socks5h 接管降级、macOS profile + STHeiti 不报高危、exposedFonts 实测清误报/保留真实暴露）；e2e j75 新增运行时报告断言——Windows profile 直接实测 STHeiti 宿主字体不可加载，且 env-risk 报告无 cn-fonts-exposed 高危；j68/j73/j74 回归 13 例全绿；全量单测 48 文件 591 例全绿；tsc/build 干净。
