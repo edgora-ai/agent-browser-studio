@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, session, shell } from "electron";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,6 +27,7 @@ import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getI
 import { migrateSecrets } from "./services/config-manager.js";
 import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
+import { UI_STORAGE_PARTITION, migrateLegacyRendererStorage } from "./services/renderer-storage.js";
 import {
   APP_DATA_DIR_NAME,
   CHROMIUM_CACHE_DIR_NAME,
@@ -114,6 +115,10 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Own session partition: keeps the renderer's localStorage out of the
+      // default session, whose first-access discovery stalls for seconds while
+      // managed browser profiles are running in the user-data tree.
+      session: session.fromPartition(UI_STORAGE_PARTITION),
     },
     titleBarStyle: "hiddenInset",
     backgroundColor: "#f5f5f5",
@@ -229,6 +234,10 @@ app.whenReady().then(async () => {
   setTimeout(() => { try { markAppHealthy(); } catch { /* best effort */ } }, 60000);
   process.on("exit", (code) => { if (code !== 0) { try { noteAppCrashed(); } catch { /* best effort */ } } });
   registerAllHandlers();
+  // One-time copy of legacy renderer settings (theme / language / wizard
+  // state) from the default session into the UI partition. Runs before the
+  // window is created so the first paint reads already-migrated values.
+  await migrateLegacyRendererStorage();
   const headless = isHeadlessMode();
   if (!headless) {
     createWindow();
