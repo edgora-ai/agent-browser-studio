@@ -31,3 +31,7 @@ tests/e2e/fixtures/
 
 # Claude plans (local)
 .claude/
+
+# Python SDK artifacts
+__pycache__/
+*.pyc

@@ -19,6 +19,7 @@ import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
 import { startScheduler } from "./services/automation.js";
+import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
 import { stopAllBrowserProfiles } from "./services/browser-manager.js";
@@ -219,17 +220,39 @@ app.whenReady().then(async () => {
     return;
   }
   registerAllHandlers();
-  createWindow();
+  const headless = isHeadlessMode();
+  if (!headless) {
+    createWindow();
+  }
   startScheduler();
 
-  // Create system tray
-  createTray(() => mainWindow, {
-    onShow: () => createWindow(),
-    onQuit: () => {
-      isQuitting = true;
-      app.quit();
-    },
-  });
+  if (!headless) {
+    // Create system tray
+    createTray(() => mainWindow, {
+      onShow: () => createWindow(),
+      onQuit: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    });
+
+    // Periodically refresh tray menu to show updated profile status
+    setInterval(() => refreshTrayMenu(() => mainWindow, {
+      onShow: () => createWindow(),
+      onQuit: () => { isQuitting = true; app.quit(); },
+    }), 10000);
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      } else {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (win) { win.show(); win.focus(); }
+      }
+    });
+  } else {
+    console.log("[server] headless server mode — no window, no tray; REST + MCP + scheduler active");
+  }
 
   const mcp = startMcpServer();
   mcp.ready.catch((e) => console.error("[mcp] failed to start:", e));
@@ -237,21 +260,6 @@ app.whenReady().then(async () => {
   // Loopback REST API (profiles / proxies / accounts / automation / audit + OpenAPI).
   const api = startRestApiServer();
   api.ready.catch((e) => console.error("[api] failed to start:", e));
-
-  // Periodically refresh tray menu to show updated profile status
-  setInterval(() => refreshTrayMenu(() => mainWindow, {
-    onShow: () => createWindow(),
-    onQuit: () => { isQuitting = true; app.quit(); },
-  }), 10000);
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win) { win.show(); win.focus(); }
-    }
-  });
 });
 
 app.on("window-all-closed", () => {

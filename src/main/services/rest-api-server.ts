@@ -17,6 +17,7 @@ import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./prox
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
 import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled } from "./team.js";
+import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
 import { getAccounts } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
@@ -89,7 +90,18 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   const p = url.pathname || "/";
 
   if (method === "GET" && p === "/health") {
-    return { status: 200, body: { status: "ok", service: PRODUCT_SLUG + "-api", port: apiPort } };
+    return {
+      status: 200,
+      body: {
+        status: "ok",
+        service: PRODUCT_SLUG + "-api",
+        port: apiPort,
+        mode: isHeadlessMode() ? "headless" : "gui",
+        version: API_VERSION,
+        profiles: Object.keys(getConfig().browserProfiles || {}).length,
+        uptimeSeconds: Math.floor(process.uptime()),
+      },
+    };
   }
   if (method === "GET" && p === "/openapi.json") {
     return { status: 200, body: buildOpenApi() };

@@ -1,0 +1,16 @@
+services:
+  agent-browser:
+    build: .
+    image: agent-browser-studio:headless
+    ports:
+      - "26582:26582"
+    volumes:
+      # Persist profiles, config, secrets and the managed CDM outside the container.
+      - ./data:/root/.config/agent-browser-studio
+      # Linux engine binary (pending Windows/Linux production builds):
+      # - ./chromium:/opt/chromium
+    environment:
+      AGENT_BROWSER_API_TOKEN: change-me
+      # AGENT_BROWSER_CHROMIUM_BINARY_PATH: /opt/chromium/chrome
+    restart: unless-stopped
+

@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as http from "node:http";
 import { _electron as electron, ElectronApplication, Page } from "playwright";
 import { closeAllDialogs } from "./diag.js";
 
@@ -160,6 +161,100 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     pageErrors,
     cdpPort: null,
     cdpPids,
+  };
+}
+
+export interface HeadlessAppHandle {
+  app: ElectronApplication;
+  port: number;
+  token: string;
+  userDataDir: string;
+  close: () => Promise<void>;
+}
+
+/** Pick a currently free loopback port (race-safe enough for tests). */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = require("node:net").createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as any).port as number;
+      srv.close(() => resolve(port));
+    });
+    srv.on("error", reject);
+  });
+}
+
+function healthOk(port: number, token: string, deadline: number): Promise<{ ok: boolean; body: any }> {
+  return new Promise((resolve) => {
+    const done = (v: any) => resolve(v);
+    const attempt = () => {
+      const req = http.request(
+        { hostname: "127.0.0.1", port, path: "/health", method: "GET", headers: { authorization: "Bearer " + token } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf8");
+            let body: any = null;
+            try { body = JSON.parse(text); } catch { body = text; }
+            if (res.statusCode === 200 && body && body.status === "ok") return done({ ok: true, body });
+            if (Date.now() > deadline) return done({ ok: false, body });
+            setTimeout(attempt, 300);
+          });
+        },
+      );
+      req.on("error", () => {
+        if (Date.now() > deadline) return done({ ok: false, body: null });
+        setTimeout(attempt, 300);
+      });
+      req.end();
+    };
+    attempt();
+  });
+}
+
+/** Launch the controller in --headless server mode and wait for /health. */
+export async function launchHeadlessApp(opts: {
+  userDataDir: string;
+  token?: string;
+  timeoutMs?: number;
+}): Promise<HeadlessAppHandle> {
+  fs.rmSync(opts.userDataDir, { recursive: true, force: true });
+  fs.mkdirSync(opts.userDataDir, { recursive: true });
+  const token = opts.token || "test-headless-token";
+  const port = await freePort();
+  const launchEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ELECTRON_DISABLE_GPU: "1",
+    ELECTRON_ENABLE_LOGGING: "1",
+    AGENT_BROWSER_API_PORT: String(port),
+    AGENT_BROWSER_API_TOKEN: token,
+  };
+  const chromiumBin = resolveManagedChromiumPath(launchEnv);
+  if (chromiumBin) launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
+
+  const app = await electron.launch({
+    args: [REPO, "--user-data-dir=" + opts.userDataDir, "--headless"],
+    executablePath: ELECTRON_BIN,
+    env: launchEnv,
+    timeout: opts.timeoutMs ?? 30000,
+  });
+
+  const deadline = Date.now() + (opts.timeoutMs ?? 30000);
+  const h = await healthOk(port, token, deadline);
+  if (!h.ok) {
+    await app.close().catch(() => undefined);
+    throw new Error("headless /health did not come up on port " + port + "; last=" + JSON.stringify(h.body));
+  }
+  return {
+    app,
+    port,
+    token,
+    userDataDir: opts.userDataDir,
+    close: async () => {
+      await app.close().catch(() => undefined);
+      await killOrphanChromium(opts.userDataDir).catch(() => undefined);
+    },
   };
 }
 
