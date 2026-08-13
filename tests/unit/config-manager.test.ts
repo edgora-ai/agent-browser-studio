@@ -48,6 +48,9 @@ import {
   setProfileMeta,
   normalizeProfileExtensionMap,
   migrateSecrets,
+  getWebRtcDiagnostics,
+  setWebRtcDiagnostics,
+  clearWebRtcDiagnostics,
 } from "../../src/main/services/config-manager.js";
 import type { MgmtConfig } from "../../src/main/types.js";
 import {
@@ -554,5 +557,39 @@ describe("Agent Run normalization", () => {
   it("defaults agentFs to sandbox", () => {
     expect(getConfig().agentFs?.mode).toBe("sandbox");
     expect(getConfig().agentFs?.allowlist).toEqual([]);
+  });
+
+  it("persists and caps WebRTC diagnostics history per profile", () => {
+    const dirId = "ab_webrtc_test";
+    const entry = {
+      at: 123456,
+      success: true,
+      rtcAvailable: true,
+      candidates: ["candidate:1 typ host udp 192.0.2.1"],
+      mdnsHosts: [],
+      hostIps: ["192.0.2.1"],
+      srflxIps: [],
+      connectionState: "connected",
+      rttMs: 42,
+      error: null,
+      summary: "⚠️ 暴露本地 IP: 192.0.2.1",
+    };
+    setWebRtcDiagnostics(dirId, [entry]);
+    reloadConfig();
+    expect(getWebRtcDiagnostics(dirId).length).toBe(1);
+    expect(getWebRtcDiagnostics(dirId)[0].rttMs).toBe(42);
+
+    // history capped at MAX_WEBRTC_DIAG_HISTORY (20)
+    const many = Array.from({ length: 25 }, (_, i) => ({ ...entry, at: i, summary: "s" + i }));
+    setWebRtcDiagnostics(dirId, many);
+    reloadConfig();
+    const back = getWebRtcDiagnostics(dirId);
+    expect(back.length).toBe(20);
+    expect(back[0].at).toBe(5);
+    expect(back[back.length - 1].at).toBe(24);
+
+    clearWebRtcDiagnostics(dirId);
+    reloadConfig();
+    expect(getWebRtcDiagnostics(dirId).length).toBe(0);
   });
 });
