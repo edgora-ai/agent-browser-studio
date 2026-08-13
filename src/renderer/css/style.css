@@ -335,6 +335,11 @@ dialog,
 .proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-secondary); }
 .proxy-health-summary b { color: var(--text); }
 
+.proxy-bind-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 12.5px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.proxy-bind-item:hover { background: var(--primary-bg); }
+.proxy-bind-item:last-child { border-bottom: none; }
+.proxy-bind-current { margin-left: auto; font-size: 10.5px; color: var(--text-muted); }
+
 .profile-card .info-row {
   display: flex;
   justify-content: space-between;

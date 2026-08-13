@@ -34,6 +34,7 @@ const api = {
     rotationInfo: (name) => ipcRenderer.invoke("proxy:rotation-info", name),
     importText: (text, replace) => ipcRenderer.invoke("proxy:import-text", { text, replace }),
     exportCsv: () => ipcRenderer.invoke("proxy:export-csv"),
+    qrcode: (name) => ipcRenderer.invoke("proxy:qrcode", { name }),
   },
   drm: {
     status: () => ipcRenderer.invoke("drm:status"),

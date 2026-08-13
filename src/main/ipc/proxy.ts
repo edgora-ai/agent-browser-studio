@@ -11,10 +11,21 @@ import {
   renameProxy,
   getProxyRotationInfo,
 } from "../services/config-manager.js";
+import { getProxySecret } from "../services/config-manager.js";
 import { clearProxyHealth, listProxyHealth, proxyHealthSummary, recordProxyRotation } from "../services/proxy-health.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "../services/proxy-import.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
+import QRCode from "qrcode";
+
+/** Build a standard proxy URI (with credentials) for QR export. */
+function proxyUri(cfg: ProxyConfig): string {
+  const user = cfg.username ? encodeURIComponent(cfg.username) : "";
+  const pass = cfg.password ? ":" + encodeURIComponent(cfg.password) : "";
+  const auth = user ? user + pass + "@" : "";
+  const host = cfg.host.includes(":") && !cfg.host.startsWith("[") ? `[${cfg.host}]` : cfg.host;
+  return `${cfg.type}://${auth}${host}:${cfg.port}`;
+}
 
 export function registerProxyHandlers(): void {
   // List all named proxies
@@ -192,6 +203,20 @@ export function registerProxyHandlers(): void {
       const csv = exportProxiesCsv();
       recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "user", detail: `exported CSV` });
       return { success: true, csv };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
+    }
+  });
+
+  // Export a single proxy as a scannable QR code (full config incl. credentials).
+  ipcMain.handle("proxy:qrcode", async (_event, { name }: { name: string }) => {
+    try {
+      const cfg = getProxySecret(name);
+      if (!cfg) return { success: false, error: "Proxy not found" };
+      const uri = proxyUri(cfg);
+      const dataUrl = await QRCode.toDataURL(uri, { width: 512, margin: 2, errorCorrectionLevel: "M" });
+      recordAudit({ category: "proxy", action: "qrcode-export", target: name, actor: "user", detail: "exported QR proxy config" });
+      return { success: true, dataUrl, uri };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };
     }

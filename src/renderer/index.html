@@ -3,7 +3,7 @@
 <head>
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
- <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+ <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
  <title>Agent Browser Studio</title>
  <link rel="stylesheet" href="css/style.css">
 </head>
@@ -725,6 +725,34 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.import">导入</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
+ </div>
+ </form>
+</dialog>
+
+<!-- ── Proxy Bind Profiles Dialog ── -->
+<dialog id="dlg-proxy-bind" style="max-width:540px;width:92%;">
+ <form method="dialog" data-role="submit" data-submit-cmd="doBindProxyToProfiles">
+ <h3 style="margin:0 0 8px;">📎 <span data-i18n="proxy.bind.title">一键绑定 Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
+ <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="proxy.bind.hint">勾选要绑定到此代理的 profile（已绑定的会切换为当前代理）。</p>
+ <div id="dlg-proxy-bind-list" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;"></div>
+ <div class="btn-row">
+ <button type="submit" class="btn btn-primary" data-i18n="proxy.bind.confirm">绑定</button>
+ <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
+ </div>
+ </form>
+</dialog>
+
+<!-- ── Proxy QR Export Dialog ── -->
+<dialog id="dlg-proxy-qr" style="max-width:420px;width:92%;">
+ <form method="dialog">
+ <h3 style="margin:0 0 8px;">📱 <span data-i18n="proxy.qr.title">代理二维码</span></h3>
+ <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;" data-i18n="proxy.qr.hint">用微信/手机扫码获取完整代理配置（含账号密码）。</p>
+ <div style="text-align:center;">
+ <img id="dlg-proxy-qr-img" alt="QR" style="max-width:280px;width:100%;image-rendering:pixelated;">
+ <div id="dlg-proxy-qr-uri" style="font-family:var(--mono);font-size:10px;word-break:break-all;color:var(--text-muted);margin-top:8px;"></div>
+ </div>
+ <div class="btn-row">
+ <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
  </div>
  </form>
 </dialog>

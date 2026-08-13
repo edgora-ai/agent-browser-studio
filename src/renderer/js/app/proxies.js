@@ -217,6 +217,85 @@
           setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
           toast((window.i18n ? window.i18n.t("toast.proxy.exported", "Proxies exported") : "Proxies exported"), "success");
         }).catch(function (e) { toast(e.message, "error"); });
+      },
+
+  bindProxyToProfiles: function (proxyName) {
+        api.browser.list().then(function (profiles) {
+          var listEl = document.getElementById("dlg-proxy-bind-list");
+          if (!listEl) return;
+          var all = profiles || [];
+          listEl.innerHTML = "";
+          if (!all.length) {
+            listEl.innerHTML = '<div class="empty-state">' + (window.i18n ? window.i18n.t("proxy.bind.no-profiles", "No profiles to bind") : "No profiles to bind") + '</div>';
+          } else {
+            all.forEach(function (p) {
+              var current = p.proxyName || "";
+              var label = document.createElement("label");
+              label.className = "proxy-bind-item";
+              label.innerHTML = '<input type="checkbox" data-dir-id="' + escAttr(p.dirId) + '"> <span>' + esc(p.name) + '</span>' +
+                (current ? '<span class="proxy-bind-current">当前: ' + esc(current) + '</span>' : '');
+              listEl.appendChild(label);
+            });
+          }
+          var nameEl = document.getElementById("dlg-proxy-bind-proxy");
+          if (nameEl) nameEl.textContent = proxyName;
+          var dlg = document.getElementById("dlg-proxy-bind");
+          if (dlg && !dlg.open) dlg.showModal();
+        }).catch(function (e) { toast(e.message, "error"); });
+      },
+
+  doBindProxyToProfiles: function () {
+        var nameEl = document.getElementById("dlg-proxy-bind-proxy");
+        var proxyName = nameEl ? nameEl.textContent : "";
+        if (!proxyName) { toast("Proxy name missing", "error"); return; }
+        var boxes = document.querySelectorAll("#dlg-proxy-bind-list input[type=checkbox]:checked");
+        var ids = [];
+        Array.prototype.forEach.call(boxes, function (b) { ids.push(b.getAttribute("data-dir-id")); });
+        if (!ids.length) {
+          toast((window.i18n ? window.i18n.t("proxy.bind.none-selected", "请选择至少一个 profile") : "请选择至少一个 profile"), "error");
+          return;
+        }
+        var done = 0;
+        var failed = 0;
+        ids.forEach(function (dirId) {
+          api.proxy.setProfile(dirId, proxyName, "named").then(function (r) {
+            done++;
+            if (!r || r.success === false) failed++;
+            finishBind();
+          }).catch(function (e) { done++; failed++; finishBind(e.message); });
+        });
+        function finishBind(errMsg) {
+          if (done < ids.length) return;
+          var dlg = document.getElementById("dlg-proxy-bind");
+          if (dlg && dlg.open) dlg.close();
+          if (failed) {
+            toast(errMsg ? ("绑定失败: " + errMsg) : ((window.i18n ? window.i18n.t("toast.proxy.bind-failed", "绑定完成，失败 {n} 个").replace("{n}", failed) : "绑定完成，失败 " + failed + " 个")), "error");
+          } else {
+            toast((window.i18n ? window.i18n.t("toast.proxy.bound", "已绑定 {n} 个 profile").replace("{n}", ids.length) : "已绑定 " + ids.length + " 个 profile"), "success");
+          }
+          agentBrowser.refresh();
+          scheduleProfilesRefresh();
+        }
+      },
+
+  qrcodeProxy: function (name) {
+        var dlg = document.getElementById("dlg-proxy-qr");
+        var img = document.getElementById("dlg-proxy-qr-img");
+        var cap = document.getElementById("dlg-proxy-qr-uri");
+        if (!dlg || !img) return;
+        img.removeAttribute("src");
+        img.style.display = "none";
+        if (cap) cap.textContent = "";
+        if (!dlg.open) dlg.showModal();
+        api.proxy.qrcode(name).then(function (r) {
+          if (!r || r.success === false) {
+            if (cap) cap.textContent = (r && r.error) || "Failed";
+            return;
+          }
+          img.src = r.dataUrl;
+          img.style.display = "";
+          if (cap) cap.textContent = r.uri || "";
+        }).catch(function (e) { if (cap) cap.textContent = e.message; });
       }
   });
   function healthBadgeHtml(entry) {
@@ -347,6 +426,8 @@
             '<button class="btn btn-secondary btn-sm" data-action="clear-health">🧹 清除健康</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy">🔄 轮换</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="toggle-history">📈 历史</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="bind-profiles">📎 绑定</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="qrcode-proxy">📱 二维码</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
           '</div>' +
@@ -381,6 +462,8 @@
       }
       else if (action === "edit-proxy") agentBrowser.editProxy(name);
       else if (action === "delete-proxy") agentBrowser.delProxy(name);
+      else if (action === "bind-profiles") agentBrowser.bindProxyToProfiles(name);
+      else if (action === "qrcode-proxy") agentBrowser.qrcodeProxy(name);
     };
   }
 
