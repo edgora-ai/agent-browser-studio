@@ -17,10 +17,13 @@ import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./prox
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
 import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion } from "./update-manager.js";
-import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled } from "./team.js";
+import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret } from "./team.js";
 import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
-import { getAccounts } from "./local-agent.js";
+import {
+  getAccounts, getAccountPassword, addAccount, updateAccount, deleteAccount,
+  parseAccountsBulkText, bulkAddAccounts, bulkCreateProfilesWithAccounts,
+} from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
 import { listJobs, type JobStatus } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
@@ -86,6 +89,46 @@ function proxyInfo(name: string): any {
     isDefault: cfg.defaultProxy === name,
   };
 }
+
+function requireRestAccountMutation(): { status: number; body: any } | null {
+  const r = requireAccountMutation();
+  return r.ok ? null : { status: 403, body: { error: r.error } };
+}
+
+function requireRestAccountSecret(): { status: number; body: any } | null {
+  const r = requireAccountSecret();
+  return r.ok ? null : { status: 403, body: { error: r.error } };
+}
+
+function redactRestAccount(account: any, index: number): any {
+  return {
+    index,
+    url: account.platformUrl,
+    username: account.platformUserName,
+    profileIds: Array.isArray(account.profileIds) ? account.profileIds : [],
+    tags: Array.isArray(account.tags) ? account.tags : [],
+    hasPassword: Boolean(account.platformPassword),
+  };
+}
+
+function normalizeRestProfileIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const clean = value
+    .filter((v) => typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v))
+    .filter((v) => !seen.has(v) && (seen.add(v), true))
+    .slice(0, 200);
+  return clean.length ? clean : undefined;
+}
+
+function normalizeRestTags(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const clean = [...new Set(
+    value.filter((v) => typeof v === "string").map((v) => v.trim().slice(0, 40)).filter(Boolean),
+  )].slice(0, 20);
+  return clean.length ? clean : undefined;
+}
+
 
 async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonResponse> {
   const method = req.method || "GET";
@@ -605,8 +648,100 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "GET" && p === "/api/accounts") {
     return {
       status: 200,
-      body: { accounts: getAccounts().map((a) => ({ url: a.platformUrl, username: a.platformUserName, tags: a.tags })) },
+      body: { accounts: getAccounts().map((a, index) => redactRestAccount(a, index)) },
     };
+  }
+  if (method === "POST" && p === "/api/accounts") {
+    const body = await readJson(req);
+    if (!body || typeof body.url !== "string" || !body.url.trim() || typeof body.username !== "string" || !body.username.trim()) {
+      return { status: 400, body: { error: "url and username are required" } };
+    }
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
+    try {
+      // addAccount appends to the array; capture the index before the save
+      // because saveConfig rebuilds the config object (reference identity is lost).
+      const index = getAccounts().length;
+      const added = addAccount({
+        platformUrl: String(body.url).trim().slice(0, 1000),
+        platformUserName: String(body.username).trim().slice(0, 200),
+        platformPassword: typeof body.password === "string" ? body.password : "",
+        profileIds: normalizeRestProfileIds(body.profileIds),
+        tags: normalizeRestTags(body.tags),
+      });
+      recordAudit({ category: "account", action: "add", target: added.platformUrl.slice(0, 200), actor: "api", detail: "added via API" });
+      return { status: 201, body: { success: true, account: redactRestAccount(added, index) } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/accounts/bulk") {
+    const body = await readJson(req);
+    if (!body || typeof body.text !== "string") {
+      return { status: 400, body: { error: "text is required" } };
+    }
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
+    try {
+      const parsed = parseAccountsBulkText(body.text);
+      if (body.createProfiles) {
+        const platform = body.platform === "macos" ? "macos" : "windows";
+        const r = bulkCreateProfilesWithAccounts(parsed, { platform });
+        recordAudit({ category: "account", action: "bulk-create-profiles", target: "", actor: "api", detail: "added=" + r.added + " created=" + r.created + " skipped=" + r.skipped });
+        return { status: 200, body: { success: true, report: r } };
+      }
+      const r = bulkAddAccounts(parsed);
+      recordAudit({ category: "account", action: "bulk-add", target: "", actor: "api", detail: "added=" + r.added + " skipped=" + r.skipped });
+      return { status: 200, body: { success: true, report: r } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mAccountPassword = p.match(/^\/api\/accounts\/(\d+)\/password$/);
+  if (mAccountPassword && method === "GET") {
+    const deny = requireRestAccountSecret();
+    if (deny) return deny;
+    const index = Number(mAccountPassword[1]);
+    const account = getAccounts()[index];
+    const password = getAccountPassword(index);
+    if (!account || password === null) return { status: 404, body: { error: "Account not found or no password" } };
+    recordAudit({ category: "account", action: "reveal-password", target: account.platformUrl.slice(0, 200), actor: "api" });
+    return { status: 200, body: { success: true, password } };
+  }
+  const mAccount = p.match(/^\/api\/accounts\/(\d+)$/);
+  if (mAccount && method === "PATCH") {
+    const body = await readJson(req);
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
+    const index = Number(mAccount[1]);
+    try {
+      const patch: Partial<import("../types.js").PlatformAccount> = {};
+      if (body && body.url !== undefined) patch.platformUrl = String(body.url).trim().slice(0, 1000);
+      if (body && body.username !== undefined) patch.platformUserName = String(body.username).trim().slice(0, 200);
+      if (body && body.password !== undefined) patch.platformPassword = String(body.password);
+      if (body && body.profileIds !== undefined) patch.profileIds = normalizeRestProfileIds(body.profileIds);
+      if (body && body.tags !== undefined) patch.tags = normalizeRestTags(body.tags);
+      const updated = updateAccount(index, patch);
+      if (!updated) return { status: 404, body: { error: "Account not found" } };
+      recordAudit({ category: "account", action: "update", target: updated.platformUrl.slice(0, 200), actor: "api", detail: "updated via API" });
+      return { status: 200, body: { success: true, account: redactRestAccount(updated, index) } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (mAccount && method === "DELETE") {
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
+    const index = Number(mAccount[1]);
+    const target = getAccounts()[index]?.platformUrl || "";
+    try {
+      const ok = deleteAccount(index);
+      if (!ok) return { status: 404, body: { error: "Account not found" } };
+      recordAudit({ category: "account", action: "delete", target: target.slice(0, 200), actor: "api", detail: "deleted via API" });
+      return { status: 200, body: { success: true } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
   }
 
   // ── Automation ──
@@ -971,7 +1106,34 @@ function buildOpenApi(): any {
         parameters: [nameParam],
         get: { summary: "Read-only rotation status", responses: ok("Rotation info") },
       },
-      "/api/accounts": { get: { summary: "List stored account usernames + platform URLs", responses: ok("Account list") } },
+      "/api/accounts": {
+        get: { summary: "List stored accounts (index, url, username, tags, profileIds, hasPassword; never the password)", responses: ok("Account list") },
+        post: {
+          summary: "Add an account (password encrypted at rest)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["url", "username"], properties: { url: { type: "string" }, username: { type: "string" }, password: { type: "string" }, profileIds: { type: "array", items: { type: "string" } }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: created("Account added with index"),
+        },
+      },
+      "/api/accounts/bulk": {
+        post: {
+          summary: "Bulk import accounts from pasted lines (url,username,password,tags); createProfiles=true also creates a bound profile per account",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["text"], properties: { text: { type: "string" }, createProfiles: { type: "boolean" }, platform: { type: "string", enum: ["windows", "macos"] } } } } } },
+          responses: ok("Import report (added / skipped / errors; +created when createProfiles)"),
+        },
+      },
+      "/api/accounts/{index}": {
+        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer" } }],
+        patch: {
+          summary: "Update an account (partial; empty/omitted password keeps the stored one)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { url: { type: "string" }, username: { type: "string" }, password: { type: "string" }, profileIds: { type: "array", items: { type: "string" } }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Update result with account"),
+        },
+        delete: { summary: "Delete an account", responses: ok("Delete result") },
+      },
+      "/api/accounts/{index}/password": {
+        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer" } }],
+        get: { summary: "Reveal a stored account password (member+ when team enabled)", responses: ok("Revealed password") },
+      },
       "/api/automation/rules": { get: { summary: "List automation rules", responses: ok("Rule list") } },
       "/api/runs": { get: { summary: "List recent agent runs (limit/dirId query params)", responses: ok("Run list") } },
       "/api/runs/{id}/retry": {

@@ -246,20 +246,29 @@ export function saveAccounts(accounts: PlatformAccount[]): void {
 
 export function addAccount(account: PlatformAccount): PlatformAccount {
   const accounts = getAccounts();
-  account.createdAt = Date.now();
-  account.updatedAt = Date.now();
-  accounts.push(account);
+  const next: PlatformAccount = {
+    ...account,
+    platformPassword: encryptSecret(account.platformPassword || ""),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  accounts.push(next);
   saveAccounts(accounts);
-  return account;
+  return next;
 }
 
 export function updateAccount(index: number, account: Partial<PlatformAccount>): PlatformAccount | null {
   const accounts = getAccounts();
   if (index < 0 || index >= accounts.length) return null;
-  const next = { ...accounts[index], ...account, updatedAt: Date.now() };
-  if (!account.platformPassword && accounts[index].platformPassword) {
-    next.platformPassword = accounts[index].platformPassword;
-  }
+  const { platformPassword, ...rest } = account;
+  const next: PlatformAccount = {
+    ...accounts[index],
+    ...rest,
+    // An omitted/empty password keeps the stored value (already encrypted);
+    // a new one is encrypted at rest like the bulk path.
+    platformPassword: platformPassword ? encryptSecret(platformPassword) : accounts[index].platformPassword,
+    updatedAt: Date.now(),
+  };
   accounts[index] = next;
   saveAccounts(accounts);
   return accounts[index];
