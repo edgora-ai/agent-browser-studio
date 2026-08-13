@@ -71,6 +71,7 @@ describe("J54 — local REST API + OpenAPI", () => {
     expect(spec.body.openapi).toMatch(/^3\.0/);
     expect(spec.body.paths["/api/profiles"]).toBeTruthy();
     expect(spec.body.paths["/api/profiles/{dirId}/launch"]).toBeTruthy();
+    expect(spec.body.paths["/api/profiles/{dirId}/drift"]).toBeTruthy();
     expect(spec.body.paths["/api/proxies/{name}/rotate"]).toBeTruthy();
     expect(spec.body.paths["/api/audit"]).toBeTruthy();
     expect(Array.isArray(spec.body.security)).toBe(true);
@@ -106,6 +107,12 @@ describe("J54 — local REST API + OpenAPI", () => {
     const list = await apiRequest(port, token, "GET", "/api/profiles");
     expect(list.body.profiles.some((p: any) => p.dirId === dirId)).toBe(true);
 
+    const noBaseline = await apiRequest(port, token, "GET", "/api/profiles/" + dirId + "/drift");
+    expect(noBaseline.status).toBe(200);
+    expect(noBaseline.body.ok).toBe(true);
+    expect(noBaseline.body.hasBaseline).toBe(false);
+    expect(noBaseline.body.checked).toBe(false);
+
     const del = await apiRequest(port, token, "DELETE", "/api/profiles/" + dirId);
     expect(del.status).toBe(200);
     expect(del.body.success).toBe(true);
@@ -127,6 +134,15 @@ describe("J54 — local REST API + OpenAPI", () => {
       await new Promise((r) => setTimeout(r, 500));
     }
     expect(running, "profile should report running").toBe(true);
+
+    const cap = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.browser.captureBaseline(id), dirId);
+    expect(cap.ok).toBe(true);
+    const drift = await apiRequest(port, token, "GET", "/api/profiles/" + dirId + "/drift");
+    expect(drift.status).toBe(200);
+    expect(drift.body.ok).toBe(true);
+    expect(drift.body.hasBaseline).toBe(true);
+    expect(drift.body.checked).toBe(true);
+    expect(drift.body.risky).toBe(false);
 
     const stop = await apiRequest(port, token, "POST", "/api/profiles/" + dirId + "/stop");
     expect(stop.status).toBe(200);

@@ -221,6 +221,7 @@ Main resources:
 | GET/DELETE | `/api/profiles/{dirId}` | Profile detail / delete (stopped only) |
 | POST | `/api/profiles/{dirId}/launch` | `/stop` | Start / stop the profile's Chromium |
 | GET | `/api/profiles/{dirId}/status` | Running state + CDP port |
+| GET | `/api/profiles/{dirId}/drift` | Read-only fingerprint drift check vs stored baseline |
 | GET/POST | `/api/proxies` | List / add proxies |
 | PATCH/DELETE | `/api/proxies/{name}` | Update / delete a proxy |
 | GET | `/api/proxies/health` | Health score / risk / bindings / suggestions |

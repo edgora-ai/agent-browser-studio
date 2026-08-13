@@ -18,7 +18,7 @@ import { listJobs, type JobStatus } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { listExtensionRepository, addOrUpdateChromeStoreExtension } from "./extension-repository.js";
 import {
-  listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser,
+  listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
   createBrowserProfile, deleteBrowserProfile,
   findRuntimeChromiumBinary, getRuntimeChromiumVersion,
 } from "./browser-manager.js";
@@ -172,7 +172,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       validateDirId(dirId);
       const r = await launchBrowser(dirId);
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
-      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort } };
+      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -198,6 +198,16 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       return { status: 200, body: { dirId, running: st.running, pid: st.pid, cdpPort: st.cdpPort } };
     } catch (e: any) {
       return { status: 404, body: { error: e.message || String(e) } };
+    }
+  }
+  const mDrift = p.match(/^\/api\/profiles\/([^/]+)\/drift$/);
+  if (mDrift && method === "GET") {
+    try {
+      const dirId = mDrift[1];
+      validateDirId(dirId);
+      return { status: 200, body: await checkFingerprintDrift(dirId) };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
     }
   }
   const mProfile = p.match(/^\/api\/profiles\/([^/]+)$/);
@@ -525,6 +535,10 @@ function buildOpenApi(): any {
       "/api/profiles/{dirId}/status": {
         parameters: [dirIdParam],
         get: { summary: "Running status / CDP port", responses: ok("Status") },
+      },
+      "/api/profiles/{dirId}/drift": {
+        parameters: [dirIdParam],
+        get: { summary: "Read-only fingerprint drift check vs stored baseline", responses: ok("Drift check") },
       },
       "/api/profiles/{dirId}/launch": {
         parameters: [dirIdParam],

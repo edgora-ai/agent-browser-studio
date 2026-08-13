@@ -767,6 +767,37 @@ async function waitForProcessExit(pid: number, timeoutMs = 4000): Promise<void> 
   try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
 }
 
+export interface FingerprintDriftCheckResult {
+  ok: boolean;
+  error?: string;
+  checked?: boolean;
+  hasBaseline?: boolean;
+  risky?: boolean;
+  drift?: FingerprintDrift[];
+  fields?: number;
+}
+
+/** Read-only live fingerprint check against the stored baseline (no state change). */
+export async function checkFingerprintDrift(dirId: string): Promise<FingerprintDriftCheckResult> {
+  validateDirId(dirId);
+  const cfg = getConfig() as any;
+  const meta = cfg.browserProfiles?.[dirId];
+  if (!meta) return { ok: false, error: "Profile not found" };
+  if (!meta.fingerprintBaseline) {
+    return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
+  }
+  const st = statusBrowser(dirId);
+  if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
+  try {
+    const current = await captureFingerprint(st.cdpPort);
+    const drift = diffFingerprints(meta.fingerprintBaseline, current);
+    const risky = hasRiskyDrift(drift);
+    return { ok: true, checked: true, hasBaseline: true, risky, drift, fields: Object.keys(current).length };
+  } catch (e: any) {
+    return { ok: false, error: e.message || String(e) };
+  }
+}
+
 export function stopBrowser(dirId: string): boolean {
   validateDirId(dirId);
   const entry = runningProcesses.get(dirId);
