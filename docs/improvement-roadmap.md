@@ -1165,3 +1165,23 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 结论：浏览器侧双方都干净；在「中文字体剥离」与「DNS 走代理/DoH」两个面上我方引擎比真实 RoxyBrowser 更干净。RoxyBrowser「什么问题都没有」的印象，与本机同代理实测不符——其扣分正是用户之前给我们提的那两类。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。ping0 我方侧唯一可变分项是代理出口是否 IDC——换住宅/非 IDC 出口即回 100。
+
+## Slice 73 — 代理出口风险检测（IDC/机房 + 公共代理标志）→ 启动一致性 + 代理健康 + UI
+
+**上游核对**：RoxyBrowser 仍 4.0.3、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro，无新发布。Slice 72 实测结论里，我方 ping0 唯一可变扣分是「代理出口是 Oracle IDC（net.isidc）」，而真实 RoxyBrowser 的扣分之一是 DNS 泄漏。本轮把验证结论变成产品能力：**在代理资产与启动一致性里主动标记 IDC/机房出口与公共代理标志**，让用户在没有平台检测页的情况下也能提前发现这两类风控信号。
+
+**实现**：
+- `src/main/services/proxy-detector.ts`：`ProxyDetectionResult` 新增 `hosting` / `isProxy`；新增离线 `classifyHosting` 启发式（约 60 个已知云/机房 ASN + org 名提示词，保守匹配，住宅 ISP 不误报），对 ipwho.is / ipapi.co / ip-api.com 三个 provider 统一套用；ip-api.com 查询补 `proxy,hosting` 字段并以其权威标志优先（无标志时回退启发式）；
+- `src/main/types.ts` / `config-manager.ts`：`ProxyDetectionCacheEntry` / `ProxyHealthHistoryPoint` 新增 `org`、`as`、`hosting`、`isProxy`，`normalizeProxyDetection` / `normalizeProxyHealthEntry` 保留新字段（防 reload 丢弃）；
+- `src/main/services/consistency-check.ts`：新增 `proxy-idc`（出口为机房/IDC IP，带 org/ASN，注明 ping0 net.isidc 与养号风控风险）与 `proxy-anonymous`（出口被标记公共代理/VPN）两条 warning；
+- `src/main/services/proxy-health.ts`：健康历史记录 hosting/isProxy；`suggestionFor` 对最新成功检测为 IDC 时给出「换住宅/非 IDC 出口」建议；
+- `src/main/services/browser-manager.ts`：launch 时的隐式 geo 检测（resolveGeoFromProxy 返回完整 detection）回写代理检测缓存，让没点过 Detect 的代理在下次启动也能带出 IDC 告警（只写 detection cache，不动健康历史）；
+- `src/main/ipc/detect.ts`：detect 结果与缓存、健康记录透传 hosting/isProxy/org/as；
+- `src/renderer`：代理卡片新增 🏭 IDC / ⚠ 代理徽标（读取健康历史最新点）、Detect 结果与历史时间线显示 🏭IDC/⚠代理 标记；样式 `.proxy-idc-badge`。
+
+**验证**：
+- 单测 +10：`classifyHosting`（云 ASN/机房 org 命中、住宅不误报、代理标志独立）、consistency `proxy-idc`/`proxy-anonymous`（含 org/ASN 文案）、proxy-health IDC 建议与历史标志、config-manager 保存/重载保留 hosting/isProxy；
+- e2e `tests/e2e/j94-proxy-idc-risk.test.ts` 新增 5 例：IDC 代理 profile 的 consistencyCheck 报 `proxy-idc`（含 Oracle/AS31898 文案）→ 干净住宅代理不报 → 代理页仅 IDC 卡片渲染 🏭 徽标 → 历史时间线含 🏭IDC → console 无意外错误；
+- 全量单测 646 例全绿；受影响 e2e（j35/j70/j29/j94）全过；全量 e2e（见文末回归数）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。IDC/代理标志目前是 warning 级（不阻断），后续可按需把 `proxy-idc` 纳入 `blockOnConsistencyConflict` 可阻断面（如开启「一致性阻断」的账号场景）。
