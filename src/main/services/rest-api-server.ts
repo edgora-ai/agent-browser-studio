@@ -17,7 +17,7 @@ import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./prox
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
 import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion } from "./update-manager.js";
-import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret } from "./team.js";
+import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret, requireSettingsMutation } from "./team.js";
 import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
 import {
@@ -25,9 +25,15 @@ import {
   parseAccountsBulkText, bulkAddAccounts, bulkCreateProfilesWithAccounts,
 } from "./local-agent.js";
 import { listAudit, clearAudit, recordAudit } from "./audit-log.js";
-import { listJobs, type JobStatus } from "./job-store.js";
+import { listJobs, markCancelled, type JobStatus } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
-import { listExtensionRepository, addOrUpdateChromeStoreExtension } from "./extension-repository.js";
+import {
+  listExtensionRepository, addOrUpdateChromeStoreExtension, installLocalExtension,
+  updateRepositoryExtension, deleteRepositoryExtension, setRepositoryExtensionMeta,
+  getRepositoryExtension,
+} from "./extension-repository.js";
+import { listSkillRepository, addOrUpdateSkill, installSkill, removeSkill, setSkillMeta } from "./skill-repository.js";
+import { createAutomationRule, updateAutomationRule, deleteAutomationRule } from "./automation-rules.js";
 import {
   listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
   createBrowserProfile, deleteBrowserProfile,
@@ -38,7 +44,7 @@ import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "./profile-archive.js";
 import { syncService } from "./sync-service.js";
-import { retryAgentRun, retryJobRuns } from "./automation.js";
+import { retryAgentRun, retryJobRuns, testRunRule, reloadSchedule, cancelRunningJob } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
 
 const API_VERSION = "1.0.0";
@@ -98,6 +104,20 @@ function requireRestAccountMutation(): { status: number; body: any } | null {
 function requireRestAccountSecret(): { status: number; body: any } | null {
   const r = requireAccountSecret();
   return r.ok ? null : { status: 403, body: { error: r.error } };
+}
+
+function requireRestSettingsMutation(): { status: number; body: any } | null {
+  const r = requireSettingsMutation();
+  return r.ok ? null : { status: 403, body: { error: r.error } };
+}
+
+// Map a service-layer "not found" error to a 404 instead of a generic 400.
+function notFoundStatus(error: unknown): { status: number; body: any } {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not found|not in the repository|does not exist/i.test(message)) {
+    return { status: 404, body: { error: message } };
+  }
+  return { status: 400, body: { error: message } };
 }
 
 function redactRestAccount(account: any, index: number): any {
@@ -748,6 +768,215 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "GET" && p === "/api/automation/rules") {
     return { status: 200, body: { rules: (getConfig() as any).automation || [] } };
   }
+  if (method === "POST" && p === "/api/automation/rules") {
+    const body = await readJson(req);
+    if (!body || !body.trigger || !body.action) {
+      return { status: 400, body: { error: "trigger and action are required" } };
+    }
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      const rule = createAutomationRule(body);
+      reloadSchedule();
+      recordAudit({ category: "automation", action: "create", target: rule.id, actor: "api", detail: "rule created via API" });
+      return { status: 201, body: { success: true, rule } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mRuleTest = p.match(/^\/api\/automation\/rules\/([^/]+)\/test-run$/);
+  if (mRuleTest && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      return { status: 200, body: await testRunRule(decodeURIComponent(mRuleTest[1])) };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mRule = p.match(/^\/api\/automation\/rules\/([^/]+)$/);
+  if (mRule && method === "PATCH") {
+    const body = await readJson(req);
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const ruleId = decodeURIComponent(mRule[1]);
+    try {
+      const r = updateAutomationRule({ id: ruleId, ...(body || {}) } as any);
+      if (!r.success) return { status: 404, body: { error: r.error || "rule not found" } };
+      reloadSchedule();
+      recordAudit({ category: "automation", action: "update", target: ruleId, actor: "api", detail: "rule updated via API" });
+      return { status: 200, body: { success: true, rule: r.rule } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (mRule && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const ruleId = decodeURIComponent(mRule[1]);
+    try {
+      const ok = deleteAutomationRule(ruleId);
+      if (!ok) return { status: 404, body: { error: "rule not found" } };
+      reloadSchedule();
+      recordAudit({ category: "automation", action: "delete", target: ruleId, actor: "api", detail: "rule deleted via API" });
+      return { status: 200, body: { success: true } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
+  // ── Extension repository ──
+  if (method === "GET" && p === "/api/extension-repository") {
+    return { status: 200, body: { extensions: listExtensionRepository(url.searchParams.get("filter") || undefined) } };
+  }
+  if (method === "POST" && p === "/api/extension-repository") {
+    const body = await readJson(req);
+    if (!body || typeof body.extId !== "string" || !body.extId.trim()) {
+      return { status: 400, body: { error: "extId is required" } };
+    }
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      const entry = await addOrUpdateChromeStoreExtension(body.extId.trim(), { shared: body.shared, tags: normalizeRestTags(body.tags) });
+      recordAudit({ category: "extension", action: "add", target: entry.id, actor: "api", detail: "added from Chrome Web Store via API" });
+      return { status: 201, body: { success: true, extension: entry } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  if (method === "POST" && p === "/api/extension-repository/local") {
+    const body = await readJson(req);
+    if (!body || typeof body.path !== "string" || !body.path.trim()) {
+      return { status: 400, body: { error: "path is required" } };
+    }
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      const entry = await installLocalExtension(body.path.trim(), { shared: body.shared, tags: normalizeRestTags(body.tags) });
+      recordAudit({ category: "extension", action: "add", target: entry.id, actor: "api", detail: "installed local extension via API" });
+      return { status: 201, body: { success: true, extension: entry } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mExtUpdate = p.match(/^\/api\/extension-repository\/([^/]+)\/update$/);
+  if (mExtUpdate && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const extId = decodeURIComponent(mExtUpdate[1]);
+    try {
+      const entry = await updateRepositoryExtension(extId);
+      recordAudit({ category: "extension", action: "update", target: extId, actor: "api", detail: "updated via API" });
+      return { status: 200, body: { success: true, extension: entry } };
+    } catch (e: any) {
+      return notFoundStatus(e);
+    }
+  }
+  const mExt = p.match(/^\/api\/extension-repository\/([^/]+)$/);
+  if (mExt && method === "PATCH") {
+    const body = await readJson(req);
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const extId = decodeURIComponent(mExt[1]);
+    try {
+      if (!getRepositoryExtension(extId)) return { status: 404, body: { error: "extension not found" } };
+      const entry = setRepositoryExtensionMeta(extId, { shared: body?.shared, tags: normalizeRestTags(body?.tags) });
+      recordAudit({ category: "extension", action: "set-meta", target: extId, actor: "api", detail: "meta updated via API" });
+      return { status: 200, body: { success: true, extension: entry } };
+    } catch (e: any) {
+      return notFoundStatus(e);
+    }
+  }
+  if (mExt && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const extId = decodeURIComponent(mExt[1]);
+    try {
+      const ok = deleteRepositoryExtension(extId);
+      if (!ok) return { status: 404, body: { error: "extension not found" } };
+      recordAudit({ category: "extension", action: "delete", target: extId, actor: "api", detail: "deleted via API" });
+      return { status: 200, body: { success: true } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
+  // ── Skills ──
+  if (method === "GET" && p === "/api/skills") {
+    return { status: 200, body: { skills: listSkillRepository(url.searchParams.get("filter") || undefined) } };
+  }
+  if (method === "POST" && p === "/api/skills") {
+    const body = await readJson(req);
+    if (!body || typeof body.id !== "string" || !body.id.trim() || typeof body.prompt !== "string") {
+      return { status: 400, body: { error: "id and prompt are required" } };
+    }
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    try {
+      const skill = addOrUpdateSkill(body);
+      recordAudit({ category: "skill", action: "add", target: skill.id, actor: "api", detail: "skill added/updated via API" });
+      return { status: 201, body: { success: true, skill } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+  const mSkillInstall = p.match(/^\/api\/skills\/([^/]+)\/install$/);
+  if (mSkillInstall && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const id = decodeURIComponent(mSkillInstall[1]);
+    try {
+      const skill = installSkill(id);
+      recordAudit({ category: "skill", action: "install", target: id, actor: "api", detail: "skill installed via API" });
+      return { status: 200, body: { success: true, skill } };
+    } catch (e: any) {
+      return notFoundStatus(e);
+    }
+  }
+  const mSkill = p.match(/^\/api\/skills\/([^/]+)$/);
+  if (mSkill && method === "PATCH") {
+    const body = await readJson(req);
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const id = decodeURIComponent(mSkill[1]);
+    try {
+      const skill = setSkillMeta(id, { shared: body?.shared, enabled: body?.enabled, tags: normalizeRestTags(body?.tags) });
+      recordAudit({ category: "skill", action: "set-meta", target: id, actor: "api", detail: "meta updated via API" });
+      return { status: 200, body: { success: true, skill } };
+    } catch (e: any) {
+      return notFoundStatus(e);
+    }
+  }
+  if (mSkill && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const id = decodeURIComponent(mSkill[1]);
+    try {
+      const ok = removeSkill(id);
+      if (!ok) return { status: 404, body: { error: "skill not found" } };
+      recordAudit({ category: "skill", action: "delete", target: id, actor: "api", detail: "skill deleted via API" });
+      return { status: 200, body: { success: true } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
+
+  // ── Jobs (durable queue control) ──
+  const mJobCancel = p.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
+  if (mJobCancel && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const jobId = decodeURIComponent(mJobCancel[1]);
+    try {
+      const ok = markCancelled(jobId);
+      if (!ok) return { status: 404, body: { error: "job not found" } };
+      cancelRunningJob(jobId);
+      recordAudit({ category: "automation", action: "job-cancel", target: jobId, actor: "api", detail: "job cancelled via API" });
+      return { status: 200, body: { success: true } };
+    } catch (e: any) {
+      return { status: 400, body: { error: e.message || String(e) } };
+    }
+  }
 
   // ── Runs & Jobs ──
   if (method === "GET" && p === "/api/runs") {
@@ -1134,7 +1363,27 @@ function buildOpenApi(): any {
         parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer" } }],
         get: { summary: "Reveal a stored account password (member+ when team enabled)", responses: ok("Revealed password") },
       },
-      "/api/automation/rules": { get: { summary: "List automation rules", responses: ok("Rule list") } },
+      "/api/automation/rules": {
+        get: { summary: "List automation rules", responses: ok("Rule list") },
+        post: {
+          summary: "Create an automation rule (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["trigger", "action"], properties: { name: { type: "string" }, enabled: { type: "boolean" }, trigger: { type: "object" }, action: { type: "object" }, runTimeoutMs: { type: "integer" }, maxRetries: { type: "integer" } } } } } },
+          responses: ok("Created rule"),
+        },
+      },
+      "/api/automation/rules/{ruleId}": {
+        parameters: [{ name: "ruleId", in: "path", required: true, schema: { type: "string" } }],
+        patch: {
+          summary: "Update an automation rule (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, enabled: { type: "boolean" }, trigger: { type: "object" }, action: { type: "object" }, runTimeoutMs: { type: "integer" }, maxRetries: { type: "integer" } } } } } },
+          responses: ok("Updated rule"),
+        },
+        delete: { summary: "Delete an automation rule (member+ when team enabled)", responses: ok("Delete result") },
+      },
+      "/api/automation/rules/{ruleId}/test-run": {
+        parameters: [{ name: "ruleId", in: "path", required: true, schema: { type: "string" } }],
+        post: { summary: "Run an automation rule once immediately (member+ when team enabled)", responses: ok("Test-run result") },
+      },
       "/api/runs": { get: { summary: "List recent agent runs (limit/dirId query params)", responses: ok("Run list") } },
       "/api/runs/{id}/retry": {
         post: {
@@ -1150,6 +1399,59 @@ function buildOpenApi(): any {
           parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
           responses: ok("Batch retry summary (attempted/succeeded/failed)"),
         },
+      },
+      "/api/jobs/{jobId}/cancel": {
+        parameters: [{ name: "jobId", in: "path", required: true, schema: { type: "string" } }],
+        post: { summary: "Cancel a queued/running job (member+ when team enabled)", responses: ok("Cancel result") },
+      },
+      "/api/extension-repository": {
+        get: { summary: "List the shared extension repository (filter query param)", responses: ok("Extension list") },
+        post: {
+          summary: "Add a Chrome Web Store extension to the repository (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["extId"], properties: { extId: { type: "string" }, shared: { type: "boolean" }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Added extension"),
+        },
+      },
+      "/api/extension-repository/local": {
+        post: {
+          summary: "Install a local CRX/ZIP/unpacked extension into the repository (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["path"], properties: { path: { type: "string", description: "Local CRX/ZIP file or unpacked directory" }, shared: { type: "boolean" }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Installed extension"),
+        },
+      },
+      "/api/extension-repository/{extId}": {
+        parameters: [{ name: "extId", in: "path", required: true, schema: { type: "string" } }],
+        patch: {
+          summary: "Set extension repository metadata (shared/tags) (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { shared: { type: "boolean" }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Updated extension"),
+        },
+        delete: { summary: "Remove an extension from the repository (member+ when team enabled)", responses: ok("Delete result") },
+      },
+      "/api/extension-repository/{extId}/update": {
+        parameters: [{ name: "extId", in: "path", required: true, schema: { type: "string" } }],
+        post: { summary: "Refresh a repository extension from its source (member+ when team enabled)", responses: ok("Updated extension") },
+      },
+      "/api/skills": {
+        get: { summary: "List skills (filter query param)", responses: ok("Skill list") },
+        post: {
+          summary: "Add or update a skill (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["id", "prompt"], properties: { id: { type: "string" }, name: { type: "string" }, title: { type: "string" }, description: { type: "string" }, version: { type: "string" }, source: { type: "string" }, tools: { type: "array", items: { type: "string" } }, prompt: { type: "string" }, shared: { type: "boolean" }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Saved skill"),
+        },
+      },
+      "/api/skills/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        patch: {
+          summary: "Set skill metadata (shared/enabled/tags) (member+ when team enabled)",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { shared: { type: "boolean" }, enabled: { type: "boolean" }, tags: { type: "array", items: { type: "string" } } } } } } },
+          responses: ok("Updated skill"),
+        },
+        delete: { summary: "Remove a skill (member+ when team enabled)", responses: ok("Delete result") },
+      },
+      "/api/skills/{id}/install": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        post: { summary: "Install (enable) a skill (member+ when team enabled)", responses: ok("Installed skill") },
       },
       "/api/sync/status": { get: { summary: "Sync configuration / connectivity status", responses: ok("Sync status") } },
       "/api/sync/push": {

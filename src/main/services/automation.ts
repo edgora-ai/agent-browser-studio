@@ -11,6 +11,9 @@ import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.j
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
 import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, getJob } from "./job-store.js";
 import { runSandboxed } from "./script-sandbox.js";
+import { validateCron, parseCronField } from "./cron-validate.js";
+
+export { validateCron } from "./cron-validate.js";
 
 function runTimeoutMsFor(rule: AutomationRule): number {
   return jobGuard.configFor(rule).runTimeoutMs;
@@ -402,40 +405,6 @@ function clearAllRetries(): void {
 }
 
 // ── cron 解析(轻量,5 字段: min hour dom mon dow) ──
-function parseCronField(field: string, min: number, max: number): number[] {
-  const result = new Set<number>();
-  for (const part of field.split(",")) {
-    const f = part.trim();
-    if (f === "*") { for (let i = min; i <= max; i++) result.add(i); continue; }
-    const stepMatch = f.match(/^\*\/(\d+)$/);
-    if (stepMatch) {
-      const step = Number(stepMatch[1]);
-      for (let i = min; i <= max; i += step) result.add(i);
-      continue;
-    }
-    const rangeMatch = f.match(/^(\d+)-(\d+)(?:\/(\d+))?$/);
-    if (rangeMatch) {
-      const lo = Number(rangeMatch[1]), hi = Number(rangeMatch[2]), step = Number(rangeMatch[3] || 1);
-      for (let i = lo; i <= hi; i += step) result.add(i);
-      continue;
-    }
-    const n = Number(f);
-    if (Number.isInteger(n) && n >= min && n <= max) result.add(n);
-    else throw new Error(`invalid cron field value: ${f}`);
-  }
-  return [...result];
-}
-
-export function validateCron(expr: string): void {
-  const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) throw new Error("cron must have 5 fields: min hour dom mon dow");
-  parseCronField(parts[0], 0, 59); // min
-  parseCronField(parts[1], 0, 23); // hour
-  parseCronField(parts[2], 1, 31); // dom
-  parseCronField(parts[3], 1, 12); // mon
-  parseCronField(parts[4], 0, 6);  // dow (0=Sun)
-}
-
 // 算 cron 下次触发时间(从 now 之后)
 function nextCronTime(expr: string, now: Date): number {
   const [minF, hourF, domF, monF, dowF] = expr.trim().split(/\s+/);

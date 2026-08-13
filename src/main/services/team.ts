@@ -82,6 +82,13 @@ export function requireAccountMutation(): RoleCheck {
   return requireRole("member");
 }
 
+/** Mutating shared app configuration (automation rules, extension repository,
+ *  skills, etc.) — member+ when team enabled. */
+export function requireSettingsMutation(): RoleCheck {
+  if (!teamEnabled()) return { ok: true };
+  return requireRole("member");
+}
+
 function saveTeam(team: TeamConfig): void {
   const cfg = getConfig();
   cfg.team = team;

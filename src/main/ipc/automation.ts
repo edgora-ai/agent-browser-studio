@@ -1,13 +1,10 @@
 // Automation IPC handlers — CRUD + test-run + logs
 import { ipcMain } from "electron";
-import { getConfig, saveConfig } from "../services/config-manager.js";
+import { getConfig } from "../services/config-manager.js";
+import { createAutomationRule, updateAutomationRule, deleteAutomationRule } from "../services/automation-rules.js";
 import { reloadSchedule, testRunRule, getRunLogs, validateCron, cancelRunningJob, retryAgentRun, retryJobRuns } from "../services/automation.js";
 import { listJobs, getJob, markCancelled } from "../services/job-store.js";
 import type { AutomationRule } from "../types.js";
-
-function newRuleId(): string {
-  return "rule_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
-}
 
 export function registerAutomationHandlers(): void {
   ipcMain.handle("automation:list", async () => {
@@ -16,44 +13,33 @@ export function registerAutomationHandlers(): void {
   });
 
   ipcMain.handle("automation:create", async (_event, rule: Partial<AutomationRule>) => {
-    const cfg = getConfig() as any;
-    cfg.automation = cfg.automation || [];
-    const full: AutomationRule = {
-      id: rule.id || newRuleId(),
-      name: String(rule.name || "Untitled").slice(0, 120),
-      enabled: rule.enabled !== false,
-      trigger: rule.trigger as any,
-      action: rule.action as any,
-      createdAt: Date.now(),
-      ...(typeof rule.runTimeoutMs === "number" ? { runTimeoutMs: rule.runTimeoutMs } : {}),
-      ...(Number.isInteger(rule.maxRetries) ? { maxRetries: rule.maxRetries } : {}),
-    };
-    // validate cron if present
-    if (full.trigger?.type === "cron" && full.trigger.cron) validateCron(full.trigger.cron);
-    cfg.automation.push(full);
-    saveConfig(cfg);
-    reloadSchedule();
-    return { success: true, rule: full };
+    try {
+      const full = createAutomationRule(rule);
+      reloadSchedule();
+      return { success: true, rule: full };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
   });
 
   ipcMain.handle("automation:update", async (_event, rule: AutomationRule) => {
-    const cfg = getConfig() as any;
-    cfg.automation = cfg.automation || [];
-    const idx = cfg.automation.findIndex((r: AutomationRule) => r.id === rule.id);
-    if (idx < 0) return { success: false, error: "rule not found" };
-    if (rule.trigger?.type === "cron" && rule.trigger.cron) validateCron(rule.trigger.cron);
-    cfg.automation[idx] = { ...cfg.automation[idx], ...rule };
-    saveConfig(cfg);
-    reloadSchedule();
-    return { success: true, rule: cfg.automation[idx] };
+    try {
+      const r = updateAutomationRule(rule);
+      if (r.success) reloadSchedule();
+      return r;
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
   });
 
   ipcMain.handle("automation:delete", async (_event, ruleId: string) => {
-    const cfg = getConfig() as any;
-    cfg.automation = (cfg.automation || []).filter((r: AutomationRule) => r.id !== ruleId);
-    saveConfig(cfg);
-    reloadSchedule();
-    return { success: true };
+    try {
+      const ok = deleteAutomationRule(ruleId);
+      if (ok) reloadSchedule();
+      return { success: ok };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
   });
 
   ipcMain.handle("automation:test-run", async (_event, ruleId: string) => {
