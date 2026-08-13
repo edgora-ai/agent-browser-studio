@@ -32,6 +32,8 @@
       // ── Profiles ──
       "profiles.title": "浏览器配置",
       "profiles.new": "🥷 + 新建配置",
+      "profiles.quick": "⚡ 快速创建",
+      "profiles.quick-name": "快速配置",
       "profiles.bulk-import": "📥 批量导入",
       "profiles.import-archive": "📦 导入备份",
       "profiles.start-all": "▶ 全部启动",
@@ -691,6 +693,7 @@
       "toast.profile.not-found": "配置未找到",
       "toast.profile.saved": "配置已保存",
       "toast.profile.created": "🥷 已创建托管 Chromium 配置！",
+      "toast.profile.quick-created": "⚡ 已快速创建配置",
       "toast.profile.name-prompt": "请输入名称",
       "toast.profile.exported": "已导出备份: ",
       "toast.profile.imported": "已导入 profile: ",
@@ -765,6 +768,8 @@
 
       "profiles.title": "Browser Profiles",
       "profiles.new": "🥷 + New Profile",
+      "profiles.quick": "⚡ Quick Create",
+      "profiles.quick-name": "Quick Profile",
       "profiles.bulk-import": "📥 Bulk Import",
       "profiles.import-archive": "📦 Import Backup",
       "profiles.start-all": "▶ Start All",
@@ -1408,6 +1413,7 @@
       "toast.profile.not-found": "Profile not found",
       "toast.profile.saved": "Profile saved",
       "toast.profile.created": "🥷 Managed Chromium profile created!",
+      "toast.profile.quick-created": "⚡ Profile created",
       "toast.profile.name-prompt": "Please enter a name",
       "toast.profile.exported": "Exported backup: ",
       "toast.profile.imported": "Imported profile: ",

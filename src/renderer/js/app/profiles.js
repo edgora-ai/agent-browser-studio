@@ -251,6 +251,15 @@
         document.getElementById("dlg-profile").showModal();
       },
 
+  quickCreateProfile: function () {
+        var base = (window.i18n ? window.i18n.t("profiles.quick-name", "Quick Profile") : "Quick Profile");
+        api.browser.create({ name: base }).then(function(r) {
+          if (!r || !r.dirId) { toast((r && r.error) || "Quick create failed", "error"); return; }
+          toast((window.i18n ? window.i18n.t("toast.profile.quick-created", "Profile created") : "Profile created") + ": " + base, "success");
+          loadProfiles();
+        }).catch(function(e) { toast(e.message || String(e), "error"); });
+      },
+
   profileBrowserChanged: function() {
         var chromeOpts = document.getElementById("new-profile-chrome-opts");
         var browserOptions = document.getElementById("new-profile-agent-browser-opts");
