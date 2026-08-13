@@ -558,3 +558,14 @@ $ npx vitest run -c vitest.config.e2e.ts (全部)  → J1-J59 全绿（含 journ
 - `tests/smoke/linux-build.test.ts` — 5 例：args.gn.linux 表面与键值行可解析、build-linux.sh 存在且可执行且 `bash -n` 通过、electron-builder mac/win/linux 目标齐全、Dockerfile/compose 引擎接线正确
 
 **验证**：smoke 5 例全绿；全量单测/tsc 不受影响（见下方回归）。真实 Linux 构建与生产 E2E 仍需 Linux 构建主机，矩阵该行从 `missing` 更新为 `partial` 并注明已定义路径。
+
+### Slice 46 — 窗口几何自洽性实证（P1，反检测可信闭环）— ✅
+
+**背景**：上游 CloakBrowser `[Unreleased]` 变更——headed 启动不再套固定 emulated viewport，页面跟随真实窗口；headless 保持确定性视口。我们核对 `browser-manager.ts` 只传 `--window-size` / `--window-position` / `--force-device-scale-factor`，`screen.*` 由 Chromium patch 0003 固定覆盖，`window.*`（inner/outer/screenX/screenY）理论上跟随真实窗口。本切片用 e2e 实证该自洽性，并归档为回归护栏。
+
+**新增**：
+- `tests/e2e/j71-window-geometry.test.ts` — 4 例：headed windows profile 启动；初始几何自洽（inner≤outer≤screen、窗口落屏内）；通过 CDP `Browser.setWindowBounds` 把真实窗口 resize/move 到 1000x700@(60,60)，断言 outer/inner 跟随真实窗口（无固定 emulated viewport 残留）、`screen.*` 保持固定、移动后仍自洽；无意外 console error。
+
+**结论**：默认窗口 1280x800（`min(avail,1280/800)`），resize 到 1000x700 后 `outerWidth` 落在 900-1050、`innerWidth` 跟随且在 outer 内、`screen.*` 不变——headed 窗口几何与上游 v0.3.32 unreleased 对齐点自洽，无需额外 DOM 覆盖补丁。
+
+**验证**：j71 4 例全绿；j1-profile-launch 回归 8 例全绿；全量单测 47 文件 570 例全绿；tsc/build 干净。

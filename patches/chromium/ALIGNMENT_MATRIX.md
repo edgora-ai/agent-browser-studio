@@ -78,7 +78,7 @@ Status meanings:
 | Same-seed restart stability | verified | Preserve on Chromium 150 | at least two fresh user-data directories and one restart |
 | Cross-seed distinction | verified | Extend to all seeded deep surfaces | pairwise diff with required-distinct field set |
 | Joint hardware profiles | verified | Preserve versioned CPU/RAM/GPU/screen/DPR/font/audio tuples and reject incoherent overrides | 1,000-config Windows/macOS seed corpus, partial-constraint resolution, conflict rejection and native runtime checks |
-| Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 53-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS |
+| Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 53-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS; e2e `j71` re-proves window geometry self-consistency — a real resize/move is followed by `window.*` while `screen.*` stays fixed (Slice 46) |
 | Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 53-surface fresh-directory, same-directory restart and independent-directory comparison |
 | Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 53-surface native-host comparison, including host theme, with all managed profile consumers disabled |
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
