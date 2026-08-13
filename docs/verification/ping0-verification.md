@@ -1,34 +1,45 @@
 # ping0.cc 环境一致性验证（Agent Browser · Chromium 150 official build）
 
-验证日期：2026-08-13（official/ThinLTO 构建复测）
+验证日期：2026-08-13 深夜复测（Slice 66，official/ThinLTO 构建）
 
 被测浏览器：Agent Browser Studio 内置 Chromium 150.0.7871.114，official 构建（is_official_build=true、symbol_level=0、ThinLTO 生效、无 PGO），patchset 0002-0044 全量应用。
 
 代理：http://127.0.0.1:7890 -> 出口 152.70.241.120（KR / Seoul / Oracle Corporation，IDC）
 
-方法：直接 spawn Chromium（不注入 --enable-automation，使用具体 CDP 端口），经代理做新鲜 geo 检测（ipwho.is），按 app 同款参数注入 managed fingerprint 配置，加载 https://ping0.cc/env ，等 Vue finished=true 后静置 15s 抓取，全程页面保持前台可见。
+方法：直接 spawn Chromium（不注入 --enable-automation，使用具体 CDP 端口），经代理做新鲜 geo 检测（ipwho.is），按 app 同款参数注入 managed fingerprint 配置，加载 https://ping0.cc/env ，等 Vue finished=true 后静置 15s 抓取。verifier 在探针前 best-effort 前台化窗口（page.bringToFront）并把抓取时的窗口状态记入报告（probeFocus），保证 stealth/rAF 探针测的是前台可见窗口——后台/遮挡窗口会把 rAF 节流到 ~100ms 造成误报。
 
-## 结论
+## 结论（当前 ping0 检测套件）
 
-连续 3 次完整检测全部 **100 分 / green / 0 findings**（上一版非 official 构建为 92 分，余两项告警：net.isidc warn、stealth.raf_timing info）。official 构建在保持全部反检测能力的同时，还消除了 rAF 计时告警——官方优化后检测 JS 主线程负载下的帧间隔不再被放大到阈值以上。
+复测（多轮完整捕获，含当前 ping0 的 net.*/stealth.*/xc.* 全套交叉检查）：**92 分 / green**。唯一实扣分项是 `net.isidc`（weight 8）：出口 152.70.241.120 是 Oracle Cloud **IDC 机房 IP**——这是代理出口属性，不是浏览器指纹泄漏，换成住宅/非 IDC 出口即可回 100。浏览器侧所有检查全部通过：
 
-| run | score | level | findings |
-| --- | --- | --- | --- |
-| official-run1 | 100 | green | 0 |
-| official-run2 | 100 | green | 0 |
-| official-run3 | 100 | green | 0 |
+| 检查面 | 结果 |
+| --- | --- |
+| stealth.webdriver / cdc / selenium 全局 / 各 antidetect 痕迹 | 全部 false（未检出） |
+| UA / UA-CH / 服务端请求头一致性 | 一致（Chrome/150.0.7871.114, Windows NT 10.0） |
+| DNS 泄漏 | dns_countries=[KR]，foreign_countries=[]（无境外/国内混入解析器） |
+| 中文字体 | fonts_cn=false（无） |
+| tz / locale | Asia/Seoul + ko-KR，与 KR 出口一致 |
+| WebRTC / 本地 IP | rtc disabled，无本地地址泄漏 |
+| canvas / audio 稳定性 | x5 / x3 采样稳定 |
+| rAF 帧间隔 | 前台窗口受控测量中位 16.6ms（标准 60Hz）；ping0 前台抓取 ~14.6ms（info 级，不扣分） |
 
-原始报告见同目录 ping0-official-run1.json / run2 / run3。
+| run | score | level | findings | probeFocus |
+| --- | --- | --- | --- | --- |
+| slice66-1 | 92 | green | 154（仅 net.isidc 扣 8 分） | - |
+| slice66-2 | 92 | green | 154 | - |
+| slice66-3 | 92 | green | 154 | - |
+| slice66b-1 | 92 | green | 154 | visible + focused |
+| slice66c-1 | 92 | green | 154 | visible + focused |
 
-快速探针（每轮一致）：webdriver=false、platform=Win32、UA=Chrome/150.0.7871.114 (Windows NT 10.0)、languages=[ko-KR]、timezone=Asia/Seoul、visibility=visible、hasFocus=true。
+原始报告见同目录 ping0-slice66-*.json / ping0-slice66b-1.json。
 
-## 与上一版（非 official）构建对比
+**关于早上的「100/0」**：official-run1/2/3 与 slice51 报告未包含当前检测套件的完整数据（rows/findings 为空或 xc.* 全部 pending，net.*/stealth.* 检查当时未产出），并非浏览器在这些新检查上得分 100。当前 92 分才是完整捕获下的真实基线。
 
-| 检查项 | 非 official（patchset 0044 初版） | official build |
-| --- | --- | --- |
-| ping0 总分 | 92 / green | 100 / green |
-| 泄漏项 | 0（浏览器侧，2 项非浏览器 warn/info） | 0 |
-| stealth.raf_timing | info 告警（被检测负载放大） | 无告警 |
+**关于 rAF**：用户曾观察到 ping0 报 rAF 帧间隔异常。受控测量证明引擎本身是干净的——前台聚焦窗口下 rAF 中位 16.6ms（60Hz 标准）；ping0 自动化跑分时若窗口被遮挡/后台，rAF 会被节流到 ~100ms 造成误报。verifier 已加 bringToFront + probeFocus 证据，遮挡导致的误报不会再混入结果。
+
+## 快速探针（每轮一致）
+
+webdriver=false、platform=Win32、UA=Chrome/150.0.7871.114 (Windows NT 10.0)、languages=[ko-KR]、timezone=Asia/Seoul、visibility=visible、hasFocus=true（bringToFront 后）。
 
 ## 性能基准（同一 M1 Pro、同一 CDP 方式）
 

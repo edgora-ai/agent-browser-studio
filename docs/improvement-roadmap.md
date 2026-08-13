@@ -967,3 +967,34 @@ CloakBrowser 最新 chromium-v150.0.7871.114.6-pro（2026-08-11）为同基线 C
 
 **后续项**：agent/集成面已覆盖 IPC / REST / MCP / Python SDK / JS SDK；RoxyBrowser 4.0.3 四个新特性已全部对齐。
 引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+
+## Slice 66 — ping0 复测修正 + macOS 生产链路补全
+
+**背景**：用户最关心的真实防检测质量此前以「ping0 100/0」入库，但深夜完整复测发现那是**不完整捕获**
+（早上的 official-run1/2/3 与 slice51 报告的 rows/findings 为空或 xc.* 全部 pending，net.*/stealth.* 检查未产出）。
+当前 ping0 检测套件下完整捕获的真实基线是 **92 / green**，唯一实扣分是 `net.isidc`（weight 8）：
+出口 152.70.241.120 是 Oracle Cloud **IDC 机房 IP**——代理出口属性，非浏览器泄漏，换住宅出口即回 100。
+
+**rAF 定性（用户曾报 ping0 帧间隔异常）**：受控测量证明引擎干净——前台聚焦窗口 rAF 中位 **16.6ms（标准 60Hz）**；
+ping0 自动化跑分时若窗口被遮挡/后台，rAF 会被节流到 ~100ms 造成误报（复测首次确实测到 108ms，bringToFront 后回到 14.6ms，
+且该检查为 info 级不扣分）。
+
+**改动**：
+- `src/tools/verify-ping0.ts`：探针前 best-effort 前台化窗口（page.bringToFront）+ 抓取时记录 probeFocus（visibility/hasFocus）作为证据；
+  finally 清理改为 SIGKILL 后带重试的 rm，修复 macOS 上 profile 目录未及时释放导致的 ENOTEMPTY 崩溃；
+- `docs/verification/ping0-verification.md`：按完整捕获重写结论（92 分归因 IDC 出口；浏览器侧检查全过明细表；
+  rAF 定性；早前 100/0 的成因说明）；
+- `patches/chromium/build-macos.sh`（新增）：独立 macOS 构建脚本（默认 arm64、支持 x64，复用 args.gn + apply.sh，bash -n 通过）；
+- `electron-builder.yml`：mac 目标扩为 dmg arm64 + zip arm64/x64；
+- `.github/workflows/engine-verify.yml`：新增 `macos-arm64` job（macos-14：clone+sync → build-macos.sh → 53-surface verify →
+  全量 e2e → dmg/zip 打包 → 有 APPLE_ID/APPLE_TEAM_ID 时 `-c.mac.notarize=true` 公证 → sha256 校验和 → 上传 artifact）；YAML 校验通过；
+- `patches/chromium/ALIGNMENT_MATRIX.md`：host env risk 证据行更新为诚实基线；签名分发 partial 行补充 macOS 生产链路定义。
+
+**验证**：
+- ping0 复测 5 轮（slice66-1/2/3、slice66b-1、slice66c-1）全部 92/green、probeFocus=visible+focused；
+  受控 rAF 探针 16.6ms（60Hz）；cleanup 修复后单轮完整退出（EXIT=0）；
+- tsc --noEmit 通过；engine-verify.yml YAML 解析通过（3 jobs：linux-x64 / windows-x64 / macos-arm64）；
+- 全量单测（见下文回归数）；e2e 未新增用例（本轮为工具/CI/文档修正，回归确认不破坏现有链路）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial，其中可本地关账部分（脚本/YAML/打包配置）已在本轮补齐；
+macOS/Windows/Linux 三个平台的真实 runner 构建、签名、公证与完整 e2e 仍需平台 runner 执行。

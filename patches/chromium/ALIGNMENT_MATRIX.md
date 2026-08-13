@@ -84,6 +84,8 @@ Status meanings:
 | Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
 | Signed multi-platform distribution | partial | macOS arm64/x64, Windows x64, Linux x64/arm64 | macOS arm64 engine + controller are verified and packaged; Linux (`patches/chromium/build-linux.sh` + `args.gn.linux`) and Windows (`patches/chromium/build-windows.sh` + `args.gn.win`) engine build paths are defined; `.github/workflows/engine-verify.yml` builds the pinned engine, runs the 53-surface strict verifier + full e2e against the freshly built binary, packages (AppImage/NSIS) and publishes sha256 checksums on Linux x64 and Windows x64 with opt-in signing; `ci.yml` also gates tsc/build/unit/smoke on Windows; checksums/signatures still require real platform runners (Slice 52) |
 
+  Slice 66：macOS 构建路径补齐为独立脚本 `patches/chromium/build-macos.sh`（默认 arm64，支持 x64 交叉），`electron-builder.yml` mac 目标扩为 dmg arm64 + zip arm64/x64；`engine-verify.yml` 新增 `macos-arm64` job（macos-14：clone+sync 固定 commit → build-macos.sh → 53-surface verify → 全量 e2e → 打包 dmg/zip → 有 APPLE_ID/APPLE_TEAM_ID 时 `-c.mac.notarize=true` 公证 → sha256 校验和 → 上传 artifact）。本地可关账部分（脚本语法、YAML 结构、打包配置）已验证；真实 runner 上的构建/签名/公证执行仍需平台 runner（Slice 66） |
+
 ## Product-level capabilities
 
 These do not prove browser stealth, but they are required for feature parity of
@@ -93,10 +95,14 @@ the complete product rather than only the engine:
 - Docker/server mode and Python/JavaScript/.NET integration surfaces — ✅ verified (see the Server mode & integration surfaces table below);
 - Widevine/DRM discovery for persistent profiles — ✅ verified (see the DRM/Widevine table below);
 - Windows and Linux production verification — Linux and Windows engine build paths + multi-platform CI (`ci.yml` Windows gate; `engine-verify.yml` build → 53-surface verify → e2e → package → checksums on Linux x64 and Windows x64) are defined (see Signed multi-platform distribution); full production E2E still requires real platform runners;
+
+  Slice 66：该行扩为 macOS——`engine-verify.yml` 新增 macos-arm64 job（macos-14 runner），build-macos.sh → 53-surface verify → 全量 e2e → dmg/zip 打包 → 公证 → 校验和，覆盖 macOS arm64 生产链路定义；执行仍需真实平台 runner。
 - team workspace semantics (RBAC, locks, conflict handling), not only object
   storage backup — ✅ verified (see the Team RBAC table below);
 - proxy health/history/rotation as managed assets — ✅ verified (see the Proxy health assets table below).
 - runtime-evidenced host environment risk report — ✅ verified (see the Host environment risk evidence table below): the env-risk report distinguishes host-only false positives from genuine exposure — HTTP/socks5h proxy takeover downgrades a CN host resolver, macOS-universal fonts (STHeiti/PingFang/Songti) are expected on a real Mac, and a running profile is probed over CDP (FontFaceSet.check + width-vs-generic-fallback) so the cn-fonts-exposed finding is only reported when a Windows-only Chinese font is actually loadable (Slice 50, e2e j75-cn-font-exposure).
+
+  Slice 66 复测：ping0.cc 完整捕获下 92/green，唯一实扣分是 `net.isidc`（出口 152.70.241.120 为 Oracle Cloud IDC 机房 IP，weight 8，属代理出口属性而非浏览器泄漏）；浏览器侧全过——webdriver/cdc/antidetect 全 false、UA/UA-CH/请求头一致、DNS 无境外混入解析器、无中文字体、tz/locale 与出口一致、WebRTC 无本地 IP、canvas/audio 采样稳定、rAF 前台聚焦窗口受控测量中位 16.6ms（标准 60Hz）。早上记录的「100/0」为不完整捕获（net.*/stealth.* 检查当时未产出），已在 `docs/verification/ping0-verification.md` 修正；`verify-ping0` 工具新增 bringToFront 前台化 + probeFocus 证据 + 清理重试，消除后台遮挡导致的 rAF 误报。
 
 ### DRM / Widevine — verified
 
