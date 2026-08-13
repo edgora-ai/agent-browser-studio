@@ -29,3 +29,18 @@ export function resolveRetryTarget(runId: string): { ok: true; target: RetryTarg
   }
   return { ok: true, target: { rule, action, dirId: run.dirId, sourceRun: run } };
 }
+
+/** Failed runs belonging to one batch job (same source.jobId), newest first.
+ *  These are the candidates for a group-level "retry all failed profiles". */
+export function listJobRetryCandidates(jobId: string): AgentRun[] {
+  if (!jobId) return [];
+  return agentRunRecorder.listRuns().filter(
+    (r) =>
+      r.status === "error" &&
+      r.source?.type === "automation" &&
+      r.source.jobId === jobId &&
+      !!r.dirId &&
+      !!r.source.ruleId &&
+      !agentRunRecorder.isActive(r.id),
+  );
+}

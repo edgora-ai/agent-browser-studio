@@ -1,7 +1,7 @@
 // Automation IPC handlers — CRUD + test-run + logs
 import { ipcMain } from "electron";
 import { getConfig, saveConfig } from "../services/config-manager.js";
-import { reloadSchedule, testRunRule, getRunLogs, validateCron, cancelRunningJob, retryAgentRun } from "../services/automation.js";
+import { reloadSchedule, testRunRule, getRunLogs, validateCron, cancelRunningJob, retryAgentRun, retryJobRuns } from "../services/automation.js";
 import { listJobs, getJob, markCancelled } from "../services/job-store.js";
 import type { AutomationRule } from "../types.js";
 
@@ -62,6 +62,10 @@ export function registerAutomationHandlers(): void {
 
   ipcMain.handle("automation:retry-run", async (_event, runId: string) => {
     return await retryAgentRun(runId);
+  });
+
+  ipcMain.handle("automation:retry-job", async (_event, jobId: string) => {
+    return await retryJobRuns(jobId);
   });
 
   ipcMain.handle("automation:logs", async () => {

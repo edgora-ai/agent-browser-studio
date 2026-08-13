@@ -191,6 +191,13 @@ class RunRecorder {
     return run ? safeRun(run) : null;
   }
 
+  /** True while a run is live in memory (started but not yet finished).
+   *  Persisted config normalizes active runs to "error" for crash recovery, so
+   *  callers that need to tell "running now" from "really failed" must use this. */
+  isActive(runId: string): boolean {
+    return this.runWebContents.has(runId);
+  }
+
   /** Newest first. */
   listRuns(opts?: { dirId?: string }): AgentRun[] {
     const cfg = getConfig() as any;

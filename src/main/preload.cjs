@@ -158,6 +158,7 @@ const api = {
     delete: (ruleId) => ipcRenderer.invoke("automation:delete", ruleId),
     testRun: (ruleId) => ipcRenderer.invoke("automation:test-run", ruleId),
     retryRun: (runId) => ipcRenderer.invoke("automation:retry-run", runId),
+    retryJob: (jobId) => ipcRenderer.invoke("automation:retry-job", jobId),
     logs: () => ipcRenderer.invoke("automation:logs"),
     validateCron: (expr) => ipcRenderer.invoke("automation:validate-cron", expr),
     jobs: (opts) => ipcRenderer.invoke("automation:jobs", opts),

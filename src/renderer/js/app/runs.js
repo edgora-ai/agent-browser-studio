@@ -54,8 +54,13 @@
         return item.group ? renderGroupCard(item.group) : renderRunCard(item.single);
       }).join("");
       el.onclick = function(event) {
-        var btn = event.target.closest("[data-run-action]");
+        var btn = event.target.closest("[data-run-action], [data-group-action]");
         if (!btn || !el.contains(btn)) return;
+        if (btn.dataset.groupAction === "retry-failed") {
+          var gcard = btn.closest("[data-group-id]");
+          if (gcard) agentBrowser.runsRetryJob(gcard.dataset.groupId);
+          return;
+        }
         var card = btn.closest("[data-run-id]");
         if (!card) return;
         var runId = card.dataset.runId;
@@ -103,6 +108,13 @@
   function retryButton(run) {
     return canRetryRun(run)
       ? '<button class="btn btn-primary btn-sm" data-run-action="retry">' + t("runs.btn.retry", "重试") + '</button>'
+      : "";
+  }
+
+  function groupRetryButton(runs) {
+    var n = runs.filter(canRetryRun).length;
+    return n > 0
+      ? '<button class="btn btn-primary btn-sm" data-group-action="retry-failed">' + t("runs.btn.retry-all", "重试全部失败") + " (" + n + ")</button>"
       : "";
   }
 
@@ -165,10 +177,12 @@
         "</div>" + err +
       "</div>";
     }).join("");
-    return '<div class="profile-card run-group-card">' +
+    return '<div class="profile-card run-group-card" data-group-id="' + escAttr(first.source && first.source.jobId ? first.source.jobId : "") + '">' +
       '<div class="card-header"><span class="name">' + esc(first.name) +
         ' <span style="color:var(--text-muted);font-size:11px;">× ' + runs.length + ' ' + t("runs.group.profiles", "profiles") + '</span></span>' +
-        groupBadge(runs) + "</div>" +
+        '<span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">' +
+          groupRetryButton(runs) + groupBadge(runs) +
+        "</span></div>" +
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(first.source) + "</span></div>" +
       (first.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(first.startedAt).toLocaleString() + "</span></div>" : "") +
       '<details class="run-group-detail" open>' +
@@ -187,6 +201,29 @@
         return;
       }
       toast(t("runs.toast.retried", "已重试") + (r.runId ? " · " + r.runId : ""), "success");
+      agentBrowser.loadRunsTab();
+    }).catch(function(e) {
+      toast(t("runs.toast.retry-failed", "重试失败: ") + (e.message || String(e)), "error");
+    });
+  };
+
+  agentBrowser.runsRetryJob = function(jobId) {
+    if (!confirm(t("runs.confirm.retry-all", "重试这个批次所有失败的 profile?（会按顺序重新启动浏览器并逐个重跑失败的任务）"))) return;
+    api.automation.retryJob(jobId).then(function(r) {
+      if (!r || typeof r.attempted !== "number") {
+        toast(t("runs.toast.retry-failed", "重试失败: ") + ((r && r.error) || "unknown"), "error");
+        return;
+      }
+      if (r.attempted === 0) {
+        toast(t("runs.toast.retry-none", "没有可重试的失败记录"), "info");
+        return;
+      }
+      if (r.failed.length === 0) {
+        toast(t("runs.toast.retried-all", "已重试全部失败 profile") + " (" + r.succeeded + "/" + r.attempted + ")", "success");
+      } else {
+        toast(t("runs.toast.retry-partial", "部分重试失败") + " (" + r.succeeded + "/" + r.attempted + "): " +
+          r.failed.map(function(f) { return f.error; }).join("; ").slice(0, 200), "error");
+      }
       agentBrowser.loadRunsTab();
     }).catch(function(e) {
       toast(t("runs.toast.retry-failed", "重试失败: ") + (e.message || String(e)), "error");

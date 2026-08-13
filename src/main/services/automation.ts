@@ -7,7 +7,7 @@ import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.j
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
 import { onEvent } from "./event-bus.js";
-import { resolveRetryTarget } from "./automation-retry.js";
+import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
 import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, getJob } from "./job-store.js";
 import { runSandboxed } from "./script-sandbox.js";
@@ -220,6 +220,43 @@ export async function retryAgentRun(runId: string): Promise<{ ok: boolean; runId
   const outcome = await runAgentTaskOnProfile(rule, config, dirId, action, {}, { retryOf: runId });
   if (outcome.ok) return { ok: true, runId: outcome.runId };
   return { ok: false, error: outcome.error };
+}
+
+/** Retry every failed profile of one batch job (same source.jobId). Each
+ *  failed run is re-run through its rule's agent-task action on that profile
+ *  (the same path as a single retry). Returns a per-run summary. */
+export async function retryJobRuns(jobId: string): Promise<{
+  ok: boolean;
+  attempted: number;
+  succeeded: number;
+  failed: Array<{ runId: string; error: string }>;
+}> {
+  const candidates = listJobRetryCandidates(jobId);
+  const config = getOrDetectLlmConfig();
+  const failed: Array<{ runId: string; error: string }> = [];
+  let succeeded = 0;
+  for (const run of candidates) {
+    const resolved = resolveRetryTarget(run.id);
+    if (!resolved.ok) {
+      failed.push({ runId: run.id, error: resolved.error });
+      continue;
+    }
+    if (!config) {
+      failed.push({ runId: run.id, error: "no LLM config" });
+      continue;
+    }
+    const outcome = await runAgentTaskOnProfile(
+      resolved.target.rule,
+      config,
+      resolved.target.dirId,
+      resolved.target.action,
+      {},
+      { retryOf: run.id },
+    );
+    if (outcome.ok) succeeded++;
+    else failed.push({ runId: run.id, error: outcome.error || "failed" });
+  }
+  return { ok: failed.length === 0, attempted: candidates.length, succeeded, failed };
 }
 
 /**

@@ -15,7 +15,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
-import { resolveRetryTarget } from "../../src/main/services/automation-retry.js";
+import { resolveRetryTarget, listJobRetryCandidates } from "../../src/main/services/automation-retry.js";
 import { agentRunRecorder } from "../../src/main/services/agent-run-trace.js";
 import { getConfig, saveConfig, reloadConfig } from "../../src/main/services/config-manager.js";
 
@@ -105,5 +105,34 @@ describe("resolveRetryTarget", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/agent task/);
+  });
+
+  it("lists only failed automation runs of a job as batch-retry candidates", () => {
+    addRule("rule_abc", { type: "agent-task", agentPrompt: "check the store", profileDirIds: ["a", "b", "c"] });
+    const mk = (jobId: string, dirId: string | undefined, status: "done" | "error" | "running") => {
+      const run = agentRunRecorder.startRun({
+        source: { type: "automation", ruleId: "rule_abc", ruleName: "R", jobId },
+        name: "R",
+        dirId,
+      });
+      if (status !== "running") agentRunRecorder.finishRun(run.id, status, status === "error" ? "boom" : undefined);
+      return run.id;
+    };
+    // job_1: two retryable failures + one done + one running + one dir-less failure.
+    mk("job_1", "a", "error");
+    mk("job_1", "b", "error");
+    mk("job_1", "c", "done");
+    mk("job_1", "d", "running");
+    mk("job_1", undefined, "error");
+    // other jobs / non-automation must be excluded.
+    mk("job_2", "e", "error");
+    const chat = agentRunRecorder.startRun({ source: { type: "chat" }, name: "chat", dirId: "f" });
+    agentRunRecorder.finishRun(chat.id, "error", "chat boom");
+
+    const candidates = listJobRetryCandidates("job_1");
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((r) => r.status === "error" && r.dirId && r.source?.type === "automation" && r.source.jobId === "job_1")).toBe(true);
+    expect(listJobRetryCandidates("job_2")).toHaveLength(1);
+    expect(listJobRetryCandidates("")).toHaveLength(0);
   });
 });

@@ -78,6 +78,8 @@ describe("J63 — batch run grouping + per-profile retry", () => {
     expect(await h.page.locator(".run-group-card .run-group-row").count()).toBe(2);
     // Only the failed profile row gets a retry button.
     expect(await h.page.locator('.run-group-card [data-run-action="retry"]').count()).toBe(1);
+    // The group header gets a "retry all failed" button for the one failure.
+    expect(await h.page.locator('.run-group-card [data-group-action="retry-failed"]').count()).toBe(1);
   }, 30000);
 
   it("retry API re-runs just that profile and creates a linked done run", async () => {
@@ -118,6 +120,66 @@ describe("J63 — batch run grouping + per-profile retry", () => {
     expect(retried).toBeTruthy();
     expect(retried.status).toBe("done");
     expect(retried.dirId).toBe(dirId1);
+  }, 90000);
+
+  async function runAllFailedBatch(): Promise<string> {
+    mock.setNextResponses([
+      { statusCode: 500, body: JSON.stringify({ error: { message: "mock outage 1" } }) },
+      { statusCode: 500, body: JSON.stringify({ error: { message: "mock outage 2" } }) },
+    ]);
+    const res = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.automation.testRun(id), ruleId);
+    expect(res.ok, `result: ${res.result}`).toBe(true);
+    expect(res.result).toContain("0 ok / 2 failed");
+    const runs: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.agentRuns.list());
+    const mine = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.ruleId === ruleId && !x.source.retryOf);
+    const failed = mine.filter((x: any) => x.status === "error");
+    const jobId = failed[0].source.jobId;
+    const thisJob = failed.filter((x: any) => x.source.jobId === jobId);
+    expect(thisJob.length).toBeGreaterThanOrEqual(2);
+    return jobId;
+  }
+
+  it("retryJob API re-runs every failed profile of a batch job", async () => {
+    const jobId = await runAllFailedBatch();
+    const retry = await h.page.evaluate(async (jid: string) => (window as any).agentBrowser.api.automation.retryJob(jid), jobId);
+    expect(retry.ok, JSON.stringify(retry)).toBe(true);
+    expect(retry.attempted).toBe(2);
+    expect(retry.succeeded).toBe(2);
+    expect(retry.failed).toHaveLength(0);
+
+    await h.page.waitForFunction((jid: string) => (async () => {
+      const runs: any[] = await (window as any).agentBrowser.api.agentRuns.list();
+      const originals = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.jobId === jid && !x.source.retryOf && x.status === "error");
+      return originals.length >= 2 && originals.every((x: any) =>
+        runs.some((y: any) => y.source && y.source.retryOf === x.id && y.status === "done"));
+    })(), jobId, { timeout: 30000 });
+
+    const runs: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.agentRuns.list());
+    const retried = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.retryOf);
+    expect(retried.length).toBeGreaterThanOrEqual(2);
+    expect(retried.every((x: any) => x.status === "done")).toBe(true);
+  }, 90000);
+
+  it("group retry-all button re-runs all failed profiles from the Runs tab", async () => {
+    const jobId = await runAllFailedBatch();
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("runs"));
+    await h.page.evaluate(() => (window as any).agentBrowser.loadRunsTab());
+    await h.page.waitForSelector('.run-group-card [data-group-action="retry-failed"]', { timeout: 5000 });
+
+    h.page.once("dialog", async (dialog) => { await dialog.accept(); });
+    await h.page.locator('.run-group-card [data-group-action="retry-failed"]').first().click();
+
+    await h.page.waitForFunction((jid: string) => (async () => {
+      const runs: any[] = await (window as any).agentBrowser.api.agentRuns.list();
+      const originals = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.jobId === jid && !x.source.retryOf && x.status === "error");
+      return originals.length >= 2 && originals.every((x: any) =>
+        runs.some((y: any) => y.source && y.source.retryOf === x.id && y.status === "done"));
+    })(), jobId, { timeout: 30000 });
+
+    const runs: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.agentRuns.list());
+    const retried = runs.filter((x: any) => x.source && x.source.type === "automation" && x.source.retryOf);
+    expect(retried.length).toBeGreaterThanOrEqual(2);
+    expect(retried.every((x: any) => x.status === "done")).toBe(true);
   }, 90000);
 
   it("no unexpected console errors", () => {

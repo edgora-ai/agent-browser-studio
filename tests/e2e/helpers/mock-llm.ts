@@ -32,6 +32,7 @@ export interface MockLlmServer {
   requests: CapturedRequest[];
   setChunks(chunks: string[]): void;
   setNextResponse(opts: { statusCode?: number; body?: string }): void;
+  setNextResponses(opts: Array<{ statusCode?: number; body?: string }>): void;
   setResponses(responses: MockLlmResponse[]): void;
   close(): Promise<void>;
 }
@@ -47,7 +48,7 @@ export async function startMockLlm(opts: MockLlmOptions = {}): Promise<MockLlmSe
   };
 
   const requests: CapturedRequest[] = [];
-  let nextOverride: { statusCode?: number; body?: string } | null = null;
+  let nextOverrides: Array<{ statusCode?: number; body?: string }> = [];
 
   const server = http.createServer((req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
@@ -66,8 +67,7 @@ export async function startMockLlm(opts: MockLlmOptions = {}): Promise<MockLlmSe
       }
       requests.push({ body, headers: req.headers, receivedAt: Date.now() });
 
-      const override = nextOverride;
-      nextOverride = null;
+      const override = nextOverrides.shift() ?? null;
 
       if (override?.statusCode && override.statusCode !== 200) {
         res.statusCode = override.statusCode;
@@ -181,7 +181,10 @@ export async function startMockLlm(opts: MockLlmOptions = {}): Promise<MockLlmSe
       state.chunks = chunks;
     },
     setNextResponse(o) {
-      nextOverride = o;
+      nextOverrides.push(o);
+    },
+    setNextResponses(overrides) {
+      nextOverrides.push(...overrides);
     },
     setResponses(responses) {
       state.responses = [...responses];
