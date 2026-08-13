@@ -12,10 +12,8 @@
 set -euo pipefail
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
-TARGET_CPU="$2"
-if [ -z "$TARGET_CPU" ]; then TARGET_CPU="x64"; fi
-CHROMIUM_SRC="$1"
-if [ -z "$CHROMIUM_SRC" ]; then CHROMIUM_SRC="$PWD/chromium-src-150"; fi
+TARGET_CPU="${2:-x64}"
+CHROMIUM_SRC="${1:-$PWD/chromium-src-150}"
 CHROMIUM_COMMIT="f405107495a07cb1bfcf687d4af8d91117098db6"
 
 if [ ! -d "$CHROMIUM_SRC/.git" ]; then

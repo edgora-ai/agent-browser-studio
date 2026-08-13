@@ -912,3 +912,7 @@ Python SDK 侧同步补上 sdk/python/example_agent.py（同一套 agent 面全�
 headless + mock LLM 上实测通过；sdk/python/README.md 补充 agent 面与示例说明。
 
 **后续项**：agent 能力现已覆盖 IPC / REST / MCP / Python SDK / JS SDK 五个面。引擎矩阵仅剩「签名多平台分发」partial（需真实 GitHub runner 跑 engine-verify）。
+
+**工具链修正（同 slice）**：patches/chromium/build-linux.sh 与 build-windows.sh 在 set -euo pipefail 下
+把 $1/$2 赋给变量后再判空——无参调用（文档宣称的默认 x64 / ./chromium-src-150）会直接 `unbound variable` 退出。
+改为 `${1:-...}` / `${2:-x64}` 默认展开，bash -n 通过、默认与显式传参行为均验证；使「多平台构建路径已定义」更可落地。
