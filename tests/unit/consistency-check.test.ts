@@ -106,6 +106,37 @@ describe("checkProfileConsistency", () => {
     expect(r.warnings.some((w) => w.code === "proxy-anonymous")).toBe(true);
   });
 
+  it("escalates an IDC exit to a blocker when blockOnProxyRisk=true (Slice 74)", () => {
+    const r = checkProfileConsistency({
+      timezone: "Asia/Seoul", locale: "ko-KR", proxyMode: "named",
+      proxyGeo: { countryCode: "KR", timezone: "Asia/Seoul", hosting: true, org: "Oracle Corporation", as: "AS31898" },
+    }, { blockOnProxyRisk: true });
+    expect(r.ok).toBe(false);
+    expect(r.blockers.some((b) => b.code === "proxy-idc")).toBe(true);
+    expect(r.warnings.some((w) => w.code === "proxy-idc")).toBe(false);
+    expect(r.blockers.some((b) => b.code === "proxy-anonymous")).toBe(false);
+  });
+
+  it("escalates a public-proxy exit to a blocker when blockOnProxyRisk=true (Slice 74)", () => {
+    const r = checkProfileConsistency({
+      timezone: "Europe/London", locale: "en-GB", proxyMode: "named",
+      proxyGeo: { countryCode: "GB", timezone: "Europe/London", isProxy: true },
+    }, { blockOnProxyRisk: true });
+    expect(r.ok).toBe(false);
+    expect(r.blockers.some((b) => b.code === "proxy-anonymous")).toBe(true);
+    expect(r.warnings.some((w) => w.code === "proxy-anonymous")).toBe(false);
+  });
+
+  it("keeps proxy-risk findings as warnings by default (Slice 74)", () => {
+    const r = checkProfileConsistency({
+      timezone: "Asia/Seoul", locale: "ko-KR", proxyMode: "named",
+      proxyGeo: { countryCode: "KR", timezone: "Asia/Seoul", hosting: true, org: "Oracle Corporation", as: "AS31898" },
+    }, { blockOnProxyRisk: false });
+    expect(r.ok).toBe(true);
+    expect(r.warnings.some((w) => w.code === "proxy-idc")).toBe(true);
+    expect(r.blockers).toHaveLength(0);
+  });
+
   it("does not flag a clean residential exit as IDC", () => {
     const r = checkProfileConsistency({
       timezone: "America/New_York", locale: "en-US", proxyMode: "named",
