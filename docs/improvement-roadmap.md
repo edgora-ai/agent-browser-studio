@@ -1223,3 +1223,21 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 受影响 e2e j88/j92/j96 共 3 文件 13 例全过（j92 创建流程回归、j88 快速创建回归未受预设行影响）。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。竞品差距清单还剩：Firefox 双引擎（数周级）、AI Skills Hub 平台适配器目录、RoxyIP 代理商城/团队计费（商业向）。预设目录后续可按用户反馈扩展更多地区/平台组合，并可与代理健康/风控联动（如「预设匹配代理」时直接给出该代理的 IDC/纯净度体检）。
+
+## Slice 76 — AI Skills Hub 平台适配器目录（Platform Adapter Catalog + Hub 面，对齐竞品「适配器/技能市场」）
+
+**上游核对**：RoxyBrowser 仍 4.0.3（2026-08-13）、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro（2026-08-11），均无新发布。Slice 75 后续项点名的竞品差距清单里，「AI Skills Hub 平台适配器目录」是当前唯一可在本地关账的能力差距（Firefox 双引擎为数周级、RoxyIP 代理商城/团队计费为商业向、签名分发需真实 GitHub runner）。此前平台适配器只有 5 个且只注入 LLM 系统提示，没有任何可浏览的「目录/Hub」面。本轮把它升级成真正的 Skills Hub 目录：**扩展适配器目录 + 新增 IPC/REST/MCP/UI 四面浏览能力**。
+
+**实现**：
+- `src/main/services/platform-adapters.ts`：新增 `hub` 元数据（category / regions / presets / pitch），目录从 5 个扩展到 15 个适配器——保留 generic-web / amazon-seller / shopee-seller / tiktok-shop / facebook，新增 instagram、google-ads、ebay、amazon-retail、lazada、x-twitter、linkedin、youtube、crypto-exchange（SG/全球交易所，含 2FA 感知）、eu-marketplace（DE/欧盟通用）；每个新增适配器带完整 domains / selectorVersion / capabilities / loginUrlHints / selectors / recipes / notes / loginCheck；新增 `listPlatformAdapters(filter?)`（lean summary，按 category 分组排序）与 `getPlatformAdapter(id)`（完整 recipe 含 loginCheck + selectors）；`renderAdapterCatalog` 注入系统提示时带上 hub 信息并注明 MCP 查询入口；
+- `src/main/ipc/agent.ts` + `preload.cjs` + `src/renderer/api.d.ts`：新增 `platform:adapters:list` / `platform:adapter:get` / `platform:adapter:detect` 三个 IPC 与 `api.agent.platformAdapters.{list,get,detect}` 桥接；
+- `src/main/services/rest-api-server.ts`：新增 `GET /api/platform-adapters`（可 filter）、`GET /api/platform-adapters/{id}`、`GET /api/platform-adapter/detect?url=`，并写入 OpenAPI 3.0 文档；
+- `src/main/services/mcp-server.ts`：新增 `agent_browser_platform_adapters_list` / `agent_browser_platform_adapter_get` / `agent_browser_platform_adapter_detect` 三个工具（get 支持按 url 探测），让外部 AI 能发现并按当前页面取用对应 recipe；
+- `src/renderer`：Agent 侧边栏新增「🔌 Adapter Hub」子视图（`agent-view-adapters`）；`agent-adapters.js`（新）渲染目录卡片（分类徽标 / 地区 / capabilities / presets / domains / 概要），可展开 Overview（loginUrlHints / recipes / notes）与「加载完整 recipe」（loginCheck + selectors），带搜索与刷新；`agent-chat.js` 的 `switchAgentSub` 接入新视图；i18n 中英文案补齐。
+
+**验证**：
+- 单测 `tests/unit/platform-adapters.test.ts` 重构 +12 例：目录 ≥14 个且 id 唯一、每个适配器 hub 元数据合法（category 合法 / 引用的 business preset id 真实存在）、新增平台 detect 命中（instagram/ebay/google-ads/amazon-retail/lazada/x-twitter/linkedin/youtube/crypto-exchange/eu-marketplace，且 amazon-seller 优先于 amazon-retail）、list 返回 lean summary 并按 category 分组、filter（id/category/region/preset/capability）、get 返回完整 recipe、renderAdapterCatalog 含 hub 信息与 MCP 工具入口；
+- e2e `tests/e2e/j97-platform-adapters.test.ts` 新增 6 例：UI Adapter Hub 列表渲染 → 展开 Overview + 加载完整 recipe → IPC list/get/detect → REST list/detail/detect/401 → MCP tools/list + 三个工具的调用 → 无意外 console error；
+- 全量单测 57 文件 661 例全绿（较 Slice 75 +6）；回归 j5（agent 工具面）6 例全过。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。竞品差距清单还剩：Firefox 双引擎（数周级）、RoxyIP 代理商城/团队计费（商业向）。适配器目录后续可按用户反馈扩展更多地区/平台（TikTok 社媒、X 广告、Shopee 地区站、日本 Yahoo 等），并可与账号模块联动——在「账号」列表里一键针对该账号的平台跑登录健康（adapter loginCheck）。

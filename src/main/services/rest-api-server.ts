@@ -41,6 +41,7 @@ import {
   getRepositoryExtension,
 } from "./extension-repository.js";
 import { listSkillRepository, addOrUpdateSkill, installSkill, removeSkill, setSkillMeta } from "./skill-repository.js";
+import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platform-adapters.js";
 import { createAutomationRule, updateAutomationRule, deleteAutomationRule } from "./automation-rules.js";
 import {
   listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
@@ -991,6 +992,23 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     }
   }
 
+  // ── Platform Adapters (AI Skills Hub catalog, read-only) ──
+  if (method === "GET" && p === "/api/platform-adapters") {
+    return { status: 200, body: { adapters: listPlatformAdapters(url.searchParams.get("filter") || undefined) } };
+  }
+  const mAdapter = p.match(/^\/api\/platform-adapters\/([^/]+)$/);
+  if (mAdapter && method === "GET") {
+    const id = decodeURIComponent(mAdapter[1]);
+    const adapter = getPlatformAdapter(id);
+    if (!adapter) return { status: 404, body: { error: "adapter not found" } };
+    return { status: 200, body: { adapter } };
+  }
+  if (method === "GET" && p === "/api/platform-adapter/detect") {
+    const pageUrl = url.searchParams.get("url") || "";
+    const adapter = getPlatformAdapter(detectAdapter(pageUrl).id);
+    return { status: 200, body: { adapter } };
+  }
+
   // ── Jobs (durable queue control) ──
   const mJobCancel = p.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
   if (mJobCancel && method === "POST") {
@@ -1715,6 +1733,24 @@ function buildOpenApi(): any {
       "/api/skills/{id}/install": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         post: { summary: "Install (enable) a skill (member+ when team enabled)", responses: ok("Installed skill") },
+      },
+      "/api/platform-adapters": {
+        get: {
+          summary: "List the AI Skills Hub platform adapter catalog (filter by id/name/category/region/preset/capability)",
+          parameters: [{ name: "filter", in: "query", schema: { type: "string" } }],
+          responses: ok("Platform adapter catalog (lean summaries)"),
+        },
+      },
+      "/api/platform-adapters/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: { summary: "Get one full platform adapter (with loginCheck + selectors)", responses: ok("Platform adapter detail") },
+      },
+      "/api/platform-adapter/detect": {
+        get: {
+          summary: "Detect the matching platform adapter for a URL",
+          parameters: [{ name: "url", in: "query", required: true, schema: { type: "string" } }],
+          responses: ok("Matched platform adapter"),
+        },
       },
       "/api/agent/llm-config": {
         get: { summary: "Read the saved LLM config (API key redacted; hasApiKey boolean)", responses: ok("LLM config") },

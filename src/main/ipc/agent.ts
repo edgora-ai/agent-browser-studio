@@ -33,6 +33,7 @@ import {
 import { recordAudit } from "../services/audit-log.js";
 import { TASK_TEMPLATES } from "../services/task-templates.js";
 import { requireAccountMutation, requireAccountSecret, type RoleCheck } from "../services/team.js";
+import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "../services/platform-adapters.js";
 
 function gateAccount(r: RoleCheck): void {
   if (!r.ok) throw new Error(r.error);
@@ -134,6 +135,22 @@ export function registerAgentHandlers(): void {
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
+  });
+
+  // ════════════════════════════════════════════════════════
+  // Platform Adapters (AI Skills Hub catalog)
+  // ════════════════════════════════════════════════════════
+
+  ipcMain.handle("platform:adapters:list", async (_event, filter?: string) => {
+    return listPlatformAdapters(filter);
+  });
+
+  ipcMain.handle("platform:adapter:get", async (_event, id: string) => {
+    return getPlatformAdapter(id) || null;
+  });
+
+  ipcMain.handle("platform:adapter:detect", async (_event, url: string) => {
+    return getPlatformAdapter(detectAdapter(url).id) || null;
   });
 
   // ════════════════════════════════════════════════════════

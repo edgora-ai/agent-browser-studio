@@ -172,6 +172,12 @@ const api = {
       exportShared: () => ipcRenderer.invoke("agent:skills:export-shared"),
       importShared: (entries) => ipcRenderer.invoke("agent:skills:import-shared", entries),
     },
+    // AI Skills Hub platform adapter catalog
+    platformAdapters: {
+      list: (filter) => ipcRenderer.invoke("platform:adapters:list", filter),
+      get: (id) => ipcRenderer.invoke("platform:adapter:get", id),
+      detect: (url) => ipcRenderer.invoke("platform:adapter:detect", url),
+    },
     // Multi-session conversations
     conversations: {
       list: () => ipcRenderer.invoke("agent:conversations:list"),

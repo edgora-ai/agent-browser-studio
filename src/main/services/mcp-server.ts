@@ -16,6 +16,7 @@ import {
 import { validateDirId } from "./utils.js";
 import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, findRuntimeChromiumBinary, getRuntimeChromiumVersion } from "./browser-manager.js";
 import { listSkillRepository, getSkill, installSkill } from "./skill-repository.js";
+import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platform-adapters.js";
 import { listPendingApprovals, resolveApproval } from "./approval-gate.js";
 import { agentDbTables } from "./agent-db.js";
 
@@ -175,6 +176,9 @@ const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
   { name: "agent_browser_skills_list", description: "List installed/marketplace agent skills (optional filter by id/name/title/tags)", inputSchema: { type: "object", properties: { filter: { type: "string" } } } },
   { name: "agent_browser_skill_get", description: "Get one agent skill by id", inputSchema: { type: "object", properties: { skillId: { type: "string" } }, required: ["skillId"] } },
   { name: "agent_browser_skill_install", description: "Install an agent skill by id (adds it to the local repository)", inputSchema: { type: "object", properties: { skillId: { type: "string" } }, required: ["skillId"] } },
+  { name: "agent_browser_platform_adapters_list", description: "List the AI Skills Hub platform adapter catalog (filter by id/name/category/region/preset/capability)", inputSchema: { type: "object", properties: { filter: { type: "string" } } } },
+  { name: "agent_browser_platform_adapter_get", description: "Get one full platform adapter recipe (with loginCheck expression + selectors) by id", inputSchema: { type: "object", properties: { adapterId: { type: "string" }, url: { type: "string", description: "Optional URL to detect the matching adapter instead of a fixed id" } }, required: ["adapterId"] } },
+  { name: "agent_browser_platform_adapter_detect", description: "Return the platform adapter that matches a page URL", inputSchema: { type: "object", properties: { url: { type: "string" } }, required: ["url"] } },
   { name: "agent_browser_approvals_list", description: "List pending approval requests (risky agent operations waiting on a decision)", inputSchema: { type: "object", properties: {} } },
   { name: "agent_browser_approval_resolve", description: "Resolve a pending approval request; decision is once, always or deny", inputSchema: { type: "object", properties: { approvalId: { type: "string" }, decision: { type: "string", enum: ["once", "always", "deny"] } }, required: ["approvalId", "decision"] } },
   { name: "agent_browser_db_tables", description: "List agent SQLite tables with row counts", inputSchema: { type: "object", properties: {} } },
@@ -431,6 +435,22 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       } catch (e: any) {
         return { error: e.message || String(e) };
       }
+    }
+    case "agent_browser_platform_adapters_list": {
+      return { adapters: listPlatformAdapters(args?.filter) };
+    }
+    case "agent_browser_platform_adapter_get": {
+      if (args?.url) {
+        const adapter = getPlatformAdapter(detectAdapter(args.url).id);
+        return adapter ? { adapter } : { error: "Adapter not found" };
+      }
+      const adapter = getPlatformAdapter(args?.adapterId);
+      if (!adapter) return { error: "Adapter not found" };
+      return { adapter };
+    }
+    case "agent_browser_platform_adapter_detect": {
+      if (typeof args?.url !== "string" || !args.url) return { error: "url is required" };
+      return { adapter: getPlatformAdapter(detectAdapter(args.url).id) };
     }
     case "agent_browser_approvals_list": {
       return { approvals: listPendingApprovals() };

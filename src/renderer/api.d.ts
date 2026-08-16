@@ -282,6 +282,11 @@ export interface AgentBrowserAPI {
       exportShared: () => Promise<Array<Pick<SkillRepositoryEntry, "id" | "name" | "title" | "version" | "description" | "source" | "tools" | "prompt" | "shared" | "tags" | "author" | "homepage">>>;
       importShared: (entries: any[]) => Promise<{ success: boolean; result?: { added: number; updated: number; skipped: number }; error?: string }>;
     };
+    platformAdapters: {
+      list: (filter?: string) => Promise<PlatformAdapterSummary[]>;
+      get: (id: string) => Promise<PlatformAdapter | null>;
+      detect: (url: string) => Promise<PlatformAdapter | null>;
+    };
     conversations: any;
     accounts: {
       list: () => Promise<RedactedPlatformAccount[]>;
@@ -293,6 +298,34 @@ export interface AgentBrowserAPI {
   };
   on: (channel: string, callback: (...args: any[]) => void) => void;
   removeListener: (channel: string, callback: (...args: any[]) => void) => void;
+}
+
+export interface PlatformAdapterRecipe {
+  name: string;
+  goal: string;
+  steps: string[];
+}
+
+export interface PlatformAdapterSummary {
+  id: string;
+  name: string;
+  category: string;
+  regions: string[];
+  presets: string[];
+  pitch: string;
+  domains: string[];
+  selectorVersion: number;
+  capabilities: string[];
+  loginUrlHints: string[];
+  recipes: PlatformAdapterRecipe[];
+  notes: string;
+  lastVerifiedAt: string;
+}
+
+export interface PlatformAdapter extends PlatformAdapterSummary {
+  selectors: Record<string, string[]>;
+  loginCheck: string;
+  collectMetrics?: string;
 }
 
 declare global {

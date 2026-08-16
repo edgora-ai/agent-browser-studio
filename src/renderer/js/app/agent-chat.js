@@ -49,14 +49,16 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
-  // Sub-view switcher (chat, config, accounts, skills)
+  // Sub-view switcher (chat, config, accounts, skills, adapters)
   agentBrowser.switchAgentSub = function(view) {
     document.getElementById('agent-view-chat').style.display = (view === 'chat') ? 'flex' : 'none';
     document.getElementById('agent-view-config').style.display = (view === 'config') ? 'block' : 'none';
     document.getElementById('agent-view-accounts').style.display = (view === 'accounts') ? 'block' : 'none';
     document.getElementById('agent-view-skills').style.display = (view === 'skills') ? 'block' : 'none';
+    document.getElementById('agent-view-adapters').style.display = (view === 'adapters') ? 'block' : 'none';
     if (view === 'accounts') agentBrowser.agentLoadAccounts();
     if (view === 'skills') agentBrowser.agentLoadSkills();
+    if (view === 'adapters') agentBrowser.agentLoadAdapters();
     if (view === 'config') agentBrowser.agentLoadConfig();
     if (view === 'chat') agentBrowser.agentLoadConversations();
   };

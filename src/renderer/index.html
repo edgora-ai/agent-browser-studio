@@ -274,6 +274,7 @@
  <button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="config" style="flex:1;" title="API Config">⚙️</button>
  <button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="accounts" style="flex:1;" title="Accounts">🔑</button>
  <button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="skills" style="flex:1;" title="Skills">📋</button>
+ <button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="adapters" style="flex:1;" title="Adapter Hub">🔌</button>
  </div>
  </div>
 
@@ -357,6 +358,20 @@
  </div>
  <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Skills are Agent automation prompt/tool recipes. They are separate from Chrome extensions and are persisted in your local private skill marketplace.</p>
  <div id="agent-skills-list"></div>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="chat" style="margin-top:16px;">← Back</button>
+ </div>
+
+ <!-- Adapter Hub (AI Skills Hub platform adapter catalog) -->
+ <div id="agent-view-adapters" class="agent-view agent-view-scroll" style="display:none;">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;">
+ <h4>🔌 Adapter Hub</h4>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+ <input id="adapter-hub-search" placeholder="Search adapters, categories, regions, presets..." data-role="input" data-input-cmd="agentLoadAdapters" style="font-size:11px;padding:4px 6px;width:200px;">
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentLoadAdapters">🔄 Refresh</button>
+ </div>
+ </div>
+ <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Platform adapter catalog for the AI Skills Hub — versioned selector recipes the Agent uses to inspect login state and collect metrics on each platform. Pick the recipes for the page you're working on, or read them into your own automation.</p>
+ <div id="agent-adapters-list"></div>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="chat" style="margin-top:16px;">← Back</button>
  </div>
  </div>
@@ -1258,6 +1273,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <script src="js/app/agent-chat.js"></script>
 <script src="js/app/agent-config.js"></script>
 <script src="js/app/agent-skills.js"></script>
+<script src="js/app/agent-adapters.js"></script>
 <script src="js/app/wizard.js"></script>
 <script src="js/app/automation.js"></script>
 <script src="js/app/runs.js"></script>
