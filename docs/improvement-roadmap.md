@@ -1185,3 +1185,22 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 全量单测 646 例全绿；受影响 e2e（j35/j70/j29/j94）全过；全量 e2e（见文末回归数）。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。IDC/代理标志目前是 warning 级（不阻断），后续可按需把 `proxy-idc` 纳入 `blockOnConsistencyConflict` 可阻断面（如开启「一致性阻断」的账号场景）。
+
+## Slice 74 — 代理风控可阻断门（blockOnProxyRisk）+ DNS 路由审计
+
+**上游核对**：RoxyBrowser 仍 4.0.3、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro，无新发布。Slice 73 的后续项落地：把 `proxy-idc` / `proxy-anonymous` 从 warning 升级为可选 blocker，让账号场景真正「先阻断、再放行」；同时补托管代理启动时的 DNS 路由审计，把「DNS 走出口代理、无 host-resolver 回退」写成可查证证据。
+
+**实现**：
+- `src/main/types.ts`：`MgmtConfig` 新增 `blockOnProxyRisk?: boolean`（默认 false，仅告警）；
+- `src/main/services/consistency-check.ts`：`checkProfileConsistency` 新增 `opts.blockOnProxyRisk`——开启时 `proxy-idc`（IDC/机房出口）与 `proxy-anonymous`（公共代理/VPN 出口）从 warning 升级为 blocker，关闭时维持原 warning；
+- `src/main/services/browser-manager.ts`：launch 阻断逻辑把代理风控 blocker 与其它一致性 blocker 分开判断，按 `blockOnProxyRisk` / `blockOnConsistencyConflict` 各自生效；托管代理（managedSecureDns）启动记录 `dns-route` 审计——DoH 探针与全部 DNS 均走出口代理、无 host-resolver 回退；期望代理但无托管 DNS 时写 warning 审计；
+- `src/main/ipc/settings.ts` / `ipc/browser.ts`：`launchGates` get/set 透传 `blockOnProxyRisk`，launch 传入 gate；
+- `src/renderer`：Launch Safety Gates 新增「Block on proxy risk (IDC / public proxy exit)」开关（自动保存），i18n 中英文案；
+- 单测 `tests/unit/consistency-check.test.ts` +3 例（IDC 出口开启后升级 blocker / 公共代理出口开启后升级 blocker / 默认保持 warning 不阻断）；
+- e2e `tests/e2e/j95-proxy-risk-gate.test.ts` 新增 4 例（默认 warning → 开启后 consistencyCheck 报 blocker 且启动被拒并进审计 → 干净住宅代理托管启动记录 dns-route 审计 → console 无意外错误）。
+
+**验证**：
+- 全量单测 56 文件 649 例全绿（较 Slice 73 +3）；
+- 受影响 e2e j29/j35/j70/j94/j95 共 5 文件 24 例全过。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。代理风控目前是「启动前一次性阻断」，后续可把 DNS 路由审计与代理健康历史联动成周期复检。
