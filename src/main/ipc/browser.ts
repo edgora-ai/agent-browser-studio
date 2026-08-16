@@ -186,7 +186,7 @@ export function registerBrowserHandlers(): void {
       timezone: meta.timezone, locale: meta.locale, webrtcIp: meta.webrtcIp, platform: meta.platform,
       proxyMode: resolved.mode,
       proxyGeo,
-    });
+    }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
   });
 
   // Capture (or re-capture) the live fingerprint baseline; diff vs the prior one.

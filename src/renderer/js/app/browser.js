@@ -200,6 +200,7 @@
   function currentGates() {
     return {
       blockOnConsistencyConflict: gateEl("gate-consistency") ? gateEl("gate-consistency").checked : false,
+      blockOnProxyRisk: gateEl("gate-proxy-risk") ? gateEl("gate-proxy-risk").checked : false,
       blockOnFingerprintDrift: gateEl("gate-drift") ? gateEl("gate-drift").checked : true,
       blockOnEnvironmentRisk: gateEl("gate-env-risk") ? gateEl("gate-env-risk").checked : false,
     };
@@ -209,6 +210,7 @@
     api.settings.launchGates().then(function (g) {
       if (!g) return;
       if (gateEl("gate-consistency")) gateEl("gate-consistency").checked = g.blockOnConsistencyConflict === true;
+      if (gateEl("gate-proxy-risk")) gateEl("gate-proxy-risk").checked = g.blockOnProxyRisk === true;
       if (gateEl("gate-drift")) gateEl("gate-drift").checked = g.blockOnFingerprintDrift !== false;
       if (gateEl("gate-env-risk")) gateEl("gate-env-risk").checked = g.blockOnEnvironmentRisk === true;
     }).catch(function () { /* ignore */ });
@@ -228,7 +230,7 @@
     }).catch(function () { /* ignore */ });
   }
   function wireLaunchGateEvents() {
-    ["gate-consistency", "gate-drift", "gate-env-risk"].forEach(function (id) {
+    ["gate-consistency", "gate-proxy-risk", "gate-drift", "gate-env-risk"].forEach(function (id) {
       var el = gateEl(id);
       if (el && !el.dataset.gateWired) {
         el.dataset.gateWired = "1";

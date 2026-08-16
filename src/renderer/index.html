@@ -204,8 +204,9 @@
  <div class="card">
  <h3 data-i18n="browser.launch-gates">🛡 Launch Safety Gates</h3>
  <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="browser.launch-gates-hint">Before each profile launch, safety checks run and can refuse the launch when high-risk conditions are detected. Toggles save automatically.</p>
- <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-consistency"> <span data-i18n="browser.gate.consistency">Block on consistency conflict</span></label>
- <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-drift"> <span data-i18n="browser.gate.drift">Block on fingerprint drift</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-consistency"> <span data-i18n="browser.gate.consistency">Block on consistency conflict</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-proxy-risk"> <span data-i18n="browser.gate.proxy-risk">Block on proxy risk (IDC / public proxy exit)</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-drift"> <span data-i18n="browser.gate.drift">Block on fingerprint drift</span></label>
  <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="gate-env-risk"> <span data-i18n="browser.gate.env">Block on environment risk (DNS leak / CN fonts / proxy DNS)</span></label>
  <div id="gate-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
  </div>

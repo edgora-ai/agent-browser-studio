@@ -305,6 +305,8 @@ export interface MgmtConfig {
   agentFs?: AgentFsConfig;
   /** When true, pre-launch consistency blockers refuse the launch. Default false (warn only). */
   blockOnConsistencyConflict?: boolean;
+  /** When true, pre-launch proxy-risk findings (IDC/hosting or public-proxy exit) become blockers. Default false (warn only). */
+  blockOnProxyRisk?: boolean;
   /** When true (default), a post-launch fingerprint drift on high-risk fields stops the browser. */
   blockOnFingerprintDrift?: boolean;
   /** When true, launch is refused when the host environment check finds high-risk findings (DNS leak / CN fonts / SOCKS5 DNS). Default false (warn only). */

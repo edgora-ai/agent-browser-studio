@@ -489,11 +489,13 @@ export async function launchBrowser(
     platform: meta.platform,
     proxyMode: resolvedProxy.mode,
     proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
-  });
+  }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
   for (const w of consistency.warnings) recordAudit({ category: "profile", action: "consistency-warning", target: dirId, detail: `${w.code}: ${w.message}` });
   if (!consistency.ok) {
     for (const b of consistency.blockers) recordAudit({ category: "profile", action: "consistency-blocker", target: dirId, detail: `${b.code}: ${b.message}` });
-    if (cfg.blockOnConsistencyConflict) {
+    const proxyRiskBlocker = consistency.blockers.some((b) => b.code === "proxy-idc" || b.code === "proxy-anonymous");
+    const otherBlocker = consistency.blockers.some((b) => b.code !== "proxy-idc" && b.code !== "proxy-anonymous");
+    if ((cfg.blockOnProxyRisk && proxyRiskBlocker) || (cfg.blockOnConsistencyConflict && otherBlocker)) {
       throw new Error(`Launch blocked by consistency check: ${consistency.blockers.map((b) => b.message).join("; ")}`);
     }
   }
@@ -606,6 +608,17 @@ export async function launchBrowser(
       fingerprintSwitch,
       managedSecureDns,
     ));
+    // DNS routing audit: managed profiles behind a proxy route every DNS query
+    // (including the DoH probe) through that same proxy with no host-resolver
+    // fallback, so the resolver stays coherent with the exit identity. Record
+    // per-launch evidence so profile logs prove proxy-coherent DNS.
+    if (managedSecureDns) {
+      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+        detail: "proxy DNS active: DoH routed through the exit proxy (no host-resolver fallback)" });
+    } else if (!passThrough && resolvedProxy.mode !== "none") {
+      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+        detail: "warning: profile expects a proxy but no managed secure DNS is active — check proxy resolution" });
+    }
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
     args = dedupeChromeArgs([
       ...args,

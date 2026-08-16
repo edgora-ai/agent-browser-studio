@@ -66,7 +66,10 @@ function sameCountry(a: string | null, b: string | null): boolean {
   return a.toUpperCase() === b.toUpperCase();
 }
 
-export function checkProfileConsistency(input: ConsistencyInput): ConsistencyResult {
+export function checkProfileConsistency(
+  input: ConsistencyInput,
+  opts?: { blockOnProxyRisk?: boolean },
+): ConsistencyResult {
   const warnings: ConsistencyFinding[] = [];
   const blockers: ConsistencyFinding[] = [];
 
@@ -127,20 +130,22 @@ export function checkProfileConsistency(input: ConsistencyInput): ConsistencyRes
   // account-warming risk — platforms treat cloud/IDC exits as high-risk.
   if (input.proxyGeo?.hosting === true) {
     const who = [input.proxyGeo.org, input.proxyGeo.as].filter(Boolean).join(" · ");
-    warnings.push({
-      severity: "warning",
+    const finding: ConsistencyFinding = {
+      severity: opts?.blockOnProxyRisk ? "blocker" : "warning",
       code: "proxy-idc",
       message: `Proxy exit is a hosting/IDC IP${who ? ` (${who})` : ""} — cloud/data-center exits are flagged by ping0 (net.isidc) and account-warming risk controls; prefer a residential/non-IDC exit for account-heavy work.`,
-    });
+    };
+    if (finding.severity === "blocker") blockers.push(finding); else warnings.push(finding);
   }
 
   // Warning: proxy exit is flagged as a public proxy/VPN/anonymizer.
   if (input.proxyGeo?.isProxy === true) {
-    warnings.push({
-      severity: "warning",
+    const finding: ConsistencyFinding = {
+      severity: opts?.blockOnProxyRisk ? "blocker" : "warning",
       code: "proxy-anonymous",
       message: "Proxy exit is flagged as a public proxy/VPN — many platforms block known proxy exits outright; prefer a clean residential exit.",
-    });
+    };
+    if (finding.severity === "blocker") blockers.push(finding); else warnings.push(finding);
   }
 
   return { ok: blockers.length === 0, warnings, blockers };

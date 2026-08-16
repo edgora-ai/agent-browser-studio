@@ -27,14 +27,16 @@ export function registerSettingsHandlers(): void {
     const cfg = getConfig() as any;
     return {
       blockOnConsistencyConflict: cfg.blockOnConsistencyConflict === true,
+      blockOnProxyRisk: cfg.blockOnProxyRisk === true,
       blockOnFingerprintDrift: cfg.blockOnFingerprintDrift !== false,
       blockOnEnvironmentRisk: cfg.blockOnEnvironmentRisk === true,
     };
   });
 
-  ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
+  ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnProxyRisk?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
     const cfg = getConfig() as any;
     if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
+    if (typeof gates.blockOnProxyRisk === "boolean") cfg.blockOnProxyRisk = gates.blockOnProxyRisk;
     if (typeof gates.blockOnFingerprintDrift === "boolean") cfg.blockOnFingerprintDrift = gates.blockOnFingerprintDrift;
     if (typeof gates.blockOnEnvironmentRisk === "boolean") cfg.blockOnEnvironmentRisk = gates.blockOnEnvironmentRisk;
     saveConfig(cfg);
