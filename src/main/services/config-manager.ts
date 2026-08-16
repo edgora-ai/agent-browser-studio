@@ -1085,6 +1085,7 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     syncedHash: cp.syncedHash,
     note: cp.note || null,
     tags: normalizeProfileTags(cp.tags),
+    preset: sanitizeOptionalText(cp.preset, 64),
     platform: cp.platform === "macos" ? "macos" : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
@@ -1395,6 +1396,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.taskbarHeight = sanitizeOptionalInteger(profile.taskbarHeight, 0, 500);
       profile.fontsDir = sanitizeOptionalFontsDir(profile.fontsDir);
       profile.tags = normalizeProfileTags(profile.tags);
+      profile.preset = sanitizeOptionalText(profile.preset, 64);
       profile.extensions = normalizeExtensionMap(profile.extensions);
       profile.appUrl = sanitizeAppUrl(profile.appUrl);
       merged.browserProfiles[dirId] = profile;

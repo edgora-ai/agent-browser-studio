@@ -153,6 +153,8 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   syncedHash?: string;
   note?: string | null;
   tags?: string[];
+  /** Business preset id used at creation (Slice 75). */
+  preset?: string | null;
   extensions?: Record<string, boolean>;
   /** Last user edit time (carried through sync for newest-merge). */
   updatedAt?: number;

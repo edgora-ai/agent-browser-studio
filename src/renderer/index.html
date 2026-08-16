@@ -544,6 +544,12 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <h3>Create New Profile</h3>
  <div class="form-row"><label>Name *</label><input id="new-profile-name" placeholder="My Profile" required></div>
  <p style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;">只需填 Name 即可创建（其余用默认值）。更多身份/指纹选项在下方「⚙️ 高级设置」里，之后也可随时在 Profile 编辑中修改。</p>
+ <div class="form-row"><label>🎯 Business Preset (业务预设)</label>
+ <select id="new-profile-preset" data-role="change" data-change-cmd="presetChanged">
+ <option value="">None — manual setup (手动配置)</option>
+ </select>
+ </div>
+ <div id="new-profile-preset-info" style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;display:none;"></div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="new-profile-browser-row">
  <div class="form-row"><label>Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
@@ -628,6 +634,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
  <option value="en-GB">en-GB (English UK)</option>
+ <option value="en-SG">en-SG (English Singapore)</option>
  <option value="ja-JP">ja-JP (Japanese)</option>
  <option value="ko-KR">ko-KR (Korean)</option>
  <option value="de-DE">de-DE (German)</option>
@@ -1117,6 +1124,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
  <option value="en-GB">en-GB (English UK)</option>
+ <option value="en-SG">en-SG (English Singapore)</option>
  <option value="ja-JP">ja-JP (Japanese)</option>
  <option value="ko-KR">ko-KR (Korean)</option>
  <option value="de-DE">de-DE (German)</option>

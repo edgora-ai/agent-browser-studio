@@ -135,6 +135,7 @@ const api = {
     list: () => ipcRenderer.invoke("browser:list"),
     binary: () => ipcRenderer.invoke("browser:binary"),
     verifyBinary: () => ipcRenderer.invoke("browser:verify-binary"),
+    presets: () => ipcRenderer.invoke("browser:presets"),
     create: (opts) => ipcRenderer.invoke("browser:create", opts),
     delete: (dirId) => ipcRenderer.invoke("browser:delete", dirId),
     launch: (dirId) => ipcRenderer.invoke("browser:launch", { dirId }),

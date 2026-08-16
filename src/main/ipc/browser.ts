@@ -14,6 +14,7 @@ import { captureFingerprint, diffFingerprints, hasRiskyDrift } from "../services
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "../services/environment-risk.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
+import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
 import type { BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
@@ -54,6 +55,9 @@ export function registerBrowserHandlers(): void {
     }
   });
 
+  // Business one-click preset catalog (Slice 75).
+  handleBrowser("presets", async () => listBusinessPresets());
+
   handleBrowser("create", async (_event, opts: {
     name: string; fingerprintSeed?: number; platform?: BrowserPlatform;
     fingerprintMode?: FingerprintMode; browserVersion?: string | null;
@@ -66,8 +70,9 @@ export function registerBrowserHandlers(): void {
     windowTitlePrefix?: string | null;
     appUrl?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
+    businessPresetId?: string;
   }) => {
-    const r = createBrowserProfile({
+    const explicit: Parameters<typeof createBrowserProfile>[0] = {
       name: opts.name,
       fingerprintMode: opts.fingerprintMode,
       browserVersion: opts.browserVersion,
@@ -97,7 +102,20 @@ export function registerBrowserHandlers(): void {
       proxyMode: opts.proxyMode,
       proxyName: opts.proxyName,
       tags: opts.tags,
-    });
+    };
+    // Business preset: the main process applies the preset authoritatively so a
+    // preset profile can never be created with a partial/incoherent identity.
+    // Explicit user fields always win over preset defaults.
+    if (opts.businessPresetId) {
+      const presetFields = presetProfileToCreateOpts(resolveBusinessPreset(opts.businessPresetId));
+      for (const key of Object.keys(presetFields) as Array<keyof ReturnType<typeof presetProfileToCreateOpts>>) {
+        const value = (explicit as Record<string, unknown>)[key];
+        if (value === undefined || value === null || value === "") {
+          (explicit as Record<string, unknown>)[key] = presetFields[key];
+        }
+      }
+    }
+    const r = createBrowserProfile({ ...explicit, preset: opts.businessPresetId || null });
     return r;
   });
 

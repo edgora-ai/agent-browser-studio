@@ -65,6 +65,7 @@
     return { geolocationMode: mode, geolocationLatitude: latitude, geolocationLongitude: longitude, geolocationAccuracy: accuracy };
   }
 
+  var businessPresetCatalog = [];
   function writeGeolocationFields(prefix, meta) {
     document.getElementById(prefix + "geolocation-mode").value = meta.geolocationMode || "real";
     document.getElementById(prefix + "geolocation-latitude").value = meta.geolocationLatitude == null ? "" : meta.geolocationLatitude;
@@ -244,10 +245,82 @@
         document.getElementById("new-agent-browser-webrtc").value = "";
         writeGeolocationFields("new-agent-browser-", {});
         writeHardwareFields("new-agent-browser-", {});
+        var presetSelect = document.getElementById("new-profile-preset");
+        if (presetSelect) presetSelect.value = "";
+        var presetInfo = document.getElementById("new-profile-preset-info");
+        if (presetInfo) { presetInfo.style.display = "none"; presetInfo.innerHTML = ""; }
+      },
+
+  loadBusinessPresets: function () {
+        var select = document.getElementById("new-profile-preset");
+        if (!select) return Promise.resolve([]);
+        return api.browser.presets().then(function(list) {
+          businessPresetCatalog = list || [];
+          var zh = window.i18n && window.i18n.locale && window.i18n.locale.indexOf("zh") === 0;
+          select.innerHTML = "";
+          var none = document.createElement("option");
+          none.value = "";
+          none.textContent = (window.i18n ? window.i18n.t("profiles.preset.none", "None \u2014 manual setup") : "None \u2014 manual setup");
+          select.appendChild(none);
+          businessPresetCatalog.forEach(function(p) {
+            var opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.icon + " " + (zh ? p.nameZh : p.name);
+            select.appendChild(opt);
+          });
+          return businessPresetCatalog;
+        }).catch(function() { return []; });
+      },
+
+  presetChanged: function () {
+        var select = document.getElementById("new-profile-preset");
+        var id = select ? select.value : "";
+        var info = document.getElementById("new-profile-preset-info");
+        if (!id) {
+          if (info) { info.style.display = "none"; info.innerHTML = ""; }
+          return;
+        }
+        var preset = null;
+        for (var i = 0; i < businessPresetCatalog.length; i++) {
+          if (businessPresetCatalog[i].id === id) { preset = businessPresetCatalog[i]; break; }
+        }
+        if (!preset) return;
+        // Coherent identity prefill (advanced section fields).
+        var nameEl = document.getElementById("new-profile-name");
+        if (nameEl && !nameEl.value.trim()) nameEl.value = preset.nameSuffix;
+        var platformEl = document.getElementById("new-agent-browser-platform");
+        if (platformEl) platformEl.value = preset.profile.platform;
+        var tzEl = document.getElementById("new-agent-browser-timezone");
+        if (tzEl) tzEl.value = preset.profile.timezone;
+        var locEl = document.getElementById("new-agent-browser-locale");
+        if (locEl) locEl.value = preset.profile.locale;
+        var webrtcModeEl = document.getElementById("new-agent-browser-webrtc-mode");
+        if (webrtcModeEl) webrtcModeEl.value = preset.profile.webrtcMode;
+        try {
+          writeGeolocationFields("new-agent-browser-", {
+            geolocationMode: preset.profile.geolocationMode,
+            geolocationLatitude: preset.profile.geolocationLatitude,
+            geolocationLongitude: preset.profile.geolocationLongitude,
+            geolocationAccuracy: preset.profile.geolocationAccuracy,
+          });
+        } catch (e) { /* ignore */ }
+        if (info) {
+          var zh = window.i18n && window.i18n.locale && window.i18n.locale.indexOf("zh") === 0;
+          var gates = [];
+          if (preset.recommendedGates.blockOnConsistencyConflict) gates.push(zh ? "一致性" : "Consistency");
+          if (preset.recommendedGates.blockOnProxyRisk) gates.push(zh ? "代理风控" : "Proxy risk");
+          if (preset.recommendedGates.blockOnEnvironmentRisk) gates.push(zh ? "环境风控" : "Environment");
+          info.innerHTML = (zh ? preset.descriptionZh : preset.description) + " \u00b7 " +
+            (zh ? "地区" : "Region") + ": " + (zh ? preset.regionZh : preset.region) + " \u00b7 " +
+            (zh ? "建议代理" : "Proxy") + ": " + (zh ? preset.proxyHintZh : preset.proxyHint) +
+            (gates.length ? " \u00b7 " + (zh ? "建议开启安全门" : "Recommended gates") + ": " + gates.join("/") : "");
+          info.style.display = "block";
+        }
       },
 
   newProfile: function () {
         agentBrowser.resetNewProfileForm("chromium");
+        agentBrowser.loadBusinessPresets();
         agentBrowser.loadNewProfileProxies();
         agentBrowser.profileBrowserChanged();
         var adv = document.getElementById("new-profile-advanced");
@@ -281,6 +354,7 @@
   createProfile: function () {
         var name = document.getElementById("new-profile-name").value.trim();
         var proxySelection = parseProxySelection(document.getElementById("new-profile-proxy").value, "default");
+        var businessPresetId = document.getElementById("new-profile-preset").value || undefined;
 
         if (!name) { toast((window.i18n ? window.i18n.t("toast.profile.name-prompt", "Please enter a name") : "Please enter a name"), "error"); return; }
 
@@ -317,6 +391,7 @@
           proxyMode: proxySelection.mode,
           windowTitlePrefix: windowTitlePrefix,
           proxyName: proxySelection.name,
+          businessPresetId: businessPresetId,
         }, geolocation, hardware)).then(function(r) {
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");

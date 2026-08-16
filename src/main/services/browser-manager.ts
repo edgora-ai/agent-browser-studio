@@ -91,6 +91,7 @@ export interface BrowserProfile {
   proxyName: string | null;  // resolved proxy reference name
   note: string | null;      // user note
   tags: string[];
+  preset: string | null;    // business preset id used at creation (Slice 75)
   syncedAt: number | null;
   syncStatus: "synced" | "dirty" | "never";
   lastModified: number;
@@ -239,6 +240,8 @@ export function createBrowserProfile(opts: {
   proxyName?: string | null;
   tags?: string[];
   drm?: boolean;
+  /** Business preset id used at creation (Slice 75). */
+  preset?: string | null;
 }): { dirId: string } {
   // Team RBAC: viewers are read-only.
   const mutationGate = requireProfileMutation();
@@ -275,6 +278,7 @@ export function createBrowserProfile(opts: {
     appUrl: sanitizeAppUrl(opts.appUrl),
     note: null,
     tags: normalizeTags(opts.tags),
+    preset: opts.preset || null,
     updatedAt: Date.now(),
   };
   if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
@@ -354,6 +358,7 @@ export function listBrowserProfiles(): BrowserProfile[] {
       proxyName: resolvedProxy.name,
       note: m.note || null,
       tags: normalizeTags(m.tags),
+      preset: m.preset || null,
       syncedAt,
       syncStatus,
       lastModified,
