@@ -628,4 +628,18 @@ describe("Agent Run normalization", () => {
     reloadConfig();
     expect(getConfig().browserProfiles![dirId].appUrl).toBeNull();
   });
+
+  it("normalizes and persists the browser engine (firefox)", () => {
+    const dirId = "ab_engine_test";
+    setProfileMeta(dirId, { name: "Fx", engine: "firefox" as any });
+    reloadConfig();
+    expect(getConfig().browserProfiles![dirId].engine).toBe("firefox");
+
+    // invalid/unknown engines normalize back to chromium
+    const dirId2 = "ab_engine_test2";
+    setProfileMeta(dirId2, { name: "Bad", engine: "edge" as any });
+    reloadConfig();
+    expect(getConfig().browserProfiles![dirId2].engine).toBe("chromium");
+    expect(getConfig().browserProfiles![dirId2].name).toBe("Bad");
+  });
 });

@@ -93,6 +93,8 @@ export interface BrowserProfileInfo {
   dirId: string;
   name: string;
   version: string;
+  engine: "chromium" | "firefox";
+  browserVersion: string | null;
   fingerprintSeed: number;
   platform: "windows" | "macos" | string;
   timezone: string | null;
@@ -132,6 +134,15 @@ export interface ManagedChromiumStatus {
   platform: string;
   cacheDir: string | null;
   installedVersions: Array<{ version: string; path: string }>;
+}
+
+export interface FirefoxStatus {
+  engine: "firefox";
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  fingerprintParity: false;
+  hint: string;
 }
 
 export interface ExtensionRepositoryEntry {
@@ -253,6 +264,7 @@ export interface AgentBrowserAPI {
   browser: {
     list: () => Promise<BrowserProfileInfo[]>;
     binary: () => Promise<ManagedChromiumStatus>;
+    engineStatus: () => Promise<{ chromium: ManagedChromiumStatus; firefox: FirefoxStatus }>;
     verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
     create: (opts: any) => Promise<{ dirId: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;

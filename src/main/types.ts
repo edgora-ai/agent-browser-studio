@@ -100,6 +100,8 @@ export type BrowserPlatform = "windows" | "macos";
 export type GeolocationMode = "real" | "disable" | "custom";
 export type WebRtcMode = "auto" | "real" | "altered" | "disable";
 export type FingerprintMode = "managed" | "off";
+/** Browser engine a profile launch uses. `chromium` is the managed Chromium build (default); `firefox` uses an installed Firefox (Slice 77). */
+export type BrowserEngine = "chromium" | "firefox";
 
 export interface BrowserFingerprintMeta {
   /** `off` launches the selected build with all managed identity consumers disabled. */
@@ -145,6 +147,8 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   windowTitlePrefix?: string | null;
   /** Web App (PWA) mode: when set, the profile launches as a standalone app window at this URL (RoxyBrowser 3.9.2 "PWA / Sub apps" parity). */
   appUrl?: string | null;
+  /** Browser engine used to launch this profile (Slice 77): `chromium` (managed build, default) or `firefox`. */
+  engine?: BrowserEngine;
   proxyMode?: ProxyMode;
   proxyName?: string | null;
   /** When true, the profile launches with Widevine/DRM enabled when a CDM is available. */

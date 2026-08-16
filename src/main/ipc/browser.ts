@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
 import {
   launchBrowser, stopBrowser, statusBrowser, listBrowserProfiles, checkFingerprintDrift,
-  getRuntimeChromiumStatus, verifyRuntimeChromium,
+  getRuntimeChromiumStatus, verifyRuntimeChromium, getEngineStatus,
   getRuntimeChromiumVersion, isRuntimeChromiumInstalled,
   createBrowserProfile, deleteBrowserProfile,
   getLaunchLogPath,
@@ -17,7 +17,7 @@ import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
-import type { BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
+import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
 
@@ -47,6 +47,11 @@ export function registerBrowserHandlers(): void {
     return getRuntimeChromiumStatus();
   });
 
+  // Combined engine status (Slice 77): Chromium + Firefox availability.
+  handleBrowser("engine-status", async () => {
+    return getEngineStatus();
+  });
+
   handleBrowser("verify-binary", async () => {
     try {
       return { success: true, status: verifyRuntimeChromium() };
@@ -59,7 +64,7 @@ export function registerBrowserHandlers(): void {
   handleBrowser("presets", async () => listBusinessPresets());
 
   handleBrowser("create", async (_event, opts: {
-    name: string; fingerprintSeed?: number; platform?: BrowserPlatform;
+    name: string; engine?: BrowserEngine; fingerprintSeed?: number; platform?: BrowserPlatform;
     fingerprintMode?: FingerprintMode; browserVersion?: string | null;
     allowThirdPartyCookies?: boolean;
     drm?: boolean;
@@ -74,6 +79,7 @@ export function registerBrowserHandlers(): void {
   }) => {
     const explicit: Parameters<typeof createBrowserProfile>[0] = {
       name: opts.name,
+      engine: opts.engine,
       fingerprintMode: opts.fingerprintMode,
       browserVersion: opts.browserVersion,
       allowThirdPartyCookies: opts.allowThirdPartyCookies,

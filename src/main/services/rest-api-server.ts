@@ -45,7 +45,7 @@ import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platf
 import { createAutomationRule, updateAutomationRule, deleteAutomationRule } from "./automation-rules.js";
 import {
   listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
-  createBrowserProfile, deleteBrowserProfile,
+  createBrowserProfile, deleteBrowserProfile, getEngineStatus,
   findRuntimeChromiumBinary, getRuntimeChromiumVersion,
   touchProfileActivity, listRunningProfileIdle, getIdlePolicyTimeoutMs,
 } from "./browser-manager.js";
@@ -80,7 +80,8 @@ function profileSummary(p: any): any {
   return {
     dirId: p.dirId,
     name: p.name,
-    browser: "chromium",
+    engine: p.engine === "firefox" ? "firefox" : "chromium",
+    browser: p.engine === "firefox" ? "firefox" : "chromium",
     running: Boolean(p.running),
     proxyMode: p.proxyMode,
     proxy: p.proxyMode === "none" ? null : (p.proxyName || null),
@@ -1009,6 +1010,11 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { adapter } };
   }
 
+  // ── Engine status (Slice 77): Chromium + Firefox availability ──
+  if (method === "GET" && p === "/api/engine-status") {
+    return { status: 200, body: getEngineStatus() };
+  }
+
   // ── Jobs (durable queue control) ──
   const mJobCancel = p.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
   if (mJobCancel && method === "POST") {
@@ -1752,6 +1758,9 @@ function buildOpenApi(): any {
           responses: ok("Matched platform adapter"),
         },
       },
+      "/api/engine-status": {
+        get: { summary: "Report both browser engines (managed Chromium + Firefox availability)", responses: ok("Engine status") },
+      },
       "/api/agent/llm-config": {
         get: { summary: "Read the saved LLM config (API key redacted; hasApiKey boolean)", responses: ok("LLM config") },
         put: {
@@ -1869,7 +1878,7 @@ function buildOpenApi(): any {
 
 function sanitizeProfileOpts(opts: any): any {
   const keys = [
-    "fingerprintMode", "browserVersion", "allowThirdPartyCookies", "fingerprintSeed",
+    "engine", "fingerprintMode", "browserVersion", "allowThirdPartyCookies", "fingerprintSeed",
     "platform", "timezone", "locale", "webrtcMode", "webrtcIp", "geolocationMode",
     "geolocationLatitude", "geolocationLongitude", "geolocationAccuracy", "gpuVendor",
     "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth", "screenHeight",

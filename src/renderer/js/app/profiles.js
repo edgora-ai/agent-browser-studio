@@ -338,14 +338,16 @@
       },
 
   profileBrowserChanged: function() {
+        var browser = (document.getElementById("new-profile-browser") || {}).value || "chromium";
         var chromeOpts = document.getElementById("new-profile-chrome-opts");
         var browserOptions = document.getElementById("new-profile-agent-browser-opts");
         var firefoxOpts = document.getElementById("new-profile-firefox-opts");
+        var isFirefox = browser === "firefox";
         if (chromeOpts) chromeOpts.style.display = "none";
-        if (browserOptions) browserOptions.style.display = "block";
-        if (firefoxOpts) firefoxOpts.style.display = "none";
+        if (browserOptions) browserOptions.style.display = isFirefox ? "none" : "block";
+        if (firefoxOpts) firefoxOpts.style.display = isFirefox ? "block" : "none";
         var browserRow = document.getElementById("new-profile-browser-row");
-        if (browserRow) browserRow.style.display = "none";
+        if (browserRow) browserRow.style.display = "block";
         var proxyRow = document.getElementById("new-profile-proxy-row");
         if (proxyRow) proxyRow.style.display = "block";
         agentBrowser.loadNewProfileProxies();
@@ -376,8 +378,10 @@
         try { hardware = readHardwareFields("new-agent-browser-"); geolocation = readGeolocationFields("new-agent-browser-"); }
         catch (e) { toast(e.message || String(e), "error"); return; }
 
+        var engine = (document.getElementById("new-profile-browser").value === "firefox") ? "firefox" : undefined;
         api.browser.create(Object.assign({
           name: name,
+          engine: engine,
           fingerprintMode: fingerprintMode,
           browserVersion: browserVersion,
           allowThirdPartyCookies: allowThirdPartyCookies,
@@ -781,7 +785,7 @@
           proxyName: cp.proxyName || null,
           syncedAt: cp.syncedAt || null,
           syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
-          fingerprint: { browser: "chromium", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
+          fingerprint: { browser: cp.engine || "chromium", version: cp.version, mode: cp.engine === "firefox" ? "off" : (cp.fingerprintMode || "managed"), browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
           hardwareConcurrency: cp.hardwareConcurrency || null,
@@ -849,17 +853,19 @@
         var platform = fp.platform || "windows";
         var osName = platform === "macos" ? "macOS" : "Windows";
 
-        var browserIcon = "🥷", browserName = "Managed Chromium";
-        var fingerprintLabel = fp.mode === "off"
-          ? "↪ Pass-through"
+        var isFirefox = fp.browser === "firefox" || p.engine === "firefox";
+        var browserIcon = isFirefox ? "🦊" : "🥷";
+        var browserName = isFirefox ? "Firefox (stock)" : "Managed Chromium";
+        var fingerprintLabel = (isFirefox || fp.mode === "off")
+          ? (isFirefox ? "↪ Firefox pass-through" : "↪ Pass-through")
           : platformIcon(platform) + " 🎲#" + (fp.seed || "?");
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
-        var identityStr = fp.mode === "off"
-          ? "Native host identity"
+        var identityStr = (isFirefox || fp.mode === "off")
+          ? (isFirefox ? "Native Firefox host identity" : "Native host identity")
           : (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale") + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
-        if (fp.mode !== "off" && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
-        var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · Chromium " + (fp.browserVersion || fp.version || "auto");
+        if (fp.mode !== "off" && !isFirefox && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
+        var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through (Firefox: stock identity)" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
         var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
         var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
         var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
@@ -869,6 +875,7 @@
         var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var drmBadge = p.drm ? '<span class="status-badge" style="background:var(--primary-bg);color:var(--primary);" title="Widevine/DRM enabled">🎬 DRM</span>' : '';
         var appBadge = p.appUrl ? '<span class="status-badge" style="background:var(--surface2);color:var(--text);" title="Web App: ' + escAttr(p.appUrl) + '">🖥 App</span>' : '';
+        var engineBadge = isFirefox ? '<span class="status-badge" style="background:var(--surface2);color:#ff7a18;" title="Firefox engine: installed Firefox + remote debugging; managed fingerprint injection parity is a follow-up">🦊 Firefox</span>' : '';
         var tagHtml = (p.tags || []).map(function(tag) {
           return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
@@ -881,6 +888,7 @@
             '<span class="name" title="Click to rename" data-action="rename">' + esc(p.name) + '</span>' +
             '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
             lockBadge +
+            engineBadge +
             drmBadge +
             appBadge +
           '</div>' +

@@ -15,6 +15,7 @@ import {
   usingEncryption,
 } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
+import { sanitizeBrowserEngine } from "./browser-engine.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import type { WebRtcDiagnosticsEntry } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
@@ -1077,6 +1078,7 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
   return {
     name: cp.name,
     fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
+    engine: sanitizeBrowserEngine(cp.engine),
     browserVersion: normalizeManagedChromiumVersion(cp.browserVersion),
     allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
     proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
@@ -1135,6 +1137,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>)
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
+  if (meta.engine !== undefined) next.engine = sanitizeBrowserEngine(meta.engine);
   if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
   if (meta.browserVersion !== undefined) next.browserVersion = normalizeManagedChromiumVersion(meta.browserVersion);
   if (meta.allowThirdPartyCookies !== undefined) next.allowThirdPartyCookies = sanitizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility");
@@ -1372,6 +1375,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
         profile.proxyName = null;
       }
       profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
+      profile.engine = sanitizeBrowserEngine(profile.engine);
       profile.browserVersion = normalizeManagedChromiumVersion(profile.browserVersion);
       profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
       profile.platform = profile.platform === "macos" ? "macos" : "windows";

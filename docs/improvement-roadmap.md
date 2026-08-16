@@ -1241,3 +1241,25 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 全量单测 57 文件 661 例全绿（较 Slice 75 +6）；回归 j5（agent 工具面）6 例全过。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。竞品差距清单还剩：Firefox 双引擎（数周级）、RoxyIP 代理商城/团队计费（商业向）。适配器目录后续可按用户反馈扩展更多地区/平台（TikTok 社媒、X 广告、Shopee 地区站、日本 Yahoo 等），并可与账号模块联动——在「账号」列表里一键针对该账号的平台跑登录健康（adapter loginCheck）。
+
+## Slice 77 — Firefox 引擎能力（Firefox capability：engine 抽象 + 二进制探测 + 启动管线 + 四处表面，对齐竞品双引擎的工程层）
+
+**上游核对**：RoxyBrowser 仍 4.0.3（2026-08-13）、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro（2026-08-11）。Slice 75/76 后续项里唯一的本地可落地能力差距是「Firefox 双引擎（数周级）」。本轮不做数周的完整双引擎（那是 Firefox 独立的指纹注入 patch 集），而是把 **Firefox 能力从「零支持」推进到「一等公民的工程层」**：profile 可声明 `engine=firefox`、可探测 Firefox 二进制/版本、可构建 Firefox 启动参数与 `user.js` 偏好（代理/DoH/语言）、可在拖拽不到 Firefox 的机器上优雅报错，并通过 IPC / REST / MCP / UI 四处暴露。
+
+**实现**：
+- 新增 `src/main/services/browser-engine.ts`：`BrowserEngine` + `sanitizeBrowserEngine`、Firefox 二进制探测（`AGENT_BROWSER_FIREFOX_BINARY_PATH`/`FIREFOX_BINARY_PATH` 覆盖 + 各平台默认路径）、`detectFirefoxVersion`、`getFirefoxStatus`、`buildFirefoxLaunchArgs`（`-profile` / `-no-remote` / `-new-instance`（非 Windows）/ `--remote-debugging-port`（WebDriver BiDi）/ `-headless` / 首 URL）、`buildFirefoxUserJs`（proxy http/socks5（socks_remote_dns=true）/ DoH TRR / `intl.locale.requested` / 关闭首启噪音 prefs）、`writeFirefoxUserJs`；
+- `src/main/types.ts`：新增 `BrowserEngine`，`BrowserProfileMeta.engine`（chrome 默认 / firefox）；
+- `src/main/services/config-manager.ts`：mergeConfig / getProfileMeta / setProfileMeta 归一化与持久化 `engine`（未知值回退 chromium）；
+- `src/main/services/browser-manager.ts`：`BrowserProfile.engine` + create 接受 engine（firefox 强制 `fingerprintMode=off`，诚实 pass-through）+ list 输出 engine 与对应版本 + `getEngineStatus()`（chromium+firefox 双状态）+ `launchBrowser` 分流到新的 `launchFirefoxProfile`（无二进制时优雅抛「Managed Firefox is required…」；写 user.js；spawn 并登记运行态；记录审计）+ `checkFingerprintDrift` 对 firefox 直接返回无基线；
+- `src/main/ipc/browser.ts` + `preload.cjs` + `api.d.ts`：`browser:engine-status`、create 透传 engine、`api.browser.engineStatus()`；
+- `src/main/services/rest-api-server.ts`：`GET /api/engine-status` + profile create/list/detail 透出 engine + OpenAPI；
+- `src/main/services/mcp-server.ts`：新工具 `agent_browser_engine_status`（返回 chromium + firefox 双状态）；
+- `src/renderer`：创建对话框新增可见「Browser」下拉（Managed Chromium / Firefox (installed)），选 Firefox 显示 🦊 说明（当前 pass-through 运行，指纹注入对齐为已知后续项）并隐藏 Chromium 专属高级项；profile 卡片对 firefox 显示 🦊 徽标、「Firefox (stock)」与「↪ Firefox pass-through」指纹标签。
+
+**验证**：
+- 单测 `tests/unit/browser-engine.test.ts` 新增 9 例：engine 归一化、二进制覆盖 env、findFirefoxBinary 存在性、版本解析、getFirefoxStatus 未安装/已安装、buildFirefoxLaunchArgs（-profile/远程调试/headless/首 URL/Windows 无 -new-instance）、buildFirefoxUserJs（HTTP 代理 / SOCKS 远端解析 / DoH TRR / locale / 直连）、writeFirefoxUserJs 落盘；
+- 单测 `tests/unit/config-manager.test.ts` +1 例：engine firefox 持久化、未知值回退 chromium；
+- e2e `tests/e2e/j98-firefox-engine.test.ts` 新增 7 例：engine-status IPC（本机 Firefox 未安装也优雅）→ IPC 建 Firefox profile 并 list 透出 engine=fingerprintMode=off → 创建对话框选 Firefox（可见下拉 + 说明 + 建号 + 🦊 卡片）→ REST /api/engine-status + engine 建/读/列 → 无 Firefox 时启动优雅失败（清晰报错）→ MCP agent_browser_engine_status → 无 console error；
+- 全量单测 58 文件 671 例全绿（较 Slice 76 +10）；受影响 e2e j92 / j88 / j96 共 3 文件 13 例全过（创建流程 / 快速创建 / 预设均未受影响）。
+
+**后续项**：Firefox 的**完整双引擎指纹注入对齐**仍是数周级工程（stock Firefox 没有 `--fingerprint-*` patch 集，需要 Firefox 内核 patch + 指纹注入 + 自洽校验 + 回归护栏）；本切片已把「engine 抽象 + 二进制探测 + 启动管线 + 四处表面」全部落地，使 Firefox profile 成为真实可选、可探测、可优雅报错的产品能力。其余竞品差距清单保持：RoxyIP 代理商城/团队计费（商业向）。

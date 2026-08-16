@@ -565,19 +565,14 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  <div id="new-profile-preset-info" style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;display:none;"></div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;" id="new-profile-browser-row">
+ <div id="new-profile-browser-row">
  <div class="form-row"><label>Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
  <option value="chromium" selected>Managed Chromium</option>
+ <option value="firefox">Firefox (installed)</option>
  </select>
  </div>
- <div class="form-row"><label>Version</label>
- <select id="new-profile-version">
- <option value="149">v149 (latest)</option>
- <option value="148">v148</option>
- <option value="147">v147</option>
- </select>
- </div>
+ <div id="new-profile-firefox-opts" style="display:none;font-size:11px;color:var(--text-muted);margin:2px 0 8px;">🦊 Firefox engine — 使用已安装的 Firefox + 远程调试端口启动。管理端指纹注入对齐是已知后续项，Firefox profile 当前以 pass-through 运行。</div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label>Platform</label>

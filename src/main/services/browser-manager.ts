@@ -56,14 +56,24 @@ import {
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
-import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta } from "../types.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta, BrowserEngine } from "../types.js";
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
+import {
+  buildFirefoxLaunchArgs,
+  detectFirefoxVersion,
+  findFirefoxBinary,
+  getFirefoxStatus,
+  sanitizeBrowserEngine,
+  writeFirefoxUserJs,
+  type FirefoxStatus,
+} from "./browser-engine.js";
 
 export interface BrowserProfile {
   dirId: string;
   name: string;
-  version: string;       // Chromium version
+  version: string;       // engine version (Chromium or Firefox)
   browserVersion: string | null; // exact installed version pin, or auto
+  engine: BrowserEngine; // chromium (managed build, default) | firefox (Slice 77)
   fingerprintMode: FingerprintMode;
   allowThirdPartyCookies: boolean;
   drm: boolean;
@@ -206,12 +216,27 @@ export function verifyRuntimeChromium(): ManagedChromiumStatus {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Engine status (Slice 77): report both engines for IPC / REST / MCP / UI.
+// ═══════════════════════════════════════════════════════════════
+
+export function getEngineStatus(): {
+  chromium: ManagedChromiumStatus;
+  firefox: FirefoxStatus;
+} {
+  return {
+    chromium: getRuntimeChromiumStatus(),
+    firefox: getFirefoxStatus(),
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Profile Management
 // ═══════════════════════════════════════════════════════════════
 
-/** Create a managed Chromium profile using --fingerprint=<seed>. */
+/** Create a managed Chromium profile using --fingerprint=<seed>, or a Firefox profile (Slice 77). */
 export function createBrowserProfile(opts: {
   name: string;
+  engine?: BrowserEngine;
   fingerprintMode?: FingerprintMode;
   browserVersion?: string | null;
   allowThirdPartyCookies?: boolean;
@@ -258,9 +283,14 @@ export function createBrowserProfile(opts: {
   if (proxyMode === "named" && (!opts.proxyName || !Object.hasOwn(cfg.proxies, opts.proxyName))) {
     throw new Error(`Proxy not found: ${opts.proxyName || ""}`);
   }
+  const engine = sanitizeBrowserEngine(opts.engine);
+  // Stock Firefox has no managed --fingerprint-* injection; a Firefox profile
+  // launches pass-through until fingerprint parity lands (see roadmap Slice 77).
+  const fingerprintMode = engine === "firefox" ? "off" : normalizeFingerprintMode(opts.fingerprintMode);
   const profile = {
     name: opts.name,
-    fingerprintMode: normalizeFingerprintMode(opts.fingerprintMode),
+    engine,
+    fingerprintMode,
     browserVersion: normalizeManagedChromiumVersion(opts.browserVersion),
     allowThirdPartyCookies: normalizeBoolean(opts.allowThirdPartyCookies, "third-party cookie compatibility"),
     fingerprintSeed: normalizeFingerprintSeed(opts.fingerprintSeed || Math.floor(Math.random() * 90000) + 10000),
@@ -326,11 +356,15 @@ export function listBrowserProfiles(): BrowserProfile[] {
     const syncedAt = m.syncedAt || null;
     const syncStatus = getProfileSyncStatus(m, lastModified, dirId);
     const resolvedProxy = resolveProfileProxy(dirId);
+    const engine = sanitizeBrowserEngine(m.engine);
     result.push({
       dirId,
       name: m.name || dirId.slice(0, 8),
-      version: normalizeManagedChromiumVersion(m.browserVersion) || getRuntimeChromiumVersion() || "?",
+      version: engine === "firefox"
+        ? (getFirefoxStatus().version || "?")
+        : (normalizeManagedChromiumVersion(m.browserVersion) || getRuntimeChromiumVersion() || "?"),
       browserVersion: normalizeManagedChromiumVersion(m.browserVersion),
+      engine,
       fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
       allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
       drm: normalizeBoolean(m.drm, "drm"),
@@ -423,6 +457,11 @@ export async function launchBrowser(
   if (psFallback) {
     runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort, lastActivityAt: Date.now() });
     return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
+  }
+
+  // Firefox engine path (Slice 77): stock Firefox with remote debugging.
+  if (sanitizeBrowserEngine(meta.engine) === "firefox") {
+    return launchFirefoxProfile(dirId, meta, cfg, opts?.headless, releaseLaunchLock);
   }
 
   const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
@@ -907,6 +946,10 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   const cfg = getConfig() as any;
   const meta = cfg.browserProfiles?.[dirId];
   if (!meta) return { ok: false, error: "Profile not found" };
+  if (sanitizeBrowserEngine(meta.engine) === "firefox") {
+    // Firefox uses stock fingerprint behavior (Slice 77): no managed baseline.
+    return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
+  }
   if (!meta.fingerprintBaseline) {
     return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
   }
@@ -920,6 +963,80 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   } catch (e: any) {
     return { ok: false, error: e.message || String(e) };
   }
+}
+
+/**
+ * Firefox engine launch (Slice 77).
+ *
+ * Stock Firefox is launched pass-through (no managed --fingerprint-* patch
+ * set), so the profile's identity fields are forwarded only where Firefox
+ * supports them without a patch: the language preference and proxy/DoH prefs
+ * are written to the profile's user.js, the timezone is NOT overridden (no
+ * stock equivalent of --fingerprint-timezone) and drive detection is absent.
+ * Full fingerprint parity is the tracked follow-up. Remote debugging uses
+ * Firefox's --remote-debugging-port (WebDriver BiDi), not Chromium's CDP.
+ */
+async function launchFirefoxProfile(
+  dirId: string,
+  meta: BrowserProfileMeta,
+  cfg: any,
+  headless: boolean | undefined,
+  releaseLaunchLock: (() => void) | null,
+): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
+  const bin = findFirefoxBinary();
+  if (!bin) {
+    if (releaseLaunchLock) releaseLaunchLock();
+    throw new Error(
+      "Managed Firefox is required for this profile. Install Firefox or set AGENT_BROWSER_FIREFOX_BINARY_PATH.",
+    );
+  }
+  const firefoxVersion = detectFirefoxVersion(bin);
+  if (meta.browserVersion && firefoxVersion && firefoxVersion !== meta.browserVersion) {
+    if (releaseLaunchLock) releaseLaunchLock();
+    throw new Error(`Profile requires Firefox ${meta.browserVersion}, but the installed binary is ${firefoxVersion}`);
+  }
+
+  const profileDir = path.join(getProfilesDir(), dirId);
+  const cdpPort = findFreePort();
+  const resolvedProxy = resolveProfileProxySecret(dirId);
+  const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
+
+  writeFirefoxUserJs(profileDir, {
+    proxy: resolvedProxy.config,
+    dohUrl,
+    locale: meta.locale || undefined,
+  });
+
+  const args = buildFirefoxLaunchArgs({
+    profileDir,
+    remotePort: cdpPort,
+    headless,
+    platform: meta.platform,
+    appUrl: meta.appUrl || undefined,
+  });
+  console.log(`[agent-browser] Firefox launch plan ready for ${dirId.slice(0, 8)}: ${bin}`);
+
+  const child = (await import("node:child_process")).spawn(bin, args, {
+    detached: false,
+    stdio: "ignore",
+    env: process.env,
+  });
+  let pid: number;
+  if (typeof child.pid === "number") pid = child.pid;
+  else throw new Error("Failed to spawn Firefox: no pid");
+
+  runningProcesses.set(dirId, { pid, process: child, port: cdpPort, lastActivityAt: Date.now() });
+  child.on("exit", () => {
+    const entry = runningProcesses.get(dirId);
+    if (entry && entry.pid === pid) {
+      if (entry.killTimer) clearTimeout(entry.killTimer);
+      runningProcesses.delete(dirId);
+    }
+  });
+
+  recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `firefox ${firefoxVersion || "?"} port=${cdpPort}` });
+  if (releaseLaunchLock) releaseLaunchLock();
+  return { pid, cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
 }
 
 export function stopBrowser(dirId: string): boolean {
