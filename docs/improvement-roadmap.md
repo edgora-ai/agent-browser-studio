@@ -1263,3 +1263,26 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 全量单测 58 文件 671 例全绿（较 Slice 76 +10）；受影响 e2e j92 / j88 / j96 共 3 文件 13 例全过（创建流程 / 快速创建 / 预设均未受影响）。
 
 **后续项**：Firefox 的**完整双引擎指纹注入对齐**仍是数周级工程（stock Firefox 没有 `--fingerprint-*` patch 集，需要 Firefox 内核 patch + 指纹注入 + 自洽校验 + 回归护栏）；本切片已把「engine 抽象 + 二进制探测 + 启动管线 + 四处表面」全部落地，使 Firefox profile 成为真实可选、可探测、可优雅报错的产品能力。其余竞品差距清单保持：RoxyIP 代理商城/团队计费（商业向）。
+
+## Slice 78 — Firefox 启动对齐真实 RoxyFirefox（Marionette + WebDriver BiDi 端口发现 + Roxy 的 user.js 家族）
+
+**上游核对**：RoxyBrowser 仍 4.0.3（2026-08-13）、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro（2026-08-11）。Slice 77 交付的是「engine 抽象 + 二进制探测 + 启动管线 + 四处表面」，但启动管线用的是「猜一个固定端口 + 只写基础 user.js」。本机存在真实 RoxyBrowser 安装（`/Applications/RoxyBrowser.app` + `~/Library/Application Support/RoxyBrowser/firefox-bin/146/RoxyFirefox.app`），解包其 `app.asar` 直接对照了 RoxyFirefox 的真实实现（`812.mjs` 的 Firefox 启动器 + `main.mjs` 的 `prepareFirefoxProfile`），把我们的 Firefox 启动对齐到竞品经过验证的做法。
+
+**RoxyFirefox 真实实现（从 asar 逆向对照）**：
+- 命令行：`-profile <dir>` + `--marionette` + `--remote-debugging-port=0` + …启动参数/URL… + `-no-remote`；**端口用 0 让 Firefox 自选**，再解析输出；
+- 端口发现：stdout 解析 `Marionette\s+INFO\s+Listening on port\s+(\d+)`（marionette 端口），stderr 解析 `WebDriver BiDi listening on (ws://\S+)`（BiDi WebSocket），`actualPort = URL 端口`，`marionettePort = 解析值 ?? actualPort-1`；
+- `user.js`（`prepareFirefoxProfile`）：自动化友好基础 prefs（`focusmanager.testmode` / `layout.testing.top-level-always-active` / `dom.min_background_timeout_value*` / `dom.timeout.enable_budget_timer_throttling`）、首页与新建标签、GPU（`layers.acceleration.disabled` / `gfx.webrender.disabled`）、sandbox（`security.sandbox.content.level`）、配色方案（`layout.css.prefers-color-scheme.content-override` / `ui.systemUsesDarkTheme` / `extensions.activeThemeID` + `extensions.json`/`addonStartup.json.lz4` 主题处理）、`xulstore.json` 窗口位置。
+
+**实现**：
+- `src/main/services/browser-engine.ts`：
+  - `buildFirefoxLaunchArgs` 改为 Roxy 同款：`-profile` + `--marionette` + `--remote-debugging-port=<0|N>` + `-no-remote`（收尾），保留 `-new-instance`（非 Windows）与 `-headless`；
+  - 新增 `extractBidiWebSocketUrl`（`WebDriver BiDi listening on ws://…`）与 `extractMarionettePort`（`Marionette INFO Listening on port N`）；
+  - 新增 `spawnFirefoxWithDebugInfo`：spawn 后等待 BiDi WebSocket（硬超时），同时累计 Marionette 端口，返回 `{ bidiWebSocketUrl, marionettePort, actualPort }`——与 Roxy 启动器同构；
+  - `buildFirefoxUserJs` 扩展为 Roxy 的 managed prefs 家族：自动化基础 prefs、`browser.startup.homepage`/`browser.newtabpage.enabled`、GPU（`useGpu`）、sandbox（`sandboxPermission`）、配色方案与活动主题（`colorScheme`），再叠加我们的 proxy/DoH/locale；
+- `src/main/services/browser-manager.ts`：`launchFirefoxProfile` 改用 `spawnFirefoxWithDebugInfo`（端口 0 自动分配 + 解析真实端口），`user.js` 写入 `useGpu/sandboxPermission/colorScheme`，运行态记录真实 BiDi 端口，审计含 bidi/marionette 证据。
+
+**验证**：
+- 单测 `tests/unit/browser-engine.test.ts` 12 例全绿（较 Slice 77 +3）：launch args 对齐 Roxy（`--marionette`、端口 0 默认、`-no-remote` 收尾）、`extractBidiWebSocketUrl` / `extractMarionettePort`、`spawnFirefoxWithDebugInfo` 用假 Firefox 脚本打印 BiDi+Marionette 端口验证解析与真实端口、Roxy user.js 家族（自动化基础 / GPU / sandbox / 配色 / 主题）；
+- 回归 e2e j98（Firefox engine 7 例）+ 全量单测 58 文件 674 例全绿（较 Slice 77 +3）。
+
+**后续项**：Firefox 的**完整自动化面**（把 CDP 工具栈换成 WebDriver BiDi/Marionette，让 Agent 的 browser_* 工具、指纹采集/漂移检测能在 Firefox 上跑）以及**指纹注入对齐**仍是后续工程；本切片已把 RoxyFirefox 的启动/端口发现/managed prefs 全部对齐，Firefox profile 现在与 Roxy 同构地「能起、能发现端口、能写托管偏好」。其余竞品差距清单保持：RoxyIP 代理商城/团队计费（商业向）。

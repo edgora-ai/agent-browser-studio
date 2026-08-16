@@ -11,6 +11,9 @@ import {
   buildFirefoxLaunchArgs,
   buildFirefoxUserJs,
   writeFirefoxUserJs,
+  extractBidiWebSocketUrl,
+  extractMarionettePort,
+  spawnFirefoxWithDebugInfo,
 } from "../../src/main/services/browser-engine.js";
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "fx-engine-test-"));
@@ -72,7 +75,7 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(ok.version).toBe("139.0");
   });
 
-  it("buildFirefoxLaunchArgs uses -profile + remote debugging + headless + first-URL", () => {
+  it("buildFirefoxLaunchArgs mirrors RoxyFirefox (-profile + --marionette + remote debugging + -no-remote)", () => {
     const args = buildFirefoxLaunchArgs({
       profileDir: "/tmp/fx-profile",
       remotePort: 39201,
@@ -80,18 +83,46 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
       platform: "macos",
       appUrl: "https://example.com",
     });
-    expect(args).toContain("-profile");
+    expect(args[0]).toBe("-profile");
     expect(args).toContain("/tmp/fx-profile");
-    expect(args).toContain("-no-remote");
-    expect(args).toContain("-new-instance"); // non-Windows
+    expect(args).toContain("--marionette"); // Roxy enables Marionette
     expect(args).toContain("--remote-debugging-port");
     expect(args).toContain("39201");
+    expect(args).toContain("-new-instance"); // non-Windows
     expect(args).toContain("-headless");
-    expect(args[args.length - 1]).toBe("https://example.com");
+    expect(args).toContain("https://example.com");
+    expect(args[args.length - 1]).toBe("-no-remote"); // Roxy appends -no-remote last
 
-    // Windows omits -new-instance
+    // Windows omits -new-instance; default remotePort is 0 (auto-assign)
     const winArgs = buildFirefoxLaunchArgs({ profileDir: "C:\\fx", remotePort: 1, platform: "windows" });
     expect(winArgs).not.toContain("-new-instance");
+    const auto = buildFirefoxLaunchArgs({ profileDir: "/tmp/fx2" });
+    expect(auto).toContain("--remote-debugging-port");
+    expect(auto[auto.indexOf("--remote-debugging-port") + 1]).toBe("0");
+  });
+
+  it("extracts the WebDriver BiDi WebSocket URL and Marionette port from Firefox output", () => {
+    expect(extractBidiWebSocketUrl("WebDriver BiDi listening on ws://127.0.0.1:9239/")).toBe("ws://127.0.0.1:9239/");
+    expect(extractBidiWebSocketUrl("no bidi here")).toBeNull();
+    expect(extractMarionettePort("Marionette  INFO  Listening on port 2828")).toBe(2828);
+    expect(extractMarionettePort("Marionette  INFO  Listening on port abc")).toBeNull();
+  });
+
+  it("spawnFirefoxWithDebugInfo waits for the BiDi WebSocket and reports the real port", async () => {
+    const bin = makeFakeFirefox(); // fake script just prints version; we build a special one
+    const special = path.join(tempDir, "fake-firefox-bidi");
+    fs.writeFileSync(
+      special,
+      `#!/bin/sh\nsleep 0.2\necho "Marionette  INFO  Listening on port 2828" >&1\necho "WebDriver BiDi listening on ws://127.0.0.1:9239/" >&2\nsleep 30\n`,
+      "utf8",
+    );
+    fs.chmodSync(special, 0o755);
+    const { child, info } = await spawnFirefoxWithDebugInfo(special, ["-profile", "/tmp/fx"], { timeoutMs: 8000 });
+    expect(info.bidiWebSocketUrl).toBe("ws://127.0.0.1:9239/");
+    expect(info.actualPort).toBe(9239);
+    expect(info.marionettePort).toBe(2828);
+    try { child.kill(); } catch { /* ignore */ }
+    void bin;
   });
 
   it("buildFirefoxUserJs writes proxy prefs for HTTP and SOCKS", () => {
@@ -120,6 +151,33 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
 
     const noDoh = buildFirefoxUserJs({});
     expect(noDoh).toContain('user_pref("network.trr.mode", 5)');
+  });
+
+  it("buildFirefoxUserJs writes Roxy's managed prefs family (automation base, GPU, sandbox, color scheme/theme)", () => {
+    const prefs = buildFirefoxUserJs({ useGpu: false, sandboxPermission: false, colorScheme: "dark" });
+    // automation-friendly base
+    expect(prefs).toContain('user_pref("focusmanager.testmode", true)');
+    expect(prefs).toContain('user_pref("dom.timeout.enable_budget_timer_throttling", false)');
+    expect(prefs).toContain('user_pref("browser.newtabpage.enabled", true)');
+    // GPU off
+    expect(prefs).toContain('user_pref("layers.acceleration.disabled", true)');
+    expect(prefs).toContain('user_pref("gfx.webrender.disabled", true)');
+    // sandbox disabled
+    expect(prefs).toContain('user_pref("security.sandbox.content.level", -1)');
+    // dark scheme
+    expect(prefs).toContain('user_pref("layout.css.prefers-color-scheme.content-override", 0)');
+    expect(prefs).toContain('user_pref("ui.systemUsesDarkTheme", true)');
+    expect(prefs).toContain('user_pref("extensions.activeThemeID", "firefox-compact-dark@mozilla.org")');
+
+    const gpuOn = buildFirefoxUserJs({ useGpu: true, sandboxPermission: true, colorScheme: "light" });
+    expect(gpuOn).toContain('user_pref("layers.acceleration.disabled", false)');
+    expect(gpuOn).toContain('user_pref("security.sandbox.content.level", 0)');
+    expect(gpuOn).toContain('user_pref("layout.css.prefers-color-scheme.content-override", 1)');
+    expect(gpuOn).toContain('user_pref("extensions.activeThemeID", "firefox-compact-light@mozilla.org")');
+
+    const system = buildFirefoxUserJs({});
+    expect(system).toContain('user_pref("layout.css.prefers-color-scheme.content-override", 2)');
+    expect(system).toContain('user_pref("extensions.activeThemeID", "default-theme@mozilla.org")');
   });
 
   it("writeFirefoxUserJs creates the profile dir and persists user.js", () => {

@@ -1,24 +1,31 @@
-// Browser engine abstraction (Slice 77 — Firefox capability).
+// Browser engine abstraction (Slice 77 — Firefox capability; Slice 78 — aligned
+// with RoxyFirefox's proven launch approach).
 //
 // The product core engine is the independently patched Chromium 150 build
 // (managed fingerprint injection via the --fingerprint-* switch family). This
 // module makes "Firefox" a first-class, modeled option in the product:
 //  - profiles can declare engine = "chromium" | "firefox";
 //  - Firefox binary discovery + version detection (`AGENT_BROWSER_FIREFOX_BINARY_PATH`);
-//  - a Firefox launch-argument builder (`-profile`, remote debugging / BiDi port,
-//    headless, first-URL) and a `user.js` preferences writer (proxy / DoH /
-//    locale) — the standard way to steer Firefox at runtime;
+//  - a Firefox launch-argument builder and `user.js` preferences writer modeled
+//    on RoxyBrowser's real RoxyFirefox engine (Slice 78 reference):
+//    * launch with `-profile`, `--marionette`, `--remote-debugging-port=0`,
+//      `-no-remote` (Roxy's proven CLI);
+//    * parse `WebDriver BiDi listening on ws://...` from stderr to discover the
+//      automation WebSocket, and `Marionette INFO Listening on port N` from
+//      stdout for the legacy Marionette port — exactly like Roxy's launcher;
+//    * write the same managed `user.js` family (automation-friendly prefs, GPU,
+//      sandbox, color-scheme/theme) plus proxy/DoH/locale prefs.
 //  - an engine-status surface used by IPC / REST / MCP / UI.
 //
 // Honest scope note: full managed fingerprint-injection parity for Firefox
-// (the --fingerprint-* patch set does not exist on stock Firefox) is the
-// remaining follow-up. This slice delivers the engine plumbing + surfaces so
-// Firefox profiles are real, detectable and launcan play well with the rest of
-// the product; fingerprint parity is tracked in docs/improvement-roadmap.md.
+// (Roxy drives Firefox mostly through Marionette/BiDi + user.js, not a
+// --fingerprint-* patch set — see Slice 78) is the remaining follow-up. This
+// slice delivers the engine plumbing + Roxy-aligned launch so Firefox profiles
+// are real, detectable and launch like RoxyFirefox does.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { ProxyConfig } from "../types.js";
 
 export type BrowserEngine = "chromium" | "firefox";
@@ -118,7 +125,8 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
 
 export interface FirefoxLaunchArgsOpts {
   profileDir: string;
-  remotePort: number;
+  /** 0 (default) = auto-assign and parse from Firefox output; or a specific port. */
+  remotePort?: number;
   headless?: boolean;
   platform?: "windows" | "macos";
   /** First-tab URL (Web App / PWA-ish mode; Firefox has no --app= flag). */
@@ -126,20 +134,117 @@ export interface FirefoxLaunchArgsOpts {
 }
 
 /**
- * Build the Firefox command line. Note the surface differences vs Chromium:
+ * Build the Firefox command line, modeled on RoxyBrowser's real RoxyFirefox
+ * engine (Slice 78 reference — Roxy uses `-profile`, `--marionette`,
+ * `--remote-debugging-port=0`, `-no-remote`):
  *  - Firefox uses `-profile <dir>` (not `--user-data-dir=`);
- *  - remote debugging is enabled with `--remote-debugging-port` (WebDriver BiDi
- *    endpoint) rather than the Chromium CDP listener;
- *  - `-no-remote` prevents the running-instance takeover, `-new-instance` forces
+ *  - `--marionette` enables the Marionette automation port (parsed from stdout);
+ *  - `--remote-debugging-port` exposes the WebDriver BiDi WebSocket (parsed from
+ *    stderr as `WebDriver BiDi listening on ws://...`); Roxy uses 0 = auto;
+ *  - `-no-remote` prevents the running-instance takeover; `-new-instance` forces
  *    a fresh instance on macOS/Linux (Firefox for Windows does not accept it).
  */
 export function buildFirefoxLaunchArgs(opts: FirefoxLaunchArgsOpts): string[] {
-  const args: string[] = ["-profile", opts.profileDir, "-no-remote"];
+  const args: string[] = ["-profile", opts.profileDir, "--marionette", "--remote-debugging-port", String(opts.remotePort ?? 0)];
   if (opts.platform !== "windows") args.push("-new-instance");
-  args.push("--remote-debugging-port", String(opts.remotePort));
   if (opts.headless) args.push("-headless");
   if (opts.appUrl) args.push(opts.appUrl);
+  args.push("-no-remote");
   return args;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Firefox debugging discovery (RoxyFirefox-aligned, Slice 78)
+//
+// Roxy parses Firefox's own output instead of guessing a port:
+//  - stderr: `WebDriver BiDi listening on ws://127.0.0.1:PORT/...`
+//  - stdout: `Marionette  INFO  Listening on port N`
+// We mirror that so a Firefox profile launches on a conflict-free port and we
+// can report the real automation endpoint to the rest of the product.
+// ═══════════════════════════════════════════════════════════
+
+const BIDI_WS_RE = /WebDriver BiDi listening on (ws:\/\/\S+)/i;
+const MARIONETTE_PORT_RE = /Marionette\s+INFO\s+Listening on port\s+(\d+)/i;
+
+export function extractBidiWebSocketUrl(text: string): string | null {
+  const m = String(text || "").match(BIDI_WS_RE);
+  return m ? m[1] : null;
+}
+
+export function extractMarionettePort(text: string): number | null {
+  const m = String(text || "").match(MARIONETTE_PORT_RE);
+  if (!m) return null;
+  const port = Number.parseInt(m[1], 10);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
+export interface FirefoxDebugInfo {
+  /** WebDriver BiDi WebSocket URL parsed from stderr. */
+  bidiWebSocketUrl: string | null;
+  /** Marionette port parsed from stdout. */
+  marionettePort: number | null;
+  /** The port from the BiDi WebSocket URL (actual remote-debugging port). */
+  actualPort: number | null;
+}
+
+/**
+ * Spawn Firefox and wait for its debugging endpoint, mirroring Roxy's launcher.
+ * Resolves once the WebDriver BiDi WebSocket is printed (with a hard timeout),
+ * or rejects with a clear message if Firefox exits before announcing a port.
+ */
+export function spawnFirefoxWithDebugInfo(
+  bin: string,
+  args: string[],
+  opts: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ child: ChildProcess; info: FirefoxDebugInfo }> {
+  const timeoutMs = opts.timeoutMs ?? 60000;
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { detached: false, stdio: ["ignore", "pipe", "pipe"], env: opts.env ?? process.env });
+    let bidiUrl: string | null = null;
+    let marionettePort: number | null = null;
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    const timer = setTimeout(() => {
+      finish(() => {
+        try { child.kill(); } catch { /* ignore */ }
+        reject(new Error("Firefox launch timed out waiting for the debugging port"));
+      });
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => {
+      const text = chunk.toString();
+      const port = extractMarionettePort(text);
+      if (port !== null && marionettePort === null) marionettePort = port;
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      const url = extractBidiWebSocketUrl(text);
+      if (url && bidiUrl === null) {
+        bidiUrl = url;
+        let actualPort: number | null = null;
+        try { actualPort = Number.parseInt(new URL(url).port, 10) || null; } catch { /* ignore */ }
+        finish(() => {
+          clearTimeout(timer);
+          resolve({ child, info: { bidiWebSocketUrl: url, marionettePort, actualPort } });
+        });
+      }
+    });
+    child.on("error", (err) => {
+      finish(() => { clearTimeout(timer); reject(err); });
+    });
+    child.on("exit", (code) => {
+      if (code !== 0 && code !== null) {
+        finish(() => {
+          clearTimeout(timer);
+          reject(new Error(`Firefox exited early (code ${code}) before announcing a debugging port`));
+        });
+      }
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -151,6 +256,12 @@ export interface FirefoxUserJsOpts {
   /** DoH endpoint URI; when set, Firefox uses TRR as the DNS resolver. */
   dohUrl?: string | null;
   locale?: string | null;
+  /** Hardware acceleration enabled (Roxy maps this to layers/webrender prefs). */
+  useGpu?: boolean;
+  /** Content sandbox level: true = 0 (enabled), false = -1 (disabled). */
+  sandboxPermission?: boolean;
+  /** Color scheme: "system" | "dark" | "light" (Roxy's color-scheme family). */
+  colorScheme?: "system" | "dark" | "light";
 }
 
 function prefString(key: string, value: string): string {
@@ -166,17 +277,58 @@ function prefBoolean(key: string, value: boolean): string {
 }
 
 /**
- * Build the managed `user.js` prefs file for a Firefox profile. Firefox does
- * not expose proxy / DoH on the command line like Chromium does, so the
- * standard, reversible way to steer a launched profile is a `user.js` in the
- * profile directory. Proxy credentials are written as SOCKS/HTTP proxy auth via
- * the network proxy prefs; the file lives inside the (already sealed) profile
- * dir and is never logged.
+ * Build the managed `user.js` prefs file for a Firefox profile, modeled on
+ * RoxyBrowser's RoxyFirefox `prepareFirefoxProfile` (Slice 78 reference):
+ * Firefox does not expose proxy / DoH on the command line like Chromium does,
+ * so the standard, reversible way to steer a launched profile is a `user.js`
+ * in the profile directory. We keep Roxy's family (automation-friendly prefs,
+ * GPU / sandbox, color-scheme + active theme) and layer our proxy / DoH /
+ * locale prefs on top. The file lives inside the (already sealed) profile dir
+ * and is never logged.
  */
 export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
   const lines: string[] = [];
-  lines.push("// Agent Browser Studio managed Firefox preferences (regenerated at launch).");
+  lines.push("// Agent Browser Studio managed Firefox preferences (RoxyFirefox-aligned, regenerated at launch).");
 
+  // Roxy's automation-friendly base prefs (keeps WebDriver/Marionette sessions
+  // and background tabs stable for unattended runs).
+  lines.push(prefBoolean("focusmanager.testmode", true));
+  lines.push(prefBoolean("layout.testing.top-level-always-active", true));
+  lines.push(prefNumber("dom.min_background_timeout_value", 0));
+  lines.push(prefNumber("dom.min_background_timeout_value_without_budget_throttling", 0));
+  lines.push(prefBoolean("dom.timeout.enable_budget_timer_throttling", false));
+  lines.push(prefString("browser.startup.homepage", "about:home"));
+  lines.push(prefBoolean("browser.newtabpage.enabled", true));
+
+  // GPU (hardware acceleration) — Roxy maps `useGpu` to these two prefs.
+  if (opts.useGpu) {
+    lines.push(prefBoolean("layers.acceleration.disabled", false));
+    lines.push(prefBoolean("gfx.webrender.disabled", false));
+  } else {
+    lines.push(prefBoolean("layers.acceleration.disabled", true));
+    lines.push(prefBoolean("gfx.webrender.disabled", true));
+  }
+
+  // Content sandbox — Roxy: true = level 0 (enabled), false = -1 (disabled).
+  lines.push(prefNumber("security.sandbox.content.level", opts.sandboxPermission ? 0 : -1));
+
+  // Color scheme + active theme (Roxy's `browserColorScheme` family).
+  const scheme = opts.colorScheme ?? "system";
+  if (scheme === "system") {
+    lines.push(prefNumber("layout.css.prefers-color-scheme.content-override", 2));
+  } else {
+    const dark = scheme === "dark";
+    lines.push(prefNumber("layout.css.prefers-color-scheme.content-override", dark ? 0 : 1));
+    lines.push(prefBoolean("ui.systemUsesDarkTheme", dark));
+  }
+  const theme = scheme === "dark"
+    ? "firefox-compact-dark@mozilla.org"
+    : scheme === "light"
+      ? "firefox-compact-light@mozilla.org"
+      : "default-theme@mozilla.org";
+  lines.push(prefString("extensions.activeThemeID", theme));
+
+  // Proxy — HTTP or SOCKS (socks5h → remote DNS) via the standard prefs.
   const proxy = opts.proxy;
   const isSocks = proxy?.type === "socks5" || proxy?.type === "socks5h";
   if (proxy && proxy.port) {

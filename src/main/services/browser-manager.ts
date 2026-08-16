@@ -64,6 +64,7 @@ import {
   findFirefoxBinary,
   getFirefoxStatus,
   sanitizeBrowserEngine,
+  spawnFirefoxWithDebugInfo,
   writeFirefoxUserJs,
   type FirefoxStatus,
 } from "./browser-engine.js";
@@ -966,15 +967,17 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
 }
 
 /**
- * Firefox engine launch (Slice 77).
+ * Firefox engine launch (Slice 77/78), aligned with RoxyBrowser's real
+ * RoxyFirefox engine.
  *
  * Stock Firefox is launched pass-through (no managed --fingerprint-* patch
- * set), so the profile's identity fields are forwarded only where Firefox
- * supports them without a patch: the language preference and proxy/DoH prefs
- * are written to the profile's user.js, the timezone is NOT overridden (no
- * stock equivalent of --fingerprint-timezone) and drive detection is absent.
- * Full fingerprint parity is the tracked follow-up. Remote debugging uses
- * Firefox's --remote-debugging-port (WebDriver BiDi), not Chromium's CDP.
+ * set); identity is forwarded where Firefox supports it without a patch: the
+ * language preference and proxy/DoH prefs are written to the profile's user.js,
+ * plus Roxy's managed prefs family (automation-friendly base, GPU, sandbox,
+ * color-scheme/theme). The command line matches RoxyFirefox — `-profile`,
+ * `--marionette`, `--remote-debugging-port=0`, `-no-remote` — and we parse the
+ * WebDriver BiDi WebSocket URL from stderr (Marionette port from stdout) to
+ * discover the real automation port instead of guessing one.
  */
 async function launchFirefoxProfile(
   dirId: string,
@@ -997,7 +1000,6 @@ async function launchFirefoxProfile(
   }
 
   const profileDir = path.join(getProfilesDir(), dirId);
-  const cdpPort = findFreePort();
   const resolvedProxy = resolveProfileProxySecret(dirId);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
@@ -1005,27 +1007,33 @@ async function launchFirefoxProfile(
     proxy: resolvedProxy.config,
     dohUrl,
     locale: meta.locale || undefined,
+    useGpu: true,
+    sandboxPermission: true,
+    colorScheme: "system",
   });
 
   const args = buildFirefoxLaunchArgs({
     profileDir,
-    remotePort: cdpPort,
+    remotePort: 0, // auto-assign; parse the real endpoint from Firefox output
     headless,
     platform: meta.platform,
     appUrl: meta.appUrl || undefined,
   });
   console.log(`[agent-browser] Firefox launch plan ready for ${dirId.slice(0, 8)}: ${bin}`);
 
-  const child = (await import("node:child_process")).spawn(bin, args, {
-    detached: false,
-    stdio: "ignore",
-    env: process.env,
-  });
-  let pid: number;
-  if (typeof child.pid === "number") pid = child.pid;
-  else throw new Error("Failed to spawn Firefox: no pid");
+  const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000 });
+  const pid = child.pid;
+  if (typeof pid !== "number" || !Number.isInteger(pid)) {
+    try { child.kill(); } catch { /* ignore */ }
+    if (releaseLaunchLock) releaseLaunchLock();
+    throw new Error("Failed to spawn Firefox: no pid");
+  }
 
-  runningProcesses.set(dirId, { pid, process: child, port: cdpPort, lastActivityAt: Date.now() });
+  // Firefox speaks WebDriver BiDi (not Chromium CDP). We record the BiDi port
+  // as the profile's debug port so status/stop/idle tracking stay coherent;
+  // agent CDP tooling remains Chromium-only for now (documented follow-up).
+  const actualPort = info.actualPort ?? info.marionettePort ?? 0;
+  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now() });
   child.on("exit", () => {
     const entry = runningProcesses.get(dirId);
     if (entry && entry.pid === pid) {
@@ -1034,9 +1042,15 @@ async function launchFirefoxProfile(
     }
   });
 
-  recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `firefox ${firefoxVersion || "?"} port=${cdpPort}` });
+  recordAudit({
+    category: "profile",
+    action: "launch",
+    target: dirId,
+    actor: "user",
+    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} marionette=${info.marionettePort ?? "-"}`,
+  });
   if (releaseLaunchLock) releaseLaunchLock();
-  return { pid, cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
+  return { pid, cdpPort: actualPort, driftCheck: { checked: false }, envCheck: { checked: false } };
 }
 
 export function stopBrowser(dirId: string): boolean {
