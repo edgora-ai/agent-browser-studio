@@ -1204,3 +1204,22 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 受影响 e2e j29/j35/j70/j94/j95 共 5 文件 24 例全过。
 
 **后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。代理风控目前是「启动前一次性阻断」，后续可把 DNS 路由审计与代理健康历史联动成周期复检。
+
+
+## Slice 75 — 业务一键预设（Business One-Click Presets，超 RoxyBrowser 3.8.7 的深度对齐）
+
+**上游核对**：RoxyBrowser 仍 4.0.3（2026-08-13）、CloakBrowser 仍 chromium-v150.0.7871.114.6-pro（2026-08-11），均无新发布。本轮补齐竞品差距清单里「业务一键配置」一项，并做出差异化：RoxyBrowser 3.8.7 的预设是「业务标签 → 预填指纹 + 匹配特挑 IP」；我们做的是**完整自洽身份预设**——每个预设输出平台/时区/语言/WebRTC/自定义地理位置/标签一整套互相一致的字段，创建时由主进程权威合并，且天然对接既有的启动安全门（一致性 / 代理风控 / 环境风控）。
+
+**实现**：
+- 新增 `src/main/services/business-presets.ts`：8 个预设目录（TikTok Shop US / Amazon 卖家 US / FB·IG 广告 US / IG 社媒矩阵 US / eBay UK / 欧盟电商 DE / AI 自动化工作台 US / 加密交易所 SG），每个预设含自洽身份 + 目标地区 + 建议代理 + 建议安全门；`resolveBusinessPreset` 校验 id、`presetProfileToCreateOpts` 映射建号字段；
+- `src/main/ipc/browser.ts`：新增 `browser:presets`（目录透传）；`browser:create` 接受 `businessPresetId`——主进程权威合并预设字段，**显式用户字段优先于预设默认值**，并把 `preset` 写进 profile；
+- `src/main/types.ts` / `config-manager.ts` / `browser-manager.ts`：`BrowserProfileMeta` / `BrowserProfile` 新增 `preset` 字段，getProfileMeta / list / 配置重载归一化均保留（防 reload 丢弃）；
+- `src/renderer`：创建对话框新增「🎯 Business Preset」下拉 + 说明行（地区 / 建议代理 / 建议安全门，中英文案按当前语言渲染）；选中预设即预填 Name（建议名）+ Platform + Timezone + Locale + WebRTC + 自定义地理位置；Locale 下拉补 en-SG；打开对话框/切回手动时重置；
+- 单测 `tests/unit/business-presets.test.ts` +6 例（目录唯一性 / 每个预设身份自洽（tz·locale·geo·平台·WebRTC 合法）/ 深拷贝 / 未知 id 抛错 / 字段映射 / 场景覆盖）；
+- e2e `tests/e2e/j96-business-preset.test.ts` 新增 6 例（目录可见 → 选中 TikTok 预设预填自洽身份+说明 → UI 建号落库 preset+tags → 绕过 UI 直连 API 主进程权威合并 → 显式字段覆盖预设 → console 无意外错误）。
+
+**验证**：
+- 全量单测 57 文件 655 例全绿（较 Slice 74 +6）；
+- 受影响 e2e j88/j92/j96 共 3 文件 13 例全过（j92 创建流程回归、j88 快速创建回归未受预设行影响）。
+
+**后续项**：引擎矩阵仅剩「签名多平台分发」partial（真实 runner 执行）。竞品差距清单还剩：Firefox 双引擎（数周级）、AI Skills Hub 平台适配器目录、RoxyIP 代理商城/团队计费（商业向）。预设目录后续可按用户反馈扩展更多地区/平台组合，并可与代理健康/风控联动（如「预设匹配代理」时直接给出该代理的 IDC/纯净度体检）。
