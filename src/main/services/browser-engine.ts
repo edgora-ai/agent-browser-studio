@@ -92,8 +92,10 @@ export interface FirefoxStatus {
   installed: boolean;
   path: string | null;
   version: string | null;
-  /** Stock Firefox does not carry the managed --fingerprint-* patch set. */
+  /** Native `--fingerprint-*` patch parity is NOT delivered on stock Firefox. */
   fingerprintParity: false;
+  /** What the runtime DOES deliver (Slice 79): prefs + BiDi preload injection. */
+  managedInjection: "prefs+bidi-preload" | "none";
   hint: string;
 }
 
@@ -106,6 +108,7 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
       path: null,
       version: null,
       fingerprintParity: false,
+      managedInjection: "none",
       hint: `Firefox binary not found. Install Firefox or set ${FIREFOX_ENV}.`,
     };
   }
@@ -115,7 +118,9 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
     path: bin,
     version: detectFirefoxVersion(bin),
     fingerprintParity: false,
-    hint: "Firefox remote debugging (WebDriver BiDi) is used. Managed fingerprint-injection parity is a known follow-up.",
+    managedInjection: "prefs+bidi-preload",
+    hint: "Firefox is driven via WebDriver BiDi + user.js (RoxyFirefox-aligned). " +
+      "Managed identity = prefs + preload injection (Slice 79); native --fingerprint-* patch parity is a known follow-up.",
   };
 }
 
@@ -256,6 +261,8 @@ export interface FirefoxUserJsOpts {
   /** DoH endpoint URI; when set, Firefox uses TRR as the DNS resolver. */
   dohUrl?: string | null;
   locale?: string | null;
+  /** Extra managed prefs (Slice 79 fingerprint parity: UA / concurrency / DNT). */
+  extraPrefs?: Record<string, string | number | boolean> | null;
   /** Hardware acceleration enabled (Roxy maps this to layers/webrender prefs). */
   useGpu?: boolean;
   /** Content sandbox level: true = 0 (enabled), false = -1 (disabled). */
@@ -289,6 +296,16 @@ function prefBoolean(key: string, value: boolean): string {
 export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
   const lines: string[] = [];
   lines.push("// Agent Browser Studio managed Firefox preferences (RoxyFirefox-aligned, regenerated at launch).");
+
+  // Extra managed prefs (Slice 79 fingerprint parity family), laid down before
+  // the Roxy base family so a conflict always resolves in Roxy's favor.
+  if (opts.extraPrefs) {
+    for (const [key, value] of Object.entries(opts.extraPrefs)) {
+      if (typeof value === "boolean") lines.push(prefBoolean(key, value));
+      else if (typeof value === "number") lines.push(prefNumber(key, value));
+      else lines.push(prefString(key, String(value)));
+    }
+  }
 
   // Roxy's automation-friendly base prefs (keeps WebDriver/Marionette sessions
   // and background tabs stable for unattended runs).

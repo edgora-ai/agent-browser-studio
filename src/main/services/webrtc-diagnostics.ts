@@ -1,15 +1,16 @@
 // ── In-browser WebRTC diagnostics (RoxyBrowser 3.9.2 "WebRTC logs /
 // performance diagnostics" parity) ──
 // Runs a real RTCPeerConnection probe inside the profile's own managed
-// Chromium via CDP, and reports what ICE candidates expose (mDNS hostnames
-// vs raw host IPs), connection state and RTT. This verifies the engine's
-// WebRTC hiding from the actual browser surface, not from a curl proxy test.
+// browser via CDP (Chromium) or WebDriver BiDi (Firefox), and reports what ICE
+// candidates expose (mDNS hostnames vs raw host IPs), connection state and
+// RTT. This verifies the engine's WebRTC hiding from the actual browser
+// surface, not from a curl proxy test.
 
 import { statusBrowser, launchBrowser } from "./browser-manager.js";
-import { cdpConnect, cdpDisconnect, cdpNavigate, cdpEvaluate } from "./local-agent.js";
 import { getWebRtcDiagnostics, setWebRtcDiagnostics } from "./config-manager.js";
 import { clearWebRtcDiagnostics as clearStoredWebRtcDiagnostics } from "./config-manager.js";
 import { recordAudit } from "./audit-log.js";
+import { evaluateInPage, navigateInPage, getProfileEngineByDirId } from "./page-eval.js";
 import type { WebRtcDiagnosticsEntry } from "../types.js";
 
 /** Probe injected via CDP Runtime.evaluate (awaitPromise). Plain ES5-ish. */
@@ -117,17 +118,17 @@ export async function runWebRtcDiagnostics(dirId: string): Promise<WebRtcDiagRun
       status = statusBrowser(dirId);
     }
     if (!cdpPort || !status.running) {
-      return { ok: false, error: "Profile is not running and CDP port could not be obtained" };
+      return { ok: false, error: "Profile is not running and the debug port could not be obtained" };
     }
-    let client: any = null;
+    const engine = getProfileEngineByDirId(dirId);
     try {
-      client = await cdpConnect(cdpPort);
-      let res: any = await cdpEvaluate(client, PROBE_JS);
-      // Privileged chrome:// pages can hide WebRTC; retry once on a plain page.
+      let res: any = await evaluateInPage(cdpPort, engine, PROBE_JS, { timeoutMs: 15000 });
+      // Privileged chrome:// (or otherwise locked) pages can hide WebRTC;
+      // retry once on a plain page.
       if (res && res.rtcAvailable === false) {
-        await cdpNavigate(client, "about:blank");
+        await navigateInPage(cdpPort, engine, "about:blank");
         await sleep(600);
-        res = await cdpEvaluate(client, PROBE_JS);
+        res = await evaluateInPage(cdpPort, engine, PROBE_JS, { timeoutMs: 15000 });
       }
       const entry: WebRtcDiagnosticsEntry = {
         at: Date.now(),
@@ -146,8 +147,8 @@ export async function runWebRtcDiagnostics(dirId: string): Promise<WebRtcDiagRun
       setWebRtcDiagnostics(dirId, [...history, entry]);
       recordAudit({ category: "profile", action: "webrtc-diagnostic", target: dirId, actor: "user", detail: entry.summary });
       return { ok: true, result: entry };
-    } finally {
-      if (client) { try { cdpDisconnect(client); } catch (e) { /* ignore */ } }
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
     }
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };

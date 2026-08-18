@@ -8,6 +8,7 @@ import {
 } from "../services/drm.js";
 import { setDrmCdmPath } from "../services/config-manager.js";
 import { statusBrowser } from "../services/browser-manager.js";
+import { getProfileEngineByDirId } from "../services/page-eval.js";
 import { recordAudit } from "../services/audit-log.js";
 
 export function registerDrmHandlers(): void {
@@ -57,7 +58,7 @@ export function registerDrmHandlers(): void {
     try {
       const st = statusBrowser(dirId);
       if (!st.running || !st.cdpPort) return { success: false, error: "Profile is not running" };
-      const result = await probeDrmViaCdp(st.cdpPort);
+      const result = await probeDrmViaCdp(st.cdpPort, getProfileEngineByDirId(dirId));
       recordAudit({ category: "profile", action: "drm-probe", target: dirId, actor: "user", detail: result.available ? "widevine available" : (result.error || "widevine unavailable") });
       return { success: true, ...result };
     } catch (e: any) {

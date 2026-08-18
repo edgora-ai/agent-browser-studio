@@ -10,7 +10,8 @@ import {
   getProfileMeta,
   removeProfileMeta,
 } from "./config-manager.js";
-import { cdpCookieService } from "./cdp-cookie-service.js";
+import { runtimeCookieOps } from "./bidi-cookie-service.js";
+import { getProfileEngineByDirId } from "./page-eval.js";
 import { validateDirId, getDirectorySizeAsync } from "./utils.js";
 import type { ProfileInfo, CookieInfo } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
@@ -172,14 +173,19 @@ export async function listCookies(dirId: string, filter?: string): Promise<Cooki
   validateDirId(dirId);
   if (filter !== undefined) validateCookieText("filter", filter, 200, true);
 
-  if (cdpCookieService.hasRunningChrome(dirId)) {
+  if (runtimeCookieOps.hasRunningBrowser(dirId)) {
     const normalizedFilter = filter?.toLowerCase();
-    const cookies = await cdpCookieService.exportCookies(dirId);
+    const cookies = await runtimeCookieOps.exportCookies(dirId);
     const filtered = normalizedFilter
       ? cookies.filter((c) => c.domain.toLowerCase().includes(normalizedFilter) || c.name.toLowerCase().includes(normalizedFilter))
       : cookies;
     return filtered.sort((a, b) => a.domain.localeCompare(b.domain)).slice(0, 200);
   }
+
+  // A running Firefox profile has no Chromium-style sqlite file; when the
+  // runtime export is unavailable we simply report none rather than reading
+  // another engine's on-disk format.
+  if (getProfileEngineByDirId(dirId) === "firefox") return [];
 
   return listCookiesFromSqlite(dirId, filter);
 }
@@ -190,11 +196,11 @@ export async function setCookie(dirId: string, cookie: { domain: string; name: s
   validateCookieName(cookie.name);
   validateCookieText("value", cookie.value, 4096, true);
 
-  if (!cdpCookieService.hasRunningChrome(dirId)) {
+  if (!runtimeCookieOps.hasRunningBrowser(dirId)) {
     throw new Error("Launch this profile before adding cookies. Stopped profiles are read-only to avoid corrupting the browser cookie store.");
   }
 
-  return cdpCookieService.setCookie(dirId, {
+  return runtimeCookieOps.setCookie(dirId, {
     domain: cookie.domain,
     name: cookie.name,
     value: cookie.value,
@@ -211,11 +217,11 @@ export async function deleteCookie(dirId: string, domain: string, name: string):
   validateCookieDomain(domain);
   validateCookieName(name);
 
-  if (!cdpCookieService.hasRunningChrome(dirId)) {
+  if (!runtimeCookieOps.hasRunningBrowser(dirId)) {
     throw new Error("Launch this profile before deleting cookies. Stopped profiles are read-only to avoid corrupting the browser cookie store.");
   }
 
-  return cdpCookieService.deleteCookie(dirId, domain, name);
+  return runtimeCookieOps.deleteCookie(dirId, domain, name);
 }
 
 function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {

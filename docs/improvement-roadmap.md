@@ -1286,3 +1286,23 @@ Logs for profile opening/closing）」。我们此前只有全局 Activity tab�
 - 回归 e2e j98（Firefox engine 7 例）+ 全量单测 58 文件 674 例全绿（较 Slice 77 +3）。
 
 **后续项**：Firefox 的**完整自动化面**（把 CDP 工具栈换成 WebDriver BiDi/Marionette，让 Agent 的 browser_* 工具、指纹采集/漂移检测能在 Firefox 上跑）以及**指纹注入对齐**仍是后续工程；本切片已把 RoxyFirefox 的启动/端口发现/managed prefs 全部对齐，Firefox profile 现在与 Roxy 同构地「能起、能发现端口、能写托管偏好」。其余竞品差距清单保持：RoxyIP 代理商城/团队计费（商业向）。
+## Slice 79 — Firefox 能力与 Chromium 对齐（WebDriver BiDi 运行时桥 + prefs/preload 指纹注入 + 运行时工具）
+
+**上游核对**：RoxyBrowser 4.0.3（2026-08-13）、CloakBrowser chromium-v150.0.7871.114.6-pro（2026-08-11）。Slice 77/78 建好 Firefox 引擎面与真实 RoxyFirefox 启动管线后，缺 Chromium 已有的管理能力：managed identity（指纹配置落到运行态）、指纹漂移基线 + 启动门、运行态 Cookie（排队导入/导出）、环境风险/WebRTC/DRM 运行时探针。由于 stock Firefox 没有 `--fingerprint-*` 原生 patch，本切片用两条真实通道对齐：**user.js prefs**（UA/hardwareConcurrency/language/DNT）与 **WebDriver BiDi preload script**（navigator/screen/时区/canvas/WebGL/audio/geo/媒体设备/语音/storage/webdriver）——与真实 RoxyFirefox 的架构同构（Roxy 也走 prefs + 远程自动化），JS 级注入弱于 Chromium 原生 patch，诚实范围以注释与 `FirefoxStatus.fingerprintParity:false` 披露，漂移基线负责把差异暴露出来。
+
+**实现**：
+- 新增 `src/main/services/bidi-client.ts`：WebDriver BiDi WebSocket 客户端（`session.new` / `browsingContext.getTree|navigate` / `script.evaluate` / `script.addPreloadScript` / `storage.getCookies|setCookie|deleteCookies`），loopback 强制 + 命令/响应相关 + 超时；
+- 新增 `src/main/services/firefox-fingerprint.ts`：`buildFirefoxFingerprintPrefs`（UA/concurrency/DNT）、`buildFirefoxFingerprintPreloadScript`(复用 BrowserFingerprintConfig 确定性注入)、`buildFirefoxManagedIdentity` 汇总包；
+- 新增 `src/main/services/page-eval.ts`：`evaluateInPage(port, engine, expr)` 统一 CDP/BiDi 路由；`navigateInPage`、`getProfileEngineByDirId`；
+- 新增 `src/main/services/bidi-cookie-service.ts`：BiDi 运行时 Cookie 操作 + `runtimeCookieOps` 引擎门面；`cdp-cookie-service` 的排队导入/导出函数改名为 `read/write/clearQueuedCookieImports` 并导出（引擎无关共享队列）；
+- `browser-manager.ts`：`launchFirefoxProfile` 集成 managed identity（显式空闲端口 + prefs 写入 + 长会话持 preload）+ 排队 Cookie 应用 + 指纹漂移门（`captureFingerprint(port, "firefox")`）+ 环境风险运行态门（BiDi 测 rAF/字体暴露）+ 阻断清理；`createBrowserProfile` 移除 Firefox 强制 `fingerprintMode:"off"`；`checkFingerprintDrift` 引擎感知；`parseBrowserProcessLine` 扩展匹配 Firefox `-profile` + 空格分隔 `--remote-debugging-port`（此前 ps 重启发现对 Firefox 完全失效）；`runningProcesses.bidiConn` 生命周期（exit/stop 关闭）；
+- 引擎感知接入点：`environment-risk.ts`（measureRaf/verifyFontExposureViaCdp/checkEnvironmentRiskRuntime）、`webrtc-diagnostics.ts`（runWebRtcDiagnostics）、`drm.ts`（probeDrmViaCdp）、`profile-manager.ts`（list/set/deleteCookie）、`sync-service.ts`（导出/导入/恢复锁）、`rest-api-server.ts`（env-risk 路由）、`ipc/browser.ts`（capture-baseline）、`ipc/drm.ts`；
+- `browser-engine.ts`：`FirefoxStatus.managedInjection: "prefs+bidi-preload" | "none"`、`FirefoxUserJsOpts.extraPrefs`。
+
+**验证**（全部在本机执行）：
+- 单测 +3 文件 +：`tests/unit/bidi-client.test.ts`（本地假 ws 服务器真实跑通协议：session/evaluate/preload/storage cookie/未知命令报错/loopback 校验）、`tests/unit/firefox-fingerprint.test.ts`（UA/prefs/preload 关键断言 + 同种子确定性强、`normalizeFirefoxVersion` 修复）、page-eval 引擎路由（firefox→BiDi 成功、chromium 诚实失败）；`fingerprint-launch-mode.test.ts` +1（Firefox 进程 ps 重发现）；
+- e2e 新增 `tests/e2e/j99-firefox-parity.test.ts`（假 Firefox 二进制 + 假 WebDriver BiDi 服务器全链路）：engine-status managedInjection、user.js prefs 落地、preload 注册（含确定性指纹脚本）、排队 Cookie 经 `storage.setCookie` 应用并清除队列、环境风险 rAF 运行时测量、`/api/profiles/:id/drift` 与 capture-baseline 走 BiDi、canvasHash 漂移 → 重启被 `Fingerprint drift blocked` 拦截 → 清除漂移后恢复启动、stop 关闭会话 + 进程回收；
+- 回归：全量单测 60 文件 698 例全绿；e2e j98/j99 13 例全绿；全量 e2e 91 文件 458 passed（12 skipped）。
+- 81.0 补集（`navigator.gpu`/OffscreenCanvas 面）：`patchWebglContext` 抽出为共用助手，页面 canvas 与 `OffscreenCanvas.getContext`（2d 噪声 + WebGL identity）走同一 patch；`navigator.gpu.requestAdapter` 拦截并改写 `adapter.info`（vendor/architecture/device/description/subgroup）；单测/webEnginePreload 断言同步（本机验证：构建 0 错、单测 24 例、j99 6 例全绿）。
+
+**诚实边界**：preload JS 注入证据强度低于 Chromium 原生 patch（`fingerprintParity:false` 如实上报）；Worker/DedicatedWorker 内的指纹面仍无法经 preload 覆盖（OpenBSD 侧同理属引擎所致，非注入缺口）；Agent 的 `browser_*` CDP 工具栈仍仅 Chromium（把工具栈换成 BiDi 是后续工程）；Firefox 真实指纹一致性需真机 + 外部指纹平台比对（Slice 72 方法复用，本机无 Firefox 已核验）。

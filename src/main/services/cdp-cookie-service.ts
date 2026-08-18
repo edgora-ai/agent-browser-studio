@@ -25,16 +25,16 @@ export const cdpCookieService = {
 
   /** Queue cookies for a stopped profile; launch will apply them once CDP is ready. */
   queueImport(dirId: string, cookies: CookieInfo[]): void {
-    writePendingCookies(dirId, cookies);
+    writeQueuedCookieImports(dirId, cookies);
   },
 
   /** Apply and clear queued cookies for a running profile. */
   async applyQueuedImports(dirId: string): Promise<number> {
-    const pending = readPendingCookies(dirId);
+    const pending = readQueuedCookieImports(dirId);
     if (!pending.length) return 0;
     const imported = await this.importCookies(dirId, pending);
     if (imported === pending.length) {
-      clearPendingCookies(dirId);
+      clearQueuedCookieImports(dirId);
     }
     return imported;
   },
@@ -267,12 +267,18 @@ async function cdpDeleteCookie(port: number, domain: string, name: string): Prom
   } catch (e: any) { console.error("[cdp] deleteCookie:", e.message); return false; }
 }
 
+// ── Shared pending-cookie queue ──
+// Engine-agnostic: the Chromium CDP path and the Firefox BiDi path both read
+// and write the same per-profile queue file, so "queue on stopped profile →
+// apply at next launch" works regardless of which engine eventually launches.
+
 function pendingCookiePath(dirId: string): string {
   validateDirId(dirId);
   return path.join(getAppDataDir(), "pending-cookie-imports", `${dirId}.json`);
 }
 
-function readPendingCookies(dirId: string): CookieInfo[] {
+/** Read the queued cookie imports for a profile. */
+export function readQueuedCookieImports(dirId: string): CookieInfo[] {
   const filePath = pendingCookiePath(dirId);
   if (!fs.existsSync(filePath)) return [];
   try {
@@ -284,7 +290,8 @@ function readPendingCookies(dirId: string): CookieInfo[] {
   }
 }
 
-function writePendingCookies(dirId: string, cookies: CookieInfo[]): void {
+/** Write cookie imports to the per-profile queue for the next launch. */
+export function writeQueuedCookieImports(dirId: string, cookies: CookieInfo[]): void {
   const filePath = pendingCookiePath(dirId);
   const dir = path.dirname(filePath);
   const normalized = cookies.map(normalizeCookieForQueue).filter(Boolean) as CookieInfo[];
@@ -293,7 +300,8 @@ function writePendingCookies(dirId: string, cookies: CookieInfo[]): void {
   fs.renameSync(`${filePath}.tmp`, filePath);
 }
 
-function clearPendingCookies(dirId: string): void {
+/** Clear the queued cookie imports for a profile. */
+export function clearQueuedCookieImports(dirId: string): void {
   try { fs.rmSync(pendingCookiePath(dirId), { force: true }); } catch {}
 }
 

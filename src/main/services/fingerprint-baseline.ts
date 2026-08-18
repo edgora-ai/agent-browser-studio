@@ -3,10 +3,13 @@
 // the live browser fingerprint (UA / platform / languages / hardware / screen /
 // timezone / WebGL / canvas), store it as the profile's baseline, and diff
 // subsequent captures so drift is visible/auditable before it causes account
-// loss. Pure logic for capture/diff (testable); CDP connection injected.
+// loss. Pure logic for capture/diff (testable); engine-aware eval (CDP / BiDi)
+// injected.
 import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
 import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
 import { captureFontCorpusInPage } from "../../tools/font-corpus.js";
+import { evaluateInPage } from "./page-eval.js";
+import type { BrowserEngine } from "./browser-engine.js";
 
 const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
 const WEBGPU_CORPUS_CAPTURE_SOURCE = captureWebGpuCorpusInPage.toString();
@@ -196,19 +199,13 @@ export const CAPTURE_EXPRESSION = `(async function(){
 
 export type Fingerprint = Record<string, string | number | null | boolean>;
 
-/** Capture the live fingerprint from a running profile via CDP. */
-export async function captureFingerprint(cdpPort: number): Promise<Fingerprint> {
+/** Capture the live fingerprint from a running profile (CDP or BiDi by engine). */
+export async function captureFingerprint(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<Fingerprint> {
   // Keep the probe importable by the standalone Chromium verifier without
-  // loading Electron-only local-agent dependencies.
-  const { cdpConnect, cdpEvaluate } = await import("./local-agent.js");
-  const client = await cdpConnect(cdpPort);
-  try {
-    const raw = await cdpEvaluate(client, CAPTURE_EXPRESSION);
-    const value = typeof raw === "string" ? raw : raw?.value;
-    return typeof value === "string" ? JSON.parse(value) : (value || {});
-  } finally {
-    try { (client as any).ws?.close?.(); } catch { /* ignore */ }
-  }
+  // loading Electron-only local-agent dependencies (page-eval lazy-loads).
+  const raw = await evaluateInPage(cdpPort, engine, CAPTURE_EXPRESSION, { timeoutMs: 20000 });
+  const value = typeof raw === "string" ? raw : raw?.value;
+  return typeof value === "string" ? JSON.parse(value) : (value || {});
 }
 
 export interface FingerprintDrift {

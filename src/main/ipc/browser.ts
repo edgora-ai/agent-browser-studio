@@ -16,6 +16,7 @@ import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
+import { sanitizeBrowserEngine } from "../services/browser-engine.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
 import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
@@ -219,8 +220,9 @@ export function registerBrowserHandlers(): void {
     const st = statusBrowser(dirId);
     if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
     try {
-      const current = await captureFingerprint(st.cdpPort);
       const cfg = getConfig() as any;
+      const engine = sanitizeBrowserEngine(cfg.browserProfiles?.[dirId]?.engine);
+      const current = await captureFingerprint(st.cdpPort, engine);
       const meta = cfg.browserProfiles?.[dirId] || {};
       const drift = diffFingerprints(meta.fingerprintBaseline, current);
       const risky = hasRiskyDrift(drift);
@@ -430,7 +432,7 @@ export function registerBrowserHandlers(): void {
           const length = stat.size - start;
           const buf = Buffer.alloc(length);
           fs.readSync(fd, buf, 0, length, start);
-          logTail = buf.toString("utf-8").replace(/[ --]/g, "");
+          logTail = buf.toString("utf-8").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
         } finally {
           fs.closeSync(fd);
         }

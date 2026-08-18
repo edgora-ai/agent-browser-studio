@@ -9,7 +9,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { getAppDataDir, getConfig, getDrmConfig, setProfileMeta } from "./config-manager.js";
-import { cdpConnect, cdpDisconnect, cdpEvaluate } from "./local-agent.js";
+import { evaluateInPage } from "./page-eval.js";
+import type { BrowserEngine } from "./browser-engine.js";
 
 export interface WidevineCdmInfo {
   /** Directory containing manifest.json + _platform_specific/. */
@@ -245,24 +246,21 @@ export function drmLaunchArgs(dirId: string): string[] {
   return [`--widevine-cdm-path=${cdm.path}`, `--widevine-cdm-version=${cdm.version}`];
 }
 
-/** Probe a running profile over CDP for real Widevine availability. */
-export async function probeDrmViaCdp(cdpPort: number): Promise<{ available: boolean; keySystems: string[]; error?: string }> {
-  const client = await cdpConnect(cdpPort);
+/** Probe a running profile (CDP or BiDi by engine) for real Widevine availability. */
+export async function probeDrmViaCdp(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<{ available: boolean; keySystems: string[]; error?: string }> {
+  const expression = `(async () => {
+    const cfg = [{ initDataTypes: ["cenc"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }] }];
+    try {
+      await navigator.requestMediaKeySystemAccess("com.widevine.alpha", cfg);
+      return { available: true, keySystems: ["com.widevine.alpha"] };
+    } catch (e) {
+      return { available: false, keySystems: [] };
+    }
+  })()`;
   try {
-    const expression = `(async () => {
-      const cfg = [{ initDataTypes: ["cenc"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }] }];
-      try {
-        await navigator.requestMediaKeySystemAccess("com.widevine.alpha", cfg);
-        return { available: true, keySystems: ["com.widevine.alpha"] };
-      } catch (e) {
-        return { available: false, keySystems: [] };
-      }
-    })()`;
-    const result = await cdpEvaluate(client, expression);
+    const result = await evaluateInPage(cdpPort, engine, expression, { timeoutMs: 10000 });
     return { available: !!result?.available, keySystems: result?.keySystems || [] };
   } catch (e: any) {
     return { available: false, keySystems: [], error: e?.message || String(e) };
-  } finally {
-    cdpDisconnect(client);
   }
 }

@@ -51,6 +51,7 @@ import {
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
+import { getProfileEngineByDirId } from "./page-eval.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "./profile-archive.js";
 import { syncService } from "./sync-service.js";
 import { retryAgentRun, retryJobRuns, testRunRule, reloadSchedule, cancelRunningJob } from "./automation.js";
@@ -347,7 +348,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       if (!meta) return { status: 404, body: { error: "Profile not found" } };
       const st = statusBrowser(dirId);
       const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
-      if (st.running && st.cdpPort) return { status: 200, body: await checkEnvironmentRiskRuntime(profile, st.cdpPort) };
+      if (st.running && st.cdpPort) return { status: 200, body: await checkEnvironmentRiskRuntime(profile, st.cdpPort, {}, getProfileEngineByDirId(dirId)) };
       return { status: 200, body: checkEnvironmentRisk(profile) };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };

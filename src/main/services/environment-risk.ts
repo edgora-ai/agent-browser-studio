@@ -12,6 +12,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ResolvedProfileProxy } from "../types.js";
+import { evaluateInPage } from "./page-eval.js";
+import type { BrowserEngine } from "./browser-engine.js";
 
 export type EnvSeverity = "high" | "medium" | "info";
 
@@ -289,19 +291,14 @@ export const RAF_MEASURE_EXPRESSION = `(async () => {
   return { samples: samples.length, median: Math.round(median * 100) / 100, mean: Math.round(mean * 100) / 100 };
 })()`;
 
-/** Measure rAF timing over a running profile via CDP. Returns null when unavailable. */
-export async function measureRaf(cdpPort: number): Promise<EnvRafResult | null> {
+/** Measure rAF timing over a running profile (CDP or BiDi by engine). Returns null when unavailable. */
+export async function measureRaf(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<EnvRafResult | null> {
   try {
-    const { cdpConnect, cdpEvaluate } = await import("./local-agent.js");
-    const client = await cdpConnect(cdpPort);
-    try {
-      const raw = await cdpEvaluate(client, RAF_MEASURE_EXPRESSION);
-      const value = typeof raw === "string" ? JSON.parse(raw) : raw?.value || raw;
-      const classified = classifyRaf(Number(value?.median) || 0, Number(value?.samples) || 0);
-      return { ...classified, meanMs: Number(value?.mean) || 0 };
-    } finally {
-      try { (client as any).ws?.close?.(); } catch { /* ignore */ }
-    }
+    const rawValue = await evaluateInPage(cdpPort, engine, RAF_MEASURE_EXPRESSION, { timeoutMs: 8000 });
+    const raw = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue?.value || rawValue;
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const classified = classifyRaf(Number(value?.median) || 0, Number(value?.samples) || 0);
+    return { ...classified, meanMs: Number(value?.mean) || 0 };
   } catch (e) {
     return null;
   }
@@ -331,10 +328,10 @@ export const FONT_EXPOSURE_EXPRESSION = `(async () => {
  * Measure which Chinese font families are ACTUALLY loadable inside a running
  * profile (FontFaceSet.check + rendered-width-vs-generic-fallback evidence, the
  * same method the FONT_CORPUS acceptance gate uses). Returns the loadable family
- * names. On any CDP failure returns the full candidate list (conservative: keep
- * the static risk rather than under-report).
+ * names. On any engine-eval failure returns the full candidate list
+ * (conservative: keep the static risk rather than under-report).
  */
-export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames: string[]): Promise<string[]> {
+export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames: string[], engine: BrowserEngine = "chromium"): Promise<string[]> {
   const families: string[] = [];
   const seen = new Set<string>();
   for (const name of fontDisplayNames) {
@@ -345,16 +342,11 @@ export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames
   if (!families.length) return [];
   const expression = FONT_EXPOSURE_EXPRESSION.replace("globalThis.__agentBrowserFontProbeList || []", JSON.stringify(families));
   try {
-    const { cdpConnect, cdpEvaluate } = await import("./local-agent.js");
-    const client = await cdpConnect(cdpPort);
-    try {
-      const raw = await cdpEvaluate(client, expression);
-      const value = typeof raw === "string" ? JSON.parse(raw) : raw?.value || raw;
-      if (!value || typeof value !== "object") return families;
-      return families.filter((fam) => value[fam] === true);
-    } finally {
-      try { (client as any).ws?.close?.(); } catch { /* ignore */ }
-    }
+    const rawValue = await evaluateInPage(cdpPort, engine, expression, { timeoutMs: 10000 });
+    const raw = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue?.value || rawValue;
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!value || typeof value !== "object") return families;
+    return families.filter((fam) => value[fam] === true);
   } catch (e) {
     return families; // conservative: assume exposed when verification fails
   }
@@ -490,24 +482,25 @@ export function checkEnvironmentRisk(profile: {
   };
 }
 
-/** Runtime variant: measure rAF over CDP and append its finding. */
+/** Runtime variant: measure rAF over the live browser and append its finding. */
 export async function checkEnvironmentRiskRuntime(profile: {
   timezone?: string | null;
   locale?: string | null;
   platform?: string | null;
-}, cdpPort: number, opts: Omit<EnvCheckOptions, "runtime" | "cdpPort"> = {}): Promise<EnvironmentRiskResult> {
-  // Static host scan first, then verify actual in-browser font exposure over
-  // CDP. A host may have Chinese fonts installed while the engine isolates them
-  // (Windows profiles), so the report uses runtime evidence when available.
+}, cdpPort: number, opts: Omit<EnvCheckOptions, "runtime" | "cdpPort"> = {}, engine: BrowserEngine = "chromium"): Promise<EnvironmentRiskResult> {
+  // Static host scan first, then verify actual in-browser font exposure via
+  // the live engine (CDP for Chromium, BiDi for Firefox). A host may have
+  // Chinese fonts installed while the engine isolates them (Windows profiles),
+  // so the report uses runtime evidence when available.
   const base = checkEnvironmentRisk(profile, { ...opts, runtime: false });
   let exposedFonts: string[] = [];
   if (base.cnFonts.length && base.findings.some((f) => f.code === "cn-fonts-exposed" || f.code === "cn-fonts-macos-universal")) {
-    exposedFonts = await verifyFontExposureViaCdp(cdpPort, base.cnFonts);
+    exposedFonts = await verifyFontExposureViaCdp(cdpPort, base.cnFonts, engine);
   }
   const result = exposedFonts.length || base.findings.some((f) => f.code === "cn-fonts-exposed")
     ? checkEnvironmentRisk(profile, { ...opts, runtime: false, exposedFonts })
     : base;
-  const raf = await measureRaf(cdpPort);
+  const raf = await measureRaf(cdpPort, engine);
   result.raf = raf;
   if (raf && raf.samples > 0 && !raf.standard) {
     result.findings.push({

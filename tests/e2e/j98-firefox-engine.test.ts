@@ -103,6 +103,7 @@ describe('J98 — Firefox engine capability', () => {
     expect(st.firefox.engine).toBe('firefox');
     expect(typeof st.firefox.installed).toBe('boolean');
     expect(st.firefox.fingerprintParity).toBe(false);
+    expect(st.firefox.managedInjection).toBe('none');
     // On this machine no Firefox is expected; the status must still be coherent.
     expect(st.firefox.installed).toBe(false);
     expect(st.firefox.hint).toContain('Firefox binary not found');
@@ -117,7 +118,9 @@ describe('J98 — Firefox engine capability', () => {
     const p = (list || []).find((x: any) => x.name === 'J98-Firefox-IPC');
     expect(p).toBeTruthy();
     expect(p.engine).toBe('firefox');
-    expect(p.fingerprintMode).toBe('off'); // stock Firefox = pass-through
+    // Slice 79: Firefox carries the same managed identity as Chromium (prefs +
+    // BiDi preload injection); "off" is an explicit opt-out on both engines.
+    expect(p.fingerprintMode).toBe('managed');
     expect(p.locale).toBe('en-US');
   }, 20000);
 

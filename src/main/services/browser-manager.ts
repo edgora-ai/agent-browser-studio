@@ -19,7 +19,7 @@ import {
   captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
-import { checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
+import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
@@ -68,6 +68,9 @@ import {
   writeFirefoxUserJs,
   type FirefoxStatus,
 } from "./browser-engine.js";
+import { buildFirefoxManagedIdentity } from "./firefox-fingerprint.js";
+import { connectBidi, bidiAddPreloadScript, type BidiConnection } from "./bidi-client.js";
+import { firefoxCookieService } from "./bidi-cookie-service.js";
 
 export interface BrowserProfile {
   dirId: string;
@@ -119,6 +122,8 @@ const runningProcesses = new Map<string, {
   lastActivityAt: number;
   killTimer?: ReturnType<typeof setTimeout>;
   proxyBridge?: { close: () => Promise<void> };
+  /** Long-lived WebDriver BiDi session for Firefox (keeps preload scripts alive). */
+  bidiConn?: BidiConnection;
 }>();
 
 // ═══════════════════════════════════════════════════════════════
@@ -285,9 +290,10 @@ export function createBrowserProfile(opts: {
     throw new Error(`Proxy not found: ${opts.proxyName || ""}`);
   }
   const engine = sanitizeBrowserEngine(opts.engine);
-  // Stock Firefox has no managed --fingerprint-* injection; a Firefox profile
-  // launches pass-through until fingerprint parity lands (see roadmap Slice 77).
-  const fingerprintMode = engine === "firefox" ? "off" : normalizeFingerprintMode(opts.fingerprintMode);
+  // Firefox carries the same managed identity intent as Chromium (Slice 79):
+  // prefs (user.js) + a WebDriver BiDi preload script. `fingerprintMode: off`
+  // explicitly opts out on both engines.
+  const fingerprintMode = normalizeFingerprintMode(opts.fingerprintMode);
   const profile = {
     name: opts.name,
     engine,
@@ -947,17 +953,14 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   const cfg = getConfig() as any;
   const meta = cfg.browserProfiles?.[dirId];
   if (!meta) return { ok: false, error: "Profile not found" };
-  if (sanitizeBrowserEngine(meta.engine) === "firefox") {
-    // Firefox uses stock fingerprint behavior (Slice 77): no managed baseline.
-    return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
-  }
+  const engine = sanitizeBrowserEngine(meta.engine);
   if (!meta.fingerprintBaseline) {
     return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
   }
   const st = statusBrowser(dirId);
   if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
   try {
-    const current = await captureFingerprint(st.cdpPort);
+    const current = await captureFingerprint(st.cdpPort, engine);
     const drift = diffFingerprints(meta.fingerprintBaseline, current);
     const risky = hasRiskyDrift(drift);
     return { ok: true, checked: true, hasBaseline: true, risky, drift, fields: Object.keys(current).length };
@@ -967,21 +970,27 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
 }
 
 /**
- * Firefox engine launch (Slice 77/78), aligned with RoxyBrowser's real
- * RoxyFirefox engine.
+ * Firefox engine launch (Slice 77/78/79), aligned with RoxyBrowser's real
+ * RoxyFirefox engine AND with the managed Chromium capability set:
  *
- * Stock Firefox is launched pass-through (no managed --fingerprint-* patch
- * set); identity is forwarded where Firefox supports it without a patch: the
- * language preference and proxy/DoH prefs are written to the profile's user.js,
- * plus Roxy's managed prefs family (automation-friendly base, GPU, sandbox,
- * color-scheme/theme). The command line matches RoxyFirefox — `-profile`,
- * `--marionette`, `--remote-debugging-port=0`, `-no-remote` — and we parse the
- * WebDriver BiDi WebSocket URL from stderr (Marionette port from stdout) to
- * discover the real automation port instead of guessing one.
+ *  - command line matches RoxyFirefox — `-profile`, `--marionette`,
+ *    `--remote-debugging-port=<free port>` (explicit so the port survives app
+ *    restarts and ps-based rediscovery), `-no-remote` — and we parse the
+ *    WebDriver BiDi WebSocket URL from stderr (Marionette port from stdout);
+ *  - managed identity (Slice 79): the profile's fingerprint config is applied
+ *    through the two channels stock Firefox supports — prefs (user.js) and a
+ *    WebDriver BiDi preload script registered over a long-lived session;
+ *  - runtime tools (Slice 79): queued cookie import, live fingerprint drift
+ *    check and the host environment risk check run against the running
+ *    Firefox exactly like they do against managed Chromium.
+ *
+ * Honest scope note: stock Firefox cannot carry the native `--fingerprint-*`
+ * patch set; the preload-script shims are JS-level and weaker than renderer
+ * patching. The fingerprint drift baseline keeps that difference visible.
  */
 async function launchFirefoxProfile(
   dirId: string,
-  meta: BrowserProfileMeta,
+  meta: any,
   cfg: any,
   headless: boolean | undefined,
   releaseLaunchLock: (() => void) | null,
@@ -1000,6 +1009,8 @@ async function launchFirefoxProfile(
   }
 
   const profileDir = path.join(getProfilesDir(), dirId);
+  const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
+  const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
   const resolvedProxy = resolveProfileProxySecret(dirId);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
@@ -1010,47 +1021,171 @@ async function launchFirefoxProfile(
     useGpu: true,
     sandboxPermission: true,
     colorScheme: "system",
+    ...(managedIdentity ? { extraPrefs: managedIdentity.prefs } : {}),
   });
 
+  // Explicit free port (not 0): the BiDi endpoint is deterministic and the
+  // `ps`-based port rediscovery (statusBrowser after an app restart) works.
+  const remotePort = findFreePort();
   const args = buildFirefoxLaunchArgs({
     profileDir,
-    remotePort: 0, // auto-assign; parse the real endpoint from Firefox output
+    remotePort,
     headless,
     platform: meta.platform,
     appUrl: meta.appUrl || undefined,
   });
+
+  const logFile = getLaunchLogPath(dirId);
+  let logFd: number | null = null;
+  try {
+    logFd = fs.openSync(logFile, "a");
+  } catch { /* launch without a log file */ }
+  if (logFd !== null) {
+    try {
+      fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
+    } catch { /* ignore */ }
+  }
   console.log(`[agent-browser] Firefox launch plan ready for ${dirId.slice(0, 8)}: ${bin}`);
 
   const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000 });
   const pid = child.pid;
   if (typeof pid !== "number" || !Number.isInteger(pid)) {
     try { child.kill(); } catch { /* ignore */ }
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error("Failed to spawn Firefox: no pid");
   }
 
-  // Firefox speaks WebDriver BiDi (not Chromium CDP). We record the BiDi port
-  // as the profile's debug port so status/stop/idle tracking stay coherent;
-  // agent CDP tooling remains Chromium-only for now (documented follow-up).
-  const actualPort = info.actualPort ?? info.marionettePort ?? 0;
+  // Firefox speaks WebDriver BiDi (not Chromium CDP). The BiDi port is the
+  // profile's debug port; agent CDP tooling remains Chromium-only for now
+  // (documented follow-up), while the product's own tools went BiDi (Slice 79).
+  const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
   runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now() });
   child.on("exit", () => {
     const entry = runningProcesses.get(dirId);
     if (entry && entry.pid === pid) {
       if (entry.killTimer) clearTimeout(entry.killTimer);
+      if (entry.bidiConn) { try { entry.bidiConn.close(); } catch { /* ignore */ } }
       runningProcesses.delete(dirId);
     }
   });
 
+  let bidiInjected = false;
+  let bidiSessionId: string | null = null;
+  let bidiError: string | null = null;
+  let driftCheck: LaunchDriftCheck = { checked: false };
+  let envCheck: LaunchEnvCheck = { checked: false };
+
+  try {
+    // Long-lived BiDi session: the fingerprint preload script lives in the
+    // session, so the connection stays open while the profile runs.
+    if (info.bidiWebSocketUrl) {
+      try {
+        const conn = await connectBidi(info.bidiWebSocketUrl, { timeoutMs: 15000 });
+        runningProcesses.get(dirId)!.bidiConn = conn;
+        if (managedIdentity) {
+          const scriptId = await bidiAddPreloadScript(conn, managedIdentity.preloadScript, 15000);
+          bidiInjected = scriptId !== null;
+          bidiSessionId = scriptId;
+        }
+      } catch (e: any) {
+        bidiError = e?.message || String(e);
+      }
+    }
+
+    // Queued cookie imports (shared with the Chromium pipeline).
+    try {
+      const queuedCookies = await firefoxCookieService.applyQueuedImports(dirId);
+      if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
+    } catch (e: any) {
+      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, e?.message || e);
+    }
+
+    // Post-launch fingerprint drift check — same gate as managed Chromium:
+    // a stored baseline that no longer matches the live fingerprint on
+    // high-risk fields blocks the launch (blockOnFingerprintDrift).
+    if (managedIdentity && meta.fingerprintBaseline) {
+      try {
+        const current = await captureFingerprint(actualPort, "firefox");
+        const drift = diffFingerprints(meta.fingerprintBaseline, current);
+        const risky = hasRiskyDrift(drift);
+        driftCheck = { checked: true, risky, drift };
+        if (drift.length) {
+          recordAudit({
+            category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
+            detail: drift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(drift),
+          });
+        }
+        if (risky && cfg.blockOnFingerprintDrift !== false) {
+          const reason = "Fingerprint drift blocked (" + summarizeDrift(drift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+          recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
+          const blockError: any = new Error(reason);
+          blockError.driftBlocked = true;
+          throw blockError;
+        }
+      } catch (e: any) {
+        if (e && e.driftBlocked) throw e;
+        console.warn("[agent-browser] fingerprint drift check failed for " + dirId.slice(0, 8) + ":", e?.message || e);
+        driftCheck = { checked: false, error: (e && e.message) || String(e) };
+      }
+    }
+
+    // Host environment risk — for Firefox the runtime font-exposure and rAF
+    // probes run through BiDi (there is no engine-level font isolation).
+    try {
+      const envResult = await checkEnvironmentRiskRuntime(
+        { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
+        actualPort,
+        { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
+        "firefox",
+      );
+      envCheck = { checked: true, high: !envResult.ok, findings: envResult.findings };
+      if (!envResult.ok) {
+        recordAudit({
+          category: "profile", action: "env-risk-high", target: dirId, actor: "auto",
+          detail: "high: " + summarizeEnvFindings(envResult.findings, "high") + (envResult.findings.some((f) => f.severity === "medium") ? "; medium: " + summarizeEnvFindings(envResult.findings, "medium") : ""),
+        });
+      }
+      if (shouldBlockEnvironmentRisk(envResult, cfg.blockOnEnvironmentRisk)) {
+        const reason = "Environment risk blocked (" + summarizeEnvFindings(envResult.findings, "high") + "). Fix the host environment or set blockOnEnvironmentRisk=false to launch.";
+        recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail: reason });
+        throw new Error(reason);
+      }
+    } catch (e: any) {
+      if (e?.driftBlocked) throw e;
+      if (/Environment risk blocked/.test(String(e?.message || e))) {
+        const failedEntry = runningProcesses.get(dirId);
+        if (failedEntry?.bidiConn) { try { failedEntry.bidiConn.close(); } catch { /* ignore */ } }
+        runningProcesses.delete(dirId);
+        try { child.kill(); } catch { /* ignore */ }
+        if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
+        await waitForProcessExit(pid);
+        throw e;
+      }
+      console.warn("[agent-browser] environment risk check failed for " + dirId.slice(0, 8) + ":", e?.message || e);
+      envCheck = { checked: false, error: (e && e.message) || String(e) };
+    }
+  } catch (e: any) {
+    // Drift-blocked or fatal post-launch gate failure: terminate and clean up.
+    const failedEntry = runningProcesses.get(dirId);
+    if (failedEntry?.bidiConn) { try { failedEntry.bidiConn.close(); } catch { /* ignore */ } }
+    runningProcesses.delete(dirId);
+    try { child.kill(); } catch { /* ignore */ }
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
+    await waitForProcessExit(pid);
+    throw e;
+  }
+
+  if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
   recordAudit({
     category: "profile",
     action: "launch",
     target: dirId,
     actor: "user",
-    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} marionette=${info.marionettePort ?? "-"}`,
+    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"}`,
   });
   if (releaseLaunchLock) releaseLaunchLock();
-  return { pid, cdpPort: actualPort, driftCheck: { checked: false }, envCheck: { checked: false } };
+  return { pid, cdpPort: actualPort, driftCheck, envCheck };
 }
 
 export function stopBrowser(dirId: string): boolean {
@@ -1062,6 +1197,13 @@ export function stopBrowser(dirId: string): boolean {
   const psFound = findBrowserByProfile(dirId);
   if (psFound && !pids.includes(psFound.pid)) pids.push(psFound.pid);
   if (!pids.length) return false;
+
+  // Close the long-lived BiDi session first (Firefox drops preload scripts
+  // with it; the browser process itself is still reclaimed below).
+  if (entry?.bidiConn) {
+    try { entry.bidiConn.close(); } catch { /* ignore */ }
+  }
+  entry && delete (entry as any).bidiConn;
 
   // Cancel any pending SIGKILL timer to prevent stale PID reuse race
   if (entry?.killTimer) { clearTimeout(entry.killTimer); }
@@ -1603,15 +1745,26 @@ export function parseBrowserProcessLine(
 ): { pid: number; cdpPort: number } | null {
   const pid = parseInt(line.trim().split(/\s+/, 1)[0], 10);
   if (!Number.isInteger(pid) || pid < 1) return null;
-  const profileMatch = line.match(/--user-data-dir=("[^"]+"|'[^']+'|\S+)/);
-  if (!profileMatch) return null;
-  const profileArg = profileMatch[1].replace(/^['\"]|['\"]$/g, "");
-  if (path.resolve(profileArg) !== path.resolve(expectedProfileDir)) return null;
-  const portMatch = line.match(/--remote-debugging-port=(\d+)/);
+  // Chromium family: `--user-data-dir=<dir> --remote-debugging-port=<port>`.
+  // Firefox family: `-profile <dir> ... --remote-debugging-port <port>`
+  // (space-separated, matching buildFirefoxLaunchArgs / RoxyFirefox).
+  const expected = path.resolve(expectedProfileDir);
+  let profileArg: string | null = null;
+  const chromiumMatch = line.match(/--user-data-dir=("[^"]+"|'[^']+'|\S+)/);
+  if (chromiumMatch) profileArg = chromiumMatch[1].replace(/^['\"]|['\"]$/g, "");
+  if (profileArg === null) {
+    const fxMatch = line.match(/(?:^|\s)-profile\s+("[^"]+"|'[^']+'|\S+)/);
+    if (fxMatch) profileArg = fxMatch[1].replace(/^['\"]|['\"]$/g, "");
+  }
+  if (profileArg === null) return null;
+  if (path.resolve(profileArg) !== expected) return null;
+  let cdpPort = 0;
+  const portEq = line.match(/--remote-debugging-port=(\d+)/);
+  const portSpace = line.match(/--remote-debugging-port\s+(\d+)/);
+  if (portEq) cdpPort = parseInt(portEq[1], 10);
+  else if (portSpace) cdpPort = parseInt(portSpace[1], 10);
   // Renderer/helper processes can briefly outlive the browser process and
   // retain the profile path, but they do not own its CDP endpoint.
-  if (!portMatch) return null;
-  const cdpPort = parseInt(portMatch[1], 10);
   if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65535) return null;
   return { pid, cdpPort };
 }

@@ -120,4 +120,29 @@ describe("fingerprint pass-through launch mode", () => {
       profileDir,
     )).toEqual({ pid: 4203, cdpPort: 9222 });
   });
+
+  it("redisovers Firefox processes via -profile and the space-separated BiDi port (Slice 79)", () => {
+    const profileDir = "/tmp/Agent Browser Profile";
+    // Firefox's launcher mirrors RoxyFirefox: `-profile <dir>` +
+    // `--marionette` + `--remote-debugging-port <port>` + `-no-remote`.
+    expect(parseBrowserProcessLine(
+      `5201 firefox -profile "${profileDir}" --marionette --remote-debugging-port 9333 -new-instance -no-remote`,
+      profileDir,
+    )).toEqual({ pid: 5201, cdpPort: 9333 });
+    // Helpers (content processes) do not carry the debugging port.
+    expect(parseBrowserProcessLine(
+      `5202 firefox -contentproc -childID 3 -profile "${profileDir}"`,
+      profileDir,
+    )).toBeNull();
+    // Space-separated port 0 is invalid just like the `=` variant.
+    expect(parseBrowserProcessLine(
+      `5203 firefox -profile "${profileDir}" --remote-debugging-port 0`,
+      profileDir,
+    )).toBeNull();
+    // Wrong profile dir must not match.
+    expect(parseBrowserProcessLine(
+      `5204 firefox -profile "/tmp/Other Profile" --remote-debugging-port 9333`,
+      profileDir,
+    )).toBeNull();
+  });
 });

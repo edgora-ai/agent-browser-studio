@@ -5,7 +5,8 @@ import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { getSyncConfig, getConfig, saveConfig, getProfilesDir } from "./config-manager.js";
-import { cdpCookieService } from "./cdp-cookie-service.js";
+import { runtimeCookieOps } from "./bidi-cookie-service.js";
+import { writeQueuedCookieImports } from "./cdp-cookie-service.js";
 import { listExtensions } from "./launch-args.js";
 import { acquireRestoreLock, isRestoreLocked } from "./profile-restore-lock.js";
 import { decryptSecretOr } from "./secrets.js";
@@ -162,8 +163,8 @@ export const syncService = {
           totalPrefs++;
         }
 
-        // Cookies (CDP)
-        const cookieList = await withTimeout(cdpCookieService.exportCookies(dirId, signal), 5000, signal);
+        // Cookies (CDP / BiDi per engine)
+        const cookieList = await withTimeout(runtimeCookieOps.exportCookies(dirId, signal), 5000, signal);
         assertSyncNotAborted(signal);
         if (cookieList && cookieList.length > 0) {
           cookiesBlob[dirId] = zlib.gzipSync(JSON.stringify(cookieList)).toString("base64");
@@ -312,13 +313,13 @@ export const syncService = {
             aggregateCookies += list.length;
             if (aggregateCookies > MAX_PULL_COOKIES) throw new Error("Remote config contains too many cookies");
             if (list.length > 0) {
-              if (cdpCookieService.hasRunningChrome(dirId)) {
-                const n = await withTimeout(cdpCookieService.importCookies(dirId, list, signal), 30000, signal) ?? 0;
+              if (runtimeCookieOps.hasRunningBrowser(dirId)) {
+                const n = await withTimeout(runtimeCookieOps.importCookies(dirId, list, signal), 30000, signal) ?? 0;
                 assertSyncNotAborted(signal);
-                console.log(`[sync] pull: ${dirId.slice(0, 8)} ← ${n} cookies (CDP)`);
+                console.log(`[sync] pull: ${dirId.slice(0, 8)} ← ${n} cookies (runtime)`);
                 importedCookies += n;
               } else {
-                cdpCookieService.queueImport(dirId, list);
+                writeQueuedCookieImports(dirId, list);
                 console.log(`[sync] pull: ${dirId.slice(0, 8)} queued ${list.length} cookies for next launch`);
                 importedCookies += list.length;
               }
@@ -371,7 +372,7 @@ export const syncService = {
             validatePreferencesJson(rawPrefs);
             const release = acquireRestoreLock(dirId);
             try {
-              if (cdpCookieService.hasRunningChrome(dirId) || statusBrowser(dirId).running) {
+              if (runtimeCookieOps.hasRunningBrowser(dirId) || statusBrowser(dirId).running) {
                 console.log(`[sync] pull: skipped preferences for running profile ${dirId.slice(0, 8)}`);
                 continue;
               }
@@ -750,7 +751,7 @@ function writeFileAtomic(filePath: string, data: Buffer): void {
 
 function isProfileRunningForRestore(dirId: string): boolean {
   validateDirId(dirId);
-  if (cdpCookieService.hasRunningChrome(dirId)) return true;
+  if (runtimeCookieOps.hasRunningBrowser(dirId)) return true;
   try {
     if (statusBrowser(dirId).running) return true;
   } catch (e) {
