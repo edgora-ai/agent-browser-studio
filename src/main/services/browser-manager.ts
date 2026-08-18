@@ -1339,6 +1339,33 @@ export function touchProfileActivityByPort(port: number): void {
   }
 }
 
+/** Engine of the live profile bound to a debug port, or null when unknown. */
+export function getEngineByPort(port: number): BrowserEngine | null {
+  if (!Number.isInteger(port) || port < 1) return null;
+  for (const [dirId, entry] of runningProcesses) {
+    if (entry.port !== port) continue;
+    try { process.kill(entry.pid, 0); } catch { continue; }
+    const cfg = getConfig() as any;
+    return sanitizeBrowserEngine(cfg.browserProfiles?.[dirId]?.engine);
+  }
+  return null;
+}
+
+/**
+ * The long-lived BiDi session of the live Firefox profile bound to a debug
+ * port (the one carrying the managed preload scripts), or null. Agent tooling
+ * uses this so the injected fingerprint world is the one the agent sees.
+ */
+export function getFirefoxBidiSessionByPort(port: number): BidiConnection | null {
+  if (!Number.isInteger(port) || port < 1) return null;
+  for (const [, entry] of runningProcesses) {
+    if (entry.port !== port || !entry.bidiConn) continue;
+    try { process.kill(entry.pid, 0); } catch { continue; }
+    return entry.bidiConn;
+  }
+  return null;
+}
+
 /** Milliseconds since the profile was last active, or null when not running. */
 export function getProfileIdleMs(dirId: string): number | null {
   if (typeof dirId !== "string" || !dirId) return null;

@@ -192,6 +192,48 @@ export async function bidiCloseContext(conn: BidiConnection, contextId: string, 
   } catch { /* the context may already be gone */ }
 }
 
+/** Capture a PNG screenshot of the context viewport (result.data is base64). */
+export async function bidiCaptureScreenshot(conn: BidiConnection, contextId: string | null = null, timeoutMs = 15000): Promise<string | null> {
+  const context = contextId ?? await bidiGetTopContext(conn, timeoutMs);
+  const result = await conn.send("browsingContext.captureScreenshot", { context, origin: "viewport" }, timeoutMs);
+  return typeof result?.data === "string" ? result.data : null;
+}
+
+/** Drive the input pipeline (pointer/key actions) inside a context. */
+export async function bidiPerformActions(conn: BidiConnection, contextId: string, actions: any[], timeoutMs = 15000): Promise<void> {
+  await conn.send("input.performActions", { context: contextId, actions }, timeoutMs);
+}
+
+/** Type text into the focused element (input.insertText, no synthesis). */
+export async function bidiInsertText(conn: BidiConnection, contextId: string, text: string, timeoutMs = 15000): Promise<boolean> {
+  const result = await conn.send("input.insertText", { context: contextId, text }, timeoutMs);
+  return result?.success !== false;
+}
+
+/**
+ * Resolve a DOM element to its BiDi sharedId (resultOwnership: "root") whose
+ * element handle `input.setFiles` can reference.
+ */
+export async function bidiEvaluateSharedId(conn: BidiConnection, expression: string, contextId: string, timeoutMs = 15000): Promise<string | null> {
+  const result = await conn.send("script.evaluate", {
+    expression,
+    target: { context: contextId },
+    awaitPromise: false,
+    resultOwnership: "root",
+  }, timeoutMs);
+  return typeof result?.result?.sharedId === "string" ? result.result.sharedId : null;
+}
+
+/** Attach local files to a file input via its sharedId element reference. */
+export async function bidiSetFiles(conn: BidiConnection, contextId: string, elementSharedId: string, files: string[], timeoutMs = 15000): Promise<boolean> {
+  const result = await conn.send("input.setFiles", {
+    context: contextId,
+    element: { sharedId: elementSharedId },
+    files,
+  }, timeoutMs);
+  return result?.success !== false;
+}
+
 /**
  * Evaluate a JS expression in the top-level context, awaiting promises.
  * Throws when the page throws (exceptionDetails), so callers see real failures.
@@ -214,16 +256,24 @@ export async function bidiEvaluateInContext(conn: BidiConnection, expression: st
 }
 
 function unwrapBidiValue(value: any): any {
+  if (value === null || value === undefined) return value;
   switch (value.type) {
     case "undefined": return undefined;
     case "null": return null;
-    case "boolean": case "number": case "bigint": return value.value;
-    case "string": return value.value;
+    case "boolean": case "number": case "bigint": case "string": return value.value;
     case "array":
       return Array.isArray(value.value) ? value.value.map(unwrapBidiValue) : [];
     case "object":
       return value.value === null ? null : Object.fromEntries(Object.entries(value.value).map(([k, v]) => [k, unwrapBidiValue(v)]));
     default:
+      // Nested values arrive unwrapped by the BiDi serializer (only the
+      // top-level answer is wrapped): pass primitives through, recurse into
+      // raw objects/arrays, and fall back to the wrapped value otherwise.
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+      if (Array.isArray(value)) return value.map(unwrapBidiValue);
+      if (value !== null && typeof value === "object" && !value.type) {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrapBidiValue(v)]));
+      }
       return value.value !== undefined ? value.value : null;
   }
 }

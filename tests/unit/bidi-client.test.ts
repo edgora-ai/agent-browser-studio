@@ -103,6 +103,25 @@ describe("bidi-client wire protocol", () => {
     conn.close();
   }, 15000);
 
+  it("unwraps nested objects WITHOUT losing primitives (Slice 79.3 regression)", async () => {
+    // The BiDi serializer wraps only the top-level answer; nested values are
+    // raw JS. A previous unwrap squash led to {x:null,y:null} for {x:12,y:34},
+    // which silently broke agent click/type coordinates on Firefox.
+    const original = behaviors["script.evaluate"];
+    behaviors["script.evaluate"] = () => ({ result: {
+      type: "object",
+      value: { x: 12, y: 34, label: "ok", enabled: true, nested: { list: [1, 2, 3] } },
+    } });
+    try {
+      const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+      const value = await bidiEvaluateInContext(conn, "(function(){ return { x: 12, y: 34, label: 'ok', enabled: true, nested: { list: [1,2,3] } }; })()", "ctx-1", 5000);
+      expect(value).toEqual({ x: 12, y: 34, label: "ok", enabled: true, nested: { list: [1, 2, 3] } });
+      conn.close();
+    } finally {
+      behaviors["script.evaluate"] = original;
+    }
+  }, 15000);
+
   it("storage cookie operations map through the protocol", async () => {
     const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
     const cookies = await bidiGetCookies(conn, 5000);

@@ -673,24 +673,7 @@ export async function cdpSnapshot(client: CdpClient): Promise<any> {
 /** Get a lightweight text snapshot of the page (visible text + interactive elements) */
 export async function cdpTextSnapshot(client: CdpClient): Promise<string> {
   const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: `(() => {
-      const els = document.querySelectorAll('a, button, input, select, textarea, h1, h2, h3, h4, h5, p, span, label, li, td, th, div[role]');
-      const seen = new Set();
-      const out = [];
-      for (const el of els) {
-        const tag = el.tagName.toLowerCase();
-        const text = (el.textContent || '').trim().slice(0, 100);
-        const id = el.id ? '#' + el.id : '';
-        const cls = el.className && typeof el.className === 'string' ? '.' + el.className.split(' ').slice(0,2).join('.') : '';
-        const key = tag + id + text.slice(0,30);
-        if (seen.has(key)) continue; seen.add(key);
-        const href = el.href ? ' -> ' + el.href : '';
-        const placeholder = el.placeholder ? ' placeholder="' + el.placeholder + '"' : '';
-        const type = el.type ? ' type=' + el.type : '';
-        out.push('<' + tag + id + cls + type + placeholder + '>' + text + href);
-      }
-      return out.join('\\n');
-    })()`,
+    expression: TEXT_SNAPSHOT_EXPRESSION,
     returnByValue: true,
   });
   return r.result?.value || "";
@@ -2135,7 +2118,7 @@ export const AGENT_TOOLS = [
 // 5. Tool Execution Engine
 // ═══════════════════════════════════════════════════════════════
 
-import { launchBrowser, listBrowserProfiles, touchProfileActivityByPort, createBrowserProfile } from "./browser-manager.js";
+import { launchBrowser, listBrowserProfiles, touchProfileActivityByPort, createBrowserProfile, getEngineByPort, getFirefoxBidiSessionByPort } from "./browser-manager.js";
 import { listProfiles } from "./profile-manager.js";
 import { getProfileMeta } from "./config-manager.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
@@ -2144,6 +2127,8 @@ import { requestApproval, classifyDbSql } from "./approval-gate.js";
 import { decryptSecretOr } from "./secrets.js";
 import { renderTemplateCatalog } from "./task-templates.js";
 import { renderAdapterCatalog } from "./platform-adapters.js";
+import { TEXT_SNAPSHOT_EXPRESSION, firefoxNavigate, firefoxEvaluate, firefoxTextSnapshot, firefoxGetText, firefoxGetUrl, firefoxGetTitle, firefoxGetCookies, firefoxNewTab, firefoxScreenshot, firefoxWaitForSelector, firefoxWaitForLoad, firefoxClick, firefoxHover, firefoxType, firefoxPressKey, firefoxScroll, firefoxSelect, firefoxUploadFile } from "./firefox-agent-tools.js";
+import type { BidiConnection } from "./bidi-client.js";
 
 // Cache connected CDP clients
 const cdpClients = new Map<number, CdpClient>();
@@ -2563,106 +2548,164 @@ export interface AgentToolExecutionContext {
   runId?: string;
   webContents?: any; // Electron WebContents — used to route approval prompts to the UI
   signal?: AbortSignal;
+  /**
+   * Test/embedding hook: resolve the engine bound to a debug port. Defaults to
+   * the live profile registry (browser-manager); injection keeps the tool stack
+   * testable against a fake BiDi server without a running profile.
+   */
+  engineResolver?: (port: number) => "chromium" | "firefox" | null;
+  /**
+   * Test/embedding hook: resolve the live BiDi session for a Firefox port.
+   * Defaults to the profile registry's long-lived session (browser-manager);
+   * injection keeps the tool stack testable against a fake BiDi server.
+   */
+  sessionResolver?: (port: number) => BidiConnection | null;
 }
 
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Agent run aborted");
 }
 
+/**
+ * Resolve the browser backend behind a debug port and run the engine-specific
+ * implementation. Chromium keeps the existing CDP client cache; Firefox uses
+ * the profile's long-lived BiDi session (the one carrying the preload scripts),
+ * so agent tooling sees the same injected fingerprint world as the profile.
+ */
+async function runBrowserTool(
+  port: number,
+  context: AgentToolExecutionContext,
+  chromium: (client: CdpClient) => Promise<any>,
+  firefox: (conn: BidiConnection) => Promise<any>,
+): Promise<any> {
+  const engine = (context.engineResolver ? context.engineResolver(port) : null) ?? getEngineByPort(port);
+  if (engine === "firefox") {
+    const conn = (context.sessionResolver ? context.sessionResolver(port) : null) ?? getFirefoxBidiSessionByPort(port);
+    if (!conn) {
+      throw new Error(`Firefox profile on port ${port} has no live managed session; start it via launch_profile first.`);
+    }
+    return firefox(conn);
+  }
+  const client = await getOrConnectCdp(port);
+  return chromium(client);
+}
+
 export async function executeToolCall(name: string, args: any, allowedToolNames?: Set<string>, context: AgentToolExecutionContext = {}): Promise<any> {
   assertNotAborted(context.signal);
   if (allowedToolNames && !allowedToolNames.has(name)) throw new Error(`Tool is not enabled: ${name}`);
   switch (name) {
-    // ── CDP tools ──
+    // ── Browser tools (engine-aware: CDP for Chromium, BiDi for Firefox) ──
     case "browser_navigate": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpNavigate(c, await assertSafeNavigationUrl(args.url));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const url = await assertSafeNavigationUrl(args.url);
+      return runBrowserTool(port, context, (c) => cdpNavigate(c, url), (conn) => firefoxNavigate(conn, url));
     }
     case "browser_snapshot": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpTextSnapshot(c);
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      return runBrowserTool(port, context, (c) => cdpTextSnapshot(c), (conn) => firefoxTextSnapshot(conn));
     }
     case "browser_click": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpClick(c, normalizeToolString(args.selector, "selector"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const selector = normalizeToolString(args.selector, "selector");
+      return runBrowserTool(port, context, (c) => cdpClick(c, selector), (conn) => firefoxClick(conn, selector));
     }
     case "browser_type": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpType(c, normalizeToolString(args.selector, "selector"), normalizeToolString(args.text, "text", 10000));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const selector = normalizeToolString(args.selector, "selector");
+      const text = normalizeToolString(args.text, "text", 10000);
+      return runBrowserTool(port, context, (c) => cdpType(c, selector, text), (conn) => firefoxType(conn, selector, text));
     }
     case "browser_screenshot": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      const b64 = await cdpScreenshot(c);
-      return { base64: b64.slice(0, 500) + "...(truncated)", note: "Screenshot captured successfully" };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      return runBrowserTool(port, context, async (c) => {
+        const b64 = await cdpScreenshot(c);
+        return { base64: b64.slice(0, 500) + "...(truncated)", note: "Screenshot captured successfully" };
+      }, async (conn) => {
+        const b64 = await firefoxScreenshot(conn);
+        return { base64: (b64 || "").slice(0, 500) + "...(truncated)", note: "Screenshot captured successfully" };
+      });
     }
     case "browser_scroll": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpScroll(c, args.direction, args.amount);
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const direction = args.direction === "up" ? "up" : "down";
+      const amount = args.amount === undefined ? 500 : normalizeToolNumber(args.amount, 500, 0, 100000, "scroll amount");
+      return runBrowserTool(port, context, (c) => cdpScroll(c, direction, amount), (conn) => firefoxScroll(conn, direction, amount));
     }
     case "browser_press_key": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const key = normalizeToolString(args.key, "key", 40);
       const delayMs = args.delayMs === undefined
         ? undefined
         : normalizeToolNumber(args.delayMs, 0, 0, 5000, "key press delay");
-      return cdpPressKey(c, normalizeToolString(args.key, "key", 40), delayMs);
+      return runBrowserTool(port, context, (c) => cdpPressKey(c, key, delayMs), (conn) => firefoxPressKey(conn, key, delayMs));
     }
     case "browser_hover": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpHover(c, normalizeToolString(args.selector, "selector"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const selector = normalizeToolString(args.selector, "selector");
+      return runBrowserTool(port, context, (c) => cdpHover(c, selector), (conn) => firefoxHover(conn, selector));
     }
     case "browser_select": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      return cdpSelect(c, normalizeToolString(args.selector, "selector"), normalizeToolString(args.value, "select value", 1000));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const selector = normalizeToolString(args.selector, "selector");
+      const value = normalizeToolString(args.value, "select value", 1000);
+      return runBrowserTool(port, context, (c) => cdpSelect(c, selector, value), (conn) => firefoxSelect(conn, selector, value));
     }
     case "browser_wait_for": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const selector = normalizeToolString(args.selector, "selector");
-      const found = await cdpWaitForSelector(c, selector, normalizeToolNumber(args.timeout, 5000, 100, 60000, "wait timeout"));
-      return { found, selector };
+      const timeout = normalizeToolNumber(args.timeout, 5000, 100, 60000, "wait timeout");
+      return runBrowserTool(port, context, async (c) => {
+        const found = await cdpWaitForSelector(c, selector, timeout);
+        return { found, selector };
+      }, (conn) => firefoxWaitForSelector(conn, selector, timeout));
     }
     case "browser_wait_for_load": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      await cdpWaitForLoad(c, normalizeToolNumber(args.timeout, 10000, 100, 30000, "load timeout"));
-      return { loaded: true };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const timeout = normalizeToolNumber(args.timeout, 10000, 100, 30000, "load timeout");
+      return runBrowserTool(port, context, async (c) => {
+        await cdpWaitForLoad(c, timeout);
+        return { loaded: true };
+      }, (conn) => firefoxWaitForLoad(conn, timeout));
     }
     case "browser_get_text": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      const text = await cdpGetText(c, normalizeToolString(args.selector, "selector"));
-      return { text };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      const selector = normalizeToolString(args.selector, "selector");
+      return runBrowserTool(port, context, async (c) => ({ text: await cdpGetText(c, selector) }), (conn) => firefoxGetText(conn, selector));
     }
     case "browser_get_url": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      const url = await cdpGetUrl(c);
-      return { url };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      return runBrowserTool(port, context, async (c) => ({ url: await cdpGetUrl(c) }), (conn) => firefoxGetUrl(conn));
     }
     case "browser_get_title": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      const title = await cdpGetTitle(c);
-      return { title };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      return runBrowserTool(port, context, async (c) => ({ title: await cdpGetTitle(c) }), (conn) => firefoxGetTitle(conn));
     }
     case "browser_get_cookies": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
-      const cookies = await cdpGetCookies(c);
-      return { cookies: cookies.map((ck: any) => ({ name: ck.name, domain: ck.domain })) };
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
+      return runBrowserTool(port, context, async (c) => {
+        const cookies = await cdpGetCookies(c);
+        return { cookies: cookies.map((ck: any) => ({ name: ck.name, domain: ck.domain })) };
+      }, (conn) => firefoxGetCookies(conn));
     }
     case "browser_new_tab": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const url = typeof args.url === "string" ? await assertSafeNavigationUrl(args.url) : undefined;
-      const r = await cdpNewTab(c, url);
-      return { targetId: r?.targetId, url: url || "about:blank" };
+      return runBrowserTool(port, context, async (c) => {
+        const r = await cdpNewTab(c, url);
+        return { targetId: r?.targetId, url: url || "about:blank" };
+      }, async (conn) => firefoxNewTab(conn, url));
     }
     case "browser_upload_file": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const selector = normalizeToolString(args.selector, "selector");
       const filePath = normalizeToolString(args.filePath, "filePath", 4096);
       assertSafeUploadPath(filePath);
-      return await cdpUploadFile(c, selector, filePath);
+      return runBrowserTool(port, context, (c) => cdpUploadFile(c, selector, filePath), (conn) => firefoxUploadFile(conn, selector, filePath));
     }
     case "browser_evaluate": {
-      const c = await getOrConnectCdp(normalizeToolNumber(args.port, 0, 1, 65535, "CDP port"));
+      const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const expression = normalizeToolString(args.expression, "expression", 50000);
-      const value = await cdpEvaluate(c, expression);
-      return { value };
+      return runBrowserTool(port, context, async (c) => ({ value: await cdpEvaluate(c, expression) }), async (conn) => ({ value: await firefoxEvaluate(conn, expression) }));
     }
     // ── Profile tools ──
     case "list_profiles": {
