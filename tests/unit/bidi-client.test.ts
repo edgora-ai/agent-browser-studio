@@ -18,6 +18,9 @@ import {
   bidiGetTopContext,
   bidiEvaluateInContext,
   normalizeBidiWebSocketUrl,
+  registerFirefoxSession,
+  dropFirefoxSession,
+  getRegisteredFirefoxSession,
 } from "../../src/main/services/bidi-client.js";
 import { evaluateInPage } from "../../src/main/services/page-eval.js";
 import { bidiCookieToCookieInfo, cookieInfoToBidiCookie } from "../../src/main/services/bidi-cookie-service.js";
@@ -103,14 +106,26 @@ describe("bidi-client wire protocol", () => {
     conn.close();
   }, 15000);
 
-  it("unwraps nested objects WITHOUT losing primitives (Slice 79.3 regression)", async () => {
-    // The BiDi serializer wraps only the top-level answer; nested values are
-    // raw JS. A previous unwrap squash led to {x:null,y:null} for {x:12,y:34},
+  it("unwraps nested objects WITHOUT losing primitives (Slice 79.3 regression, real Firefox wire shape)", async () => {
+    // REAL Firefox serializes object properties as arrays of [key, RemoteValue]
+    // pairs. A previous unwrap squash led to {x:null,y:null} for {x:12,y:34},
     // which silently broke agent click/type coordinates on Firefox.
     const original = behaviors["script.evaluate"];
     behaviors["script.evaluate"] = () => ({ result: {
       type: "object",
-      value: { x: 12, y: 34, label: "ok", enabled: true, nested: { list: [1, 2, 3] } },
+      value: [
+        ["x", { type: "number", value: 12 }],
+        ["y", { type: "number", value: 34 }],
+        ["label", { type: "string", value: "ok" }],
+        ["enabled", { type: "boolean", value: true }],
+        ["nested", { type: "object", value: [
+          ["list", { type: "array", value: [
+            { type: "number", value: 1 },
+            { type: "number", value: 2 },
+            { type: "number", value: 3 },
+          ] }],
+        ] }],
+      ],
     } });
     try {
       const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
@@ -145,11 +160,28 @@ describe("bidi-client wire protocol", () => {
     conn.close();
   }, 15000);
 
+  it("rejects (instead of hanging) when the endpoint is not listening yet (Slice 79.4 regression)", async () => {
+    // The launch path polls the debug port; a hung connectBidi would stall the
+    // whole startup gate. Every failure path (refused socket, pre-open close,
+    // init timeout) must settle the init promise.
+    const dead = await freePort();
+    await expect(connectBidi(`ws://127.0.0.1:${dead}/session`, { timeoutMs: 500 })).rejects.toThrow();
+    await expect(connectBidi(`ws://127.0.0.1:${dead}/session`, { timeoutMs: 1000 })).rejects.toThrow(/timed out|closed|websocket error/);
+  }, 15000);
+
   it("normalizeBidiWebSocketUrl rejects non-loopback targets", () => {
     expect(() => normalizeBidiWebSocketUrl("ws://evil.example.com/session")).toThrow(/loopback/);
     expect(() => normalizeBidiWebSocketUrl("https://127.0.0.1:1/session")).toThrow(/loopback/);
     const ok = normalizeBidiWebSocketUrl("ws://localhost:1234/session", 1234);
     expect(ok).toBe("ws://127.0.0.1:1234/session");
+  });
+
+  it("normalizeBidiWebSocketUrl appends /session when the announcement lacks a path (Sl 79.4)", () => {
+    // Real Firefox prints `WebDriver BiDi listening on ws://127.0.0.1:PORT`
+    // (no path) yet serves the protocol only under /session.
+    expect(normalizeBidiWebSocketUrl("ws://127.0.0.1:9222")).toBe("ws://127.0.0.1:9222/session");
+    expect(normalizeBidiWebSocketUrl("ws://127.0.0.1:9222/")).toBe("ws://127.0.0.1:9222/session");
+    expect(normalizeBidiWebSocketUrl("ws://127.0.0.1:9222/session")).toBe("ws://127.0.0.1:9222/session");
   });
 });
 
@@ -157,6 +189,44 @@ describe("page-eval engine routing", () => {
   it("routes firefox evaluation over BiDi", async () => {
     const result = await evaluateInPage(port, "firefox", "(async()=>'x')()", { timeoutMs: 8000 });
     expect(result).toBe(`{"ping":"pong"}`);
+  }, 15000);
+
+  it("reuses a registered live session WITHOUT opening a second connection (Sl 79.4: one session per port)", async () => {
+    // Firefox allows exactly one BiDi session per debug port. After launch the
+    // preload-carrying session is registered; any fresh session.new would fail.
+    // The routing must therefore pass live captures through the SAME session.
+    let connections = 0;
+    const counter = () => { connections += 1; };
+    wss!.on("connection", counter);
+    const live = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    registerFirefoxSession(port, live);
+    try {
+      const before = connections;
+      const value = await evaluateInPage(port, "firefox", "(async()=>JSON.stringify({a:1}))()", { timeoutMs: 8000 });
+      expect(value).toBe(`{"ping":"pong"}`);
+      expect(connections).toBe(before);
+    } finally {
+      dropFirefoxSession(port);
+      live.close();
+      wss!.off("connection", counter);
+    }
+  }, 15000);
+
+  it("dropping the registered session lets evaluateInPage fall back to a fresh one", async () => {
+    const live = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    registerFirefoxSession(port, live);
+    dropFirefoxSession(port);
+    live.close();
+    const result = await evaluateInPage(port, "firefox", "(async()=>'x')()", { timeoutMs: 8000 });
+    expect(result).toBe(`{"ping":"pong"}`);
+  }, 15000);
+
+  it("evicts a stale registered session once its connection is closed", async () => {
+    const live = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    registerFirefoxSession(port, live);
+    live.close();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(getRegisteredFirefoxSession(port)).toBeNull();
   }, 15000);
 
   it("rejects chromium evaluation when no CDP endpoint exists (honest failure)", async () => {

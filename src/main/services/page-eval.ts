@@ -52,8 +52,28 @@ export async function evaluateInPage(
     }
   }
 
-  const { connectBidi, bidiEvaluateInContext, bidiGetTopContext, bidiNavigate } = await import("./bidi-client.js");
+  const { connectBidi, getRegisteredFirefoxSession, bidiEvaluateInContext, bidiGetTopContext, bidiNavigate } = await import("./bidi-client.js");
+
+  // A launched profile holds the one allowed BiDi session (the one carrying
+  // the managed preload). Route through it so capture sees the same injected
+  // world the profile actually presents; fall back to a short-lived session
+  // only when no live session is registered (e.g. pre-launch diagnostics).
   assertNotAborted(opts.signal);
+  const live = getRegisteredFirefoxSession(port);
+  if (live) {
+    assertNotAborted(opts.signal);
+    try {
+      const context = await bidiGetTopContext(live, opts.timeoutMs ?? 8000);
+      return await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+    } catch (e: any) {
+      if (opts.signal?.aborted) throw e;
+      if (!/no browsing contexts/.test(String(e?.message || e))) throw e;
+      await bidiNavigate(live, "about:blank", null, opts.timeoutMs ?? 15000);
+      const context = await bidiGetTopContext(live, opts.timeoutMs ?? 8000);
+      return await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+    }
+  }
+
   const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: opts.timeoutMs ?? 15000 });
   try {
     assertNotAborted(opts.signal);
@@ -84,7 +104,12 @@ export async function navigateInPage(port: number, engine: BrowserEngine, url: s
     }
     return;
   }
-  const { connectBidi, bidiNavigate } = await import("./bidi-client.js");
+  const { connectBidi, getRegisteredFirefoxSession, bidiNavigate } = await import("./bidi-client.js");
+  const live = getRegisteredFirefoxSession(port);
+  if (live) {
+    await bidiNavigate(live, url, null, opts.timeoutMs ?? 15000);
+    return;
+  }
   const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: opts.timeoutMs ?? 15000 });
   try {
     await bidiNavigate(conn, url, null, opts.timeoutMs ?? 15000);

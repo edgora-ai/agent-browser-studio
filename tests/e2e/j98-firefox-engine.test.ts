@@ -4,8 +4,12 @@
 //   - the engine persists through list/get and displays a Firefox badge;
 //   - engine status (Chromium + Firefox availability) is exposed via IPC, REST
 //     and MCP;
-//   - launching a Firefox profile without an installed Firefox fails gracefully
-//     with a clear message (no hang, no partial state).
+//   - launching a Firefox profile fails gracefully when no Firefox is
+//     installed (clear message, no hang, no partial state), and succeeds —
+//     through the same gate — when one is (Slice 79.4).
+// The two "availability" tests branch on the machine actually having Firefox,
+// so the same file passes with and without a local installation. The fake
+// binary launch paths live in j99 where the gates are exercised deterministically.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as path from 'node:path';
 import * as http from 'node:http';
@@ -73,6 +77,8 @@ describe('J98 — Firefox engine capability', () => {
   let restToken = '';
   let mcpPort = 0;
   let mcpToken = '';
+  let firefoxInstalled = false;
+  let engineStatus: any = null;
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA, env: { AGENT_BROWSER_API_PORT: '0' } });
@@ -97,16 +103,23 @@ describe('J98 — Firefox engine capability', () => {
   }, 60000);
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
-  it('engine-status IPC reports Chromium installed + Firefox gracefully not installed here', async () => {
+  it('engine-status IPC reports Chromium installed + a coherent Firefox status', async () => {
     const st = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.engineStatus());
     expect(st.chromium.installed).toBe(true);
     expect(st.firefox.engine).toBe('firefox');
     expect(typeof st.firefox.installed).toBe('boolean');
     expect(st.firefox.fingerprintParity).toBe(false);
-    expect(st.firefox.managedInjection).toBe('none');
-    // On this machine no Firefox is expected; the status must still be coherent.
-    expect(st.firefox.installed).toBe(false);
-    expect(st.firefox.hint).toContain('Firefox binary not found');
+    // Slice 79.4: this machine may or may not have Firefox; the status must
+    // reflect reality and stay coherent in both cases.
+    engineStatus = st;
+    firefoxInstalled = st.firefox.installed === true;
+    if (firefoxInstalled) {
+      expect(st.firefox.managedInjection).toBe('prefs+bidi-preload');
+      expect(st.firefox.hint).not.toContain('Firefox binary not found');
+    } else {
+      expect(st.firefox.managedInjection).toBe('none');
+      expect(st.firefox.hint).toContain('Firefox binary not found');
+    }
   }, 15000);
 
   it('creates a Firefox profile over IPC and it persists through list', async () => {
@@ -165,17 +178,38 @@ describe('J98 — Firefox engine capability', () => {
     expect(list.body.profiles.some((p: any) => p.dirId === dirId && p.engine === 'firefox')).toBe(true);
   }, 20000);
 
-  it('launching a Firefox profile without an installed Firefox fails gracefully', async () => {
+  it('launching a Firefox profile: graceful failure without Firefox, real launch with it', async () => {
     const r = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.create({
-      name: 'J98-Launch-NoFx', engine: 'firefox',
+      name: 'J98-Launch-Fx', engine: 'firefox',
     }));
     const out: any = await h.page.evaluate(async (dirId: string) => {
       const res: any = await (window as any).agentBrowser.api.browser.launch(dirId);
       return { success: res.success, error: res.error || '' };
     }, r.dirId);
-    expect(out.success).toBe(false);
-    expect(out.error).toMatch(/Firefox is required|Firefox binary not found/i);
-  }, 20000);
+    if (!firefoxInstalled) {
+      expect(out.success).toBe(false);
+      expect(out.error).toMatch(/Firefox is required|Firefox binary not found/i);
+      return;
+    }
+    // Real Firefox present: the same gate must let the managed profile come up.
+    expect(out.success, out.error).toBe(true);
+    try {
+      const st: any = await h.page.evaluate((dirId: string) =>
+        (window as any).agentBrowser.api.browser.status(dirId), r.dirId);
+      expect(st.running).toBe(true);
+      expect(st.cdpPort).toBeGreaterThan(0);
+      expect(st.injectionProbe?.confirmed).toBe(true);
+      expect(st.injectionProbe?.noiseActive).toBe(true);
+      const list: any[] = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.list());
+      expect((list || []).find((p: any) => p.dirId === r.dirId)?.engine).toBe('firefox');
+    } finally {
+      const stop: any = await h.page.evaluate(async (dirId: string) => {
+        const s: any = await (window as any).agentBrowser.api.browser.stop(dirId);
+        return { success: s.success, error: s.error || '' };
+      }, r.dirId);
+      expect(stop.success, stop.error).toBe(true);
+    }
+  }, 120000);
 
   it('MCP exposes agent_browser_engine_status', async () => {
     const tools = await mcpCall(mcpPort, mcpToken, 'tools/list', {});

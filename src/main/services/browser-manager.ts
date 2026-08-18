@@ -69,7 +69,7 @@ import {
   type FirefoxStatus,
 } from "./browser-engine.js";
 import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
-import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, type BidiConnection } from "./bidi-client.js";
+import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, registerFirefoxSession, dropFirefoxSession, getRegisteredFirefoxSession, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
 export interface BrowserProfile {
@@ -1071,7 +1071,10 @@ async function launchFirefoxProfile(
     const entry = runningProcesses.get(dirId);
     if (entry && entry.pid === pid) {
       if (entry.killTimer) clearTimeout(entry.killTimer);
-      if (entry.bidiConn) { try { entry.bidiConn.close(); } catch { /* ignore */ } }
+      if (entry.bidiConn) {
+        dropFirefoxSession(entry.port);
+        try { entry.bidiConn.close(); } catch { /* ignore */ }
+      }
       runningProcesses.delete(dirId);
     }
   });
@@ -1089,6 +1092,7 @@ async function launchFirefoxProfile(
       try {
         const conn = await connectBidi(info.bidiWebSocketUrl, { timeoutMs: 15000 });
         runningProcesses.get(dirId)!.bidiConn = conn;
+        registerFirefoxSession(info.actualPort ?? info.marionettePort ?? remotePort, conn);
         if (managedIdentity) {
           const scriptId = await bidiAddPreloadScript(conn, managedIdentity.preloadScript, 15000);
           bidiInjected = scriptId !== null;
@@ -1206,7 +1210,10 @@ async function launchFirefoxProfile(
       if (e?.driftBlocked) throw e;
       if (/Environment risk blocked/.test(String(e?.message || e))) {
         const failedEntry = runningProcesses.get(dirId);
-        if (failedEntry?.bidiConn) { try { failedEntry.bidiConn.close(); } catch { /* ignore */ } }
+        if (failedEntry?.bidiConn) {
+          dropFirefoxSession(failedEntry.port);
+          try { failedEntry.bidiConn.close(); } catch { /* ignore */ }
+        }
         runningProcesses.delete(dirId);
         try { child.kill(); } catch { /* ignore */ }
         if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
@@ -1219,7 +1226,10 @@ async function launchFirefoxProfile(
   } catch (e: any) {
     // Drift-blocked or fatal post-launch gate failure: terminate and clean up.
     const failedEntry = runningProcesses.get(dirId);
-    if (failedEntry?.bidiConn) { try { failedEntry.bidiConn.close(); } catch { /* ignore */ } }
+    if (failedEntry?.bidiConn) {
+      dropFirefoxSession(failedEntry.port);
+      try { failedEntry.bidiConn.close(); } catch { /* ignore */ }
+    }
     runningProcesses.delete(dirId);
     try { child.kill(); } catch { /* ignore */ }
     if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
@@ -1252,6 +1262,7 @@ export function stopBrowser(dirId: string): boolean {
   // Close the long-lived BiDi session first (Firefox drops preload scripts
   // with it; the browser process itself is still reclaimed below).
   if (entry?.bidiConn) {
+    dropFirefoxSession(entry.port);
     try { entry.bidiConn.close(); } catch { /* ignore */ }
   }
   entry && delete (entry as any).bidiConn;
@@ -1357,13 +1368,7 @@ export function getEngineByPort(port: number): BrowserEngine | null {
  * uses this so the injected fingerprint world is the one the agent sees.
  */
 export function getFirefoxBidiSessionByPort(port: number): BidiConnection | null {
-  if (!Number.isInteger(port) || port < 1) return null;
-  for (const [, entry] of runningProcesses) {
-    if (entry.port !== port || !entry.bidiConn) continue;
-    try { process.kill(entry.pid, 0); } catch { continue; }
-    return entry.bidiConn;
-  }
-  return null;
+  return getRegisteredFirefoxSession(port);
 }
 
 /** Milliseconds since the profile was last active, or null when not running. */
