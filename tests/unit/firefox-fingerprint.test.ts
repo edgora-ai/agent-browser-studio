@@ -8,6 +8,10 @@ import {
   buildFirefoxFingerprintPrefs,
   buildFirefoxFingerprintPreloadScript,
   buildFirefoxManagedIdentity,
+  buildInjectionProbeExpression,
+  buildInjectionProbeExpectation,
+  judgeInjectionProbe,
+  shouldBlockInjectionProbe,
 } from "../../src/main/services/firefox-fingerprint.js";
 import { buildBrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
 import type { BrowserFingerprintMeta } from "../../src/main/types.js";
@@ -140,5 +144,69 @@ describe("buildFirefoxManagedIdentity", () => {
     expect(bundle.prefs["dom.maxHardwareConcurrency"]).toBe(bundle.config.hardwareConcurrency);
     expect(bundle.preloadScript).toContain(bundle.config.seed.toString());
     expect(bundle.preloadScript).toContain("cfg.screen.width");
+  });
+});
+
+describe("injection self-check probe (Slice 79.2)", () => {
+  const exp = buildInjectionProbeExpectation(buildBrowserFingerprintConfig(meta({})));
+
+  it("expression carries a marker, reads webdriver and double-draws a canvas", () => {
+    const expression = buildInjectionProbeExpression();
+    expect(expression).toContain("roxy-managed-probe");
+    expect(expression).toContain("navigator.webdriver");
+    expect(expression).toContain("doubleDrawEqual");
+    expect(expression).toContain("getImageData");
+    expect(expression).toContain("drawCanvas");
+  });
+
+  it("confirms injection when webdriver is disarmed and fields match", () => {
+    const check = judgeInjectionProbe(
+      { webdriver: false, doubleDrawEqual: false, platform: exp.platform, language: exp.language, screenWidth: exp.screenWidth, hardwareConcurrency: exp.hardwareConcurrency },
+      exp,
+    );
+    expect(check.checked).toBe(true);
+    expect(check.confirmed).toBe(true);
+    expect(check.ambiguous).toBe(false);
+    expect(check.noiseActive).toBe(true);
+    expect(check.mismatches).toHaveLength(0);
+    expect(shouldBlockInjectionProbe(check, undefined)).toBe(false);
+  });
+
+  it("flags a dead injection (webdriver still true — the BiDi-automation tell)", () => {
+    const check = judgeInjectionProbe({ webdriver: true, doubleDrawEqual: true }, exp);
+    expect(check.checked).toBe(true);
+    expect(check.confirmed).toBe(false);
+    expect(check.ambiguous).toBe(false);
+    expect(shouldBlockInjectionProbe(check, undefined)).toBe(true);
+    expect(shouldBlockInjectionProbe(check, false)).toBe(false);
+  });
+
+  it("reports injected fields that drifted from the managed identity", () => {
+    const check = judgeInjectionProbe(
+      { webdriver: false, doubleDrawEqual: false, platform: "Win32", language: "de-DE", screenWidth: 999, hardwareConcurrency: 2 },
+      { ...exp, platform: "MacIntel" },
+    );
+    expect(check.confirmed).toBe(true);
+    expect(check.mismatches).toEqual(expect.arrayContaining(["platform", "language", "screenWidth", "hardwareConcurrency"]));
+  });
+
+  it("is ambiguous (never blocking) when the probe could not decide", () => {
+    const check = judgeInjectionProbe(null, exp);
+    expect(check.checked).toBe(false);
+    expect(check.ambiguous).toBe(true);
+    expect(shouldBlockInjectionProbe(check, undefined)).toBe(false);
+
+    const noWebdriver = judgeInjectionProbe({ platform: "MacIntel" }, exp);
+    expect(noWebdriver.checked).toBe(true);
+    expect(noWebdriver.ambiguous).toBe(true);
+    expect(shouldBlockInjectionProbe(noWebdriver, undefined)).toBe(false);
+  });
+
+  it("expectation mirrors the preload's own patch surface (platform/language/screen/hwc/webdriver)", () => {
+    expect(exp.webdriver).toBe(false);
+    expect(exp.platform).toBe("Win32");
+    expect(exp.language).toBe("en-US");
+    expect(exp.screenWidth).toBe(1920);
+    expect(typeof exp.hardwareConcurrency).toBe("number");
   });
 });

@@ -56,6 +56,22 @@ function cannedFingerprint() {
   if (STATE) { try { shift = JSON.parse(fs.readFileSync(STATE, 'utf-8')).shift || {}; } catch (e) {} }
   return Object.assign({}, fp, shift);
 }
+function managedCfgFromRecord() {
+  if (!RECORD) return null;
+  try {
+    const lines = String(fs.readFileSync(RECORD, 'utf-8')).split('\\n').filter(Boolean);
+    let cfg = null;
+    for (const line of lines) {
+      let m = null;
+      try { m = JSON.parse(line); } catch (e) {}
+      if (m && m.t === 'preload' && typeof m.script === 'string') {
+        const mm = m.script.match(/var cfg = (\{.*?\});/);
+        if (mm) { try { cfg = JSON.parse(mm[1]); } catch (e) {} }
+      }
+    }
+    return cfg;
+  } catch (e) { return null; }
+}
 function answer(method, params) {
   n += 1;
   switch (method) {
@@ -63,6 +79,10 @@ function answer(method, params) {
       return { sessionId: 'j99-session-' + n, capabilities: {} };
     case 'browsingContext.getTree':
       return { contexts: [{ context: 'ctx-1', url: 'about:blank', children: [], parent: null }] };
+    case 'browsingContext.create':
+      return { context: 'ctx-probe-' + n };
+    case 'browsingContext.close':
+      return {};
     case 'script.addPreloadScript': {
       record({ t: 'preload', script: String((params && params.functionDeclaration) || '').slice(0, 20000) });
       return { script: 'pre-' + n };
@@ -71,7 +91,26 @@ function answer(method, params) {
       const expr = String((params && params.expression) || '');
       record({ t: 'eval', expr: expr.slice(0, 140) });
       let value = '{}';
-      if (expr.indexOf('Agent Browser Studio-FP') !== -1) value = JSON.stringify(cannedFingerprint());
+      if (expr.indexOf('roxy-managed-probe') !== -1) {
+        // The managed-injection self-check: echo the identity that was actually
+        // registered as the preload (parsed from the session record), with an
+        // optional probe='dead' state simulating a preload that never ran.
+        let dead = false;
+        if (STATE) { try { dead = (JSON.parse(fs.readFileSync(STATE, 'utf-8')).probe || '') === 'dead'; } catch (e) {} }
+        if (dead) {
+          value = JSON.stringify({ webdriver: true, doubleDrawEqual: true, platform: 'Win32', language: 'en-US', screenWidth: 1920, hardwareConcurrency: 8 });
+        } else {
+          const cfg = managedCfgFromRecord() || {};
+          value = JSON.stringify({
+            webdriver: false, doubleDrawEqual: false,
+            platform: cfg.platform === 'MacIntel' ? 'MacIntel' : 'Win32',
+            language: (cfg.languages && cfg.languages[0]) || 'en-US',
+            screenWidth: cfg.screen ? cfg.screen.width : 1920,
+            hardwareConcurrency: cfg.hardwareConcurrency != null ? cfg.hardwareConcurrency : 8,
+          });
+        }
+      }
+      else if (expr.indexOf('Agent Browser Studio-FP') !== -1) value = JSON.stringify(cannedFingerprint());
       else if (expr.indexOf('samples.push') !== -1) value = JSON.stringify({ samples: 60, median: 16.7, mean: 16.9 });
       else if (expr.indexOf('__agentBrowserFontProbeList') !== -1) value = JSON.stringify({});
       return { result: { type: 'string', value } };
@@ -155,7 +194,9 @@ function recordHas(pred: (m: any) => boolean): boolean {
 }
 
 function setState(shift: Record<string, unknown> | null): void {
-  fs.writeFileSync(STATE, JSON.stringify({ shift: shift || {} }));
+  const state: any = { shift: shift || {} };
+  if (shift && typeof shift.probe === 'string') state.probe = shift.probe;
+  fs.writeFileSync(STATE, JSON.stringify(state));
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -250,6 +291,19 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
     // Environment-risk runtime probes ran over BiDi (rAF measurement happened).
     expect(recordHas((m) => m.t === 'cmd' && m.method === 'script.evaluate')).toBe(true);
 
+    // Managed-injection self-check ran in a fresh probe tab and confirmed the
+    // preload took effect (navigator.webdriver disarmed, injected fields match).
+    expect(recordHas((m) => m.t === 'cmd' && m.method === 'browsingContext.create')).toBe(true);
+    expect(recordHas((m) => m.t === 'eval' && m.expr.indexOf('roxy-managed-probe') !== -1)).toBe(true);
+    const st2 = await h.page.evaluate(async (id: string) => {
+      const res: any = await (window as any).agentBrowser.api.browser.status(id);
+      return { running: res.running, probe: res.injectionProbe };
+    }, dirId);
+    expect(st2.probe && st2.probe.checked, 'probe not reported: ' + JSON.stringify(st2)).toBe(true);
+    expect(st2.probe.confirmed, 'probe verdict: ' + JSON.stringify(st2.probe)).toBe(true);
+    expect(st2.probe.ambiguous).toBe(false);
+    expect(st2.probe.mismatches || []).toHaveLength(0);
+
     const st = await apiRequest(restPort, restToken, 'GET', '/api/profiles/' + dirId);
     expect(st.status).toBe(200);
     expect(recordHas((m) => m.t === 'cmd' && m.method === 'script.addPreloadScript')).toBe(true);
@@ -319,6 +373,43 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
     }, dirId);
     expect(rel2.success, rel2.error).toBe(true);
     expect(rel2.pid).toBeGreaterThan(0);
+  }, 60000);
+
+  it('a dead injection probe blocks launch — managed preload must be provable', async () => {
+    // The self-check is a hard gate: when the preload did not take effect
+    // (navigator.webdriver still true), the launch must be blocked by default
+    // and reported, then succeed once injection is alive again.
+    const stopRes = await h.page.evaluate(async (id: string) => {
+      const res: any = await (window as any).agentBrowser.api.browser.stop(id);
+      return { success: res.success ?? res.ok, error: res.error || '' };
+    }, dirId);
+    expect(stopRes.success).toBe(true);
+    let deadline = Date.now() + 15000;
+    for (;;) {
+      const st = await h.page.evaluate(async (id: string) => {
+        const res: any = await (window as any).agentBrowser.api.browser.status(id);
+        return { running: res.running };
+      }, dirId);
+      if (!st.running) break;
+      if (Date.now() > deadline) throw new Error('firefox process did not stop for probe-block test');
+      await sleep(300);
+    }
+
+    setState({ probe: 'dead' });
+    const blocked: any = await h.page.evaluate(async (id: string) => {
+      const res: any = await (window as any).agentBrowser.api.browser.launch(id);
+      return { success: res.success, error: res.error || '' };
+    }, dirId);
+    expect(blocked.success, 'launch should have been probe-blocked: ' + JSON.stringify(blocked)).toBe(false);
+    expect(blocked.error).toMatch(/injection probe blocked/i);
+
+    setState({});
+    const rel: any = await h.page.evaluate(async (id: string) => {
+      const res: any = await (window as any).agentBrowser.api.browser.launch(id);
+      return { success: res.success, error: res.error || '', pid: res.pid };
+    }, dirId);
+    expect(rel.success, rel.error).toBe(true);
+    expect(rel.pid).toBeGreaterThan(0);
   }, 60000);
 
   it('REST runtime env-risk measures rAF over the running BiDi profile', async () => {

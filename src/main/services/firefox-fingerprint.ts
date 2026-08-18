@@ -396,3 +396,116 @@ export function buildFirefoxManagedIdentity(
     userAgent: buildFirefoxUserAgent(config.platform, firefoxVersion),
   };
 }
+
+// ── Injection self-check (launch-time probe, Slice 79.2) ──
+//
+// The fingerprint drift baseline compares the live page against a stored
+// baseline, but it cannot tell whether the managed preload took effect at all
+// (both worlds read the same "true" values when nothing is injected). The probe
+// closes that gap deterministically:
+//   - the decisive check is `navigator.webdriver`: real Firefox exposes
+//     `true` while a WebDriver BiDi session is active, and the preload disarms
+//     it to `false` — an injection that ran is provable from this one value;
+//   - a canvas double-draw confirms the deterministic noise layer is alive
+//     (two identical draws must differ when noise is applied, and be byte
+//     identical when it is not);
+//   - the managed fields are echoed back so the launch verifies the injected
+//     values are the profile's own identity.
+
+export interface InjectionProbeExpectation {
+  platform: string;
+  language: string;
+  screenWidth: number;
+  hardwareConcurrency: number;
+  webdriver: boolean;
+}
+
+export interface InjectionProbeCheck {
+  checked: boolean;
+  /** The preload demonstrably ran (navigator.webdriver is disarmed). */
+  confirmed: boolean;
+  /** The probe could not decide (probe evaluation failed/broken context). */
+  ambiguous: boolean;
+  /** Fields the page reported that differ from the managed identity. */
+  mismatches: string[];
+  /** Informational: the canvas noise layer is functioning (double-draw differs). */
+  noiseActive?: boolean;
+  error?: string;
+}
+
+/** The expectations the preload itself implements — derived from the same config. */
+export function buildInjectionProbeExpectation(config: BrowserFingerprintConfig): InjectionProbeExpectation {
+  return {
+    platform: config.platform === "MacIntel" ? "MacIntel" : "Win32",
+    language: config.languages[0] || "en-US",
+    screenWidth: config.screen.width,
+    hardwareConcurrency: config.hardwareConcurrency,
+    webdriver: false,
+  };
+}
+
+/** Probe expression evaluated INSIDE the injected world (launch BiDi session). */
+export function buildInjectionProbeExpression(): string {
+  return `// roxy-managed-probe
+(function(){
+  var o = {};
+  function drawCanvas(){
+    var c = document.createElement("canvas"); c.width = 64; c.height = 16;
+    var x = c.getContext("2d");
+    x.textBaseline = "top"; x.font = "12px Arial";
+    x.fillRect(2, 2, 8, 4);
+    x.fillText("Agent Browser Studio-FP", 2, 2);
+    x.strokeRect(40, 2, 10, 6);
+    x.beginPath(); x.arc(48, 12, 4, 0, Math.PI * 1.5); x.stroke();
+    return x.getImageData(0, 0, 64, 16).data;
+  }
+  try {
+    var a = drawCanvas(); var b = drawCanvas();
+    var same = a.length === b.length;
+    if (same) { for (var i = 0; i < a.length; i++) { if (a[i] !== b[i]) { same = false; break; } } }
+    o.doubleDrawEqual = same;
+  } catch(e){}
+  try { o.webdriver = navigator.webdriver; } catch(e){}
+  try { o.platform = navigator.platform; } catch(e){}
+  try { o.language = navigator.language; } catch(e){}
+  try { o.screenWidth = screen.width; } catch(e){}
+  try { o.hardwareConcurrency = navigator.hardwareConcurrency; } catch(e){}
+  return o;
+})()`;
+}
+
+/** Turn the probe's in-page answer into a verdict. */
+export function judgeInjectionProbe(response: any, expected: InjectionProbeExpectation): InjectionProbeCheck {
+  if (typeof response === "string") {
+    try { response = JSON.parse(response); } catch { /* fall through as broken */ }
+  }
+  const mismatches: string[] = [];
+  if (!response || typeof response !== "object") {
+    return { checked: false, confirmed: false, ambiguous: true, mismatches: [], error: "probe returned nothing" };
+  }
+  const fields: Array<[string, any]> = [
+    ["platform", expected.platform],
+    ["language", expected.language],
+    ["screenWidth", expected.screenWidth],
+    ["hardwareConcurrency", expected.hardwareConcurrency],
+  ];
+  for (const [field, want] of fields) {
+    if (response[field] !== undefined && response[field] !== want) mismatches.push(field);
+  }
+  if (typeof response.webdriver !== "boolean") {
+    return { checked: true, confirmed: false, ambiguous: true, mismatches, error: "probe did not report navigator.webdriver" };
+  }
+  const confirmed = response.webdriver === false;
+  return {
+    checked: true,
+    confirmed,
+    ambiguous: false,
+    mismatches,
+    noiseActive: typeof response.doubleDrawEqual === "boolean" ? response.doubleDrawEqual === false : undefined,
+  };
+}
+
+/** Block rule: an injection we cannot prove is a silent-failure launch gate. */
+export function shouldBlockInjectionProbe(check: InjectionProbeCheck, blockOnInjectionProbe: unknown): boolean {
+  return !!check.checked && !check.confirmed && !check.ambiguous && blockOnInjectionProbe !== false;
+}

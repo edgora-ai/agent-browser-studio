@@ -177,6 +177,21 @@ export async function bidiNavigate(conn: BidiConnection, url: string, contextId:
   await conn.send("browsingContext.navigate", { context, url, wait: "interactive" }, timeoutMs);
 }
 
+/** Open a fresh tab (about:blank). The fingerprint preload applies to it. */
+export async function bidiCreateContext(conn: BidiConnection, timeoutMs = 15000): Promise<string> {
+  const result = await conn.send("browsingContext.create", { type: "tab" }, timeoutMs);
+  const context: string = result?.context;
+  if (!context) throw new Error("BiDi browsingContext.create returned no context id");
+  return context;
+}
+
+/** Close a tab we opened (probe isolation — the user's page stays untouched). */
+export async function bidiCloseContext(conn: BidiConnection, contextId: string, timeoutMs = 8000): Promise<void> {
+  try {
+    await conn.send("browsingContext.close", { context: contextId }, timeoutMs);
+  } catch { /* the context may already be gone */ }
+}
+
 /**
  * Evaluate a JS expression in the top-level context, awaiting promises.
  * Throws when the page throws (exceptionDetails), so callers see real failures.

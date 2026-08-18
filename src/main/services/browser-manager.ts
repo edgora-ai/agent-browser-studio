@@ -68,8 +68,8 @@ import {
   writeFirefoxUserJs,
   type FirefoxStatus,
 } from "./browser-engine.js";
-import { buildFirefoxManagedIdentity } from "./firefox-fingerprint.js";
-import { connectBidi, bidiAddPreloadScript, type BidiConnection } from "./bidi-client.js";
+import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
+import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
 export interface BrowserProfile {
@@ -124,6 +124,8 @@ const runningProcesses = new Map<string, {
   proxyBridge?: { close: () => Promise<void> };
   /** Long-lived WebDriver BiDi session for Firefox (keeps preload scripts alive). */
   bidiConn?: BidiConnection;
+  /** Result of the launch-time managed-injection self-check (Slice 79.2). */
+  injectionProbe?: InjectionProbeCheck;
 }>();
 
 // ═══════════════════════════════════════════════════════════════
@@ -928,6 +930,10 @@ export async function launchBrowser(
 
 /** Wait for a spawned child to exit, escalating to SIGKILL so a "blocked"
  *  launch never leaves a live process behind. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitForProcessExit(pid: number, timeoutMs = 4000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -1130,6 +1136,51 @@ async function launchFirefoxProfile(
       }
     }
 
+    // Managed-injection self-check — the drift gate cannot tell whether the
+    // preload took effect (baseline and live both read the "true" world when
+    // nothing is injected; real Firefox also exposes navigator.webdriver=true
+    // under BiDi). Probe a fresh tab inside the launch session: webdriver must
+    // be disarmed, the noise layer must be live, and the managed fields must
+    // match the profile's identity. A provably-dead injection blocks the
+    // launch by default (blockOnInjectionProbe=false escapes, like drift).
+    if (managedIdentity) {
+      try {
+        const entry = runningProcesses.get(dirId);
+        const conn = entry?.bidiConn;
+        if (conn) {
+          const expected = buildInjectionProbeExpectation(managedIdentity.config);
+          const expression = buildInjectionProbeExpression();
+          let probeCheck: InjectionProbeCheck = { checked: false, confirmed: false, ambiguous: true, mismatches: [] };
+          for (let attempt = 0; attempt < 2 && !probeCheck.checked; attempt++) {
+            if (attempt > 0) await sleep(1500);
+            let probeContext: string | null = null;
+            try {
+              probeContext = await bidiCreateContext(conn, 15000);
+              const response = await bidiEvaluateInContext(conn, expression, probeContext, 15000);
+              probeCheck = judgeInjectionProbe(response, expected);
+            } catch (e: any) {
+              probeCheck = { checked: false, confirmed: false, ambiguous: true, mismatches: [], error: e?.message || String(e) };
+            } finally {
+              if (probeContext) await bidiCloseContext(conn, probeContext, 8000);
+            }
+          }
+          if (entry && entry.bidiConn === conn) entry.injectionProbe = probeCheck;
+          if (shouldBlockInjectionProbe(probeCheck, cfg.blockOnInjectionProbe)) {
+            const reason = "Fingerprint injection probe blocked — the managed preload did not take effect (navigator.webdriver is not disarmed). Set blockOnInjectionProbe=false to launch without this verification.";
+            recordAudit({ category: "profile", action: "injection-probe-block", target: dirId, actor: "auto", detail: reason });
+            throw new Error(reason);
+          }
+          if (probeCheck.checked) {
+            const verdict = probeCheck.confirmed ? "injected" : probeCheck.ambiguous ? "ambiguous" : "not-injected";
+            console.log(`[agent-browser] Firefox injection probe for ${dirId.slice(0, 8)}: ${verdict}` + (probeCheck.mismatches.length ? " mismatches=" + probeCheck.mismatches.join(",") : ""));
+          }
+        }
+      } catch (e: any) {
+        if (/injection probe blocked/.test(String(e?.message || e))) throw e;
+        console.warn("[agent-browser] injection probe failed for " + dirId.slice(0, 8) + ":", e?.message || e);
+      }
+    }
+
     // Host environment risk — for Firefox the runtime font-exposure and rAF
     // probes run through BiDi (there is no engine-level font isolation).
     try {
@@ -1234,13 +1285,15 @@ export function stopBrowser(dirId: string): boolean {
   return true;
 }
 
-export function statusBrowser(dirId: string): { running: boolean; pid: number | null; cdpPort: number | null } {
+export function statusBrowser(dirId: string): { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } {
   validateDirId(dirId);
   const entry = runningProcesses.get(dirId);
   if (entry) {
     try {
       process.kill(entry.pid, 0);
-      return { running: true, pid: entry.pid, cdpPort: entry.port };
+      const status: { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } = { running: true, pid: entry.pid, cdpPort: entry.port };
+      if (entry.injectionProbe) status.injectionProbe = entry.injectionProbe;
+      return status;
     } catch {
       void entry.proxyBridge?.close().catch(() => undefined);
       runningProcesses.delete(dirId);
