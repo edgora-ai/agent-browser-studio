@@ -143,7 +143,7 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
 
   it("buildFirefoxUserJs sets DoH (TRR) and locale and quiet-first-run prefs", () => {
     const prefs = buildFirefoxUserJs({ dohUrl: "https://dns.example/dns-query", locale: "en-US" });
-    expect(prefs).toContain('user_pref("network.trr.mode", 2)');
+    expect(prefs).toContain('user_pref("network.trr.mode", 3)');
     expect(prefs).toContain('user_pref("network.trr.uri", "https://dns.example/dns-query")');
     expect(prefs).toContain('user_pref("intl.locale.requested", "en-US")');
     expect(prefs).toContain('user_pref("browser.shell.checkDefaultBrowser", false)');

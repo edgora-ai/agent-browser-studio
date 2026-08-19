@@ -372,8 +372,12 @@ export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
   }
 
   if (opts.dohUrl) {
-    // TRR mode 2 = prefer DoH (fall back to native on failure).
-    lines.push(prefNumber("network.trr.mode", 2));
+    // TRR mode 3 = DoH ONLY (no native-DNS fallback). The fingerprint goal is
+    // a coherent DNS view: a fallback path would let instrumented pages see
+    // two resolver populations (native + DoH) at once, which careers as a
+    // proxy/DNS tell. Mode 2 is what an interactive user wants; a managed,
+    // deployment-guaranteed DoH endpoint is what the platform wants.
+    lines.push(prefNumber("network.trr.mode", 3));
     lines.push(prefString("network.trr.uri", opts.dohUrl));
   } else {
     // Explicit native-DNS default so a previous managed profile never lingers.

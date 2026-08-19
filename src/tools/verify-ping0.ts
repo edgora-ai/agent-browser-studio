@@ -684,6 +684,51 @@ return {
  }
 }
 
+/**
+ * Findings that are NOT a property of the managed identity — they are either
+ * measurements of the site's own infra (ping0.cc serves its API behind a
+ * Cloudflare edge, so IP-geo comparisons use the CDN edge instead of the real
+ * exit) or documented engine/environment boundaries (confirmed by the two-world
+ * and frame-level forensics in Slice 79). Kept here so the summary can separate
+ * "identity failures" from "site-infra / boundary noise" instead of conflating
+ * them into a single number.
+ */
+const SITE_INFRA_OR_BOUNDARY = new Set([
+  // Site-CDN artifacts: the page's own IP/geo reads are Cloudflare edge IPs.
+  "net.isidc",
+  "net.iprisk",
+  "net.isproxy",
+  "net.tor_exit",
+  "net.dc_asn_catalog",
+  "xc.ip_tz",
+  "xc.ip_lang",
+  "xc.ip_fonts_cn",
+  "xc.multi_geo_ip",
+  // Proxy-path DNS (gateway-owned; DoH already removed the native-CN path).
+  "xc.dns_ip_country",
+  "xc.dns_blackhole",
+  // Environment/overlay boundaries (framing at Slice 79.5/79.6).
+  "stealth.raf_timing",
+  "stealth.descriptor_modified",
+]);
+
+/** Split a run's findings into (identity failures) vs (site-infra/boundary). */
+export function categorizeFindings(findings: Array<any>): {
+  identityFails: Array<any>;
+  boundaryFails: Array<any>;
+} {
+  const identity: Array<any> = [];
+  const boundary: Array<any> = [];
+  for (const f of findings) {
+    if (SITE_INFRA_OR_BOUNDARY.has(f.id) || !f.fail) continue;
+    identity.push(f);
+  }
+  for (const f of findings) {
+    if (SITE_INFRA_OR_BOUNDARY.has(f.id) && f.fail) boundary.push(f);
+  }
+  return { identityFails: identity, boundaryFails: boundary };
+}
+
 function browserVersionOf(browserPath: string): string {
   try {
     const out = execFileSync(browserPath, ["--version"], { encoding: "utf8" });
@@ -717,10 +762,22 @@ async function main(): Promise<void> {
       reports.push(report);
       process.stderr.write("[verify-ping0] run " + index + " → score=" + report.state.score + " level=" + report.state.level + " findings=" + report.state.findings.length + " report=" + file + "\n");
     }
-    process.stdout.write("\n| run | engine | score | level | findings |\n");
-    process.stdout.write("| --- | --- | --- | --- | --- |\n");
+    process.stdout.write("\n| run | engine | score | identity-fails | site-infra/boundary | level |\n");
+    process.stdout.write("| --- | --- | --- | --- | --- | --- |\n");
     for (const report of reports) {
-      process.stdout.write("| " + report.launch.runId + " | " + report.launch.engine + " | " + report.state.score + " | " + report.state.level + " | " + report.state.findings.length + " |\n");
+      const { identityFails, boundaryFails } = categorizeFindings(report.state.findings);
+      process.stdout.write(
+        "| " + report.launch.runId + " | " + report.launch.engine +
+        " | " + report.state.score + " | " + identityFails.length + " | " + boundaryFails.length +
+        " | " + report.state.level + " |\n",
+      );
+      const identityIds = identityFails.length
+        ? "identity: " + identityFails.map((f) => f.id).join(", ") + "\n"
+        : "identity: none — managed identity fully consistent\n";
+      const boundaryIds = boundaryFails.length
+        ? "site-infra/boundary: " + boundaryFails.map((f) => f.id).join(", ") + "\n"
+        : "";
+      process.stdout.write("  " + identityIds + (boundaryIds ? "  " + boundaryIds : ""));
     }
     if (reports.some((r) => r.state.status === "timeout")) {
       process.stderr.write("[verify-ping0] one or more runs timed out (partial capture)\n");
