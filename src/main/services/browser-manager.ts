@@ -1053,7 +1053,12 @@ async function launchFirefoxProfile(
   }
   console.log(`[agent-browser] Firefox launch plan ready for ${dirId.slice(0, 8)}: ${bin}`);
 
-  const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000 });
+  // Engine-level timezone: JS shims can rewrite `Intl.DateTimeFormat` strings,
+  // but `Date.getTimezoneOffset` / `Date` parsing read the OS clock and still
+  // leak `+08:00`-style host offsets. Firefox honors the `TZ` env var natively,
+  // so the managed timezone rides on the child environment (engine-level).
+  const spawnEnv = meta.timezone ? { ...process.env, TZ: meta.timezone } : undefined;
+  const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv });
   const pid = child.pid;
   if (typeof pid !== "number" || !Number.isInteger(pid)) {
     try { child.kill(); } catch { /* ignore */ }

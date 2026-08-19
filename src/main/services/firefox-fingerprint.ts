@@ -71,6 +71,18 @@ export function buildFirefoxFingerprintPrefs(
     prefs["privacy.donottrackheader.enabled"] = true;
     prefs["privacy.donottrackheader.value"] = 1;
   }
+  // WebRTC: the real leak on this engine. Even through an HTTP proxy, WebRTC
+  // UDP goes direct, so the STUN server-reflexive candidate exposes the host's
+  // true public IP (verified on <https://ping0.cc> — `rtc.public_ip` reads the
+  // host public IP while the page's geo IP is the proxy exit). JS preloads
+  // cannot touch ICE candidates, so this is a prefs channel: obfuscate host
+  // addresses as mDNS AND never gather server-reflexive candidates
+  // (`ice.proxy_only` — no STUN placement at all, with or without a proxy, so
+  // the real IP cannot appear in any candidate). TURN/relay stays functional
+  // when an app configures it. (Verified against the Firefox 154 binary
+  // inventory: `media.peerconnection.stun.client.enabled` does not exist.)
+  prefs["media.peerconnection.ice.obfuscate_host_addresses"] = true;
+  prefs["media.peerconnection.ice.proxy_only"] = true;
   return prefs;
 }
 
@@ -111,6 +123,12 @@ defValue(Navigator.prototype, "languages", cfg.languages.slice());
 defValue(Navigator.prototype, "maxTouchPoints", cfg.maxTouchPoints || 0);
 defValue(Navigator.prototype, "hardwareConcurrency", cfg.hardwareConcurrency);
 defValue(Navigator.prototype, "webdriver", false);
+// oscpu/appVersion must agree with the mapped platform, else a scanner pairing
+// the rewritten UA ("Windows NT 10.0; Win64; x64") with the leaky host
+// (real Firefox reports "Intel Mac OS X 10.15" / "5.0 (Macintosh)" here) flags
+// an internal contradiction.
+defValue(Navigator.prototype, "oscpu", cfg.platform === "MacIntel" ? "Intel Mac OS X 10.15" : "Windows NT 10.0; Win64; x64");
+defValue(Navigator.prototype, "appVersion", cfg.platform === "MacIntel" ? "5.0 (Macintosh)" : "5.0 (Windows)");
 
 // ── window / screen surface ──
 def(window, "devicePixelRatio", function(){ return cfg.screen.devicePixelRatio; });
@@ -160,15 +178,22 @@ if (cfg.timezone) {
 if (cfg.canvas.enabled) {
   (function(){
     function makeNoiser(){
-      var rng = mulberry32(seedFromHex(cfg.canvas.seed));
+      // One deterministic stream PER CONTEXT: each 2D context carries its own
+      // op counter (WeakMap), so replaying the same drawing sequence — a
+      // scanner's x5 canvas check, a fingerprint site re-rendering on the same
+      // or a fresh canvas — yields byte-identical pixels (the stable overlay
+      // Chromium's session noise provides), while different pages/contexts get
+      // independent streams.
+      var counters = typeof WeakMap !== "undefined" ? new WeakMap() : null;
       var noiseAmount = 0.6;
-      function jitter() { return (rng() - 0.5) * noiseAmount; }
+      function next(ctx){ var n = counters ? (counters.get(ctx) || 0) : 0; if (counters) counters.set(ctx, n + 1); return mulberry32((seedFromHex(cfg.canvas.seed) + n) >>> 0)(); }
+      function jitter(ctx){ return (next(ctx) - 0.5) * noiseAmount; }
       return {
-        fillRect: function(a){ return [a[0] + jitter(), a[1] + jitter(), a[2], a[3]]; },
-        strokeRect: function(a){ return [a[0] + jitter(), a[1] + jitter(), a[2], a[3]]; },
-        fillText: function(a){ return [a[0], a[1] + jitter(), a[2], a[3]]; },
-        strokeText: function(a){ return [a[0], a[1] + jitter(), a[2], a[3]]; },
-        arc: function(a){ var r = a.length; a[r-1] = a[r-1] + (rng() - 0.5) * 0.0015; return a; },
+        fillRect: function(a, ctx){ return [a[0] + jitter(ctx), a[1] + jitter(ctx), a[2], a[3]]; },
+        strokeRect: function(a, ctx){ return [a[0] + jitter(ctx), a[1] + jitter(ctx), a[2], a[3]]; },
+        fillText: function(a, ctx){ return [a[0], a[1] + jitter(ctx), a[2], a[3]]; },
+        strokeText: function(a, ctx){ return [a[0], a[1] + jitter(ctx), a[2], a[3]]; },
+        arc: function(a, ctx){ var r = a.length; a[r-1] = a[r-1] + (next(ctx) - 0.5) * 0.003; return a; },
       };
     }
     function patchProto(proto){
@@ -180,7 +205,7 @@ if (cfg.canvas.enabled) {
         if (typeof orig !== "function") continue;
         try {
           Object.defineProperty(proto, name, { configurable: true, value: function(origFn, mapper){
-            return function(){ var args = mapper(Array.prototype.slice.call(arguments)); return origFn.apply(this, args); };
+            return function(){ var args = mapper(Array.prototype.slice.call(arguments), this); return origFn.apply(this, args); };
           }(orig, map[name]) });
         } catch (e) {}
       }
@@ -192,6 +217,35 @@ if (cfg.canvas.enabled) {
     patchProto(typeof OffscreenCanvasRenderingContext2D !== "undefined" ? OffscreenCanvasRenderingContext2D.prototype : null);
   })();
 }
+
+// ── Intl default locale ──
+// Real Firefox resolves default formatter locale from the O.S. locale, not
+// navigator.language (zh-Hans-CN on this host). A scanner that formats a date
+// or number sees the host locale even when navigator.language is managed —
+// pin the default to the managed language by injecting options when the page
+// leaves them unspecified.
+(function(){
+  var want = cfg.languages[0] || "en-US";
+  var ctorNames = ["DateTimeFormat", "NumberFormat", "Collator", "PluralRules", "RelativeTimeFormat", "DisplayNames", "ListFormat", "Segmenter"];
+  for (var ci = 0; ci < ctorNames.length; ci++) {
+    let ctorName = ctorNames[ci];
+    let RealCtor = Intl[ctorName];
+    if (typeof RealCtor !== "function") continue;
+    try {
+      let Wrapped = function(locales, arg){
+        // Firefox resolves an unspecified formatter locale from the O.S.
+        // locale, NOT navigator.language (real leak: zh-Hans-CN on this host
+        // even when the identity says ja-JP). Inject the managed language as
+        // the first positional argument — an explicit page locale is honored.
+        if (locales === undefined || locales === null) return new RealCtor(want, arg);
+        return new RealCtor(locales, arg);
+      };
+      Wrapped.prototype = RealCtor.prototype;
+      if (typeof Object.setPrototypeOf === "function") Object.setPrototypeOf(Wrapped, RealCtor);
+      Object.defineProperty(Intl, ctorName, { configurable: true, value: Wrapped });
+    } catch (e) {}
+  }
+})();
 
 // ── WebGL vendor/renderer identity (shared by page + OffscreenCanvas) ──
 function patchWebglContext(ctx){
@@ -407,8 +461,9 @@ export function buildFirefoxManagedIdentity(
 //     `true` while a WebDriver BiDi session is active, and the preload disarms
 //     it to `false` — an injection that ran is provable from this one value;
 //   - a canvas double-draw confirms the deterministic noise layer is alive
-//     (two identical draws must differ when noise is applied, and be byte
-//     identical when it is not);
+//     (noise is stable per draw — byte-identical replays — so the double-draw
+//     reads equal when the managed overlay is active, and also equal on a bare
+//     engine; the decisive confirmation stays `navigator.webdriver` below);
 //   - the managed fields are echoed back so the launch verifies the injected
 //     values are the profile's own identity.
 
@@ -428,7 +483,7 @@ export interface InjectionProbeCheck {
   ambiguous: boolean;
   /** Fields the page reported that differ from the managed identity. */
   mismatches: string[];
-  /** Informational: the canvas noise layer is functioning (double-draw differs). */
+  /** Informational: canvas double-draw reads equal (stable deterministic noise layer). */
   noiseActive?: boolean;
   error?: string;
 }
@@ -501,7 +556,7 @@ export function judgeInjectionProbe(response: any, expected: InjectionProbeExpec
     confirmed,
     ambiguous: false,
     mismatches,
-    noiseActive: typeof response.doubleDrawEqual === "boolean" ? response.doubleDrawEqual === false : undefined,
+    noiseActive: typeof response.doubleDrawEqual === "boolean" ? response.doubleDrawEqual === true : undefined,
   };
 }
 

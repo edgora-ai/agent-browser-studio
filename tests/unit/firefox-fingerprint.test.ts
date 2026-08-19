@@ -55,6 +55,15 @@ describe("buildFirefoxFingerprintPrefs", () => {
     const withDnt = buildFirefoxFingerprintPrefs({ ...config, doNotTrack: null }, "137.0");
     expect(withDnt["privacy.donottrackheader.enabled"]).toBeUndefined();
   });
+
+  it("locks WebRTC so the real host IP cannot surface as an ICE candidate", () => {
+    const config = buildBrowserFingerprintConfig(meta(), null);
+    const prefs = buildFirefoxFingerprintPrefs(config, "137.0");
+    // Host candidates obfuscate as mDNS and the STUN client never runs
+    // (proxy_only), so no server-reflexive (real public IP) candidate exists.
+    expect(prefs["media.peerconnection.ice.obfuscate_host_addresses"]).toBe(true);
+    expect(prefs["media.peerconnection.ice.proxy_only"]).toBe(true);
+  });
 });
 
 describe("buildFirefoxFingerprintPreloadScript", () => {
@@ -94,8 +103,18 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
   it("injects deterministic canvas seed noise and WebGL identity", () => {
     expect(script).toContain("seedFromHex(cfg.canvas.seed)");
     expect(script).toContain("mulberry32");
+    expect(script).toContain("WeakMap");
     expect(script).toContain(config.webgl.vendor);
     expect(script).toContain(config.webgl.renderer);
+  });
+
+  it("pins the default Intl formatter locale to the managed language (per-constructor wrap)", () => {
+    expect(script).toContain("DateTimeFormat");
+    expect(script).toContain("NumberFormat");
+    expect(script).toContain("Segmenter");
+    expect(script).toContain("new RealCtor(want, arg)");
+    expect(script).toContain("let Wrapped");
+    expect(script).toContain("let RealCtor");
   });
 
   it("patches timezone via Intl.resolvedOptions + Date.getTimezoneOffset", () => {
@@ -161,7 +180,7 @@ describe("injection self-check probe (Slice 79.2)", () => {
 
   it("confirms injection when webdriver is disarmed and fields match", () => {
     const check = judgeInjectionProbe(
-      { webdriver: false, doubleDrawEqual: false, platform: exp.platform, language: exp.language, screenWidth: exp.screenWidth, hardwareConcurrency: exp.hardwareConcurrency },
+      { webdriver: false, doubleDrawEqual: true, platform: exp.platform, language: exp.language, screenWidth: exp.screenWidth, hardwareConcurrency: exp.hardwareConcurrency },
       exp,
     );
     expect(check.checked).toBe(true);

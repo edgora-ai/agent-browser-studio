@@ -2,17 +2,26 @@
 
 // Reusable ping0.cc environment-consistency verifier for the managed engine.
 //
-// Spawns the independent Chromium build the exact way the app does (managed
-// fingerprint switch, proxy, geo-consistent timezone/locale), loads
-// https://ping0.cc/env, waits for the Vue app to actually FINISH
-// (finished === true) — not just for the DOM to load — then settles for a
-// configurable period before capturing the full report. This is the
-// "don't close the page before the results are out" guarantee.
+// Spawns the managed engine the exact way the app does (managed fingerprint
+// injection, proxy, geo-consistent timezone/locale), loads https://ping0.cc/env,
+// waits for the Vue app to actually FINISH (finished === true) — not just for
+// the DOM to load — then settles for a configurable period before capturing the
+// full report. This is the "don't close the page before the results are out"
+// guarantee.
+//
+// Engines:
+//  - chromium (default): the independent patched build with --fingerprint-*
+//    native switches, driven over CDP (no Playwright *launch* — connectOverCDP
+//    only, so no automation signals are injected).
+//  - firefox: the real RoxyFirefox-aligned path — writer.js prefs + WebDriver
+//    BiDi preload injection (Slice 79), driven over BiDi exactly like the app.
 //
 // Usage (after npm run build):
 //   node dist/tools/verify-ping0.js --browser=/path/to/Chromium.app \
 //     [--upstream=127.0.0.1:7890] [--proxy-type=http|socks5] [--runs=1..3]
 //     [--settle-ms=15000] [--headless] [--tag=run1] [--out=docs/verification]
+//   node dist/tools/verify-ping0.js --engine=firefox \
+//     [--browser=/Applications/Firefox.app] [--upstream=…] [--runs=1..3] ...
 //
 // Writes one JSON report per run: docs/verification/ping0-<tag>.json
 
@@ -28,8 +37,23 @@ import {
   MANAGED_SECURE_DNS_TEMPLATES,
   buildBrowserFingerprintArg,
 } from "../main/services/browser-fingerprint-config.js";
+import { buildFirefoxLaunchArgs, writeFirefoxUserJs, findFirefoxBinary, detectFirefoxVersion } from "../main/services/browser-engine.js";
+import { buildFirefoxManagedIdentity } from "../main/services/firefox-fingerprint.js";
+import {
+  connectBidi,
+  bidiAddPreloadScript,
+  bidiCreateContext,
+  bidiCloseContext,
+  bidiGetTopContext,
+  bidiEvaluateInContext,
+  bidiNavigate,
+  type BidiConnection,
+} from "../main/services/bidi-client.js";
+
+type Engine = "chromium" | "firefox";
 
 interface Options {
+  engine: Engine;
   browser: string;
   upstreamHost: string;
   upstreamPort: number;
@@ -42,6 +66,7 @@ interface Options {
   outDir: string;
   seedBase: number;
   webrtcIp: string | null;
+  dohUrl: string | null;
 }
 
 interface GeoInfo {
@@ -76,6 +101,7 @@ interface Ping0State {
 
 interface RunReport {
   launch: {
+    engine: Engine;
     runId: string;
     seed: number;
     platform: string;
@@ -103,6 +129,7 @@ function resolveExecutable(input: string): string {
 }
 
 function parseOptions(argv: string[]): Options {
+  let engine: Engine = "chromium";
   let browser = "";
   let upstreamHost = "127.0.0.1";
   let upstreamPort = 7890;
@@ -115,8 +142,13 @@ function parseOptions(argv: string[]): Options {
   let outDir = "docs/verification";
   let seedBase = 70000;
   let webrtcIp: string | null = null;
+  // Firefox with an HTTP proxy still resolves DNS client-side (SOCKS does
+  // remote DNS); managed DoH keeps resolvers out of the host's CN pool, the
+  // same isolation Chromium gets from its secure-DNS templates.
+  let dohUrl: string | null = MANAGED_SECURE_DNS_TEMPLATES[0];
   for (const arg of argv) {
     if (arg.startsWith("--browser=")) browser = arg.slice("--browser=".length);
+    else if (arg.startsWith("--engine=")) engine = arg.slice("--engine=".length) as Engine;
     else if (arg.startsWith("--upstream=")) {
       const spec = arg.slice("--upstream=".length);
       const separator = spec.lastIndexOf(":");
@@ -145,16 +177,26 @@ function parseOptions(argv: string[]): Options {
       seedBase = Number(arg.slice("--seed-base=".length));
       if (!Number.isInteger(seedBase) || seedBase < 1) throw new Error("--seed-base must be a positive integer");
     } else if (arg.startsWith("--webrtc-ip=")) webrtcIp = arg.slice("--webrtc-ip=".length) || null;
+    else if (arg.startsWith("--doh-url=")) {
+      const value = arg.slice("--doh-url=".length);
+      dohUrl = !value || value === "none" ? null : value;
+    }
     else if (arg === "--headless") headless = true;
     else if (arg.startsWith("--")) throw new Error("unknown option: " + arg);
     else browser = arg;
   }
+  if (!browser && engine === "firefox") {
+    const detected = findFirefoxBinary();
+    if (detected) browser = detected;
+  }
   if (!browser) {
     throw new Error(
-      "usage: verify-ping0 --browser=/path/to/Chromium.app [--upstream=host:port] [--proxy-type=http|socks5] [--runs=n] [--settle-ms=n] [--headless] [--tag=name] [--out=dir]",
+      "usage: verify-ping0 [--engine=chromium|firefox] --browser=/path/to/Chromium.app " +
+        "[--upstream=host:port] [--proxy-type=http|socks5] [--runs=n] [--settle-ms=n] [--headless] [--tag=name] [--out=dir]",
     );
   }
   return {
+    engine,
     browser: resolveExecutable(browser),
     upstreamHost,
     upstreamPort,
@@ -167,6 +209,7 @@ function parseOptions(argv: string[]): Options {
     outDir,
     seedBase,
     webrtcIp,
+    dohUrl,
   };
 }
 
@@ -307,6 +350,191 @@ async function captureState(page: Page, settledAt: string): Promise<Ping0State> 
   };
 }
 
+// ── ping0 Vue app probes, shared between the Chromium (Playwright) and
+// Firefox (BiDi) paths so both measure the exact same state machine ──
+
+const PING0_WAIT_PROBE = `(function(){
+  var el = document.querySelector('#envdetect-app');
+  var data = el && el.__vue__ ? el.__vue__.$data : null;
+  var rows = data ? data.rows || {} : {};
+  var pending = Object.keys(rows).filter(function(k){ return rows[k] && rows[k].pending; }).slice(0, 40);
+  return {
+    finished: !!(data && data.finished),
+    phase: data ? data.phase : null,
+    score: data ? data.score : null,
+    progressDone: data ? data.progressDone : null,
+    progressTotal: data ? data.progressTotal : null,
+    pending: pending,
+    body: (document.body.innerText || '').slice(0, 400)
+  };
+})()`;
+
+const PING0_CAPTURE_PROBE = `(function(){
+  var el = document.querySelector('#envdetect-app');
+  var data = el && el.__vue__ ? el.__vue__.$data : null;
+  return {
+    score: data && typeof data.score === 'number' ? data.score : null,
+    level: data ? data.level : null,
+    reportId: data ? data.reportId : '',
+    findings: data ? (data.finalFindings || data.findings || []) : [],
+    rows: data ? (data.rows || {}) : {},
+    quickProbes: data ? (data.quickProbes || null) : null,
+    status: data ? data.status : null,
+    raf: data ? (data.raf || null) : null,
+    bodyText: document.body.innerText || '',
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus()
+  };
+})()`;
+
+async function waitForBidi(port: number, timeoutMs: number): Promise<BidiConnection> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      return await connectBidi("ws://127.0.0.1:" + port + "/session", { timeoutMs: 3000 });
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error("Firefox BiDi did not come up on port " + port + " (last error: " + lastError + ")");
+}
+
+/** The managed-identity config + prefs/preload the app itself would use. */
+function buildFirefoxLaunchPlan(opts: Options, index: number, geo: GeoInfo, profileDir: string, firefoxVersion: string) {
+  const seed = opts.seedBase + index;
+  const locale = localeFromCountry(geo.countryCode);
+  const timezone = geo.timezone;
+  const identity = buildFirefoxManagedIdentity(
+    {
+      fingerprintSeed: seed,
+      platform: "windows",
+      locale,
+      timezone,
+      webrtcMode: opts.webrtcIp ? "altered" : "auto",
+      webrtcIp: opts.webrtcIp,
+    },
+    firefoxVersion,
+    null,
+  );
+  const proxy = opts.upstreamPort
+    ? { type: opts.proxyType as "http" | "socks5", host: opts.upstreamHost, port: opts.upstreamPort }
+    : null;
+  writeFirefoxUserJs(profileDir, {
+    proxy,
+    dohUrl: opts.dohUrl,
+    locale: locale || undefined,
+    useGpu: true,
+    sandboxPermission: true,
+    colorScheme: "system",
+    ...(identity ? { extraPrefs: identity.prefs } : {}),
+  });
+  return { seed, locale, timezone, identity };
+}
+
+async function runOnceFirefox(
+  opts: Options,
+  index: number,
+  geo: GeoInfo,
+  temporaryRoot: string,
+  firefoxVersion: string,
+): Promise<RunReport> {
+  const profileDir = fs.mkdtempSync(path.join(temporaryRoot, "ping0-ff-profile-" + index + "-"));
+  const runId = opts.tag + "-" + index;
+  const plan = buildFirefoxLaunchPlan(opts, index, geo, profileDir, firefoxVersion);
+  const remotePort = await getFreePort();
+  const startedAt = new Date().toISOString();
+  const spawnEnv = plan.timezone ? { ...process.env, TZ: plan.timezone } : undefined;
+  const child: ChildProcess = spawn(
+    opts.browser,
+    buildFirefoxLaunchArgs({ profileDir, remotePort, headless: opts.headless, platform: "windows" }),
+    { stdio: "ignore", env: spawnEnv },
+  );
+  let conn: BidiConnection | null = null;
+  try {
+    conn = await waitForBidi(remotePort, opts.waitTimeoutMs);
+    await bidiAddPreloadScript(conn, plan.identity.preloadScript, 15000);
+    const context = await bidiCreateContext(conn, 15000);
+    await bidiNavigate(conn, "https://ping0.cc/env", context, 60000);
+    let timedOut = false;
+    try {
+      const deadline = Date.now() + opts.waitTimeoutMs;
+      let lastState = "";
+      let stuckSince = 0;
+      while (Date.now() < deadline) {
+        const probe = await bidiEvaluateInContext(conn, PING0_WAIT_PROBE, context, 15000);
+        if (probe && probe.finished) break;
+        const state = String(probe?.phase || "") + "|" + String(probe?.score ?? "") + "|" + String(probe?.progressDone ?? "") + "/" + String(probe?.progressTotal ?? "");
+        if (state !== lastState) {
+          const pendingText = (probe?.pending || []).length ? " pending=" + (probe.pending as string[]).join(",") : "";
+          process.stderr.write("[verify-ping0] waiting… phase=" + state + pendingText + " body=\"" + String(probe?.body || "").replace(/\s+/g, " ").slice(0, 70) + "\"\n");
+          lastState = state;
+          stuckSince = Date.now();
+        } else if (Date.now() - stuckSince > 20000) {
+          process.stderr.write("[verify-ping0] still stuck at " + state + "\n");
+          stuckSince = Date.now();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (Date.now() >= deadline) throw new Error("ping0 did not finish in time (phase=" + lastState + ")");
+    } catch (error) {
+      timedOut = true;
+      process.stderr.write("[verify-ping0] warning: " + (error instanceof Error ? error.message : String(error)) + " — capturing partial state\n");
+    }
+    const finishedAt = new Date().toISOString();
+    if (!timedOut && opts.settleMs > 0) {
+      process.stderr.write("[verify-ping0] finished, settling " + opts.settleMs + "ms before capture…\n");
+      await new Promise((resolve) => setTimeout(resolve, opts.settleMs));
+    }
+    const settledAt = new Date().toISOString();
+    const captured = await bidiEvaluateInContext(conn, PING0_CAPTURE_PROBE, context, 15000);
+    const state: Ping0State = {
+      startedAt,
+      finishedAt,
+      settledAt,
+      endedAt: new Date().toISOString(),
+      score: typeof captured?.score === "number" ? captured.score : null,
+      level: captured?.level ?? null,
+      reportId: String(captured?.reportId || ""),
+      findings: captured?.findings ?? [],
+      rows: captured?.rows ?? {},
+      quickProbes: captured?.quickProbes ?? null,
+      status: captured?.status ?? null,
+      raf: captured?.raf ?? null,
+      probeFocus: { visibility: String(captured?.visibility || ""), hasFocus: captured?.hasFocus === true },
+      bodyText: String(captured?.bodyText || ""),
+    };
+    if (timedOut) state.status = "timeout";
+    return {
+      launch: {
+        engine: "firefox",
+        runId,
+        seed: plan.seed,
+        platform: "windows",
+        proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
+        geo,
+        timezone: plan.timezone,
+        locale: plan.locale,
+        webrtcIp: opts.webrtcIp,
+        browserVersion: firefoxVersion,
+        browserPath: opts.browser,
+        headless: opts.headless,
+      },
+      state,
+    };
+  } finally {
+    conn?.close();
+    try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    if (profileDir.startsWith(temporaryRoot)) {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try { fs.rmSync(profileDir, { recursive: true, force: true }); break; }
+        catch { await new Promise((resolve) => setTimeout(resolve, 200)); }
+      }
+    }
+  }
+}
+
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -423,11 +651,12 @@ try {
    state.startedAt = startedAt;
    state.finishedAt = finishedAt;
    if (timedOut) state.status = "timeout";
-   return {
-     launch: {
-       runId,
-       seed,
-       platform: "windows",
+return {
+      launch: {
+        engine: "chromium",
+        runId,
+        seed,
+        platform: "windows",
        proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
        geo,
        timezone,
@@ -468,24 +697,28 @@ async function main(): Promise<void> {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "verify-ping0-"));
   try {
     fs.mkdirSync(opts.outDir, { recursive: true });
-    process.stderr.write("[verify-ping0] proxy=" + opts.proxyType + "://" + opts.upstreamHost + ":" + opts.upstreamPort + " runs=" + opts.runs + " settle=" + opts.settleMs + "ms headless=" + opts.headless + "\n");
+    process.stderr.write("[verify-ping0] engine=" + opts.engine + " proxy=" + opts.proxyType + "://" + opts.upstreamHost + ":" + opts.upstreamPort + " runs=" + opts.runs + " settle=" + opts.settleMs + "ms headless=" + opts.headless + "\n");
     const geo = await detectGeo(opts);
     process.stderr.write("[verify-ping0] exit=" + geo.exitIp + " country=" + geo.countryCode + " tz=" + geo.timezone + "\n");
     if (!opts.webrtcIp) opts.webrtcIp = geo.exitIp;
-    const browserVersion = browserVersionOf(opts.browser);
+    const browserVersion = opts.engine === "firefox"
+      ? detectFirefoxVersion(opts.browser) || "unknown"
+      : browserVersionOf(opts.browser);
     const reports: RunReport[] = [];
     for (let index = 1; index <= opts.runs; index += 1) {
       process.stderr.write("[verify-ping0] run " + index + "/" + opts.runs + " starting\n");
-      const report = await runOnce(opts, index, geo, temporaryRoot, browserVersion);
+      const report = opts.engine === "firefox"
+        ? await runOnceFirefox(opts, index, geo, temporaryRoot, browserVersion)
+        : await runOnce(opts, index, geo, temporaryRoot, browserVersion);
       const file = path.join(opts.outDir, "ping0-" + report.launch.runId + ".json");
       fs.writeFileSync(file, JSON.stringify(report, null, 2), "utf8");
       reports.push(report);
       process.stderr.write("[verify-ping0] run " + index + " → score=" + report.state.score + " level=" + report.state.level + " findings=" + report.state.findings.length + " report=" + file + "\n");
     }
-    process.stdout.write("\n| run | score | level | findings |\n");
-    process.stdout.write("| --- | --- | --- | --- |\n");
+    process.stdout.write("\n| run | engine | score | level | findings |\n");
+    process.stdout.write("| --- | --- | --- | --- | --- |\n");
     for (const report of reports) {
-      process.stdout.write("| " + report.launch.runId + " | " + report.state.score + " | " + report.state.level + " | " + report.state.findings.length + " |\n");
+      process.stdout.write("| " + report.launch.runId + " | " + report.launch.engine + " | " + report.state.score + " | " + report.state.level + " | " + report.state.findings.length + " |\n");
     }
     if (reports.some((r) => r.state.status === "timeout")) {
       process.stderr.write("[verify-ping0] one or more runs timed out (partial capture)\n");
