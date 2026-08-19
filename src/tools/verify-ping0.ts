@@ -47,6 +47,7 @@ import {
   bidiGetTopContext,
   bidiEvaluateInContext,
   bidiNavigate,
+  bidiActivateContext,
   type BidiConnection,
 } from "../main/services/bidi-client.js";
 
@@ -457,6 +458,7 @@ async function runOnceFirefox(
     await bidiAddPreloadScript(conn, plan.identity.preloadScript, 15000);
     const context = await bidiCreateContext(conn, 15000);
     await bidiNavigate(conn, "https://ping0.cc/env", context, 60000);
+    try { await bidiActivateContext(conn, context, 8000); } catch { /* tab activation is best-effort */ }
     let timedOut = false;
     try {
       const deadline = Date.now() + opts.waitTimeoutMs;

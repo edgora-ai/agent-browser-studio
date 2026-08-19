@@ -235,6 +235,11 @@ export async function bidiCloseContext(conn: BidiConnection, contextId: string, 
   } catch { /* the context may already be gone */ }
 }
 
+/** Bring a tab to the foreground so its page renders as an active tab (Firefox 127+). */
+export async function bidiActivateContext(conn: BidiConnection, contextId: string, timeoutMs = 8000): Promise<void> {
+  await conn.send("browsingContext.activate", { context: contextId }, timeoutMs);
+}
+
 /** Capture a PNG screenshot of the context viewport (result.data is base64). */
 export async function bidiCaptureScreenshot(conn: BidiConnection, contextId: string | null = null, timeoutMs = 15000): Promise<string | null> {
   const context = contextId ?? await bidiGetTopContext(conn, timeoutMs);
