@@ -528,7 +528,7 @@ export function registerAgentHandlers(): void {
   // Bulk import accounts AND create a bound profile per account.
   ipcMain.handle("agent:accounts:bulk-create", async (_event, params: {
     text: string;
-    options?: { platform?: "windows" | "macos" };
+    options?: { platform?: "windows" | "macos" | "android" };
   }) => {
     gateAccount(requireAccountMutation());
     const items = parseAccountsBulkText(String(params?.text || ""));

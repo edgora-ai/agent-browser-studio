@@ -253,3 +253,66 @@ export function summarizeDrift(drift: FingerprintDrift[], limit = 8): string {
   const head = drift.slice(0, limit).map((d) => d.field).join(", ");
   return drift.length > limit ? head + " (+" + (drift.length - limit) + " more)" : head;
 }
+
+/** The persona a profile was configured with, used to gate live captures. */
+export interface PersonaExpectation {
+  platform: string;
+  timezone?: string | null;
+}
+
+export interface PersonaMismatch {
+  field: string;
+  expected: unknown;
+  actual: unknown;
+}
+
+const PERSONA_PLATFORM: Record<string, string> = {
+  windows: "Win32",
+  macos: "MacIntel",
+  android: "Linux armv81",
+};
+
+/**
+ * G9 hard gate: the drift machinery compares successive captures, but a
+ * capture identical to the PREVIOUS one still proves nothing if both were
+ * leaked through a broken injection layer. Cross-checking the checkpointed
+ * persona against the LIVE surface (platform, UA mobile token, plugin table,
+ * timezone) catches the consistent-leak case where the injection never
+ * engaged at all (e.g. preload mis-fires but the profile is unchanged).
+ */
+export function checkPersonaConsistency(
+  persona: PersonaExpectation,
+  current: Fingerprint,
+): PersonaMismatch[] {
+  const out: PersonaMismatch[] = [];
+  const expectedPlat = PERSONA_PLATFORM[persona.platform];
+  const plat = String(current.platform ?? "");
+  if (expectedPlat && plat && plat !== expectedPlat) {
+    out.push({ field: "persona.platform", expected: expectedPlat, actual: plat });
+  }
+  const isMobile = persona.platform === "android";
+  const pluginsStr = String(current.plugins ?? "");
+  if (isMobile && pluginsStr !== "") {
+    out.push({ field: "persona.plugins", expected: "empty (mobile)", actual: pluginsStr.slice(0, 80) });
+  }
+  if (!isMobile && pluginsStr === "") {
+    out.push({ field: "persona.plugins", expected: "non-empty (desktop)", actual: "empty" });
+  }
+  const ua = String(current.userAgent ?? "");
+  if (isMobile && ua && !ua.includes("Mobile")) {
+    out.push({ field: "persona.uaMobile", expected: "Mobile UA token", actual: ua.slice(0, 80) });
+  }
+  if (!isMobile && ua && ua.includes("Mobile")) {
+    out.push({ field: "persona.uaMobile", expected: "no Mobile UA token", actual: ua.slice(0, 80) });
+  }
+  const tz = String(current.tz ?? "");
+  if (persona.timezone && tz && tz !== persona.timezone) {
+    out.push({ field: "persona.tz", expected: persona.timezone, actual: tz });
+  }
+  return out;
+}
+
+/** Render persona mismatches as drift entries so the existing gate UI reuses. */
+export function mismatchesAsDrift(mismatches: PersonaMismatch[]): FingerprintDrift[] {
+  return mismatches.map((m) => ({ field: m.field, baseline: m.expected, current: m.actual }));
+}

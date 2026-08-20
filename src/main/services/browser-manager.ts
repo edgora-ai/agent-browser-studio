@@ -17,6 +17,7 @@ import { checkProfileConsistency } from "./consistency-check.js";
 import { drmLaunchArgs } from "./drm.js";
 import {
   captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
+  checkPersonaConsistency, mismatchesAsDrift,
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
@@ -82,7 +83,7 @@ export interface BrowserProfile {
   allowThirdPartyCookies: boolean;
   drm: boolean;
   fingerprintSeed: number; // integer seed for deterministic fingerprint
-  platform: "windows" | "macos";
+  platform: "windows" | "macos" | "android";
   timezone: string | null;  // IANA timezone (e.g. 'Asia/Shanghai', 'America/New_York')
   locale: string | null;    // BCP 47 locale (e.g. 'zh-CN', 'en-US')
   webrtcMode: WebRtcMode;
@@ -249,7 +250,7 @@ export function createBrowserProfile(opts: {
   browserVersion?: string | null;
   allowThirdPartyCookies?: boolean;
   fingerprintSeed?: number;
-  platform?: "windows" | "macos";
+  platform?: "windows" | "macos" | "android";
   timezone?: string;
   locale?: string;
   webrtcMode?: WebRtcMode;
@@ -835,16 +836,25 @@ export async function launchBrowser(
     try {
       const current = await captureFingerprint(cdpPort);
       const drift = diffFingerprints(meta.fingerprintBaseline, current);
-      const risky = hasRiskyDrift(drift);
-      driftCheck = { checked: true, risky, drift };
-      if (drift.length) {
+      // G9 persona-consistency gate: a capture matching the previous one is
+      // still a leak if the injection never engaged (consistent-leak case) —
+      // cross-check platform/UA/plugins/tz against the configured persona.
+      const personaCheck = checkPersonaConsistency(
+        { platform: meta.platform || "windows", timezone: meta.timezone },
+        current,
+      );
+      const personaDrift = mismatchesAsDrift(personaCheck);
+      const combinedDrift = [...drift, ...personaDrift];
+      const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
+      driftCheck = { checked: true, risky, drift: combinedDrift };
+      if (drift.length || personaDrift.length) {
         recordAudit({
           category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
-          detail: drift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(drift),
+          detail: combinedDrift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift),
         });
       }
       if (risky && cfg.blockOnFingerprintDrift !== false) {
-        const reason = "Fingerprint drift blocked (" + summarizeDrift(drift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+        const reason = "Fingerprint drift blocked (" + summarizeDrift(combinedDrift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
         recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
         const failedEntry = runningProcesses.get(dirId);
         runningProcesses.delete(dirId);
@@ -968,8 +978,13 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   try {
     const current = await captureFingerprint(st.cdpPort, engine);
     const drift = diffFingerprints(meta.fingerprintBaseline, current);
-    const risky = hasRiskyDrift(drift);
-    return { ok: true, checked: true, hasBaseline: true, risky, drift, fields: Object.keys(current).length };
+    const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
+      { platform: meta.platform || "windows", timezone: meta.timezone },
+      current,
+    ));
+    const combined = [...drift, ...personaDrift];
+    const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
+    return { ok: true, checked: true, hasBaseline: true, risky, drift: combined, fields: Object.keys(current).length };
   } catch (e: any) {
     return { ok: false, error: e.message || String(e) };
   }
@@ -1698,8 +1713,8 @@ function normalizeBoolean(value: unknown, label: string, fallback = false): bool
   return value;
 }
 
-function normalizePlatform(value: unknown): "windows" | "macos" {
-  if (value === "windows" || value === "macos") return value;
+function normalizePlatform(value: unknown): "windows" | "macos" | "android" {
+  if (value === "windows" || value === "macos" || value === "android") return value;
   throw new Error(`Invalid browser platform: ${JSON.stringify(value)}`);
 }
 

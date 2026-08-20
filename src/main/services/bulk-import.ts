@@ -3,7 +3,7 @@
 // legacy positional format. Pure → unit-testable.
 export interface ProfileSpec {
   name: string;
-  platform?: "windows" | "macos";
+  platform?: "windows" | "macos" | "android";
   locale?: string;
   timezone?: string;
   fingerprintSeed?: number;

@@ -45,7 +45,9 @@ function cannedFingerprint() {
     hardwareConcurrency: 8, deviceMemory: 8, screenW: 1920, screenH: 1080,
     availLeft: 0, availTop: 0, screenX: 0, screenY: 0, outerWidth: 1920, outerHeight: 1040,
     innerWidth: 1920, innerHeight: 1040, devicePixelRatio: 1, canvasHash: 'j99-canvas-512',
-    clientRect: '0,0,1,1', workerIdentity: '{}', plugins: '', mimeTypes: '', speechVoices: '',
+    clientRect: '0,0,1,1', workerIdentity: '{}',
+    plugins: 'Internal PDF Plugin|pdfium.dll|Portable Document Format;Widevine Content Decryption Module|widevinecdm.dll|Enables Widevine decryption for HTML audio/video content.',
+    mimeTypes: 'application/pdf|application/pdf|pdf', speechVoices: '',
     fontAvailability: '', fontCapabilityHash: null, audioHash: 'j99-audio-1', mediaDevices: '',
     storageQuota: 1073741824, doNotTrack: 1, systemColors: '', preferredColorScheme: 'light',
     webglCapabilityHash: 'j99-webgl', webgpuCapabilityHash: null,
@@ -84,7 +86,7 @@ function answer(method, params) {
     case 'browsingContext.close':
       return {};
     case 'script.addPreloadScript': {
-      record({ t: 'preload', script: String((params && params.functionDeclaration) || '').slice(0, 20000) });
+      record({ t: 'preload', script: String((params && params.functionDeclaration) || '').slice(0, 70000) });
       return { script: 'pre-' + n };
     }
     case 'script.evaluate': {
@@ -243,7 +245,7 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
 
   it('launches a Firefox profile: prefs user.js, BiDi preload, queued cookies via BiDi', async () => {
     const r = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.create({
-      name: 'J99-Firefox', engine: 'firefox', locale: 'en-US', timezone: 'America/New_York',
+      name: 'J99-Firefox', engine: 'firefox', platform: 'windows', locale: 'en-US', timezone: 'America/New_York',
     }));
     dirId = r.dirId;
     expect(dirId).toMatch(/^ab_/);
@@ -319,10 +321,10 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
     // Capture the baseline live (BiDi evaluate → canned fingerprint).
     const cap: any = await h.page.evaluate(async (id: string) => {
       const res: any = await (window as any).agentBrowser.api.browser.captureBaseline(id);
-      return { ok: res.ok, error: res.error || '', risky: res.risky, fields: res.fields };
+      return { ok: res.ok, error: res.error || '', risky: res.risky, fields: res.fields, drift: res.drift };
     }, dirId);
     expect(cap.ok, cap.error + '\n--record--\n' + readRecord().slice(-8).map((m) => JSON.stringify(m)).join('\n')).toBe(true);
-    expect(cap.risky).toBe(false);
+    expect(cap.risky, 'capture: ' + JSON.stringify(cap)).toBe(false);
     expect(cap.fields).toBeGreaterThan(10);
 
     d = await apiRequest(restPort, restToken, 'GET', `/api/profiles/${dirId}/drift`);

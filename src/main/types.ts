@@ -96,7 +96,9 @@ export interface ResolvedProfileProxy {
   rotationReason?: string | null;
 }
 
-export type BrowserPlatform = "windows" | "macos";
+/** OS identity a managed profile presents. `android` renders a mobile
+ * persona (touch, phone screen geometry, mobile UA) for mobile simulation. */
+export type BrowserPlatform = "windows" | "macos" | "android";
 export type GeolocationMode = "real" | "disable" | "custom";
 export type WebRtcMode = "auto" | "real" | "altered" | "disable";
 export type FingerprintMode = "managed" | "off";

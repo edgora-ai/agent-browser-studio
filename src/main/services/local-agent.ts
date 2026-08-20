@@ -432,7 +432,7 @@ export function bulkAddAccounts(items: ParsedAccountLine[]): BulkAccountResult {
 }
 
 export interface BulkCreateProfilesOptions {
-  platform?: "windows" | "macos";
+  platform?: "windows" | "macos" | "android";
 }
 
 /** Derive a readable, collision-free profile name from account identity. */

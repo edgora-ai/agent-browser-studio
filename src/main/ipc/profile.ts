@@ -51,7 +51,7 @@ export function registerProfileHandlers(): void {
   }: {
     name: string;
     fingerprintSeed?: number;
-    platform?: "windows" | "macos";
+    platform?: "windows" | "macos" | "android";
     timezone?: string;
     locale?: string;
     webrtcMode?: WebRtcMode;

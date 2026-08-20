@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import { listAudit } from "../services/audit-log.js";
 import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
 import { checkProfileConsistency } from "../services/consistency-check.js";
-import { captureFingerprint, diffFingerprints, hasRiskyDrift } from "../services/fingerprint-baseline.js";
+import { captureFingerprint, diffFingerprints, hasRiskyDrift, checkPersonaConsistency, mismatchesAsDrift } from "../services/fingerprint-baseline.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "../services/environment-risk.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
@@ -225,16 +225,21 @@ export function registerBrowserHandlers(): void {
       const current = await captureFingerprint(st.cdpPort, engine);
       const meta = cfg.browserProfiles?.[dirId] || {};
       const drift = diffFingerprints(meta.fingerprintBaseline, current);
-      const risky = hasRiskyDrift(drift);
+      const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
+        { platform: meta.platform || "windows", timezone: meta.timezone },
+        current,
+      ));
+      const combined = [...drift, ...personaDrift];
+      const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
       cfg.browserProfiles[dirId] = { ...meta, fingerprintBaseline: current };
       saveConfig(cfg);
-      if (drift.length) {
+      if (combined.length) {
         recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId,
-          detail: `${drift.length} field(s) changed${risky ? " (risky)" : ""}: ${drift.map((d) => d.field).slice(0, 8).join(", ")}` });
+          detail: `${combined.length} field(s) changed${risky ? " (risky)" : ""}: ${combined.map((d) => d.field).slice(0, 8).join(", ")}` });
       } else {
         recordAudit({ category: "profile", action: "fingerprint-baseline", target: dirId, detail: "baseline captured (stable)" });
       }
-      return { ok: true, fields: Object.keys(current).length, drift, risky, baseline: current };
+      return { ok: true, fields: Object.keys(current).length, drift: combined, risky, baseline: current };
     } catch (e: any) {
       return { ok: false, error: e.message || String(e) };
     }

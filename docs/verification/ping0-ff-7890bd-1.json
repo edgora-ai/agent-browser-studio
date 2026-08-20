@@ -1,0 +1,3002 @@
+{
+  "launch": {
+    "engine": "firefox",
+    "runId": "ff-7890bd-1",
+    "seed": 70001,
+    "platform": "windows",
+    "proxy": {
+      "type": "http",
+      "host": "127.0.0.1",
+      "port": 7890
+    },
+    "geo": {
+      "exitIp": "152.69.211.51",
+      "country": "Singapore",
+      "countryCode": "SG",
+      "region": "01",
+      "city": "Singapore",
+      "timezone": "Asia/Singapore",
+      "isp": "Oracle Corporation",
+      "org": "Oracle Corporation",
+      "asn": "AS31898",
+      "provider": "ipwho.is"
+    },
+    "timezone": "Asia/Singapore",
+    "locale": "en-SG",
+    "webrtcIp": "152.69.211.51",
+    "browserVersion": "154.0",
+    "browserPath": "/Applications/Firefox.app/Contents/MacOS/Firefox",
+    "headless": false
+  },
+  "state": {
+    "startedAt": "2026-08-19T18:00:59.763Z",
+    "finishedAt": "2026-08-19T18:01:56.433Z",
+    "settledAt": "2026-08-19T18:02:11.434Z",
+    "endedAt": "2026-08-19T18:02:11.496Z",
+    "score": 92,
+    "level": "green",
+    "reportId": "b96c512f-1f07-46c0-a3a1-5ffdf7dd8be5",
+    "findings": [
+      {
+        "id": "net.ipv4",
+        "category": "net",
+        "severity": "info",
+        "weight": 0,
+        "value": {
+          "ip": "152.69.211.51",
+          "isv6": false,
+          "country": "新加坡",
+          "country_code": "SG",
+          "province": "新加坡",
+          "city": "新加坡 新加坡",
+          "location": "新加坡 新加坡 新加坡 新加坡",
+          "asn": 31898,
+          "asnname": "Oracle Corporation",
+          "asndomain": "cloud.oracle.com",
+          "asntype": "idc",
+          "org": "Oracle Corporation",
+          "orgdomain": "cloud.oracle.com",
+          "orgtype": "idc",
+          "isidc": true,
+          "iptype": "IDC机房IP",
+          "iprisk": 15,
+          "isproxy": false,
+          "nativeip": false,
+          "usecount": "1 - 10 (极好)",
+          "cdn": "",
+          "needCaptcha": false,
+          "captchaHost": "ipv4.ping0.cc"
+        },
+        "fail": false
+      },
+      {
+        "id": "net.ipv6",
+        "category": "net",
+        "severity": "info",
+        "weight": 0,
+        "value": null,
+        "fail": false
+      },
+      {
+        "id": "net.asn",
+        "category": "net",
+        "severity": "info",
+        "weight": 0,
+        "value": 31898,
+        "fail": false
+      },
+      {
+        "id": "net.org",
+        "category": "net",
+        "severity": "info",
+        "weight": 0,
+        "value": "Oracle Corporation",
+        "fail": false
+      },
+      {
+        "id": "net.isidc",
+        "category": "net",
+        "severity": "warn",
+        "weight": 8,
+        "value": true,
+        "fail": true
+      },
+      {
+        "id": "net.isproxy",
+        "category": "net",
+        "severity": "danger",
+        "weight": 12,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "net.iprisk",
+        "category": "net",
+        "severity": "warn",
+        "weight": 6,
+        "value": 15,
+        "fail": false
+      },
+      {
+        "id": "net.tor_exit",
+        "category": "net",
+        "severity": "critical",
+        "weight": 15,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "net.dc_asn_catalog",
+        "category": "net",
+        "severity": "danger",
+        "weight": 10,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "net.rdns",
+        "category": "net",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.public_ip",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.public_ip_country",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": null,
+        "fail": false
+      },
+      {
+        "id": "rtc.public_ip_v6",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.public_ip_v6_country",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": null,
+        "fail": false
+      },
+      {
+        "id": "rtc.local_ip",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.local_ip_v6",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.mdns_hostname",
+        "category": "rtc",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "rtc.disabled",
+        "category": "rtc",
+        "severity": "warn",
+        "weight": 6,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "dns.resolver_count",
+        "category": "dns",
+        "severity": "info",
+        "weight": 0,
+        "value": 3,
+        "fail": false
+      },
+      {
+        "id": "dns.resolvers",
+        "category": "dns",
+        "severity": "info",
+        "weight": 0,
+        "value": [
+          {
+            "ip": "140.204.54.45",
+            "cc": "SG",
+            "country": "Singapore",
+            "foreign": false
+          },
+          {
+            "ip": "140.204.54.46",
+            "cc": "SG",
+            "country": "Singapore",
+            "foreign": false
+          },
+          {
+            "ip": "140.204.54.44",
+            "cc": "SG",
+            "country": "Singapore",
+            "foreign": false
+          }
+        ],
+        "fail": false
+      },
+      {
+        "id": "dns.resolver_countries",
+        "category": "dns",
+        "severity": "info",
+        "weight": 0,
+        "value": [
+          "SG"
+        ],
+        "fail": false
+      },
+      {
+        "id": "dns.dnssec",
+        "category": "dns",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "ident.ua",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "fail": false
+      },
+      {
+        "id": "ident.ua_browser",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "firefox",
+        "fail": false
+      },
+      {
+        "id": "ident.ua_version",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "154.0",
+        "fail": false
+      },
+      {
+        "id": "ident.ua_chua",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "ident.ua_high_entropy",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "ident.platform",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "Win32",
+        "fail": false
+      },
+      {
+        "id": "ident.vendor",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "ident.oscpu",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "Windows NT 10.0; Win64; x64",
+        "fail": false
+      },
+      {
+        "id": "ident.product_sub",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "20100101",
+        "fail": false
+      },
+      {
+        "id": "ident.window_chrome",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "ident.app_version",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "5.0 (Windows)",
+        "fail": false
+      },
+      {
+        "id": "ident.do_not_track",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "1",
+        "fail": false
+      },
+      {
+        "id": "ident.cookie_enabled",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "ident.pdf_viewer",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "ident.max_touch_points",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": 0,
+        "fail": false
+      },
+      {
+        "id": "ident.online",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "ident.connection",
+        "category": "ident",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "engine.detected_browser",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "firefox",
+        "fail": false
+      },
+      {
+        "id": "engine.detected_version",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "154",
+        "fail": false
+      },
+      {
+        "id": "engine.detected_min",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "152",
+        "fail": false
+      },
+      {
+        "id": "engine.detected_max",
+        "category": "verify",
+        "severity": "info",
+        "weight": 0,
+        "value": "154",
+        "fail": false
+      },
+      {
+        "id": "locale.languages",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": [
+          "en-SG",
+          "en"
+        ],
+        "fail": false
+      },
+      {
+        "id": "locale.language",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "en-SG",
+        "fail": false
+      },
+      {
+        "id": "locale.accept_language",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": null,
+        "fail": false
+      },
+      {
+        "id": "locale.intl_timezone",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "Asia/Singapore",
+        "fail": false
+      },
+      {
+        "id": "locale.tz_offset",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": -480,
+        "fail": false
+      },
+      {
+        "id": "locale.tz_offset_human",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "UTC+08:00",
+        "fail": false
+      },
+      {
+        "id": "locale.intl_locale",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "en-SG",
+        "fail": false
+      },
+      {
+        "id": "locale.region",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "SG",
+        "fail": false
+      },
+      {
+        "id": "locale.calendar",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "gregory",
+        "fail": false
+      },
+      {
+        "id": "locale.numbering",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "latn",
+        "fail": false
+      },
+      {
+        "id": "locale.hour_cycle",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "locale.first_day_of_week",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": 7,
+        "fail": false
+      },
+      {
+        "id": "locale.measurement",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "locale.date_sample",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "20 August 2026 at 2:01:23 am",
+        "fail": false
+      },
+      {
+        "id": "locale.currency_sample",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "$1,234.50",
+        "fail": false
+      },
+      {
+        "id": "locale.voices",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": [],
+        "fail": false
+      },
+      {
+        "id": "locale.fonts_cn",
+        "category": "locale",
+        "severity": "warn",
+        "weight": 6,
+        "value": [],
+        "fail": false
+      },
+      {
+        "id": "locale.number_format",
+        "category": "locale",
+        "severity": "info",
+        "weight": 0,
+        "value": "1,234.5",
+        "fail": false
+      },
+      {
+        "id": "hw.screen",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "1920x1080@2x30",
+        "fail": false
+      },
+      {
+        "id": "hw.hardware_concurrency",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": 8,
+        "fail": false
+      },
+      {
+        "id": "hw.device_memory",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": 0,
+        "fail": false
+      },
+      {
+        "id": "hw.media_devices",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": 3,
+        "fail": false
+      },
+      {
+        "id": "hw.webgl_vendor",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "Google Inc. (Intel)",
+        "fail": false
+      },
+      {
+        "id": "hw.webgl_renderer",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "fail": false
+      },
+      {
+        "id": "hw.webgl_params_hash",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "4bd9b7061e59f6e1515e56a518eae743dc99b530899cc5262c8895371096f769",
+        "fail": false
+      },
+      {
+        "id": "hw.webgpu_adapter",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "{\"features\":[\"depth-clip-control\",\"depth32float-stencil8\",\"texture-compression-bc\",\"texture-compression-bc-sliced-3d\",\"texture-compression-etc2\",\"texture-compression-astc\",\"texture-compression-astc-sliced-3d\",\"timestamp-query\",\"indirect-first-instance\",\"shader-f16\",\"rg11b10ufloat-renderable\",\"bgra8unorm-storage\",\"float32-filterable\",\"core-features-and-limits\"],\"limits\":{\"maxBufferSize\":2147483644,\"maxTextureDimension2D\":16384,\"maxComputeWorkgroupSizeX\":1024},\"isFallbackAdapter\":false}",
+        "fail": false
+      },
+      {
+        "id": "hw.canvas_hash",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "1fdea200",
+        "fail": false
+      },
+      {
+        "id": "hw.canvas_noise_x5",
+        "category": "hw",
+        "severity": "danger",
+        "weight": 12,
+        "value": [
+          "1fdea200",
+          "1fdea200",
+          "1fdea200",
+          "1fdea200",
+          "1fdea200"
+        ],
+        "fail": false
+      },
+      {
+        "id": "hw.audio_hash",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": "2d4.2909852",
+        "fail": false
+      },
+      {
+        "id": "hw.audio_stable_x3",
+        "category": "hw",
+        "severity": "danger",
+        "weight": 10,
+        "value": [
+          "2d4.2909852",
+          "2d4.2909852",
+          "2d4.2909852"
+        ],
+        "fail": false
+      },
+      {
+        "id": "hw.fonts_count",
+        "category": "hw",
+        "severity": "info",
+        "weight": 0,
+        "value": 4,
+        "fail": false
+      },
+      {
+        "id": "stealth.webdriver",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 20,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.cdc",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 25,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.selenium_globals",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 20,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.plugins_length",
+        "category": "stealth",
+        "severity": "warn",
+        "weight": 4,
+        "value": 5,
+        "fail": false
+      },
+      {
+        "id": "stealth.permissions_consistency",
+        "category": "stealth",
+        "severity": "danger",
+        "weight": 8,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "stealth.battery",
+        "category": "stealth",
+        "severity": "info",
+        "weight": 0,
+        "value": "no",
+        "fail": false
+      },
+      {
+        "id": "stealth.raf_timing",
+        "category": "stealth",
+        "severity": "info",
+        "weight": 3,
+        "value": 35.63,
+        "fail": true
+      },
+      {
+        "id": "stealth.tostring_tampered",
+        "category": "stealth",
+        "severity": "danger",
+        "weight": 12,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.proxy_hooked",
+        "category": "stealth",
+        "severity": "danger",
+        "weight": 12,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.descriptor_modified",
+        "category": "stealth",
+        "severity": "danger",
+        "weight": 10,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_multilogin",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_gologin",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_kameleo",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_adspower",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_bitbrowser",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_dolphin",
+        "category": "stealth",
+        "severity": "critical",
+        "weight": 18,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "stealth.antidetect_generic",
+        "category": "stealth",
+        "severity": "danger",
+        "weight": 14,
+        "value": false,
+        "fail": false
+      },
+      {
+        "id": "headers.user-agent",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-platform",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-mobile",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-platform-version",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-arch",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-bitness",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-ch-ua-full-version-list",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.accept-language",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "en-SG,en;q=0.9",
+        "fail": false
+      },
+      {
+        "id": "headers.accept-encoding",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "gzip, deflate, br, zstd",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-fetch-site",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "same-origin",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-fetch-mode",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "cors",
+        "fail": false
+      },
+      {
+        "id": "headers.sec-fetch-dest",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "empty",
+        "fail": false
+      },
+      {
+        "id": "headers.forwarded",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "headers.via",
+        "category": "headers",
+        "severity": "info",
+        "weight": 0,
+        "value": "",
+        "fail": false
+      },
+      {
+        "id": "api.webauthn",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.credentials",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.serial",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.wakelock",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.permissions",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.clipboard_read",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.clipboard_write",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.bg_sync",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": null,
+        "fail": false
+      },
+      {
+        "id": "api.push",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.broadcast_channel",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.shared_worker",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.webassembly",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.webgpu",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.storage_access",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.compression",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.crypto_random_uuid",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.structured_clone",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.abort_signal_timeout",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.abort_signal_any",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.promise_with_resolvers",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.array_to_sorted",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.object_group_by",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.set_intersection",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.url_can_parse",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.user_activation",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": true,
+        "fail": false
+      },
+      {
+        "id": "api.missing_count",
+        "category": "api",
+        "severity": "warn",
+        "weight": 5,
+        "value": 0,
+        "fail": false
+      },
+      {
+        "id": "api.total",
+        "category": "api",
+        "severity": "info",
+        "weight": 0,
+        "value": 24,
+        "fail": false
+      },
+      {
+        "id": "multigeo.results",
+        "category": "multigeo",
+        "severity": "info",
+        "weight": 0,
+        "value": [
+          {
+            "provider": "ipify",
+            "provider_label": "ipify",
+            "region": "US",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "ipify-64",
+            "provider_label": "ipify",
+            "region": "US-v6",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "bigdatacloud",
+            "provider_label": "BigDataCloud",
+            "region": "NL",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "ip.sb",
+            "provider_label": "ip.sb",
+            "region": "JP",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "ipinfo.io",
+            "provider_label": "ipinfo",
+            "region": "US",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "geojs.io",
+            "provider_label": "geojs",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "ipapi.is",
+            "provider_label": "ipapi.is",
+            "region": "US",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "netease-163",
+            "provider_label": "网易云音乐",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "bytedance-perfops",
+            "provider_label": "今日头条",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "douyin-v26web",
+            "provider_label": "抖音",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "tencent-weixin-clientip",
+            "provider_label": "微信",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "sina-sinaimg",
+            "provider_label": "微博",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "youku-mykimg",
+            "provider_label": "优酷",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "xhs-avatar",
+            "provider_label": "小红书",
+            "region": "CN",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "cf-1.1.1.1",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "cf-1.0.0.1",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "cf-dns",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "cf-workers",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "cf-pages",
+            "provider_label": "Cloudflare",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "chatgpt",
+            "provider_label": "chatgpt",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "claude",
+            "provider_label": "claude",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "x.com",
+            "provider_label": "x.com",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "grok",
+            "provider_label": "grok",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "nodejs",
+            "provider_label": "nodejs",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "gitlab",
+            "provider_label": "gitlab",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "unpkg",
+            "provider_label": "unpkg",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "discord",
+            "provider_label": "discord",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          },
+          {
+            "provider": "shopify",
+            "provider_label": "shopify",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "medium",
+            "provider_label": "medium",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "mdn",
+            "provider_label": "mdn",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          },
+          {
+            "provider": "cdnjs",
+            "provider_label": "cdnjs",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "npm",
+            "provider_label": "npm",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "skypack",
+            "provider_label": "skypack",
+            "region": "Anycast",
+            "ip": "152.69.211.51",
+            "country": "SG",
+            "country_auth": "SG"
+          },
+          {
+            "provider": "vercel",
+            "provider_label": "vercel",
+            "region": "Anycast",
+            "ip": "",
+            "country": ""
+          }
+        ],
+        "fail": false
+      },
+      {
+        "id": "xc.ip_tz",
+        "category": "crosscheck",
+        "severity": "danger",
+        "weight": 10,
+        "value": {
+          "ip_country": "SG",
+          "tz": "Asia/Singapore"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ip_lang",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 8,
+        "value": {
+          "ip_country": "SG",
+          "primary_lang": "en-SG"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ip_fonts_cn",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 8,
+        "value": {
+          "ip_country": "SG",
+          "has_cn_fonts": false
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ua_webgl",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 15,
+        "value": {
+          "platform": "Win32",
+          "webgl_renderer": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ua_navplatform",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 8,
+        "value": {
+          "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+          "platform": "Win32"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ua_engine_browser",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 18,
+        "value": {
+          "ua_browser": "firefox",
+          "engine_browser": "firefox"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ua_engine_version",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 25,
+        "value": {
+          "ua_browser": "firefox",
+          "ua_version": "154.0",
+          "ua_version_for_engine": "154.0",
+          "engine_version": "154",
+          "engine_version_min": "152",
+          "engine_version_max": "154",
+          "major_diff": 0
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ipv4_ipv6_country",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 8,
+        "value": {
+          "ipv4_country": "SG",
+          "ipv6_country": ""
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.rtc_http_ip",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 12,
+        "value": {
+          "rtc_public_ip": "",
+          "rtc_public_ip_v6": "",
+          "http_ip": "152.69.211.51",
+          "net_ipv4_ip": "152.69.211.51",
+          "net_ipv6_ip": ""
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.tz_intl_tz",
+        "category": "crosscheck",
+        "severity": "danger",
+        "weight": 10,
+        "value": {
+          "tz": "Asia/Singapore",
+          "offset_min": -480
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.cores_memory_vps",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 8,
+        "value": {
+          "cores": 8,
+          "memory": 0
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.dns_ip_country",
+        "category": "crosscheck",
+        "severity": "danger",
+        "weight": 10,
+        "value": {
+          "ip_country": "SG",
+          "dns_countries": [
+            "SG"
+          ],
+          "foreign_countries": []
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.dns_blackhole",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 15,
+        "value": {
+          "resolver_count": 3
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.voices_country",
+        "category": "crosscheck",
+        "severity": "danger",
+        "weight": 10,
+        "value": {
+          "ip_country": "SG",
+          "voice_top": "",
+          "distribution": []
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.proxy_headers",
+        "category": "crosscheck",
+        "severity": "warn",
+        "weight": 6,
+        "value": {
+          "forwarded": "",
+          "via": ""
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.multi_geo_ip",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 20,
+        "value": {
+          "distinct_v4": [
+            "152.69.211.51"
+          ],
+          "distinct_v6": [],
+          "distinct_ip_country": [
+            "SG"
+          ],
+          "sources": {
+            "152.69.211.51": [
+              "ipify",
+              "ipify-64",
+              "bigdatacloud",
+              "ip.sb",
+              "ipinfo.io",
+              "geojs.io",
+              "ipapi.is",
+              "netease-163",
+              "bytedance-perfops",
+              "douyin-v26web",
+              "tencent-weixin-clientip",
+              "sina-sinaimg",
+              "youku-mykimg",
+              "xhs-avatar",
+              "cf-1.1.1.1",
+              "cf-1.0.0.1",
+              "cf-dns",
+              "cf-workers",
+              "cf-pages",
+              "chatgpt",
+              "claude",
+              "x.com",
+              "grok",
+              "nodejs",
+              "gitlab",
+              "unpkg",
+              "shopify",
+              "medium",
+              "cdnjs",
+              "npm",
+              "skypack"
+            ]
+          },
+          "sources_country": {
+            "SG": [
+              "ipify",
+              "ipify-64",
+              "bigdatacloud",
+              "ip.sb",
+              "ipinfo.io",
+              "geojs.io",
+              "ipapi.is",
+              "netease-163",
+              "bytedance-perfops",
+              "douyin-v26web",
+              "tencent-weixin-clientip",
+              "sina-sinaimg",
+              "youku-mykimg",
+              "xhs-avatar",
+              "cf-1.1.1.1",
+              "cf-1.0.0.1",
+              "cf-dns",
+              "cf-workers",
+              "cf-pages",
+              "chatgpt",
+              "claude",
+              "x.com",
+              "grok",
+              "nodejs",
+              "gitlab",
+              "unpkg",
+              "shopify",
+              "medium",
+              "cdnjs",
+              "npm",
+              "skypack"
+            ]
+          }
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.gpu_cpu_mismatch",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 18,
+        "value": {
+          "gpu": "",
+          "cores": 8
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.webgl_driver_leak",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 15,
+        "value": {
+          "engine_browser": "firefox",
+          "engine_version": "154",
+          "webgl_renderer": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.ua_header_match",
+        "category": "crosscheck",
+        "severity": "critical",
+        "weight": 15,
+        "value": {
+          "server_header_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+          "client_navigator_ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0"
+        },
+        "fail": false
+      },
+      {
+        "id": "xc.sec_ch_ua_match",
+        "category": "crosscheck",
+        "severity": "danger",
+        "weight": 10,
+        "value": {
+          "server_sec_ch_ua": "",
+          "client_ua_chua": ""
+        },
+        "fail": false
+      }
+    ],
+    "rows": {
+      "multigeo.results": {
+        "id": "multigeo.results",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.resolvers": {
+        "id": "dns.resolvers",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip": {
+        "id": "rtc.public_ip",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip_v6": {
+        "id": "rtc.public_ip_v6",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.local_ip": {
+        "id": "rtc.local_ip",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.local_ip_v6": {
+        "id": "rtc.local_ip_v6",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.mdns_hostname": {
+        "id": "rtc.mdns_hostname",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.disabled": {
+        "id": "rtc.disabled",
+        "value": false,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "ident.ua_browser": {
+        "id": "ident.ua_browser",
+        "value": "firefox",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_version": {
+        "id": "ident.ua_version",
+        "value": "154.0",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_browser": {
+        "id": "engine.detected_browser",
+        "value": "firefox",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_version": {
+        "id": "engine.detected_version",
+        "value": "154",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua": {
+        "id": "ident.ua",
+        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.platform": {
+        "id": "ident.platform",
+        "value": "Win32",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.vendor": {
+        "id": "ident.vendor",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.product_sub": {
+        "id": "ident.product_sub",
+        "value": "20100101",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.app_version": {
+        "id": "ident.app_version",
+        "value": "5.0 (Windows)",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.oscpu": {
+        "id": "ident.oscpu",
+        "value": "Windows NT 10.0; Win64; x64",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.window_chrome": {
+        "id": "ident.window_chrome",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_chua": {
+        "id": "ident.ua_chua",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.ua_high_entropy": {
+        "id": "ident.ua_high_entropy",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.do_not_track": {
+        "id": "ident.do_not_track",
+        "value": "1",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.cookie_enabled": {
+        "id": "ident.cookie_enabled",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.pdf_viewer": {
+        "id": "ident.pdf_viewer",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.max_touch_points": {
+        "id": "ident.max_touch_points",
+        "value": 0,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.online": {
+        "id": "ident.online",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "ident.connection": {
+        "id": "ident.connection",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.user-agent": {
+        "id": "headers.user-agent",
+        "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua": {
+        "id": "headers.sec-ch-ua",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-platform": {
+        "id": "headers.sec-ch-ua-platform",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-mobile": {
+        "id": "headers.sec-ch-ua-mobile",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-platform-version": {
+        "id": "headers.sec-ch-ua-platform-version",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.accept-language": {
+        "id": "headers.accept-language",
+        "value": "en-SG,en;q=0.9",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.accept-encoding": {
+        "id": "headers.accept-encoding",
+        "value": "gzip, deflate, br, zstd",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-fetch-site": {
+        "id": "headers.sec-fetch-site",
+        "value": "same-origin",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-fetch-mode": {
+        "id": "headers.sec-fetch-mode",
+        "value": "cors",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.forwarded": {
+        "id": "headers.forwarded",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.via": {
+        "id": "headers.via",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.language": {
+        "id": "locale.language",
+        "value": "en-SG",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.languages": {
+        "id": "locale.languages",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.intl_locale": {
+        "id": "locale.intl_locale",
+        "value": "en-SG",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.region": {
+        "id": "locale.region",
+        "value": "SG",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.intl_timezone": {
+        "id": "locale.intl_timezone",
+        "value": "Asia/Singapore",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.tz_offset_human": {
+        "id": "locale.tz_offset_human",
+        "value": "UTC+08:00",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.tz_offset": {
+        "id": "locale.tz_offset",
+        "value": -480,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.calendar": {
+        "id": "locale.calendar",
+        "value": "gregory",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.numbering": {
+        "id": "locale.numbering",
+        "value": "latn",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.hour_cycle": {
+        "id": "locale.hour_cycle",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.first_day_of_week": {
+        "id": "locale.first_day_of_week",
+        "value": 7,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.measurement": {
+        "id": "locale.measurement",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.date_sample": {
+        "id": "locale.date_sample",
+        "value": "20 August 2026 at 2:01:23 am",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.number_format": {
+        "id": "locale.number_format",
+        "value": "1,234.5",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.currency_sample": {
+        "id": "locale.currency_sample",
+        "value": "$1,234.50",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.fonts_cn": {
+        "id": "locale.fonts_cn",
+        "value": [],
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "locale.voices": {
+        "id": "locale.voices",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.screen": {
+        "id": "hw.screen",
+        "value": "1920x1080@2x30",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.hardware_concurrency": {
+        "id": "hw.hardware_concurrency",
+        "value": 8,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.device_memory": {
+        "id": "hw.device_memory",
+        "value": 0,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.media_devices": {
+        "id": "hw.media_devices",
+        "value": 3,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_vendor": {
+        "id": "hw.webgl_vendor",
+        "value": "Google Inc. (Intel)",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_renderer": {
+        "id": "hw.webgl_renderer",
+        "value": "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgpu_adapter_info": {
+        "id": "hw.webgpu_adapter_info",
+        "value": "{\"vendor\":\"\",\"architecture\":\"\",\"device\":\"\",\"description\":\"\"}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.canvas_hash": {
+        "id": "hw.canvas_hash",
+        "value": "1fdea200",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.canvas_noise_x5": {
+        "id": "hw.canvas_noise_x5",
+        "value": [],
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "hw.audio_hash": {
+        "id": "hw.audio_hash",
+        "value": "2d4.2909852",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.audio_stable_x3": {
+        "id": "hw.audio_stable_x3",
+        "value": [],
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "hw.fonts_count": {
+        "id": "hw.fonts_count",
+        "value": 4,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_mac": {
+        "id": "hw.fonts_mac",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_linux": {
+        "id": "hw.fonts_linux",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_design": {
+        "id": "hw.fonts_design",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webauthn": {
+        "id": "api.webauthn",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.credentials": {
+        "id": "api.credentials",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.serial": {
+        "id": "api.serial",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.wakelock": {
+        "id": "api.wakelock",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.permissions": {
+        "id": "api.permissions",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.clipboard_read": {
+        "id": "api.clipboard_read",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.clipboard_write": {
+        "id": "api.clipboard_write",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.push": {
+        "id": "api.push",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.broadcast_channel": {
+        "id": "api.broadcast_channel",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.shared_worker": {
+        "id": "api.shared_worker",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webassembly": {
+        "id": "api.webassembly",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.webgpu": {
+        "id": "api.webgpu",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.storage_access": {
+        "id": "api.storage_access",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.compression": {
+        "id": "api.compression",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.crypto_random_uuid": {
+        "id": "api.crypto_random_uuid",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.structured_clone": {
+        "id": "api.structured_clone",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.abort_signal_timeout": {
+        "id": "api.abort_signal_timeout",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.abort_signal_any": {
+        "id": "api.abort_signal_any",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.promise_with_resolvers": {
+        "id": "api.promise_with_resolvers",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.array_to_sorted": {
+        "id": "api.array_to_sorted",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.object_group_by": {
+        "id": "api.object_group_by",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.set_intersection": {
+        "id": "api.set_intersection",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.url_can_parse": {
+        "id": "api.url_can_parse",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.user_activation": {
+        "id": "api.user_activation",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.missing_count": {
+        "id": "api.missing_count",
+        "value": 0,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.ip_tz": {
+        "id": "xc.ip_tz",
+        "value": null,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "xc.ip_lang": {
+        "id": "xc.ip_lang",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.ip_fonts_cn": {
+        "id": "xc.ip_fonts_cn",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.ua_webgl": {
+        "id": "xc.ua_webgl",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.ua_engine_browser": {
+        "id": "xc.ua_engine_browser",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.ua_engine_version": {
+        "id": "xc.ua_engine_version",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.ipv4_ipv6_country": {
+        "id": "xc.ipv4_ipv6_country",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.rtc_http_ip": {
+        "id": "xc.rtc_http_ip",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.tz_intl_tz": {
+        "id": "xc.tz_intl_tz",
+        "value": null,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "xc.dns_ip_country": {
+        "id": "xc.dns_ip_country",
+        "value": null,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "xc.dns_blackhole": {
+        "id": "xc.dns_blackhole",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.voices_country": {
+        "id": "xc.voices_country",
+        "value": null,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "xc.proxy_headers": {
+        "id": "xc.proxy_headers",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.multi_geo_ip": {
+        "id": "xc.multi_geo_ip",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.gpu_cpu_mismatch": {
+        "id": "xc.gpu_cpu_mismatch",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.webgl_driver_leak": {
+        "id": "xc.webgl_driver_leak",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.ua_header_match": {
+        "id": "xc.ua_header_match",
+        "value": null,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "xc.sec_ch_ua_match": {
+        "id": "xc.sec_ch_ua_match",
+        "value": null,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "net.ipv4": {
+        "id": "net.ipv4",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "net.ipv6": {
+        "id": "net.ipv6",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.total": {
+        "id": "api.total",
+        "value": 24,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts": {
+        "id": "hw.fonts",
+        "value": [
+          "Verdana",
+          "Georgia",
+          "Tahoma",
+          "Impact"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.fonts_cn_list": {
+        "id": "hw.fonts_cn_list",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgpu_adapter": {
+        "id": "hw.webgpu_adapter",
+        "value": "{\"features\":[\"depth-clip-control\",\"depth32float-stencil8\",\"texture-compression-bc\",\"texture-compression-bc-sliced-3d\",\"texture-compression-etc2\",\"texture-compression-astc\",\"texture-compression-astc-sliced-3d\",\"timestamp-query\",\"indirect-first-instance\",\"shader-f16\",\"rg11b10ufloat-renderable\",\"bgra8unorm-storage\",\"float32-filterable\",\"core-features-and-limits\"],\"limits\":{\"maxBufferSize\":2147483644,\"maxTextureDimension2D\":16384,\"maxComputeWorkgroupSizeX\":1024},\"isFallbackAdapter\":false}",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "hw.webgl_params_hash": {
+        "id": "hw.webgl_params_hash",
+        "value": "4bd9b7061e59f6e1515e56a518eae743dc99b530899cc5262c8895371096f769",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.storage_quota": {
+        "id": "privacy.storage_quota",
+        "value": 125829120000,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.indexeddb": {
+        "id": "privacy.indexeddb",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.serviceworker": {
+        "id": "privacy.serviceworker",
+        "value": true,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "privacy.third_party_cookies": {
+        "id": "privacy.third_party_cookies",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "stealth.webdriver": {
+        "id": "stealth.webdriver",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.cdc": {
+        "id": "stealth.cdc",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.selenium_globals": {
+        "id": "stealth.selenium_globals",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.plugins_length": {
+        "id": "stealth.plugins_length",
+        "value": 5,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "stealth.permissions_consistency": {
+        "id": "stealth.permissions_consistency",
+        "value": true,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "stealth.battery": {
+        "id": "stealth.battery",
+        "value": "no",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "stealth.raf_timing": {
+        "id": "stealth.raf_timing",
+        "value": 35.63,
+        "fail": true,
+        "severity": "info",
+        "pending": false
+      },
+      "stealth.tostring_tampered": {
+        "id": "stealth.tostring_tampered",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "stealth.proxy_hooked": {
+        "id": "stealth.proxy_hooked",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "stealth.descriptor_modified": {
+        "id": "stealth.descriptor_modified",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "stealth.antidetect_multilogin": {
+        "id": "stealth.antidetect_multilogin",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_gologin": {
+        "id": "stealth.antidetect_gologin",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_kameleo": {
+        "id": "stealth.antidetect_kameleo",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_adspower": {
+        "id": "stealth.antidetect_adspower",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_bitbrowser": {
+        "id": "stealth.antidetect_bitbrowser",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_dolphin": {
+        "id": "stealth.antidetect_dolphin",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "stealth.antidetect_generic": {
+        "id": "stealth.antidetect_generic",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "dns.resolver_count": {
+        "id": "dns.resolver_count",
+        "value": 3,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.resolver_countries": {
+        "id": "dns.resolver_countries",
+        "value": [],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "dns.dnssec": {
+        "id": "dns.dnssec",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "multigeo.distinct_ips": {
+        "id": "multigeo.distinct_ips",
+        "value": [
+          "152.69.211.51"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "multigeo.distinct_countries": {
+        "id": "multigeo.distinct_countries",
+        "value": [
+          "SG"
+        ],
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_min": {
+        "id": "engine.detected_min",
+        "value": "152",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "engine.detected_max": {
+        "id": "engine.detected_max",
+        "value": "154",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "net.asn": {
+        "id": "net.asn",
+        "value": 31898,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "net.org": {
+        "id": "net.org",
+        "value": "Oracle Corporation",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "net.isidc": {
+        "id": "net.isidc",
+        "value": true,
+        "fail": true,
+        "severity": "warn",
+        "pending": false
+      },
+      "net.isproxy": {
+        "id": "net.isproxy",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "net.iprisk": {
+        "id": "net.iprisk",
+        "value": 15,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "net.tor_exit": {
+        "id": "net.tor_exit",
+        "value": false,
+        "fail": false,
+        "severity": "critical",
+        "pending": false
+      },
+      "net.dc_asn_catalog": {
+        "id": "net.dc_asn_catalog",
+        "value": false,
+        "fail": false,
+        "severity": "danger",
+        "pending": false
+      },
+      "net.rdns": {
+        "id": "net.rdns",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip_country": {
+        "id": "rtc.public_ip_country",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "rtc.public_ip_v6_country": {
+        "id": "rtc.public_ip_v6_country",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "locale.accept_language": {
+        "id": "locale.accept_language",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-arch": {
+        "id": "headers.sec-ch-ua-arch",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-bitness": {
+        "id": "headers.sec-ch-ua-bitness",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-ch-ua-full-version-list": {
+        "id": "headers.sec-ch-ua-full-version-list",
+        "value": "",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "headers.sec-fetch-dest": {
+        "id": "headers.sec-fetch-dest",
+        "value": "empty",
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "api.bg_sync": {
+        "id": "api.bg_sync",
+        "value": null,
+        "fail": false,
+        "severity": "info",
+        "pending": false
+      },
+      "xc.ua_navplatform": {
+        "id": "xc.ua_navplatform",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      },
+      "xc.cores_memory_vps": {
+        "id": "xc.cores_memory_vps",
+        "value": null,
+        "fail": false,
+        "severity": "warn",
+        "pending": false
+      }
+    },
+    "quickProbes": null,
+    "status": null,
+    "raf": null,
+    "fontsDiag": {
+      "checkSimSun": "false",
+      "checkYaHei": "false",
+      "checkPingFang": "false",
+      "checkArial": "true",
+      "mSimSun": "46.20000076293945",
+      "mFallback": "46.20000076293945",
+      "pixSimSun": "0",
+      "pixFallback": "0",
+      "checkIsOurs": true,
+      "c2dOurs": true,
+      "fontsProtoName": "FontFaceSet",
+      "checkOnProto": "function",
+      "realCheckProto": "function",
+      "tryInstall": "false",
+      "checkDesc": "data:function () { [native code] }",
+      "widths": {
+        "PingFang SC": "647.6666870117188",
+        "sans-serif": "647.6666870117188",
+        "STKaiti": "647.6666870117188",
+        "Arial": "647.6666870117188"
+      },
+      "offscreen": {
+        "PingFang SC": "647.8333129882812",
+        "sans-serif": "647.8333129882812",
+        "STKaiti": "647.8333129882812",
+        "Arial": "647.8333129882812"
+      },
+      "doms": {
+        "PingFang SC": "620",
+        "sans-serif": "620",
+        "STKaiti": "620",
+        "Arial": "620"
+      },
+      "_lastFontReadback": "72px Arial",
+      "rawRb": "\"72px \\\"PingFang SC\\\", sans-serif\"",
+      "wBefore": "647.6666870117188",
+      "wAfter": "647.6666870117188",
+      "wRb": "647.6666870117188",
+      "wSingle": "647.6666870117188",
+      "mtName": "measureFn",
+      "mtOwn": "\"function () { [native code] }\"",
+      "ftRb": "[\"sc\",\"pingfang\",\"sans-serif\"]",
+      "ftRaw": "[\"sc\",\"pingfang\",\"sans-serif\"]",
+      "swapped": "\"72px sans-serif,  sans-serif\"",
+      "familyTokensResult": "sans-serif",
+      "ft": "[\"sc\",\"pingfang\",\"sans-serif\"]",
+      "ft2": "[\"sc\",\"pingfang\",\"sans-serif\"]",
+      "iterCount": 0,
+      "fontsSize": "0",
+      "fontsSizeReal": "function(){\n          try {\n            ",
+      "iterFams": "[]",
+      "localFontsApi": false,
+      "cssFontFamDesc": "{\"has\":true,\"setIsInstalled\":true,\"setSrc\":\"function () { [native code] }\"}",
+      "cssOwnFf": "{\"has\":false}",
+      "cssCtor": "CSSStyleProperties",
+      "cssProtoName": "CSSStyleProperties",
+      "cssReadback": "\"\"",
+      "cssComputed": "\"\"",
+      "cssRawSetReading": "\"\"",
+      "cssWidth": "0/0",
+      "fontFaceLoad": "{\"pf\":\"pending\",\"arial\":\"pending\"}",
+      "measureTextStr": "function () { [native code] }",
+      "replicaCanvas": "[\"Verdana:759.6\",\"Georgia:696.6\",\"Tahoma:654.3\",\"Impact:614.2\"]",
+      "replicaDom": "[]",
+      "replicaCheck": "[\"Arial\",\"Verdana\",\"Georgia\",\"Tahoma\",\"Impact\"]",
+      "workerWrapInstalled": "yes",
+      "xhrBlobStatus": "200",
+      "xhrBlobLen": "1",
+      "mtFnStr": "function () { [native code] }",
+      "worker": "{\"wd\":\"undefined\",\"plat\":\"MacIntel\",\"shimFlag\":\"true\",\"san1\":\"\\\"sans-serif, sans-serif\\\"\",\"san2\":\"\\\"72px sans-serif\\\"\",\"known\":\"[\\\"arial\\\",\\\"arial unicode ms\\\",\\\"comic sans ms\\\",\\\"courier new\\\",\\\"georgia\\\",\\\"impact\\\",\\\"tahoma\\\",\\\"times new roman\\\",\\\"trebuchet ms\\\",\\\"verdana\\\"]\",\"pf\":647.8333129882812,\"pf2\":647.8333129882812,\"ss\":647.8333129882812,\"stk\":647.8333129882812,\"a\":647.8333129882812,\"own\":\"function measureText() { [native code] }\",\"rbPf\":\"\\\"72px \\\\\\\"PingFang SC\\\\\\\", sans-serif\\\"\",\"rbSw\":\"\\\"13px sans-serif, sans-serif\\\"\"}"
+    },
+    "probeFocus": {
+      "visibility": "visible",
+      "hasFocus": true
+    },
+    "bodyText": "PING0\nIP 查询\n环境检测New\nIP 反查域名\nLatency\nPing\nTrace\nASN 变化监控\n中文\n✓\n检测完成\n分数 92 · 2 项异常\n100%\n01:56.17\n[SCORE]\n完成：92 / 100 等级：green\n01:53.20\n[SCORE]\n提交服务端做交叉检验和评分…\n01:53.20\n[ENGINE]\n完成（4 项）\n01:52.40\n[MULTIGEO]\n完成（3 项）\n01:51.16\n[DNS]\n完成（4 项）\n01:28.58\n[NET]\n完成（2 项）\n01:27.74\n[RTC]\n完成（6 项）\n01:25.31\n[LOCALE]\n完成（17 项）\n01:24.27\n[STEALTH]\n完成（17 项）\n01:24.22\n[PRIVACY]\n完成（4 项）\n01:24.22\n[HW]\n完成（19 项）\n01:24.21\n[API]\n完成（26 项）\n01:23.74\n[IDENT]\n完成（15 项）\n01:23.57\n[MULTIGEO]\n多出口检测（split-tunnel）\n01:23.57\n[API]\nAPI 能力可用性扫描\n01:23.57\n[PRIVACY]\n存储配额/IndexedDB/SW\n01:23.57\n[STEALTH]\n检查 webdriver/cdc/anti-detect 特征\n01:23.57\n[HW]\nWebGL/Canvas×5/Audio×3/字体枚举\n01:23.57\n[LOCALE]\n时区/语言/字体环境\n01:23.57\n[ENGINE]\n运行引擎反推（数百探针）\n01:23.57\n[IDENT]\n采集 UA/Sec-CH-UA/平台串\n01:23.57\n[DNS]\n随机子域 DNS 泄漏测试\n01:23.57\n[RTC]\nSTUN 探测公网/本地 IP\n01:23.57\n[NET]\n请求服务端 IP/ASN/Proxy 信息\n01:23.27\n[SYS]\n准备探针…\n当前分数\n92\n安全\n已检 166\n异常 2\n总 166\n异常项\n2\nIDC 数据中心\nIP 在数据中心机房段，非家庭住宅 IP，电商风控扣分。\n实测值：是\n一般\nRAF 帧间隔(ms)\nrequestAnimationFrame 帧间隔不接近任何标准刷新率（60/90/120/144/240Hz），可能是 anti-detect 工具伪造的合成器，或标签长期处于后台被节流。\n实测值：35.63\n记录\n重新检测\n🛰\nIPv4\n✓\nIP\n152.69.211.51\nIP 位置\n新加坡 新加坡 新加坡 新加坡\nASN\nAS31898\nASN 所有者\nIDC\nOracle Corporation\n— cloud.oracle.com\n企业\nIDC\nOracle Corporation\n— cloud.oracle.com\nIP 类型\nIDC 机房 IP\n风控值\n15%\n纯净\n原生 IP\n广播 IP\n共享人数\n1 - 10 (极好)\n🛰\nIPv6\n✓\n未检出\n🌐\n多出口检测\n✓\n微信\n152.69.211.51\n网易云音乐\n152.69.211.51\n今日头条\n152.69.211.51\n抖音\n152.69.211.51\n微博\n152.69.211.51\n优酷\n152.69.211.51\n小红书\n152.69.211.51\nipify\n152.69.211.51\nipify\n152.69.211.51\nBigDataCloud\n152.69.211.51\nip.sb\n152.69.211.51\nipinfo\n152.69.211.51\ngeojs\n152.69.211.51\nipapi.is\n152.69.211.51\n🔍\nDNS\n✓\n140.204.54.45\nSingapore\n140.204.54.46\nSingapore\n140.204.54.44\nSingapore\n📡\nWebRTC\n✓\n公网 IPv4（WebRTC）\n—\n公网 IPv6（WebRTC）\n—\n本地 IPv4\n—\n本地 IPv6\n—\nmDNS 主机名\n—\nWebRTC 已禁用\n否\n⭐\n浏览器版本检测\n✓\nUA 声明浏览器\nfirefox\nUA 声明版本\n154.0\n启发式检测浏览器\nfirefox\n启发式检测版本\n152 – 154\n🪪\n浏览器信息\n✓\nUser-Agent\nMozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0\nnavigator.platform\nWin32\nnavigator.vendor\n—\nnavigator.productSub\n20100101\nnavigator.appVersion\n5.0 (Windows)\nnavigator.oscpu\nWindows NT 10.0; Win64; x64\nwindow.chrome\n—\nSec-CH-UA\n—\nUA 高熵\n—\nDo Not Track\n1\nCookie 启用\n是\n内置 PDF 阅读器\n是\n最大触摸点\n0\n网络在线\n是\n网络连接信息\n—\n📨\nHTTP 请求头\n✓\nUser-Agent\nMozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0\nSec-CH-UA\n—\nSec-CH-UA-Platform\n—\nSec-CH-UA-Mobile\n—\nSec-CH-UA-Platform-Version\n—\nAccept-Language\nen-SG,en;q=0.9\nAccept-Encoding\ngzip, deflate, br, zstd\nSec-Fetch-Site\nsame-origin\nSec-Fetch-Mode\ncors\nForwarded\n—\nVia\n—\n🌍\n区域 / 时区\n✓\nnavigator.language\nen-SG\nnavigator.languages\nen-SG, en\nIntl locale\nen-SG\n区域代码\nSG\nIntl 时区\nAsia/Singapore\n时区偏移\nUTC+08:00\nDate 时区偏移（分钟，UTC−本地）\n-480\n历法\ngregory\n数字系统\nlatn\n时制\n—\n每周首日\n7\n度量制\n—\n日期样例\n20 August 2026 at 2:01:23 am\n数字格式\n1,234.5\n货币样例\n$1,234.50\n中文字体\n无\n语音列表\n无\n🖥\n硬件指纹\n✓\n屏幕\n1920x1080@2x30\nCPU 核数\n8\n内存（GB）\n0\n媒体设备\n3\nWebGL 厂商\nGoogle Inc. (Intel)\nWebGL 渲染器\nANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)\nWebGPU 适配器\n{\"vendor\":\"\",\"architecture\":\"\",\"device\":\"\",\"description\":\"\"}\nCanvas 指纹\n1fdea200\nCanvas 5 次稳定性\n1fdea200, 1fdea200, 1fdea200, 1fdea200, 1fdea200\nAudio 指纹\n2d4.2909852\nAudio 3 次稳定性\n2d4.2909852, 2d4.2909852, 2d4.2909852\n字体数量\n4\nmacOS 独占字体\n无\nLinux 独占字体\n无\n设计/Office 字体\n无\n🧩\nAPI 能力探针\n✓\nWebAuthn / PublicKeyCredential\n是\nCredential Management\n是\nWeb Serial\n是\nScreen Wake Lock\n是\nPermissions API\n是\nClipboard Read\n是\nClipboard Write\n是\nPush Manager\n是\nBroadcastChannel\n是\nSharedWorker\n是\nWebAssembly\n是\nWebGPU\n是\nStorage Access\n是\nCompressionStream\n是\ncrypto.randomUUID\n是\nstructuredClone\n是\nAbortSignal.timeout\n是\nAbortSignal.any\n是\nPromise.withResolvers\n是\nArray.prototype.toSorted\n是\nObject.groupBy\n是\nSet.prototype.intersection\n是\nURL.canParse\n是\nnavigator.userActivation\n是\n缺失 API 数\n0\n⚖️\n交叉校验\n✓\nIP 国家 ↔ 时区\n{\"ip_country\":\"SG\",\"tz\":\"Asia/Singapore\"}\nIP 国家 ↔ 浏览器语言\n{\"ip_country\":\"SG\",\"primary_lang\":\"en-SG\"}\nIP 国家 ↔ 中文字体\n{\"ip_country\":\"SG\",\"has_cn_fonts\":false}\nUA 平台 ↔ GPU 渲染器\n{\"platform\":\"Win32\",\"webgl_renderer\":\"ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 p\n⭐ UA ↔ 启发式检测浏览器\n{\"ua_browser\":\"firefox\",\"engine_browser\":\"firefox\"}\n⭐ UA 版本 ↔ 启发式检测版本\n{\"ua_browser\":\"firefox\",\"ua_version\":\"154.0\",\"ua_version_for_engine\":\"154.0\",\"engine_version\":\"154\",\nIPv4 ↔ IPv6 国家\n{\"ipv4_country\":\"SG\",\"ipv6_country\":\"\"}\nWebRTC IP ↔ HTTP IP\n{\"rtc_public_ip\":\"\",\"rtc_public_ip_v6\":\"\",\"http_ip\":\"152.69.211.51\",\"net_ipv4_ip\":\"152.69.211.51\",\"n\ntz offset ↔ Intl 时区\n{\"tz\":\"Asia/Singapore\",\"offset_min\":-480}\nDNS 解析器 ↔ IP 国家\n{\"ip_country\":\"SG\",\"dns_countries\":[\"SG\"],\"foreign_countries\":[]}\nDNS 黑洞（VPN fake-ip）\n{\"resolver_count\":3}\n语音包国家 ↔ IP 国家\n{\"ip_country\":\"SG\",\"voice_top\":\"\",\"distribution\":[]}\nHTTP 代理头（Forwarded/Via）\n{\"forwarded\":\"\",\"via\":\"\"}\n多出口出口国家一致性\n{\"distinct_v4\":[\"152.69.211.51\"],\"distinct_v6\":[],\"distinct_ip_country\":[\"SG\"],\"sources\":{\"152.69.21\n⭐ GPU ↔ CPU 核心数物理矛盾\n{\"gpu\":\"\",\"cores\":8}\n⭐ WebGL 驱动号泄漏（老内核痕迹）\n{\"engine_browser\":\"firefox\",\"engine_version\":\"154\",\"webgl_renderer\":\"ANGLE (Intel, Intel(R) Iris(R)\n⭐ HTTP UA 头 ↔ navigator.userAgent\n{\"server_header_ua\":\"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.\nSec-CH-UA 头 ↔ navigator.userAgentData\n{\"server_sec_ch_ua\":\"\",\"client_ua_chua\":\"\"}\n这个工具能帮你检测什么\n\n一站式浏览器与网络环境自检工具，覆盖 12 个维度、近 100 项指标、19 条交叉校验规则，包括：\n\n网络出口：IPv4 / IPv6 双栈、ASN、IDC 机房库、代理 / VPN 标记、Tor 出口、风控值、原生 IP；\nWebRTC 检测：公网 / 本地 / mDNS 主机名暴露情况；\nDNS 解析器：实际生效的 DNS 服务器、所在国家、是否泄漏；\n多出口 GeoIP：并发请求多家第三方端点比对，识别 split-tunnel；\n浏览器版本反推：基于 1247 项引擎特征探针 推断真实内核版本，与 UA 交叉比对；\n身份与请求头：UA、Sec-CH-UA、navigator.platform、HTTP 头一致性；\n区域 / 时区 / 字体 / 语言包 / TTS 语音；\n硬件指纹：Canvas × 5 / Audio × 3 稳定性、WebGL / WebGPU 厂商与渲染器、屏幕、CPU 核数、内存；\nAPI 能力：23 项现代 Web API 可用性扫描；\n隐私模式：存储配额、IndexedDB、Service Worker；\n跨维度校验：IP 国家 ↔ 时区 / 语言 / 字体 / DNS / 语音包，UA ↔ 引擎 / WebGL / Sec-CH-UA / HTTP 头，IPv4 ↔ IPv6 国家，WebRTC ↔ HTTP IP，等等。\n适用场景\n跨境电商 / 海外业务：Amazon / eBay / Walmart / TikTok Shop / 独立站等多账号、多店铺环境的健康自检；\n支付与广告：PayPal / Stripe / Wise / Facebook Ads / Google Ads 等账号环境一致性核对；\nAI 应用使用者：ChatGPT / Claude / Midjourney 等多账号 / API 订阅环境检查；\n社媒运营 / 自媒体：TikTok / Instagram / X(Twitter) / YouTube 多号矩阵；\n跨境购物 / 海淘：海外限定商品、抢购场景的网络出口确认；\n游戏 / 虚拟物品：Steam / Epic / G2A 多区账号环境一致性；\n隐私研究 / 安全测试：评估浏览器 / 系统的指纹暴露程度，验证 VPN / 代理 / DoH 是否真正生效，排查 WebRTC、DNS 泄漏。\n环境异常可能带来的影响\n\n检测出的不一致项 / 泄漏点 / 自动化痕迹会被主流平台的风控系统当作异常信号采集。常见的影响包括：\n\n账号注册 / 登录：触发额外人机校验、邮箱 / 手机二次验证、账号被标记待审核或直接拒绝注册；\n支付与提现：交易进入人工审核、单笔限额降低、支付失败、收款方被冻结或要求补充材料；\n店铺 / 多账号关联：同一指纹被关联到历史账号，触发关联店铺受限、连带停权、卖家中心审查；\n广告与营销：广告账户被审核 / 暂停投放、预算异常重置、Pixel 数据失效；\nAI / SaaS 订阅：免费额度无法领取、API key 申请被拒、被识别为滥用导致频次限流甚至封禁；\n限定 / 抢购：被识别为机器人 / 黄牛而失去抢购资格，订单被取消；\n隐私层面：真实地理位置、本地 OS 语言、字体清单、硬件指纹等\"原本以为隐藏了\"的信息其实正在向第三方泄漏。\n\n这些影响是各家平台风控算法长期累积的策略，与本工具无关 —— 本工具只负责把\"哪些维度泄漏了 / 不一致\"这件事客观告诉你，便于后续做隐私加固或环境配置调整。\n\n分数怎么读\n\n满分 100。扣分越多，说明环境中的不一致项 / 泄漏点 / anti-detect 痕迹越明显。重点看左侧\"异常项\"列表 —— 每一条都是技术层面客观存在的不一致或指纹异常，比如 IP 国家与时区不符、WebRTC 公网 IP 与 HTTP 出口不一致、UA 声明与引擎反推版本对不上等等，可作为优化网络与浏览器配置的参考。\n\n数据收集说明： 检测过程会在客户端采集浏览器与设备的公开特征（UA、屏幕、Canvas / WebGL / Audio 指纹哈希、时区、字体列表、API 能力等）以及网络层信息（出口 IP、ASN、WebRTC 公网地址、DNS 解析器），用于本次评分和生成可分享的报告。我们不收集任何账号、密码、Cookie、表单输入等敏感数据。\n本工具仅供 环境自检、隐私评估与教育研究目的，结果仅反映检测时刻的技术状态，不构成任何业务能力或合规性承诺。使用本工具产生的任何后果由使用者自行承担，请勿用于违反所在地法律或服务条款的用途。\nIP 查询\nIP 查询\n环境检测\nIP 反查\nIP 反查域名\nrDNS 批量查询\nrDNS 反查\nCNAME 反查\n常用功能\nLatency\nPing\nTrace\nASN 变化监控\nIP Leak 检测\n小鸡监控\n近24小时\n近5天\n近一个月\n近一年\nAPI 接口\nAPI接口\n联系我们\n广告位联系: https://t.me/heyxiun\n© 2021 - 2026 ping0.cc 所有权利保留 | 广告位联系: https://t.me/heyxiun"
+  }
+}

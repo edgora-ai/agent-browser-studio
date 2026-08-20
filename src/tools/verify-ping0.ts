@@ -68,6 +68,8 @@ interface Options {
   seedBase: number;
   webrtcIp: string | null;
   dohUrl: string | null;
+  diagProbe: boolean;
+  platform: "windows" | "macos" | "android";
 }
 
 interface GeoInfo {
@@ -96,6 +98,7 @@ interface Ping0State {
   quickProbes: unknown;
   status: string;
   raf: unknown;
+  fontsDiag?: unknown;
   probeFocus: { visibility: string; hasFocus: boolean } | null;
   bodyText: string;
 }
@@ -143,6 +146,8 @@ function parseOptions(argv: string[]): Options {
   let outDir = "docs/verification";
   let seedBase = 70000;
   let webrtcIp: string | null = null;
+  let diagProbe = false;
+  let platform: Options["platform"] = "windows";
   // Firefox with an HTTP proxy still resolves DNS client-side (SOCKS does
   // remote DNS); managed DoH keeps resolvers out of the host's CN pool, the
   // same isolation Chromium gets from its secure-DNS templates.
@@ -150,6 +155,13 @@ function parseOptions(argv: string[]): Options {
   for (const arg of argv) {
     if (arg.startsWith("--browser=")) browser = arg.slice("--browser=".length);
     else if (arg.startsWith("--engine=")) engine = arg.slice("--engine=".length) as Engine;
+    else if (arg.startsWith("--platform=")) {
+      const value = arg.slice("--platform=".length);
+      if (value !== "windows" && value !== "macos" && value !== "android") {
+        throw new Error("--platform must be windows, macos or android");
+      }
+      platform = value;
+    }
     else if (arg.startsWith("--upstream=")) {
       const spec = arg.slice("--upstream=".length);
       const separator = spec.lastIndexOf(":");
@@ -183,6 +195,7 @@ function parseOptions(argv: string[]): Options {
       dohUrl = !value || value === "none" ? null : value;
     }
     else if (arg === "--headless") headless = true;
+    else if (arg === "--diag-probe") diagProbe = true;
     else if (arg.startsWith("--")) throw new Error("unknown option: " + arg);
     else browser = arg;
   }
@@ -211,6 +224,8 @@ function parseOptions(argv: string[]): Options {
     seedBase,
     webrtcIp,
     dohUrl,
+    diagProbe,
+    platform,
   };
 }
 
@@ -388,6 +403,307 @@ const PING0_CAPTURE_PROBE = `(function(){
   };
 })()`;
 
+const PING0_DIAG_PROBE = `(function(){
+  var out = {};
+  function chk(s){ try { return String(document.fonts.check(s)); } catch (e) { return "err:" + e.message; } }
+  out.checkSimSun = chk("16px SimSun");
+  out.checkYaHei = chk("16px 'Microsoft YaHei'");
+  out.checkPingFang = chk("16px 'PingFang SC'");
+  out.checkArial = chk("16px Arial");
+  function measure(font){
+    try {
+      var c = document.createElement("canvas").getContext("2d");
+      c.font = font;
+      return String(c.measureText("中 text").width);
+    } catch (e) { return "err:" + e.message; }
+  }
+  out.mSimSun = measure("16px SimSun");
+  out.mFallback = measure("16px sans-serif");
+  function pixels(font){
+    try {
+      var a = document.createElement("canvas"); var ca = a.getContext("2d");
+      ca.font = font; ca.fillText("中", 10, 20);
+      var b = document.createElement("canvas"); var cb = b.getContext("2d");
+      cb.font = "16px sans-serif"; cb.fillText("中", 10, 20);
+      var da = ca.getImageData(0,0,200,40).data, db = cb.getImageData(0,0,200,40).data;
+      var diff = 0;
+      for (var i = 0; i < da.length; i += 4) { diff += (da[i]===db[i]&&da[i+1]===db[i+1]&&da[i+2]===db[i+2]) ? 0 : 1; }
+      return String(diff);
+    } catch (e) { return "err:" + e.message; }
+  }
+  out.pixSimSun = pixels("16px SimSun");
+  out.pixFallback = pixels("16px sans-serif");
+  try { out.checkIsOurs = !!(document.fonts && document.fonts.constructor && document.fonts.constructor.prototype.__roxyFontsInstalled); } catch (e) {}
+  try { out.c2dOurs = !!(CanvasRenderingContext2D.prototype.__roxyFontsInstalled); } catch (e) {}
+  try { out.fontsProtoName = document.fonts && document.fonts.constructor && document.fonts.constructor.name; } catch (e) {}
+  try { out.checkOnProto = typeof document.fonts.constructor.prototype.check; } catch (e) {}
+  // Attempt install with error capture
+  try {
+    var ffs = document.fonts.constructor.prototype;
+    var real = ffs.check;
+    out.realCheckProto = typeof real;
+    ffs.check = function(font){ return false; };
+    out.tryInstall = chk("16px SimSun");
+    ffs.check = real;
+  } catch (e) { out.installErr = e.message; }
+  // check what preload set
+  try { var d = Object.getOwnPropertyDescriptor(document.fonts.constructor.prototype, "check"); out.checkDesc = d ? (d.get ? "getter" : "data:" + String(d.value).slice(0,50)) : "none"; } catch (e) { out.descErr = e.message; }
+  // Which channel leaks host fonts? Probe fonts a scanner would use:
+  function widthMethod(families){
+    try {
+      var c = document.createElement("canvas").getContext("2d");
+      c.font = "72px " + families;
+      out._lastFontReadback = String(c.font);
+      return String(c.measureText("mmmmmmmmmmlli").width);
+    } catch (e) { return "err:" + e.message; }
+  }
+  function offscreenMethod(families){
+    try {
+      var c = new OffscreenCanvas(400, 100).getContext("2d");
+      c.font = "72px " + families;
+      return String(c.measureText("mmmmmmmmmmlli").width);
+    } catch (e) { return "err:" + e.message; }
+  }
+  function domMethod(families){
+    try {
+      var s = document.createElement("span");
+      s.textContent = "mmmmmmmmmmlli";
+      s.style.position = "absolute"; s.style.visibility = "hidden";
+      s.style.fontFamily = families; s.style.fontSize = "72px";
+      document.body.appendChild(s);
+      var w = s.offsetWidth;
+      s.parentNode.removeChild(s);
+      return String(w);
+    } catch (e) { return "err:" + e.message; }
+  }
+  var probes = ["'PingFang SC',sans-serif", "sans-serif", "'STKaiti',sans-serif", "Arial"];
+  out.widths = {};
+  out.offscreen = {};
+  out.doms = {};
+  for (var i = 0; i < probes.length; i++) {
+    var key = probes[i].replace(/^'(.*)',.*$/, "$1");
+    out.widths[key] = widthMethod(probes[i]);
+    out.offscreen[key] = offscreenMethod(probes[i]);
+    out.doms[key] = domMethod(probes[i]);
+  }
+  try {
+    var c2 = document.createElement("canvas").getContext("2d");
+    c2.font = "72px 'PingFang SC',sans-serif";
+    var rb = c2.font;
+    out.rawRb = JSON.stringify(rb);
+    // manually reproduce the swap
+    try {
+      var c4 = document.createElement("canvas").getContext("2d");
+      c4.font = "72px 'PingFang SC',sans-serif";
+      out.wBefore = String(c4.measureText("mmmmmmmmmmlli").width);
+      c4.font = "72px sans-serif";
+      out.wAfter = String(c4.measureText("mmmmmmmmmmlli").width);
+      var c5 = document.createElement("canvas").getContext("2d");
+      c5.font = rb;
+      out.wRb = String(c5.measureText("mmmmmmmmmmlli").width);
+      c5.font = "72px 'PingFang SC'";
+      out.wSingle = String(c5.measureText("mmmmmmmmmmlli").width);
+      out.mtName = String(CanvasRenderingContext2D.prototype.measureText.name);
+      out.mtOwn = JSON.stringify(Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, "measureText").value.toString().slice(0, 60));
+      // exact replica of the preload familyAllowed
+      var famTokens2 = function(spec){
+        var o = [];
+        if (typeof spec !== "string") return o;
+        var parts = spec.split(",");
+        for (var p = 0; p < parts.length; p++) {
+          var tokens = parts[p].trim().split(/\\s+/);
+          for (var t = tokens.length - 1; t >= 0; t--) {
+            var tok = (tokens[t] || "").replace(/^["']|["']$/g, "");
+            if (!tok) continue;
+            if (/^-?\\d/.test(tok)) break;
+            if (/^(bold|bolder|lighter|italic|oblique|normal|small-caps|ultra-condensed|extra-condensed|condensed|semi-condensed|semi-expanded|expanded|extra-expanded|ultra-expanded|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger|[1-9]00)$/i.test(tok)) break;
+            o.push(tok.toLowerCase());
+          }
+        }
+        return o;
+      };
+      out.ftRb = JSON.stringify(famTokens2(rb));
+      out.ftRaw = JSON.stringify(famTokens2("72px 'PingFang SC',sans-serif"));
+      // manually run the swap to see resulting width
+      var c6 = document.createElement("canvas").getContext("2d");
+      c6.font = rb;
+      var before = c6.font;
+      var parts6 = before.split(","), o6 = [];
+      for (var p = 0; p < parts6.length; p++) {
+        var seg = parts6[p], toks6 = seg.trim().split(/\\s+/);
+        var splitAt = toks6.length;
+        for (var t = toks6.length - 1; t >= 0; t--) {
+          var tok6 = (toks6[t] || "").replace(/^["']|["']$/g, "");
+          if (!tok6 || /^-?\\d/.test(tok6)) break;
+          splitAt = t;
+        }
+        if (splitAt >= toks6.length) { o6.push(seg); continue; }
+        var inline6 = toks6.slice(splitAt).map(function(x){ return x.replace(/^["']|["']$/g, ""); }).join(" ");
+        var allowedAny = false;
+        var tt = inline6.split(/\\s+/);
+        for (var k = 0; k < tt.length; k++) { var ff = tt[k].toLowerCase(); if (/^(serif|sans-serif|monospace|cursive|fantasy)$/.test(ff)) { allowedAny = true; break; } }
+        if (allowedAny) { o6.push(seg); continue; }
+        toks6[splitAt] = "sans-serif";
+        for (var r = splitAt + 1; r < toks6.length; r++) toks6[r] = "";
+        o6.push(toks6.join(" ").replace(/\\s+/g, " ").trim());
+      }
+      out.swapped = JSON.stringify(o6.join(", "));
+    } catch (e) { out.swapErr = e.message; }
+    var toks = rb.replace(/^[^,]+,/,"").trim();
+    out.familyTokensResult = toks;
+    function famTokens(spec){
+      var o = [];
+      if (typeof spec !== "string") return o;
+      var parts = spec.split(",");
+      for (var p = 0; p < parts.length; p++) {
+        var tokens = parts[p].trim().split(/\\s+/);
+        for (var t = tokens.length - 1; t >= 0; t--) {
+          var tok = (tokens[t] || "").replace(/^["']|["']$/g, "");
+          if (!tok) continue;
+          if (/^-?\\d/.test(tok)) break;
+          if (/^(bold|bolder|lighter|italic|oblique|normal|small-caps|ultra-condensed|extra-condensed|condensed|semi-condensed|semi-expanded|expanded|extra-expanded|ultra-expanded|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger|[1-9]00)$/i.test(tok)) break;
+          o.push(tok.toLowerCase());
+        }
+      }
+      return o;
+    }
+    out.ft = JSON.stringify(famTokens(rb));
+    out.ft2 = JSON.stringify(famTokens("72px 'PingFang SC',sans-serif"));
+  } catch (e) { out.ftErr = e.message; }
+  try {
+    var iterCount = 0, iterFams = [];
+    for (var fv = document.fonts.values(); !fv.next().done; ) iterCount++;
+    out.iterCount = iterCount;
+    out.fontsSize = String(document.fonts.size);
+    out.fontsSizeReal = (function(){ var d = Object.getOwnPropertyDescriptor(document.fonts.constructor.prototype, "size"); return d && d.get ? String(d.get).slice(0, 40) : "none"; })();
+    var iter2 = document.fonts.values();
+    for (var i2 = 0; i2 < 12; i2++) { var s2 = iter2.next(); if (s2.done) break; try { iterFams.push(String(s2.value.family)); } catch (e) {} }
+    out.iterFams = JSON.stringify(iterFams);
+    var ql = (typeof window.queryLocalFonts === "function");
+    out.localFontsApi = ql;
+    if (ql) {
+      (function(){
+        var qlArr = [];
+        window.queryLocalFonts().then(function(arr){ qlArr = arr || []; }).catch(function(e){ out.qlErr = e.message; }).then(function(){
+          out.qlCount = qlArr.length;
+          out.qlFams = JSON.stringify(qlArr.slice(0, 5).map(function(f){ return String(f.family); }));
+        });
+      })();
+    }
+  } catch (e) { out.iterErr = e.message; }
+  try {
+    var csd = typeof CSSStyleDeclaration !== "undefined" ? CSSStyleDeclaration.prototype : null;
+    out.cssFontFamDesc = csd ? (function(){
+      var d = Object.getOwnPropertyDescriptor(csd, "fontFamily");
+      return JSON.stringify({ has: !!d, setIsInstalled: !!(d && d.set && d.set.__roxyFontsInstalled), setSrc: d && d.set ? String(d.set).slice(0, 40) : null });
+    })() : "no-csd";
+    var sp = document.createElement("span");
+    var ownFf = Object.getOwnPropertyDescriptor(sp.style, "fontFamily");
+    out.cssOwnFf = ownFf ? JSON.stringify({ has: true, setInstalled: !!(ownFf.set && ownFf.set.__roxyFontsInstalled) }) : JSON.stringify({ has: false });
+    out.cssCtor = String(sp.style && sp.style.constructor && sp.style.constructor.name);
+    out.cssProtoName = Object.getPrototypeOf(sp.style) === CSSStyleDeclaration.prototype ? "same" : Object.getPrototypeOf(sp.style) && Object.getPrototypeOf(sp.style).constructor && Object.getPrototypeOf(sp.style).constructor.name;
+    sp.style.fontFamily = "'PingFang SC', sans-serif";
+    out.cssReadback = JSON.stringify(sp.style.fontFamily);
+    out.cssComputed = JSON.stringify(getComputedStyle(sp).fontFamily);
+    var sp2 = document.createElement("span");
+    if (csd) {
+      var d2 = Object.getOwnPropertyDescriptor(csd, "fontFamily");
+      try { d2.set.call(sp2.style, "'STKaiti', monospace"); out.cssRawSetReading = JSON.stringify(sp2.style.fontFamily); } catch (e) { out.cssRawSetErr = e.message; }
+    }
+    document.body.appendChild(sp);
+    out.cssWidth = String(sp.offsetWidth || 0) + "/" + String(sp.clientWidth || 0);
+    sp.remove();
+  } catch (e) { out.cssErr = e.message; }
+  try {
+    var ff1 = new FontFace("PingFang SC", "local('PingFang SC')");
+    var ff2 = new FontFace("Arial", "local('Arial')");
+    var ffRes = { pf: "pending", arial: "pending" };
+    ff1.load().then(function(){ ffRes.pf = "loaded"; }).catch(function(e){ ffRes.pf = "rejected:" + e.name; });
+    ff2.load().then(function(){ ffRes.arial = "loaded"; }).catch(function(e){ ffRes.arial = "rejected:" + e.name; });
+    out.fontFaceLoad = JSON.stringify(ffRes);
+  } catch (e) { out.ffErr = e.message; }
+  try { out.measureTextStr = String(CanvasRenderingContext2D.prototype.measureText).slice(0, 60); } catch (e) { out.mtStrErr = e.message; }
+  try {
+    var __names = ["Arial","Arial Black","Arial Narrow","Arial Rounded MT Bold","Helvetica","Helvetica Neue","Times","Times New Roman","Courier","Courier New","Verdana","Georgia","Tahoma","Trebuchet MS","Comic Sans MS","Impact","Lucida Console","Lucida Sans Unicode","Palatino","Palatino Linotype","Book Antiqua","Garamond","Bookman Old Style","Century Gothic","Symbol","Webdings","Wingdings","Wingdings 2","Wingdings 3","Segoe UI","Segoe UI Light","Segoe UI Semibold","Segoe UI Symbol","Segoe UI Historic","Segoe Print","Segoe Script","Calibri","Calibri Light","Cambria","Candara","Consolas","Constantia","Corbel","Ebrima","Gabriola","Gadugi","Javanese Text","Leelawadee UI","Malgun Gothic","MV Boli","Microsoft Sans Serif","Microsoft Tai Le","Microsoft Himalaya","Microsoft New Tai Lue","Microsoft PhagsPa","Microsoft Yi Baiti","MingLiU-ExtB","Mongolian Baiti","Myanmar Text","Nirmala UI","Sitka","Sitka Banner","Sitka Display","Sitka Heading","Sitka Subheading","Sitka Text","Sylfaen","Yu Gothic","Yu Gothic UI","Yu Mincho","-apple-system","BlinkMacSystemFont","Helvetica Neue","Helvetica","San Francisco","SF Pro Display","SF Pro Text","SF Mono","New York","Lucida Grande","Geneva","Monaco","Menlo","Andale Mono","Apple Chancery","Apple SD Gothic Neo","Apple Symbols","AppleGothic","AppleMyungjo","Avenir","Avenir Next","Avenir Next Condensed","Big Caslon","Brush Script MT","Chalkboard","Chalkboard SE","Chalkduster","Charter","Cochin","Copperplate","Didot","Futura","GillSans","Hiragino Kaku Gothic Pro","Hiragino Maru Gothic Pro","Hiragino Mincho ProN","Hoefler Text","Iowan Old Style","Lucida Sans","Marker Felt","Noteworthy","Optima","Papyrus","Phosphate","PingFang HK","PingFang SC","PingFang TC","Rockwell","Savoye LET","SignPainter","Skia","Snell Roundhand","Songti SC","Songti TC","Superclarendon","Times","Trattatello","Zapfino","Heiti SC","Heiti TC","DejaVu Sans","DejaVu Sans Mono","Liberation Sans","Liberation Mono","Bitstream Vera Sans","Bitstream Vera Sans Mono","Noto Sans","Noto Sans Mono","Ubuntu","Ubuntu Mono","Cantarell","FreeSans","FreeMono","FreeSerif","Droid Sans","Droid Sans Mono","Source Code Pro","Source Sans Pro","Fira Sans","Fira Mono","Fira Code","Inconsolata","Hack","JetBrains Mono","IBM Plex Sans","IBM Plex Mono","Open Sans","Lato","Roboto","Roboto Mono","Roboto Slab","PT Sans","PT Mono","PT Serif","Adobe Garamond Pro","Adobe Caslon Pro","Adobe Devanagari","Bickham Script Pro","Birch Std","Blackoak Std","Brush Script Std","Chaparral Pro","Charlemagne Std","Cooper Std","Eccentric Std","Giddyup Std","Hobo Std","Kozuka Gothic Pr6N","Kozuka Mincho Pr6N","Lithos Pro","Mesquite Std","Minion Pro","Myriad Pro","Myriad Pro Cond","Nueva Std","OCR A Std","Orator Std","Poplar Std","Prestige Elite Std","Rosewood Std","Stencil Std","Tekton Pro","Trajan Pro","Aldhabi","Aharoni","Aparajita","Bahnschrift","Bell MT","Berlin Sans FB","Bodoni MT","Book Antiqua","Broadway","Calligraphy","Castellar","Centaur","Century","Century Schoolbook","Chiller","Colonna MT","Cooper Black","David","DilleniaUPC","EucrosiaUPC","FrankRuehl","Franklin Gothic Book","Franklin Gothic Demi","Goudy Old Style","Goudy Stout","Gulim","GulimChe","Haettenschweiler","High Tower Text","Informal Roman","IrisUPC","JasmineUPC","KodchiangUPC","Kunstler Script","LilyUPC","Magneto","Maiandra GD","MingLiU","Mongolian Baiti","MoolBoran","MS Outlook","Niagara Engraved","Niagara Solid","Nyala","Onyx","Parchment","Plantagenet Cherokee","Playbill","Poor Richard","Pristina","Raavi","Ravie","Rockwell","Sakkal Majalla","Showcard Gothic","Sylfaen","Symbol","Tunga","Tw Cen MT","Vijaya","Vivaldi","Vladimir Script","SimSun","SimHei","Microsoft YaHei","Microsoft YaHei UI","Microsoft JhengHei","Microsoft JhengHei UI","KaiTi","NSimSun","DengXian","LiSu","YouYuan","STXihei","STKaiti","STSong","STZhongsong","STFangsong","STCaiyun","STHupo","STLiti","STXingkai","STXinwei","PingFang SC","PingFang TC","PingFang HK","Heiti SC","Heiti TC","Hiragino Sans GB","Lantinghei SC","Lantinghei TC","Wawati SC","Wawati TC","Weibei SC","Weibei TC","Yuanti SC","Yuanti TC","Yuppy SC","Yuppy TC","Source Han Sans CN","Source Han Sans HK","Source Han Sans TW","Noto Sans CJK SC","Noto Sans CJK TC","Noto Sans CJK HK","WenQuanYi Micro Hei","WenQuanYi Zen Hei","HarmonyOS Sans SC","HarmonyOS Sans TC","OPPO Sans","MiSans","HYQiHei","HYQiHei-50S"];
+    var __base = 0;
+    var __c2 = document.createElement("canvas").getContext("2d");
+    __c2.font = "72px sans-serif";
+    __base = __c2.measureText("mmmmmmmmmmlli").width;
+    var __d = [];
+    for (var ni = 0; ni < __names.length; ni++) {
+      var nm2 = __names[ni];
+      __c2.font = "72px '" + nm2 + "', sans-serif";
+      var wdt = __c2.measureText("mmmmmmmmmmlli").width;
+      if (Math.abs(wdt - __base) > 0.5) __d.push(nm2 + ":" + wdt.toFixed(1));
+    }
+    out.replicaCanvas = JSON.stringify(__d);
+  } catch (e) { out.replicaErr = e.message; }
+  try {
+    var __s = document.createElement("span");
+    __s.style.position = "absolute"; __s.style.visibility = "hidden"; __s.style.fontSize = "72px";
+    document.body.appendChild(__s);
+    var __d2 = [];
+    for (var ni2 = 0; ni2 < __names.length; ni2++) {
+      var nm3 = __names[ni2];
+      __s.style.fontFamily = "'" + nm3 + "', sans-serif";
+      var w1 = __s.offsetWidth || __s.getBoundingClientRect().width;
+      __s.style.fontFamily = "sans-serif";
+      var w0 = __s.offsetWidth || __s.getBoundingClientRect().width;
+      if (Math.abs(w1 - w0) > 0.5) __d2.push(nm3);
+    }
+    __s.remove();
+    out.replicaDom = JSON.stringify(__d2);
+  } catch (e) { out.replicaDomErr = e.message; }
+  try {
+    var __d3 = [];
+    for (var ni3 = 0; ni3 < __names.length; ni3++) {
+      if (document.fonts.check("72px '" + __names[ni3] + "', sans-serif")) __d3.push(__names[ni3]);
+    }
+    out.replicaCheck = JSON.stringify(__d3);
+  } catch (e) { out.replicaCheckErr = e.message; }
+  try { out.workerWrapInstalled = String(window.Worker === undefined ? "no-worker" : (window.Worker.__roxyFontsInstalled === true ? "yes" : "no")); } catch (e) { out.workerWrapErr = e.message; }
+  try {
+    var _b = URL.createObjectURL(new Blob(["x"], { type: "text/plain" }));
+    var _x = new XMLHttpRequest();
+    try { _x.open("GET", _b, false); } catch (e) { out.xhrBlobOpenErr = e.message; }
+    if (!out.xhrBlobOpenErr) { try { _x.send(); } catch (e) { out.xhrBlobSendErr = e.message; } }
+    out.xhrBlobStatus = String(_x.status); out.xhrBlobLen = String(((_x.responseText) || "").length);
+    URL.revokeObjectURL(_b);
+  } catch (e) { out.blobXhrErr = e.message; }
+  try {
+    var c3 = document.createElement("canvas").getContext("2d");
+    var realMt = c3.measureText;
+    out.mtFnStr = String(realMt).slice(0, 60);
+  } catch (e) { out.mtFnErr = e.message; }
+  try {
+    var __pl = window.navigator.plugins;
+    out.plugins = String(__pl.length);
+    out.pdfv = String(window.navigator.pdfViewerEnabled);
+    try { out.plugin0 = String(__pl && __pl[0] ? (__pl[0].filename || __pl[0].name || "") : ""); } catch (e) { out.plugin0e = e.message; }
+    try { out.pdfMime = String(window.navigator.mimeTypes && window.navigator.mimeTypes["application/pdf"] ? window.navigator.mimeTypes["application/pdf"].suffixes : ""); } catch (e) { out.mimee = e.message; }
+    try { out.dtStr = String(new Date(2024, 0, 15, 12, 0, 0)).slice(0, 80); } catch (e) { out.dtsErr = e.message; }
+  } catch (e) { out.pluginsErr = e.message; }
+  return out;
+})()`;
+
+const PING0_DIAG_WORKER = `(function(){
+  return new Promise(function(resolve){
+    var out = {};
+    try {
+      var wkCode =
+        'self.onmessage=function(e){var r={};try{r.wd=String(navigator.webdriver);r.plat=String(navigator.platform);r.oscpu=String(navigator.oscpu);r.hw=String(navigator.hardwareConcurrency);r.lang=JSON.stringify(navigator.languages);try{r.tz=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){r.tz="err";}r.shimFlag=String(OffscreenCanvasRenderingContext2D.prototype.__roxyFontsInstalled===true);var d=self.__roxyFontDiag;if(d){try{r.san1=JSON.stringify(d.sanitize(String.fromCharCode(39)+"PingFang SC"+String.fromCharCode(39)+",sans-serif"));r.san2=JSON.stringify(d.sanitize("72px sans-serif"));r.known=JSON.stringify(Object.keys(d.known));}catch(e){r.sanErr=e.message;}}else{r.san1="no-diag-handle";}var c=new OffscreenCanvas(400,100).getContext("2d");var q=String.fromCharCode(39);var w=function(f){c.font=f;return c.measureText("mmmmmmmmmmlli").width;};var sf=function(name){return "72px "+q+name+q+",sans-serif";};r.pf=w(sf("PingFang SC"));r.pf2=w("72px "+q+"PingFang SC"+q);r.ss=w("72px sans-serif");r.stk=w(sf("STKaiti"));r.a=w(sf("Arial"));r.own=String(OffscreenCanvasRenderingContext2D.prototype.measureText);c.font=sf("PingFang SC");r.rbPf=JSON.stringify(c.font);c.font="13px sans-serif, sans-serif";r.rbSw=JSON.stringify(c.font);}catch(e){r.err=e.message;}postMessage(r);};';
+      var wkUrl = URL.createObjectURL(new Blob([wkCode], { type: "text/javascript" }));
+      var wk;
+      try { wk = new Worker(wkUrl); } catch (e) { out.workerNewErr = e.message; resolve(out); return; }
+      var done = false;
+      var timer = setTimeout(function(){ if (!done) { done = true; out.worker = "timeout"; resolve(out); } }, 4000);
+      wk.onmessage = function(ev){ if (done) return; done = true; clearTimeout(timer); out.worker = JSON.stringify(ev.data); resolve(out); };
+      wk.onerror = function(ev){ if (done) return; done = true; clearTimeout(timer); out.worker = "err:" + ev.message; resolve(out); };
+      wk.postMessage("go");
+    } catch (e) { out.workerTopErr = e.message; resolve(out); }
+  });
+})()`;
+
 async function waitForBidi(port: number, timeoutMs: number): Promise<BidiConnection> {
   const deadline = Date.now() + timeoutMs;
   let lastError = "";
@@ -410,7 +726,7 @@ function buildFirefoxLaunchPlan(opts: Options, index: number, geo: GeoInfo, prof
   const identity = buildFirefoxManagedIdentity(
     {
       fingerprintSeed: seed,
-      platform: "windows",
+      platform: opts.platform,
       locale,
       timezone,
       webrtcMode: opts.webrtcIp ? "altered" : "auto",
@@ -449,7 +765,7 @@ async function runOnceFirefox(
   const spawnEnv = plan.timezone ? { ...process.env, TZ: plan.timezone } : undefined;
   const child: ChildProcess = spawn(
     opts.browser,
-    buildFirefoxLaunchArgs({ profileDir, remotePort, headless: opts.headless, platform: "windows" }),
+    buildFirefoxLaunchArgs({ profileDir, remotePort, headless: opts.headless, platform: opts.platform }),
     { stdio: "ignore", env: spawnEnv },
   );
   let conn: BidiConnection | null = null;
@@ -491,6 +807,31 @@ async function runOnceFirefox(
     }
     const settledAt = new Date().toISOString();
     const captured = await bidiEvaluateInContext(conn, PING0_CAPTURE_PROBE, context, 15000);
+    let fontsDiag = null;
+    if (opts.diagProbe) {
+      try {
+        fontsDiag = await bidiEvaluateInContext(conn, PING0_DIAG_PROBE, context, 15000);
+        process.stderr.write("[verify-ping0] diag-probe returned " + JSON.stringify(fontsDiag)?.slice(0, 200) + "\n");
+        try {
+          const workerDiag = await bidiEvaluateInContext(conn, PING0_DIAG_WORKER, context, 15000);
+          if (fontsDiag && workerDiag) Object.assign(fontsDiag, workerDiag);
+          if (fontsDiag && typeof fontsDiag.plat === "string") {
+            const expectedWorkerPlat = opts.platform === "macos" ? "MacIntel"
+              : opts.platform === "android" ? "Linux armv81" : "Win32";
+            if (fontsDiag.plat !== expectedWorkerPlat) {
+              process.stderr.write(`[verify-ping0] WARNING: worker navigator.platform="${fontsDiag.plat}" != persona "${expectedWorkerPlat}"\n`);
+              fontsDiag.workerPlatMismatch = expectedWorkerPlat;
+            }
+            if (fontsDiag.wd !== "false") {
+              process.stderr.write(`[verify-ping0] WARNING: worker navigator.webdriver="${fontsDiag.wd}" should be false\n`);
+              fontsDiag.workerWebdriverMismatch = "false";
+            }
+          }
+        } catch (e) { process.stderr.write("[verify-ping0] worker-diag: " + String((e as Error)?.message || e) + "\n"); }
+      } catch (e) {
+        process.stderr.write("[verify-ping0] diag-probe failed: " + String((e as Error)?.message || e) + "\n");
+      }
+    }
     const state: Ping0State = {
       startedAt,
       finishedAt,
@@ -504,6 +845,7 @@ async function runOnceFirefox(
       quickProbes: captured?.quickProbes ?? null,
       status: captured?.status ?? null,
       raf: captured?.raf ?? null,
+      fontsDiag,
       probeFocus: { visibility: String(captured?.visibility || ""), hasFocus: captured?.hasFocus === true },
       bodyText: String(captured?.bodyText || ""),
     };
@@ -513,7 +855,7 @@ async function runOnceFirefox(
         engine: "firefox",
         runId,
         seed: plan.seed,
-        platform: "windows",
+        platform: opts.platform,
         proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
         geo,
         timezone: plan.timezone,
@@ -606,7 +948,7 @@ async function runOnce(
   const fingerprintArg = buildBrowserFingerprintArg(
     {
       fingerprintSeed: seed,
-      platform: "windows",
+      platform: opts.platform,
       locale,
       timezone,
       webrtcMode: opts.webrtcIp ? "altered" : "auto",
@@ -658,7 +1000,7 @@ return {
         engine: "chromium",
         runId,
         seed,
-        platform: "windows",
+        platform: opts.platform,
        proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
        geo,
        timezone,

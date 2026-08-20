@@ -738,7 +738,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     try {
       const parsed = parseAccountsBulkText(body.text);
       if (body.createProfiles) {
-        const platform = body.platform === "macos" ? "macos" : "windows";
+        const platform = body.platform === "windows" || body.platform === "macos" || body.platform === "android"
+          ? body.platform : "windows";
         const r = bulkCreateProfilesWithAccounts(parsed, { platform });
         recordAudit({ category: "account", action: "bulk-create-profiles", target: "", actor: "api", detail: "added=" + r.added + " created=" + r.created + " skipped=" + r.skipped });
         return { status: 200, body: { success: true, report: r } };
@@ -1634,7 +1635,7 @@ function buildOpenApi(): any {
       "/api/accounts/bulk": {
         post: {
           summary: "Bulk import accounts from pasted lines (url,username,password,tags); createProfiles=true also creates a bound profile per account",
-          requestBody: { content: { "application/json": { schema: { type: "object", required: ["text"], properties: { text: { type: "string" }, createProfiles: { type: "boolean" }, platform: { type: "string", enum: ["windows", "macos"] } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["text"], properties: { text: { type: "string" }, createProfiles: { type: "boolean" }, platform: { type: "string", enum: ["windows", "macos", "android"] } } } } } },
           responses: ok("Import report (added / skipped / errors; +created when createProfiles)"),
         },
       },

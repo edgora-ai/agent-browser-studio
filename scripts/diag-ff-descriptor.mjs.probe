@@ -1,0 +1,14 @@
+(function(){
+  var out = {};
+  try { out.fontsAtInject = !!document.fonts; } catch(e){ out.fontsAtInject = "err:"+e.message; }
+  try { out.FFSGlobal = typeof FontFaceSet; } catch(e){ out.FFSGlobal = "err"; }
+  try {
+    var before = document.fonts.check("16px SimSun");
+    var proto = document.fonts.constructor && document.fonts.constructor.prototype;
+    out.ctorProtoIsFFS = proto === FontFaceSet.prototype;
+    proto.check = function(font){ return false; };
+    out.after = document.fonts.check("16px SimSun");
+    out.sameInstance = true;
+  } catch(e){ out.manualPatch = "err:"+e.message; }
+  return out;
+})()

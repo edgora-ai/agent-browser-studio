@@ -1211,7 +1211,8 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
       browserVersion: typeof profile.browserVersion === "string" ? profile.browserVersion : null,
       allowThirdPartyCookies: profile.allowThirdPartyCookies === true,
       fingerprintSeed: Number.isInteger(profile.fingerprintSeed) ? profile.fingerprintSeed : 12345,
-      platform: profile.platform === "macos" ? "macos" : "windows",
+      platform: profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
+        ? profile.platform : "windows",
       timezone: profile.timezone || null,
       locale: profile.locale || null,
       webrtcMode: profile.webrtcMode === "real" || profile.webrtcMode === "altered" || profile.webrtcMode === "disable"

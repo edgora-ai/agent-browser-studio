@@ -561,8 +561,8 @@ function sanitizeBoolean(value: unknown, label: string, fallback = false): boole
   return value;
 }
 
-function sanitizeBrowserPlatform(value: unknown): "windows" | "macos" {
-  if (value === "windows" || value === "macos") return value;
+function sanitizeBrowserPlatform(value: unknown): "windows" | "macos" | "android" {
+  if (value === "windows" || value === "macos" || value === "android") return value;
   throw new Error(`Invalid browser platform: ${JSON.stringify(value)}`);
 }
 
@@ -1088,7 +1088,7 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     note: cp.note || null,
     tags: normalizeProfileTags(cp.tags),
     preset: sanitizeOptionalText(cp.preset, 64),
-    platform: cp.platform === "macos" ? "macos" : "windows",
+    platform: cp.platform === "windows" || cp.platform === "macos" || cp.platform === "android" ? cp.platform : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
     webrtcMode: sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp),
@@ -1378,7 +1378,8 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       profile.engine = sanitizeBrowserEngine(profile.engine);
       profile.browserVersion = normalizeManagedChromiumVersion(profile.browserVersion);
       profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
-      profile.platform = profile.platform === "macos" ? "macos" : "windows";
+      profile.platform = profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
+        ? profile.platform : "windows";
       profile.fingerprintSeed = sanitizeFingerprintSeed(profile.fingerprintSeed || 12345);
       profile.timezone = sanitizeOptionalTimezone(profile.timezone);
       profile.locale = sanitizeOptionalLocale(profile.locale);

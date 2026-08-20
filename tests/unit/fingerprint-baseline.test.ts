@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffFingerprints, hasRiskyDrift, summarizeDrift, CAPTURE_EXPRESSION } from "../../src/main/services/fingerprint-baseline.js";
+import { diffFingerprints, hasRiskyDrift, summarizeDrift, CAPTURE_EXPRESSION, checkPersonaConsistency, mismatchesAsDrift } from "../../src/main/services/fingerprint-baseline.js";
 
 describe("fingerprint baseline diff", () => {
   it("returns no drift for identical fingerprints", () => {
@@ -68,5 +68,46 @@ describe("fingerprint baseline diff", () => {
   it("summarizeDrift caps long drift lists", () => {
     const drift = Array.from({ length: 12 }, (_, i) => ({ field: "f" + i, baseline: "a", current: "b" }));
     expect(summarizeDrift(drift, 5)).toBe("f0, f1, f2, f3, f4 (+7 more)");
+  });
+
+  it("persona consistency passes a coherent Android capture", () => {
+    const mismatches = checkPersonaConsistency(
+      { platform: "android", timezone: "Asia/Shanghai" },
+      {
+        platform: "Linux armv81", userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) ... Mobile Safari/537.36",
+        plugins: "", tz: "Asia/Shanghai",
+      },
+    );
+    expect(mismatches).toEqual([]);
+  });
+
+  it("persona consistency flags a host-platform leak that drift would miss", () => {
+    const mismatches = checkPersonaConsistency(
+      { platform: "windows", timezone: "Asia/Shanghai" },
+      {
+        platform: "MacIntel", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...",
+        plugins: "Internal PDF Plugin, Widevine Content Decryption Module", tz: "America/Los_Angeles",
+      },
+    );
+    expect(mismatches.map((m) => m.field)).toEqual(["persona.platform", "persona.tz"]);
+    expect(mismatches[0]).toEqual({ field: "persona.platform", expected: "Win32", actual: "MacIntel" });
+  });
+
+  it("persona consistency flags lost plugin injection on desktop + mobile token leak", () => {
+    const mobile = checkPersonaConsistency({ platform: "android" }, {
+      platform: "Linux armv81", userAgent: "Mozilla/5.0 (Linux; Android 13; ...) Mobile Safari/537.36",
+      plugins: "Internal PDF Plugin", tz: "",
+    });
+    expect(mobile.map((m) => m.field)).toEqual(["persona.plugins"]);
+    const desktop = checkPersonaConsistency({ platform: "windows" }, {
+      platform: "Win32", userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) ... Mobile Safari/537.36",
+      plugins: "", tz: "",
+    });
+    expect(desktop.map((m) => m.field)).toEqual(["persona.plugins", "persona.uaMobile"]);
+  });
+
+  it("persona mismatches render as drift entries", () => {
+    const drift = mismatchesAsDrift([{ field: "persona.platform", expected: "Win32", actual: "MacIntel" }]);
+    expect(drift).toEqual([{ field: "persona.platform", baseline: "Win32", current: "MacIntel" }]);
   });
 });

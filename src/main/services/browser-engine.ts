@@ -133,7 +133,7 @@ export interface FirefoxLaunchArgsOpts {
   /** 0 (default) = auto-assign and parse from Firefox output; or a specific port. */
   remotePort?: number;
   headless?: boolean;
-  platform?: "windows" | "macos";
+  platform?: "windows" | "macos" | "android";
   /** First-tab URL (Web App / PWA-ish mode; Firefox has no --app= flag). */
   appUrl?: string | null;
 }

@@ -33,7 +33,7 @@ describe("Agent Browser fingerprint config", () => {
     expect(Object.keys(first).sort()).toEqual([
       "appVersion", "audio", "canvas", "deviceMemory", "doNotTrack", "fonts",
       "geolocation", "hardwareConcurrency", "hardwareProfile", "languages", "maxTouchPoints",
-      "mediaDevices", "platform", "platformVersion", "schemaVersion", "screen", "secureDns",
+      "mediaDevices", "platform", "platformVersion", "pluginProfile", "schemaVersion", "screen", "secureDns",
       "seed", "speechSynthesis", "storageQuotaBytes", "timezone", "userAgent",
       "vendor", "webauthn", "webgl", "webgpu", "webrtc",
     ]);
@@ -74,6 +74,25 @@ describe("Agent Browser fingerprint config", () => {
       userVerifyingPlatformAuthenticator: true,
     });
     expect(first.doNotTrack).toBe("1");
+    expect(first.pluginProfile).toEqual({
+      pdfViewerEnabled: true,
+      plugins: [
+        {
+          name: "Internal PDF Plugin",
+          filename: "pdfium.dll",
+          description: "Portable Document Format",
+          mimeTypes: [{ type: "application/pdf", suffixes: "pdf" }],
+        },
+        {
+          name: "Widevine Content Decryption Module",
+          filename: "widevinecdm.dll",
+          description:
+            "Enables Widevine decryption for HTML audio/video content.",
+          mimeTypes: [],
+        },
+      ],
+      mimeTypes: [{ type: "application/pdf", suffixes: "pdf" }],
+    });
     expect(first.speechSynthesis).toEqual({
       enabled: true,
       voices: [{ name: "Microsoft Huihui - Chinese (Simplified, PRC)", lang: "zh-CN", localService: true }],
@@ -100,6 +119,12 @@ describe("Agent Browser fingerprint config", () => {
     });
     expect(decoded.speechSynthesis.voices.map((voice: { name: string }) => voice.name))
       .toEqual(["Samantha", "Alex"]);
+    expect(decoded.pluginProfile.plugins[0]).toMatchObject({
+      name: "Internal PDF Plugin",
+      filename: "libpdf.dylib",
+    });
+    expect(decoded.pluginProfile.plugins[1].filename).toBe("libwidevinecdm.dylib");
+    expect(decoded.pluginProfile.pdfViewerEnabled).toBe(true);
     expect(json).not.toContain("license");
     expect(json).not.toContain("lumi.conf");
   });
@@ -220,6 +245,95 @@ describe("Agent Browser fingerprint config", () => {
       .toEqual({ mode: "altered", publicIp: "203.0.113.3" });
     expect(buildBrowserFingerprintConfig({ fingerprintSeed: 13, webrtcMode: "altered" }, "149.0.7827.22").webrtc)
       .toEqual({ mode: "altered", publicIp: null });
+  });
+
+  it("produces a coherent mobile Android persona with a touch + phone identity", () => {
+    const config = buildBrowserFingerprintConfig({
+      fingerprintSeed: 55,
+      platform: "android",
+      locale: "zh-CN",
+      timezone: "Asia/Shanghai",
+    }, "150.0.7871.114");
+
+    expect(Object.keys(config.hardwareProfile)).toEqual(["id", "source", "fontProfile", "audioProfile"]);
+    expect(config.platform).toBe("Linux armv81");
+    expect(config.platformVersion).toMatch(/^\d+\.0\.0$/);
+    expect(config.maxTouchPoints).toBe(5);
+    expect(config.screen.mobile).toBe(true);
+    expect(config.screen.outerWidth).toBe(config.screen.availWidth);
+    expect(config.screen.outerHeight).toBe(config.screen.availHeight);
+    expect(config.screen.availTop).toBe(0);
+    expect(config.screen.availLeft).toBe(0);
+    expect(config.screen.windowX).toBe(0);
+    expect(config.screen.windowY).toBe(0);
+    expect(config.userAgent).toMatch(/^Mozilla\/5\.0 \(Linux; Android 1[34]; /);
+    expect(config.userAgent).toContain(`Chrome/150.0.7871.114 Mobile Safari/537.36`);
+    expect(config.appVersion).toContain("Mobile Safari");
+    expect(config.hardwareProfile.fontProfile).toBe("android-system");
+    expect(config.hardwareProfile.source).toBe("seeded");
+    expect(config.webauthn.hybridTransport).toBe(false);
+    expect(config.webauthn.passkeyPlatformAuthenticator).toBe(true);
+    expect(config.mediaDevices).toEqual({ enabled: true, audioInputs: 1, videoInputs: 2, audioOutputs: 1 });
+    expect(config.speechSynthesis.voices[0]).toEqual({
+      name: "Google 普通话（中国大陆）", lang: "zh-CN", localService: true,
+    });
+    expect(config.fonts).toContain("Roboto");
+    expect(config.fonts).toContain("sans-serif");
+    expect(config.fonts.some((font) => /^Noto Sans (SC|CJK) SC|Noto Serif CJK SC$/.test(font))).toBe(true);
+    expect(config.fonts).toEqual([...config.fonts].sort());
+    expect(config.fonts.length).toBeGreaterThanOrEqual(4);
+    expect(config.webgpu).toMatchObject({ mode: "webgl" });
+    expect(config.pluginProfile).toEqual({
+      pdfViewerEnabled: true,
+      plugins: [],
+      mimeTypes: [],
+    });
+  });
+
+  it("selects Android personas as seed-owned coherent tuples", () => {
+    const corpus = [1, 2, 3, 4, 5, 6, 7, 8].map((fingerprintSeed) =>
+      buildBrowserFingerprintConfig({ fingerprintSeed, platform: "android", locale: "en-US" }, "150.0.7871.114"));
+    expect(new Set(corpus.map((config) => config.hardwareProfile.id)).size).toBeGreaterThan(1);
+    for (const config of corpus) {
+      expect(config.screen.width).toBeLessThan(500);
+      expect(config.screen.height).toBeLessThan(1200);
+      expect(config.screen.devicePixelRatio).toBeGreaterThan(1);
+      expect(config.userAgent).toContain("Mobile");
+      expect(config.maxTouchPoints).toBe(5);
+      expect(config.hardwareProfile.source).toBe("seeded");
+      expect(config.webrtc).toMatchObject({ mode: "real", publicIp: null });
+      expect(config.pluginProfile.plugins).toEqual([]);
+      expect(config.pluginProfile.pdfViewerEnabled).toBe(true);
+    }
+    expect(buildBrowserFingerprintConfig({ fingerprintSeed: 7, platform: "android" }, "150.0.7871.114"))
+      .toEqual(buildBrowserFingerprintConfig({ fingerprintSeed: 7, platform: "android" }, "150.0.7871.114"));
+  });
+
+  it("keeps every Android GPU coherent with its WebGL/WebGPU vendor", () => {
+    for (let fingerprintSeed = 1; fingerprintSeed <= 40; fingerprintSeed++) {
+      const config = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "android" }, "150.0.7871.114");
+      expect(config.webgl.vendor).toContain("Google Inc. (");
+      if (config.webgpu.vendor === "Qualcomm") expect(config.webgl.renderer).toContain("Adreno");
+      if (config.webgpu.vendor === "ARM") expect(config.webgl.renderer).toMatch(/Mali|Immortalis/);
+    }
+  });
+
+  it("applies Android as a constraint on a complete mobile persona", () => {
+    const config = buildBrowserFingerprintConfig({
+      fingerprintSeed: 99,
+      platform: "android",
+      gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
+    }, "150.0.7871.114");
+    expect(config.hardwareProfile.source).toBe("validated-override");
+    expect(config.hardwareProfile.id).toMatch(/^android-/);
+    expect(config.webgpu.vendor).toBe("Qualcomm");
+  });
+
+  it("rejects unsupported platforms instead of silently degrading to Windows", () => {
+    expect(() => buildBrowserFingerprintConfig({ fingerprintSeed: 9, platform: "ios" as never }, "150.0.7871.114"))
+      .toThrow(/Unsupported browser platform/);
+    expect(() => buildBrowserFingerprintConfig({ fingerprintSeed: 9, platform: "linux" as never }, "150.0.7871.114"))
+      .toThrow(/Unsupported browser platform/);
   });
 
   it("keeps every supported locale on a locale-shaped speech identity", () => {

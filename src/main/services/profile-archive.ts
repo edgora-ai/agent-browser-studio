@@ -106,7 +106,7 @@ function sanitizeImportedMeta(raw: any): Record<string, unknown> {
     browserVersion: str(raw?.browserVersion, 80, null),
     allowThirdPartyCookies: raw?.allowThirdPartyCookies === true,
     fingerprintSeed: isInt(raw?.fingerprintSeed) ? raw.fingerprintSeed : Math.floor(Math.random() * 90000) + 10000,
-    platform: mode(raw?.platform, ["windows", "macos"], "windows"),
+    platform: mode(raw?.platform, ["windows", "macos", "android"], "windows"),
     timezone: str(raw?.timezone, 64, null),
     locale: str(raw?.locale, 32, null),
     webrtcMode: mode(raw?.webrtcMode, ["auto", "altered", "disable", "real"], "auto"),

@@ -21,6 +21,16 @@ const MAC_FONT_POOL = [
 const MAC_CJK_FONT_POOL = [
   "PingFang SC", "PingFang TC", "Hiragino Kaku Gothic ProN",
 ];
+const REQUIRED_ANDROID_FONT_POOL = [
+  "Noto Color Emoji", "Roboto", "sans-serif",
+];
+const ANDROID_FONT_POOL = [
+  "Droid Sans Mono", "Noto Sans", "Noto Sans Mono", "Noto Sans Symbols 2", "Roboto Condensed",
+  "Roboto Flex", "Roboto Mono", "Roboto Serif", "Roboto Slab",
+];
+const ANDROID_CJK_FONT_POOL = [
+  "Noto Sans CJK SC", "Noto Sans SC", "Noto Serif CJK SC",
+];
 
 // Managed profiles resolve DNS over HTTPS through the configured proxy so the
 // resolver and DNS queries stay consistent with the exit identity. The DoH
@@ -35,6 +45,8 @@ export interface SecureDnsConfig {
 
 interface HardwarePersona {
   id: string;
+  deviceModel: string | null;
+  androidVersion: "13" | "14" | null;
   hardwareConcurrency: number;
   deviceMemory: number;
   screenWidth: number;
@@ -52,6 +64,8 @@ interface HardwarePersona {
 const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
     id: "win-intel-uhd620-8c-8gb-1080p",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 8,
     deviceMemory: 8,
     screenWidth: 1920,
@@ -63,6 +77,8 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "win-intel-irisxe-8c-16gb-1080p",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -74,6 +90,8 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "win-nvidia-rtx3060-12c-16gb-1080p",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 12,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -85,6 +103,8 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "win-nvidia-rtx4060-16c-16gb-1440p",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 16,
     deviceMemory: 16,
     screenWidth: 2560,
@@ -96,6 +116,8 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "win-amd-radeon-16c-16gb-1080p",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 16,
     deviceMemory: 16,
     screenWidth: 1920,
@@ -110,6 +132,8 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
 const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
     id: "mac-apple-m1-8c-8gb-1440x900",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 8,
     deviceMemory: 8,
     screenWidth: 1440,
@@ -121,6 +145,8 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "mac-apple-m2-8c-16gb-1512x982",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1512,
@@ -132,6 +158,8 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "mac-apple-m3-8c-16gb-1710x1107",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 8,
     deviceMemory: 16,
     screenWidth: 1710,
@@ -143,6 +171,8 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
   {
     id: "mac-apple-m2pro-12c-16gb-1728x1117",
+    deviceModel: null,
+    androidVersion: null,
     hardwareConcurrency: 12,
     deviceMemory: 16,
     screenWidth: 1728,
@@ -154,10 +184,65 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
 ];
 
+const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
+  {
+    id: "android-pixel7-tensor-8c-8gb-412x915",
+    deviceModel: "Pixel 7",
+    androidVersion: "13",
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
+    screenWidth: 412,
+    screenHeight: 915,
+    taskbarHeight: 0,
+    devicePixelRatio: 2.625,
+    gpuVendor: "Google Inc. (Google)",
+    gpuRenderer: "ANGLE (Google, Vulkan 1.3.0 (Google, Mali-G710))",
+  },
+  {
+    id: "android-galaxys23-sd8gen2-8c-12gb-393x851",
+    deviceModel: "SM-S911B",
+    androidVersion: "14",
+    hardwareConcurrency: 8,
+    deviceMemory: 12,
+    screenWidth: 393,
+    screenHeight: 851,
+    taskbarHeight: 0,
+    devicePixelRatio: 2.75,
+    gpuVendor: "Google Inc. (Qualcomm)",
+    gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
+  },
+  {
+    id: "android-pixel8-tensor3-8c-12gb-412x915",
+    deviceModel: "Pixel 8",
+    androidVersion: "14",
+    hardwareConcurrency: 8,
+    deviceMemory: 12,
+    screenWidth: 412,
+    screenHeight: 915,
+    taskbarHeight: 0,
+    devicePixelRatio: 2.625,
+    gpuVendor: "Google Inc. (ARM)",
+    gpuRenderer: "ANGLE (ARM, Immortalis-G715, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Immortalis-G715)))",
+  },
+  {
+    id: "android-xiaomi13-sd8gen2-8c-16gb-393x852",
+    deviceModel: "23013RK75C",
+    androidVersion: "14",
+    hardwareConcurrency: 8,
+    deviceMemory: 16,
+    screenWidth: 393,
+    screenHeight: 852,
+    taskbarHeight: 0,
+    devicePixelRatio: 2.625,
+    gpuVendor: "Google Inc. (Qualcomm)",
+    gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
+  },
+];
+
 export interface BrowserFingerprintConfig {
   schemaVersion: 1;
   seed: number;
-  platform: "Win32" | "MacIntel";
+  platform: "Win32" | "MacIntel" | "Linux armv81";
   platformVersion: string;
   userAgent: string;
   appVersion: string;
@@ -169,7 +254,7 @@ export interface BrowserFingerprintConfig {
   hardwareProfile: {
     id: string;
     source: "seeded" | "validated-override";
-    fontProfile: "windows-portable" | "macos-system";
+    fontProfile: "windows-portable" | "macos-system" | "android-system";
     audioProfile: "chromium-desktop";
   };
   screen: {
@@ -186,6 +271,7 @@ export interface BrowserFingerprintConfig {
     windowY: number;
     outerWidth: number;
     outerHeight: number;
+    mobile: boolean;
   };
   storageQuotaBytes: number;
   canvas: { enabled: boolean; seed: string };
@@ -227,6 +313,17 @@ export interface BrowserFingerprintConfig {
   secureDns: SecureDnsConfig;
   fonts: string[];
   doNotTrack: string | null;
+  /** Platform-shaped navigator.plugins/mimeTypes roster (Firefox parity). */
+  pluginProfile: {
+    pdfViewerEnabled: boolean;
+    plugins: Array<{
+      name: string;
+      filename: string;
+      description: string;
+      mimeTypes: Array<{ type: string; suffixes: string }>;
+    }>;
+    mimeTypes: Array<{ type: string; suffixes: string }>;
+  };
 }
 
 /**
@@ -244,22 +341,28 @@ export function buildBrowserFingerprintConfig(
   const locale = normalizeLocale(meta.locale);
   const languages = locale.includes("-") ? [locale, locale.split("-")[0]] : [locale];
   const { persona, source: personaSource } = selectHardwarePersona(seed, platform, meta);
+  const isAndroid = platform === "Linux armv81";
   const screenWidth = persona.screenWidth;
   const screenHeight = persona.screenHeight;
   const taskbarHeight = persona.taskbarHeight;
   const availLeft = 0;
+  // macOS places the menu bar above the availTop; Windows and Android do not.
   const availTop = platform === "MacIntel" ? Math.min(taskbarHeight, Math.max(0, screenHeight - 1)) : 0;
   const availWidth = screenWidth;
   const availHeight = Math.max(1, screenHeight - taskbarHeight);
-  const outerWidth = Math.min(availWidth, 1280);
-  const outerHeight = Math.min(availHeight, 800);
+  // Chrome Android fills the display (no separable window geometry), so the
+  // window and outer size equal the viewport; desktop caps the window span.
+  const outerWidth = isAndroid ? availWidth : Math.min(availWidth, 1280);
+  const outerHeight = isAndroid ? availHeight : Math.min(availHeight, 800);
   const windowX = availLeft + Math.min(32, Math.max(0, availWidth - outerWidth));
   const windowY = availTop + Math.min(32, Math.max(0, availHeight - outerHeight));
   const devicePixelRatio = persona.devicePixelRatio;
   const osToken = platform === "MacIntel"
     ? "Macintosh; Intel Mac OS X 10_15_7"
-    : "Windows NT 10.0; Win64; x64";
-  const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} Safari/537.36`;
+    : platform === "Linux armv81"
+      ? `Linux; Android ${persona.androidVersion}; ${persona.deviceModel}`
+      : "Windows NT 10.0; Win64; x64";
+  const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} ${isAndroid ? "Mobile " : ""}Safari/537.36`;
   const webgl = {
     vendor: persona.gpuVendor,
     renderer: persona.gpuRenderer,
@@ -269,18 +372,18 @@ export function buildBrowserFingerprintConfig(
     schemaVersion: AGENT_BROWSER_FINGERPRINT_SCHEMA_VERSION,
     seed,
     platform,
-    platformVersion: platform === "MacIntel" ? "15.7.0" : "10.0.0",
+    platformVersion: platform === "MacIntel" ? "15.7.0" : platform === "Linux armv81" ? `${persona.androidVersion}.0.0` : "10.0.0",
     userAgent: ua,
     appVersion: ua.replace(/^Mozilla\//, ""),
     vendor: "Google Inc.",
     languages,
     hardwareConcurrency: persona.hardwareConcurrency,
     deviceMemory: persona.deviceMemory,
-    maxTouchPoints: 0,
+    maxTouchPoints: isAndroid ? 5 : 0,
     hardwareProfile: {
       id: persona.id,
       source: personaSource,
-      fontProfile: platform === "MacIntel" ? "macos-system" : "windows-portable",
+      fontProfile: platform === "MacIntel" ? "macos-system" : isAndroid ? "android-system" : "windows-portable",
       audioProfile: "chromium-desktop",
     },
     screen: {
@@ -297,6 +400,7 @@ export function buildBrowserFingerprintConfig(
       windowY,
       outerWidth,
       outerHeight,
+      mobile: isAndroid,
     },
     storageQuotaBytes: normalizeInteger(meta.storageQuota, 1, 1048576, 120000) * 1024 * 1024,
     canvas: { enabled: true, seed: deriveSeed(seed, "canvas") },
@@ -307,7 +411,9 @@ export function buildBrowserFingerprintConfig(
       enabled: true,
       conditionalGet: true,
       conditionalCreate: true,
-      hybridTransport: true,
+      // Android cannot act as a cross-device passkey, so its walker must not
+      // advertise hybrid transport; the platform passkey still applies.
+      hybridTransport: !isAndroid,
       passkeyPlatformAuthenticator: true,
       userVerifyingPlatformAuthenticator: true,
     },
@@ -315,10 +421,12 @@ export function buildBrowserFingerprintConfig(
     webrtc: normalizeWebRtc(meta.webrtcMode, meta.webrtcIp),
     timezone: typeof meta.timezone === "string" && meta.timezone ? meta.timezone : null,
     geolocation: normalizeGeolocation(meta),
-    mediaDevices: { enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 },
+    // Flagship Android units expose the mic plus front and rear cameras.
+    mediaDevices: { enabled: true, audioInputs: 1, videoInputs: isAndroid ? 2 : 1, audioOutputs: 1 },
     secureDns: secureDns ?? { enabled: false, templates: [] },
     fonts: selectStableFonts(seed, platform, locale),
     doNotTrack: "1",
+    pluginProfile: selectPluginProfile(platform),
   };
 }
 
@@ -347,8 +455,12 @@ function normalizeSeed(value: unknown): number {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : 12345;
 }
 
-function normalizePlatform(value: BrowserPlatform | undefined): "Win32" | "MacIntel" {
-  return value === "macos" ? "MacIntel" : "Win32";
+function normalizePlatform(value: BrowserPlatform | undefined): "Win32" | "MacIntel" | "Linux armv81" {
+  if (value === undefined) return "Win32";
+  if (value === "windows") return "Win32";
+  if (value === "macos") return "MacIntel";
+  if (value === "android") return "Linux armv81";
+  throw new Error(`Unsupported browser platform: ${JSON.stringify(value)}. Supported: windows, macos, android`);
 }
 
 function normalizeChromiumVersion(value: string | null): string {
@@ -400,12 +512,13 @@ function deriveWebGpuArchitecture(vendor: string, identity: string): string {
   if (vendor === "NVIDIA") return /RTX\s*40/i.test(identity) ? "Lovelace" : "Ampere";
   if (vendor === "Intel") return /Iris|Xe/i.test(identity) ? "Gen 12 LP" : "Gen 9";
   if (vendor === "AMD") return "RDNA 2";
-  if (vendor === "Qualcomm") return "Adreno 7xx";
+  if (vendor === "ARM") return /Immortalis|G71\d|G61\d/i.test(identity) ? "Valhall 4th Gen" : "Valhall";
+  if (vendor === "Qualcomm") return /740|750/i.test(identity) ? "Adreno 7xx" : "Adreno 6xx";
   return "";
 }
 
 function selectSpeechVoices(
-  platform: "Win32" | "MacIntel",
+  platform: "Win32" | "MacIntel" | "Linux armv81",
   locale: string,
 ): Array<{ name: string; lang: string; localService: boolean }> {
   const language = locale.split("-")[0].toLowerCase();
@@ -454,7 +567,25 @@ function selectSpeechVoices(
     zh: ["Tingting"],
     "zh-tw": ["Mei-Jia"],
   };
-  const voices = platform === "Win32" ? windows : mac;
+  const android: Record<string, string[]> = {
+    en: ["Google US English"],
+    "en-gb": ["Google UK English Female"],
+    ar: ["Google العربية"],
+    de: ["Google Deutsch"],
+    el: ["Google ελληνικά"],
+    es: ["Google español"],
+    fr: ["Google français"],
+    it: ["Google italiano"],
+    ja: ["Google 日本語"],
+    ko: ["Google 한국어"],
+    pt: ["Google português do Brasil"],
+    ru: ["Google русский"],
+    th: ["Google ไทย"],
+    vi: ["Google Tiếng Việt"],
+    zh: ["Google 普通话（中国大陆）"],
+    "zh-tw": ["Google 國語（臺灣）"],
+  };
+  const voices = platform === "Win32" ? windows : platform === "Linux armv81" ? android : mac;
   const names = voices[localeKey] || voices[language] || voices.en;
   return names.map((name) => ({ name, lang: locale, localService: true }));
 }
@@ -497,10 +628,14 @@ function normalizeFiniteNumber(value: unknown, min: number, max: number, label: 
 
 function selectHardwarePersona(
   seed: number,
-  platform: "Win32" | "MacIntel",
+  platform: "Win32" | "MacIntel" | "Linux armv81",
   meta: BrowserFingerprintMeta,
 ): { persona: HardwarePersona; source: "seeded" | "validated-override" } {
-  const personas = platform === "MacIntel" ? MAC_HARDWARE_PERSONAS : WINDOWS_HARDWARE_PERSONAS;
+  const personas = platform === "MacIntel"
+    ? MAC_HARDWARE_PERSONAS
+    : platform === "Linux armv81"
+      ? ANDROID_HARDWARE_PERSONAS
+      : WINDOWS_HARDWARE_PERSONAS;
   const numericConstraints = [
     ["hardwareConcurrency", "hardwareConcurrency"],
     ["deviceMemory", "deviceMemory"],
@@ -548,9 +683,54 @@ function deriveSeed(seed: number, surface: string): string {
   return createHash("sha256").update(`${seed}:${surface}`).digest("hex").slice(0, 16);
 }
 
-function selectStableFonts(seed: number, platform: "Win32" | "MacIntel", locale: string): string[] {
+/**
+ * Platform-shaped navigator.plugins/mimeTypes roster for the Firefox parity
+ * layer. Firefox materialises the ENGINE's plugin table, which differs per OS
+ * (macOS ships libpdf.dylib, Windows pdfium.dll, Android exposes none of the
+ * desktop plugin surface), so a persona has to present its own roster or a
+ * scanner reading plugins alongside platform detects the contradiction.
+ */
+function selectPluginProfile(
+  platform: "Win32" | "MacIntel" | "Linux armv81",
+): BrowserFingerprintConfig["pluginProfile"] {
+  if (platform === "Linux armv81") {
+    return { pdfViewerEnabled: true, plugins: [], mimeTypes: [] };
+  }
+  const isMac = platform === "MacIntel";
+  return {
+    pdfViewerEnabled: true,
+    plugins: [
+      {
+        name: "Internal PDF Plugin",
+        filename: isMac ? "libpdf.dylib" : "pdfium.dll",
+        description: "Portable Document Format",
+        mimeTypes: [{ type: "application/pdf", suffixes: "pdf" }],
+      },
+      {
+        name: "Widevine Content Decryption Module",
+        filename: isMac ? "libwidevinecdm.dylib" : "widevinecdm.dll",
+        description: "Enables Widevine decryption for HTML audio/video content.",
+        mimeTypes: [],
+      },
+    ],
+    mimeTypes: [{ type: "application/pdf", suffixes: "pdf" }],
+  };
+}
+
+function selectStableFonts(
+  seed: number,
+  platform: "Win32" | "MacIntel" | "Linux armv81",
+  locale: string,
+): string[] {
   if (platform === "Win32") {
     return [...new Set(stableShuffle(PORTABLE_WINDOWS_FONT_POOL, seed))].sort();
+  }
+  if (platform === "Linux armv81") {
+    const pool = stableShuffle(ANDROID_FONT_POOL, seed);
+    const selected = /^(zh|ja|ko)(-|$)/i.test(locale)
+      ? [...REQUIRED_ANDROID_FONT_POOL, ...pool.slice(0, 6), ...stableShuffle(ANDROID_CJK_FONT_POOL, seed ^ 0x7f4a7c15)]
+      : [...REQUIRED_ANDROID_FONT_POOL, ...pool.slice(0, 9)];
+    return [...new Set(selected)].sort();
   }
   const pool = stableShuffle(MAC_FONT_POOL, seed);
   const selected = /^(zh|ja|ko)(-|$)/i.test(locale)
