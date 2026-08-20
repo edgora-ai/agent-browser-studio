@@ -14,12 +14,18 @@ mac:
       arch: [arm64, x64]
   artifactName: Agent-Browser-Studio-${version}-mac-${arch}.${ext}
   icon: dist/resources/icon.icns
+  extraResources:
+    - from: native-browsers/mac
+      to: native-browsers
 
 win:
   target:
     - target: nsis
       arch: [x64]
   artifactName: Agent-Browser-Studio-${version}-win-${arch}.${ext}
+  extraResources:
+    - from: native-browsers/win
+      to: native-browsers
 
 linux:
   target:
@@ -28,6 +34,9 @@ linux:
   category: Network
   maintainer: ahoo
   artifactName: Agent-Browser-Studio-${version}-linux-${arch}.${ext}
+  extraResources:
+    - from: native-browsers/linux
+      to: native-browsers
 
 # Signing is opt-in and driven by standard electron-builder env vars so local
 # builds stay unsigned:

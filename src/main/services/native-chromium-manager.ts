@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { CHROMIUM_CACHE_DIR_NAME } from "../branding.js";
+import { bundledChromiumBinaryPath, readBundledBrowsersManifest } from "./bundled-native-browsers.js";
 
 export interface ManagedChromiumBinary {
   version: string;
@@ -29,9 +31,20 @@ export function listManagedChromiumBinaries(
   root = getManagedChromiumRoot(),
   platform: NodeJS.Platform = process.platform,
 ): ManagedChromiumBinary[] {
-  if (!fs.existsSync(root)) return [];
-
   const candidates: ManagedChromiumBinary[] = [];
+
+  const bundled = bundledChromiumBinaryPath(platform);
+  if (bundled) {
+    const manifest = readBundledBrowsersManifest(platform);
+    candidates.push({
+      version: manifest?.chromiumVersion || detectBinaryVersion(bundled) || "bundled",
+      binaryPath: bundled,
+      installDir: path.dirname(bundled),
+    });
+  }
+
+  if (!fs.existsSync(root)) return candidates;
+
   try {
     for (const entry of fs.readdirSync(root)) {
       const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
@@ -51,10 +64,21 @@ export function listManagedChromiumBinaries(
       }
     }
   } catch {
-    return [];
+    return candidates;
   }
 
   return candidates.sort((a, b) => compareChromiumVersions(b.version, a.version));
+}
+
+function detectBinaryVersion(binaryPath: string): string | null {
+  try {
+    const result = spawnSync(binaryPath, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true });
+    const raw = String(result.stdout || result.stderr || "").trim();
+    const match = raw.match(/Chromium\s*(\d+\.\d+\.\d+\.\d+)/i);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 export function findManagedChromiumBinary(

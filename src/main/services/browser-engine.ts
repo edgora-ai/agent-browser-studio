@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { ProxyConfig } from "../types.js";
+import { bundledFirefoxBinaryPath } from "./bundled-native-browsers.js";
 
 export type BrowserEngine = "chromium" | "firefox";
 
@@ -65,10 +66,12 @@ export function defaultFirefoxBinaryPaths(platform: NodeJS.Platform = process.pl
   }
 }
 
-/** Find the Firefox binary (env override wins, then platform defaults). */
+/** Find the Firefox binary (env override wins, then the bundled copy, then platform defaults). */
 export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = getFirefoxBinaryOverride(env);
   if (override) return fs.existsSync(override) ? override : null;
+  const bundled = bundledFirefoxBinaryPath();
+  if (bundled) return bundled;
   for (const candidate of defaultFirefoxBinaryPaths()) {
     if (fs.existsSync(candidate)) return candidate;
   }
