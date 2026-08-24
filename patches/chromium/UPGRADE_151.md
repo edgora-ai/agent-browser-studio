@@ -178,5 +178,29 @@ everything that *claims verification* intentionally still says 150 until phase 5
 
 ## Explicitly out of scope until phases 1–5 pass
 
+## Phase 4 re-baseline — progress (2026-08-25)
+
+Stock reference corpora captured from the locally installed
+**Google Chrome 151.0.7922.170** (macOS arm64, headed, loopback secure-context)
+via `patches/chromium/scripts/capture-stock151.mjs`; evidence committed at
+`patches/chromium/corpora-151/stock-chrome-151.0.7922.170.json`:
+
+- **WebGL capability SHA-256 is byte-identical** to the RoxyChrome-149
+  reference embedded in `verify-native-chromium.ts`
+  (`8f97b977…40bc2`). The WebGL gate carries over to 151 **unchanged** — no
+  verifier edit needed for that surface.
+- **WebGPU drifted**: stock-151 exposes 22 adapter features vs the 23 recorded
+  for stock-150 (feature names not preserved in the old corpus, only its SHA).
+  Stock-151 normalized capability SHA-256:
+  `395882ac7d36445fbee01453204b3c6abba6b6bbdd823ba66e9c9f090809203e`.
+- Storage OPFS available + roundTrip true; Fonts 390 generic metric cases with
+  Local Font Access entries — both captured for gate comparison.
+- Verifier audit: the ONLY version-pinned items in `verify-native-chromium.ts`
+  are the two SHA constants (lines 38–41) and cosmetic `detectVersion`
+  fallbacks (`149.0.7827.22`, line 365/367). Phase 5 therefore reduces to:
+  repoint the WebGPU constant to the stock-151 SHA (after our build
+  reproduces it), refresh the two label strings, and optionally bump the
+  fallback version literals.
+
 - Shipping/installer defaults stay on the verified 150 engine.
 - No persona or identity-string changes ride along with the version bump.
