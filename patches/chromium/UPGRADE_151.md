@@ -104,13 +104,15 @@ Resolution notes per patch:
   `ui/display/mac/screen_utils_mac.mm` (our real change) retained.
 - `0045`: `third_party/widevine/cdm/widevine.gni` — wrap
   `enable_widevine_cdm_component` in `declare_args()` (context shifted).
-- `0046`: **partial** — `chrome/common/chrome_switches.{cc,h}` switch
-  declarations apply clean; the `browser.cc` `GetWindowTitleForCurrentTab`
-  modification is **deferred**: 151 refactored the window-title API out of
-  `browser.cc` (function no longer exists there). The `--agent-browser-window-title-prefix`
-  switch is declared but currently unused on 151. Re-port the prefix behavior
-  against 151's new title-computation site as a follow-up (tracked separately;
-  cosmetic only, no fingerprint/identity impact).
+- `0046`: **complete** — `chrome/common/chrome_switches.{cc,h}` declares
+  `--agent-browser-window-title-prefix`, and the prefix is now applied in
+  `BrowserView::GetWindowTitle()` (chrome/browser/ui/views/frame/browser_view.cc).
+  151 moved the window-title computation out of `Browser` into the platform
+  `BrowserWindow` layer (`BrowserView::GetWindowTitle()` calls
+  `WindowMetadataController::From(browser)->GetWindowTitleForCurrentTab(...)`);
+  Chrome on macOS uses the Views browser window, so this covers the Mac target.
+  Prefix is prepended to the native window title only (document.title / page
+  surfaces unaffected). Cosmetic; no fingerprint/identity impact.
 
 Harness used: `patches/chromium/scripts/upgrade-drive.sh` (full-series dry-run),
 `upgrade-resolve.sh` (`prepare` builds post-predecessor base + `git apply --reject`,
