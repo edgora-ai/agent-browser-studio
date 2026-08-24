@@ -1,7 +1,7 @@
 name: Engine production verify (multi-platform)
 
 # Heavy multi-platform gate for the last alignment row (signed multi-platform
-# distribution): builds the independent Chromium 150 engine from the pinned
+# distribution): builds the independent Chromium 151 engine from the pinned
 # upstream commit, runs the strict 53-surface native verifier and the full e2e
 # suite against the freshly built engine, then packages the controller and
 # publishes sha256 checksums. Code signing is opt-in via the standard
@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CHROMIUM_COMMIT: f405107495a07cb1bfcf687d4af8d91117098db6
+  CHROMIUM_COMMIT: ef35003457e93c278f911a334b06e4a5f8967e06
 
 jobs:
   linux-x64:
@@ -49,31 +49,31 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-150
-          git -C chromium-src-150 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-150 && gclient sync -D
+          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-151
+          git -C chromium-src-151 checkout "$CHROMIUM_COMMIT"
+          cd chromium-src-151 && gclient sync -D
       - name: Install Linux build deps
         run: |
-          cd chromium-src-150
+          cd chromium-src-151
           sudo bash ./build/install-build-deps.sh --no-nacl --no-prompt
       - name: Build independent engine
-        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-150" x64
+        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-151" x64
       - name: npm ci + build
         run: |
           npm ci
           npm run build
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/chrome"
       - name: E2E suite (xvfb)
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/chrome
         run: xvfb-run -a npm run test:e2e
       - name: Package AppImage + checksums
         run: |
           npm run dist
           cd release
           sha256sum *.AppImage > SHA256SUMS.txt
-          printf 'engine=chromium-150.0.7871.114\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+          printf 'engine=chromium-151.0.7922.71\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
           name: agent-browser-linux-x64
@@ -105,11 +105,11 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-150
-          git -C chromium-src-150 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-150 && gclient sync -D
+          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-151
+          git -C chromium-src-151 checkout "$CHROMIUM_COMMIT"
+          cd chromium-src-151 && gclient sync -D
       - name: Build independent engine
-        run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium-src-150" x64
+        run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium-src-151" x64
       - name: npm ci + controller build (bash)
         run: |
           npm ci
@@ -122,17 +122,17 @@ jobs:
           cp resources/icon.icns dist/resources/
           node scripts/build-masque-bridge.mjs
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome.exe"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/chrome.exe"
       - name: E2E suite
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/chrome.exe
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/chrome.exe
         run: npm run test:e2e
       - name: Package NSIS + checksums
         run: |
           npm run dist
           cd release
           sha256sum *.exe > SHA256SUMS.txt
-          printf 'engine=chromium-150.0.7871.114\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+          printf 'engine=chromium-151.0.7922.71\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
           name: agent-browser-windows-x64
@@ -161,20 +161,20 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-150
-          git -C chromium-src-150 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-150 && gclient sync -D
+          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-151
+          git -C chromium-src-151 checkout "$CHROMIUM_COMMIT"
+          cd chromium-src-151 && gclient sync -D
       - name: Build independent engine (arm64)
-        run: bash patches/chromium/build-macos.sh "${{ github.workspace }}/chromium-src-150" arm64
+        run: bash patches/chromium/build-macos.sh "${{ github.workspace }}/chromium-src-151" arm64
       - name: npm ci + build
         run: |
           npm ci
           npm run build
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium"
       - name: E2E suite (headed)
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-150/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-151/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium
         run: npm run test:e2e
       - name: Package DMG/zip + notarize (opt-in) + checksums
         env:
@@ -191,7 +191,7 @@ jobs:
           fi
           cd release
           shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
-          printf 'engine=chromium-150.0.7871.114\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+          printf 'engine=chromium-151.0.7922.71\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
           name: agent-browser-macos-arm64

@@ -1,14 +1,15 @@
 # Chromium 151 upgrade plan
 
-Status: **Phase 1 rebase COMPLETE against `151.0.7922.71` — patch series applies
-clean (0 rejects across all 45 patches), 2026-08-24.** ⚠️ `151.0.7922.71` is
-**not** the latest 151 stable: upstream released `151.0.7922.174` (Win/Mac,
-2026-08-20; `.173` Linux) and Chrome 152 is due 2026-08-25. Re-targeting to
-`.174` (patch-level on the same `151.0.7922.x` branch, near-zero rebase risk)
-is pending a successful tag fetch, which is currently blocked by a slow proxy
-(see "Target version" below). Phases 2–5 (build, re-baseline corpora, full
-verification) remain and are multi-session. The matrix stays at the verified
-Chromium `150.0.7871.114` build until phases 2–5 pass.
+Status: **Phases 1–2 COMPLETE against `151.0.7922.71`** (2026-08-24): the full
+45-patch series applies with **0 rejects**, and the strict `check.sh` gate
+(`git apply --cached` against the pristine pinned baseline, no reject fallback)
+passes end-to-end on 151; all build pins now target the 151 commit. Phases 3–5
+(build, re-baseline corpora, full verification) remain and are multi-session.
+The matrix stays at the verified Chromium `150.0.7871.114` build until phases
+3–5 pass. ⚠️ Note: `151.0.7922.71` is *a* current 151 stable, but not the
+newest patch build — upstream shipped `151.0.7922.174` (Win/Mac, 2026-08-20)
+and Chrome 152 is due 2026-08-25; the tag fetch for `.174` timed out twice via
+the configured proxy, so `.71` was kept per decision (see "Target" below).
 
 ## Target
 
@@ -120,6 +121,33 @@ Harness used: `patches/chromium/scripts/upgrade-drive.sh` (full-series dry-run),
 (`--reject`) so foundational files (e.g. `roxy_fingerprint_config.h` created by
 `0017`) land even when a predecessor itself has its own conflict.
 
+Re-validation after the `0046` re-port (browser_view.cc hunk added post-rebase):
+a fresh full-series drive run again produced **0 rejects** (`0046` applies clean
+without needing `--reject`), and the strict `check.sh` gate passes end-to-end
+against the pinned 151 baseline — all 45 patches apply via plain
+`git apply --cached`, payload overlay verified, `PATCHSET.sha256` intact.
+(The earlier dry-run's `OK*` entries for `0040`/`0042` were an artifact of the
+drive harness not overlaying `files/` payloads; under the real `apply.sh`
+payload flow both apply strictly clean.)
+
+## Phase 2 plumbing — results (2026-08-24)
+
+Everything that determines *which* Chromium gets built now targets 151;
+everything that *claims verification* intentionally still says 150 until phase 5:
+
+- Pins bumped to `ef35003457e93c278f911a334b06e4a5f8967e06` (= tag
+  `151.0.7922.71`): `build-macos.sh`, `build-windows.sh`, `build-linux.sh`,
+  `check.sh` (`UPSTREAM_BASELINE`), `.github/workflows/engine-verify.yml`
+  (`CHROMIUM_COMMIT`). Default checkout dirs renamed `chromium-src-150` →
+  `chromium-src-151`; BUILD.txt labels → `chromium-151.0.7922.71`.
+- `PATCHSET.sha256` regenerated — it had gone stale after the rebase (10
+  regenerated patches failed hash verification, plus one stray blank line);
+  `check.sh` would have aborted. Now 48/48 hashes verify.
+- Left at 150 on purpose (verified-state claims, flipped in phase 5):
+  `README*` "verified at" lines, `ALIGNMENT_MATRIX.md` baselines, corpus docs,
+  verifier fallback defaults (`src/tools/verify-ping0.ts`,
+  `verify-managed-doh.ts`, `capture-font-corpus.ts`), unit-test sample strings.
+
 ## Phase 1 work order (from the measured dry-run)
 
 1. Resolve `0044` first and re-run the dry-run from scratch: it is the largest
@@ -132,13 +160,12 @@ Harness used: `patches/chromium/scripts/upgrade-drive.sh` (full-series dry-run),
 
 ## Phases
 
-1. **Rebase patch series onto 151** — apply each patch with `git apply --reject`
-   against a clean 151 checkout, resolve the 31 hot files by hand, keep patch
-   semantics identical (no drive-by changes), regenerate `PATCHSET.sha256`.
-   Effort: multi-session.
-2. **args.gn / version plumbing** — bump pinned version in app-side
-   `patches/chromium/args.gn*`, `install-native-chromium.ts`, verifier defaults,
-   and any `150.0.7871.114` literals surfaced by grep.
+1. ✅ **Rebase patch series onto 151** — DONE (2026-08-24). All conflicts
+   resolved (see results above); full-series drive = 0 rejects; strict
+   `check.sh` passes on the pinned 151 baseline; `PATCHSET.sha256` regenerated.
+2. ✅ **Version plumbing** — DONE (2026-08-24). Build pins, CI env, baseline
+   and BUILD.txt labels moved to 151 (`ef35003457e93c278f911a334b06e4a5f8967e06`);
+   verified-state strings intentionally untouched. Smoke suites pass.
 3. **Build macOS arm64** via `build-macos.sh` into a separate output dir
    (`AgentBrowserRelease151`); never touch the known-good 150 install.
 4. **Re-baseline corpora against stock Chrome 151** — WEBGL / STORAGE / FONT /

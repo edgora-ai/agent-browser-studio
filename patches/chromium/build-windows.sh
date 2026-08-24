@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build the independent Chromium 150 engine for Windows (x64/arm64).
+# Build the independent Chromium 151 engine for Windows (x64/arm64).
 #
 # Usage (run inside Git Bash on a Windows build host):
 #   bash ./patches/chromium/build-windows.sh [/path/to/chromium/src] [x64|arm64]
 #
-# First argument: Chromium source checkout (default: ./chromium-src-150 under
+# First argument: Chromium source checkout (default: ./chromium-src-151 under
 # the current directory). If missing, the script clones the pinned upstream
 # commit and runs gclient sync (requires depot_tools on PATH; on Windows run
 # update_depot_tools.bat once). Second argument selects target_cpu
@@ -18,8 +18,8 @@ export DEPOT_TOOLS_WIN_TOOLCHAIN="${DEPOT_TOOLS_WIN_TOOLCHAIN:-0}"
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TARGET_CPU="${2:-x64}"
-CHROMIUM_SRC="${1:-$PWD/chromium-src-150}"
-CHROMIUM_COMMIT="f405107495a07cb1bfcf687d4af8d91117098db6"
+CHROMIUM_SRC="${1:-$PWD/chromium-src-151}"
+CHROMIUM_COMMIT="ef35003457e93c278f911a334b06e4a5f8967e06"
 
 if [ ! -d "$CHROMIUM_SRC/.git" ]; then
   mkdir -p "$CHROMIUM_SRC"

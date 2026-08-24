@@ -5,7 +5,7 @@ set -euo pipefail
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
 CHROMIUM_SRC="${1:?usage: check.sh /path/to/chromium/src}"
-UPSTREAM_BASELINE="f405107495a07cb1bfcf687d4af8d91117098db6"
+UPSTREAM_BASELINE="ef35003457e93c278f911a334b06e4a5f8967e06"
 
 if ! diff -u \
   <(awk '{print $2}' "$PATCH_ROOT/PATCHSET.sha256" | LC_ALL=C sort) \
