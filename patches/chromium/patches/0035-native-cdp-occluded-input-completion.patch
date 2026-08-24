@@ -1,8 +1,8 @@
 diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
-index 4a740ff0ecbfedfbeb6ef46203809a93c2f0e976..b0cad39e9b27ebf50a7a5a2c081234d979370590 100644
+index 2aa7fe4..21aca8b 100644
 --- a/cc/trees/layer_tree_host.cc
 +++ b/cc/trees/layer_tree_host.cc
-@@ -1204,6 +1204,20 @@ void LayerTreeHost::UpdateScrollOffsetFromImpl(
+@@ -1202,6 +1202,20 @@ void LayerTreeHost::UpdateScrollOffsetFromImpl(
                                                        snap_target_ids);
  }
  
@@ -24,10 +24,10 @@ index 4a740ff0ecbfedfbeb6ef46203809a93c2f0e976..b0cad39e9b27ebf50a7a5a2c081234d9
    DCHECK(IsMainThread());
    DCHECK(commit_data);
 diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
-index bb1b8edfe423ed0ef126a3c2012f024615d5a56c..79989f1bf5df8e1146353d884158e05a39ea49e9 100644
+index 7daa72a..a5c7262 100644
 --- a/cc/trees/layer_tree_host.h
 +++ b/cc/trees/layer_tree_host.h
-@@ -826,6 +826,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+@@ -822,6 +822,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
    void DidCompletePageScaleAnimation();
    // Virtual for testing
    virtual void ApplyCompositorChanges(CompositorCommitData* commit_data);
@@ -40,7 +40,7 @@ index bb1b8edfe423ed0ef126a3c2012f024615d5a56c..79989f1bf5df8e1146353d884158e05a
    void RecordStartOfFrameMetrics();
    void RecordEndOfFrameMetrics(base::TimeTicks frame_begin_time,
 diff --git a/components/input/mouse_wheel_event_queue.cc b/components/input/mouse_wheel_event_queue.cc
-index 9c2e12ef053f35b873d34fa71d5c11e35c4442f8..75117fbbff3250c0c0673bdf88c2bec472635e06 100644
+index 009df59..c37ad3b 100644
 --- a/components/input/mouse_wheel_event_queue.cc
 +++ b/components/input/mouse_wheel_event_queue.cc
 @@ -137,8 +137,13 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
@@ -59,7 +59,7 @@ index 9c2e12ef053f35b873d34fa71d5c11e35c4442f8..75117fbbff3250c0c0673bdf88c2bec4
          blink::WebGestureDevice::kTouchpad);
  
 diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
-index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143b6b7a080 100644
+index abd8cf6..7c65f6c 100644
 --- a/content/browser/devtools/protocol/input_handler.cc
 +++ b/content/browser/devtools/protocol/input_handler.cc
 @@ -21,6 +21,7 @@
@@ -77,8 +77,8 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
 +#include "content/public/browser/web_contents_delegate.h"
  #include "content/public/common/content_features.h"
  #include "content/public/common/url_constants.h"
- #include "third_party/blink/public/common/input/web_input_event.h"
-@@ -474,9 +476,7 @@ CreateWebMouseEvent(const std::string& event_type,
+ #include "third_party/blink/public/common/dom/dom_node_id.h"
+@@ -479,9 +481,7 @@ CreateWebMouseEvent(const std::string& event_type,
      if (wheel_event->delta_y != 0.0f) {
        wheel_event->wheel_ticks_y = wheel_event->delta_y > 0.0f ? 1.0f : -1.0f;
      }
@@ -89,7 +89,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
      wheel_event->delta_units = ui::ScrollGranularity::kScrollByPrecisePixel;
      wheel_event->dispatch_type = blink::WebInputEvent::DispatchType::kBlocking;
      mouse_event = std::move(wheel_event);
-@@ -686,6 +686,9 @@ class InputHandler::InputInjector
+@@ -691,6 +691,9 @@ class InputHandler::InputInjector
    InputInjector& operator=(const InputInjector&) = delete;
  
    void Cleanup() {
@@ -99,7 +99,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
      for (auto& callback : pending_key_callbacks_)
        callback->sendSuccess();
      pending_key_callbacks_.clear();
-@@ -711,6 +714,13 @@ class InputHandler::InputInjector
+@@ -716,6 +719,13 @@ class InputHandler::InputInjector
      widget_host_->Focus();
      input_queued_ = false;
      input_events_queued_ = 0;
@@ -113,7 +113,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
      pending_mouse_callbacks_.push_back(std::move(callback));
      // This may destroy the injector if the events get discarded.
      base::WeakPtr<InputHandler::InputInjector> weak_this =
-@@ -726,14 +736,16 @@ class InputHandler::InputInjector
+@@ -731,14 +741,16 @@ class InputHandler::InputInjector
        return;
      }
  
@@ -138,7 +138,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
        return;
      }
  
-@@ -763,6 +775,7 @@ class InputHandler::InputInjector
+@@ -768,6 +780,7 @@ class InputHandler::InputInjector
      widget_host_->Focus();
      input_queued_ = false;
      input_events_queued_ = 0;
@@ -146,7 +146,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
      pending_mouse_callbacks_.push_back(std::move(callback));
      // This may destroy the injector if the events get discarded.
      base::WeakPtr<InputHandler::InputInjector> weak_this =
-@@ -779,10 +792,7 @@ class InputHandler::InputInjector
+@@ -784,10 +797,7 @@ class InputHandler::InputInjector
        pending_mouse_callbacks_.pop_back();
        MaybeSelfDestruct();
      } else if (blink::RoxyFingerprintConfig::Get().enabled()) {
@@ -158,7 +158,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
      }
    }
  
-@@ -848,6 +858,50 @@ class InputHandler::InputInjector
+@@ -853,6 +863,50 @@ class InputHandler::InputInjector
    }
  
   private:
@@ -209,7 +209,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
    void OnInputEvent(const RenderWidgetHost& widget,
                      const blink::WebInputEvent& event,
                      InputEventSource source) override {
-@@ -897,7 +951,8 @@ class InputHandler::InputInjector
+@@ -902,7 +956,8 @@ class InputHandler::InputInjector
    }
  
    void MaybeSelfDestruct() {
@@ -219,7 +219,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
        return;
      if (widget_host_)
        widget_host_->RemoveInputEventObserver(this);
-@@ -912,6 +967,9 @@ class InputHandler::InputInjector
+@@ -917,6 +972,9 @@ class InputHandler::InputInjector
    bool input_queued_ = false;
    // Number of events synchronously queued by the current Forward* call.
    size_t input_events_queued_ = 0;
@@ -229,7 +229,7 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
    base::circular_deque<std::unique_ptr<DispatchKeyEventCallback>>
        pending_key_callbacks_;
    base::circular_deque<std::unique_ptr<DispatchMouseEventCallback>>
-@@ -1428,6 +1486,16 @@ void InputHandler::HandleMouseEvent(
+@@ -1433,6 +1491,16 @@ void InputHandler::HandleMouseEvent(
    bool is_wheel_event =
        event->GetType() == blink::WebInputEvent::Type::kMouseWheel;
  
@@ -247,10 +247,10 @@ index ebe2679e89251aa2cfb6ff696fece0b9d15c29b0..8816e78002134123340683702b147143
        host_ ? host_->GetRenderWidgetHost() : nullptr;
    if (!widget_host || !widget_host->delegate() ||
 diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
-index 502dec2025874a538618b96cc6a56a5c29ed268e..7d0a60a38a33b9d0de69191863dd4c6f6cb26bd3 100644
+index 73eade6..9f52058 100644
 --- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
 +++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
-@@ -1303,6 +1303,18 @@ InputHandlerProxy::HandleGestureScrollUpdate(
+@@ -1304,6 +1304,18 @@ InputHandlerProxy::HandleGestureScrollUpdate(
    cc::InputHandlerScrollResult scroll_result =
        input_handler_->ScrollUpdate(cc::ScrollState(scroll_state_data), delay);
  
@@ -270,7 +270,7 @@ index 502dec2025874a538618b96cc6a56a5c29ed268e..7d0a60a38a33b9d0de69191863dd4c6f
      snap_fling_controller_->Finish();
      input_handler_->ScrollEnd(/*should_snap=*/true, std::nullopt);
 diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
-index fb8179350c43e054bd6340760048a836b093a12b..d7e110e2fd18be0696f7b1e92257e93bc9a5d7e1 100644
+index fb81793..d7e110e 100644
 --- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
 +++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h
 @@ -5,6 +5,9 @@
@@ -297,7 +297,7 @@ index fb8179350c43e054bd6340760048a836b093a12b..d7e110e2fd18be0696f7b1e92257e93b
    virtual bool AllowsScrollResampling() = 0;
  
 diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
-index bc3251cabe0a50e608df447223202da4beec85f4..64662ef6f3cc85df476abb84eda07726acfac29e 100644
+index 8ad9715..7883848 100644
 --- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
 +++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc
 @@ -28,6 +28,7 @@ namespace blink {
@@ -337,7 +337,7 @@ index bc3251cabe0a50e608df447223202da4beec85f4..64662ef6f3cc85df476abb84eda07726
      bool has_handlers) {
    has_pointerrawupdate_handlers_.store(has_handlers, std::memory_order_relaxed);
 diff --git a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
-index d42add7ee7a91b0ff035bef81f58c95e68b9f11b..a387c6e8454ad07b3eda09e395ea455f561e157f 100644
+index d42add7..a387c6e 100644
 --- a/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
 +++ b/third_party/blink/renderer/platform/widget/input/main_thread_event_queue.h
 @@ -132,6 +132,7 @@ class PLATFORM_EXPORT MainThreadEventQueue
@@ -357,7 +357,7 @@ index d42add7ee7a91b0ff035bef81f58c95e68b9f11b..a387c6e8454ad07b3eda09e395ea455f
  
    // Contains data to be shared between main thread and compositor thread.
 diff --git a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
-index 34908aa2b1d76e874e2c3eb2ba62ff692c3da732..8fbc7ecc547ab8dd9db3cb33abee0d933732823e 100644
+index 34908aa..8fbc7ec 100644
 --- a/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
 +++ b/third_party/blink/renderer/platform/widget/input/mock_input_handler_proxy_client.h
 @@ -39,6 +39,9 @@ class MockInputHandlerProxyClient : public InputHandlerProxyClient {
@@ -371,7 +371,7 @@ index 34908aa2b1d76e874e2c3eb2ba62ff692c3da732..8fbc7ecc547ab8dd9db3cb33abee0d93
    bool AllowsScrollResampling() override { return true; }
  };
 diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
-index 3e5c67461d642d6ce345f8f9924f97fced79ad65..936979278f0aeeb7b4ef4686d9bfac3ca54af687 100644
+index 53a4bb1..2e86e62 100644
 --- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
 +++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.cc
 @@ -40,6 +40,7 @@
@@ -382,16 +382,16 @@ index 3e5c67461d642d6ce345f8f9924f97fced79ad65..936979278f0aeeb7b4ef4686d9bfac3c
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/renderer/platform/scheduler/main_thread/pending_user_input.h"
  #include "third_party/blink/renderer/platform/scheduler/public/agent_group_scheduler.h"
-@@ -390,6 +391,8 @@ void WidgetInputHandlerManager::SetHidden(bool hidden) {
- void WidgetInputHandlerManager::OnDevToolsSessionConnectionChanged(
+@@ -372,6 +373,8 @@ void WidgetInputHandlerManager::OnDevToolsSessionConnectionChanged(
      bool attached) {
+   DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
    dev_tools_session_attached_ = attached;
 +  input_event_queue_->SetUseLowLatencyRafFallbackForDebugger(
 +      attached && RoxyFingerprintConfig::Get().enabled());
  }
  
  void WidgetInputHandlerManager::InitInputHandler() {
-@@ -489,6 +492,26 @@ void WidgetInputHandlerManager::SetNeedsMainFrame(
+@@ -482,6 +485,26 @@ void WidgetInputHandlerManager::SetNeedsMainFrame(
    widget_->RequestAnimationAfterDelay(reason, base::TimeDelta(), urgent);
  }
  
@@ -416,13 +416,13 @@ index 3e5c67461d642d6ce345f8f9924f97fced79ad65..936979278f0aeeb7b4ef4686d9bfac3c
 +}
 +
  bool WidgetInputHandlerManager::RequestedMainFramePending() {
+   DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
    return widget_->LayerTreeHost()->RequestedMainFramePending();
- }
 diff --git a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
-index 31c072f0ad03272ff934592236434b1da55e445c..3523ff1650237661c8a15500cb5268bb643c445b 100644
+index 66d7507..e09ebee 100644
 --- a/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
 +++ b/third_party/blink/renderer/platform/widget/input/widget_input_handler_manager.h
-@@ -126,6 +126,9 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+@@ -123,6 +123,9 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
    // InputHandlerProxyClient overrides.
    void WillShutdown() override;
    void DidStartScrollingViewport() override;
@@ -432,7 +432,7 @@ index 31c072f0ad03272ff934592236434b1da55e445c..3523ff1650237661c8a15500cb5268bb
    void SetAllowedTouchAction(cc::TouchAction touch_action) override;
    bool AllowsScrollResampling() override { return allow_scroll_resampling_; }
  
-@@ -235,6 +238,8 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
+@@ -233,6 +236,8 @@ class PLATFORM_EXPORT WidgetInputHandlerManager final
    void InitOnInputHandlingThread(
        const base::WeakPtr<cc::CompositorDelegateForInput>& compositor_delegate,
        bool sync_compositing);

@@ -1,5 +1,5 @@
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index df8f9455d224f7c15ac89075b37edde07df8ea2e..7ec4330ef191ca9d7b7ecd9d2d7aaf2b6cbfb4e8 100644
+index df8f945..7ec4330 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
 @@ -45,6 +45,7 @@
@@ -33,10 +33,10 @@ index df8f9455d224f7c15ac89075b37edde07df8ea2e..7ec4330ef191ca9d7b7ecd9d2d7aaf2b
    // Browser should not be sandboxed.
    if (is_browser && IsSandboxedProcess()) {
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 311a3dfebc076092e33ff29c502ed77f1b0836c3..5e1c3f9f03447f22d83a50a53c8080c50b764009 100644
+index bfc8555..06ce91a 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -631,6 +631,8 @@ source_set("core") {
+@@ -853,6 +853,8 @@ source_set("core") {
      "global_features.cc",
      "icon_manager.cc",
      "memory_details.cc",
@@ -44,12 +44,12 @@ index 311a3dfebc076092e33ff29c502ed77f1b0836c3..5e1c3f9f03447f22d83a50a53c8080c5
 +    "net/roxy_proxy_auth.h",
      "net_benchmarking.cc",
      "platform_util_internal.cc",
-     "platform_util_internal.h",
+     "process_resource_usage.cc",
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 51c145d19fb22557a5c4685964cba07c03b80c8b..b58403c84b5b532460a6f7c89e8efee670d2a717 100644
+index 651ca4f..d487022 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -119,6 +119,7 @@
+@@ -121,6 +121,7 @@
  #include "chrome/browser/net/chrome_network_delegate.h"
  #include "chrome/browser/net/profile_network_context_service.h"
  #include "chrome/browser/net/profile_network_context_service_factory.h"
@@ -57,7 +57,7 @@ index 51c145d19fb22557a5c4685964cba07c03b80c8b..b58403c84b5b532460a6f7c89e8efee6
  #include "chrome/browser/net/system_network_context_manager.h"
  #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
  #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-@@ -7203,6 +7204,12 @@ ChromeContentBrowserClient::CreateLoginDelegate(
+@@ -7266,6 +7267,12 @@ ChromeContentBrowserClient::CreateLoginDelegate(
      bool first_auth_attempt,
      content::GuestPageHolder* guest,
      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
@@ -72,7 +72,7 @@ index 51c145d19fb22557a5c4685964cba07c03b80c8b..b58403c84b5b532460a6f7c89e8efee6
    // external credentials. However, on ChromeOS we can suggest the user to
 diff --git a/chrome/browser/net/roxy_proxy_auth.cc b/chrome/browser/net/roxy_proxy_auth.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..74d31413662119716ed0625fcad8d4be6caf3d44
+index 0000000..74d3141
 --- /dev/null
 +++ b/chrome/browser/net/roxy_proxy_auth.cc
 @@ -0,0 +1,198 @@
@@ -276,7 +276,7 @@ index 0000000000000000000000000000000000000000..74d31413662119716ed0625fcad8d4be
 +}  // namespace roxy
 diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..f9dbd74af68169741f4ca6612996b566b517f2a8
+index 0000000..f9dbd74
 --- /dev/null
 +++ b/chrome/browser/net/roxy_proxy_auth.h
 @@ -0,0 +1,36 @@

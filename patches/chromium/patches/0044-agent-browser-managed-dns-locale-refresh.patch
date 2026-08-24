@@ -1,8 +1,8 @@
 diff --git a/android_webview/browser/aw_content_browser_client.cc b/android_webview/browser/aw_content_browser_client.cc
-index 4c0014d077..108d8361ee 100644
+index 26268a6..bbfbec8 100644
 --- a/android_webview/browser/aw_content_browser_client.cc
 +++ b/android_webview/browser/aw_content_browser_client.cc
-@@ -304,7 +304,8 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
+@@ -307,7 +307,8 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
          net::DnsOverHttpsConfig(),
          /*additional_dns_types_enabled=*/true,
          /*fallback_doh_nameservers=*/std::vector<net::IPEndPoint>(),
@@ -13,7 +13,7 @@ index 4c0014d077..108d8361ee 100644
  }
  
 diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/net/stub_resolver_config_reader.cc
-index 3d9047c1cf..bfc7b0523a 100644
+index d855df0..e2ae118 100644
 --- a/chrome/browser/net/stub_resolver_config_reader.cc
 +++ b/chrome/browser/net/stub_resolver_config_reader.cc
 @@ -39,6 +39,7 @@
@@ -78,10 +78,10 @@ index 3d9047c1cf..bfc7b0523a 100644
  
    return SecureDnsConfig(secure_dns_mode, std::move(doh_config),
 diff --git a/content/renderer/renderer_main.cc b/content/renderer/renderer_main.cc
-index a37ee81ad3..4d8e1610ed 100644
+index 5e40721..2be8616 100644
 --- a/content/renderer/renderer_main.cc
 +++ b/content/renderer/renderer_main.cc
-@@ -53,6 +53,7 @@
+@@ -54,6 +54,7 @@
  #include "services/tracing/public/cpp/trace_startup.h"
  #include "skia/ext/font_utils.h"
  #include "third_party/blink/public/common/features.h"
@@ -89,7 +89,7 @@ index a37ee81ad3..4d8e1610ed 100644
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
  #include "third_party/skia/include/core/SkFontMgr.h"
-@@ -162,12 +163,23 @@ int RendererMain(MainFunctionParams parameters) {
+@@ -163,12 +164,23 @@ int RendererMain(MainFunctionParams parameters) {
    base::apple::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool;
  #endif  // BUILDFLAG(IS_MAC)
  
@@ -115,7 +115,7 @@ index a37ee81ad3..4d8e1610ed 100644
          command_line.GetSwitchValueASCII(switches::kLang);
      base::i18n::SetICUDefaultLocale(locale);
 diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
-index 948a8755c0..0233b34a46 100644
+index 948a875..0233b34 100644
 --- a/content/shell/browser/shell_content_browser_client.cc
 +++ b/content/shell/browser/shell_content_browser_client.cc
 @@ -775,7 +775,8 @@ void ShellContentBrowserClient::OnNetworkServiceCreated(
@@ -129,7 +129,7 @@ index 948a8755c0..0233b34a46 100644
  #endif
  }
 diff --git a/net/dns/dns_config.cc b/net/dns/dns_config.cc
-index 2c075f1278..1ebf1d9d54 100644
+index 2c075f1..1ebf1d9 100644
 --- a/net/dns/dns_config.cc
 +++ b/net/dns/dns_config.cc
 @@ -51,7 +51,8 @@ bool DnsConfig::EqualsIgnoreHosts(const DnsConfig& d) const {
@@ -159,7 +159,7 @@ index 2c075f1278..1ebf1d9d54 100644
  }
  
 diff --git a/net/dns/dns_config.h b/net/dns/dns_config.h
-index add1443212..51db864439 100644
+index add1443..51db864 100644
 --- a/net/dns/dns_config.h
 +++ b/net/dns/dns_config.h
 @@ -114,6 +114,13 @@ struct NET_EXPORT DnsConfig {
@@ -177,20 +177,19 @@ index add1443212..51db864439 100644
  
  }  // namespace net
 diff --git a/net/dns/dns_http_attempt.cc b/net/dns/dns_http_attempt.cc
-index c7afbb1d90..6d3566edf9 100644
+index 2120851..d41ab65 100644
 --- a/net/dns/dns_http_attempt.cc
 +++ b/net/dns/dns_http_attempt.cc
-@@ -68,7 +68,8 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -70,7 +70,7 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
                                 bool use_post,
                                 URLRequestContext* url_request_context,
-                                RequestPriority request_priority_,
+                                RequestPriority request_priority,
 -                               bool is_probe)
-+                               bool is_probe,
-+                               bool doh_via_proxy)
++                               bool is_probe, bool doh_via_proxy)
      : DnsAttempt(doh_server_index),
        is_probe_(is_probe),
-       query_(std::move(query)),
-@@ -169,8 +170,13 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+       request_priority_(request_priority),
+@@ -172,8 +172,13 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
    // Apply special policy to DNS lookups for for a DoH server hostname to
    // avoid deadlock and enable the use of preconfigured IP addresses.
    request_->SetSecureDnsPolicy(SecureDnsPolicy::kBootstrap);
@@ -206,24 +205,23 @@ index c7afbb1d90..6d3566edf9 100644
    request_->set_isolation_info(GetDohIsolationInfo());
  }
 diff --git a/net/dns/dns_http_attempt.h b/net/dns/dns_http_attempt.h
-index c37ea8a0f4..31a21d9e4e 100644
+index 39af55f..457c7ad 100644
 --- a/net/dns/dns_http_attempt.h
 +++ b/net/dns/dns_http_attempt.h
-@@ -50,7 +50,8 @@ class NET_EXPORT_PRIVATE DnsHTTPAttempt : public DnsAttempt,
+@@ -49,7 +49,7 @@ class NET_EXPORT_PRIVATE DnsHTTPAttempt : public DnsAttempt,
                   bool use_post,
                   URLRequestContext* url_request_context,
-                  RequestPriority request_priority_,
+                  RequestPriority request_priority,
 -                 bool is_probe);
-+                 bool is_probe,
-+                 bool doh_via_proxy);
++                 bool is_probe, bool doh_via_proxy);
    ~DnsHTTPAttempt() override;
  
    DnsHTTPAttempt(const DnsHTTPAttempt&) = delete;
 diff --git a/net/dns/dns_transaction.cc b/net/dns/dns_transaction.cc
-index f379cb770c..9057e8b5d4 100644
+index cbd8f95..3b1fa1b 100644
 --- a/net/dns/dns_transaction.cc
 +++ b/net/dns/dns_transaction.cc
-@@ -128,6 +128,11 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -130,6 +130,11 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
                               bool is_probe) {
    DCHECK(url_request_context);
  
@@ -235,7 +233,7 @@ index f379cb770c..9057e8b5d4 100644
    std::unique_ptr<DnsQuery> query;
    if (attempts->empty()) {
      query =
-@@ -145,7 +150,8 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -147,7 +152,8 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
    attempts->push_back(std::make_unique<DnsHTTPAttempt>(
        std::move(resolve_context), session, doh_server_index, std::move(query),
        doh_server.server_template(), gurl_without_parameters,
@@ -246,10 +244,10 @@ index f379cb770c..9057e8b5d4 100644
  
  // ----------------------------------------------------------------------------
 diff --git a/net/dns/host_resolver_manager_unittest.cc b/net/dns/host_resolver_manager_unittest.cc
-index 7d38cb9018..b1b9221733 100644
+index dc22265..cbdb548 100644
 --- a/net/dns/host_resolver_manager_unittest.cc
 +++ b/net/dns/host_resolver_manager_unittest.cc
-@@ -8280,6 +8280,7 @@ TEST_F(HostResolverManagerDnsTest, SetDnsConfigOverrides) {
+@@ -8984,6 +8984,7 @@ TEST_F(HostResolverManagerDnsTest, SetDnsConfigOverrides) {
    const std::vector<IPEndPoint> fallback_doh_nameservers = {
        CreateExpected("8.8.8.8", net::dns_protocol::kDefaultPort)};
    overrides.fallback_doh_nameservers = fallback_doh_nameservers;
@@ -258,7 +256,7 @@ index 7d38cb9018..b1b9221733 100644
  
    // This test is expected to test overriding all fields.
 diff --git a/net/dns/public/dns_config_overrides.cc b/net/dns/public/dns_config_overrides.cc
-index 74465d8445..129cb5b33a 100644
+index 74465d8..129cb5b 100644
 --- a/net/dns/public/dns_config_overrides.cc
 +++ b/net/dns/public/dns_config_overrides.cc
 @@ -45,6 +45,7 @@ DnsConfigOverrides::CreateOverridingEverythingWithDefaults() {
@@ -288,7 +286,7 @@ index 74465d8445..129cb5b33a 100644
      overridden.hosts.clear();
  
 diff --git a/net/dns/public/dns_config_overrides.h b/net/dns/public/dns_config_overrides.h
-index dc30fe00b9..4c5ff90a81 100644
+index dc30fe0..4c5ff90 100644
 --- a/net/dns/public/dns_config_overrides.h
 +++ b/net/dns/public/dns_config_overrides.h
 @@ -62,6 +62,9 @@ struct NET_EXPORT DnsConfigOverrides {
@@ -302,10 +300,10 @@ index dc30fe00b9..4c5ff90a81 100644
    // |hosts| is not supported for overriding except to clear it.
    bool clear_hosts = false;
 diff --git a/services/network/network_service.cc b/services/network/network_service.cc
-index 4811f9883b..850078013b 100644
+index 01b8e87..cd83a88 100644
 --- a/services/network/network_service.cc
 +++ b/services/network/network_service.cc
-@@ -751,7 +751,8 @@ void NetworkService::ConfigureStubHostResolver(
+@@ -760,7 +760,8 @@ void NetworkService::ConfigureStubHostResolver(
      const net::DnsOverHttpsConfig& dns_over_https_config,
      bool additional_dns_types_enabled,
      const std::vector<net::IPEndPoint>& fallback_doh_nameservers,
@@ -315,7 +313,7 @@ index 4811f9883b..850078013b 100644
    // Enable or disable the insecure part of DnsClient. "DnsClient" is the class
    // that implements the stub resolver.
    net::HostResolverManager::InsecureDnsMode mode;
-@@ -777,6 +778,7 @@ void NetworkService::ConfigureStubHostResolver(
+@@ -786,6 +787,7 @@ void NetworkService::ConfigureStubHostResolver(
    overrides.allow_dns_over_https_upgrade =
        base::FeatureList::IsEnabled(features::kDnsOverHttpsUpgrade);
    overrides.fallback_doh_nameservers = fallback_doh_nameservers;
@@ -324,10 +322,10 @@ index 4811f9883b..850078013b 100644
  
    const bool happy_eyeballs_v3_changed =
 diff --git a/services/network/network_service.h b/services/network/network_service.h
-index 8ddb831236..ddf049fdd8 100644
+index 37e43d9..68dd302 100644
 --- a/services/network/network_service.h
 +++ b/services/network/network_service.h
-@@ -175,7 +175,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
+@@ -181,7 +181,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
        const net::DnsOverHttpsConfig& dns_over_https_config,
        bool additional_dns_types_enabled,
        const std::vector<net::IPEndPoint>& fallback_doh_nameservers,
@@ -338,10 +336,10 @@ index 8ddb831236..ddf049fdd8 100644
    void SetUpHttpAuth(
        mojom::HttpAuthStaticParamsPtr http_auth_static_params) override;
 diff --git a/services/network/network_service_unittest.cc b/services/network/network_service_unittest.cc
-index 43265641e3..a4679abced 100644
+index fec0a78..840196c 100644
 --- a/services/network/network_service_unittest.cc
 +++ b/services/network/network_service_unittest.cc
-@@ -654,7 +654,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -727,7 +727,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -351,7 +349,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_TRUE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kOff,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -665,7 +666,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -738,7 +739,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -361,7 +359,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kOff,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -676,7 +678,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -749,7 +751,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -371,7 +369,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kAutomatic,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -687,7 +690,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -760,7 +763,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        *net::DnsOverHttpsConfig::FromString("https://foo/"),
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -381,7 +379,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kAutomatic,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -710,7 +714,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
+@@ -783,7 +787,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -391,7 +389,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_TRUE(dns_client_ptr->CanQueryAdditionalTypesViaInsecureDns());
  
    service()->ConfigureStubHostResolver(
-@@ -719,7 +724,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
+@@ -792,7 +797,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -401,7 +399,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_FALSE(dns_client_ptr->CanQueryAdditionalTypesViaInsecureDns());
  }
  
-@@ -739,7 +745,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
+@@ -812,7 +818,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -411,7 +409,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_TRUE(service()->host_resolver_manager()->IsHappyEyeballsV3Enabled());
  
    service()->ConfigureStubHostResolver(
-@@ -748,7 +755,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
+@@ -821,7 +828,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -421,7 +419,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_FALSE(service()->host_resolver_manager()->IsHappyEyeballsV3Enabled());
  }
  
-@@ -775,7 +783,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
+@@ -848,7 +856,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
        kConfig1,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -431,7 +429,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(kConfig1, dns_client_ptr->GetEffectiveConfig()->doh_config);
  
    // Enable DNS over HTTPS for two servers.
-@@ -785,7 +794,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
+@@ -858,7 +867,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
        net::SecureDnsMode::kSecure, kConfig2,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -441,7 +439,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(kConfig2, dns_client_ptr->GetEffectiveConfig()->doh_config);
  }
  
-@@ -810,7 +820,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -883,7 +893,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -451,7 +449,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(kConfig, dns_client_ptr->GetEffectiveConfig()->doh_config);
    EXPECT_TRUE(dns_client_ptr->GetConfigOverridesForTesting()
                    .fallback_doh_nameservers->empty());
-@@ -827,7 +838,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -900,7 +911,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        net::SecureDnsMode::kAutomatic, kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/fallback_doh_nameservers,
@@ -461,7 +459,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(
        dns_client_ptr->GetConfigOverridesForTesting().fallback_doh_nameservers,
        fallback_doh_nameservers);
-@@ -840,7 +852,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -913,7 +925,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -471,7 +469,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(kConfig, dns_client_ptr->GetEffectiveConfig()->doh_config);
    EXPECT_TRUE(dns_client_ptr->GetConfigOverridesForTesting()
                    .fallback_doh_nameservers->empty());
-@@ -870,7 +883,8 @@ TEST_F(NetworkServiceTest, DisableDohUpgradeProviders) {
+@@ -943,7 +956,8 @@ TEST_F(NetworkServiceTest, DisableDohUpgradeProviders) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -481,7 +479,7 @@ index 43265641e3..a4679abced 100644
  
    // Set valid DnsConfig.
    net::DnsConfig config;
-@@ -1836,7 +1850,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
+@@ -1909,7 +1923,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -491,7 +489,7 @@ index 43265641e3..a4679abced 100644
    LoadURL(test_server()->GetURL("/echo"));
    EXPECT_EQ(net::OK, client()->completion_status().error_code);
  
-@@ -1846,7 +1861,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
+@@ -1919,7 +1934,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -502,7 +500,7 @@ index 43265641e3..a4679abced 100644
    EXPECT_EQ(net::OK, client()->completion_status().error_code);
  }
 diff --git a/services/network/public/cpp/host_resolver_mojom_traits.cc b/services/network/public/cpp/host_resolver_mojom_traits.cc
-index e444812ee2..0dee076cc8 100644
+index e444812..0dee076 100644
 --- a/services/network/public/cpp/host_resolver_mojom_traits.cc
 +++ b/services/network/public/cpp/host_resolver_mojom_traits.cc
 @@ -198,6 +198,10 @@ bool StructTraits<DnsConfigOverridesDataView, net::DnsConfigOverrides>::Read(
@@ -517,7 +515,7 @@ index e444812ee2..0dee076cc8 100644
  
    return true;
 diff --git a/services/network/public/cpp/host_resolver_mojom_traits.h b/services/network/public/cpp/host_resolver_mojom_traits.h
-index 106be2bb38..560dcbfcce 100644
+index 106be2b..560dcbf 100644
 --- a/services/network/public/cpp/host_resolver_mojom_traits.h
 +++ b/services/network/public/cpp/host_resolver_mojom_traits.h
 @@ -113,6 +113,10 @@ struct COMPONENT_EXPORT(NETWORK_CPP_HOST_RESOLVER)
@@ -532,7 +530,7 @@ index 106be2bb38..560dcbfcce 100644
      return overrides.clear_hosts;
    }
 diff --git a/services/network/public/mojom/host_resolver.mojom b/services/network/public/mojom/host_resolver.mojom
-index a9f8531b95..86474098c1 100644
+index 50fbf3f..fb9f5a2 100644
 --- a/services/network/public/mojom/host_resolver.mojom
 +++ b/services/network/public/mojom/host_resolver.mojom
 @@ -110,6 +110,10 @@ struct DnsConfigOverrides {
@@ -547,10 +545,10 @@ index a9f8531b95..86474098c1 100644
    bool clear_hosts = false;
  };
 diff --git a/services/network/public/mojom/network_service.mojom b/services/network/public/mojom/network_service.mojom
-index 33af39b0c1..bc79453cbd 100644
+index 3de362c..23fc0f7 100644
 --- a/services/network/public/mojom/network_service.mojom
 +++ b/services/network/public/mojom/network_service.mojom
-@@ -271,7 +271,8 @@ interface NetworkService {
+@@ -278,7 +278,8 @@ interface NetworkService {
                              DnsOverHttpsConfig dns_over_https_config,
                              bool additional_dns_types_enabled,
                              array<IPEndPoint> fallback_doh_nameservers,
@@ -560,79 +558,11 @@ index 33af39b0c1..bc79453cbd 100644
  
    // Disables QUIC for the NetworkService. Affects all existing NetworkContexts,
    // and all new ones that are created. Once called, QUIC cannot be re-enabled.
-diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
-index 9b5079a72c..b2fcb6c6b6 100644
---- a/third_party/blink/public/common/roxy_fingerprint_config.h
-+++ b/third_party/blink/public/common/roxy_fingerprint_config.h
-@@ -129,6 +129,10 @@ class RoxyFingerprintConfig {
-   int media_audio_inputs() const { return media_audio_inputs_; }
-   int media_video_inputs() const { return media_video_inputs_; }
-   int media_audio_outputs() const { return media_audio_outputs_; }
-+  bool secure_dns_enabled() const { return secure_dns_enabled_; }
-+  const std::vector<std::string>& secure_dns_templates() const {
-+    return secure_dns_templates_;
-+  }
- 
-   std::string StableToken(std::string_view name_space,
-                           std::string_view scope) const {
-@@ -161,8 +165,7 @@ class RoxyFingerprintConfig {
-     if (normalized == "serif" || normalized == "sans-serif" ||
-         normalized == "monospace" || normalized == "cursive" ||
-         normalized == "fantasy" || normalized == "system-ui" ||
--        normalized == "emoji" || normalized == "math" ||
--        normalized == "fangsong" || normalized.starts_with("ui-")) {
-+        normalized == "math") {
-       return true;
-     }
-     for (const std::string& allowed : fonts_) {
-@@ -185,8 +188,9 @@ class RoxyFingerprintConfig {
-   // builders; profile-scoped runtime fonts can later provide exact Segoe and
-   // regional families without exposing unrelated host fonts.
-   std::optional<std::string> ManagedGenericFontFamily(
--      std::string_view family) const {
--    if (!enabled_ || platform_ != "Win32")
-+      std::string_view family,
-+      bool family_is_generic) const {
-+    if (!enabled_ || platform_ != "Win32" || !family_is_generic)
-       return std::nullopt;
-     const std::string normalized = LowerAscii(family);
-     if (normalized == "serif" || normalized == "ui-serif" ||
-@@ -518,6 +522,21 @@ class RoxyFingerprintConfig {
-         return;
-       }
-     }
-+    if (const base::DictValue* secure_dns = root->FindDict("secureDns")) {
-+      secure_dns_enabled_ = secure_dns->FindBool("enabled").value_or(false);
-+      if (const base::ListValue* templates =
-+              secure_dns->FindList("templates")) {
-+        for (const base::Value& template_value : *templates) {
-+          if (!template_value.is_string())
-+            continue;
-+          const std::string& server = template_value.GetString();
-+          if (!server.empty() && server.size() <= 256 &&
-+              secure_dns_templates_.size() < 8) {
-+            secure_dns_templates_.push_back(server);
-+          }
-+        }
-+      }
-+    }
- 
-     enabled_ = seed_ > 0 &&
-                (platform_ == "Win32" || platform_ == "MacIntel") &&
-@@ -605,6 +624,8 @@ class RoxyFingerprintConfig {
-   int media_audio_inputs_ = 0;
-   int media_video_inputs_ = 0;
-   int media_audio_outputs_ = 0;
-+  bool secure_dns_enabled_ = false;
-+  std::vector<std::string> secure_dns_templates_;
- };
- 
- }  // namespace blink
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 328914bc15..7278498ca7 100644
+index 0bc3c3d..4237199 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
-@@ -31,7 +31,6 @@
+@@ -33,7 +33,6 @@
  
  #include <limits>
  #include <memory>
@@ -640,7 +570,7 @@ index 328914bc15..7278498ca7 100644
  
  #include "base/byte_size.h"
  #include "base/debug/alias.h"
-@@ -133,29 +132,31 @@ const FontPlatformData* FontCache::GetFontPlatformData(
+@@ -160,29 +159,31 @@ const FontPlatformData* FontCache::GetFontPlatformData(
      AlternateFontName alternate_font_name) {
    TRACE_EVENT0("fonts", "FontCache::GetFontPlatformData");
  
@@ -683,7 +613,7 @@ index 328914bc15..7278498ca7 100644
  
  void FontCache::AcceptLanguagesChanged(const String& accept_languages) {
 diff --git a/third_party/blink/renderer/platform/fonts/font_selector.cc b/third_party/blink/renderer/platform/fonts/font_selector.cc
-index 7bb977d999..e59e15d37d 100644
+index 7bb977d..e59e15d 100644
 --- a/third_party/blink/renderer/platform/fonts/font_selector.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_selector.cc
 @@ -29,7 +29,8 @@ AtomicString FontSelector::FamilyNameFromSettings(
@@ -697,10 +627,10 @@ index 7bb977d999..e59e15d37d 100644
    }
    if (font_description.GenericFamily() != FontDescription::kStandardFamily &&
 diff --git a/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm b/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
-index 88ee05ca71..5fa43f5685 100644
+index c31a45b..91fddce 100644
 --- a/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
 +++ b/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
-@@ -368,12 +368,19 @@ bool IsSystemFontName(const AtomicString& font_name) {
+@@ -375,12 +375,19 @@ bool IsSystemFontName(const AtomicString& font_name) {
  
  const SimpleFontData* FontCache::GetLastResortFallbackFont(
      const FontDescription& font_description) {
@@ -722,7 +652,7 @@ index 88ee05ca71..5fa43f5685 100644
    if (simple_font_data)
      return simple_font_data;
  
-@@ -381,8 +388,7 @@ bool IsSystemFontName(const AtomicString& font_name) {
+@@ -388,8 +395,7 @@ bool IsSystemFontName(const AtomicString& font_name) {
    // where the user doesn't have it, we fall back on Lucida Grande because
    // that's guaranteed to be there, according to Nathan Taylor. This is good
    // enough to avoid a crash at least.
@@ -732,131 +662,8 @@ index 88ee05ca71..5fa43f5685 100644
  }
  
  const FontPlatformData* FontCache::CreateFontPlatformData(
-diff --git a/ui/display/mac/ca_display_link_mac.mm b/ui/display/mac/ca_display_link_mac.mm
-index 7a9e54bddd..e3dbc1e213 100644
---- a/ui/display/mac/ca_display_link_mac.mm
-+++ b/ui/display/mac/ca_display_link_mac.mm
-@@ -75,7 +75,7 @@ - (void)setCallback:(base::RepeatingClosure)callback {
-   // Sanity check. Inputs should always be valid. Use the default values if this
-   // is not the case.
-   if (!interval.is_positive()) {
--    interval = display::GetNSScreenRefreshInterval(display_id);
-+    interval = display::GetCGRefreshInterval(display_id);
-   }
-   if (callback_time.is_null() || target_time.is_null()) {
-     callback_time = base::TimeTicks() + base::Seconds(CACurrentMediaTime());
-@@ -117,7 +117,7 @@ - (void)setCallback:(base::RepeatingClosure)callback {
- }
- 
- base::TimeDelta CADisplayLinkMac::GetRefreshInterval() const {
--  return display::GetNSScreenRefreshInterval(display_id_);
-+  return display::GetCGRefreshInterval(display_id_);
- }
- 
- void CADisplayLinkMac::GetRefreshIntervalRange(
-diff --git a/ui/display/mac/ca_metal_display_link_mac.mm b/ui/display/mac/ca_metal_display_link_mac.mm
-index 2b68500efe..d13e2b6b90 100644
---- a/ui/display/mac/ca_metal_display_link_mac.mm
-+++ b/ui/display/mac/ca_metal_display_link_mac.mm
-@@ -103,7 +103,7 @@ bool AlmostEqual(base::TimeDelta a, base::TimeDelta b) {
-   base::TimeDelta interval = target_time - last_target_time;
-   if (target_time.is_null() || last_target_time.is_null() ||
-       !interval.is_positive()) {
--    interval = display::GetNSScreenRefreshInterval(display_id);
-+    interval = display::GetCGRefreshInterval(display_id);
-   }
- 
-   // The time the system estimates until the display of the next frame.
-@@ -175,7 +175,7 @@ bool AlmostEqual(base::TimeDelta a, base::TimeDelta b) {
- }
- 
- base::TimeDelta CAMetalDisplayLinkMac::GetRefreshInterval() const {
--  return display::GetNSScreenRefreshInterval(display_id_);
-+  return display::GetCGRefreshInterval(display_id_);
- }
- 
- void CAMetalDisplayLinkMac::GetRefreshIntervalRange(
-diff --git a/ui/display/mac/cv_display_link_mac.mm b/ui/display/mac/cv_display_link_mac.mm
-index 6f062da231..4b9fc4008c 100644
---- a/ui/display/mac/cv_display_link_mac.mm
-+++ b/ui/display/mac/cv_display_link_mac.mm
-@@ -277,10 +277,13 @@ bool ComputeVSyncParameters(const CVTimeStamp& cv_time,
-   if (!(cv_time.flags & kCVTimeIsIndefinite)) {
-     double refresh_interval = (static_cast<double>(cv_time.timeValue) /
-                                static_cast<double>(cv_time.timeScale));
--    return (base::Seconds(1) * refresh_interval);
--  } else {
--    return display::GetNSScreenRefreshInterval(display_id_);
-+    const base::TimeDelta interval = base::Seconds(1) * refresh_interval;
-+    if (interval.is_positive()) {
-+      return interval;
-+    }
-   }
-+
-+  return display::GetCGRefreshInterval(display_id_);
- }
- 
- void CVDisplayLinkMac::GetRefreshIntervalRange(
-diff --git a/ui/display/mac/display_link_mac.mm b/ui/display/mac/display_link_mac.mm
-index 8271bc9772..4283852ee5 100644
---- a/ui/display/mac/display_link_mac.mm
-+++ b/ui/display/mac/display_link_mac.mm
-@@ -94,7 +94,7 @@
- 
-   CGDirectDisplayID display_id =
-       static_cast<CGDirectDisplayID>(vsync_display_id);
--  return display::GetNSScreenRefreshInterval(display_id);
-+  return display::GetCGRefreshInterval(display_id);
- }
- 
- std::unique_ptr<PresentationCallbackMac>
-diff --git a/ui/display/mac/external_display_link_mac.mm b/ui/display/mac/external_display_link_mac.mm
-index db895b7e9e..d28d70e617 100644
---- a/ui/display/mac/external_display_link_mac.mm
-+++ b/ui/display/mac/external_display_link_mac.mm
-@@ -115,15 +115,14 @@
- }
- 
- base::TimeDelta ExternalDisplayLinkMac::GetRefreshInterval() const {
--  return display::GetNSScreenRefreshInterval(display_id_);
-+  return display::GetCGRefreshInterval(display_id_);
- }
- 
- void ExternalDisplayLinkMac::GetRefreshIntervalRange(
-     base::TimeDelta& min_interval,
-     base::TimeDelta& max_interval,
-     base::TimeDelta& granularity) const {
--  display::GetNSScreenRefreshIntervalRange(display_id_, min_interval,
--                                           max_interval, granularity);
-+  min_interval = max_interval = granularity = GetRefreshInterval();
- }
- 
- base::TimeTicks ExternalDisplayLinkMac::GetCurrentTime() const {
-diff --git a/ui/display/mac/screen_utils_mac.h b/ui/display/mac/screen_utils_mac.h
-index 21a7caa080..a0d09557f2 100644
---- a/ui/display/mac/screen_utils_mac.h
-+++ b/ui/display/mac/screen_utils_mac.h
-@@ -12,6 +12,18 @@
- 
- namespace display {
- 
-+// Returns the display's current refresh interval using CoreGraphics APIs.
-+// Unlike NSScreen APIs, this is safe to call from non-browser helper processes
-+// (such as the GPU process) because it does not require an initialized
-+// NSApplication instance.
-+//
-+// Backported from Chromium 151 commit
-+// d3b9663276a9a6dffc67b12bef7048c9fbbf3b87 (crbug.com/345275139).
-+base::TimeDelta GetCGRefreshInterval(CGDirectDisplayID display_id);
-+
-+// Only call the following NSScreen utility functions in the Browser process,
-+// as they require an initialized `NSApplication` instance.
-+
- // Returns the NSScreen object pointer for the caller to retrieve information
- // about a screen.
- NSScreen* GetNSScreenFromDisplayID(CGDirectDisplayID display_id);
 diff --git a/ui/display/mac/screen_utils_mac.mm b/ui/display/mac/screen_utils_mac.mm
-index eace771c4b..be60d3741a 100644
+index 7215ee0..60f4a3a 100644
 --- a/ui/display/mac/screen_utils_mac.mm
 +++ b/ui/display/mac/screen_utils_mac.mm
 @@ -6,6 +6,21 @@

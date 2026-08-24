@@ -1,15 +1,16 @@
 diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
+index 19ae925..dc1ed5b 100644
 --- a/content/browser/devtools/protocol/input_handler.cc
 +++ b/content/browser/devtools/protocol/input_handler.cc
-@@ -39,6 +39,7 @@
- #include "content/public/common/content_features.h"
+@@ -45,6 +45,7 @@
  #include "content/public/common/url_constants.h"
+ #include "third_party/blink/public/common/dom/dom_node_id.h"
  #include "third_party/blink/public/common/input/web_input_event.h"
 +#include "third_party/blink/public/common/roxy_fingerprint_config.h"
  #include "third_party/blink/public/common/page/page_zoom.h"
  #include "ui/base/clipboard/clipboard_constants.h"
  #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-shared.h"
-@@ -1410,6 +1411,31 @@ void InputHandler::HandleMouseEvent(
+@@ -1415,6 +1416,31 @@ void InputHandler::HandleMouseEvent(
          if (!self || !widget_host)
            return;
          gfx::PointF position = event->PositionInWidget();

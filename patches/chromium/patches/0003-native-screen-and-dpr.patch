@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
-index f442c8d8..e77bbe73 100644
+index 08db1e8..5f9cbd0 100644
 --- a/third_party/blink/renderer/core/frame/local_dom_window.cc
 +++ b/third_party/blink/renderer/core/frame/local_dom_window.cc
 @@ -41,6 +41,7 @@
@@ -10,7 +10,7 @@ index f442c8d8..e77bbe73 100644
  #include "third_party/blink/public/common/switches.h"
  #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
  #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
-@@ -1800,6 +1801,10 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
+@@ -1907,6 +1908,10 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
  }
  
  double LocalDOMWindow::devicePixelRatio() const {
@@ -18,11 +18,11 @@ index f442c8d8..e77bbe73 100644
 +  if (config.enabled() && config.screen().device_pixel_ratio > 0) {
 +    return config.screen().device_pixel_ratio;
 +  }
-   if (!GetFrame())
+   if (!GetFrame()) {
      return 0.0;
- 
+   }
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
-index 69ffc2b0..56ec3872 100644
+index 69ffc2b..56ec387 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
 @@ -30,6 +30,7 @@
