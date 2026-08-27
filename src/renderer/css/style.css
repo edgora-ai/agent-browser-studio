@@ -196,6 +196,8 @@ dialog,
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .tab-header h2 {
@@ -203,9 +205,11 @@ dialog,
   font-weight: 750;
   letter-spacing: -0.4px;
   color: var(--text);
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.header-btns { display: flex; gap: 8px; }
+.header-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ═══════ Buttons ═══════ */
 .btn {
@@ -267,8 +271,13 @@ dialog,
 
 .profile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
+}
+@media (max-width: 900px) {
+  .profile-grid { grid-template-columns: 1fr; }
+  #content { padding: 16px; }
+  .tab-header h2 { font-size: 20px; }
 }
 
 /* ═══════ Profile Card ═══════ */
@@ -418,6 +427,9 @@ dialog,
 .fp-tab:hover { color: var(--text); }
 .fp-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 .fp-tab-content { padding: 12px 0; }
+
+/* ── Dialog viewport guard (inline max-widths already use calc, keep backdrop scrollable) ── */
+dialog[open] { animation: fadeIn 0.15s ease; }
 
 /* ═══════ Agent Chat ═══════ */
 #tab-agent {
@@ -803,10 +815,12 @@ dialog {
   border-radius: var(--radius);
   padding: 24px;
   color: var(--text);
-  max-width: 500px;
+  max-width: min(500px, calc(100vw - 32px));
   width: 90%;
   box-shadow: var(--shadow-lg);
   margin: auto;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 dialog::backdrop {
@@ -820,7 +834,7 @@ dialog h3 {
   margin-bottom: 18px;
 }
 
-.dialog-wide { max-width: 680px; }
+.dialog-wide { max-width: min(680px, calc(100vw - 32px)); }
 
 /* Workflow status bar inside dialog — always visible */
 #wf-run-result {
@@ -916,6 +930,17 @@ dialog h3 {
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Responsive: keep content breathable on narrow windows ── */
+@media (max-width: 1100px) {
+  #sidebar { width: 180px; min-width: 180px; }
+}
+@media (max-width: 700px) {
+  #sidebar { width: 160px; min-width: 160px; }
+  #sidebar .sidebar-header { padding: 12px 10px 10px; }
+  #sidebar .sidebar-header h1 { font-size: 15px; letter-spacing: -0.3px; }
+  .nav-item { padding: 7px 10px; font-size: 12px; }
 }
 
 /* ═══════ Misc ═══════ */
