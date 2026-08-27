@@ -214,6 +214,15 @@ export interface FingerprintDrift {
   current: unknown;
 }
 
+/**
+ * Window-frame fields measured from the OS window server. On macOS the
+ * compositor rounds the window top / content height by 1 px between captures
+ * (menu-bar/decoration rounding, the same stock-matched variance recorded in
+ * ALIGNMENT_MATRIX). A ±1 change here is placement noise, not identity: the
+ * declared screen.* surfaces, DPR and every seeded field still match exactly.
+ */
+const FRAME_NOISE_FIELDS = new Set(["screenX", "screenY", "innerWidth", "innerHeight"]);
+
 /** Compare two fingerprints; return the changed fields (drift). */
 export function diffFingerprints(baseline: Fingerprint | null | undefined, current: Fingerprint): FingerprintDrift[] {
   if (!baseline) return [];
@@ -224,6 +233,11 @@ export function diffFingerprints(baseline: Fingerprint | null | undefined, curre
     const c = (current as any)[k];
     if (b === undefined && c === undefined) continue;
     if (String(b ?? "") !== String(c ?? "")) {
+      const bn = Number(b);
+      const cn = Number(c);
+      if (FRAME_NOISE_FIELDS.has(k) && Number.isFinite(bn) && Number.isFinite(cn) && Math.abs(bn - cn) <= 1) {
+        continue;
+      }
       drift.push({ field: k, baseline: b ?? null, current: c ?? null });
     }
   }

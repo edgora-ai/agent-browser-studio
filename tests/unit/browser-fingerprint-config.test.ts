@@ -163,6 +163,35 @@ describe("Agent Browser fingerprint config", () => {
       .toEqual(buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
   });
 
+  it("composes the Windows renderer per engine: Chrome embeds the PCI device id, Firefox strips it", () => {
+    const chromium = buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114", null, "chromium");
+    const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114", null, "firefox");
+    expect(chromium.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    expect(firefox.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    // Chrome's device-id form must be a strict refinement of the persona base string.
+    expect(chromium.webgl.renderer.startsWith(firefox.webgl.renderer.split(" Direct3D11")[0])).toBe(true);
+    // WebGPU identity derivation is unaffected by the embedded device id.
+    expect(chromium.webgpu).toEqual(firefox.webgpu);
+  });
+
+  it("keeps Metal and Android renderer forms shared across engines (no device id exists there)", () => {
+    for (const platform of ["macos", "android"] as const) {
+      const chromium = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "chromium");
+      const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "firefox");
+      expect(chromium.webgl.renderer).toBe(firefox.webgl.renderer);
+      expect(chromium.webgl.renderer).not.toContain("(0x");
+    }
+  });
+
+  it("composes an explicit gpuRenderer override with the Chrome device id too", () => {
+    const config = buildBrowserFingerprintConfig({
+      fingerprintSeed: 99,
+      platform: "windows",
+      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    }, "150.0.7871.114");
+    expect(config.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)");
+  });
+
   it("treats advanced hardware fields as constraints on a complete persona", () => {
     const config = buildBrowserFingerprintConfig({
       fingerprintSeed: 99,

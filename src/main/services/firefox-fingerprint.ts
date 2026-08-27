@@ -1286,7 +1286,7 @@ export function buildFirefoxManagedIdentity(
   firefoxVersion: string | null | undefined,
   secureDns: SecureDnsConfig | null = null,
 ): { config: BrowserFingerprintConfig; prefs: Record<string, string | number | boolean>; preloadScript: string; userAgent: string } {
-  const config = buildBrowserFingerprintConfig(meta, null, secureDns);
+  const config = buildBrowserFingerprintConfig(meta, null, secureDns, "firefox");
   return {
     config,
     prefs: buildFirefoxFingerprintPrefs(config, firefoxVersion),

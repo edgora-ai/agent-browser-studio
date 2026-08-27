@@ -31,6 +31,17 @@ describe("fingerprint baseline diff", () => {
     expect(hasRiskyDrift([{ field: "canvasLen", baseline: 1, current: 2 }])).toBe(false);
   });
 
+  it("tolerates ±1px macOS window-server rounding on window-frame fields only", () => {
+    const base = { screenY: 32, innerHeight: 800, screenX: 32, innerWidth: 1280, canvasHash: "aa" };
+    expect(diffFingerprints(base, { ...base, screenY: 33, innerHeight: 799, screenX: 31, innerWidth: 1281 })).toEqual([]);
+    expect(diffFingerprints(base, { ...base, screenY: 34 })).toEqual([
+      { field: "screenY", baseline: 32, current: 34 },
+    ]);
+    expect(diffFingerprints(base, { ...base, canvasHash: "bb" })).toEqual([
+      { field: "canvasHash", baseline: "aa", current: "bb" },
+    ]);
+  });
+
   it("the capture expression is a self-contained IIFE returning JSON", () => {
     expect(CAPTURE_EXPRESSION).toMatch(/^\(async function\(\)/);
     expect(CAPTURE_EXPRESSION).toContain("userAgent");

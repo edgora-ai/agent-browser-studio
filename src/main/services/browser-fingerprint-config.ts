@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { BrowserFingerprintMeta, BrowserPlatform, GeolocationMode, WebRtcMode } from "../types.js";
+import type { BrowserEngine, BrowserFingerprintMeta, BrowserPlatform, GeolocationMode, WebRtcMode } from "../types.js";
 
 export const AGENT_BROWSER_FINGERPRINT_SWITCH = "--agent-browser-fingerprint-config=";
 export const LEGACY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config=";
@@ -55,6 +55,14 @@ interface HardwarePersona {
   devicePixelRatio: number;
   gpuVendor: string;
   gpuRenderer: string;
+  /**
+   * PCI device id embedded by Chrome in the Windows ANGLE D3D11 renderer
+   * string (`ANGLE (Intel, … UHD Graphics 620 (0x00003EA0) Direct3D11 …)`).
+   * Firefox strips the device id for privacy, so its observable form is the
+   * base `gpuRenderer` string. Null on Metal/Android where neither engine
+   * embeds one. Composed per engine at config build time.
+   */
+  gpuDeviceId: string | null;
 }
 
 // Publicly common hardware combinations, kept as whole tuples so the default
@@ -74,6 +82,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 1,
     gpuVendor: "Google Inc. (Intel)",
     gpuRenderer: "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuDeviceId: "0x00003EA0",
   },
   {
     id: "win-intel-irisxe-8c-16gb-1080p",
@@ -87,6 +96,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 1,
     gpuVendor: "Google Inc. (Intel)",
     gpuRenderer: "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuDeviceId: "0x00009A49",
   },
   {
     id: "win-nvidia-rtx3060-12c-16gb-1080p",
@@ -100,6 +110,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 1,
     gpuVendor: "Google Inc. (NVIDIA)",
     gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuDeviceId: "0x00002504",
   },
   {
     id: "win-nvidia-rtx4060-16c-16gb-1440p",
@@ -113,6 +124,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 1,
     gpuVendor: "Google Inc. (NVIDIA)",
     gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuDeviceId: "0x00002882",
   },
   {
     id: "win-amd-radeon-16c-16gb-1080p",
@@ -126,6 +138,7 @@ const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 1,
     gpuVendor: "Google Inc. (AMD)",
     gpuRenderer: "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    gpuDeviceId: "0x00001638",
   },
 ];
 
@@ -142,6 +155,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2,
     gpuVendor: "Google Inc. (Apple)",
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+    gpuDeviceId: null,
   },
   {
     id: "mac-apple-m2-8c-16gb-1512x982",
@@ -155,6 +169,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2,
     gpuVendor: "Google Inc. (Apple)",
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)",
+    gpuDeviceId: null,
   },
   {
     id: "mac-apple-m3-8c-16gb-1710x1107",
@@ -168,6 +183,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2,
     gpuVendor: "Google Inc. (Apple)",
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)",
+    gpuDeviceId: null,
   },
   {
     id: "mac-apple-m2pro-12c-16gb-1728x1117",
@@ -181,6 +197,7 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2,
     gpuVendor: "Google Inc. (Apple)",
     gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
+    gpuDeviceId: null,
   },
 ];
 
@@ -197,6 +214,7 @@ const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2.625,
     gpuVendor: "Google Inc. (Google)",
     gpuRenderer: "ANGLE (Google, Vulkan 1.3.0 (Google, Mali-G710))",
+    gpuDeviceId: null,
   },
   {
     id: "android-galaxys23-sd8gen2-8c-12gb-393x851",
@@ -210,6 +228,7 @@ const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2.75,
     gpuVendor: "Google Inc. (Qualcomm)",
     gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
+    gpuDeviceId: null,
   },
   {
     id: "android-pixel8-tensor3-8c-12gb-412x915",
@@ -223,6 +242,7 @@ const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2.625,
     gpuVendor: "Google Inc. (ARM)",
     gpuRenderer: "ANGLE (ARM, Immortalis-G715, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Immortalis-G715)))",
+    gpuDeviceId: null,
   },
   {
     id: "android-xiaomi13-sd8gen2-8c-16gb-393x852",
@@ -236,6 +256,7 @@ const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
     devicePixelRatio: 2.625,
     gpuVendor: "Google Inc. (Qualcomm)",
     gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
+    gpuDeviceId: null,
   },
 ];
 
@@ -327,13 +348,34 @@ export interface BrowserFingerprintConfig {
 }
 
 /**
+ * Compose the engine-appropriate ANGLE renderer string for a persona.
+ * Chrome embeds the PCI device id in its Windows D3D11 renderer string while
+ * Firefox strips it (Mozilla privacy policy), so one persona base string
+ * cannot serve both engines: a Chrome-150 UA reporting the Firefox form
+ * (no device id) is detectably inconsistent, and vice versa. macOS Metal and
+ * Android Vulkan forms carry no device id and are shared verbatim. Strings
+ * that already embed a device id pass through untouched.
+ */
+export function composeGpuRenderer(baseRenderer: string, gpuDeviceId: string | null, engine: BrowserEngine): string {
+  if (engine !== "chromium" || !gpuDeviceId) return baseRenderer;
+  if (baseRenderer.includes("(0x")) return baseRenderer;
+  const marker = " Direct3D11";
+  const at = baseRenderer.indexOf(marker);
+  if (at < 0) return baseRenderer;
+  return `${baseRenderer.slice(0, at)} (${gpuDeviceId})${baseRenderer.slice(at)}`;
+}
+
+/**
  * Build the versioned, public configuration consumed by our Chromium fork.
  * This deliberately does not reuse RoxyChrome's encrypted lumi.conf format.
+ * `engine` selects the WebGL renderer composition (device-id embedding is
+ * Chrome-only; see composeGpuRenderer).
  */
 export function buildBrowserFingerprintConfig(
   meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
   secureDns: SecureDnsConfig | null = null,
+  engine: BrowserEngine = "chromium",
 ): BrowserFingerprintConfig {
   const seed = normalizeSeed(meta.fingerprintSeed);
   const platform = normalizePlatform(meta.platform);
@@ -365,7 +407,7 @@ export function buildBrowserFingerprintConfig(
   const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} ${isAndroid ? "Mobile " : ""}Safari/537.36`;
   const webgl = {
     vendor: persona.gpuVendor,
-    renderer: persona.gpuRenderer,
+    renderer: composeGpuRenderer(persona.gpuRenderer, persona.gpuDeviceId, engine),
   };
 
   return {
@@ -439,11 +481,12 @@ export function buildBrowserFingerprintArg(
   chromiumVersion: string | null,
   switchPrefix = AGENT_BROWSER_FINGERPRINT_SWITCH,
   secureDns: SecureDnsConfig | null = null,
+  engine: BrowserEngine = "chromium",
 ): string {
   if (switchPrefix !== AGENT_BROWSER_FINGERPRINT_SWITCH && switchPrefix !== LEGACY_FINGERPRINT_SWITCH) {
     throw new Error(`Unsupported fingerprint switch: ${switchPrefix}`);
   }
-  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion, secureDns));
+  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion, secureDns, engine));
 }
 
 /** Validate that advanced fields can resolve to one complete hardware tuple. */

@@ -652,6 +652,7 @@ export async function launchBrowser(
       nativeFingerprintMeta,
       nativeChromiumVersion,
       managedSecureDns,
+      "chromium",
     );
     const fingerprintSwitch = supportsAgentBrowserFingerprintConfig(bin)
       ? AGENT_BROWSER_FINGERPRINT_SWITCH
@@ -661,6 +662,7 @@ export async function launchBrowser(
       nativeChromiumVersion,
       fingerprintSwitch,
       managedSecureDns,
+      "chromium",
     ));
     // DNS routing audit: managed profiles behind a proxy route every DNS query
     // (including the DoH probe) through that same proxy with no host-resolver
