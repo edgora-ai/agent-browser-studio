@@ -162,9 +162,11 @@ describe("writeCurlConfig — credential safety", () => {
   it("writes a 0600 conf file with proxy + proxy-user", () => {
     const conf = writeCurlConfig({ type: "http", host: "p.example", port: 8080, username: "u", password: "secret" });
     try {
-      const stat = fs.statSync(conf);
-      // mode 0o600 — owner read/write only
-      expect(stat.mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        const stat = fs.statSync(conf);
+        // mode 0o600 — owner read/write only (POSIX only; Windows has no chmod semantics)
+        expect(stat.mode & 0o777).toBe(0o600);
+      }
       const content = fs.readFileSync(conf, "utf-8");
       expect(content).toContain("proxy = ");
       expect(content).toContain("p.example:8080");

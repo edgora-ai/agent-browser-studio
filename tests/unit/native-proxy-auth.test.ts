@@ -34,8 +34,10 @@ describe("native proxy authentication handoff", () => {
       username: "user",
       password: "secret",
     }, root);
-    expect(fs.statSync(path.dirname(auth.filePath)).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(auth.filePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.dirname(auth.filePath)).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(auth.filePath).mode & 0o777).toBe(0o600);
+    }
     expect(JSON.parse(fs.readFileSync(auth.filePath, "utf8"))).toEqual({
       version: 1,
       host: "proxy.example",
@@ -50,6 +52,7 @@ describe("native proxy authentication handoff", () => {
   });
 
   it("requires an explicit binary capability marker", () => {
+    if (process.platform === "win32") return; // shell-script capability probe is POSIX-only
     const root = makeRoot();
     const capable = path.join(root, "capable-browser");
     fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_PROXY_AUTH_CAPABILITY}' '${NATIVE_QUIC_PROXY_CAPABILITY}' '${NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY}'\n`, { mode: 0o700 });

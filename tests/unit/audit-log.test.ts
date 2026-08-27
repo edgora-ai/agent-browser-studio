@@ -57,7 +57,12 @@ describe("audit-log", () => {
   });
 
   it("never throws on a non-writable path", () => {
-    _setAuditPathForTesting("/no/such/dir/audit.log.jsonl");
+    // Use a path whose parent is a file, not a directory — mkdirSync will fail
+    // on every platform. On Windows with admin, /no/such/dir is writable.
+    const file = freshLog();
+    fs.writeFileSync(file, "x");
+    const impossibleChild = file + "/audit.log.jsonl";
+    _setAuditPathForTesting(impossibleChild);
     expect(() => recordAudit({ category: "x", action: "y", at: 1 })).not.toThrow();
     expect(listAudit(10)).toEqual([]);
   });

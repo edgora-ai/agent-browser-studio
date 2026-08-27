@@ -51,7 +51,7 @@ describe("legacy Agent Browser Studio migration", () => {
     expect(config["cloakBin"]).toBeUndefined();
     expect(config["cloakProfiles"]).toBeUndefined();
     expect(config.chromiumBin).toContain(".agent-browser-studio");
-    expect(config.browserProfiles.cb_existing.fontsDir).toContain("AgentBrowserStudio/fonts/windows");
+    expect(config.browserProfiles.cb_existing.fontsDir.replace(/\\/g, "/")).toContain("AgentBrowserStudio/fonts/windows");
     expect(fs.existsSync(source)).toBe(true);
   });
 

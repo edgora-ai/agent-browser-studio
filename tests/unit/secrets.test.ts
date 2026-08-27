@@ -96,7 +96,7 @@ describe("secrets vault (local file backend)", () => {
     expect(encrypted).toMatch(/^v2:/);
     expect(encrypted).not.toContain("secret-value");
     expect(decryptSecret(encrypted)).toBe("secret-value");
-    expect(fs.statSync(plan.keyPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(plan.keyPath).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(plan.keyPath)).toHaveLength(32);
   });
 

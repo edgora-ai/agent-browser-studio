@@ -94,8 +94,9 @@ describe("drm service (real files)", () => {
 
   it("returns null when no CDM is present", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "drm-none-"));
-    // Use the Linux candidate set (no Chrome install on this host) to prove the negative case.
-    expect(findWidevineCdm({ cdmPath: null, platform: "linux", appDataDir: path.join(root, "appdata"), homeDir: root })).toBeNull();
+    // Isolate to this temp home/appData so a runner-installed Chrome (Linux) CDM
+    // doesn't leak into the "no CDM" assertion.
+    expect(findWidevineCdm({ cdmPath: null, platform: "linux", appDataDir: path.join(root, "appdata"), homeDir: path.join(root, "home") })).toBeNull();
   });
 
   it("stages a managed copy under <appData>/cdm/widevine/<version>", () => {
