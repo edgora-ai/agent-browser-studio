@@ -22,11 +22,19 @@ afterAll(() => {
 });
 
 function makeFakeFirefox(version = "137.0"): string {
-  const bin = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_") + (process.platform === "win32" ? ".js" : ""));
-  // Use a Node script so it runs on Linux, macOS and Windows (cmd shim) alike.
-  const script = `#!/usr/bin/env node\nconsole.log("Mozilla Firefox ${version}");\n`;
-  fs.writeFileSync(bin, script, "utf8");
-  if (process.platform !== "win32") fs.chmodSync(bin, 0o755);
+  const isWin = process.platform === "win32";
+  if (isWin) {
+    // On Windows spawnSync .js directly fails without shell association; write
+    // a .cmd shim that invokes node so spawnSync with/without shell both work.
+    const jsPath = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_") + ".js");
+    fs.writeFileSync(jsPath, `console.log("Mozilla Firefox ${version}");\n`, "utf8");
+    const cmdPath = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_") + ".cmd");
+    fs.writeFileSync(cmdPath, `@node "${jsPath}" %*\n`, "utf8");
+    return cmdPath;
+  }
+  const bin = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_"));
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nconsole.log("Mozilla Firefox ${version}");\n`, "utf8");
+  fs.chmodSync(bin, 0o755);
   return bin;
 }
 
@@ -108,12 +116,17 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
 
   it("spawnFirefoxWithDebugInfo waits for the BiDi WebSocket and reports the real port", async () => {
     const bin = makeFakeFirefox(); // fake script just prints version; we build a special one
-    const special = path.join(tempDir, "fake-firefox-bidi" + (process.platform === "win32" ? ".js" : ""));
-    const script = process.platform === "win32"
-      ? `setTimeout(() => { console.log("Marionette  INFO  Listening on port 2828"); console.error("WebDriver BiDi listening on ws://127.0.0.1:9239/"); }, 200); setInterval(() => {}, 30000);\n`
-      : `#!/bin/sh\nsleep 0.2\necho "Marionette  INFO  Listening on port 2828" >&1\necho "WebDriver BiDi listening on ws://127.0.0.1:9239/" >&2\nsleep 30\n`;
-    fs.writeFileSync(special, script, "utf8");
-    if (process.platform !== "win32") fs.chmodSync(special, 0o755);
+    let special: string;
+    if (process.platform === "win32") {
+      const jsPath = path.join(tempDir, "fake-firefox-bidi.js");
+      fs.writeFileSync(jsPath, `setTimeout(() => { console.log("Marionette  INFO  Listening on port 2828"); console.error("WebDriver BiDi listening on ws://127.0.0.1:9239/"); }, 200); setInterval(() => {}, 30000);\n`, "utf8");
+      special = path.join(tempDir, "fake-firefox-bidi.cmd");
+      fs.writeFileSync(special, `@node "${jsPath}" %*\n`, "utf8");
+    } else {
+      special = path.join(tempDir, "fake-firefox-bidi");
+      fs.writeFileSync(special, `#!/bin/sh\nsleep 0.2\necho "Marionette  INFO  Listening on port 2828" >&1\necho "WebDriver BiDi listening on ws://127.0.0.1:9239/" >&2\nsleep 30\n`, "utf8");
+      fs.chmodSync(special, 0o755);
+    }
     const { child, info } = await spawnFirefoxWithDebugInfo(special, ["-profile", "/tmp/fx"], { timeoutMs: 8000 });
     expect(info.bidiWebSocketUrl).toBe("ws://127.0.0.1:9239/");
     expect(info.actualPort).toBe(9239);
