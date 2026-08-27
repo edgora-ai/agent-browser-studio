@@ -80,14 +80,25 @@ export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string 
 
 /** Detect the Firefox product version via `firefox --version`. */
 export function detectFirefoxVersion(bin: string): string | null {
-  try {
-    const result = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true });
-    const raw = String(result.stdout || result.stderr || "").trim();
+  const run = (useShell: boolean): ReturnType<typeof spawnSync> | null => {
+    try {
+      return spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true, shell: useShell } as any);
+    } catch { return null; }
+  };
+  // On Windows a Node .js shim needs shell:true; real binaries work either way.
+  // Missing binaries must return null, not shell error text — treat any non-zero
+  // exit as "not a Firefox binary".
+  for (const useShell of [false, true] as const) {
+    const result = run(useShell);
+    if (!result || result.error) continue;
+    if (typeof (result as any).status === "number" && (result as any).status !== 0) continue;
+    const raw = String((result.stdout as unknown as string) || (result.stderr as unknown as string) || "").trim();
+    if (!raw) continue;
     const match = raw.match(/Mozilla Firefox\s*([\d.]+)/i);
-    return match ? match[1] : (raw || null);
-  } catch {
-    return null;
+    if (match) return match[1];
+    if (raw) return raw;
   }
+  return null;
 }
 
 export interface FirefoxStatus {
@@ -207,7 +218,8 @@ export function spawnFirefoxWithDebugInfo(
 ): Promise<{ child: ChildProcess; info: FirefoxDebugInfo }> {
   const timeoutMs = opts.timeoutMs ?? 60000;
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { detached: false, stdio: ["ignore", "pipe", "pipe"], env: opts.env ?? process.env });
+    const needsShell = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
+    const child = spawn(bin, args, { detached: false, stdio: ["ignore", "pipe", "pipe"], env: opts.env ?? process.env, shell: needsShell } as any);
     let bidiUrl: string | null = null;
     let marionettePort: number | null = null;
     let settled = false;

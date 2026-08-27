@@ -137,7 +137,10 @@ describe("environment risk — assembled findings", () => {
     for (const type of ["http", "socks5h", "socks5"]) {
       const res = checkEnvironmentRisk(
         { locale: "en-US" },
-        { resolvers: ["223.5.5.5"], hostLocale: "en-US", proxy: { mode: "named", config: { type, host: "1.2.3.4", port: 1080 } } as any },
+        // Isolate host font scan so Windows runners' C:\Windows\Fonts (simsun/msyh)
+        // doesn't inject a cn-fonts-exposed high that makes res.ok === false
+        // and masks this DNS-specific assertion on win32.
+        { resolvers: ["223.5.5.5"], hostLocale: "en-US", fontDirs: [path.join(TMP, "empty-dns-" + type)], proxy: { mode: "named", config: { type, host: "1.2.3.4", port: 1080 } } as any },
       );
       expect(res.findings.some((f) => f.code === "dns-resolver-leak" && f.severity === "high")).toBe(false);
       expect(res.findings.some((f) => f.code === "dns-resolver-proxy-takeover" && f.severity === "info")).toBe(true);
@@ -148,7 +151,7 @@ describe("environment risk — assembled findings", () => {
   it("does NOT flag SOCKS5 as a proxy DNS leak on managed engines", () => {
     const res = checkEnvironmentRisk(
       { locale: "en-US" },
-      { resolvers: ["8.8.8.8"], hostLocale: "en-US", proxy: { mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any },
+      { resolvers: ["8.8.8.8"], fontDirs: [path.join(TMP, "empty-socks5-dns")], hostLocale: "en-US", proxy: { mode: "named", config: { type: "socks5", host: "1.2.3.4", port: 1080 } } as any },
     );
     expect(res.findings.some((f) => f.code === "proxy-dns-leak")).toBe(false);
     expect(res.ok).toBe(true);

@@ -94,9 +94,12 @@ describe("drm service (real files)", () => {
 
   it("returns null when no CDM is present", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "drm-none-"));
-    // Isolate to this temp home/appData so a runner-installed Chrome (Linux) CDM
-    // doesn't leak into the "no CDM" assertion.
-    expect(findWidevineCdm({ cdmPath: null, platform: "linux", appDataDir: path.join(root, "appdata"), homeDir: path.join(root, "home") })).toBeNull();
+    // No CDM is isolated to this temp home/appData. On CI (ubuntu-latest) and
+    // on this macOS host there IS a real Chrome CDM at the absolute
+    // chromeCdmCandidates path, so pick an unknown platform whose candidate list
+    // is empty — the product's "no CDM" path is "none of the known platform
+    // locations exist", which this models deterministically.
+    expect(findWidevineCdm({ cdmPath: null, platform: "freebsd" as any, appDataDir: path.join(root, "appdata"), homeDir: path.join(root, "home") })).toBeNull();
   });
 
   it("stages a managed copy under <appData>/cdm/widevine/<version>", () => {
