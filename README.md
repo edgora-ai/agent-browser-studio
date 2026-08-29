@@ -61,15 +61,15 @@ Do **not** use Agent Browser Studio for fraud, spam, credential attacks, unautho
 ### Install and run
 
 ```bash
-git clone https://github.com/edgora-ai/browser-manger.git
-cd browser-manger
+git clone https://github.com/edgora-ai/agent-browser-studio.git
+cd agent-browser-studio
 npm install
 npm start
 ```
 
-### Use the independent Chromium 150 engine
+### Use the independent Chromium engine
 
-Build Chromium 150 with the independently maintained patch set under
+Build Chromium 150/151 with the independently maintained patch set under
 [`patches/chromium`](patches/chromium/README.md), verify it, and install it into
 the local OSS engine cache:
 
@@ -111,7 +111,7 @@ cause repeated macOS authorization prompts. Existing `CloakLite Safe Storage`
 values are converted once and atomically, without deleting the legacy
 Keychain item or writing plaintext to the config file.
 
-The current Apple Silicon build is verified at Chromium `150.0.7871.114`:
+The current Apple Silicon build is verified at Chromium `150.0.7871.114` (151.0.7922.71 in-tree, verification pending for 151 — see patches/chromium/UPGRADE_151.md):
 the strict native harness passes all 53 checked surfaces, the modern/legacy
 Storage corpus, 61 system-theme checks and the deep Window/Worker/DOM/Local
 Access font corpus, including full WebGL 1/2 and WebGPU adapter/device

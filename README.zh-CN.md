@@ -61,8 +61,8 @@ Agent Browser Studio 是具有双用途属性的本地自动化工具。请仅�
 ### 安装与启动
 
 ```bash
-git clone https://github.com/edgora-ai/browser-manger.git
-cd browser-manger
+git clone https://github.com/edgora-ai/agent-browser-studio.git
+cd agent-browser-studio
 npm install
 npm start
 ```
