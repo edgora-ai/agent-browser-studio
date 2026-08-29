@@ -33,7 +33,9 @@ jobs:
       - name: Build
         run: npm run build
       - name: Unit + smoke tests
-        run: npx vitest run tests/unit tests/smoke
+        run: npx vitest run
+      - name: Coverage (unit + smoke, threshold gated)
+        run: npx vitest run --coverage tests/unit tests/smoke
 
   checks-windows:
     name: Build + unit/smoke (Windows)
@@ -55,17 +57,11 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build (bash on Windows)
-        run: |
-          rm -rf dist
-          npx tsc
-          mkdir -p dist/renderer dist/resources
-          cp -r src/renderer/index.html src/renderer/css src/renderer/js dist/renderer/
-          cp src/main/preload.cjs dist/main/
-          cp resources/tray-icon-Template.png dist/resources/
-          cp resources/icon.icns dist/resources/
-          node scripts/build-masque-bridge.mjs
+        run: npm run build
       - name: Unit + smoke tests
-        run: npx vitest run tests/unit tests/smoke
+        run: npx vitest run
+      - name: Coverage (unit + smoke, threshold gated)
+        run: npx vitest run --coverage tests/unit tests/smoke
 
   e2e-macos:
     name: E2E (macOS, needs locally built engine — see engine-verify)
