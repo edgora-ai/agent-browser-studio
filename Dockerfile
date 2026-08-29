@@ -36,6 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdk-pixbuf-2.0-0 libxss1 libxtst6 libgtk-3-0 fonts-liberation \
     fonts-noto-color-emoji fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
-EXPOSE 26582
-# --no-sandbox is required when running as root inside a container.
+# Run as the image's non-root `node` user (home /home/node is writable, so the
+# app data dir lands there). Chromium child processes still need --no-sandbox:
+# containers lack the user namespaces the Chromium sandbox requires — this is a
+# container constraint, not a hardening regression (review item AR-8).
+RUN mkdir -p /home/node/.config && chown -R node:node /home/node
+USER node
+EXPOSE 26582 26581
+# --no-sandbox is required for Chromium children inside containers (no user
+# namespaces); everything else runs unprivileged as `node`.
 CMD ["npx", "electron", ".", "--headless", "--no-sandbox"]

@@ -88,10 +88,7 @@ export function refreshTrayMenu(
       label: tMain("tray.quit", "Quit Agent Browser Studio"),
       click: () => {
         if (options.onQuit) options.onQuit();
-        else {
-          (app as any).isQuitting = true;
-          app.quit();
-        }
+        else app.quit();
       },
     },
   ];

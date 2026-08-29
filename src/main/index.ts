@@ -20,12 +20,14 @@ import { registerAutomationHandlers } from "./ipc/automation.js";
 import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
 import { registerUpdateHandlers } from "./ipc/updates.js";
+import { registerObservabilityHandlers } from "./ipc/observability.js";
+import { configureObservability, logInfo, logWarn, logError } from "./services/observability.js";
 import { startScheduler } from "./services/automation.js";
 import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
 import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs } from "./services/browser-manager.js";
-import { migrateSecrets } from "./services/config-manager.js";
+import { migrateSecrets, getAppDataDir } from "./services/config-manager.js";
 import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
 import { UI_STORAGE_PARTITION, migrateLegacyRendererStorage } from "./services/renderer-storage.js";
@@ -105,6 +107,18 @@ let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 
 function createWindow(): void {
+  // Harden the UI session before any window exists: deny all permission
+  // requests, downloads and webview attachment for the isolated partition.
+  const uiSession = session.fromPartition(UI_STORAGE_PARTITION);
+  try {
+    uiSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  } catch {}
+  try {
+    uiSession.setPermissionCheckHandler(() => false);
+  } catch {}
+  try {
+    (uiSession as any).setPermissionCheckHandler?.(() => false);
+  } catch {}
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 750,
@@ -116,10 +130,11 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: false,
       // Own session partition: keeps the renderer's localStorage out of the
       // default session, whose first-access discovery stalls for seconds while
       // managed browser profiles are running in the user-data tree.
-      session: session.fromPartition(UI_STORAGE_PARTITION),
+      session: uiSession,
     },
     titleBarStyle: "hiddenInset",
     backgroundColor: "#f5f5f5",
@@ -145,6 +160,19 @@ function createWindow(): void {
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (url !== trustedAppUrl) event.preventDefault();
   });
+
+  // Deny any attempt to attach a <webview> inside the trusted UI.
+  mainWindow.webContents.on("will-attach-webview" as any, (event: any) => {
+    event.preventDefault();
+  });
+
+  // UI session should never trigger downloads; legitimate downloads go through
+  // the main-process controlled flow. Deny defensively.
+  try {
+    uiSession.on("will-download" as any, (event: any) => {
+      try { event.preventDefault(); } catch {}
+    });
+  } catch {}
 
   // Open external links in default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -192,6 +220,7 @@ function registerAllHandlers(): void {
   registerAuditHandlers();
   registerDataHandlers();
   registerUpdateHandlers();
+  registerObservabilityHandlers();
 }
 
 // ── App lifecycle ──
@@ -235,6 +264,25 @@ app.whenReady().then(async () => {
   if (updateState.history.length) console.log("[updates] active=" + updateState.activeVersion + " history=" + updateState.history.length);
   setTimeout(() => { try { markAppHealthy(); } catch { /* best effort */ } }, 60000);
   process.on("exit", (code) => { if (code !== 0) { try { noteAppCrashed(); } catch { /* best effort */ } } });
+  // Crash nets: a desktop controller must survive a stray rejected promise
+  // (a failing automation rule, a closed CDP socket) without taking the whole
+  // app — including running profiles and the scheduler — down with it.
+  // Both handlers log through observability so the event lands in the
+  // diagnostic bundle and recent-events ring.
+  process.on("unhandledRejection", (reason) => {
+    logWarn("app.unhandled-rejection", { reason: reason instanceof Error ? reason.stack || reason.message : String(reason) });
+  });
+  process.on("uncaughtException", (err: Error) => {
+    logError("app.uncaught-exception", { error: err.stack || err.message });
+  });
+  // Local-only observability: structured log + metrics under the app data dir.
+  // Nothing here is transmitted anywhere; see services/observability.ts.
+  try {
+    configureObservability({ dir: path.join(getAppDataDir(), "logs") });
+    logInfo("app.started", { mode: isHeadlessMode() ? "headless" : "gui", platform: process.platform, arch: process.arch });
+  } catch (error) {
+    console.error("[observability] failed to configure:", error);
+  }
   registerAllHandlers();
   // One-time copy of legacy renderer settings (theme / language / wizard
   // state) from the default session into the UI partition. Runs before the
@@ -277,11 +325,12 @@ app.whenReady().then(async () => {
       },
     });
 
-    // Periodically refresh tray menu to show updated profile status
+    // Periodically refresh tray menu to show updated profile status.
+    // unref: a pending tray tick must not hold the process open on quit.
     setInterval(() => refreshTrayMenu(() => mainWindow, {
       onShow: () => createWindow(),
       onQuit: () => { isQuitting = true; app.quit(); },
-    }), 10000);
+    }), 10000).unref();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -310,35 +359,37 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", async (event) => {
+app.on("before-quit", async (event: any) => {
+  if (isQuitting) return;
+  // Block Electron's default quit so async cleanup can finish; re-trigger quit after.
+  event.preventDefault();
   isQuitting = true;
   console.log(`${PRODUCT_NAME} shutting down — cleaning up child processes`);
+  const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T | void> =>
+    Promise.race([
+      p,
+      new Promise<void>((resolve) => setTimeout(() => { console.warn(`[shutdown] ${label} timed out after ${ms}ms`); resolve(); }, ms)),
+    ]) as Promise<T | void>;
   try {
     stopAllBrowserProfiles();
   } catch (e) {
     console.error("[shutdown] failed to stop managed Chromium children:", e);
   }
   try {
-    // Flush + close the agent SQLite DB so WAL is checkpointed.
     const { closeAgentDb } = await import("./services/agent-db.js");
-    closeAgentDb();
+    await withTimeout(Promise.resolve(closeAgentDb()), 2000, "closeAgentDb");
   } catch { /* ignore */ }
   try {
     const { closeJobDb } = await import("./services/job-store.js");
-    closeJobDb();
+    await withTimeout(Promise.resolve(closeJobDb()), 2000, "closeJobDb");
   } catch { /* ignore */ }
   try {
     destroyTray();
   } catch (e) {
     console.error("[shutdown] failed to destroy tray:", e);
   }
-  // Stop MCP server (best-effort — non-blocking timeout)
-  Promise.race([
-    stopMcpServer(),
-    new Promise(resolve => setTimeout(resolve, 500)),
-  ]).catch((e) => console.error("[shutdown] failed to stop MCP server:", e));
-  Promise.race([
-    stopRestApiServer(),
-    new Promise(resolve => setTimeout(resolve, 500)),
-  ]).catch((e) => console.error("[shutdown] failed to stop REST API server:", e));
+  await withTimeout(stopMcpServer().catch((e) => console.error("[shutdown] failed to stop MCP server:", e)), 2000, "stopMcpServer");
+  await withTimeout(stopRestApiServer().catch((e) => console.error("[shutdown] failed to stop REST API server:", e)), 2000, "stopRestApiServer");
+  // Give a tick for SIGTERM handlers to flush, then quit for real.
+  setTimeout(() => app.quit(), 50);
 });

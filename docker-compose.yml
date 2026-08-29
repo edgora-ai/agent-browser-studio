@@ -4,9 +4,13 @@ services:
     image: agent-browser-studio:headless
     ports:
       - "26582:26582"
+      - "26581:26581"
     volumes:
-      # Persist profiles, config, secrets and the managed CDM outside the container.
-      - ./data:/root/.config/agent-browser-studio
+      # Persist profiles, config, secrets and the managed CDM outside the
+      # container. The container runs as the non-root `node` user (uid 1000);
+      # on Linux hosts, chown the host dirs to uid 1000 or bind-mount access
+      # will fail: `mkdir -p data chromium && sudo chown -R 1000:1000 data chromium`.
+      - ./data:/home/node/.config/agent-browser-studio
       # Linux engine binary (build with patches/chromium/build-linux.sh,
       # then copy the built chrome into this dir):
       - ./chromium:/opt/chromium

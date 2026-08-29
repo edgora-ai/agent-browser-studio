@@ -8,6 +8,10 @@ const api = {
     get: (dirId) => ipcRenderer.invoke("profile:get", dirId),
     create: (name, options) => ipcRenderer.invoke("browser:create", { name, ...(options || {}) }),
     delete: (dirId) => ipcRenderer.invoke("profile:delete", dirId),
+    // PL-09: recoverable delete — moves the profile to a 7-day local trash.
+    trash: (dirId) => ipcRenderer.invoke("profile:trash", dirId),
+    trashRestore: (dirId) => ipcRenderer.invoke("profile:trash-restore", dirId),
+    trashList: () => ipcRenderer.invoke("profile:trash-list"),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
     exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
     importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),
@@ -57,7 +61,7 @@ const api = {
     webrtcLeak: (config) => ipcRenderer.invoke("detect:webrtc-leak", config),
   },
   webrtc: {
-    diag: (dirId) => ipcRenderer.invoke("webrtc:diag", dirId),
+    diag: (dirId, opts) => ipcRenderer.invoke("webrtc:diag", { dirId, ...(opts || {}) }),
     diagHistory: (dirId) => ipcRenderer.invoke("webrtc:diag-history", dirId),
     diagClear: (dirId) => ipcRenderer.invoke("webrtc:diag-clear", dirId),
   },
@@ -146,11 +150,19 @@ const api = {
     captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
     envRisk: (dirId) => ipcRenderer.invoke("browser:env-risk", dirId),
+    // PL-07: pick a local Chromium build when no managed engine is installed.
+    selectBinary: () => ipcRenderer.invoke("browser:select-binary"),
     setLock: (dirId, locked) => ipcRenderer.invoke("browser:set-lock", { dirId, locked }),
     parseBulkCsv: (text) => ipcRenderer.invoke("browser:parse-bulk-csv", text),
     setSeed: (dirId, seed) => ipcRenderer.invoke("browser:set-seed", { dirId, seed }),
     setMeta: (dirId, meta) => ipcRenderer.invoke("browser:set-meta", { dirId, ...meta }),
-    openRiskCheck: (dirId) => ipcRenderer.invoke("browser:open-risk-check", { dirId }),
+    // Batch operations run with bounded concurrency in the main process and
+    // report an honest per-item tally (PL-01 / PL-02).
+    batchLaunch: (dirIds, concurrency, jobId) => ipcRenderer.invoke("browser:batch-launch", { dirIds, concurrency, jobId }),
+    batchStop: (dirIds, concurrency, jobId) => ipcRenderer.invoke("browser:batch-stop", { dirIds, concurrency, jobId }),
+    batchCancel: (jobId) => ipcRenderer.invoke("browser:batch-cancel", jobId),
+    // allowLaunch is opt-in: a "check" must not silently start a browser (PL-03).
+    openRiskCheck: (dirId, opts) => ipcRenderer.invoke("browser:open-risk-check", { dirId, ...(opts || {}) }),
     openApp: (dirId, url) => ipcRenderer.invoke("browser:open-app", { dirId, url }),
     logs: (dirId) => ipcRenderer.invoke("browser:logs", dirId),
   },
@@ -238,8 +250,21 @@ const api = {
   data: {
     export: (scope) => ipcRenderer.invoke("data:export", scope),
   },
+  // Local-only observability (TE-01): structured events on disk + metrics.
+  // Nothing here leaves the device; there is no upload path.
+  observability: {
+    log: (level, event, fields) => ipcRenderer.invoke("obs:event", { level, event, fields }),
+    trace: () => ipcRenderer.invoke("obs:trace"),
+    timing: (name, ms) => ipcRenderer.invoke("obs:timing", { name, ms }),
+    counter: (name, delta) => ipcRenderer.invoke("obs:counter", { name, delta }),
+    gauge: (name, value) => ipcRenderer.invoke("obs:gauge", { name, value }),
+    metrics: () => ipcRenderer.invoke("obs:metrics"),
+    events: (limit, filter) => ipcRenderer.invoke("obs:events", { limit, filter }),
+    export: () => ipcRenderer.invoke("obs:export"),
+    status: () => ipcRenderer.invoke("obs:status"),
+  },
   on: (channel, callback) => {
-    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request"];
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress"];
     if (validChannels.includes(channel)) {
       const wrapped = (_event, ...args) => callback(...args);
       listenerMap.set(callback, wrapped);

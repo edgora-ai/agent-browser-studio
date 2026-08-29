@@ -6,6 +6,8 @@
 
 import * as http from "node:http";
 import { randomBytes } from "node:crypto";
+import { isAuthorized as isAuthorizedShared } from "./http/auth.js";
+import { readJson as readJsonShared, HttpError } from "./http/body.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -53,6 +55,7 @@ import { validateDirId } from "./utils.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "./profile-archive.js";
+import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArchiveImportPath } from "./archive-path-guard.js";
 import { syncService } from "./sync-service.js";
 import { retryAgentRun, retryJobRuns, testRunRule, reloadSchedule, cancelRunningJob } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
@@ -372,9 +375,15 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     if (!body || typeof body.zipPath !== "string" || !body.zipPath.trim()) {
       return { status: 400, body: { error: "zipPath is required" } };
     }
+    let zipPath: string;
     try {
-      const r = importProfileArchive(body.zipPath);
-      recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + body.zipPath });
+      zipPath = assertSafeArchiveImportPath(body.zipPath);
+    } catch (e: any) {
+      return { status: 400, body: { error: e?.message || String(e) } };
+    }
+    try {
+      const r = importProfileArchive(zipPath);
+      recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + zipPath });
       return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
@@ -386,7 +395,16 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     if (!body || !Array.isArray(body.zipPaths) || !body.zipPaths.length) {
       return { status: 400, body: { error: "zipPaths (non-empty array) is required" } };
     }
-    const report = importProfileArchives(body.zipPaths.filter((z: any) => typeof z === "string"));
+    const raw = body.zipPaths.filter((z: any) => typeof z === "string");
+    let validated: string[] = [];
+    for (const z of raw) {
+      try {
+        validated.push(assertSafeArchiveImportPath(z));
+      } catch (e: any) {
+        return { status: 400, body: { error: e?.message || String(e), zipPath: z } };
+      }
+    }
+    const report = importProfileArchives(validated);
     recordAudit({ category: "profile", action: "import-batch", actor: "api", detail: "imported " + report.imported.length + ", failed " + report.failed.length });
     return { status: 200, body: { success: true, report } };
   }
@@ -397,7 +415,13 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       if (!body || !Array.isArray(body.dirIds) || !body.dirIds.length) {
         return { status: 400, body: { error: "dirIds (non-empty array) is required" } };
       }
-      const destDir = typeof body?.destDir === "string" && body.destDir.trim() ? body.destDir : defaultBackupPathForBatch();
+      const destDirRaw = typeof body?.destDir === "string" && body.destDir.trim() ? body.destDir : defaultBackupPathForBatch();
+      let destDir: string;
+      try {
+        destDir = assertSafeArchiveExportDir(destDirRaw);
+      } catch (e: any) {
+        return { status: 400, body: { error: e?.message || String(e) } };
+      }
       const report = await exportProfileArchives(body.dirIds.filter((d: any) => typeof d === "string"), destDir);
       recordAudit({ category: "profile", action: "export-batch", actor: "api", detail: "exported " + report.exported.length + ", skipped " + report.skipped.length + ", failed " + report.failed.length });
       return { status: 200, body: { success: true, destDir, report } };
@@ -411,7 +435,13 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const dirId = mExport[1];
       validateDirId(dirId);
       const body = await readJson(req).catch(() => null);
-      const destPath = typeof body?.destPath === "string" && body.destPath.trim() ? body.destPath : defaultBackupPath(dirId);
+      const destPathRaw = typeof body?.destPath === "string" && body.destPath.trim() ? body.destPath : defaultBackupPath(dirId);
+      let destPath: string;
+      try {
+        destPath = assertSafeArchiveExportPath(destPathRaw);
+      } catch (e: any) {
+        return { status: 400, body: { error: e?.message || String(e) } };
+      }
       const r = await exportProfileArchive(dirId, destPath);
       recordAudit({ category: "profile", action: "export", target: dirId, actor: "api", detail: r.filePath });
       return { status: 200, body: { success: true, filePath: r.filePath, entries: r.entries, bytes: r.bytes } };
@@ -1353,11 +1383,6 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
   const ready = new Promise<void>((resolve, reject) => { markReady = resolve; markFailed = reject; });
 
   server = http.createServer(async (req, res) => {
-    if (!isTrustedOrigin(req.headers.origin)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Forbidden origin" }));
-      return;
-    }
     res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Browser-Token, X-Cloak-Token");
@@ -1368,6 +1393,16 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
       return;
     }
 
+    if (isRateLimited(loopbackRateKey(req))) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Too many requests" }));
+      return;
+    }
+    if (!isTrustedOrigin(req.headers.origin, req)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden origin" }));
+      return;
+    }
     const url = new URL(req.url || "/", "http://127.0.0.1:" + apiPort);
     const openPath = (url.pathname === "/health" || url.pathname === "/openapi.json") && req.method === "GET";
     if (!openPath && !isAuthorized(req)) {
@@ -1381,7 +1416,9 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
     } catch (e: any) {
-      res.writeHead(500, { "Content-Type": "application/json" });
+      const status = e instanceof HttpError || (e && typeof e.status === "number") ? e.status : 500;
+      if (status >= 500) console.error("[api] request failed:", url.pathname, e);
+      res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: e.message || "Internal error" }));
     }
   });
@@ -1931,15 +1968,37 @@ function validateExtensionId(extId: string): void {
   }
 }
 
-function isAuthorized(req: http.IncomingMessage): boolean {
-  const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1] || null;
-  const headerToken = req.headers["x-agent-browser-token"] ?? req.headers["x-cloak-token"];
-  const token = bearer || (Array.isArray(headerToken) ? headerToken[0] : headerToken);
-  return token === API_TOKEN;
+
+const RATE_MAX = 120;
+const RATE_WINDOW_MS = 60_000;
+const rateMap = new Map<string, number[]>();
+function isRateLimited(key: string): boolean {
+  const now = Date.now();
+  const arr = (rateMap.get(key) || []).filter(t => now - t < RATE_WINDOW_MS);
+  arr.push(now);
+  rateMap.set(key, arr);
+  if (arr.length > RATE_MAX) return true;
+  if (rateMap.size > 200) {
+    for (const [k, v] of rateMap) if (!v.length || now - Math.max(...v) > RATE_WINDOW_MS) rateMap.delete(k);
+  }
+  return false;
+}
+function loopbackRateKey(req: import("node:http").IncomingMessage): string {
+  const ip = (req.socket && (req.socket as any).remoteAddress) || "127.0.0.1";
+  // Cheap path normalization to avoid unbounded key explosion while keeping burst fairness.
+  try { return ip + ":" + new URL(req.url || "/", "http://127.0.0.1").pathname; } catch { return ip; }
 }
 
-function isTrustedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true;
+function isAuthorized(req: http.IncomingMessage): boolean {
+  return isAuthorizedShared(req, API_TOKEN);
+}
+
+function isTrustedOrigin(origin: string | undefined, req?: http.IncomingMessage): boolean {
+  if (!origin) {
+    if (!req) return true;
+    const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  }
   try {
     const url = new URL(origin);
     return (url.hostname === "127.0.0.1" || url.hostname === "localhost") && (url.protocol === "http:" || url.protocol === "https:");
@@ -1953,12 +2012,8 @@ function createLocalToken(): string {
 }
 
 async function readJson(req: http.IncomingMessage): Promise<any> {
-  let data = "";
-  for await (const chunk of req) data += chunk.toString();
-  if (!data.trim()) return {};
-  try {
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
+  // Shared streaming body reader: enforces the 2 MiB cap while chunks arrive
+  // (not after full buffering) and answers invalid JSON with 400 instead of
+  // silently treating it as an empty object.
+  return readJsonShared(req, { maxBytes: 2 * 1024 * 1024 });
 }

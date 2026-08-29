@@ -3,6 +3,8 @@
 // Claude Code, Cursor, or any MCP client can connect and control browser profiles.
 
 import * as http from "node:http";
+import { readBody as httpReadBody } from "./http/body.js";
+import { isAuthorized as isAuthorizedShared } from "./http/auth.js";
 import { randomBytes } from "node:crypto";
 import { listProfiles, getProfileInfo } from "./profile-manager.js";
 import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig } from "./config-manager.js";
@@ -558,6 +560,11 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
       return;
     }
 
+    if (isMcpRateLimited(mcpRateKey(req))) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Too many requests" }));
+      return;
+    }
     const url = new URL(req.url || "/", `http://127.0.0.1:${mcpPort}`);
     const sessionId = url.searchParams.get("sessionId") || "default";
 
@@ -733,11 +740,28 @@ function validateExtensionId(extId: string): void {
   }
 }
 
+
+const MCP_RATE_MAX = 120;
+const MCP_RATE_WINDOW_MS = 60_000;
+const mcpRateMap = new Map<string, number[]>();
+function isMcpRateLimited(key: string): boolean {
+  const now = Date.now();
+  const arr = (mcpRateMap.get(key) || []).filter(t => now - t < MCP_RATE_WINDOW_MS);
+  arr.push(now);
+  mcpRateMap.set(key, arr);
+  if (arr.length > MCP_RATE_MAX) return true;
+  if (mcpRateMap.size > 200) {
+    for (const [k, v] of mcpRateMap) if (!v.length || now - Math.max(...v) > MCP_RATE_WINDOW_MS) mcpRateMap.delete(k);
+  }
+  return false;
+}
+function mcpRateKey(req: import("node:http").IncomingMessage): string {
+  const ip = (req.socket && (req.socket as any).remoteAddress) || "127.0.0.1";
+  try { return ip + ":" + new URL(req.url || "/", "http://127.0.0.1").pathname; } catch { return ip; }
+}
+
 function isAuthorized(req: http.IncomingMessage, _url: URL): boolean {
-  const bearer = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1] || null;
-  const headerToken = req.headers["x-agent-browser-token"] ?? req.headers["x-cloak-token"];
-  const token = bearer || (Array.isArray(headerToken) ? headerToken[0] : headerToken);
-  return token === MCP_TOKEN;
+  return isAuthorizedShared(req, MCP_TOKEN);
 }
 
 function isTrustedOrigin(origin: string | undefined): boolean {
@@ -754,12 +778,9 @@ function createLocalToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve) => {
-    let data = "";
-    req.on("data", (chunk: Buffer) => { data += chunk.toString(); });
-    req.on("end", () => resolve(data));
-  });
+async function readBody(req: http.IncomingMessage): Promise<string> {
+  const buf = await httpReadBody(req as any, { maxBytes: 1 * 1024 * 1024 });
+  return buf.toString("utf-8");
 }
 
 function safeJson(text: string): any {
