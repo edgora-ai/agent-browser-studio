@@ -130,7 +130,7 @@ describe("importProxies / exportProxiesCsv (real store)", () => {
     expect(report.imported).toHaveLength(2);
     expect(report.skipped.some((s) => s.reason.includes("duplicate"))).toBe(true);
     const csv = exportProxiesCsv().split("\n");
-    expect(csv).toHaveLength(4); // header + default + 2 imported
+    expect(csv).toHaveLength(3); // header + 2 imported (no built-in default proxy)
     expect(csv.filter((r) => r.startsWith("h1-8080,") || r.startsWith("h2-8080,"))).toHaveLength(2);
   });
 

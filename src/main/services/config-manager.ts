@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
+import { transact as storeTransact, readSnapshot, setAfterTransactHook, setConfigBaseProvider, setNormalizer } from "./config/store.js";
 import {
   clearLegacySecretMigrationCache,
   decryptSecretOr,
@@ -33,19 +34,14 @@ function resolveAppDataDir(): string {
 }
 
 // ── Defaults ──
-const DefaultProxy: ProxyConfig = {
-  type: "http",
-  host: "127.0.0.1",
-  port: 7890,
-};
-
+// No built-in proxy: fresh installs launch profiles with a direct connection
+// until the user adds and marks a default proxy. (A hardcoded 127.0.0.1:7890
+// here used to silently route every new profile into a dead local proxy.)
 const DefaultConfig: MgmtConfig = {
   version: 4,
   chromiumBin: "auto",
-  defaultProxy: "default",
-  proxies: {
-    "default": { ...DefaultProxy },
-  },
+  defaultProxy: "",
+  proxies: {},
   proxyDetections: {},
   proxyHealth: {},
   webrtcDiagnostics: {},
@@ -309,7 +305,9 @@ export function deleteProxy(name: string): boolean {
   removeFallbackReference(cfg, name);
 
   if (cfg.defaultProxy === name) {
-    cfg.defaultProxy = "default";
+    // No built-in fallback proxy exists anymore: unset so default-mode
+    // profiles resolve to a direct connection instead of a missing proxy.
+    cfg.defaultProxy = "";
   }
 
   saveConfig(cfg);
@@ -1111,8 +1109,30 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
   };
 }
 
-export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>): void {
+/**
+ * Reject writes to a profile another device has checked out (review item
+ * TE-05; answers open question Q4).
+ *
+ * Before this, the checkout lock was only honoured by the sync path: the UI,
+ * the REST API and MCP could all edit a profile that another device believed
+ * it owned, so the next push silently clobbered the other device's work.
+ */
+export function assertProfileWritable(dirId: string, opts?: { force?: boolean }): void {
+  if (opts?.force) return;
+  const cfg = getConfig() as any;
+  const lock = cfg.browserProfiles?.[dirId]?.lock;
+  if (!lock || !lock.owner) return;
+  const self = cfg.deviceId || "local";
+  if (lock.owner === self) return;
+  throw new Error(
+    `Profile is locked by ${lock.ownerName || lock.owner} on another device. ` +
+    `Release the lock there (or force the change) before editing this profile.`,
+  );
+}
+
+export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>, opts?: { force?: boolean }): void {
   validateDirId(dirId);
+  assertProfileWritable(dirId, opts);
   const cfg = structuredClone(getConfig());
   const cp = cfg.browserProfiles || {};
   const current = Object.hasOwn(cp, dirId) ? cp[dirId] : { name: dirId.substring(0, 8), fingerprintSeed: 12345 };
@@ -1273,15 +1293,27 @@ function loadConfig(): MgmtConfig {
   }
 }
 
+// Single ownership (AR-1): config-manager holds the in-memory cache that all
+// getConfig() consumers share; config/store.ts is the ONLY write path
+// (atomic tmp+rename+fsync). There is deliberately no fallback: if the
+// transactional write fails, the error propagates instead of silently leaving
+// memory and disk divergent. Direct store.transact writers elsewhere (skills,
+// team, automation rules, trace trimming) re-sync this cache via the hook
+// below, so no write path can leave getConfig() stale.
+setConfigBaseProvider(() => config);
+setNormalizer((draft, mode) => mergeConfig(DefaultConfig, draft, mode));
+setAfterTransactHook((normalized) => { config = normalized; });
+
 export function saveConfig(cfg: MgmtConfig): void {
-  ensureAppDir();
-  const configPath = getConfigPath();
-  const normalized = mergeConfig(DefaultConfig, cfg, "save");
-  const tmp = configPath + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.renameSync(tmp, configPath);
-  try { fs.chmodSync(configPath, 0o600); } catch (e) { console.error("Failed to restrict config file permissions:", e); }
-  config = normalized;
+  const snap = structuredClone(cfg) as any;
+  // cfg IS the full new content, so it also serves as the draft base — this
+  // keeps the bootstrap path (first load, before `config` exists) deadlock-free.
+  storeTransact((draft: any) => {
+    // Replace draft with snap's normalized content via shallow assign of enumerable domains
+    for (const k of Object.keys(snap)) (draft as any)[k] = (snap as any)[k];
+  }, snap);
+  // The afterTransact hook has already re-synced `config` from the store
+  // (exactly what was normalized and written to disk).
 }
 
 function ensureAppDir(): void {
@@ -1293,6 +1325,7 @@ function ensureAppDir(): void {
   }
 }
 
+export function mergeConfigForStore(raw: any, mode: "load"|"save"){ return mergeConfig(DefaultConfig, raw, mode); }
 function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mode: "load" | "save"): MgmtConfig {
   const merged = structuredClone(defaults);
   if (parsed.version) merged.version = Math.max(4, parsed.version);
@@ -1309,9 +1342,6 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
         normalizedProxy.updatedAt = rawProxyUpdatedAt;
       }
       merged.proxies[name] = normalizedProxy;
-    }
-    if (!merged.proxies["default"]) {
-      merged.proxies["default"] = { ...DefaultProxy };
     }
   }
   if (parsed.defaultProxy && isValidProxyName(parsed.defaultProxy) && Object.hasOwn(merged.proxies, parsed.defaultProxy)) merged.defaultProxy = parsed.defaultProxy;
@@ -1354,10 +1384,13 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     merged.automation = normalizeAutomationRules(parsed.automation);
   }
   if (Array.isArray(parsed.agentRuns)) {
-    merged.agentRuns = normalizeAgentRuns(parsed.agentRuns);
+    merged.agentRuns = normalizeAgentRuns(parsed.agentRuns, mode);
   }
   if (parsed.agentFs && typeof parsed.agentFs === "object") {
     merged.agentFs = normalizeAgentFs(parsed.agentFs);
+  }
+  if (parsed.drm && typeof parsed.drm === "object") {
+    merged.drm = normalizeDrmConfig(parsed.drm);
   }
   const parsedProfiles = parsed.browserProfiles ?? parsed["cloakProfiles"];
   if (parsedProfiles) {
@@ -1585,7 +1618,7 @@ function normalizeAgentRunStep(raw: any, index: number): AgentRunStep | null {
   };
 }
 
-function normalizeAgentRuns(raw: any): AgentRun[] {
+function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[] {
   if (!Array.isArray(raw)) return [];
   // Keep the NEWEST 200 runs (drop oldest).
   const recent = raw.length > 200 ? raw.slice(raw.length - 200) : raw;
@@ -1595,10 +1628,11 @@ function normalizeAgentRuns(raw: any): AgentRun[] {
     if (!RUN_ID_RE.test(id)) return null;
     const name = (typeof r.name === "string" ? r.name.slice(0, 160) : id) || id;
     const startedAt = typeof r.startedAt === "number" ? r.startedAt : 0;
-    // Stale "running" runs (loaded from disk after a crash) → mark error so they don't dangle.
     const rawStatus = String(r.status) as string;
     const isKnown = rawStatus === "running" || rawStatus === "done" || rawStatus === "error";
-    const status: AgentRunStatus = (!isKnown || rawStatus === "running") ? "error" : (rawStatus as AgentRunStatus);
+    // Crash-recovery: stale running on load → error; on save preserve caller status
+    const shouldRecover = mode === "load" && rawStatus === "running";
+    const status: AgentRunStatus = (shouldRecover || !isKnown) ? "error" : (rawStatus as AgentRunStatus);
     const steps = Array.isArray(r.steps)
       ? r.steps.slice(0, 500).map((s: any, i: number) => normalizeAgentRunStep(s, i)).filter((s: AgentRunStep | null): s is AgentRunStep => Boolean(s))
       : [];
@@ -1625,6 +1659,15 @@ function normalizeAgentRuns(raw: any): AgentRun[] {
       error: status === "error" && typeof r.error === "string" ? r.error.slice(0, 1000) : undefined,
     };
   }).filter((r: AgentRun | null): r is AgentRun => Boolean(r));
+}
+
+function normalizeDrmConfig(raw: any): DrmConfig {
+  if (!raw || typeof raw !== "object") return { cdmPath: null };
+  const cdmPath = typeof raw.cdmPath === "string" && raw.cdmPath.trim() ? raw.cdmPath.trim() : null;
+  const out: DrmConfig = { cdmPath };
+  if (typeof raw.detectedAt === "number" && Number.isFinite(raw.detectedAt)) out.detectedAt = raw.detectedAt;
+  if (typeof raw.detectedVersion === "string" && raw.detectedVersion.trim()) out.detectedVersion = raw.detectedVersion.trim().slice(0, 64);
+  return out;
 }
 
 function normalizeAgentFs(raw: any): AgentFsConfig {

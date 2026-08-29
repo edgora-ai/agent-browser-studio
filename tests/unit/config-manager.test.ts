@@ -83,8 +83,10 @@ describe("Config Manager (real functions)", () => {
     const cfg = getConfig();
     expect(cfg.version).toBe(4);
     expect(cfg.chromiumBin).toBe("auto");
-    expect(cfg.defaultProxy).toBe("default");
-    expect(cfg.proxies.default.type).toBe("http");
+    // A1: no built-in 127.0.0.1:7890 proxy — fresh installs launch direct
+    // until the user explicitly adds and marks a default proxy.
+    expect(cfg.defaultProxy).toBe("");
+    expect(cfg.proxies).toEqual({});
     expect(cfg.browserProfiles).toEqual({});
     expect(cfg.extensionRepository).toEqual({});
     expect(cfg.skillRepository).toEqual({});
@@ -344,6 +346,78 @@ describe("Config Manager (real functions)", () => {
     const resolvedDefault = resolveProfileProxy("cb_profile_c");
     expect(resolvedDefault.mode).toBe("default");
     expect(resolvedDefault.name).toBe("primary"); // because we set primary as default
+  });
+
+  // ── A1: no built-in default proxy (fresh installs launch direct) ──
+  it("fresh install has no built-in proxy and an empty defaultProxy", () => {
+    const cfg = getConfig();
+    expect(cfg.defaultProxy).toBe("");
+    expect(Object.keys(cfg.proxies || {}).length).toBe(0);
+  });
+
+  it("default-mode profile with no default proxy resolves to a direct connection", () => {
+    // A proxy exists but was never marked default — default-mode profiles must
+    // not silently adopt it, nor fail-closed; they launch direct.
+    addProxy("solo", { type: "http", host: "1.1.1.1", port: 8080 });
+    const cfg = getConfig();
+    cfg.browserProfiles["cb_direct"] = {
+      name: "Direct Profile",
+      proxyMode: "default",
+      fingerprintSeed: 11111,
+      platform: "windows",
+      syncedAt: null,
+      syncStatus: "never",
+      lastModified: Date.now(),
+    };
+    saveConfig(cfg);
+    const resolved = resolveProfileProxy("cb_direct");
+    expect(resolved.mode).toBe("none");
+    expect(resolved.config).toBeNull();
+  });
+
+  it("deleting the default proxy unsets defaultProxy instead of a phantom sentinel", () => {
+    addProxy("p1", { type: "http", host: "1.1.1.1", port: 8080 });
+    setDefaultProxyName("p1");
+    const cfg = getConfig();
+    cfg.browserProfiles["cb_afterdel"] = {
+      name: "After Delete",
+      proxyMode: "default",
+      fingerprintSeed: 22222,
+      platform: "windows",
+      syncedAt: null,
+      syncStatus: "never",
+      lastModified: Date.now(),
+    };
+    saveConfig(cfg);
+    expect(resolveProfileProxy("cb_afterdel").name).toBe("p1");
+
+    expect(deleteProxy("p1")).toBe(true);
+    expect(getConfig().defaultProxy).toBe("");
+    const resolved = resolveProfileProxy("cb_afterdel");
+    expect(resolved.mode).toBe("none");
+    expect(resolved.config).toBeNull();
+  });
+
+  it("mergeConfig does not resurrect a built-in default proxy on reload", () => {
+    addProxy("keep-me", { type: "http", host: "2.2.2.2", port: 8080 });
+    saveConfig(getConfig());
+    deleteProxy("keep-me");
+    reloadConfig();
+    const cfg = getConfig();
+    expect(Object.keys(cfg.proxies || {}).length).toBe(0);
+  });
+
+  // AR-1: direct store.transact writers (skills, team, automation rules, trace
+  // trimming) must be visible to getConfig() immediately — the old dual-cache
+  // design left it stale until the next reload.
+  it("getConfig() reflects direct store.transact writes without a reload", async () => {
+    const { transact } = await import("../../src/main/services/config/store.js");
+    const before = getConfig().agentRuns || [];
+    const probe = { id: "run_ar1_probe", status: "done", startedAt: Date.now(), finishedAt: Date.now(), steps: [] };
+    transact((draft: any) => { draft.agentRuns = [...(draft.agentRuns || []), probe]; });
+    const after = getConfig().agentRuns || [];
+    expect(after.some((r: any) => r.id === "run_ar1_probe")).toBe(true);
+    expect(before.some((r: any) => r.id === "run_ar1_probe")).toBe(false);
   });
 
   it("normalizes corrupt config to defaults and backs up the original", () => {

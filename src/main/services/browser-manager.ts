@@ -8,8 +8,9 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
+import { parseBrowserProcessLine, findBrowserByProfileSync } from "./process-discovery.js";
 import { BrowserWindow } from "electron";
-import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl } from "./config-manager.js";
+import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
@@ -20,7 +21,8 @@ import {
   checkPersonaConsistency, mismatchesAsDrift,
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
-import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
+import { checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError } from "./browser/launch-guards.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
@@ -73,6 +75,9 @@ import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInject
 import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, registerFirefoxSession, dropFirefoxSession, getRegisteredFirefoxSession, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
+import { runningProcesses } from "./browser/runtime-table.js";
+import { launchBrowserPipeline } from "./browser/launch-pipeline.js";
+
 export interface BrowserProfile {
   dirId: string;
   name: string;
@@ -116,18 +121,6 @@ export interface BrowserProfile {
   cdpPort: number | null;
 }
 
-const runningProcesses = new Map<string, {
-  pid: number;
-  process: any;
-  port: number;
-  lastActivityAt: number;
-  killTimer?: ReturnType<typeof setTimeout>;
-  proxyBridge?: { close: () => Promise<void> };
-  /** Long-lived WebDriver BiDi session for Firefox (keeps preload scripts alive). */
-  bidiConn?: BidiConnection;
-  /** Result of the launch-time managed-injection self-check (Slice 79.2). */
-  injectionProbe?: InjectionProbeCheck;
-}>();
 
 // ═══════════════════════════════════════════════════════════════
 // Binary Discovery
@@ -325,9 +318,11 @@ export function createBrowserProfile(opts: {
   cfg.browserProfiles[dirId] = profile;
 
   const profileDir = path.join(getProfilesDir(), dirId);
+  const _profile = profile;
+  const _dirId = dirId;
   try {
     fs.mkdirSync(path.join(profileDir, "Default"), { recursive: true });
-    saveConfig(cfg);
+    try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ draft.browserProfiles=draft.browserProfiles||{}; draft.browserProfiles[_dirId]=_profile; }); } catch { saveConfig(cfg); }
   } catch (e) {
     if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
     throw e;
@@ -336,20 +331,193 @@ export function createBrowserProfile(opts: {
   return { dirId };
 }
 
-export function deleteBrowserProfile(dirId: string): boolean {
+/**
+ * Soft-delete (review item PL-09): move the profile directory into a local
+ * trash instead of removing it, so a mis-click is recoverable for
+ * TRASH_TTL_MS. The trash lives outside the profiles directory (under app
+ * data) so it is never picked up by sync or by the profile list.
+ */
+export const TRASH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function trashRoot(): string {
+  return path.join(getAppDataDir(), "trash", "profiles");
+}
+
+function trashIndexPath(): string {
+  return path.join(getAppDataDir(), "trash", "index.json");
+}
+
+export interface TrashEntry {
+  dirId: string;
+  name: string;
+  deletedAt: number;
+}
+
+function readTrashIndex(): TrashEntry[] {
+  try {
+    const raw = fs.readFileSync(trashIndexPath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTrashIndex(entries: TrashEntry[]): void {
+  try {
+    fs.mkdirSync(path.dirname(trashIndexPath()), { recursive: true });
+    fs.writeFileSync(trashIndexPath(), JSON.stringify(entries, null, 2), "utf-8");
+  } catch (e) {
+    console.warn("[agent-browser] failed to write trash index:", e);
+  }
+}
+
+/** List profiles currently recoverable from the trash. */
+export function listTrashedProfiles(): Array<TrashEntry & { recoverable: boolean }> {
+  return readTrashIndex().map((entry) => ({
+    ...entry,
+    recoverable: fs.existsSync(path.join(trashRoot(), entry.dirId)),
+  }));
+}
+
+/** Move a stopped profile into the trash and drop it from the config. */
+export function trashBrowserProfile(dirId: string, opts?: { force?: boolean }): boolean {
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
+  validateDirId(dirId);
+  // TE-05: a profile checked out by another device cannot be deleted from here.
+  assertProfileWritable(dirId, opts);
+
+  const st = statusBrowser(dirId);
+  if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
+
+  const cfg = getConfig() as any;
+  const meta = cfg.browserProfiles?.[dirId];
+  const profileDir = path.join(getProfilesDir(), dirId);
+  const target = path.join(trashRoot(), dirId);
+
+  fs.mkdirSync(trashRoot(), { recursive: true });
+  // A previous trashed copy of the same id is already superseded.
+  if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+  if (fs.existsSync(profileDir)) fs.renameSync(profileDir, target);
+
+  let removed = false;
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft: any) => {
+      if (draft.browserProfiles?.[dirId]) {
+        delete draft.browserProfiles[dirId];
+        removed = true;
+      }
+    });
+  } catch {
+    const fallback = getConfig() as any;
+    if (fallback.browserProfiles?.[dirId]) {
+      delete fallback.browserProfiles[dirId];
+      saveConfig(fallback);
+      removed = true;
+    }
+  }
+
+  const entries = readTrashIndex().filter((e) => e.dirId !== dirId);
+  entries.push({ dirId, name: meta?.name || dirId.slice(0, 8), deletedAt: Date.now() });
+  writeTrashIndex(entries);
+
+  recordAudit({
+    category: "profile",
+    action: "trash",
+    target: dirId,
+    actor: "user",
+    detail: `moved to trash as "${meta?.name || dirId.slice(0, 8)}" (recoverable for 7 days)`,
+  });
+  return removed || !fs.existsSync(profileDir);
+}
+
+/** Put a trashed profile back, restoring its metadata. */
+export function restoreTrashedProfile(dirId: string): boolean {
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
+  validateDirId(dirId);
+
+  const entry = readTrashIndex().find((e) => e.dirId === dirId);
+  if (!entry) throw new Error("That profile is no longer in the trash");
+  const source = path.join(trashRoot(), dirId);
+  if (!fs.existsSync(source)) throw new Error("The trashed profile data is missing");
+
+  const profileDir = path.join(getProfilesDir(), dirId);
+  if (fs.existsSync(profileDir)) throw new Error("A profile with that id already exists");
+
+  fs.mkdirSync(getProfilesDir(), { recursive: true });
+  fs.renameSync(source, profileDir);
+
+  let restored = false;
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft: any) => {
+      draft.browserProfiles = draft.browserProfiles || {};
+      if (!draft.browserProfiles[dirId]) {
+        draft.browserProfiles[dirId] = {
+          dirId,
+          name: entry.name || dirId.slice(0, 8),
+          createdAt: Date.now(),
+          engine: "chromium",
+        };
+      }
+      restored = true;
+    });
+  } catch {
+    const cfg = getConfig() as any;
+    cfg.browserProfiles = cfg.browserProfiles || {};
+    if (!cfg.browserProfiles[dirId]) {
+      cfg.browserProfiles[dirId] = { dirId, name: entry.name || dirId.slice(0, 8), createdAt: Date.now(), engine: "chromium" };
+    }
+    saveConfig(cfg);
+    restored = true;
+  }
+
+  writeTrashIndex(readTrashIndex().filter((e) => e.dirId !== dirId));
+  recordAudit({ category: "profile", action: "restore", target: dirId, actor: "user", detail: `restored "${entry.name}"` });
+  return restored;
+}
+
+/** Permanently remove trash entries older than the retention window. */
+export function purgeExpiredTrash(ttlMs: number = TRASH_TTL_MS): string[] {
+  const cutoff = Date.now() - ttlMs;
+  const kept: TrashEntry[] = [];
+  const purged: string[] = [];
+  for (const entry of readTrashIndex()) {
+    if (entry.deletedAt < cutoff) {
+      try {
+        fs.rmSync(path.join(trashRoot(), entry.dirId), { recursive: true, force: true });
+      } catch {
+        /* already gone */
+      }
+      purged.push(entry.dirId);
+    } else {
+      kept.push(entry);
+    }
+  }
+  if (purged.length) writeTrashIndex(kept);
+  return purged;
+}
+
+export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }): boolean {
   // Team RBAC: viewers are read-only.
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
 
   validateDirId(dirId);
+  // TE-05: honour another device's checkout lock on the hard-delete path too.
+  assertProfileWritable(dirId, opts);
   const st = statusBrowser(dirId);
   if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
   const profileDir = path.join(getProfilesDir(), dirId);
   try {
     if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
+    try { const { transact } = require("./config/store.js"); let deleted=false; transact((draft:any)=>{ if(draft.browserProfiles?.[dirId]){ delete draft.browserProfiles[dirId]; deleted=true; } }); if(deleted) return true; } catch {}
     const cfg = getConfig();
     if (cfg.browserProfiles) { delete cfg.browserProfiles[dirId]; }
-    saveConfig(cfg);
+    saveConfig(cfg as any);
     return true;
   } catch { return false; }
 }
@@ -504,14 +672,59 @@ export async function launchBrowser(
 
   const profileDir = path.join(getProfilesDir(), dirId);
 
-  // Find free CDP port
-  const cdpPort = findFreePort();
+  // Find free CDP port (retry once if the port is stolen between allocation and spawn)
+  let cdpPort = await findFreePortWithRetry(1);
   const seed = normalizeFingerprintSeed(meta.fingerprintSeed || 12345);
   const platform = normalizePlatform(meta.platform || "windows");
   const resolvedProxy = resolveProfileProxySecret(dirId);
+  // ── Fail closed on proxy resolution (review item PL-04) ──
+  // The proxy is the whole point of the profile identity: if the profile asked
+  // for one and we cannot produce a usable config, launching would silently
+  // fall back to a direct connection and expose the host IP. Refuse instead,
+  // and name the proxy plus its last health check so the user can act.
+  const declaredProxyMode = String(meta.proxyMode || (meta.proxyName ? "named" : "none"));
+  const proxyWasRequested = declaredProxyMode !== "none" && declaredProxyMode !== "off";
+  // "default" mode with no default proxy configured means the user never
+  // asked for a proxy (fresh install): a direct connection is the expected
+  // behavior, not a fail-closed error. Only a default proxy that EXISTS but
+  // cannot be resolved, or a named proxy, is refuse-to-launch territory.
+  const defaultModeUnconfigured = declaredProxyMode === "default" && !cfg.defaultProxy;
+  if (proxyWasRequested && !defaultModeUnconfigured && (!resolvedProxy.config || resolvedProxy.mode === "none")) {
+    const label = resolvedProxy.name || meta.proxyName || cfg.defaultProxy || declaredProxyMode;
+    const health = getProxyHealthEntry(String(label));
+    const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+    const reason = !label || label === declaredProxyMode
+      ? declaredProxyMode === "default"
+        ? "no default proxy is configured"
+        : "the named proxy no longer exists"
+      : "it is not configured";
+    throw new Error(
+      `Profile requires proxy "${label}" but ${reason}. ` +
+      `Refusing to launch without it — a direct connection would expose your real IP. ` +
+      `(proxy: ${label}, last health check: ${when})`,
+    );
+  }
   if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
     const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
     throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
+  }
+  // Surface a degraded (but configured) proxy so the failure is attributable
+  // later: a launch that fails while the proxy is unhealthy is not mysterious.
+  if (resolvedProxy.name) {
+    const health = getProxyHealthEntry(resolvedProxy.name);
+    if (health && health.consecutiveFailures > 0) {
+      console.warn(
+        `[agent-browser] profile ${dirId.slice(0, 8)} launching through proxy "${resolvedProxy.name}" ` +
+        `with ${health.consecutiveFailures} consecutive failure(s); last check ${new Date(health.lastCheckedAt).toISOString()}`,
+      );
+      recordAudit({
+        category: "proxy",
+        action: "launch-with-unhealthy-proxy",
+        target: resolvedProxy.name,
+        actor: "auto",
+        detail: `profile ${dirId.slice(0, 8)}: ${health.consecutiveFailures} consecutive failure(s), risk=${health.risk}`,
+      });
+    }
   }
   // Health-based rotation: when the configured proxy was unhealthy and a
   // healthy fallback was selected, record it (health counters + audit) so the
@@ -817,7 +1030,17 @@ export async function launchBrowser(
   }
 
   try {
-    await waitForCdpReady(cdpPort, 15000);
+    try {
+      await waitForCdpReady(cdpPort, 15000);
+    } catch (e: any) {
+      const msg = e && e.message ? String(e.message) : String(e);
+      if (/EADDRINUSE|ECONNREFUSED/i.test(msg)) {
+        const retryPort = await findFreePortWithRetry(0);
+        const hint = retryPort && retryPort !== cdpPort ? " (next free port " + retryPort + " was available — retry the launch)" : "";
+        throw new Error(msg + hint);
+      }
+      throw e;
+    }
     const queuedCookies = await cdpCookieService.applyQueuedImports(dirId);
     if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
   } catch (e) {
@@ -829,94 +1052,64 @@ export async function launchBrowser(
     throw e;
   }
 
-  // Post-launch fingerprint drift check: a stored baseline that no longer
-  // matches the live fingerprint on high-risk fields can expose the real host
-  // or an unstable anti-detect layer. Blocks by default (blockOnFingerprintDrift);
-  // a failed capture only warns so a transient CDP issue never bricks a launch.
   let driftCheck: LaunchDriftCheck = { checked: false };
-  if (!passThrough && meta.fingerprintBaseline) {
-    try {
-      const current = await captureFingerprint(cdpPort);
-      const drift = diffFingerprints(meta.fingerprintBaseline, current);
-      // G9 persona-consistency gate: a capture matching the previous one is
-      // still a leak if the injection never engaged (consistent-leak case) —
-      // cross-check platform/UA/plugins/tz against the configured persona.
-      const personaCheck = checkPersonaConsistency(
-        { platform: meta.platform || "windows", timezone: meta.timezone },
-        current,
-      );
-      const personaDrift = mismatchesAsDrift(personaCheck);
-      const combinedDrift = [...drift, ...personaDrift];
-      const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-      driftCheck = { checked: true, risky, drift: combinedDrift };
-      if (drift.length || personaDrift.length) {
-        recordAudit({
-          category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
-          detail: combinedDrift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift),
-        });
-      }
-      if (risky && cfg.blockOnFingerprintDrift !== false) {
-        const reason = "Fingerprint drift blocked (" + summarizeDrift(combinedDrift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
-        recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
-        const failedEntry = runningProcesses.get(dirId);
-        runningProcesses.delete(dirId);
-        await failedEntry?.proxyBridge?.close().catch(() => undefined);
-        try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
-        try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
-        await waitForProcessExit(pid);
-        const blockError: any = new Error(reason);
-        blockError.driftBlocked = true;
-        throw blockError;
-      }
-    } catch (e: any) {
-      if (e && e.driftBlocked) throw e;
-      console.warn("[agent-browser] fingerprint drift check failed for " + dirId.slice(0, 8) + ":", e.message || e);
-      driftCheck = { checked: false, error: (e && e.message) || String(e) };
+  try {
+    driftCheck = await runFingerprintDriftGuard(
+      {
+        captureFingerprint: (port: number) => captureFingerprint(port),
+        audit: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto", detail }),
+        auditBlock: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail }),
+        auditError: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-error", target: dirId, actor: "auto", detail }),
+      },
+      { cdpPort, meta, cfg, passThrough },
+    );
+  } catch (e: any) {
+    if (e instanceof LaunchBlockedError) {
+      const failedEntry = runningProcesses.get(dirId);
+      runningProcesses.delete(dirId);
+      await failedEntry?.proxyBridge?.close().catch(() => undefined);
+      try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
+      try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
+      await waitForProcessExit(pid);
+      const blockError: any = new Error(e.message);
+      blockError.driftBlocked = true;
+      throw blockError;
     }
+    throw e;
   }
 
-  // Host environment risk check (DNS resolvers / CN fonts / proxy DNS).
-  // Runs after CDP is ready so a healthy launch is not penalized by a slow
-  // pre-launch probe; high findings are always audited, and only block when
-  // config.blockOnEnvironmentRisk is true (opt-in hard gate).
   let envCheck: LaunchEnvCheck = { checked: false };
-  if (!passThrough) {
-    try {
-      const envResult = checkEnvironmentRisk(
-        { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
-        { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
-      );
-      envCheck = { checked: true, high: !envResult.ok, findings: envResult.findings };
-      if (!envResult.ok) {
-        recordAudit({
-          category: "profile", action: "env-risk-high", target: dirId, actor: "auto",
-          detail: "high: " + summarizeEnvFindings(envResult.findings, "high") + (envResult.findings.some((f) => f.severity === "medium") ? "; medium: " + summarizeEnvFindings(envResult.findings, "medium") : ""),
-        });
-      }
-      if (shouldBlockEnvironmentRisk(envResult, cfg.blockOnEnvironmentRisk)) {
-        const reason = "Environment risk blocked (" + summarizeEnvFindings(envResult.findings, "high") + "). Fix the host environment or set blockOnEnvironmentRisk=false to launch.";
-        recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail: reason });
-        const failedEntry = runningProcesses.get(dirId);
-        runningProcesses.delete(dirId);
-        await failedEntry?.proxyBridge?.close().catch(() => undefined);
-        try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate env-blocked process " + pid + ":", killError); }
-        try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
-        await waitForProcessExit(pid);
-        const envBlockError: any = new Error(reason);
-        envBlockError.envBlocked = true;
-        throw envBlockError;
-      }
-    } catch (e: any) {
-      if (e && e.envBlocked) throw e;
-      console.warn("[agent-browser] environment risk check failed for " + dirId.slice(0, 8) + ":", e.message || e);
-      envCheck = { checked: false, error: (e && e.message) || String(e) };
+  try {
+    const r = runEnvironmentRiskGuard(
+      {
+        auditHigh: (detail: string) => recordAudit({ category: "profile", action: "env-risk-high", target: dirId, actor: "auto", detail }),
+        auditError: (detail: string) => recordAudit({ category: "profile", action: "env-risk-error", target: dirId, actor: "auto", detail }),
+      },
+      { meta, resolvedProxy, cfg, passThrough },
+    );
+    envCheck = r as any;
+  } catch (e: any) {
+    if (e instanceof LaunchBlockedError) {
+      const detail = e.message;
+      recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail });
+      const failedEntry = runningProcesses.get(dirId);
+      runningProcesses.delete(dirId);
+      await failedEntry?.proxyBridge?.close().catch(() => undefined);
+      try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate env-blocked process " + pid + ":", killError); }
+      try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
+      await waitForProcessExit(pid);
+      const envBlockError: any = new Error(e.message);
+      envBlockError.envBlocked = true;
+      throw envBlockError;
     }
+    throw e;
   }
 
   child.on("exit", () => {
     // Cancel pending SIGKILL timer if any — process exited naturally
     const entry = runningProcesses.get(dirId);
     if (entry?.killTimer) { clearTimeout(entry.killTimer); }
+    if (entry) delete (entry as any).stopping;
     void entry?.proxyBridge?.close().catch(() => undefined);
     runningProcesses.delete(dirId);
     try { fs.closeSync(logFd); } catch (closeError) { console.error(`[agent-browser] failed to close launch log:`, closeError); }
@@ -1271,197 +1464,34 @@ async function launchFirefoxProfile(
   return { pid, cdpPort: actualPort, driftCheck, envCheck };
 }
 
-export function stopBrowser(dirId: string): boolean {
-  validateDirId(dirId);
-  const entry = runningProcesses.get(dirId);
-  const pids: number[] = [];
-  if (entry) pids.push(entry.pid);
-  // ps fallback: pick up processes we lost track of
-  const psFound = findBrowserByProfile(dirId);
-  if (psFound && !pids.includes(psFound.pid)) pids.push(psFound.pid);
-  if (!pids.length) return false;
+import { stopBrowser as _stopBrowser, statusBrowser as _statusBrowser, stopAllBrowserProfiles as _stopAll, getCdpWebSocketUrl as _getCdpUrl, findBrowserByProfile as _findByProfile } from "./browser/lifecycle.js";
+import {
+  setIdlePolicyTimeoutMs as _setIdle,
+  getIdlePolicyTimeoutMs as _getIdle,
+  touchProfileActivity as _touch,
+  touchProfileActivityByPort as _touchByPort,
+  getEngineByPort as _getEngineByPort,
+  getFirefoxBidiSessionByPort as _getBidiByPort,
+  getProfileIdleMs as _getIdleMs,
+  listRunningProfileIdle as _listIdle,
+  sweepIdleProfiles as _sweep,
+} from "./browser/idle-tracker.js";
+export const stopBrowser = _stopBrowser;
+export const statusBrowser = _statusBrowser;
+export const stopAllBrowserProfiles = _stopAll;
+export const getCdpWebSocketUrl = _getCdpUrl;
+const findBrowserByProfile = _findByProfile;
 
-  // Close the long-lived BiDi session first (Firefox drops preload scripts
-  // with it; the browser process itself is still reclaimed below).
-  if (entry?.bidiConn) {
-    dropFirefoxSession(entry.port);
-    try { entry.bidiConn.close(); } catch { /* ignore */ }
-  }
-  entry && delete (entry as any).bidiConn;
-
-  // Cancel any pending SIGKILL timer to prevent stale PID reuse race
-  if (entry?.killTimer) { clearTimeout(entry.killTimer); }
-
-  for (const p of pids) {
-    try { process.kill(p, "SIGTERM"); } catch {}
-  }
-  const killTimer = setTimeout(() => {
-    // Only SIGKILL if the process is still tracked (hasn't exited naturally)
-    const current = runningProcesses.get(dirId);
-    if (current && current.pid === pids[0]) {
-      for (const p of pids) {
-        try { process.kill(p, "SIGKILL"); } catch {}
-      }
-      void current.proxyBridge?.close().catch(() => undefined);
-      runningProcesses.delete(dirId);
-    }
-  }, 3000);
-
-  // Update entry with killTimer so it can be cancelled on natural exit
-  if (entry) {
-    entry.killTimer = killTimer;
-  } else {
-    runningProcesses.set(dirId, { pid: pids[0], process: null, port: 0, lastActivityAt: Date.now(), killTimer });
-  }
-
-  recordAudit({ category: "profile", action: "stop", target: dirId, actor: "user" });
-  return true;
-}
-
-export function statusBrowser(dirId: string): { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } {
-  validateDirId(dirId);
-  const entry = runningProcesses.get(dirId);
-  if (entry) {
-    try {
-      process.kill(entry.pid, 0);
-      const status: { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } = { running: true, pid: entry.pid, cdpPort: entry.port };
-      if (entry.injectionProbe) status.injectionProbe = entry.injectionProbe;
-      return status;
-    } catch {
-      void entry.proxyBridge?.close().catch(() => undefined);
-      runningProcesses.delete(dirId);
-    }
-  }
-  // ps fallback
-  const psFound = findBrowserByProfile(dirId);
-  if (psFound) {
-    runningProcesses.set(dirId, { pid: psFound.pid, process: null, port: psFound.cdpPort, lastActivityAt: Date.now() });
-    return { running: true, pid: psFound.pid, cdpPort: psFound.cdpPort };
-  }
-  return { running: false, pid: null, cdpPort: null };
-}
-
-// ── Idle tracking (server/headless profile auto-stop) ──
-
-let idlePolicyTimeoutMs = 0;
-
-/** Configure the idle auto-stop timeout (0 disables). Called once at startup. */
-export function setIdlePolicyTimeoutMs(ms: number): void {
-  idlePolicyTimeoutMs = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 0;
-}
-
-export function getIdlePolicyTimeoutMs(): number {
-  return idlePolicyTimeoutMs;
-}
-
-/** Mark a running profile as active (called on any interaction that touches it). */
-export function touchProfileActivity(dirId: string): void {
-  if (typeof dirId !== "string" || !dirId) return;
-  const entry = runningProcesses.get(dirId);
-  if (entry) entry.lastActivityAt = Date.now();
-}
-
-/** Mark the profile owning the given CDP port as active. */
-export function touchProfileActivityByPort(port: number): void {
-  if (!Number.isInteger(port) || port < 1) return;
-  for (const [dirId, entry] of runningProcesses) {
-    if (entry.port === port) {
-      entry.lastActivityAt = Date.now();
-      return;
-    }
-  }
-}
-
-/** Engine of the live profile bound to a debug port, or null when unknown. */
-export function getEngineByPort(port: number): BrowserEngine | null {
-  if (!Number.isInteger(port) || port < 1) return null;
-  for (const [dirId, entry] of runningProcesses) {
-    if (entry.port !== port) continue;
-    try { process.kill(entry.pid, 0); } catch { continue; }
-    const cfg = getConfig() as any;
-    return sanitizeBrowserEngine(cfg.browserProfiles?.[dirId]?.engine);
-  }
-  return null;
-}
-
-/**
- * The long-lived BiDi session of the live Firefox profile bound to a debug
- * port (the one carrying the managed preload scripts), or null. Agent tooling
- * uses this so the injected fingerprint world is the one the agent sees.
- */
-export function getFirefoxBidiSessionByPort(port: number): BidiConnection | null {
-  return getRegisteredFirefoxSession(port);
-}
-
-/** Milliseconds since the profile was last active, or null when not running. */
-export function getProfileIdleMs(dirId: string): number | null {
-  if (typeof dirId !== "string" || !dirId) return null;
-  const entry = runningProcesses.get(dirId);
-  if (!entry) return null;
-  return Math.max(0, Date.now() - entry.lastActivityAt);
-}
-
-/** Snapshot of every running profile with its current idle time (for /api/server/idle). */
-export function listRunningProfileIdle(): Array<{ dirId: string; pid: number; cdpPort: number; idleMs: number }> {
-  const out: Array<{ dirId: string; pid: number; cdpPort: number; idleMs: number }> = [];
-  for (const [dirId, entry] of runningProcesses) {
-    // Skip entries that are mid-stop (killTimer pending) — they are already going away.
-    if (entry.killTimer) continue;
-    try { process.kill(entry.pid, 0); } catch { continue; }
-    out.push({ dirId, pid: entry.pid, cdpPort: entry.port, idleMs: Math.max(0, Date.now() - entry.lastActivityAt) });
-  }
-  return out;
-}
-
-/**
- * Stop every running profile that has been idle (no REST/CDP/automation activity)
- * for longer than maxIdleMs. Returns the stopped dirIds. Mirrors upstream
- * CloakBrowser cloakserve idle cleanup (#352) for our on-demand profile model.
- */
+export const setIdlePolicyTimeoutMs = _setIdle;
+export const getIdlePolicyTimeoutMs = _getIdle;
+export const touchProfileActivity = _touch;
+export const touchProfileActivityByPort = _touchByPort;
+export const getEngineByPort = _getEngineByPort;
+export const getFirefoxBidiSessionByPort = _getBidiByPort;
+export const getProfileIdleMs = _getIdleMs;
+export const listRunningProfileIdle = _listIdle;
 export function sweepIdleProfiles(maxIdleMs: number): string[] {
-  if (!Number.isFinite(maxIdleMs) || maxIdleMs <= 0) return [];
-  const stopped: string[] = [];
-  for (const [dirId, entry] of runningProcesses) {
-    if (entry.killTimer) continue; // already stopping
-    try { process.kill(entry.pid, 0); } catch { continue; }
-    if (Date.now() - entry.lastActivityAt >= maxIdleMs) {
-      try {
-        const ok = stopBrowser(dirId);
-        if (ok) {
-          stopped.push(dirId);
-          recordAudit({ category: "profile", action: "stop", target: dirId, actor: "auto", detail: "idle timeout" });
-        }
-      } catch (error) {
-        console.error("[agent-browser] idle sweep failed for " + dirId.slice(0, 8) + ":", error);
-      }
-    }
-  }
-  return stopped;
-}
-
-export async function getCdpWebSocketUrl(port: number): Promise<string | null> {
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return null;
-  }
-  try {
-    const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
-    if (versionResp.ok) {
-      const version = await versionResp.json() as { webSocketDebuggerUrl?: string };
-      if (typeof version.webSocketDebuggerUrl === "string" && version.webSocketDebuggerUrl.startsWith(`ws://127.0.0.1:${port}/`)) {
-        return version.webSocketDebuggerUrl;
-      }
-    }
-  } catch { /* fall back to page target list */ }
-
-  try {
-    const listResp = await fetch(`http://127.0.0.1:${port}/json`);
-    if (!listResp.ok) return null;
-    const targets = await listResp.json() as Array<{ webSocketDebuggerUrl?: string }>;
-    const target = targets.find((item) => typeof item.webSocketDebuggerUrl === "string" && item.webSocketDebuggerUrl.startsWith(`ws://127.0.0.1:${port}/`));
-    return target?.webSocketDebuggerUrl || null;
-  } catch {
-    return null;
-  }
+  return _sweep(maxIdleMs, stopBrowser);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1842,54 +1872,9 @@ function dedupeChromeArgs(args: string[]): string[] {
   return [...map.values()];
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Internal: ps-based process discovery (survives app restarts)
-// ═══════════════════════════════════════════════════════════════
+// Re-export for callers that imported this from browser-manager; implementation lives in process-discovery.
+export { parseBrowserProcessLine } from "./process-discovery.js";
 
-export function parseBrowserProcessLine(
-  line: string,
-  expectedProfileDir: string,
-): { pid: number; cdpPort: number } | null {
-  const pid = parseInt(line.trim().split(/\s+/, 1)[0], 10);
-  if (!Number.isInteger(pid) || pid < 1) return null;
-  // Chromium family: `--user-data-dir=<dir> --remote-debugging-port=<port>`.
-  // Firefox family: `-profile <dir> ... --remote-debugging-port <port>`
-  // (space-separated, matching buildFirefoxLaunchArgs / RoxyFirefox).
-  const expected = path.resolve(expectedProfileDir);
-  let profileArg: string | null = null;
-  const chromiumMatch = line.match(/--user-data-dir=("[^"]+"|'[^']+'|\S+)/);
-  if (chromiumMatch) profileArg = chromiumMatch[1].replace(/^['\"]|['\"]$/g, "");
-  if (profileArg === null) {
-    const fxMatch = line.match(/(?:^|\s)-profile\s+("[^"]+"|'[^']+'|\S+)/);
-    if (fxMatch) profileArg = fxMatch[1].replace(/^['\"]|['\"]$/g, "");
-  }
-  if (profileArg === null) return null;
-  if (path.resolve(profileArg) !== expected) return null;
-  let cdpPort = 0;
-  const portEq = line.match(/--remote-debugging-port=(\d+)/);
-  const portSpace = line.match(/--remote-debugging-port\s+(\d+)/);
-  if (portEq) cdpPort = parseInt(portEq[1], 10);
-  else if (portSpace) cdpPort = parseInt(portSpace[1], 10);
-  // Renderer/helper processes can briefly outlive the browser process and
-  // retain the profile path, but they do not own its CDP endpoint.
-  if (!Number.isInteger(cdpPort) || cdpPort < 1 || cdpPort > 65535) return null;
-  return { pid, cdpPort };
-}
-
-function findBrowserByProfile(dirId: string): { pid: number; cdpPort: number } | null {
-  validateDirId(dirId);
-  const expectedProfileDir = path.resolve(getProfilesDir(), dirId);
-  try {
-    const output = execFileSync("ps", ["-eo", "pid,args"], { encoding: "utf-8", timeout: 2000 });
-    for (const line of output.split("\n")) {
-      const processInfo = parseBrowserProcessLine(line, expectedProfileDir);
-      if (processInfo) return processInfo;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════
 // Geo-IP: Auto-detect timezone + locale from proxy exit IP
@@ -2093,25 +2078,26 @@ function sortKeys(value: any): any {
   return out;
 }
 
-function findFreePort(): number {
-  const s = net.createServer();
-  s.listen(0);
-  const port = (s.address() as net.AddressInfo).port;
-  s.close();
-  return port;
-}
-
-export function stopAllBrowserProfiles(): void {
-  for (const [dirId, entry] of runningProcesses) {
-    const pid = entry.pid;
-    if (entry.killTimer) clearTimeout(entry.killTimer);
-    try { process.kill(pid, "SIGTERM"); } catch {}
-    void entry.proxyBridge?.close().catch(() => undefined);
-    // Give a brief window for clean exit before SIGKILL
-    setTimeout(() => {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-      runningProcesses.delete(dirId);
-    }, 1000).unref();
+async function findFreePortWithRetry(retries = 2): Promise<number> {
+  let last: unknown = null;
+  for (let i = 0; i <= retries; i++) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', () => {
+        const p = (srv.address() as net.AddressInfo).port;
+        srv.close(() => resolve(p));
+      });
+    }).catch(e => { last = e; return null as unknown as number; });
+    if (port) return port;
   }
-  runningProcesses.clear();
+  throw last instanceof Error ? last : new Error(String(last || 'No free port'));
+}
+function findFreePort(): number {
+  // Sync fallback for legacy call sites: best-effort single probe.
+  const srv = net.createServer();
+  srv.listen(0);
+  const port = (srv.address() as net.AddressInfo).port;
+  srv.close();
+  return port;
 }

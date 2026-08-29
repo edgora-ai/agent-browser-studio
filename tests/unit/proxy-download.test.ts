@@ -62,22 +62,11 @@ describe("resolveDownloadProxy — priority chain", () => {
     for (const k of Object.keys(savedEnv)) process.env[k] = savedEnv[k];
   });
 
-  it("returns the built-in default proxy when no app proxy is overridden", () => {
-    // A fresh app config always ships a built-in "default" proxy (127.0.0.1:7890)
-    // as the fallback — this is intentional product behavior.
+  it("returns null (direct download) when no default proxy and no env proxy exist", () => {
+    // A1: a fresh app config ships no built-in proxy. With no default proxy
+    // and no env proxy, downloads fall through to a direct connection.
     const p = resolveDownloadProxy();
-    expect(p).not.toBeNull();
-    expect(p!.host).toBe("127.0.0.1");
-    expect(p!.port).toBe(7890);
-  });
-
-  it("returns null when defaultProxy points at no entry and no env proxy is set", () => {
-    // The built-in "default" proxy is protected from deletion, so reach a no-proxy
-    // state by pointing defaultProxy at a name that doesn't exist (in-memory only,
-    // no save/reload so mergeConfig can't re-add the built-in default).
-    const cfg = getConfig();
-    cfg.defaultProxy = "does-not-exist";
-    expect(resolveDownloadProxy()).toBeNull();
+    expect(p).toBeNull();
   });
 
   it("returns a custom app default proxy when configured", () => {
