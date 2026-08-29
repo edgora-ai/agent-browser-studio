@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
+function __extTransact(mut: (draft:any)=>void): boolean { try { const { transact } = require("./config/store.js"); transact(mut); return true; } catch { return false; } }
 import { downloadFileWithCurl } from "./proxy-detector.js";
+
 
 export interface ExtensionRepositoryEntry {
   id: string;
@@ -114,10 +116,9 @@ export async function addOrUpdateChromeStoreExtension(extId: string, opts: { sha
       updatedAt: now,
     };
 
-    const cfg = structuredClone(getConfig()) as any;
-    cfg.extensionRepository = cfg.extensionRepository || {};
-    cfg.extensionRepository[extId] = entry;
-    commitRepositoryUpdate(stagingDir, finalUnpackedDir, tmpCrx, finalPackagePath, () => saveConfig(cfg));
+    const _entry = entry;
+    const _extId = extId;
+    commitRepositoryUpdate(stagingDir, finalUnpackedDir, tmpCrx, finalPackagePath, () => { if (!__extTransact((d:any)=>{ d.extensionRepository=d.extensionRepository||{}; d.extensionRepository[_extId]=_entry; })) { const cfg = structuredClone(getConfig()) as any; cfg.extensionRepository=cfg.extensionRepository||{}; cfg.extensionRepository[_extId]=_entry; saveConfig(cfg); } });
     return entry;
   } finally {
     if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
@@ -267,6 +268,13 @@ export async function updateRepositoryExtension(extId: string): Promise<Extensio
 
 export function deleteRepositoryExtension(extId: string): boolean {
   validateExtensionId(extId);
+  let deleted=false;
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft:any)=>{ if (!draft.extensionRepository?.[extId]) return; delete draft.extensionRepository[extId]; for(const profile of Object.values(draft.browserProfiles||{}) as any[]) if(profile.extensions) delete profile.extensions[extId]; deleted=true; });
+    if (deleted) { const repoDir = getExtensionRepoEntryDir(extId); if (fs.existsSync(repoDir)) fs.rmSync(repoDir, { recursive: true, force: true }); return true; }
+    return false;
+  } catch {}
   const cfg = structuredClone(getConfig()) as any;
   if (!cfg.extensionRepository?.[extId]) return false;
   delete cfg.extensionRepository[extId];
@@ -370,6 +378,12 @@ export async function restoreSyncedExtensionPackage(extId: string, packagePath: 
 
 export function setRepositoryExtensionMeta(extId: string, opts: { shared?: boolean; tags?: string[] }): ExtensionRepositoryEntry {
   validateExtensionId(extId);
+  let result: any =null;
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft:any)=>{ const e=draft.extensionRepository?.[extId]; if(!e) throw new Error("Extension is not in the repository"); if(opts.shared!==undefined) e.shared=Boolean(opts.shared); if(opts.tags!==undefined) e.tags=normalizeTags(opts.tags); e.updatedAt=Date.now(); result=e; });
+    return result as ExtensionRepositoryEntry;
+  } catch(e:any){ if(e.message==="Extension is not in the repository") throw e; }
   const cfg = structuredClone(getConfig()) as any;
   const entry = cfg.extensionRepository?.[extId];
   if (!entry) throw new Error("Extension is not in the repository");

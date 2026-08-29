@@ -1,4 +1,5 @@
-import { ipcMain } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
+import * as nodePath from "node:path";
 import {
   launchBrowser, stopBrowser, statusBrowser, listBrowserProfiles, checkFingerprintDrift,
   getRuntimeChromiumStatus, verifyRuntimeChromium, getEngineStatus,
@@ -18,6 +19,13 @@ import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts }
 import { validateDirId } from "../services/utils.js";
 import { sanitizeBrowserEngine } from "../services/browser-engine.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
+import {
+  runBatch,
+  normalizeConcurrency,
+  MAX_BATCH_CONCURRENCY,
+  type BatchResult,
+} from "../services/batch-queue.js";
+import { newTraceId, logInfo } from "../services/observability.js";
 import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
@@ -27,6 +35,38 @@ function handleBrowser(action: string, handler: BrowserIpcHandler): void {
   // Keep the pre-rename channel as an unadvertised compatibility alias for
   // automation clients during the data migration window.
   ipcMain.handle(`cloak:${action}`, handler);
+}
+
+/**
+ * Resolve a user-picked path to a Chromium executable.
+ * Accepts the .app bundle (Contents/MacOS/<binary>) or the binary directly.
+ */
+function resolveChromiumExecutable(picked: string): string | null {
+  if (!picked) return null;
+  try {
+    if (fs.statSync(picked).isFile()) return picked;
+  } catch {
+    return null;
+  }
+  for (const rel of ["Contents/MacOS", "Contents"]) {
+    const dir = nodePath.join(picked, rel);
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = nodePath.join(dir, entry);
+      try {
+        const st = fs.statSync(full);
+        if (st.isFile() && (st.mode & 0o111) !== 0) return full;
+      } catch {
+        /* unreadable entry — skip */
+      }
+    }
+  }
+  return null;
 }
 
 export function registerBrowserHandlers(): void {
@@ -58,6 +98,36 @@ export function registerBrowserHandlers(): void {
       return { success: true, status: verifyRuntimeChromium() };
     } catch (e: any) {
       return { success: false, error: e.message || String(e), status: getRuntimeChromiumStatus() };
+    }
+  });
+
+  // Review item PL-07: a missing engine used to surface only as a launch
+  // failure. This lets the Profiles page offer a direct in-app recovery path.
+  handleBrowser("select-binary", async () => {
+    try {
+      const { dialog } = await import("electron");
+      const win = BrowserWindow.getFocusedWindow();
+      const picked = await dialog.showOpenDialog(win as any, {
+        title: "Select the Chromium app or executable",
+        properties: ["openDirectory", "openFile"],
+      });
+      if (picked.canceled || !picked.filePaths.length) return { success: false, cancelled: true };
+      const chosen = picked.filePaths[0];
+      const exe = resolveChromiumExecutable(chosen);
+      if (!exe) return { success: false, error: "No Chromium executable found inside that selection" };
+      const cfg = getConfig();
+      cfg.chromiumBin = exe;
+      saveConfig(cfg);
+      recordAudit({
+        category: "profile",
+        action: "engine-binary-selected",
+        target: exe,
+        actor: "user",
+        detail: "chromium binary configured from the UI",
+      });
+      return { success: true, path: exe, status: verifyRuntimeChromium() };
+    } catch (e: any) {
+      return { success: false, error: e?.message || String(e) };
     }
   });
 
@@ -193,6 +263,100 @@ export function registerBrowserHandlers(): void {
   handleBrowser("stop", async (_event, dirId: string) => {
     return { success: stopBrowser(dirId) };
   });
+
+  // ── Batch operations (review items PL-01 / PL-02) ──
+  // Concurrency is bounded here as well as in the renderer, so automation
+  // clients that bypass the UI cannot fan out unbounded Chromium launches.
+  const activeBatchJobs = new Map<string, { cancelled: boolean }>();
+
+  function profileName(dirId: string): string {
+    try {
+      const cfg = getConfig() as any;
+      return cfg.browserProfiles?.[dirId]?.name || dirId.slice(0, 8);
+    } catch {
+      return dirId.slice(0, 8);
+    }
+  }
+
+  function emitProgress(event: any, payload: Record<string, unknown>): void {
+    try {
+      const sender = event?.sender;
+      if (sender && typeof sender.send === "function" && !sender.isDestroyed()) {
+        sender.send("batch:progress", payload);
+      }
+    } catch {
+      /* window closed mid-batch — progress is best effort */
+    }
+  }
+
+  handleBrowser("batch-launch", async (event, params: { dirIds: string[]; concurrency?: number; jobId?: string }) => {
+    const dirIds = Array.isArray(params?.dirIds) ? params.dirIds.filter(Boolean) : [];
+    const jobId = params?.jobId || newTraceId();
+    if (!dirIds.length) {
+      return { total: 0, succeeded: 0, failed: 0, cancelled: false, durationMs: 0, concurrency: 0, traceId: jobId, jobId, results: [] } as BatchResult<string> & { jobId: string };
+    }
+    for (const id of dirIds) validateDirId(id);
+    const concurrency = normalizeConcurrency(params?.concurrency);
+    const signal = { cancelled: false };
+    activeBatchJobs.set(jobId, signal);
+    logInfo("batch.launch.start", { jobId, total: dirIds.length, concurrency });
+    try {
+      const result = await runBatch<string>({
+        items: dirIds,
+        label: "launch",
+        concurrency,
+        signal,
+        onProgress: (done, total) => emitProgress(event, { jobId, kind: "launch", done, total }),
+        worker: async (dirId) => {
+          const r = await launchBrowser(dirId);
+          return { dirId, name: profileName(dirId), pid: r.pid, cdpPort: r.cdpPort };
+        },
+      });
+      return { ...result, jobId };
+    } finally {
+      activeBatchJobs.delete(jobId);
+    }
+  });
+
+  handleBrowser("batch-stop", async (event, params: { dirIds: string[]; concurrency?: number; jobId?: string }) => {
+    const dirIds = Array.isArray(params?.dirIds) ? params.dirIds.filter(Boolean) : [];
+    const jobId = params?.jobId || newTraceId();
+    if (!dirIds.length) {
+      return { total: 0, succeeded: 0, failed: 0, cancelled: false, durationMs: 0, concurrency: 0, traceId: jobId, jobId, results: [] } as BatchResult<string> & { jobId: string };
+    }
+    for (const id of dirIds) validateDirId(id);
+    const concurrency = normalizeConcurrency(params?.concurrency);
+    const signal = { cancelled: false };
+    activeBatchJobs.set(jobId, signal);
+    logInfo("batch.stop.start", { jobId, total: dirIds.length, concurrency });
+    try {
+      const result = await runBatch<string>({
+        items: dirIds,
+        label: "stop",
+        concurrency,
+        signal,
+        onProgress: (done, total) => emitProgress(event, { jobId, kind: "stop", done, total }),
+        worker: async (dirId) => {
+          const ok = stopBrowser(dirId);
+          if (!ok) throw new Error("Stop failed");
+          return { dirId, name: profileName(dirId) };
+        },
+      });
+      return { ...result, jobId };
+    } finally {
+      activeBatchJobs.delete(jobId);
+    }
+  });
+
+  handleBrowser("batch-cancel", async (_event, jobId: string) => {
+    const job = activeBatchJobs.get(String(jobId || ""));
+    if (!job) return { success: false, error: "Unknown or finished batch job" };
+    job.cancelled = true;
+    logInfo("batch.cancel", { jobId });
+    return { success: true };
+  });
+
+  handleBrowser("batch-max-concurrency", async () => ({ max: MAX_BATCH_CONCURRENCY }));
 
   handleBrowser("status", async (_event, dirId: string) => {
     return statusBrowser(dirId);
@@ -333,18 +497,33 @@ export function registerBrowserHandlers(): void {
     }
   });
 
-  // Open fingerprint risk-check URL in a profile
-  // If profile is not running, auto-launches it first and waits for CDP readiness.
-  handleBrowser("open-risk-check", async (_event, params: { dirId: string }) => {
+  // Open fingerprint risk-check URL in a profile.
+  //
+  // Review item PL-03: this used to auto-launch a stopped profile without
+  // asking, so a "read-only" check silently started a browser (burning
+  // resources and changing the profile's live state). Launching now requires
+  // the caller to pass `allowLaunch: true`, which the UI only does after an
+  // explicit confirmation.
+  //
+  // Review item TE-04: the destination is a third-party site, so the UI must
+  // obtain consent before calling this handler at all.
+  handleBrowser("open-risk-check", async (_event, params: { dirId: string; allowLaunch?: boolean; url?: string }) => {
     const { dirId } = params;
     validateDirId(dirId);
-    const url = "https://ping0.cc/env";
+    const url = String(params?.url || "https://ping0.cc/env");
 
     let status = statusBrowser(dirId);
     let cdpPort = status.cdpPort || 0;
 
-    // Auto-launch if not running
+    // Auto-launch only when the caller (UI, after user confirmation) allows it.
     if (!status.running) {
+      if (!params?.allowLaunch) {
+        return {
+          success: false,
+          code: "PROFILE_NOT_RUNNING",
+          error: "The profile is not running. This check needs a running browser.",
+        };
+      }
       try {
         const launchResult = await launchBrowser(dirId);
         cdpPort = launchResult.cdpPort || 0;

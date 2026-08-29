@@ -5,6 +5,7 @@ import { getConfig, saveConfig } from "./config-manager.js";
 import { reloadSchedule } from "./automation.js";
 import type { AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType } from "../types.js";
 
+
 const TRIGGER_TYPES = new Set(["cron", "once", "event"]);
 const ACTION_TYPES = new Set(["launch-profile", "stop-profile", "agent-task", "sync-push", "sync-pull", "custom-js"]);
 const EVENTS = new Set(["profile:launched", "profile:exited"]);
@@ -52,10 +53,15 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
       id: newRuleId(), name, enabled: args?.enabled !== false,
       trigger, action, createdAt: Date.now(),
     };
-    const cfg = getConfig() as any;
-    cfg.automation = cfg.automation || [];
-    cfg.automation.push(rule);
-    saveConfig(cfg);
+    try {
+      const { transact } = require("./config/store.js");
+      transact((draft: any) => { draft.automation = draft.automation || []; draft.automation.push(rule); });
+    } catch {
+      const cfg = getConfig() as any;
+      cfg.automation = cfg.automation || [];
+      cfg.automation.push(rule);
+      saveConfig(cfg);
+    }
     reloadSchedule();
     return { success: true, rule };
   } catch (e: any) {
@@ -64,9 +70,14 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
 }
 
 export function deleteAutomationRule(ruleId: string): { success: boolean } {
-  const cfg = getConfig() as any;
-  cfg.automation = (cfg.automation || []).filter((r: AutomationRule) => r.id !== ruleId);
-  saveConfig(cfg);
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft: any) => { draft.automation = (draft.automation || []).filter((r: AutomationRule) => r.id !== ruleId); });
+  } catch {
+    const cfg = getConfig() as any;
+    cfg.automation = (cfg.automation || []).filter((r: AutomationRule) => r.id !== ruleId);
+    saveConfig(cfg);
+  }
   reloadSchedule();
   return { success: true };
 }

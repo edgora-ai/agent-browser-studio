@@ -1,6 +1,7 @@
 import type { ProxyHealthEntry, ProxyHealthHistoryPoint, ProxyRiskLevel } from "../types.js";
 import { getConfig, getProxyHealthEntry, saveConfig, setProxyHealth } from "./config-manager.js";
 
+
 export interface ProxyHealthObservation {
   success: boolean;
   exitIp?: string | null;
@@ -235,6 +236,28 @@ export function listProxyHealth(): ProxyHealthEntry[] {
 
 /** Clear one proxy's health history, or all when no name is given. Returns count cleared. */
 export function clearProxyHealth(name?: string): number {
+  let result = 0;
+  let needsFallback = false;
+  try {
+    const { transact } = require("./config/store.js");
+    transact((draft: any) => {
+      if (name) {
+        if (!Object.hasOwn(draft.proxies || {}, name)) throw new Error(`Proxy not found: ${name}`);
+        if (draft.proxyHealth && Object.hasOwn(draft.proxyHealth, name)) {
+          delete draft.proxyHealth[name];
+          result = 1;
+        } else {
+          result = 0;
+        }
+        return;
+      }
+      result = Object.keys(draft.proxyHealth || {}).length;
+      draft.proxyHealth = {};
+    });
+    if (!needsFallback) return result;
+  } catch (e: any) {
+    if (e && e.message && String(e.message).includes("Proxy not found")) throw e;
+  }
   const cfg = getConfig();
   if (name) {
     if (!Object.hasOwn(cfg.proxies || {}, name)) throw new Error(`Proxy not found: ${name}`);

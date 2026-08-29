@@ -101,18 +101,26 @@ function summarizeRaw(res: any): string {
 export interface WebRtcDiagRunResult {
   ok: boolean;
   error?: string;
+  /** Machine-readable failure reason; "PROFILE_NOT_RUNNING" asks the UI to confirm a launch. */
+  code?: string;
   result?: WebRtcDiagnosticsEntry;
 }
 
 /**
- * Run a real in-browser WebRTC probe for a profile (auto-launching it first)
- * and persist one history entry. Mirrors open-risk-check's launch/CDP flow.
+ * Run a real in-browser WebRTC probe for a profile and persist one history
+ * entry. Mirrors open-risk-check's launch/CDP flow.
+ *
+ * Review item PL-03: launching a stopped profile used to be implicit. It now
+ * requires `allowLaunch`, which the UI only passes after the user confirms.
  */
-export async function runWebRtcDiagnostics(dirId: string): Promise<WebRtcDiagRunResult> {
+export async function runWebRtcDiagnostics(dirId: string, opts?: { allowLaunch?: boolean }): Promise<WebRtcDiagRunResult> {
   try {
     let status = statusBrowser(dirId);
     let cdpPort = status.cdpPort || 0;
     if (!status.running) {
+      if (!opts?.allowLaunch) {
+        return { ok: false, code: "PROFILE_NOT_RUNNING", error: "The profile is not running. This diagnostic needs a running browser." };
+      }
       const launched = await launchBrowser(dirId);
       cdpPort = launched.cdpPort || 0;
       status = statusBrowser(dirId);

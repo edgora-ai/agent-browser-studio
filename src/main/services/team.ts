@@ -90,6 +90,11 @@ export function requireSettingsMutation(): RoleCheck {
 }
 
 function saveTeam(team: TeamConfig): void {
+  try {
+    const { transact } = require("./config/store.js");
+    transact((cfg: any) => { cfg.team = team; });
+    return;
+  } catch {}
   const cfg = getConfig();
   cfg.team = team;
   saveConfig(cfg);

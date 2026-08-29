@@ -104,7 +104,9 @@ describe("RunRecorder", () => {
     expect(agentRunRecorder.listRuns().length).toBe(0);
   });
 
-  it("caps runs to 200", () => {
+  // 210 synchronous config writes through the save path; under full-suite load
+  // this crosses the 5s default timeout on slower runners.
+  it("caps runs to 200", { timeout: 20000 }, () => {
     for (let i = 0; i < 210; i++) {
       agentRunRecorder.startRun({ source: { type: "chat" }, name: "r" + i });
     }

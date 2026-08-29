@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import { getConfig, saveConfig } from "./config-manager.js";
 import type { SkillRepositoryEntry } from "../types.js";
 
+
 export interface AgentSkill {
   name: string;
   description: string;
@@ -67,10 +68,36 @@ export function getSkill(id: string): SkillRepositoryEntry | null {
 export function addOrUpdateSkill(input: SkillInput): SkillRepositoryEntry {
   const id = normalizeSkillId(input.id);
   const now = Date.now();
+  let entry: SkillRepositoryEntry;
+  try {
+    const { transact } = require("./config/store.js");
+    const { getConfig: _get } = require("./config-manager.js");
+    const prev = (_get().skillRepository || {})[id] as SkillRepositoryEntry | undefined;
+    entry = normalizeSkillEntry({
+      id,
+      name: input.name || input.title || id,
+      title: input.title || input.name || id,
+      version: input.version || prev?.version || "1.0.0",
+      description: input.description || "",
+      source: input.source === "shared-catalog" ? "shared-catalog" : "local",
+      tools: input.tools || prev?.tools || [],
+      prompt: input.prompt,
+      shared: input.shared ?? prev?.shared ?? false,
+      enabled: input.enabled ?? prev?.enabled ?? true,
+      tags: input.tags || prev?.tags || [],
+      author: input.author || prev?.author,
+      homepage: input.homepage || prev?.homepage,
+      packageHash: hashSkillPayload(input.prompt, input.tools || prev?.tools || []),
+      addedAt: prev?.addedAt || now,
+      updatedAt: now,
+    });
+    transact((draft: any) => { draft.skillRepository = draft.skillRepository || {}; draft.skillRepository[id] = entry; });
+    return entry;
+  } catch {}
   const cfg = structuredClone(getConfig()) as any;
   cfg.skillRepository = cfg.skillRepository || {};
   const previous = cfg.skillRepository[id] as SkillRepositoryEntry | undefined;
-  const entry = normalizeSkillEntry({
+  entry = normalizeSkillEntry({
     id,
     name: input.name || input.title || id,
     title: input.title || input.name || id,
@@ -112,6 +139,7 @@ export function removeSkill(id: string): boolean {
   } else {
     return false;
   }
+  try { const { transact } = require("./config/store.js"); const { getConfig: _g } = require("./config-manager.js"); const prev = (_g().skillRepository||{})[id]; transact((draft:any)=>{ draft.skillRepository=draft.skillRepository||{}; if (!prev) { if (isBuiltInSkill(id)) { const cur=buildBuiltinEntry(BUILTIN_SKILLS.find((sk)=>sk.name===id)!); draft.skillRepository[id]={...cur, ...(draft.skillRepository[id]||{}), enabled:false, updatedAt:Date.now()}; } else { delete draft.skillRepository[id]; } } else { if (isBuiltInSkill(id)) { const cur=buildBuiltinEntry(BUILTIN_SKILLS.find((sk)=>sk.name===id)!); draft.skillRepository[id]={...cur, ...(draft.skillRepository[id]||{}), enabled:false, updatedAt:Date.now()}; } else if (draft.skillRepository[id]) delete draft.skillRepository[id]; } }); return true; } catch {}
   saveConfig(cfg);
   return true;
 }
@@ -127,7 +155,9 @@ export function setSkillMeta(id: string, opts: { shared?: boolean; enabled?: boo
   if (opts.enabled !== undefined) stored.enabled = Boolean(opts.enabled);
   if (opts.tags !== undefined) stored.tags = normalizeTags(opts.tags);
   stored.updatedAt = Date.now();
-  cfg.skillRepository[id] = normalizeSkillEntry(stored);
+  const normalized = normalizeSkillEntry(stored);
+  try { const { transact: _t } = require("./config/store.js"); _t((draft:any)=>{ draft.skillRepository=draft.skillRepository||{}; draft.skillRepository[id]=normalized; }); return normalized; } catch {}
+  cfg.skillRepository[id] = normalized;
   saveConfig(cfg);
   return cfg.skillRepository[id];
 }
@@ -202,6 +232,7 @@ export function importSharedSkillRepository(entries: SharedSkillEntry[]): { adde
     repository[item.id] = item.entry;
     added++;
   }
+  try { const { transact: _t2 } = require("./config/store.js"); _t2((draft:any)=>{ draft.skillRepository=draft.skillRepository||{}; for(const it of validated) draft.skillRepository[it.id]=it.entry; }); return { added, updated: 0, skipped }; } catch {}
   cfg.skillRepository = repository;
   saveConfig(cfg);
   return { added, updated: 0, skipped };

@@ -3,10 +3,12 @@ import { runWebRtcDiagnostics, listWebRtcDiagnostics, clearWebRtcDiagnostics } f
 import { validateDirId } from "../services/utils.js";
 
 export function registerWebRtcHandlers(): void {
-  // Run one in-browser WebRTC probe for a profile (auto-launch if needed) and persist history.
-  ipcMain.handle("webrtc:diag", async (_event, dirId: string) => {
+  // Run one in-browser WebRTC probe for a profile and persist history.
+  // Starting a stopped profile is opt-in (review item PL-03).
+  ipcMain.handle("webrtc:diag", async (_event, params: { dirId: string; allowLaunch?: boolean }) => {
+    const dirId = String(params?.dirId || "");
     validateDirId(dirId);
-    return runWebRtcDiagnostics(dirId);
+    return runWebRtcDiagnostics(dirId, { allowLaunch: params?.allowLaunch === true });
   });
 
   // Read persisted WebRTC diagnostics history for a profile.

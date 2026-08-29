@@ -80,15 +80,17 @@ export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string 
 
 /** Detect the Firefox product version via `firefox --version`. */
 export function detectFirefoxVersion(bin: string): string | null {
+  const isShim = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
+  const attempts: boolean[] = isShim ? [false, true] : [false];
   const run = (useShell: boolean): ReturnType<typeof spawnSync> | null => {
     try {
       return spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true, shell: useShell } as any);
     } catch { return null; }
   };
-  // On Windows a Node .js shim needs shell:true; real binaries work either way.
+  // Only Windows .js/.cmd/.bat shims need shell:true; real binaries never do.
   // Missing binaries must return null, not shell error text — treat any non-zero
   // exit as "not a Firefox binary".
-  for (const useShell of [false, true] as const) {
+  for (const useShell of attempts) {
     const result = run(useShell);
     if (!result || result.error) continue;
     if (typeof (result as any).status === "number" && (result as any).status !== 0) continue;

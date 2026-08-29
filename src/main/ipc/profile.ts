@@ -9,10 +9,15 @@ import {
   listBrowserProfiles,
   createBrowserProfile,
   deleteBrowserProfile,
+  trashBrowserProfile,
+  restoreTrashedProfile,
+  listTrashedProfiles,
+  purgeExpiredTrash,
 } from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../services/profile-archive.js";
+import { assertSafeArchiveExportPath, assertSafeArchiveExportDir, assertSafeArchiveImportPath } from "../services/archive-path-guard.js";
 import type { GeolocationMode, ProfileInfo, ProxyMode, WebRtcMode } from "../types.js";
 
 export function registerProfileHandlers(): void {
@@ -90,6 +95,35 @@ export function registerProfileHandlers(): void {
     }
   });
 
+  // ── Recoverable delete (review item PL-09) ──
+  // The UI deletes through this channel so a mis-click can be undone for
+  // seven days; `profile:delete` remains the hard delete used by the REST API.
+  ipcMain.handle("profile:trash", async (_event, dirId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return { success: trashBrowserProfile(dirId) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("profile:trash-restore", async (_event, dirId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return { success: restoreTrashedProfile(dirId) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("profile:trash-list", async () => {
+    try {
+      // Sweep expired entries whenever the trash is inspected.
+      purgeExpiredTrash();
+      return { success: true, entries: listTrashedProfiles() };
+    } catch (e: any) {
+      return { success: false, entries: [], error: e.message };
+    }
+  });
+
   // ── Profile backup / transfer ──
   ipcMain.handle("profile:export-archive", async (_event, opts: { dirId: string; destPath?: string }): Promise<{
     success: boolean; filePath?: string; entries?: number; bytes?: number; error?: string;
@@ -104,6 +138,8 @@ export function registerProfileHandlers(): void {
         });
         if (r.canceled || !r.filePath) return { success: false, error: "cancelled" };
         destPath = r.filePath;
+      } else {
+        destPath = assertSafeArchiveExportPath(destPath);
       }
       const result = await exportProfileArchive(opts?.dirId, destPath);
       return { success: true, filePath: result.filePath, entries: result.entries, bytes: result.bytes };
@@ -125,6 +161,8 @@ export function registerProfileHandlers(): void {
         });
         if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
         zipPath = r.filePaths[0];
+      } else {
+        zipPath = assertSafeArchiveImportPath(zipPath);
       }
       const result = importProfileArchive(zipPath);
       return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes };
@@ -146,6 +184,8 @@ export function registerProfileHandlers(): void {
         });
         if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
         destDir = r.filePaths[0];
+      } else {
+        destDir = assertSafeArchiveExportDir(destDir);
       }
       const report = await exportProfileArchives(opts?.dirIds || [], destDir);
       return { success: true, report };
@@ -167,6 +207,8 @@ export function registerProfileHandlers(): void {
         });
         if (r.canceled || !r.filePaths?.length) return { success: false, error: "cancelled" };
         zipPaths = r.filePaths;
+      } else {
+        zipPaths = zipPaths.map((p) => assertSafeArchiveImportPath(p));
       }
       const report = importProfileArchives(zipPaths);
       return { success: true, report };

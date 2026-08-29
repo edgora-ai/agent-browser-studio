@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { exec, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   getProfilesDir,
@@ -10,6 +10,7 @@ import {
   getProfileMeta,
   removeProfileMeta,
 } from "./config-manager.js";
+import { getRunningProcessesAsync } from "./process-discovery.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { validateDirId, getDirectorySizeAsync } from "./utils.js";
@@ -22,29 +23,7 @@ interface RunningProcess {
 }
 
 function getRunningProcesses(): Promise<RunningProcess[]> {
-  return new Promise((resolve) => {
-    exec("ps -eo pid,args", { timeout: 2000 }, (error, stdout) => {
-      if (error || !stdout) {
-        resolve([]);
-        return;
-      }
-      const processes: RunningProcess[] = [];
-      const lines = stdout.split("\n");
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const firstSpace = trimmed.indexOf(" ");
-        if (firstSpace === -1) continue;
-        const pidStr = trimmed.substring(0, firstSpace);
-        const argsStr = trimmed.substring(firstSpace + 1);
-        const pid = parseInt(pidStr, 10);
-        if (!isNaN(pid)) {
-          processes.push({ pid, args: argsStr });
-        }
-      }
-      resolve(processes);
-    });
-  });
+  return getRunningProcessesAsync() as Promise<RunningProcess[]>;
 }
 
 export async function listProfiles(): Promise<ProfileInfo[]> {

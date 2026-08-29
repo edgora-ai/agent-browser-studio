@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { getSyncConfig, getConfig, saveConfig, getProfilesDir } from "./config-manager.js";
+import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
+import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports } from "./cdp-cookie-service.js";
 import { listExtensions } from "./launch-args.js";
@@ -248,9 +250,7 @@ export const syncService = {
         }
       }
 
-      const latestConfig2 = getConfig();
-      markAllProfilesSynced(latestConfig2, now, { profilePreferences: profilePreferenceHashes });
-      saveConfig(latestConfig2);
+      try { const { transact } = require("./config/store.js"); const ts=Date.now(); transact((draft:any)=>{ markAllProfilesSynced(draft as any, ts, { profilePreferences: profilePreferenceHashes }); }); } catch { const latestConfig2 = getConfig(); markAllProfilesSynced(latestConfig2, now, { profilePreferences: profilePreferenceHashes }); saveConfig(latestConfig2 as any); }
 
       const parts = [`${profileDirIds.length} profiles`];
       if (totalCookies > 0) parts.push(`${totalCookies} cookies`);
@@ -428,7 +428,7 @@ export const syncService = {
         preferences: importedPreferenceIds,
         preferenceHashes: importedPreferenceHashes,
       });
-      saveConfig(merged);
+      try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ draft.defaultProxy=merged.defaultProxy; draft.proxies=merged.proxies; (draft as any).accounts=merged.accounts; draft.browserProfiles=merged.browserProfiles; draft.sync=merged.sync; (draft as any).team=merged.team; }); } catch { saveConfig(merged as any); }
 
       // Extensions: for each remote entry not present locally (or stale hash),
       // pull the package from S3 and install it via installLocalExtension.
@@ -436,7 +436,7 @@ export const syncService = {
       let extensionBytes = 0;
       const remoteExts = (remoteConfig as any).extensionRepository || {};
       const remoteExtEntries = Object.entries(remoteExts) as Array<[string, any]>;
-      if (remoteExtEntries.length > MAX_SYNC_EXTENSIONS) throw new Error("Remote config contains too many extensions");
+      if (remoteExtEntries.length > (DEFAULT_SYNC_LIMITS.maxProfileCount || MAX_SYNC_EXTENSIONS)) throw new Error("Remote config contains too many extensions");
       const localExts = listExtensionRepository();
       const localExtMap = new Map(localExts.map((e) => [e.id, e]));
       for (const [extId, remoteEntry] of remoteExtEntries) {

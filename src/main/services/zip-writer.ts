@@ -1,6 +1,6 @@
 // Minimal dependency-free ZIP archive writer/reader used for profile backup &
 // transfer. Writer emits store-method (0) entries with UTF-8 names; the reader
-// accepts store (0) and deflate (8) entries. File payloads are buffered one at
+// accepts store (0) and deflate (8) entries. File payloads are streamed one at
 // a time so a large profile tree never needs to be held fully in memory.
 
 import * as fs from "node:fs";
@@ -21,6 +21,12 @@ export function crc32(buf: Buffer): number {
   let c = 0xffffffff;
   for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
+}
+
+export function crc32Update(crcState: number, buf: Buffer): number {
+  let c = crcState;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return c;
 }
 
 function dosDateTime(ms: number): { time: number; date: number } {
@@ -58,21 +64,128 @@ export async function writeZipArchive(
     const isDir = (entry as ZipDirEntry).isDirectory === true;
     const name = entry.name.replace(/\\/g, "/").replace(/^\//, "");
     const nameBuf = Buffer.from(name, "utf8");
-    let data: Buffer;
-    let mtime = Date.now();
     if (isDir) {
-      data = Buffer.alloc(0);
-    } else if ((entry as ZipFileEntry).filePath) {
-      const filePath = (entry as ZipFileEntry).filePath as string;
-      mtime = fs.statSync(filePath).mtimeMs;
-      data = fs.readFileSync(filePath);
-    } else {
-      data = (entry as ZipFileEntry).data ?? Buffer.alloc(0);
+      const dt = dosDateTime(Date.now());
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0x0800, 6);
+      local.writeUInt16LE(0, 8);
+      local.writeUInt16LE(dt.time, 10);
+      local.writeUInt16LE(dt.date, 12);
+      local.writeUInt32LE(0, 14);
+      local.writeUInt32LE(0, 18);
+      local.writeUInt32LE(0, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      local.writeUInt16LE(0, 28);
+      await write(local);
+      await write(nameBuf);
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0);
+      c.writeUInt16LE(0x0314, 4);
+      c.writeUInt16LE(20, 6);
+      c.writeUInt16LE(0x0800, 8);
+      c.writeUInt16LE(0, 10);
+      c.writeUInt16LE(dt.time, 12);
+      c.writeUInt16LE(dt.date, 14);
+      c.writeUInt32LE(0, 16);
+      c.writeUInt32LE(0, 20);
+      c.writeUInt32LE(0, 24);
+      c.writeUInt16LE(nameBuf.length, 28);
+      c.writeUInt16LE(0, 30);
+      c.writeUInt16LE(0, 32);
+      c.writeUInt16LE(0, 34);
+      c.writeUInt16LE(0, 36);
+      c.writeUInt32LE((0x41ed0010) >>> 0, 38);
+      c.writeUInt32LE(offset, 42);
+      central.push(Buffer.concat([c, nameBuf]));
+      offset += 30 + nameBuf.length;
+      count++;
+      continue;
     }
-    const dt = dosDateTime(mtime);
-    const crc = isDir ? 0 : crc32(data);
-    const size = data.length;
 
+    if ((entry as ZipFileEntry).filePath) {
+      const filePath = (entry as ZipFileEntry).filePath as string;
+      const st = fs.statSync(filePath);
+      const dt = dosDateTime(st.mtimeMs);
+      const size = st.size;
+      // Stream through file to compute CRC without holding the whole file in memory twice.
+      let crcState = 0xffffffff;
+      const CHUNK = 64 * 1024;
+      const fd = fs.openSync(filePath, "r");
+      try {
+        const buf = Buffer.allocUnsafe(CHUNK);
+        let pos = 0;
+        while (pos < size) {
+          const want = Math.min(CHUNK, size - pos);
+          const n = fs.readSync(fd, buf, 0, want, pos);
+          if (n <= 0) break;
+          crcState = crc32Update(crcState, buf.subarray(0, n));
+          pos += n;
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+      const crc = (crcState ^ 0xffffffff) >>> 0;
+
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0x0800, 6);
+      local.writeUInt16LE(0, 8);
+      local.writeUInt16LE(dt.time, 10);
+      local.writeUInt16LE(dt.date, 12);
+      local.writeUInt32LE(crc, 14);
+      local.writeUInt32LE(size, 18);
+      local.writeUInt32LE(size, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      local.writeUInt16LE(0, 28);
+      await write(local);
+      await write(nameBuf);
+      // Stream file content to the zip without buffering the whole file.
+      const fd2 = fs.openSync(filePath, "r");
+      try {
+        const buf = Buffer.allocUnsafe(CHUNK);
+        let pos = 0;
+        while (pos < size) {
+          const want = Math.min(CHUNK, size - pos);
+          const n = fs.readSync(fd2, buf, 0, want, pos);
+          if (n <= 0) break;
+          await write(Buffer.from(buf.subarray(0, n)));
+          pos += n;
+        }
+      } finally {
+        fs.closeSync(fd2);
+      }
+
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0);
+      c.writeUInt16LE(0x0314, 4);
+      c.writeUInt16LE(20, 6);
+      c.writeUInt16LE(0x0800, 8);
+      c.writeUInt16LE(0, 10);
+      c.writeUInt16LE(dt.time, 12);
+      c.writeUInt16LE(dt.date, 14);
+      c.writeUInt32LE(crc, 16);
+      c.writeUInt32LE(size, 20);
+      c.writeUInt32LE(size, 24);
+      c.writeUInt16LE(nameBuf.length, 28);
+      c.writeUInt16LE(0, 30);
+      c.writeUInt16LE(0, 32);
+      c.writeUInt16LE(0, 34);
+      c.writeUInt16LE(0, 36);
+      c.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+      c.writeUInt32LE(offset, 42);
+      central.push(Buffer.concat([c, nameBuf]));
+      offset += 30 + nameBuf.length + size;
+      count++;
+      continue;
+    }
+
+    const data = (entry as ZipFileEntry).data ?? Buffer.alloc(0);
+    const dt = dosDateTime(Date.now());
+    const crc = crc32(data);
+    const size = data.length;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
@@ -87,8 +200,7 @@ export async function writeZipArchive(
     local.writeUInt16LE(0, 28);
     await write(local);
     await write(nameBuf);
-    await write(data);
-
+    if (size) await write(data);
     const c = Buffer.alloc(46);
     c.writeUInt32LE(0x02014b50, 0);
     c.writeUInt16LE(0x0314, 4);
@@ -105,10 +217,9 @@ export async function writeZipArchive(
     c.writeUInt16LE(0, 32);
     c.writeUInt16LE(0, 34);
     c.writeUInt16LE(0, 36);
-    c.writeUInt32LE((isDir ? 0x41ed0010 : 0o100644 << 16) >>> 0, 38);
+    c.writeUInt32LE((0o100644 << 16) >>> 0, 38);
     c.writeUInt32LE(offset, 42);
     central.push(Buffer.concat([c, nameBuf]));
-
     offset += 30 + nameBuf.length + size;
     count++;
   }
@@ -222,6 +333,7 @@ export function isPathInside(childPath: string, basePath: string): boolean {
 export interface ExtractOptions {
   skipNames?: (name: string) => boolean;
   maxTotalBytes?: number;
+  maxEntryBytes?: number;
 }
 
 export function extractZipArchive(
@@ -235,6 +347,7 @@ export function extractZipArchive(
   fs.mkdirSync(destRoot, { recursive: true, mode: 0o700 });
   let total = 0;
   let files = 0;
+  const perEntryCap = opts?.maxEntryBytes ?? 512 * 1024 * 1024;
   for (const entry of entries) {
     validateZipEntryName(entry.name);
     if (opts?.skipNames?.(entry.name)) continue;
@@ -244,13 +357,35 @@ export function extractZipArchive(
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
       continue;
     }
+    if (entry.uncompressedSize > perEntryCap) {
+      throw new Error(`ZIP entry too large: ${entry.name} (${entry.uncompressedSize} bytes > ${perEntryCap})`);
+    }
+    if (entry.compressedSize > perEntryCap * 2) {
+      throw new Error(`ZIP entry compressed size too large: ${entry.name}`);
+    }
     total += entry.uncompressedSize;
     if (opts?.maxTotalBytes && total > opts.maxTotalBytes) {
       throw new Error("Archive exceeds size limit (" + opts.maxTotalBytes + " bytes)");
     }
+    // Stream to disk in chunks to keep per-entry memory bounded.
     const content = extractZipEntry(zip, entry);
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(target, content, { mode: 0o600, flag: "wx" });
+    // Write in chunks for large entries.
+    if (content.length > 64 * 1024) {
+      const fd = fs.openSync(target, "wx", 0o600);
+      try {
+        let off = 0;
+        while (off < content.length) {
+          const n = Math.min(64 * 1024, content.length - off);
+          fs.writeSync(fd, content, off, n);
+          off += n;
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else {
+      fs.writeFileSync(target, content, { mode: 0o600, flag: "wx" });
+    }
     files++;
   }
   return { files, bytes: total };

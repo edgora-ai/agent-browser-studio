@@ -169,7 +169,7 @@ export function deleteExtension(dirId: string, extId: string): boolean {
       const meta = cfg.browserProfiles?.[dirId];
       if (meta?.extensions) {
         delete meta.extensions[extId];
-        saveConfig(cfg);
+        try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ const m=draft.browserProfiles?.[dirId]; if(m?.extensions) delete m.extensions[extId]; }); } catch { saveConfig(cfg); }
       }
       return true;
     }

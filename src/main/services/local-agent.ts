@@ -133,74 +133,48 @@ export function saveLlmConfig(config: LlmConfig): void {
 // 1. Multi-Session Conversation Store
 // ═══════════════════════════════════════════════════════════════
 
-export interface Conversation {
-  id: string;
-  title: string;
-  messages: Array<{ role: string; content: string; toolResults?: any[]; timestamp?: number }>;
-  createdAt: number;
-  updatedAt: number;
-}
+import type { CdpClient } from "./agent/cdp-transport.js";
+import { cdpConnect as _cdpConnect, cdpSendRaw as _cdpSendRaw, cdpDisconnect as _cdpDisconnect, cdpNavigate as _cdpNavigate, cdpWaitForLoad as _cdpWaitForLoad, cdpGetContent as _cdpGetContent, cdpGetTitle as _cdpGetTitle, cdpGetUrl as _cdpGetUrl, cdpSnapshot as _cdpSnapshot, cdpTextSnapshot as _cdpTextSnapshot } from "./agent/cdp-transport.js";
+import type { Conversation } from "./agent/conversation-store.js";
+import {
+  loadConversations as _loadConversations,
+  saveConversations as _saveConversations,
+  createConversation as _createConversation,
+  getConversation as _getConversation,
+  listConversations as _listConversations,
+  deleteConversation as _deleteConversation,
+  renameConversation as _renameConversation,
+} from "./agent/conversation-store.js";
+export type { Conversation } from "./agent/conversation-store.js";
+export const loadConversations = _loadConversations;
+export const createConversation = _createConversation;
+export const getConversation = _getConversation;
+export const listConversations = _listConversations;
+export const deleteConversation = _deleteConversation;
+export const renameConversation = _renameConversation;
+export type { CdpClient } from "./agent/cdp-transport.js";
+export const cdpConnect = _cdpConnect;
+export const cdpSendRaw = _cdpSendRaw;
+export const cdpDisconnect = _cdpDisconnect;
+export const cdpNavigate = _cdpNavigate;
+export const cdpWaitForLoad = _cdpWaitForLoad;
+export const cdpGetContent = _cdpGetContent;
+export const cdpGetTitle = _cdpGetTitle;
+export const cdpGetUrl = _cdpGetUrl;
+export const cdpSnapshot = _cdpSnapshot;
+export const cdpTextSnapshot = _cdpTextSnapshot;
+const saveConversations = _saveConversations;
 
-function conversationsPath(): string {
-  return path.join(getAppDataDir(), "agent-conversations.json");
-}
 
-export function loadConversations(): Conversation[] {
-  const p = conversationsPath();
-  if (!fs.existsSync(p)) return [];
-  try { return JSON.parse(fs.readFileSync(p, "utf-8")); }
-  catch { return []; }
-}
 
-function saveConversations(convs: Conversation[]): void {
-  const p = conversationsPath();
-  const tmp = p + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(convs, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.renameSync(tmp, p);
-  try { fs.chmodSync(p, 0o600); } catch (e) { console.error("Failed to restrict conversation file permissions:", e); }
-}
 
-export function createConversation(title?: string): Conversation {
-  const id = "conv_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
-  const conv: Conversation = {
-    id,
-    title: title || "New Chat",
-    messages: [],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  const convs = loadConversations();
-  convs.unshift(conv);
-  saveConversations(convs);
-  return conv;
-}
 
-export function getConversation(id: string): Conversation | null {
-  return loadConversations().find(c => c.id === id) || null;
-}
 
-export function listConversations(): Conversation[] {
-  return loadConversations().sort((a, b) => b.updatedAt - a.updatedAt);
-}
 
-export function deleteConversation(id: string): boolean {
-  const convs = loadConversations();
-  const idx = convs.findIndex(c => c.id === id);
-  if (idx < 0) return false;
-  convs.splice(idx, 1);
-  saveConversations(convs);
-  return true;
-}
 
-export function renameConversation(id: string, title: string): Conversation | null {
-  const convs = loadConversations();
-  const c = convs.find(c => c.id === id);
-  if (!c) return null;
-  c.title = title;
-  c.updatedAt = Date.now();
-  saveConversations(convs);
-  return c;
-}
+
+
+
 
 /** Add a message to a conversation and persist.
  *  Returns updated conversation and the message ID. */
@@ -237,7 +211,7 @@ function redactSensitive<T>(value: T): T {
 
 export function addMessage(convId: string, role: string, content: string, toolResults?: any[]): { conv: Conversation; msgId: string } | null {
   const convs = loadConversations();
-  const c = convs.find(c => c.id === convId);
+  const c = convs.find((x: Conversation) => x.id === convId);
   if (!c) return null;
   const msgId = "msg_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
   c.messages.push({ role, content, toolResults: redactSensitive(toolResults), timestamp: Date.now() });
@@ -507,177 +481,29 @@ function getWs(): Promise<any> {
   return _wsPromise;
 }
 
-export interface CdpClient {
-  ws: any;
-  port: number;
-  targetId: string | null;
-  msgId: number;
-  callbacks: Map<number, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>;
-  pendingMessages: Promise<any>[];
-  interactionSeed: number;
-  interactionCounter: number;
-  pointerX: number | null;
-  pointerY: number | null;
-}
 
-function normalizeCdpWebSocketUrl(value: string, port: number): string {
-  const url = new URL(value);
-  if (url.protocol !== "ws:" || (url.hostname !== "127.0.0.1" && url.hostname !== "localhost" && url.hostname !== "::1") || Number(url.port) !== port) {
-    throw new Error("CDP websocket target is not on the expected loopback port");
-  }
-  url.hostname = "127.0.0.1";
-  return url.toString();
-}
+
+
 
 /** Connect to a running managed Chromium profile via CDP */
-export async function cdpConnect(port: number, interactionSeed = port): Promise<CdpClient> {
-  const wsPkg = await getWs();
-  if (!wsPkg) throw new Error("ws module not available");
-  const Ws = wsPkg;
 
-  const pages = await (await fetch(`http://127.0.0.1:${port}/json`)).json() as any[];
-  const page = pages.find((p: any) => p.type === "page" && p.webSocketDebuggerUrl);
-  if (!page) throw new Error("No debuggable page found");
 
-  return new Promise((resolve, reject) => {
-    const ws = new Ws(normalizeCdpWebSocketUrl(page.webSocketDebuggerUrl, port));
-    const client: CdpClient = {
-      ws,
-      port,
-      targetId: typeof page.id === "string" ? page.id : null,
-      msgId: 0,
-      callbacks: new Map(),
-      pendingMessages: [],
-      interactionSeed: Number.isInteger(interactionSeed) ? interactionSeed : port,
-      interactionCounter: 0,
-      pointerX: null,
-      pointerY: null,
-    };
 
-    ws.on("open", () => {
-      // Enable required domains. Some custom Chromium builds
-      // don't implement every domain (e.g. Input.enable) — use allSettled so
-      // one missing domain doesn't break the whole connection.
-      Promise.allSettled([
-        cdpSendRaw(client, "Page.enable"),
-        cdpSendRaw(client, "Runtime.enable"),
-        cdpSendRaw(client, "Network.enable"),
-        cdpSendRaw(client, "DOM.enable"),
-        cdpSendRaw(client, "Input.enable"),
-        cdpSendRaw(client, "Emulation.enable"),
-      ]).then(() => resolve(client));
-    });
 
-    ws.on("message", (data: Buffer) => {
-      const msg = JSON.parse(data.toString());
-      if (msg.id && client.callbacks.has(msg.id)) {
-        const cb = client.callbacks.get(msg.id)!;
-        client.callbacks.delete(msg.id);
-        clearTimeout(cb.timer);
-        if (msg.error) cb.reject(new Error(msg.error.message));
-        else cb.resolve(msg.result);
-      }
-    });
 
-    ws.on("error", reject);
-  });
-}
-
-function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const id = ++client.msgId;
-    const timer = setTimeout(() => {
-      if (client.callbacks.has(id)) {
-        client.callbacks.delete(id);
-        reject(new Error(`CDP ${method} timeout`));
-      }
-    }, 15000);
-    client.callbacks.set(id, { resolve, reject, timer });
-    try {
-      client.ws.send(JSON.stringify({
-        id,
-        method,
-        ...(params ? { params } : {}),
-        ...(sessionId ? { sessionId } : {}),
-      }));
-    } catch (error) {
-      clearTimeout(timer);
-      client.callbacks.delete(id);
-      reject(error);
-    }
-  });
-}
-
-export function cdpDisconnect(client: CdpClient): void {
-  try {
-    client.ws.close();
-  } catch (error) {
-    console.warn("[agent] CDP websocket close failed", error);
-  }
-}
 
 // ── Core navigation ──
 
-export async function cdpNavigate(client: CdpClient, url: string): Promise<any> {
-  return cdpSendRaw(client, "Page.navigate", { url });
-}
 
-export async function cdpWaitForLoad(client: CdpClient, timeout = 10000): Promise<void> {
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, timeout);
-    const handler = (data: Buffer) => {
-      try {
-        const msg = JSON.parse(data.toString());
-        if (msg.method === "Page.loadEventFired") {
-          // Load event fired — resolve after brief settle
-          clearTimeout(t);
-          client.ws.removeListener("message", handler);
-          setTimeout(resolve, 1500); // 1.5s for SPA initial render
-        }
-      } catch {}
-    };
-    client.ws.on("message", handler);
-  });
-}
 
-export async function cdpGetContent(client: CdpClient): Promise<string> {
-  const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: "document.documentElement.outerHTML",
-    returnByValue: true,
-  });
-  return r.result?.value || "";
-}
 
-export async function cdpGetTitle(client: CdpClient): Promise<string> {
-  const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: "document.title",
-    returnByValue: true,
-  });
-  return r.result?.value || "";
-}
 
-export async function cdpGetUrl(client: CdpClient): Promise<string> {
-  const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: "window.location.href",
-    returnByValue: true,
-  });
-  return r.result?.value || "";
-}
 
 // ── Snapshot ──
 
-export async function cdpSnapshot(client: CdpClient): Promise<any> {
-  return cdpSendRaw(client, "Accessibility.getFullAXTree");
-}
 
-/** Get a lightweight text snapshot of the page (visible text + interactive elements) */
-export async function cdpTextSnapshot(client: CdpClient): Promise<string> {
-  const r = await cdpSendRaw(client, "Runtime.evaluate", {
-    expression: TEXT_SNAPSHOT_EXPRESSION,
-    returnByValue: true,
-  });
-  return r.result?.value || "";
-}
+
+
 
 // ── Click, Type, Scroll ──
 
@@ -2129,6 +1955,7 @@ import { renderTemplateCatalog } from "./task-templates.js";
 import { renderAdapterCatalog } from "./platform-adapters.js";
 import { TEXT_SNAPSHOT_EXPRESSION, firefoxNavigate, firefoxEvaluate, firefoxTextSnapshot, firefoxGetText, firefoxGetUrl, firefoxGetTitle, firefoxGetCookies, firefoxNewTab, firefoxScreenshot, firefoxWaitForSelector, firefoxWaitForLoad, firefoxClick, firefoxHover, firefoxType, firefoxPressKey, firefoxScroll, firefoxSelect, firefoxUploadFile } from "./firefox-agent-tools.js";
 import type { BidiConnection } from "./bidi-client.js";
+
 
 // Cache connected CDP clients
 const cdpClients = new Map<number, CdpClient>();

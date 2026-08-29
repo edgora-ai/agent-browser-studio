@@ -2,10 +2,10 @@
 // Exports/imports and edits cookies via Chrome DevTools Protocol.
 // Plaintext values — bypasses macOS Keychain encryption. Cross-device safe.
 
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAppDataDir, getProfilesDir } from "./config-manager.js";
+import { findCdpPortSync } from "./process-discovery.js";
 import { validateDirId } from "./utils.js";
 import type { CookieInfo } from "../types.js";
 
@@ -329,9 +329,6 @@ function findCdpPort(dirId: string): number | null {
   validateDirId(dirId);
   const profileDir = path.join(getProfilesDir(), dirId);
   try {
-    const out = execFileSync("ps", ["-eo", "args"], { encoding: "utf-8", timeout: 2000 });
-    const line = out.split("\n").find((psLine) => psLine.includes(profileDir));
-    const match = line?.match(/--remote-debugging-port=(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
+    return findCdpPortSync(dirId, profileDir);
   } catch { return null; }
 }

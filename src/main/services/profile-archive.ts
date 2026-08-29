@@ -12,6 +12,7 @@ import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { PROFILE_ID_PREFIX } from "../branding.js";
 import { writeZipArchive, extractZipArchive, type ZipFileEntry, type ZipDirEntry } from "./zip-writer.js";
+import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArchiveImportPath } from "./archive-path-guard.js";
 
 export const PROFILE_ARCHIVE_FORMAT = 1;
 const META_FILE = "meta.json";
@@ -145,6 +146,7 @@ function uniqueName(baseName: string): string {
 
 export async function exportProfileArchive(dirId: string, destPath: string): Promise<ExportProfileResult> {
   validateDirId(dirId);
+  destPath = assertSafeArchiveExportPath(destPath);
   const meta = getProfileMeta(dirId);
   if (!meta) throw new Error("Profile not found");
   if (statusBrowser(dirId).running) {
@@ -168,7 +170,7 @@ export async function exportProfileArchive(dirId: string, destPath: string): Pro
 }
 
 export function importProfileArchive(zipPath: string): ImportProfileResult {
-  if (!fs.existsSync(zipPath)) throw new Error("Archive file not found");
+  zipPath = assertSafeArchiveImportPath(zipPath);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "abs-profile-import-"));
   try {
     const extracted = extractZipArchive(zipPath, tmpDir, { maxTotalBytes: MAX_IMPORT_BYTES });
@@ -194,10 +196,11 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
       fs.renameSync(path.join(tmpDir, child), path.join(profileDir, child));
     }
 
-    const cfg = getConfig();
-    cfg.browserProfiles = cfg.browserProfiles || {};
-    cfg.browserProfiles[dirId] = { ...importedMeta, name: uniqueName(String(importedMeta.name)) } as any;
-    saveConfig(cfg);
+    const importedName = uniqueName(String(importedMeta.name));
+    const newProfile = { ...importedMeta, name: importedName } as any;
+    try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ draft.browserProfiles=draft.browserProfiles||{}; draft.browserProfiles[dirId]=newProfile; }); } catch { const cfg = getConfig(); cfg.browserProfiles=cfg.browserProfiles||{}; cfg.browserProfiles[dirId]=newProfile; saveConfig(cfg as any); }
+    const cfg = getConfig() as any;
+
     return { dirId, name: cfg.browserProfiles[dirId].name as string, files: extracted.files, bytes: extracted.bytes };
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -210,6 +213,7 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
  * reported per item so a single bad profile never aborts the whole batch.
  */
 export async function exportProfileArchives(dirIds: string[], destDir: string): Promise<BatchExportReport> {
+  destDir = assertSafeArchiveExportDir(destDir);
   fs.mkdirSync(destDir, { recursive: true });
   const report: BatchExportReport = { exported: [], skipped: [], failed: [] };
   for (const dirId of dirIds) {

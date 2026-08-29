@@ -229,12 +229,17 @@ class RunRecorder {
     return n;
   }
 
-  private trimAndSave(cfg: any): void {
-    const runs: AgentRun[] = cfg.agentRuns || [];
-    if (runs.length > MAX_RUNS) {
-      cfg.agentRuns = runs.slice(runs.length - MAX_RUNS);
-    }
-    saveConfig(cfg);
+  private trimAndSave(_cfg: any): void {
+    try {
+      const { transact } = require("./config/store.js");
+      // We already mutated the singleton in-place; persist current snapshot transactionally
+      // To avoid double-apply, just persist current cache via transact no-op
+      const { getConfig } = require("./config-manager.js");
+      const snap = getConfig();
+      transact((draft: any) => { draft.agentRuns = snap.agentRuns; draft.agentFs = snap.agentFs; });
+      return;
+    } catch {}
+    saveConfig(_cfg);
   }
 
   private emit(channel: string, payload: unknown, wc?: WebContents): void {
