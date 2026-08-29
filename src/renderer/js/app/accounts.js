@@ -52,8 +52,7 @@
       var nameById = res[1] || {};
       var role = res[2];
       var canManage = role !== 'viewer';
-      if (!accounts || accounts.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No accounts saved yet.</div>';
+      if (!accounts || accounts.length === 0) { if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{empty:'No accounts saved yet.', cta:{label:'Add Account',cmd:'agentAddAccount'}}); } else el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No accounts saved yet.</div>';
         return;
       }
       var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
@@ -88,7 +87,7 @@
       el.innerHTML = html;
     }).catch(function(e) {
       var el = document.getElementById(targetId);
-      if (el) el.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
+      if (el && window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{error: e.message||String(e), retry:{cmd:'agentLoadAccounts'}}); } else if (el) el.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   }
 
@@ -161,10 +160,11 @@
   };
 
   agentBrowser.agentDeleteAccount = function(index) {
-    if (!confirm('Delete this account?')) return;
-    R.agent.accounts.delete(index).then(function(r) {
-      if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); agentBrowser.agentLoadAccounts(); }
-    }).catch(function(e) { toast(e.message, 'error'); });
+    agentBrowser.confirm((window.i18n ? window.i18n.t("acct.delete-confirm", "Delete this account?") : "Delete this account?"), function() {
+      R.agent.accounts.delete(index).then(function(r) {
+        if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); agentBrowser.agentLoadAccounts(); }
+      }).catch(function(e) { toast(e.message, 'error'); });
+    });
   };
 
   // ── Quick copy (main process writes the clipboard; secrets never cross) ──

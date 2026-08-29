@@ -32,6 +32,10 @@
   var bindSkillCardActions = helpers.bindSkillCardActions;
   var readHardwareFields = helpers.readHardwareFields;
   var writeHardwareFields = helpers.writeHardwareFields;
+  var validateHardwareFields = helpers.validateHardwareFields;
+  var clearFieldErrors = helpers.clearFieldErrors;
+  var showFieldErrors = helpers.showFieldErrors;
+  var bindHardwareFieldValidation = helpers.bindHardwareFieldValidation;
   var renderProxyOptions = helpers.renderProxyOptions;
   var proxySelectionValue = helpers.proxySelectionValue;
   var profileProxySelectionValue = helpers.profileProxySelectionValue;
@@ -95,30 +99,42 @@
 
   Object.assign(agentBrowser, {
   launch: function (dirId) {
-        api.browser.launch(dirId).then(function (r) {
-          if (r.success) {
-            toast((window.i18n ? window.i18n.t("toast.profile.started", "🥷 Managed Chromium started") : "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
-            if (r.envCheck && r.envCheck.high) {
-              var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
-              toast("⚠️ 环境风险: " + (envCodes || "host 环境高危") + " — 点卡片 🖥 Env 看修复建议", "error");
+        // PL-06: block edit/delete while the launch is in flight.
+        setCardBusy(dirId, true);
+        agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId); }, { kind: "launch", dedupe: true })
+          .then(function (r) {
+            if (r.success) {
+              toast(t("toast.profile.started", "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
+              if (r.envCheck && r.envCheck.high) {
+                var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
+                toast(t("toast.env.high-risk", "⚠️ Environment risk: ") + (envCodes || t("toast.env.high-generic", "host environment risk")) + t("toast.env.high-hint", " — open 🖥 Env on the card for fixes"), "error");
+              }
+              var seq = markProfileRuntime(dirId, true, r.pid);
+              setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
+              scheduleProfilesRefresh();
+            } else {
+              // PL-04: proxy failures are fail-closed, so the reason matters.
+              // UX-3: the friendly-error layer already renders localized,
+              // actionable copy for proxy failures — no extra hint needed.
+              toast(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"), "error");
             }
-            var seq = markProfileRuntime(dirId, true, r.pid);
-            setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
-            scheduleProfilesRefresh();
-          } else {
-            toast(r.error || (window.i18n ? window.i18n.t("toast.profile.launch-failed", "Managed Chromium launch failed") : "Managed Chromium launch failed"), "error");
-          }
-        }).catch(function (e) { toast(e.message, "error"); });
+          })
+          .catch(function (e) { toast(e.message, "error"); })
+          .then(function () { setCardBusy(dirId, false); });
       },
 
   stop: function (dirId) {
-        api.browser.stop(dirId).then(function (r) {
-          if (r && r.success === false) { toast(r.error || (window.i18n ? window.i18n.t("toast.profile.stop-failed", "Stop failed") : "Stop failed"), "error"); scheduleProfilesRefresh(); return; }
-          toast((window.i18n ? window.i18n.t("toast.profile.stopped", "Browser stopped") : "Browser stopped"), "success");
-          var seq = markProfileRuntime(dirId, false, null);
-          setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
-          scheduleProfilesRefresh();
-        }).catch(function (e) { toast(e.message, "error"); });
+        setCardBusy(dirId, true);
+        agentBrowser.ipc.call("browser.stop:" + dirId, function () { return api.browser.stop(dirId); }, { kind: "stop", dedupe: true })
+          .then(function (r) {
+            if (r && r.success === false) { toast(r.error || t("toast.profile.stop-failed", "Stop failed"), "error"); scheduleProfilesRefresh(); return; }
+            toast(t("toast.profile.stopped", "Browser stopped"), "success");
+            var seq = markProfileRuntime(dirId, false, null);
+            setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
+            scheduleProfilesRefresh();
+          })
+          .catch(function (e) { toast(e.message, "error"); })
+          .then(function () { setCardBusy(dirId, false); });
       },
 
   editProfile: function (dirId) {
@@ -168,6 +184,7 @@
           document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
           writeGeolocationFields("agent-browser-meta-", metaData);
           writeHardwareFields("agent-browser-meta-", metaData);
+          bindHardwareFieldValidation("agent-browser-meta-");
           var wtPrefixMeta = metaData.windowTitlePrefix;
           var wtEnabled = wtPrefixMeta !== null;
           var wtPrefix = (wtPrefixMeta && wtPrefixMeta !== "") ? wtPrefixMeta : "";
@@ -245,6 +262,7 @@
         document.getElementById("new-agent-browser-webrtc").value = "";
         writeGeolocationFields("new-agent-browser-", {});
         writeHardwareFields("new-agent-browser-", {});
+        bindHardwareFieldValidation("new-agent-browser-");
         var presetSelect = document.getElementById("new-profile-preset");
         if (presetSelect) presetSelect.value = "";
         var presetInfo = document.getElementById("new-profile-preset-info");
@@ -375,6 +393,15 @@
         var windowTitlePrefix = document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null;
         if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
         var hardware, geolocation;
+        // UE-04: validate on submit and point at the offending field instead of
+        // surfacing a technical field name in a toast.
+        var newErrors = validateHardwareFields("new-agent-browser-");
+        if (newErrors.length) {
+          clearFieldErrors("new-agent-browser-");
+          showFieldErrors(newErrors);
+          toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
+          return;
+        }
         try { hardware = readHardwareFields("new-agent-browser-"); geolocation = readGeolocationFields("new-agent-browser-"); }
         catch (e) { toast(e.message || String(e), "error"); return; }
 
@@ -469,55 +496,54 @@
   agentBrowser.exportProfileArchive = function(dirId) {
     api.profile.exportArchive(dirId).then(function(r) {
       if (!r || !r.success) {
-        toast(t("toast.profile.export-failed", "导出失败: ") + ((r && r.error) || "unknown"), "error");
+        toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
         return;
       }
-      toast(t("toast.profile.exported", "已导出备份: ") + esc(r.filePath), "success");
+      toast(t("toast.profile.exported", "Exported backup: ") + esc(r.filePath), "success");
     }).catch(function(e) {
-      toast(t("toast.profile.export-failed", "导出失败: ") + (e.message || String(e)), "error");
+      toast(t("toast.profile.export-failed", "Export failed: ") + (e.message || String(e)), "error");
     });
   };
 
   agentBrowser.importProfileArchive = function() {
     api.profile.importArchives().then(function(r) {
       if (!r || !r.success) {
-        toast(t("toast.profile.import-failed", "导入失败: ") + ((r && r.error) || "unknown"), "error");
+        toast(t("toast.profile.import-failed", "Import failed: ") + ((r && r.error) || "unknown"), "error");
         return;
       }
       var rep = (r && r.report) || {};
       var imported = (rep.imported || []).length;
       var failed = (rep.failed || []).length;
       if (imported === 0 && failed === 0) return;
-      var msg = t("toast.profile.imported", "已导入 profile: ") + imported + " 个";
-      if (failed) msg += t("toast.profile.import-failed-count", "，失败 ") + failed + " 个";
+      var msg = t("toast.profile.imported", "Imported {n} profiles").replace("{n}", imported);
+      if (failed) msg += t("toast.profile.import-failed-count", ", {n} failed").replace("{n}", failed);
       toast(msg, failed ? "error" : "success");
       loadProfiles();
     }).catch(function(e) {
-      toast(t("toast.profile.import-failed", "导入失败: ") + (e.message || String(e)), "error");
+      toast(t("toast.profile.import-failed", "Import failed: ") + (e.message || String(e)), "error");
     });
   };
+
+  // Batch start/stop (review items PL-01 / PL-02).
+  // Both now delegate to the bounded-concurrency batch runner and report the
+  // real per-profile tally instead of a hard-coded "N profiles started".
+  function finishBatch() { agentBrowser.refresh(); }
 
   agentBrowser.bulkStart = function() {
     api.browser.list().then(function(profiles) {
       var stopped = (profiles || []).filter(function(p) { return !p.running; });
-      if (stopped.length === 0) { toast((window.i18n ? window.i18n.t("toast.bulk.all-running", "All profiles already running") : "All profiles already running"), "success"); return; }
-      toast("Starting " + stopped.length + " profiles...", "success");
-      stopped.forEach(function(p, i) {
-        setTimeout(function() {
-          agentBrowser.launch(p.dirId);
-          if (i === stopped.length - 1) { toast(stopped.length + " profiles started", "success"); setTimeout(agentBrowser.refresh, 2000); }
-        }, i * 500);
-      });
+      if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
+      agentBrowser.batch.run({ kind: "launch", dirIds: stopped.map(function(p) { return p.dirId; }) })
+        .then(finishBatch, finishBatch);
     }).catch(function(){});
   };
 
   agentBrowser.bulkStop = function() {
     api.browser.list().then(function(profiles) {
       var running = (profiles || []).filter(function(p) { return p.running; });
-      if (running.length === 0) { toast((window.i18n ? window.i18n.t("toast.bulk.none-running", "No profiles running") : "No profiles running"), "success"); return; }
-      toast("Stopping " + running.length + " profiles...", "success");
-      running.forEach(function(r) { agentBrowser.stop(r.dirId); });
-      setTimeout(agentBrowser.refresh, 2000);
+      if (running.length === 0) { toast(t("toast.bulk.none-running", "No profiles are running"), "success"); return; }
+      agentBrowser.batch.run({ kind: "stop", dirIds: running.map(function(p) { return p.dirId; }) })
+        .then(finishBatch, finishBatch);
     }).catch(function(){});
   };
 
@@ -536,7 +562,7 @@
     var sel = document.getElementById("batch-assign-proxy");
     if (sel && proxies && proxies.length) {
       var prev = sel.value;
-      var html = '<option value="">(默认代理)</option>';
+      var html = '<option value="">' + esc(t("profiles.batch.proxy-default", "(Default proxy)")) + '</option>';
       (proxies || []).forEach(function (p) {
         html += '<option value="' + escAttr(p.name) + '">' + esc(p.name) + '</option>';
       });
@@ -556,6 +582,7 @@
     profileFilter.status = (document.getElementById("profile-status-filter") || {}).value || "all";
     profileFilter.tags = parseTagInput(document.getElementById("profile-tag-filter").value);
     profileSelection = {};
+    profilePage = 1;
     loadProfiles();
   };
 
@@ -564,6 +591,7 @@
     var s = document.getElementById("profile-status-filter"); if (s) s.value = "all";
     var t = document.getElementById("profile-tag-filter"); if (t) t.value = "";
     profileSelection = {};
+    profilePage = 1;
     loadProfiles();
   };
 
@@ -588,21 +616,13 @@
   agentBrowser.batchStartSelected = function() {
     var sel = selectedProfileIds();
     if (!sel.length) return;
-    toast("Starting " + sel.length + " selected profiles...", "success");
-    sel.forEach(function (dirId, i) {
-      setTimeout(function () {
-        agentBrowser.launch(dirId);
-        if (i === sel.length - 1) { toast(sel.length + " profiles started", "success"); setTimeout(agentBrowser.refresh, 2500); }
-      }, i * 500);
-    });
+    agentBrowser.batch.run({ kind: "launch", dirIds: sel }).then(finishBatch, finishBatch);
   };
 
   agentBrowser.batchStopSelected = function() {
     var sel = selectedProfileIds();
     if (!sel.length) return;
-    toast("Stopping " + sel.length + " selected profiles...", "success");
-    sel.forEach(function (dirId) { agentBrowser.stop(dirId); });
-    setTimeout(agentBrowser.refresh, 2000);
+    agentBrowser.batch.run({ kind: "stop", dirIds: sel }).then(finishBatch, finishBatch);
   };
 
   agentBrowser.batchAssignProxy = function() {
@@ -618,31 +638,96 @@
         done++;
         if (r && r.success === false) errors++;
         if (done === total) {
-          if (errors) toast("已分配 " + (total - errors) + "/" + total + " 个 profile（" + errors + " 个失败）", "error");
-          else toast("已分配代理到 " + total + " 个 profile", "success");
+          if (errors) toast(t("toast.batch.assign-partial", "Assigned {ok}/{total} profiles ({failed} failed)").replace("{ok}", total - errors).replace("{total}", total).replace("{failed}", errors), "error");
+          else toast(t("toast.batch.assign-ok", "Assigned the proxy to {n} profiles").replace("{n}", total), "success");
           loadProfiles();
         }
-      }).catch(function () { done++; errors++; if (done === total) { toast("已分配 " + (total - errors) + "/" + total + " 个 profile", "error"); loadProfiles(); } });
+      }).catch(function () { done++; errors++; if (done === total) { toast(t("toast.batch.assign-done", "Assigned {ok}/{total} profiles").replace("{ok}", total - errors).replace("{total}", total), "error"); loadProfiles(); } });
     });
   };
+
+  // PL-09: restores are serialised so two profiles never race for the same
+  // directory while it is being moved back out of the trash.
+  function restoreFromTrash(ids) {
+    var pending = ids.slice();
+    var restored = 0, failed = 0;
+    function next() {
+      if (!pending.length) {
+        if (failed) {
+          toast(t("toast.trash.restore-partial", "Restored {ok}, {failed} could not be restored")
+            .replace("{ok}", restored).replace("{failed}", failed), "error");
+        } else {
+          toast(t("toast.trash.restore-ok", "Restored {n} profiles").replace("{n}", restored), "success");
+        }
+        loadProfiles();
+        return;
+      }
+      var id = pending.shift();
+      agentBrowser.ipc.call("profile.trash-restore:" + id, function () { return api.profile.trashRestore(id); }, { kind: "write" })
+        .then(function (r) { if (r && r.success) restored++; else failed++; })
+        .catch(function () { failed++; })
+        .then(next);
+    }
+    next();
+  }
+
+  function deleteProfilesWithTally(sel) {
+    var total = sel.length, done = 0, errors = 0;
+    sel.forEach(function (dirId) {
+      // PL-09: soft-delete, so the toast can offer a real undo.
+      agentBrowser.ipc.call("profile.trash:" + dirId, function () { return api.profile.trash(dirId); }, { kind: "write" })
+        .then(function (r) {
+          done++;
+          if (r && r.success === false) errors++;
+        })
+        .catch(function () { done++; errors++; })
+        .then(function () {
+          if (done !== total) return;
+          sel.forEach(function (d) { delete profileSelection[d]; });
+          if (errors) {
+            toast(t("toast.batch.delete-partial", "Deleted {ok}/{total} profiles ({failed} failed)")
+              .replace("{ok}", total - errors).replace("{total}", total).replace("{failed}", errors), "error");
+          } else {
+            toast(t("toast.batch.delete-ok", "Deleted {n} profiles").replace("{n}", total), "success", {
+              ttlMs: 12000,
+              detail: t("toast.trash.hint", "Kept in the trash for 7 days."),
+              action: { label: t("toast.undo", "Undo"), onClick: function () { restoreFromTrash(sel); } },
+            });
+          }
+          loadProfiles();
+        });
+    });
+  }
+
+  function buildDeleteConfirm(sel, nameMap) {
+    var names = sel.map(function(id) { return nameMap[id] || id.slice(0, 8); });
+    // PL-09: list every profile. The old dialog capped the list at five names,
+    // so confirming "delete 50" only ever showed five of them.
+    var detail = '<div style="max-height:180px;overflow:auto;">' +
+      names.map(function(n) { return "• " + esc(n); }).join("<br>") +
+      '</div><div style="margin-top:8px;color:var(--danger);">' +
+      esc(t("confirm.delete.warning", "This cannot be undone. Cookies and local storage are deleted with the profile. Running profiles must be stopped first.")) +
+      "</div>";
+    var opts = { title: t("confirm.delete.title", "Delete profiles"), detailHtml: detail };
+    if (sel.length >= 10) {
+      opts.ackLabel = t("confirm.delete.ack", "I understand that {n} profiles and their site data will be permanently deleted.").replace("{n}", sel.length);
+    }
+    agentBrowser.confirm(
+      t("confirm.delete.msg", "Delete {n} selected profile(s)?").replace("{n}", sel.length),
+      function () { deleteProfilesWithTally(sel); },
+      opts,
+    );
+  }
 
   agentBrowser.batchDeleteSelected = function() {
     var sel = selectedProfileIds();
     if (!sel.length) return;
-    agentBrowser.confirm('Delete ' + sel.length + ' selected profile(s)?', function () {
-      var total = sel.length, done = 0, errors = 0;
-      sel.forEach(function (dirId) {
-        api.profile.delete(dirId).then(function (r) {
-          done++;
-          if (r && r.success === false) errors++;
-          if (done === total) {
-            sel.forEach(function (d) { delete profileSelection[d]; });
-            if (errors) toast("已删除 " + (total - errors) + "/" + total + " 个 profile（" + errors + " 个失败）", "error");
-            else toast("已删除 " + total + " 个 profile", "success");
-            loadProfiles();
-          }
-        }).catch(function () { done++; errors++; if (done === total) { sel.forEach(function (d) { delete profileSelection[d]; }); toast("已删除 " + (total - errors) + "/" + total + " 个 profile", "error"); loadProfiles(); } });
-      });
+    api.profile.list().then(function(profiles) {
+      var nameMap = {};
+      (profiles || []).forEach(function(p) { nameMap[p.dirId] = p.name || p.dirId.slice(0, 8); });
+      buildDeleteConfirm(sel, nameMap);
+    }).catch(function() {
+      buildDeleteConfirm(sel, {});
     });
   };
 
@@ -652,41 +737,272 @@
     var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
     api.profile.exportArchives(sel).then(function(r) {
       if (!r || !r.success) {
-        toast(t("toast.profile.export-failed", "导出失败: ") + ((r && r.error) || "unknown"), "error");
+        toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
         return;
       }
       var rep = (r && r.report) || {};
       var exported = (rep.exported || []).length;
       var skipped = (rep.skipped || []).length;
       var failed = (rep.failed || []).length;
-      var msg = t("toast.profile.exported-batch", "已导出 ") + exported + " 个 profile";
-      if (skipped) msg += "，跳过 " + skipped + "（运行中）";
-      if (failed) msg += "，失败 " + failed + " 个";
+      var msg = t("toast.profile.exported-batch", "Exported {n} profiles").replace("{n}", exported);
+      if (skipped) msg += t("toast.batch.export-skipped", ", skipped {n} (running)").replace("{n}", skipped);
+      if (failed) msg += t("toast.batch.export-failed", ", {n} failed").replace("{n}", failed);
       toast(msg, failed ? "error" : "success");
     }).catch(function(e) {
-      toast(t("toast.profile.export-failed", "导出失败: ") + (e.message || String(e)), "error");
+      toast(t("toast.profile.export-failed", "Export failed: ") + (e.message || String(e)), "error");
     });
   };
 
-  agentBrowser.openRiskCheck = function(dirId) {
-    var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
-    api.browser.status(dirId).then(function(s) {
-      var wasRunning = s && s.running;
-      if (!wasRunning) {
-        toast(t('toast.fp.launching', 'Launching profile and opening risk check…'), 'info');
-      } else {
-        toast(t('toast.fp.opening', 'Opening risk check…'), 'info');
+  // ── Fingerprint / environment checks (review items PL-03, TE-04, TE-09) ──
+  //
+  // Three problems used to live in these entry points:
+  //  1. a "check" silently started a stopped profile (PL-03);
+  //  2. the check posted the profile fingerprint to a third party with no
+  //     consent and no local fallback (TE-04);
+  //  3. clicking repeatedly fired overlapping checks (TE-09).
+  var EXTERNAL_CONSENT_KEY = "agent-browser-external-risk-check-consent";
+
+  // ── Health check history (review item PL-05) ──
+  // A check result used to exist only inside the open dialog: close it and the
+  // finding was gone, so risk management could never become a loop. Each
+  // profile now keeps its latest few results locally (nothing is uploaded).
+  var HEALTH_HISTORY_KEY = "agent-browser-health-history-v1";
+  var HEALTH_HISTORY_LIMIT = 5;
+
+  function readHealthHistory() {
+    try { return JSON.parse(localStorage.getItem(HEALTH_HISTORY_KEY) || "{}") || {}; }
+    catch (e) { return {}; }
+  }
+
+  function recordHealthResult(dirId, kind, summary) {
+    if (!dirId || !summary) return;
+    var all = readHealthHistory();
+    var list = (all[dirId] || []).filter(function (entry) { return entry.kind !== kind; });
+    list.push({ kind: kind, at: Date.now(), verdict: summary.verdict || "pass", detail: summary.detail || "" });
+    list.sort(function (a, b) { return b.at - a.at; });
+    all[dirId] = list.slice(0, HEALTH_HISTORY_LIMIT);
+    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); } catch (e) { /* storage disabled */ }
+  }
+
+  function lastHealthFor(dirId) {
+    var list = readHealthHistory()[dirId] || [];
+    return list.length ? list[0] : null;
+  }
+
+  function relativeTime(ts) {
+    var diff = Date.now() - ts;
+    if (diff < 60000) return t("profile.health.just-now", "just now");
+    var mins = Math.floor(diff / 60000);
+    if (mins < 60) return t("profile.health.minutes-ago", "{n}m ago").replace("{n}", mins);
+    var hours = Math.floor(mins / 60);
+    if (hours < 24) return t("profile.health.hours-ago", "{n}h ago").replace("{n}", hours);
+    return t("profile.health.days-ago", "{n}d ago").replace("{n}", Math.floor(hours / 24));
+  }
+
+  // PL-05 (part 2): let the user read back what was checked and when, instead
+  // of only seeing the latest verdict on the card.
+  function showHealthHistory(dirId) {
+    var list = readHealthHistory()[dirId] || [];
+    if (!list.length) {
+      toast(t("profile.health.no-history", "No health checks recorded for this profile yet"), "info");
+      return;
+    }
+    var rows = list.map(function (entry) {
+      var verdict = entry.verdict === "risk"
+        ? t("profile.health.verdict-risk", "Risk")
+        : entry.verdict === "warn"
+          ? t("profile.health.verdict-warn", "Watch")
+          : t("profile.health.verdict-pass", "Pass");
+      var color = entry.verdict === "risk" ? "var(--danger)" : entry.verdict === "warn" ? "var(--warning)" : "var(--success)";
+      var kindLabel = t("profile.health.kind." + entry.kind, entry.kind);
+      return '<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:5px 0;">' +
+        '<b style="min-width:110px;">' + esc(kindLabel) + "</b>" +
+        '<span style="min-width:82px;color:var(--text-muted);">' + esc(relativeTime(entry.at)) + "</span>" +
+        '<b style="min-width:56px;color:' + color + ';">' + esc(verdict) + "</b>" +
+        '<span style="color:var(--text-muted);word-break:break-word;">' + esc(entry.detail || "") + "</span>" +
+        "</div>";
+    }).join("");
+    agentBrowser.confirmHtml(
+      esc(t("profile.health.history-title", "Health check history")),
+      function () { /* informational only */ },
+      {
+        title: esc(t("profile.health.history-heading", "Recent checks")),
+        detailHtml: '<div style="font-size:12px;">' + rows + "</div>",
+      },
+    );
+  }
+
+  function lastHealthHtml(dirId) {
+    var last = lastHealthFor(dirId);
+    if (!last) {
+      return '<span style="font-size:11px;color:var(--text-muted);">' + esc(t("profile.health.never", "Not checked yet")) + "</span>";
+    }
+    var verdict = last.verdict === "risk"
+      ? { key: "profile.health.verdict-risk", fb: "Risk", color: "var(--danger)" }
+      : last.verdict === "warn"
+        ? { key: "profile.health.verdict-warn", fb: "Watch", color: "var(--warning)" }
+        : { key: "profile.health.verdict-pass", fb: "Pass", color: "var(--success)" };
+    return '<span style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last.detail || "") + '">' +
+      esc(t("profile.health.last", "Last check: {when}").replace("{when}", relativeTime(last.at))) +
+      ' · <b style="color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b></span>";
+  }
+
+  function summarizeEnvRisk(r) {
+    var findings = (r && r.result && r.result.findings) || [];
+    var high = findings.filter(function (f) { return f.severity === "high"; }).length;
+    var medium = findings.filter(function (f) { return f.severity === "medium"; }).length;
+    return { verdict: high ? "risk" : medium ? "warn" : "pass", detail: high + " high / " + medium + " medium finding(s)" };
+  }
+
+  function summarizeWebRtc(r) {
+    var res = (r && r.result) || {};
+    var leak = (res.hostIps || []).length > 0;
+    return { verdict: leak ? "risk" : "pass", detail: res.summary || (leak ? "local IP exposed" : "no local IP leak") };
+  }
+
+  var DETECT_GLOBAL_MAX = 2;
+  var detectInFlight = {};
+  var detectGlobalCount = 0;
+
+  function hasExternalRiskConsent() {
+    try { return localStorage.getItem(EXTERNAL_CONSENT_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  function grantExternalRiskConsent() {
+    try { localStorage.setItem(EXTERNAL_CONSENT_KEY, "1"); } catch (e) { /* storage disabled */ }
+  }
+
+  /** Serialise per profile and cap global concurrency (TE-09). */
+  function acquireDetectSlot(dirId) {
+    if (detectInFlight[dirId]) {
+      toast(t("toast.detect.busy", "A check is already running for this profile"), "info");
+      return false;
+    }
+    if (detectGlobalCount >= DETECT_GLOBAL_MAX) {
+      toast(t("toast.detect.global-busy", "Too many checks running — wait for one to finish"), "info");
+      return false;
+    }
+    detectInFlight[dirId] = true;
+    detectGlobalCount++;
+    return true;
+  }
+
+  function releaseDetectSlot(dirId) {
+    if (!detectInFlight[dirId]) return;
+    delete detectInFlight[dirId];
+    detectGlobalCount = Math.max(0, detectGlobalCount - 1);
+  }
+
+  function askExternalConsent(dirId) {
+    var detail = '<div style="font-size:12px;line-height:1.6;">' +
+      esc(t("risk.external.body", "This check opens an external site inside the profile. That site will receive this profile's fingerprint and its proxy exit IP.")) +
+      '</div><ul style="font-size:11.5px;color:var(--text-muted);margin:8px 0 0 18px;padding:0;">' +
+      "<li>" + esc(t("risk.external.item1", "Browser fingerprint (canvas / WebGL / fonts / screen)")) + "</li>" +
+      "<li>" + esc(t("risk.external.item2", "User agent and platform strings")) + "</li>" +
+      "<li>" + esc(t("risk.external.item3", "Proxy exit IP and geolocation")) + "</li>" +
+      "</ul>";
+    agentBrowser.confirmHtml(
+      esc(t("risk.external.title", "Send this profile's fingerprint to an external site?")),
+      function () {
+        grantExternalRiskConsent();
+        agentBrowser.openRiskCheck(dirId);
+      },
+      { title: esc(t("risk.external.heading", "External risk check")), detailHtml: detail },
+    );
+  }
+
+  function confirmLaunchForCheck(dirId) {
+    agentBrowser.confirm(
+      t("risk.launch.msg", "This check needs a running browser. Start the profile now?"),
+      function () { runRiskCheck(dirId, true); },
+      {
+        title: t("risk.launch.title", "Start profile for check"),
+        detailHtml: '<div style="font-size:12px;">' +
+          esc(t("risk.launch.body", "The profile will be started and left running after the check.")) + "</div>",
+      },
+    );
+  }
+
+  function runRiskCheck(dirId, allowLaunch) {
+    if (!acquireDetectSlot(dirId)) return;
+    toast(allowLaunch ? t("toast.fp.launching", "Starting profile and opening risk check…") : t("toast.fp.opening", "Opening risk check…"), "info");
+    agentBrowser.ipc.call("browser.openRiskCheck", function () {
+      return api.browser.openRiskCheck(dirId, { allowLaunch: !!allowLaunch });
+    }, { kind: "detect" }).then(function (r) {
+      releaseDetectSlot(dirId);
+      if (r && r.success) {
+        toast(t("toast.fp.opened", "Opened risk check in profile"), "success");
+        if (allowLaunch) scheduleProfilesRefresh();
+        return;
       }
-      return api.browser.openRiskCheck(dirId).then(function(r) {
-        if (r && r.success) {
-          toast(t('toast.fp.opened', 'Opened risk check in profile'), 'success');
-          // Refresh profile list to reflect newly running state
-          if (!wasRunning) scheduleProfilesRefresh();
-        } else {
-          toast((r && r.error) || t('toast.fp.nav-failed', 'Failed to navigate to risk check'), 'error');
-        }
-      });
-    }).catch(function(e) { toast(e.message || String(e), 'error'); });
+      if (r && r.code === "PROFILE_NOT_RUNNING") {
+        confirmLaunchForCheck(dirId);
+        return;
+      }
+      toast((r && r.error) || t("toast.fp.nav-failed", "Failed to navigate to risk check"), "error");
+    }).catch(function (e) {
+      releaseDetectSlot(dirId);
+      toast(e && e.message ? e.message : String(e), "error");
+    });
+  }
+
+  agentBrowser.openRiskCheck = function(dirId) {
+    // Consent first (TE-04): nothing leaves the machine until the user agrees.
+    if (!hasExternalRiskConsent()) { askExternalConsent(dirId); return; }
+    api.browser.status(dirId).then(function(s) {
+      if (s && s.running) { runRiskCheck(dirId, false); return; }
+      confirmLaunchForCheck(dirId);
+    }).catch(function(e) { toast(e.message || String(e), "error"); });
+  };
+
+  // ── Engine banner (review item PL-07) ──
+  // Without this, a missing Chromium build only showed up as a launch failure
+  // plus a small red dot in the sidebar; new users had no in-app recovery path.
+  function renderEngineBanner(info) {
+    var el = document.getElementById("engine-banner");
+    if (!el) return;
+    if (info && info.installed) {
+      el.className = "engine-banner ok";
+      el.innerHTML = "🥷 " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
+      el.style.display = "";
+      return;
+    }
+    el.className = "engine-banner";
+    el.innerHTML = '⚠️ <span style="flex:1;">' +
+      esc(t("engine.missing", "No managed Chromium installed — profiles cannot start until you point at a local build.")) +
+      '</span>' +
+      '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' +
+        esc(t("engine.select", "Select local build…")) + "</button> " +
+      '<button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showEngineGuide">' +
+        esc(t("engine.guide", "Install guide")) + "</button>";
+    el.style.display = "";
+  }
+
+  agentBrowser.selectChromiumBinary = function() {
+    api.browser.selectBinary().then(function (r) {
+      if (r && r.success) {
+        toast(t("engine.selected", "Chromium configured"), "success");
+        updateBrowserStatus();
+        agentBrowser.loadProfiles();
+        return;
+      }
+      if (r && !r.cancelled) toast(r.error || t("engine.select-failed", "Could not configure that binary"), "error");
+    }).catch(function (e) { toast(e.message || String(e), "error"); });
+  };
+
+  agentBrowser.showEngineGuide = function() {
+    agentBrowser.confirmHtml(
+      esc(t("engine.guide.title", "Install the independent Chromium build")),
+      function () { /* informational only */ },
+      {
+        title: esc(t("engine.guide.heading", "Install guide")),
+        detailHtml: '<div style="font-size:12px;line-height:1.6;">' +
+          esc(t("engine.guide.body", "Build Chromium 150/151 with the maintained patch set, verify it, then install it into the local engine cache:")) +
+          '</div><pre style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;overflow:auto;margin:8px 0 0;">' +
+          esc("npm run verify:chromium -- /path/to/Chromium.app\nnpm run install:chromium -- /path/to/Chromium.app") +
+          "</pre>",
+      },
+    );
   };
 
   agentBrowser.addNote = function(dirId) {
@@ -731,6 +1047,14 @@
     if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = null;
     var proxySelection = parseProxySelection(document.getElementById("agent-browser-meta-proxy").value, "none");
     var hardware, geolocation;
+    // UE-04: field-level validation on the edit form too.
+    var metaErrors = validateHardwareFields("agent-browser-meta-");
+    if (metaErrors.length) {
+      clearFieldErrors("agent-browser-meta-");
+      showFieldErrors(metaErrors);
+      toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
+      return;
+    }
     try { hardware = readHardwareFields("agent-browser-meta-"); geolocation = readGeolocationFields("agent-browser-meta-"); }
     catch (e) { toast(e.message || String(e), "error"); return; }
     document.getElementById("dlg-agent-browser-seed").close();
@@ -761,9 +1085,12 @@
     Promise.all([
       api.browser.list().catch(function () { return []; }),
       api.proxy.list(),
+      api.browser.binary().catch(function () { return null; }),
     ]).then(function (results) {
       var browserProfiles = results[0] || [];
       var proxies = results[1];
+      // PL-07: surface the engine state on the page that needs it.
+      renderEngineBanner(results[2]);
 
       // Build a proxy lookup map for legacy renderer-side fallback.
       var proxyMap = {};
@@ -801,6 +1128,9 @@
         };
       });
 
+      // A5: one-time data-safety reminder once real profiles exist.
+      updateBackupHint(browserProfiles.length > 0);
+
       profiles.forEach(function (p) {
         var override = window._profileRuntimeOverrides && window._profileRuntimeOverrides[p.dirId];
         if (!override) return;
@@ -827,8 +1157,12 @@
       if (!profiles || profiles.length === 0) {
         var filtered = profileFilter.status !== "all" || (profileFilter.tags && profileFilter.tags.length);
         container.innerHTML = filtered
-          ? '<div class="empty-state">No profiles match the current filter.</div>'
-          : '<div class="empty-state">No profiles.<br>Click "+ New Profile" to get started.</div>';
+          ? '<div class="empty-state">' + esc(t("profiles.empty.filtered", "No profiles match the current filter.")) + '</div>'
+          : '<div class="empty-state">' + esc(t("profiles.empty.none", "No profiles yet. Click \"+ New Profile\" to get started.")) + '</div>';
+        lastRenderSignature = "";
+        profilePage = 1;
+        var pagerEl = document.getElementById("profile-pagination");
+        if (pagerEl) pagerEl.style.display = "none";
         return;
       }
 
@@ -839,7 +1173,7 @@
           esc(p.name) + ' (' + esc(label) + ')' + (p.isDefault ? ' ★' : '') + '</option>';
       }).join("");
 
-      container.innerHTML = profiles.map(function (p) {
+      var cardHtmlFn = function (p) {
         var isRunning = p.running;
         var date = p.lastModified ? new Date(p.lastModified).toLocaleDateString() : "?";
         var proxyStr = proxyDisplayLabel(p);
@@ -866,18 +1200,30 @@
           : (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale") + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
         if (fp.mode !== "off" && !isFirefox && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
         var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through (Firefox: stock identity)" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
-        var checkRiskAction = '<button class="btn btn-xs" data-action="risk-check" title="Open ping0.cc/env in this profile to check fingerprint risk" style="font-size:9px;">🔍 Check Risk</button> ';
-        var driftCheckAction = '<button class="btn btn-xs" data-action="drift-check" title="Compare live fingerprint against the stored baseline" style="font-size:9px;">🧬 Drift</button> ';
-        var envCheckAction = '<button class="btn btn-xs" data-action="env-risk" title="Check host environment risks (DNS resolvers / CN fonts / proxy DNS / rAF)" style="font-size:9px;">🖥 Env</button> ';
-        var webRtcAction = '<button class="btn btn-xs" data-action="webrtc-diag" title="Run an in-browser WebRTC probe (ICE candidates / mDNS / RTT)" style="font-size:9px;">📡 WebRTC</button> ';
-        var openAppAction = '<button class="btn btn-xs" data-action="open-app" title="Open as Web App (PWA / Sub-apps): standalone app window with this profile identity" style="font-size:9px;">🖥 App</button> ';
+        // ── Review item UE-01: four 9px check buttons made the card
+        // unreadable. They collapse into one labelled control; every check is
+        // local except the last one, which is an explicit opt-in (TE-04).
+        var healthSelect = '<select class="health-select" data-action="health" aria-label="' +
+          escAttr(t('profile.health.aria', 'Run a health check')) + '">' +
+          '<option value="">' + esc(t('profile.health.placeholder', '🩺 Health…')) + '</option>' +
+          '<option value="drift">' + esc(t('profile.health.drift', '🧬 Fingerprint drift')) + '</option>' +
+          '<option value="env">' + esc(t('profile.health.env', '🖥 Host environment')) + '</option>' +
+          '<option value="webrtc">' + esc(t('profile.health.webrtc', '📡 WebRTC leak')) + '</option>' +
+          '<option value="risk">' + esc(t('profile.health.external', '🔍 External site (ping0.cc)')) + '</option>' +
+          '<option value="history">' + esc(t('profile.health.history', '🕘 History')) + '</option>' +
+          '</select>';
         var isLocked = !!(p.lock && p.lock.owner);
-        var lockBadge = isLocked ? '<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr('Locked by ' + (p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
-        var drmBadge = p.drm ? '<span class="status-badge" style="background:var(--primary-bg);color:var(--primary);" title="Widevine/DRM enabled">🎬 DRM</span>' : '';
-        var appBadge = p.appUrl ? '<span class="status-badge" style="background:var(--surface2);color:var(--text);" title="Web App: ' + escAttr(p.appUrl) + '">🖥 App</span>' : '';
-        var engineBadge = isFirefox ? '<span class="status-badge" style="background:var(--surface2);color:#ff7a18;" title="Firefox engine: installed Firefox + remote debugging; managed fingerprint injection parity is a follow-up">🦊 Firefox</span>' : '';
+        var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
+        var drmBadge = p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">🎬 DRM</span>' : '';
+        var appBadge = p.appUrl ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.app', 'Capability: Web App {url}').replace('{url}', p.appUrl)) + '">🖥 App</span>' : '';
+        var engineBadge = isFirefox ? '<span class="status-badge badge-capability" style="color:#ff7a18;" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">🦊 Firefox</span>' : '';
+        // ── Review item UE-06: sync moves into the governance tier so the
+        // three status tiers are visually distinct (lifecycle / governance /
+        // capability) instead of five equal-weight badges.
+        var syncBadge = '<span class="status-badge badge-governance ' + syncCls + '" title="' + escAttr(syncTitle) + '">' + syncIcon + ' ' +
+          esc(p.syncStatus === "synced" ? t('profile.sync.synced', 'Synced') : p.syncStatus === "dirty" ? t('profile.sync.dirty', 'Dirty') : t('profile.sync.never', 'Never')) + '</span>';
         var tagHtml = (p.tags || []).map(function(tag) {
-          return '<span class="status-badge status-done" style="font-size:9px;margin-right:4px;">' + esc(tag) + '</span>';
+          return '<span class="status-badge status-done" style="font-size:11px;margin-right:4px;">' + esc(tag) + '</span>';
         }).join('');
 
         var proxyOptsHtml = renderProxyOptions(proxies, profileProxySelectionValue(p, "none"), true);
@@ -885,43 +1231,184 @@
         return '<div class="profile-card' + (isRunning ? ' running' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '">' +
           '<div class="card-header">' +
             '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
-            '<span class="name" title="Click to rename" data-action="rename">' + esc(p.name) + '</span>' +
-            '<span class="status-badge ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? 'Running' : 'Stopped') + '</span>' +
+            '<span class="name" title="' + escAttr(t('profile.name.title', 'Click to rename')) + '" data-action="rename">' + esc(p.name) + '</span>' +
+            '<span class="status-badge badge-lifecycle ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? t('profile.status.running', 'Running') : t('profile.status.stopped', 'Stopped')) + '</span>' +
             lockBadge +
+            syncBadge +
             engineBadge +
             drmBadge +
             appBadge +
           '</div>' +
-          '<div class="info-row"><span>Browser</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
-          '<div class="info-row"><span>Modified</span><span>' + date + '</span></div>' +
-          '<div class="info-row"><span>Fingerprint</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
-          '<div class="info-row"><span>Identity</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>Hardware</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + checkRiskAction + driftCheckAction + envCheckAction + webRtcAction + (p.appUrl ? openAppAction : '') + '</span></div>' +
-          '<div class="info-row"><span>Sync</span><span class="' + syncCls + '" title="' + escAttr(syncTitle) + '"><button class="btn btn-xs" style="font-size:9px;color:var(--text-muted);" data-action="note">📝</button>' + syncIcon + ' ' + esc((p.syncStatus === "synced" ? "Synced" : p.syncStatus === "dirty" ? "Dirty" : "Never")) + '</span></div>' +
-          '<div class="info-row"><span>Proxy</span><span>' + esc(proxyStr) + '</span></div>' +
-          ((p.tags || []).length ? '<div class="info-row"><span>Tags</span><span>' + tagHtml + '</span></div>' : '') +
+          '<div class="info-row"><span>' + esc(t('profile.row.browser', 'Browser')) + '</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span>' + date + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.proxy', 'Proxy')) + '</span><span>' + esc(proxyStr) + '</span></div>' +
+          ((p.tags || []).length ? '<div class="info-row"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
           '<div class="card-actions">' +
             (isRunning
-              ? '<button class="btn btn-secondary btn-sm" data-action="stop">⏹ Stop</button> '
-              : '<button class="btn btn-primary btn-sm" data-action="launch">▶ Launch</button> ') +
-            '<button class="btn btn-secondary btn-sm" data-action="edit">✎ Edit</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="cookies" title="Cookies">🍪</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="extensions" title="Extensions">🧩</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="export-archive" title="Export backup">📦</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="lock" title="' + (isLocked ? 'Release lock (uncheckout)' : 'Check out / lock to this device') + '">' + (isLocked ? '🔓' : '🔒') + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="logs" title="Operation logs + browser log tail (RoxyBrowser-style)">📋</button> ' +
-            '<button class="btn btn-danger btn-sm" data-action="delete">🗑</button>' +
+              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '">⏹ ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
+              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '">▶ ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
+            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '">✎ ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
+            (p.appUrl ? '<button class="btn btn-secondary btn-sm" data-action="open-app" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">🖥 ' + esc(t('profile.action.app', 'App')) + '</button> ' : '') +
+            // ── UE-08: every control has an accessible name ──
+            '<details class="card-menu">' +
+              '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +
+              '<div class="card-menu-list">' +
+                '<button type="button" data-action="rename">' + esc(t('profile.menu.rename', '✏️ Rename')) + '</button>' +
+                '<button type="button" data-action="note">' + esc(t('profile.menu.note', '📝 Note')) + '</button>' +
+                '<button type="button" data-action="cookies">' + esc(t('profile.menu.cookies', '🍪 Cookies')) + '</button>' +
+                '<button type="button" data-action="extensions">' + esc(t('profile.menu.extensions', '🧩 Extensions')) + '</button>' +
+                '<button type="button" data-action="export-archive">' + esc(t('profile.menu.export', '📦 Export backup')) + '</button>' +
+                '<button type="button" data-action="lock">' + esc(isLocked ? t('profile.menu.unlock', '🔓 Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
+                '<button type="button" data-action="logs">' + esc(t('profile.menu.logs', '📋 Logs')) + '</button>' +
+                '<button type="button" class="danger" data-action="delete">' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
+              '</div>' +
+            '</details>' +
           '</div>' +
           '<div style="margin-top:4px;">' +
             '<select class="proxy-select" data-action="proxy" style="width:100%;font-size:10px;padding:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">' + proxyOptsHtml + '</select>' +
           '</div>' +
         '</div>';
-      }).join("");
+      };
+      renderProfileList(container, profiles, cardHtmlFn);
       attachProfileCardHandlers(container);
       updateBatchBar(proxies);
     }).catch(function (e) {
-      container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
+      container.innerHTML = '<div class="empty-state">' + esc(t("profiles.load-error", "Error: ")) + esc(e.message || String(e)) + '</div>';
+      lastRenderSignature = "";
     });
+  }
+
+  // ── Profile list rendering: paging + keyed incremental updates ──
+  // (review items TE-02 / UE-07)
+  //
+  // Before: every refresh rebuilt the whole grid with innerHTML, so a list of
+  // 200 profiles re-created 200 cards on every launch/stop — dropping scroll
+  // position, checkbox state and the focus in a proxy dropdown.
+  //
+  // Now: only the visible page is built, unchanged cards are reused by key,
+  // and an identical render is skipped entirely (zero DOM mutations).
+  var PAGE_SIZE = 50;
+  var profilePage = 1;
+  var lastRenderSignature = "";
+
+  function htmlSignature(text) {
+    // djb2 — cheap, good enough to detect "this card did not change".
+    var hash = 5381;
+    for (var i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
+    return hash.toString(36);
+  }
+
+  function setProfilePage(page) {
+    profilePage = Math.max(1, page);
+    loadProfiles(true);
+  }
+
+  function renderPagination(container, total, pageCount) {
+    var el = document.getElementById("profile-pagination");
+    if (pageCount <= 1) {
+      if (el) el.style.display = "none";
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "profile-pagination";
+      el.className = "batch-progress";
+      container.parentNode.insertBefore(el, container.nextSibling);
+      el.addEventListener("click", function (event) {
+        var btn = event.target.closest("[data-page]");
+        if (!btn) return;
+        setProfilePage(parseInt(btn.getAttribute("data-page"), 10) || 1);
+      });
+    }
+    el.style.display = "";
+    var start = (profilePage - 1) * PAGE_SIZE + 1;
+    var end = Math.min(total, profilePage * PAGE_SIZE);
+    el.innerHTML =
+      '<span>' + esc(t("profiles.pager.range", "Showing {a}-{b} of {n}").replace("{a}", start).replace("{b}", end).replace("{n}", total)) + "</span>" +
+      '<span style="flex:1"></span>' +
+      '<button class="btn btn-secondary btn-sm" data-page="' + (profilePage - 1) + '"' + (profilePage <= 1 ? " disabled" : "") + ">" + esc(t("profiles.pager.prev", "Previous")) + "</button>" +
+      '<span>' + profilePage + " / " + pageCount + "</span>" +
+      '<button class="btn btn-secondary btn-sm" data-page="' + (profilePage + 1) + '"' + (profilePage >= pageCount ? " disabled" : "") + ">" + esc(t("profiles.pager.next", "Next")) + "</button>";
+  }
+
+  function renderProfileList(container, profiles, cardHtmlFn) {
+    var total = profiles.length;
+    var pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (profilePage > pageCount) profilePage = pageCount;
+    if (profilePage < 1) profilePage = 1;
+    var start = (profilePage - 1) * PAGE_SIZE;
+    var pageItems = profiles.slice(start, start + PAGE_SIZE);
+
+    var cards = pageItems.map(function (p) {
+      var html = cardHtmlFn(p);
+      return { dirId: p.dirId, html: html, sig: htmlSignature(html) };
+    });
+
+    // Fast path: nothing changed -> touch no DOM at all.
+    var signature = cards.map(function (c) { return c.dirId + ":" + c.sig; }).join("|") + "#" + pageCount;
+    if (signature === lastRenderSignature) {
+      renderPagination(container, total, pageCount);
+      return;
+    }
+    lastRenderSignature = signature;
+
+    // Remember focus + scroll so a refresh does not interrupt the user.
+    var active = document.activeElement;
+    var activeCard = active && active.closest ? active.closest(".profile-card") : null;
+    var focusKey = activeCard ? (activeCard.dataset.dirId || "") + "|" + (active.getAttribute("data-action") || active.className || "") : null;
+    var scrollingEl = document.getElementById("content") || document.scrollingElement || document.documentElement;
+    var scrollTop = scrollingEl ? scrollingEl.scrollTop : 0;
+
+    var existing = {};
+    Array.prototype.forEach.call(container.children, function (el) {
+      if (el.dataset && el.dataset.dirId) existing[el.dataset.dirId] = el;
+    });
+
+    var frag = document.createDocumentFragment();
+    cards.forEach(function (card) {
+      var el = existing[card.dirId];
+      if (el && el.getAttribute("data-card-sig") === card.sig) {
+        delete existing[card.dirId];
+      } else {
+        var tmp = document.createElement("div");
+        tmp.innerHTML = card.html;
+        el = tmp.firstElementChild;
+        if (el) el.setAttribute("data-card-sig", card.sig);
+      }
+      if (el) frag.appendChild(el);
+    });
+    // Cards that are no longer present (deleted or paged away) get removed.
+    Object.keys(existing).forEach(function (dirId) {
+      if (existing[dirId].parentNode) existing[dirId].parentNode.removeChild(existing[dirId]);
+    });
+    if (frag.childNodes.length || container.children.length === 0) container.appendChild(frag);
+
+    if (scrollingEl && scrollTop) scrollingEl.scrollTop = scrollTop;
+    if (focusKey) {
+      var parts = focusKey.split("|");
+      var target = container.querySelector('.profile-card[data-dir-id="' + parts[0].replace(/"/g, "") + '"] [data-action="' + (parts[1] || "").replace(/"/g, "") + '"]');
+      if (target && target.focus) target.focus();
+    }
+
+    renderPagination(container, total, pageCount);
+  }
+
+  // ── Card busy state (review item PL-06) ──
+  // While a launch/stop is in flight the card is dimmed and stops accepting
+  // input, so a user cannot race a delete against a browser that is starting.
+  function setCardBusy(dirId, busy) {
+    var card = document.querySelector('#profile-list .profile-card[data-dir-id="' + String(dirId).replace(/"/g, "") + '"]');
+    if (!card) return;
+    if (busy) card.classList.add("busy");
+    else card.classList.remove("busy");
+  }
+
+  function closeAllCardMenus() {
+    var menus = document.querySelectorAll("#profile-list .card-menu[open]");
+    Array.prototype.forEach.call(menus, function (m) { m.removeAttribute("open"); });
   }
 
   function attachProfileCardHandlers(container) {
@@ -933,6 +1420,7 @@
       var dirId = card.dataset.dirId;
       var action = target.dataset.action;
       if (!dirId || action === "proxy") return;
+      closeAllCardMenus();
       if (action === "rename") agentBrowser.renameProfile(dirId, card.querySelector(".name")?.textContent || "");
       else if (action === "note") agentBrowser.addNote(dirId);
       else if (action === "stop") agentBrowser.stop(dirId);
@@ -957,26 +1445,56 @@
         if (card && card.dataset.dirId) agentBrowser.toggleProfileSelect(card.dataset.dirId, target.checked);
         return;
       }
-      if (!target || target.dataset.action !== "proxy") return;
-      var card = target.closest(".profile-card");
-      if (card && card.dataset.dirId) agentBrowser.proxyChanged(card.dataset.dirId, target);
+      var action = target && target.dataset ? target.dataset.action : null;
+      if (action === "proxy") {
+        var pcard = target.closest(".profile-card");
+        if (pcard && pcard.dataset.dirId) agentBrowser.proxyChanged(pcard.dataset.dirId, target);
+        return;
+      }
+      // Single "Health" control (UE-01) instead of four 9px buttons.
+      if (action === "health") {
+        var kind = target.value;
+        target.value = ""; // reset so the same check can be run again
+        var hcard = target.closest(".profile-card");
+        if (!kind || !hcard || !hcard.dataset.dirId) return;
+        var id = hcard.dataset.dirId;
+        if (kind === "drift") agentBrowser.checkDrift(id);
+        else if (kind === "env") agentBrowser.openEnvRisk(id);
+        else if (kind === "webrtc") agentBrowser.openWebRtcDiag(id);
+        else if (kind === "risk") agentBrowser.openRiskCheck(id);
+        else if (kind === "history") showHealthHistory(id);
+      }
     };
   }
 
   agentBrowser.checkDrift = function(dirId) {
-    api.browser.checkDrift(dirId).then(function(r) {
-      if (!r || !r.ok) { toast((r && r.error) || "Fingerprint check failed", "error"); return; }
+    // TE-09: one check per profile at a time, max 2 globally.
+    if (!acquireDetectSlot(dirId)) return;
+    agentBrowser.ipc.call("browser.checkDrift", function () {
+      return api.browser.checkDrift(dirId);
+    }, { kind: "detect" }).then(function(r) {
+      releaseDetectSlot(dirId);
+      if (!r || !r.ok) { toast((r && r.error) || t("toast.fp.drift-failed", "Fingerprint check failed"), "error"); return; }
       if (!r.hasBaseline) {
-        toast("No fingerprint baseline yet — launch and use Capture Baseline first", "info");
+        toast(t("toast.fp.no-baseline", "No fingerprint baseline yet — launch the profile and capture a baseline first"), "info");
         return;
       }
+      var driftFields = (r.drift || []).map(function(d) { return d.field; });
+      // PL-05: keep the verdict so the card can show it later.
+      recordHealthResult(dirId, "drift", {
+        verdict: r.risky ? "risk" : driftFields.length ? "warn" : "pass",
+        detail: driftFields.slice(0, 6).join(", "),
+      });
       if (!r.risky) {
-        toast("Fingerprint stable (" + ((r.drift || []).length) + " benign change(s))", "success");
+        toast(t("toast.fp.stable", "Fingerprint stable ({n} benign change(s))").replace("{n}", driftFields.length), "success");
       } else {
-        var fields = (r.drift || []).map(function(d) { return d.field; }).slice(0, 6).join(", ");
-        toast("⚠ Risky fingerprint drift: " + fields + ((r.drift || []).length > 6 ? " (+" + ((r.drift || []).length - 6) + ")" : ""), "error");
+        toast("⚠ " + t("toast.fp.drift", "Risky fingerprint drift") + ": " + driftFields.slice(0, 6).join(", ") + (driftFields.length > 6 ? " (+" + (driftFields.length - 6) + ")" : ""), "error");
       }
-    }).catch(function(e) { toast(e.message || String(e), "error"); });
+      scheduleProfilesRefresh();
+    }).catch(function(e) {
+      releaseDetectSlot(dirId);
+      toast(e.message || String(e), "error");
+    });
   };
 
   function renderEnvRisk(r) {
@@ -993,8 +1511,8 @@
     rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + ((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">中文字体: ' + ((res.cnFonts || []).join(', ') || '无') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">代理: ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + ((res.cnFonts || []).join(', ') || esc(t("common.none", "none"))) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.proxy", "Proxy")) + ': ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
     if (res.raf && res.raf.samples > 0) {
       rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(String(res.raf.medianMs)) + 'ms ≈ ' + esc(String(res.raf.refreshHz)) + 'Hz (' + esc(String(res.raf.samples)) + ' samples, ' + (res.raf.standard ? 'standard' : 'non-standard') + ')</div>');
     }
@@ -1009,19 +1527,24 @@
           '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">💡 ' + esc(f.fix) + '</div>' +
         '</div>';
       }).join('') +
-      (!findings.length ? '<div class="empty-state">未发现环境风险</div>' : '') +
+      (!findings.length ? '<div class="empty-state">' + esc(t("env.no-risk", "No environment risk found")) + '</div>' : '') +
       '</div>';
   }
 
   agentBrowser.openEnvRisk = function(dirId) {
     var dlg = document.getElementById('dlg-env-risk');
     var body = document.getElementById('env-risk-body');
-    if (!dlg) { toast('Env check dialog unavailable', 'error'); return; }
-    if (body) body.innerHTML = '<div class="loading">Checking host environment…</div>';
+    if (!dlg) { toast(t('env.dialog.unavailable', 'Env check dialog unavailable'), 'error'); return; }
+    if (!acquireDetectSlot(dirId)) return;
+    if (body) body.innerHTML = '<div class="loading">' + esc(t('env.checking', 'Checking host environment…')) + '</div>';
     dlg.showModal();
-    api.browser.envRisk(dirId).then(renderEnvRisk).catch(function(e) {
-      renderEnvRisk({ ok: false, error: e.message || String(e) });
-    });
+    agentBrowser.ipc.call("browser.envRisk", function () { return api.browser.envRisk(dirId); }, { kind: "detect" })
+      .then(function (r) {
+        releaseDetectSlot(dirId);
+        if (r && r.ok) recordHealthResult(dirId, "env", summarizeEnvRisk(r)); // PL-05
+        renderEnvRisk(r);
+      })
+      .catch(function (e) { releaseDetectSlot(dirId); renderEnvRisk({ ok: false, error: e.message || String(e) }); });
   };
 
 
@@ -1043,18 +1566,18 @@
     var rows = [];
     rows.push('<div class="card-header"><span class="name">WebRTC · ' + esc(when) + '</span><span>' + badge + '</span></div>');
     rows.push('<div style="font-size:12px;color:var(--text);margin-top:4px;">' + esc(res.summary || "") + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? "可用" : "不可用") + ' · ICE candidates: ' + (res.candidates || []).length + ' · 连接状态: ' + esc(res.connectionState || "") + (typeof res.rttMs === "number" ? " · RTT: " + res.rttMs + "ms" : "") + '</div>');
-    if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">mDNS 主机名: </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
-    if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--danger);">⚠ 本地 IP 泄漏: </span>' + res.hostIps.map(esc).join(", ") + '</div>');
-    if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">STUN 公网 IP: </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? t("webrtc.available", "available") : t("webrtc.unavailable", "unavailable")) + ' · ' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (res.candidates || []).length + ' · ' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(res.connectionState || "") + (typeof res.rttMs === "number" ? " · RTT: " + res.rttMs + "ms" : "") + '</div>');
+    if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.mdns", "mDNS hostnames")) + ': </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
+    if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--danger);">⚠ ' + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': </span>' + res.hostIps.map(esc).join(", ") + '</div>');
+    if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.stun-ip", "STUN public IP")) + ': </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
     if (res.error) rows.push('<div style="font-size:11px;color:var(--warning);margin-top:4px;">⚠ ' + esc(res.error) + '</div>');
     body.innerHTML = rows.join("");
     var histEl = document.getElementById("webrtc-diag-history");
     if (histEl && dirId) {
       api.webrtc.diagHistory(dirId).then(function(h) {
         var entries = (h && h.entries) || [];
-        if (!entries.length) { histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "暂无历史记录")) + '</div>'; return; }
-        var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("webrtc.diag.history", "历史记录 ({n})").replace("{n}", entries.length)) + '</div>';
+        if (!entries.length) { histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>'; return; }
+        var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("webrtc.diag.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
         entries.slice().reverse().forEach(function(en) {
           var ts = en.at ? new Date(en.at).toLocaleString() : "?";
           var leak = (en.hostIps || []).length > 0;
@@ -1065,29 +1588,65 @@
     }
   }
 
-  agentBrowser.openWebRtcDiag = function(dirId) {
-    window.__webrtcDiagDirId = dirId;
+  function runWebRtcDiag(dirId, allowLaunch) {
     var dlg = document.getElementById("dlg-webrtc-diag");
     var body = document.getElementById("webrtc-diag-body");
     var histEl = document.getElementById("webrtc-diag-history");
-    if (!dlg) { toast(t("webrtc.diag.unavailable", "WebRTC 诊断对话框不可用"), "error"); return; }
-    if (body) body.innerHTML = '<div class="loading">' + esc(t("webrtc.diag.running", "运行 WebRTC 诊断（如需会自动启动 profile 浏览器）…")) + '</div>';
+    if (!dlg) { toast(t("webrtc.diag.unavailable", "WebRTC diagnostic dialog unavailable"), "error"); return; }
+    if (!acquireDetectSlot(dirId)) return;
+    if (body) {
+      body.innerHTML = '<div class="loading">' +
+        esc(allowLaunch ? t("webrtc.diag.running-launch", "Starting profile and running the WebRTC diagnostic…") : t("webrtc.diag.running", "Running the WebRTC diagnostic…")) +
+        "</div>";
+    }
     if (histEl) histEl.innerHTML = "";
     dlg.showModal();
-    api.webrtc.diag(dirId).then(function(r) {
-      renderWebRtcDiag(r || { ok: false, error: "unknown" }, dirId);
+    agentBrowser.ipc.call("webrtc.diag", function () {
+      return api.webrtc.diag(dirId, { allowLaunch: !!allowLaunch });
+    }, { kind: "detect"     }).then(function(r) {
+      releaseDetectSlot(dirId);
+      var payload = r || { ok: false, error: "unknown" };
+      if (!payload.ok && payload.code === "PROFILE_NOT_RUNNING") {
+        dlg.close();
+        confirmLaunchForWebRtc(dirId);
+        return;
+      }
+      if (payload.ok) recordHealthResult(dirId, "webrtc", summarizeWebRtc(payload)); // PL-05
+      renderWebRtcDiag(payload, dirId);
     }).catch(function(e) {
+      releaseDetectSlot(dirId);
       renderWebRtcDiag({ ok: false, error: e.message || String(e) }, dirId);
     });
+  }
+
+  function confirmLaunchForWebRtc(dirId) {
+    agentBrowser.confirm(
+      t("risk.launch.msg", "This check needs a running browser. Start the profile now?"),
+      function () { runWebRtcDiag(dirId, true); },
+      {
+        title: t("risk.launch.title", "Start profile for check"),
+        detailHtml: '<div style="font-size:12px;">' +
+          esc(t("risk.launch.body", "The profile will be started and left running after the check.")) + "</div>",
+      },
+    );
+  }
+
+  agentBrowser.openWebRtcDiag = function(dirId) {
+    window.__webrtcDiagDirId = dirId;
+    api.browser.status(dirId).then(function(s) {
+      // PL-03: never start a browser as a side effect of a diagnostic.
+      if (s && s.running) { runWebRtcDiag(dirId, false); return; }
+      confirmLaunchForWebRtc(dirId);
+    }).catch(function(e) { toast(e.message || String(e), "error"); });
   };
 
   agentBrowser.webRtcDiagClear = function() {
     var dirId = window.__webrtcDiagDirId;
     if (!dirId) { return; }
     api.webrtc.diagClear(dirId).then(function(r) {
-      if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC 诊断历史已清除"), "success"); }
+      if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC diagnostic history cleared"), "success"); }
       var histEl = document.getElementById("webrtc-diag-history");
-      if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "暂无历史记录")) + '</div>';
+      if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>';
     }).catch(function(e) { toast(e.message || String(e), "error"); });
   };
 
@@ -1123,7 +1682,7 @@
     }
     var entries = r.activity || [];
     if (!entries.length) {
-      activityEl.innerHTML = '<div class="empty-state">' + esc(t("logs.no-activity", "暂无操作记录")) + '</div>';
+      activityEl.innerHTML = '<div class="empty-state">' + esc(t("logs.no-activity", "No activity yet")) + '</div>';
     } else {
       activityEl.innerHTML = entries.map(function(e) {
         var when = e.at ? new Date(e.at).toLocaleString() : "?";
@@ -1135,13 +1694,13 @@
           '</div>';
       }).join("");
     }
-    tailEl.textContent = r.logTail || (t("logs.no-tail", "暂无浏览器日志（启动 profile 后生成）"));
+    tailEl.textContent = r.logTail || (t("logs.no-tail", "No browser log yet (generated once the profile starts)"));
   }
 
   agentBrowser.showProfileLogs = function(dirId) {
     document.getElementById("profile-logs-dir-id").value = dirId;
     var dlg = document.getElementById("dlg-profile-logs");
-    if (!dlg) { toast(t("logs.unavailable", "日志对话框不可用"), "error"); return; }
+    if (!dlg) { toast(t("logs.unavailable", "Log dialog unavailable"), "error"); return; }
     dlg.showModal();
     agentBrowser.refreshProfileLogs();
   };
@@ -1162,15 +1721,34 @@
 
   agentBrowser.toggleLock = function(dirId, card) {
     var locked = card ? card.dataset.lock === "1" : false;
+    var apply = function() {
+      api.browser.setLock(dirId, !locked).then(function(r) {
+        if (!r || !r.success) { toast((r && r.error) || 'Lock failed', 'error'); return; }
+        toast(locked ? t('profile.lock.unlocked', '🔓 Unlocked (remember to push)') : t('profile.lock.locked', '🔒 Locked to this device (remember to push)'), 'success');
+        agentBrowser.loadProfiles();
+      }).catch(function(e) { toast(e.message || String(e), 'error'); });
+    };
     if (!locked) {
-      var ok = confirm('锁定这个 profile 到当前设备？其他设备 Push 时将无法覆盖它（可强制覆盖）。\n\n锁定后记得 Push 一次，把锁同步到远端。');
-      if (!ok) return;
+      agentBrowser.confirm(t('profile.lock.confirm', 'Lock this profile to the current device? Other devices can no longer overwrite it on push (a forced push still can).\n\nRemember to push once so the lock syncs to the remote.'), apply);
+      return;
     }
-    api.browser.setLock(dirId, !locked).then(function(r) {
-      if (!r || !r.success) { toast((r && r.error) || 'Lock failed', 'error'); return; }
-      toast(locked ? '🔓 已解锁（记得 Push 同步）' : '🔒 已锁定到本设备（记得 Push 同步）', 'success');
-      agentBrowser.loadProfiles();
-    }).catch(function(e) { toast(e.message || String(e), 'error'); });
+    apply();
+  };
+
+  var BACKUP_HINT_KEY = "abs-backup-hint-dismissed";
+
+  function updateBackupHint(hasProfiles) {
+    var el = document.getElementById("backup-hint");
+    if (!el) return;
+    var dismissed = false;
+    try { dismissed = !!localStorage.getItem(BACKUP_HINT_KEY); } catch (e) { dismissed = false; }
+    el.style.display = (hasProfiles && !dismissed) ? "flex" : "none";
+  }
+
+  agentBrowser.dismissBackupHint = function () {
+    var el = document.getElementById("backup-hint");
+    if (el) el.style.display = "none";
+    try { localStorage.setItem(BACKUP_HINT_KEY, "1"); } catch (e) { /* storage disabled */ }
   };
 
   agentBrowser.loadProfiles = loadProfiles;

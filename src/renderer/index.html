@@ -14,19 +14,19 @@
  <h1>Agent Browser Studio</h1>
  <span class="version">v1.0.0</span>
  </div>
- <ul class="nav-menu">
- <li class="nav-item active" data-tab="profiles" data-role="cmd" data-cmd="switchTab" data-i18n="tab.profiles">📦 Profiles</li>
- <li class="nav-item" data-tab="proxy" data-role="cmd" data-cmd="switchTab" data-i18n="tab.proxy">🔌 Proxies</li>
- <li class="nav-item" data-tab="storage" data-role="cmd" data-cmd="switchTab" data-i18n="tab.storage">💾 Storage</li>
- <li class="nav-item" data-tab="sync" data-role="cmd" data-cmd="switchTab" data-i18n="tab.sync">☁️ Sync</li>
- <li class="nav-item" data-tab="browser" data-role="cmd" data-cmd="switchTab" data-i18n="tab.browser">🥷 Browser Engine</li>
- <li class="nav-item" data-tab="extensions" data-role="cmd" data-cmd="switchTab" data-i18n="tab.extensions">🧩 Extensions</li>
- <li class="nav-item" data-tab="accounts" data-role="cmd" data-cmd="switchTab" data-i18n="tab.accounts">🔑 Accounts</li>
- <li class="nav-item" data-tab="agent" data-role="cmd" data-cmd="switchTab" data-i18n="tab.agent">🤖 Agent</li>
- <li class="nav-item" data-tab="automation" data-role="cmd" data-cmd="switchTab" data-i18n="tab.automation">⏰ Automation</li>
- <li class="nav-item" data-tab="runs" data-role="cmd" data-cmd="switchTab" data-i18n="tab.runs">🤖 Runs</li>
- <li class="nav-item" data-tab="activity" data-role="cmd" data-cmd="switchTab" data-i18n="tab.activity">📜 Activity</li>
- <li class="nav-item" data-tab="db" data-role="cmd" data-cmd="switchTab" data-i18n="tab.db">📊 Database</li>
+ <ul class="nav-menu" role="tablist" aria-label="Main navigation">
+ <li class="nav-item active" id="nav-profiles" role="tab" tabindex="0" aria-selected="true" data-tab="profiles" data-role="cmd" data-cmd="switchTab" data-i18n="tab.profiles" aria-controls="tab-profiles">📦 Profiles</li>
+ <li class="nav-item" id="nav-proxy" role="tab" tabindex="-1" aria-selected="false" data-tab="proxy" data-role="cmd" data-cmd="switchTab" data-i18n="tab.proxy" aria-controls="tab-proxy">🔌 Proxies</li>
+ <li class="nav-item" id="nav-storage" role="tab" tabindex="-1" aria-selected="false" data-tab="storage" data-role="cmd" data-cmd="switchTab" data-i18n="tab.storage" aria-controls="tab-storage">💾 Storage</li>
+ <li class="nav-item" id="nav-sync" role="tab" tabindex="-1" aria-selected="false" data-tab="sync" data-role="cmd" data-cmd="switchTab" data-i18n="tab.sync" aria-controls="tab-sync">☁️ Sync</li>
+ <li class="nav-item" id="nav-browser" role="tab" tabindex="-1" aria-selected="false" data-tab="browser" data-role="cmd" data-cmd="switchTab" data-i18n="tab.browser" aria-controls="tab-browser">🥷 Browser Engine</li>
+ <li class="nav-item" id="nav-extensions" role="tab" tabindex="-1" aria-selected="false" data-tab="extensions" data-role="cmd" data-cmd="switchTab" data-i18n="tab.extensions" aria-controls="tab-extensions">🧩 Extensions</li>
+ <li class="nav-item" id="nav-accounts" role="tab" tabindex="-1" aria-selected="false" data-tab="accounts" data-role="cmd" data-cmd="switchTab" data-i18n="tab.accounts" aria-controls="tab-accounts">🔑 Accounts</li>
+ <li class="nav-item" id="nav-agent" role="tab" tabindex="-1" aria-selected="false" data-tab="agent" data-role="cmd" data-cmd="switchTab" data-i18n="tab.agent" aria-controls="tab-agent">🤖 Agent</li>
+ <li class="nav-item" id="nav-automation" role="tab" tabindex="-1" aria-selected="false" data-tab="automation" data-role="cmd" data-cmd="switchTab" data-i18n="tab.automation" aria-controls="tab-automation">⏰ Automation</li>
+ <li class="nav-item" id="nav-runs" role="tab" tabindex="-1" aria-selected="false" data-tab="runs" data-role="cmd" data-cmd="switchTab" data-i18n="tab.runs" aria-controls="tab-runs">🤖 Runs</li>
+ <li class="nav-item" id="nav-activity" role="tab" tabindex="-1" aria-selected="false" data-tab="activity" data-role="cmd" data-cmd="switchTab" data-i18n="tab.activity" aria-controls="tab-activity">📜 Activity</li>
+ <li class="nav-item" id="nav-db" role="tab" tabindex="-1" aria-selected="false" data-tab="db" data-role="cmd" data-cmd="switchTab" data-i18n="tab.db" aria-controls="tab-db">📊 Database</li>
  </ul>
  <div class="sidebar-footer">
  <span id="sidebar-chrome-status" style="font-size:10px;display:block;"></span>
@@ -43,38 +43,62 @@
 <main id="content">
 
  <!-- ══════ Profiles Tab ══════ -->
- <section id="tab-profiles" class="tab-content active">
+ <section id="tab-profiles" class="tab-content active" role="tabpanel" aria-labelledby="nav-profiles">
  <div class="tab-header">
  <h2 data-i18n="profiles.title">Browser Profiles</h2>
  <div class="header-btns">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="newProfile" data-i18n="profiles.new">🥷 + New Browser Profile</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="quickCreateProfile" data-i18n="profiles.quick">⚡ Quick Create</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkImport" data-i18n="profiles.bulk-import">📥 Bulk Import</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="importProfileArchive" data-i18n="profiles.import-archive">📦 Import Backup</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkStart" data-i18n="profiles.start-all">▶ Start All</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="bulkStop" data-i18n="profiles.stop-all">⏹ Stop All</button>
+ <!-- UE-05: six equal-weight buttons buried the primary action. -->
+ <details class="card-menu" id="profiles-more-menu">
+  <summary aria-label="More actions" title="More actions" data-i18n-title="profiles.more">⋯</summary>
+  <div class="card-menu-list">
+   <button type="button" data-role="cmd" data-cmd="quickCreateProfile" data-i18n="profiles.quick">⚡ Quick Create</button>
+   <button type="button" data-role="cmd" data-cmd="bulkImport" data-i18n="profiles.bulk-import">📥 Bulk Import</button>
+   <button type="button" data-role="cmd" data-cmd="importProfileArchive" data-i18n="profiles.import-archive">📦 Import Backup</button>
+   <button type="button" data-role="cmd" data-cmd="bulkStart" data-i18n="profiles.start-all">▶ Start All</button>
+   <button type="button" data-role="cmd" data-cmd="bulkStop" data-i18n="profiles.stop-all">⏹ Stop All</button>
+  </div>
+ </details>
  </div>
  </div>
+ <!-- PL-07: missing-engine banner. Rendered by profiles.js on every load. -->
+ <div id="engine-banner" class="engine-banner" style="display:none"></div>
+ <!-- UE-06: legend for the three status tiers (lifecycle / governance / capability) -->
+ <details id="status-legend" class="status-legend">
+  <summary data-i18n="profiles.legend.toggle">Status legend</summary>
+  <div class="legend-grid">
+   <div><span class="legend-tag badge-lifecycle" data-i18n="profiles.legend.lifecycle">Lifecycle</span> <span data-i18n="profiles.legend.lifecycle-desc">Running / Stopped — whether this profile is up right now</span></div>
+   <div><span class="legend-tag badge-governance" data-i18n="profiles.legend.governance">Governance</span> <span data-i18n="profiles.legend.governance-desc">🔒 Locked / ☁ Sync — who owns it, and whether it matches the remote</span></div>
+   <div><span class="legend-tag badge-capability" data-i18n="profiles.legend.capability">Capability</span> <span data-i18n="profiles.legend.capability-desc">🎬 DRM / 🦊 Firefox / 🖥 App — what this profile can do</span></div>
+  </div>
+ </details>
   <div id="profile-batch-bar" class="batch-bar">
-  <label class="batch-filter"><span>状态</span>
+  <label class="batch-filter"><span data-i18n="profiles.filter.status">Status</span>
   <select id="profile-status-filter" data-role="change" data-change-cmd="onProfileFilterChange">
-  <option value="all">全部</option><option value="running">运行中</option><option value="stopped">已停止</option>
+  <option value="all" data-i18n="profiles.filter.all">All</option><option value="running" data-i18n="profiles.filter.running">Running</option><option value="stopped" data-i18n="profiles.filter.stopped">Stopped</option>
   </select></label>
-  <label class="batch-filter"><span>标签</span>
-  <input id="profile-tag-filter" data-role="input" data-input-cmd="onProfileFilterChange" placeholder="tag1,tag2（任一匹配）" style="width:180px;">
+  <label class="batch-filter"><span data-i18n="profiles.filter.tag">Tag</span>
+  <input id="profile-tag-filter" data-role="input" data-input-cmd="onProfileFilterChange" placeholder="tag1,tag2 (match any)" data-i18n-placeholder="profiles.filter.tag-ph" style="width:180px;">
   </label>
-  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="clearProfileFilters">✕ 清除筛选</button>
-  <label class="batch-filter" style="margin-left:auto;"><input type="checkbox" id="profile-select-all" data-role="change" data-change-cmd="onProfileSelectAllChange"> 全选可见</label>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="clearProfileFilters" data-i18n="profiles.filter.clear">✕ Clear filters</button>
+  <label class="batch-filter" style="margin-left:auto;"><input type="checkbox" id="profile-select-all" data-role="change" data-change-cmd="onProfileSelectAllChange"> <span data-i18n="profiles.filter.select-all">Select all visible</span></label>
   </div>
   <div id="profile-batch-actions" class="batch-actions" style="display:none">
-  <span><b id="profile-selected-count">0</b> 个已选</span>
-  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStartSelected">▶ 启动选中</button>
-  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStopSelected">⏹ 停止选中</button>
-  <select id="batch-assign-proxy" title="给选中 profile 分配代理"><option value="">(默认代理)</option></select>
-  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchAssignProxy">🔌 分配代理</button>
-  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchExportSelected">📦 导出选中</button>
-  <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="batchDeleteSelected">🗑 删除选中</button>
+  <span><b id="profile-selected-count">0</b> <span data-i18n="profiles.batch.selected-suffix">selected</span></span>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStartSelected" data-i18n="profiles.batch.start">▶ Start selected</button>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchStopSelected" data-i18n="profiles.batch.stop">⏹ Stop selected</button>
+  <select id="batch-assign-proxy" title="Assign a proxy to the selected profiles" data-i18n-title="profiles.batch.assign-proxy-title"><option value="" data-i18n="profiles.batch.proxy-default">(Default proxy — direct if unset)</option></select>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchAssignProxy" data-i18n="profiles.batch.assign-proxy">🔌 Assign proxy</button>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchExportSelected" data-i18n="profiles.batch.export">📦 Export selected</button>
+  <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="batchDeleteSelected" data-i18n="profiles.batch.delete">🗑 Delete selected</button>
   </div>
+ <div id="backup-hint" class="card" style="display:none;align-items:flex-start;gap:10px;">
+  <div style="flex:1;">
+   <b data-i18n="backup.hint.title">🔐 Your data lives only on this machine</b>
+   <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles hold real account state (cookies, sessions). A disk failure means losing them. Use 📦 Export backup per profile, ☁️ Sync to S3, or rely on the 7-day trash for accidents.</div>
+  </div>
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dismissBackupHint" data-i18n="backup.hint.dismiss">Don't remind me again</button>
+ </div>
  <div id="import-section" class="card" style="display:none">
  <h3>Import Existing Profiles</h3>
  <div id="import-list"></div>
@@ -85,7 +109,7 @@
  </section>
 
  <!-- ══════ Proxies Tab ══════ -->
- <section id="tab-proxy" class="tab-content">
+ <section id="tab-proxy" class="tab-content" role="tabpanel" aria-labelledby="nav-proxy">
  <div class="tab-header">
  <h2 data-i18n="proxy.title">Proxy Configurations</h2>
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="newProxy" data-i18n="proxy.add">+ Add Proxy</button>
@@ -98,7 +122,7 @@
  </section>
 
  <!-- ══════ Storage Tab ══════ -->
- <section id="tab-storage" class="tab-content">
+ <section id="tab-storage" class="tab-content" role="tabpanel" aria-labelledby="nav-storage">
  <div class="tab-header">
  <h2 data-i18n="storage.title">Storage</h2>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="clearAllCaches" data-i18n="storage.clear-all">Clear All Caches</button>
@@ -117,7 +141,7 @@
  </section>
 
  <!-- ══════ Sync Tab ══════ -->
- <section id="tab-sync" class="tab-content">
+ <section id="tab-sync" class="tab-content" role="tabpanel" aria-labelledby="nav-sync">
  <div class="tab-header"><h2 data-i18n="sync.title">Remote Sync</h2></div>
  <div class="card">
  <h3 data-i18n="sync.status">Status</h3>
@@ -139,7 +163,7 @@
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;">Team Workspace (RBAC)</h3>
+ <h3 style="margin:0;" data-i18n="team.workspace.title" title="Role-based access control (RBAC)">Team Workspace</h3>
  <span id="team-local-badge" class="status-badge" style="display:none;"></span>
  </div>
  <div id="team-panel"><div class="loading">Loading...</div></div>
@@ -154,30 +178,32 @@
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;">Team Diff 预览（push/pull 前变更对比）</h3>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff">对比远端</button>
+ <h3 style="margin:0;" data-i18n="sync.diff.title">Team Diff preview (changes before push/pull)</h3>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff" data-i18n="sync.diff.compare">Compare with remote</button>
  </div>
- <p id="sync-diff-message" style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">对比后显示本地/远端各自独有的 profile、代理、账号、扩展，以及 push 会覆盖/移除什么。Push 前会自动检查。</p>
- <div id="sync-diff"><div class="empty-state">尚未对比 —— 点击「对比远端」</div></div>
+ <p id="sync-diff-message" style="font-size:12px;color:var(--text-muted);margin:0 0 8px;" data-i18n="sync.diff.desc">Shows the profiles, proxies, accounts and extensions that exist only locally or only remotely, and what a push would overwrite or remove. This also runs automatically before every push.</p>
+ <div id="sync-diff"><div class="empty-state" data-i18n="sync.diff.empty">Not compared yet — click "Compare with remote"</div></div>
  </div>
  <div class="card">
  <h3 data-i18n="sync.config">Configuration</h3>
  <div class="sync-form">
  <div class="form-row"><label><input type="checkbox" id="sync-enabled"> Enable</label></div>
- <div class="form-row"><label data-i18n="sync.field.endpoint">Endpoint</label><input id="sync-endpoint-input" placeholder="https://oss.example.com"></div>
- <div class="form-row"><label data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="agent-browser"></div>
- <div class="form-row"><label data-i18n="sync.field.access">Access Key</label><input id="sync-ak-input"></div>
- <div class="form-row"><label data-i18n="sync.field.secret">Secret Key</label><input id="sync-sk-input" type="password"></div>
+ <div class="form-row"><label for="sync-endpoint-input" data-i18n="sync.field.endpoint">Endpoint</label><input id="sync-endpoint-input" placeholder="https://oss.example.com"></div>
+ <div class="form-row"><label for="sync-bucket-input" data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="agent-browser"></div>
+ <div class="form-row"><label for="sync-ak-input" data-i18n="sync.field.access">Access Key</label><input id="sync-ak-input"></div>
+ <div class="form-row"><label for="sync-sk-input" data-i18n="sync.field.secret">Secret Key</label><input id="sync-sk-input" type="password"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
  </div>
  </div>
  </section>
 
  <!-- ══════ Managed Chromium Tab ══════ -->
- <section id="tab-browser" class="tab-content">
+ <section id="tab-browser" class="tab-content" role="tabpanel" aria-labelledby="nav-browser">
  <div class="tab-header">
  <h2 data-i18n="browser.title">Managed Chromium</h2>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadBrowserTab" data-i18n="browser.refresh">Refresh</button>
+ <!-- PL-08: onboarding is re-runnable instead of being lost forever. -->
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="restartWizard" data-i18n="wizard.restart">🧭 Re-run onboarding</button>
  </div>
  <div class="card">
  <h3 data-i18n="browser.install-upgrade">Independent Browser Engine</h3>
@@ -196,7 +222,7 @@
  <div class="btn-row">
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshDrmStatus" data-i18n="browser.drm.rescan">🔍 Rescan CDM</button>
  </div>
- <div class="form-row" style="align-items:center;"><label data-i18n="browser.drm.cdm-path">CDM Path (override)</label>
+ <div class="form-row" style="align-items:center;"><label for="drm-cdm-path-input" data-i18n="browser.drm.cdm-path">CDM Path (override)</label>
  <div style="display:flex;gap:6px;flex:1;"><input id="drm-cdm-path-input" style="flex:1;font-family:var(--mono);font-size:11px;" placeholder="auto-detected (leave empty)"><button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="saveDrmCdmPath">Save</button></div>
  </div>
  <div id="drm-status" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
@@ -223,7 +249,7 @@
  </section>
 
  <!-- ══════ Extensions Tab ══════ -->
- <section id="tab-extensions" class="tab-content">
+ <section id="tab-extensions" class="tab-content" role="tabpanel" aria-labelledby="nav-extensions">
  <div class="tab-header">
  <h2 data-i18n="ext.title">Private Extension Repository</h2>
  <div class="header-btns">
@@ -246,7 +272,7 @@
  </section>
 
  <!-- ══════ Accounts Tab ══════ -->
- <section id="tab-accounts" class="tab-content">
+ <section id="tab-accounts" class="tab-content" role="tabpanel" aria-labelledby="nav-accounts">
  <div class="tab-header">
  <h2 data-i18n="acct.title">Account Management</h2>
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentAddAccount" data-i18n="acct.add">+ Add Account</button>
@@ -260,7 +286,7 @@
  </section>
 
  <!-- ══════ Agent Tab ══════ -->
- <section id="tab-agent" class="tab-content">
+ <section id="tab-agent" class="tab-content" role="tabpanel" aria-labelledby="nav-agent">
  <div class="agent-layout">
  <!-- Conversation Sidebar -->
  <div id="agent-sidebar" style="width:210px;min-width:160px;border-right:1px solid var(--border);display:flex;flex-direction:column;">
@@ -287,7 +313,8 @@
  <span id="agent-chat-title" style="font-weight:600;font-size:14px;" data-i18n="agent.chat-title">New Chat</span>
  <button class="btn btn-xs" style="color:var(--text-muted);" data-role="cmd" data-cmd="agentDeleteConv">🗑</button>
  </div>
- <div id="agent-chat-messages"></div>
+ <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
+ <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" style="display:none;position:absolute;right:16px;bottom:72px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom">↓ Bottom <span id="agent-scroll-badge" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:10px;line-height:16px;">new</span></button>
  <div class="agent-input-bar" style="padding:10px 16px;display:flex;gap:8px;align-items:flex-end;">
  <textarea id="agent-chat-input" rows="1" placeholder="Ask the agent..." data-i18n-placeholder="agent.placeholder"
  data-role="keydown" data-keydown-cmd="agentSend"
@@ -301,9 +328,9 @@
  <div id="agent-view-config" class="agent-view agent-view-scroll" style="display:none;">
  <h4>⚙️ API Configuration</h4>
  <p style="font-size:11px;color:var(--text-muted);margin:4px 0 14px;">Auto-detected from local Claude settings.</p>
- <div class="form-row"><label>Provider</label><select id="agent-llm-provider" data-role="change" data-change-cmd="agentProviderChanged"><option value="openai">OpenAI / Compatible</option><option value="claude">Claude</option></select></div>
- <div class="form-row"><label>API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..."></div>
- <div class="form-row"><label>Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high"></div>
+ <div class="form-row"><label for="agent-llm-provider">Provider</label><select id="agent-llm-provider" data-role="change" data-change-cmd="agentProviderChanged"><option value="openai">OpenAI / Compatible</option><option value="claude">Claude</option></select></div>
+ <div class="form-row"><label for="agent-llm-apikey">API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..."></div>
+ <div class="form-row"><label for="agent-llm-model">Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high"></div>
  <div class="form-row"><label data-i18n="sync.field.endpoint">Endpoint</label><input id="agent-llm-url" placeholder="https://api.openai.com/v1/chat/completions"></div>
  <div style="display:flex;gap:8px;align-items:center;">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveConfig" data-i18n="common.save">Save</button>
@@ -379,7 +406,7 @@
  </section>
 
  <!-- ══════ Automation Tab ══════ -->
- <section id="tab-automation" class="tab-content">
+ <section id="tab-automation" class="tab-content" role="tabpanel" aria-labelledby="nav-automation">
  <div class="tab-header">
  <h2 data-i18n="auto.section-title">⏰ Automation Tasks</h2>
  <div class="header-btns">
@@ -416,7 +443,7 @@
  </section>
 
  <!-- ══════ Workflows Tab ══════ -->
- <section id="tab-runs" class="tab-content">
+ <section id="tab-runs" class="tab-content" role="tabpanel" aria-labelledby="nav-runs">
  <div class="tab-header">
  <h2 data-i18n="runs.section-title">🤖 Agent Runs</h2>
  <div class="header-btns">
@@ -431,7 +458,7 @@
  </section>
 
  <!-- ══════ DB Tab ══════ -->
- <section id="tab-db" class="tab-content">
+ <section id="tab-db" class="tab-content" role="tabpanel" aria-labelledby="nav-db">
  <div class="tab-header">
  <h2 data-i18n="db.section-title">📊 Agent Database</h2>
  <div class="header-btns">
@@ -455,7 +482,7 @@
  </div>
  </section>
 
- <section id="tab-activity" class="tab-content">
+ <section id="tab-activity" class="tab-content" role="tabpanel" aria-labelledby="nav-activity">
  <div class="tab-header">
   <h2 data-i18n="activity.section-title">📜 Activity Audit</h2>
   <div class="header-btns">
@@ -479,7 +506,7 @@
 <!-- Approval dialog (risky-operation authorization) -->
 <dialog id="dlg-approval">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
- <h3 style="margin:0;" data-i18n="approval.dialog-title">⚠️ Operation Authorization</h3>
+ <h3 id="dlg-approval-title" style="margin:0;" data-i18n="approval.dialog-title">⚠️ Operation Authorization</h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="close">✕</button>
  </div>
  <p style="font-size:13px;margin:0 0 6px;" data-i18n="approval.dialog-desc">The Agent requests a sensitive operation and needs your confirmation:</p>
@@ -498,9 +525,9 @@
 <!-- ── New Profile Dialog ── -->
 
 <!-- ── Bulk Import Dialog ── -->
-<dialog id="dlg-env-risk" style="max-width:660px;width:94%;">
+<dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
-  <h3 style="margin:0 0 10px;">🖥 Host 环境风控检查</h3>
+  <h3 style="margin:0 0 10px;" id="dlg-env-risk-title" data-i18n="env.risk.title">🖥 Host environment risk check</h3>
   <div id="env-risk-body" style="max-height:62vh;overflow:auto;">Loading...</div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
@@ -509,20 +536,20 @@
 </dialog>
 
 <!-- ── WebRTC Diagnostics Dialog ── -->
-<dialog id="dlg-webrtc-diag" style="max-width:640px;width:94%;">
+<dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
   <h3 style="margin:0 0 10px;" data-i18n="webrtc.diag.title">📡 浏览器内 WebRTC 诊断</h3>
   <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;">Loading...</div>
   <div id="webrtc-diag-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear">🗑 清除历史</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear" data-i18n="webrtc.diag.clear">🗑 Clear history</button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
   </div>
  </div>
 </dialog>
 
 <!-- ── Profile Logs Dialog (RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs) ── -->
-<dialog id="dlg-profile-logs" style="max-width:760px;width:96%;">
+<dialog id="dlg-profile-logs" aria-labelledby="dlg-profile-logs-title" style="max-width:760px;width:96%;">
  <div>
   <h3 style="margin:0 0 10px;">📋 Profile Operation Logs &amp; Browser Tail</h3>
   <input type="hidden" id="profile-logs-dir-id">
@@ -537,9 +564,9 @@
  </div>
 </dialog>
 
-<dialog id="dlg-bulk-import">
+<dialog id="dlg-bulk-import" aria-labelledby="dlg-bulk-import-title">
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
- <h3>📥 Bulk Import Profiles</h3>
+ <h3 id="dlg-bulk-import-title">📥 Bulk Import Profiles</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
  One Browser profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code><br>
  Example: <code>Work, windows, en-US, America/Chicago, 54321, </code>
@@ -554,47 +581,47 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </form>
 </dialog>
-<dialog id="dlg-profile" class="dialog-wide">
+<dialog id="dlg-profile" aria-labelledby="dlg-profile-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="createProfile">
  <h3>Create New Profile</h3>
- <div class="form-row"><label>Name *</label><input id="new-profile-name" placeholder="My Profile" required></div>
- <p style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;">只需填 Name 即可创建（其余用默认值）。更多身份/指纹选项在下方「⚙️ 高级设置」里，之后也可随时在 Profile 编辑中修改。</p>
- <div class="form-row"><label>🎯 Business Preset (业务预设)</label>
+ <div class="form-row"><label for="new-profile-name">Name *</label><input id="new-profile-name" placeholder="My Profile" required></div>
+ <p style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;" data-i18n="profile.new.hint">Only Name is required — everything else uses defaults. More identity and fingerprint options live under “⚙️ Advanced configuration”, and you can change them any time from the profile editor.</p>
+ <div class="form-row"><label for="new-profile-preset" data-i18n="profile.new.preset">🎯 Business Preset</label>
  <select id="new-profile-preset" data-role="change" data-change-cmd="presetChanged">
- <option value="">None — manual setup (手动配置)</option>
+ <option value="" data-i18n="profiles.preset.none">None — manual setup</option>
  </select>
  </div>
  <div id="new-profile-preset-info" style="font-size:10px;color:var(--text-muted);margin:2px 0 6px;display:none;"></div>
  <div id="new-profile-browser-row">
- <div class="form-row"><label>Browser</label>
+ <div class="form-row"><label for="new-profile-browser">Browser</label>
  <select id="new-profile-browser" data-role="change" data-change-cmd="profileBrowserChanged">
  <option value="chromium" selected>Managed Chromium</option>
  <option value="firefox">Firefox (installed)</option>
  </select>
  </div>
- <div id="new-profile-firefox-opts" style="display:none;font-size:11px;color:var(--text-muted);margin:2px 0 8px;">🦊 Firefox engine — 使用已安装的 Firefox + 远程调试端口启动。管理端指纹注入对齐是已知后续项，Firefox profile 当前以 pass-through 运行。</div>
+ <div id="new-profile-firefox-opts" style="display:none;font-size:11px;color:var(--text-muted);margin:2px 0 8px;" data-i18n="profile.new.firefox-note">🦊 Firefox engine — launches the installed Firefox with a remote debugging port. Managed fingerprint injection parity is a known follow-up; Firefox profiles currently run in pass-through mode.</div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Platform</label>
+ <div class="form-row"><label for="new-agent-browser-platform">Platform</label>
  <select id="new-agent-browser-platform">
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
  </select>
  </div>
- <div class="form-row" id="new-profile-proxy-row"><label>Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
+ <div class="form-row" id="new-profile-proxy-row"><label for="new-profile-proxy">Proxy</label><select id="new-profile-proxy"><option value="">(default)</option></select></div>
  </div>
  <!-- Managed Chromium-specific options -->
  <details id="new-profile-advanced">
- <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;">⚙️ 高级设置（Advanced configuration）</summary>
+ <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;" data-i18n="profile.new.advanced">⚙️ Advanced configuration</summary>
  <div id="new-profile-agent-browser-opts" style="display:block;">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Fingerprint Mode</label>
+ <div class="form-row"><label for="new-agent-browser-fingerprint-mode">Fingerprint Mode</label>
  <select id="new-agent-browser-fingerprint-mode">
  <option value="managed">Managed identity</option>
  <option value="off">Pass-through (real machine)</option>
  </select>
  </div>
- <div class="form-row"><label>Chromium Build</label>
+ <div class="form-row"><label for="new-agent-browser-browser-version">Chromium Build</label>
  <select id="new-agent-browser-browser-version"><option value="">Auto (newest installed)</option></select>
  </div>
  </div>
@@ -602,7 +629,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded auth/payment/challenge compatibility</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> 🎬 Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> 🖥 Show profile name in taskbar / window title (RoxyBrowser-style)</label>
-<div class="form-row"><label>Fingerprint Seed</label>
+<div class="form-row"><label for="new-agent-browser-seed">Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="new-agent-browser-seed" type="number" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed">🎲 Random</button>
@@ -610,7 +637,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <p style="font-size:10px;color:var(--text-muted);margin-top:2px;">One integer controls GPU, screen, hardware, canvas, audio, fonts — same seed = identical fingerprint.</p>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Timezone</label>
+ <div class="form-row"><label for="new-agent-browser-timezone">Timezone</label>
  <select id="new-agent-browser-timezone">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
@@ -637,7 +664,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Language / Locale</label>
+ <div class="form-row"><label for="new-agent-browser-locale">Language / Locale</label>
  <select id="new-agent-browser-locale">
  <option value="">🛰 Auto (match proxy exit IP)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
@@ -659,7 +686,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <option value="vi-VN">vi-VN (Vietnamese)</option>
  </select>
  </div>
- <div class="form-row"><label>WebRTC Mode</label>
+ <div class="form-row"><label for="new-agent-browser-webrtc-mode">WebRTC Mode</label>
  <select id="new-agent-browser-webrtc-mode">
  <option value="auto">Auto (alter to proxy exit IP)</option>
  <option value="real">Real network</option>
@@ -668,10 +695,10 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </select>
  </div>
  </div>
- <div class="form-row"><label>WebRTC IP</label>
+ <div class="form-row"><label for="new-agent-browser-webrtc">WebRTC IP</label>
  <input id="new-agent-browser-webrtc" placeholder="Proxy exit IP or explicit override for altered mode">
  </div>
- <div class="form-row"><label>Geolocation</label>
+ <div class="form-row"><label for="new-agent-browser-geolocation-mode">Geolocation</label>
  <select id="new-agent-browser-geolocation-mode">
  <option value="real">Real (system/provider)</option>
  <option value="disable">Disabled</option>
@@ -712,11 +739,11 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 
 <!-- ── Rename Dialog ── -->
-<dialog id="dlg-rename">
+<dialog id="dlg-rename" aria-labelledby="dlg-rename-title">
  <form method="dialog" data-role="submit" data-submit-cmd="doRename">
  <h3>Rename Profile</h3>
  <input type="hidden" id="rename-dir-id">
- <div class="form-row"><label>New Name *</label><input id="rename-name" placeholder="Profile name" required></div>
+ <div class="form-row"><label for="rename-name">New Name *</label><input id="rename-name" placeholder="Profile name" required></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.rename">Rename</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -725,9 +752,9 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Cookie Dialog ── -->
-<dialog id="dlg-cookies" class="dialog-wide">
+<dialog id="dlg-cookies" aria-labelledby="dlg-cookies-title" class="dialog-wide">
  <form method="dialog">
- <h3>🍪 Cookies</h3>
+ <h3 id="dlg-cookies-title">🍪 Cookies</h3>
  <input type="hidden" id="cookie-dir-id">
  <div style="display:flex;gap:8px;margin-bottom:12px;">
  <input id="cookie-search" placeholder="Search domain/name..." data-i18n-placeholder="cookies.search" style="flex:1" data-role="input" data-input-cmd="cookieSearch">
@@ -749,18 +776,18 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Proxy Edit Dialog ── -->
-<dialog id="dlg-proxy">
+<dialog id="dlg-proxy" aria-labelledby="dlg-proxy-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveProxy">
  <h3 id="dlg-proxy-title">Add Proxy</h3>
  <input type="hidden" id="dlg-proxy-old-name">
- <div class="form-row"><label>Name *</label><input id="dlg-proxy-name" placeholder="e.g. home, office, vps" required></div>
- <div class="form-row"><label>Type</label><select id="dlg-proxy-type"><option value="http">HTTP</option><option value="socks5">SOCKS5</option><option value="socks5h">SOCKS5H</option></select></div>
- <div class="form-row"><label>Host</label><input id="dlg-proxy-host" placeholder="127.0.0.1" required></div>
- <div class="form-row"><label>Port</label><input id="dlg-proxy-port" type="number" placeholder="7890" min="1" max="65535" required></div>
- <div class="form-row"><label>Username</label><input id="dlg-proxy-username" autocomplete="off" placeholder="optional"></div>
- <div class="form-row"><label>Password</label><input id="dlg-proxy-password" type="password" autocomplete="off" placeholder="optional"></div>
- <div class="form-row"><label>Bypass List</label><input id="dlg-proxy-bypass" placeholder="optional, comma-separated hosts"></div>
- <div class="form-row"><label>Fallback Proxies</label><input id="dlg-proxy-fallbacks" placeholder="optional, comma-separated proxy names used when this proxy is unhealthy"></div>
+ <div class="form-row"><label for="dlg-proxy-name">Name *</label><input id="dlg-proxy-name" placeholder="e.g. home, office, vps" required></div>
+ <div class="form-row"><label for="dlg-proxy-type">Type</label><select id="dlg-proxy-type"><option value="http">HTTP</option><option value="socks5">SOCKS5</option><option value="socks5h">SOCKS5H</option></select></div>
+ <div class="form-row"><label for="dlg-proxy-host">Host</label><input id="dlg-proxy-host" placeholder="127.0.0.1" required></div>
+ <div class="form-row"><label for="dlg-proxy-port">Port</label><input id="dlg-proxy-port" type="number" placeholder="7890" min="1" max="65535" required></div>
+ <div class="form-row"><label for="dlg-proxy-username">Username</label><input id="dlg-proxy-username" autocomplete="off" placeholder="optional"></div>
+ <div class="form-row"><label for="dlg-proxy-password">Password</label><input id="dlg-proxy-password" type="password" autocomplete="off" placeholder="optional"></div>
+ <div class="form-row"><label for="dlg-proxy-bypass">Bypass List</label><input id="dlg-proxy-bypass" placeholder="optional, comma-separated hosts"></div>
+ <div class="form-row"><label for="dlg-proxy-fallbacks">Fallback Proxies</label><input id="dlg-proxy-fallbacks" placeholder="optional, comma-separated proxy names used when this proxy is unhealthy"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -769,12 +796,12 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Proxy Bulk Import Dialog ── -->
-<dialog id="dlg-proxy-import">
+<dialog id="dlg-proxy-import" aria-labelledby="dlg-proxy-import-title">
  <form method="dialog" data-role="submit" data-submit-cmd="doImportProxies">
  <h3 data-i18n="proxy.import.title">📥 导入代理</h3>
- <p style="font-size:11px;color:var(--text-muted);margin-top:4px;">每行一个代理：<code>type://user:pass@host:port</code>（http/socks5/socks5h）或 <code>host:port</code>；也支持 CSV 表头 <code>name,type,host,port,username,password</code>。以 # 开头的行会被忽略。</p>
+ <p style="font-size:11px;color:var(--text-muted);margin-top:4px;"><span data-i18n="proxy.import.format-prefix">One proxy per line:</span> <code>type://user:pass@host:port</code><span data-i18n="proxy.import.format-mid"> (http/socks5/socks5h) or</span> <code>host:port</code><span data-i18n="proxy.import.format-suffix">. CSV headers are also supported:</span> <code>name,type,host,port,username,password</code><span data-i18n="proxy.import.format-tail">. Lines starting with # are ignored.</span></p>
  <textarea id="dlg-proxy-import-text" rows="10" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="socks5://user:pass@1.2.3.4:1080&#10;5.6.7.8:8080&#10;# comment"></textarea>
- <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;"><input type="checkbox" id="dlg-proxy-import-replace"> 同名时替换（否则自动加 -2/-3 后缀）</label>
+ <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;"><input type="checkbox" id="dlg-proxy-import-replace"> <span data-i18n="proxy.import.replace">Replace on name conflict (otherwise append -2/-3)</span></label>
  <div id="dlg-proxy-import-status" style="margin-top:6px;font-size:11px;"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.import">导入</button>
@@ -784,7 +811,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Proxy Bind Profiles Dialog ── -->
-<dialog id="dlg-proxy-bind" style="max-width:540px;width:92%;">
+<dialog id="dlg-proxy-bind" aria-labelledby="dlg-proxy-bind-title" style="max-width:540px;width:92%;">
  <form method="dialog" data-role="submit" data-submit-cmd="doBindProxyToProfiles">
  <h3 style="margin:0 0 8px;">📎 <span data-i18n="proxy.bind.title">一键绑定 Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
  <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="proxy.bind.hint">勾选要绑定到此代理的 profile（已绑定的会切换为当前代理）。</p>
@@ -814,8 +841,14 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ── Confirm Dialog ── -->
 <dialog id="dlg-confirm">
  <form method="dialog" data-role="submit" data-submit-cmd="doConfirm">
- <h3 data-i18n="common.confirm">Confirm</h3>
+ <h3 id="dlg-confirm-title" data-default="Confirm" data-i18n="common.confirm">Confirm</h3>
  <p id="dlg-confirm-msg"></p>
+ <div id="dlg-confirm-detail" style="display:none;font-size:11px;color:var(--text-muted);max-height:160px;overflow:auto;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;"></div>
+ <!-- PL-09: acknowledgement checkbox for high-risk bulk actions -->
+ <label id="dlg-confirm-ack-wrap" style="display:none;align-items:flex-start;gap:6px;font-size:12px;margin-top:10px;cursor:pointer;">
+  <input type="checkbox" id="dlg-confirm-ack" style="margin-top:3px;">
+  <span id="dlg-confirm-ack-label"></span>
+ </label>
  <div class="btn-row">
  <button type="submit" class="btn btn-danger" data-i18n="common.confirm">Confirm</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -864,13 +897,13 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ── Skill Market Dialog ── -->
 
 <!-- ── Account Dialog ── -->
-<dialog id="dlg-account">
+<dialog id="dlg-account" aria-labelledby="dlg-account-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveAccount">
  <h3 id="dlg-account-title">Add Account</h3>
  <input type="hidden" id="acct-edit-index" value="-1">
- <div class="form-row"><label>Platform URL</label><input id="acct-url" placeholder="https://twitter.com" required></div>
- <div class="form-row"><label>Username *</label><input id="acct-username" placeholder="myaccount" required></div>
- <div class="form-row"><label>Password *</label><input id="acct-password" type="password" placeholder="password"></div>
+ <div class="form-row"><label for="acct-url">Platform URL</label><input id="acct-url" placeholder="https://twitter.com" required></div>
+ <div class="form-row"><label for="acct-username">Username *</label><input id="acct-username" placeholder="myaccount" required></div>
+ <div class="form-row"><label for="acct-password">Password *</label><input id="acct-password" type="password" placeholder="password"></div>
  <div class="form-row"><label>Tags (comma-separated)</label><input id="acct-tags" placeholder="social, twitter"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.save">Save</button>
@@ -908,7 +941,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
 </dialog>
 
-<dialog id="dlg-skill-market" class="dialog-wide">
+<dialog id="dlg-skill-market" aria-labelledby="dlg-skill-market-title" class="dialog-wide">
  <h3>🧩 Skill Marketplace</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">Local/private marketplace of Agent automation prompt/tool recipes. These are not Chrome extensions; enabled skills are appended to the Agent system prompt.</p>
  <input id="skill-market-search" placeholder="Search skills, descriptions, tags..." data-i18n-placeholder="agent.market.search" data-role="input" data-input-cmd="refreshSkillMarket" style="margin-bottom:10px;">
@@ -922,20 +955,20 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
 </dialog>
 
-<dialog id="dlg-skill-editor" class="dialog-wide">
+<dialog id="dlg-skill-editor" aria-labelledby="dlg-skill-editor-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveSkill">
  <h3 id="skill-editor-title">Add Agent Skill</h3>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Skill ID *</label><input id="skill-id" placeholder="amazon-scraper" required></div>
- <div class="form-row"><label>Version</label><input id="skill-version" placeholder="1.0.0"></div>
+ <div class="form-row"><label for="skill-id">Skill ID *</label><input id="skill-id" placeholder="amazon-scraper" required></div>
+ <div class="form-row"><label for="skill-version">Version</label><input id="skill-version" placeholder="1.0.0"></div>
  </div>
- <div class="form-row"><label>Title *</label><input id="skill-title" placeholder="Amazon Product Scraper" required></div>
- <div class="form-row"><label>Description</label><input id="skill-description" placeholder="What this skill helps the Agent do"></div>
- <div class="form-row"><label>Tools (comma-separated)</label><input id="skill-tools" placeholder="browser_navigate, browser_snapshot, browser_click"></div>
- <div class="form-row"><label>Tags (comma-separated)</label><input id="skill-tags" placeholder="scraping, ecommerce"></div>
- <div class="form-row"><label>Author</label><input id="skill-author" placeholder="me / team / community"></div>
- <div class="form-row"><label>Homepage (HTTPS)</label><input id="skill-homepage" placeholder="https://example.com/skill-docs"></div>
- <div class="form-row"><label>Prompt *</label><textarea id="skill-prompt" rows="8" placeholder="Describe exactly how the Agent should behave when this skill is enabled..." required></textarea></div>
+ <div class="form-row"><label for="skill-title">Title *</label><input id="skill-title" placeholder="Amazon Product Scraper" required></div>
+ <div class="form-row"><label for="skill-description">Description</label><input id="skill-description" placeholder="What this skill helps the Agent do"></div>
+ <div class="form-row"><label for="skill-tools">Tools (comma-separated)</label><input id="skill-tools" placeholder="browser_navigate, browser_snapshot, browser_click"></div>
+ <div class="form-row"><label for="skill-tags">Tags (comma-separated)</label><input id="skill-tags" placeholder="scraping, ecommerce"></div>
+ <div class="form-row"><label for="skill-author">Author</label><input id="skill-author" placeholder="me / team / community"></div>
+ <div class="form-row"><label for="skill-homepage">Homepage (HTTPS)</label><input id="skill-homepage" placeholder="https://example.com/skill-docs"></div>
+ <div class="form-row"><label for="skill-prompt">Prompt *</label><textarea id="skill-prompt" rows="8" placeholder="Describe exactly how the Agent should behave when this skill is enabled..." required></textarea></div>
  <div style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0;font-size:12px;">
  <label><input type="checkbox" id="skill-enabled" checked> Enabled</label>
  <label><input type="checkbox" id="skill-shared"> Mark as shareable in exported catalog</label>
@@ -952,7 +985,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="importSharedSkills">
  <h3>Import Shared Skill Catalog</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Paste exported skill catalog JSON. Imported skills are stored disabled by default until you enable them.</p>
- <div class="form-row"><label>Catalog JSON</label><textarea id="skill-import-json" rows="10" placeholder='[{"id":"example-skill","prompt":"..."}]' required></textarea></div>
+ <div class="form-row"><label for="skill-import-json">Catalog JSON</label><textarea id="skill-import-json" rows="10" placeholder='[{"id":"example-skill","prompt":"..."}]' required></textarea></div>
  <div id="skill-import-status" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary">Import</button>
@@ -966,7 +999,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="saveNote">
  <h3>✏️ Profile Note</h3>
  <input type="hidden" id="note-dir-id">
- <div class="form-row"><label>Note</label><textarea id="note-text" rows="3" placeholder="Add a note for this profile..."></textarea></div>
+ <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" rows="3" placeholder="Add a note for this profile..."></textarea></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -975,7 +1008,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Automation editor dialog -->
-<dialog id="dlg-automation" class="dialog-wide">
+<dialog id="dlg-automation" aria-labelledby="dlg-automation-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveAutomation">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 style="margin:0;">⏰ <span id="auto-dlg-title">New Task</span></h3>
@@ -1043,7 +1076,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Workflow editor dialog -->
-<dialog id="dlg-agent-run" class="dialog-wide">
+<dialog id="dlg-agent-run" aria-labelledby="dlg-agent-run-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 style="margin:0;">🤖 <span id="agent-run-title">Run Detail</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-agent-run">✕</button>
@@ -1079,16 +1112,16 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-allow-third-party-cookies" type="checkbox"> Allow third-party cookies for embedded compatibility</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-drm" type="checkbox"> 🎬 Enable Widevine/DRM (streaming sites)</label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-window-title-enabled" type="checkbox" checked> 🖥 Show profile name in taskbar / window title (RoxyBrowser-style, document.title untouched)</label>
-<div class="form-row"><label>Custom Title Prefix</label><input id="agent-browser-meta-window-title-prefix" placeholder="Default: profile name"></div>
-<div class="form-row"><label>🖥 Web App URL (PWA / Sub-apps)</label><input id="agent-browser-meta-app-url" placeholder="https://example.com — profile launches as a standalone app window (empty = normal browser)"></div>
+<div class="form-row"><label for="agent-browser-meta-window-title-prefix">Custom Title Prefix</label><input id="agent-browser-meta-window-title-prefix" placeholder="Default: profile name"></div>
+<div class="form-row"><label for="agent-browser-meta-app-url">🖥 Web App URL (PWA / Sub-apps)</label><input id="agent-browser-meta-app-url" placeholder="https://example.com — profile launches as a standalone app window (empty = normal browser)"></div>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
- <div class="form-row"><label>Profile Name *</label><input id="agent-browser-meta-name" placeholder="My Profile" required></div>
+ <div class="form-row"><label for="agent-browser-meta-name">Profile Name *</label><input id="agent-browser-meta-name" placeholder="My Profile" required></div>
  <div class="form-row"><label>Proxy</label><select id="agent-browser-meta-proxy"><option value="">(no proxy)</option></select></div>
  </div>
  <!-- Seed + Platform -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label>Fingerprint Seed *</label>
+ <div class="form-row"><label for="agent-browser-meta-seed">Fingerprint Seed *</label>
  <div style="display:flex;gap:4px;">
  <input id="agent-browser-meta-seed" type="number" placeholder="e.g. 54321" min="1" max="999999" style="flex:1;" required>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="agent-browser-meta-seed">🎲</button>
@@ -1204,7 +1237,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 
 <!-- ── First-run Wizard ── -->
-<dialog id="dlg-wizard" class="dialog-wide">
+<dialog id="dlg-wizard" aria-labelledby="dlg-wizard-title" class="dialog-wide">
  <h3 data-i18n="wizard.title">👋 Welcome to Agent Browser Studio</h3>
  <p data-i18n="wizard.subtitle" style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Let's get your fingerprint browser ready in 3 quick steps.</p>
 
@@ -1254,11 +1287,25 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
 </dialog>
 
+<!-- ══════ Batch operation result (PL-01: honest success/failure tally) ══════ -->
+<dialog id="dlg-batch-result" style="min-width:420px;max-width:660px;">
+ <h3 id="batch-result-title" style="margin:0 0 10px;">Batch result</h3>
+ <div id="batch-result-summary"></div>
+ <div id="batch-result-list"></div>
+ <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+  <button class="btn btn-primary btn-sm" id="batch-result-retry" data-batch-cmd="retry" style="display:none;">Retry failed</button>
+  <button class="btn btn-secondary btn-sm" data-batch-cmd="close">Close</button>
+ </div>
+</dialog>
+
 <script src="js/vendor/marked.min.js"></script>
 <script src="js/i18n.js"></script>
 <script src="js/app/core.js"></script>
+<script src="js/app/errors.js"></script>
+ <script src="js/app/ipc.js"></script>
 <script src="js/app/tabs.js"></script>
 <script src="js/app/profiles.js"></script>
+<script src="js/app/batch-ui.js"></script>
 <script src="js/app/proxies.js"></script>
 <script src="js/app/extensions.js"></script>
 <script src="js/app/cookies.js"></script>

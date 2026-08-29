@@ -160,6 +160,17 @@ dialog,
   color: var(--text);
 }
 
+/* Keyboard focus visibility (UX-6): one global focus-visible style so every
+   interactive element shows a clear ring when reached via keyboard, while
+   mouse clicks stay clean. */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: 3px; }
+.nav-item:focus { outline: none; }
+.nav-item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .nav-item.active {
   background: var(--primary-bg);
   color: var(--primary);
@@ -494,6 +505,7 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   flex: 0 0 auto;
 }
 
+#agent-view-chat { position: relative; }
 #agent-chat-messages {
   flex: 1 1 auto;
   min-height: 0;
@@ -502,6 +514,9 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   background: var(--chat-bg);
   color: var(--text);
   scroll-behavior: smooth;
+}
+#agent-scroll-bottom {
+  backdrop-filter: blur(6px);
 }
 #agent-chat-messages::-webkit-scrollbar { width: 5px; }
 #agent-chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -909,23 +924,234 @@ dialog h3 {
 }
 
 /* ═══════ Toast ═══════ */
-.toast {
+/* Review item UE-03: messages queue instead of overwriting each other, and
+   errors persist until dismissed instead of vanishing after 3s. */
+.toast-stack {
   position: fixed;
   bottom: 28px;
   right: 28px;
-  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9999;
+  max-width: min(440px, calc(100vw - 56px));
+  pointer-events: none;
+}
+
+.toast {
+  position: relative;
+  pointer-events: auto;
+  padding: 11px 34px 11px 14px;
   border-radius: var(--radius-sm);
   font-size: 12.5px;
   font-weight: 600;
   color: #fff;
-  z-index: 9999;
   animation: toastIn 0.25s ease;
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
   backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.45;
 }
 
 .toast-success { background: var(--success); }
 .toast-error { background: var(--danger); }
+.toast-warn { background: var(--warning); color: #1b1f26; }
+.toast-info { background: var(--primary); }
+.toast-detail {
+  font-size: 11.5px;
+  font-weight: 500;
+  opacity: 0.92;
+  word-break: break-word;
+}
+.toast-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: inherit;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 24px;
+}
+.toast-action:hover { background: rgba(255, 255, 255, 0.3); }
+.toast-warn .toast-action { border-color: rgba(0,0,0,0.25); background: rgba(0,0,0,0.08); }
+.toast-close {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 6px;
+}
+.toast-close:hover { opacity: 1; }
+
+/* Batch queue progress (review items PL-01 / PL-02) */
+.batch-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 0 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  font-size: 12px;
+}
+.batch-progress .bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.batch-progress .bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width 0.2s ease;
+}
+
+/* Card busy state (review item PL-06): blocks racing edit/delete during launch */
+.profile-card.busy { opacity: 0.72; pointer-events: none; }
+.profile-card.busy::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 2px;
+  width: 40%;
+  background: var(--primary);
+  animation: cardBusy 1s linear infinite;
+}
+.profile-card { position: relative; }
+@keyframes cardBusy {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+/* Engine banner (review item PL-07) */
+.engine-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  margin: 0 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  border: 1px solid var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.engine-banner.ok {
+  border-color: var(--border);
+  background: var(--surface2);
+  color: var(--text-muted);
+}
+
+/* Card overflow menu (UE-01): keeps the primary row down to 3 controls */
+.card-menu { position: relative; display: inline-block; }
+.card-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 4px 11px;
+  min-height: 24px;
+  min-width: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+.card-menu > summary::-webkit-details-marker { display: none; }
+.card-menu[open] > summary { background: var(--primary-bg); }
+.card-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.card-menu-list button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+  min-height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.card-menu-list button:hover { background: var(--surface2); }
+.card-menu-list button.danger { color: var(--danger); }
+
+/* Health check selector (UE-01): one control instead of four 9px buttons */
+.health-select {
+  font-size: 11px;
+  padding: 2px 4px;
+  margin-left: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  min-height: 22px;
+}
+
+/* Status tiers (UE-06): lifecycle / governance / capability read differently */
+.badge-lifecycle { font-weight: 700; }
+.badge-governance { font-size: 11px; }
+.badge-capability { font-size: 11px; background: var(--surface2); color: var(--text-muted); }
+
+/* Legend explaining the three status tiers (UE-06) */
+.status-legend { margin: 0 0 10px; font-size: 12px; }
+.status-legend > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px 0;
+  min-height: 24px;
+}
+.status-legend[open] > summary { color: var(--text); font-weight: 600; }
+.legend-grid {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-top: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.legend-tag {
+  display: inline-block;
+  min-width: 88px;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
 
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(16px); }
@@ -936,7 +1162,7 @@ dialog h3 {
 @media (max-width: 1100px) {
   #sidebar { width: 180px; min-width: 180px; }
 }
-@media (max-width: 700px) {
+@media (max-width: 850px) {
   #sidebar { width: 160px; min-width: 160px; }
   #sidebar .sidebar-header { padding: 12px 10px 10px; }
   #sidebar .sidebar-header h1 { font-size: 15px; letter-spacing: -0.3px; }

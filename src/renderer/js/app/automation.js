@@ -179,7 +179,7 @@
       currentRules = rules || [];
       var el = document.getElementById('automation-list');
       if (!rules || rules.length === 0) {
-        el.innerHTML = '<div class="empty-state">' + t('auto.empty-state', '还没有自动化任务。<br>点「+ 新建任务」创建,或让 Agent 帮你建(在 Agent 里说"每天9点启动demo")。') + '</div>';
+        if (window.agentBrowser && window.agentBrowser.renderViewState) { window.agentBrowser.renderViewState(el, { empty: t('auto.empty-state','暂无任务'), cta:{label:'新建任务',cmd:'automationNew'}}); } else el.innerHTML = '<div class="empty-state">' + t('auto.empty-state', '还没有自动化任务。<br>点「+ 新建任务」创建,或让 Agent 帮你建(在 Agent 里说"每天9点启动demo")。') + '</div>';
       } else {
         el.innerHTML = rules.map(function(r) {
           return '<div class="profile-card" data-rule-id="' + escAttr(r.id) + '">' +
@@ -222,7 +222,7 @@
     el.innerHTML = '<div class="loading">' + esc(t('auto.loading', 'Loading...')) + '</div>';
     api.automation.jobs({ status: status || undefined, limit: 50 }).then(function(jobs) {
       if (!jobs || jobs.length === 0) {
-        el.innerHTML = '<div class="empty-state">' + t('auto.jobs.empty', '还没有 durable jobs。<br>点击「测试运行」后会在这里看到执行记录。') + '</div>';
+        if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{empty:t('auto.jobs.empty','暂无 jobs')}); else el.innerHTML = '<div class="empty-state">' + t('auto.jobs.empty', '还没有 durable jobs。<br>点击「测试运行」后会在这里看到执行记录。') + '</div>';
         return;
       }
       el.innerHTML = jobs.map(function(job) {
@@ -258,7 +258,7 @@
         else if (btn.dataset.jobAction === 'cancel') agentBrowser.automationCancelJob(jobId);
       };
     }).catch(function(e) {
-      el.innerHTML = '<div class="empty-state">' + esc(t('auto.jobs.load-failed','加载 jobs 失败: ')) + esc(e.message || e) + '</div>';
+      if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{error: e.message||String(e), retry:{cmd:'automationRefreshJobs'}}); else el.innerHTML = '<div class="empty-state">' + esc(t('auto.jobs.load-failed','加载 jobs 失败: ')) + esc(e.message || e) + '</div>';
       toast(t('auto.jobs.load-failed','加载 jobs 失败: ') + (e.message || e), 'error');
     });
   };
@@ -278,13 +278,14 @@
 
   agentBrowser.automationCancelJob = function(jobId) {
     if (!jobId) return;
-    if (!confirm(t('auto.jobs.confirm-cancel','取消此 job? 已经开始的外部副作用不会回滚。'))) return;
-    api.automation.jobCancel(jobId).then(function(r) {
-      toast(r && r.success ? t('auto.jobs.cancelled','已取消 job') : t('auto.jobs.cancel-failed','取消失败'), r && r.success ? 'success' : 'error');
-      var dlg = document.getElementById('dlg-auto-job');
-      if (dlg && dlg.open) dlg.close();
-      agentBrowser.automationRefreshJobs();
-    }).catch(function(e) { toast(t('auto.jobs.cancel-error','取消 job 失败: ') + (e.message || e), 'error'); });
+    agentBrowser.confirm(t('auto.jobs.confirm-cancel','取消此 job? 已经开始的外部副作用不会回滚。'), function() {
+      api.automation.jobCancel(jobId).then(function(r) {
+        toast(r && r.success ? t('auto.jobs.cancelled','已取消 job') : t('auto.jobs.cancel-failed','取消失败'), r && r.success ? 'success' : 'error');
+        var dlg = document.getElementById('dlg-auto-job');
+        if (dlg && dlg.open) dlg.close();
+        agentBrowser.automationRefreshJobs();
+      }).catch(function(e) { toast(t('auto.jobs.cancel-error','取消 job 失败: ') + (e.message || e), 'error'); });
+    });
   };
 
   agentBrowser.automationRefreshLogs = function() {
@@ -432,7 +433,8 @@
     api.automation.testRun(ruleId).then(function(r) { toast((r.ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + r.result.slice(0,60), r.ok?'success':'error'); setTimeout(function(){ agentBrowser.loadAutomationTab(); }, 500); });
   };
   agentBrowser.automationDelete = function(ruleId) {
-    if (!confirm(t('auto.confirm-delete','删除此任务?'))) return;
-    api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); });
+    agentBrowser.confirm(t('auto.confirm-delete','删除此任务?'), function() {
+      api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); });
+    });
   };
 })();

@@ -46,12 +46,47 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  function navTabs() { return Array.from(document.querySelectorAll('.nav-item[role="tab"]')); }
+  function focusNavTab(tab) {
+    var tabs = navTabs();
+    var idx = tabs.findIndex(function(t) { return t.dataset.tab === tab; });
+    if (idx >= 0) tabs[idx].focus();
+  }
+  document.addEventListener('keydown', function(e) {
+    var active = document.activeElement;
+    if (!active || !active.classList.contains('nav-item') || active.getAttribute('role') !== 'tab') return;
+    var tabs = navTabs();
+    var idx = tabs.indexOf(active);
+    if (idx === -1) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      var tab = active.dataset.tab;
+      if (tab) { agentBrowser.switchTab(tab); focusNavTab(tab); }
+      return;
+    }
+    var next = -1;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next !== -1) {
+      e.preventDefault();
+      tabs[next].focus();
+      var tab2 = tabs[next].dataset.tab;
+      if (tab2) agentBrowser.switchTab(tab2);
+    }
+  });
   function initEventDelegation() {
     document.addEventListener('click', function(e) {
       var el = e.target.closest('[data-role="cmd"]');
       if (!el) return;
       var cmd = el.getAttribute('data-cmd');
       if (!cmd) return;
+      // Close any open overflow menu after an item is picked (UE-01 / UE-05).
+      try {
+        var openMenus = document.querySelectorAll('.card-menu[open]');
+        Array.prototype.forEach.call(openMenus, function (m) { m.removeAttribute('open'); });
+      } catch (menuErr) { /* menus are best effort */ }
       if (cmd === 'close-dialog') {
         var targetId = el.getAttribute('data-cmd-target');
         var d = null;
@@ -117,6 +152,42 @@
       if (!el) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentBrowser.agentSend(); }
     });
+    document.addEventListener('scroll', function(e) {
+      var el = e.target.closest('[data-role="scroll"]');
+      if (!el) return;
+      var cmd = el.getAttribute('data-scroll-cmd');
+      if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
+    }, true);
+    // Return focus to the trigger when any dialog closes.
+    document.addEventListener('close', function(e) {
+      var dlg = e.target;
+      if (!dlg || dlg.tagName !== 'DIALOG') return;
+      var trigger = dlg._returnFocus;
+      if (trigger && typeof trigger.focus === 'function') {
+        try { trigger.focus(); } catch (_) {}
+      }
+      dlg._returnFocus = null;
+    }, true);
+    // Capture trigger for showModal() callers that don't set it explicitly.
+    (function() {
+      var origShowModal = HTMLDialogElement.prototype.showModal;
+      HTMLDialogElement.prototype.showModal = function() {
+        if (!this._returnFocus && document.activeElement instanceof HTMLElement) {
+          this._returnFocus = document.activeElement;
+        }
+        // Auto-focus first focusable input inside the dialog.
+        var self = this;
+        var ret = origShowModal.call(this);
+        setTimeout(function() {
+          var first = self.querySelector('input:not([type="hidden"]), select, textarea, button[type="submit"]');
+          if (first && typeof first.focus === 'function') {
+            try { first.focus(); } catch (_) {}
+            if (first.select) try { first.select(); } catch (_) {}
+          }
+        }, 0);
+        return ret;
+      };
+    })();
   }
 
   document.addEventListener('DOMContentLoaded', function() { initEventDelegation(); });

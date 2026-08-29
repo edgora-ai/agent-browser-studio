@@ -115,9 +115,13 @@
 
   function renderProxyOptions(proxies, selectedValue, includeEndpoint) {
     selectedValue = selectedValue || "none";
+    function pi18n(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
+    var hasDefaultProxy = (proxies || []).some(function (px) { return px && px.isDefault; });
     var options = [
-      { value: "default", label: "Default proxy" },
-      { value: "none", label: "No proxy" },
+      // "default" mode follows the workspace default proxy; when none is
+      // configured it resolves to a direct connection, so say so on the label.
+      { value: "default", label: hasDefaultProxy ? pi18n("proxy.opt.default", "Workspace default proxy") : pi18n("proxy.opt.direct", "Direct (no default proxy configured)") },
+      { value: "none", label: pi18n("proxy.opt.none", "No proxy") },
     ];
     (proxies || []).forEach(function (px) {
       var cfg = px.config || {};
@@ -151,6 +155,94 @@
     ["fontsDir", "fonts-dir", "text"],
   ];
 
+  // ── Inline field validation (review item UE-04) ──
+  // readHardwareFields used to throw `Invalid hardware value for
+  // hardware-concurrency`: a technical field name, shown in a toast long after
+  // the user left the input, with no hint about which box was wrong or what
+  // range is acceptable. Errors are now field-level, human-readable and shown
+  // next to the offending input.
+  var HARDWARE_FIELD_LABELS = {
+    "hardware-concurrency": "CPU cores",
+    "device-memory": "Memory (GB)",
+    "screen-width": "Screen width",
+    "screen-height": "Screen height",
+    "storage-quota": "Storage quota",
+    "taskbar-height": "Taskbar height",
+    "gpu-vendor": "GPU vendor",
+    "gpu-renderer": "GPU renderer",
+    "fonts-dir": "Fonts directory",
+  };
+
+  /** Validate before submit; returns a list of {id, message}. */
+  function validateHardwareFields(prefix) {
+    var errors = [];
+    HARDWARE_FIELDS.forEach(function (field) {
+      var el = document.getElementById(prefix + field[1]);
+      if (!el) return;
+      var raw = String(el.value || "").trim();
+      if (!raw) return;
+      if (field[2] === "int") {
+        var n = Number(raw);
+        if (!Number.isInteger(n) || n < 0) {
+          errors.push({
+            id: prefix + field[1],
+            message: (HARDWARE_FIELD_LABELS[field[1]] || field[1]) + " must be a whole number of 0 or more",
+          });
+        }
+      }
+    });
+    return errors;
+  }
+
+  function clearFieldErrors(prefix) {
+    var nodes = document.querySelectorAll("[data-field-error]");
+    Array.prototype.forEach.call(nodes, function (node) {
+      if (prefix && String(node.getAttribute("data-field-error")).indexOf(prefix) !== 0) return;
+      node.remove();
+    });
+    HARDWARE_FIELDS.forEach(function (field) {
+      var el = document.getElementById(prefix + field[1]);
+      if (el) {
+        el.removeAttribute("aria-invalid");
+        el.style.borderColor = "";
+      }
+    });
+  }
+
+  /** Render inline errors and focus the first offending field. */
+  function showFieldErrors(errors) {
+    (errors || []).forEach(function (err) {
+      var el = document.getElementById(err.id);
+      if (!el) return;
+      el.setAttribute("aria-invalid", "true");
+      el.style.borderColor = "var(--danger)";
+      var msg = document.createElement("div");
+      msg.setAttribute("data-field-error", err.id);
+      msg.style.cssText = "font-size:11px;color:var(--danger);margin-top:2px;";
+      msg.textContent = err.message;
+      if (el.parentNode) el.parentNode.insertBefore(msg, el.nextSibling);
+    });
+    if (errors && errors.length) {
+      var first = document.getElementById(errors[0].id);
+      if (first && first.focus) first.focus();
+    }
+  }
+
+  /** Validate a field as soon as the user leaves it (review item UE-04). */
+  function bindHardwareFieldValidation(prefix) {
+    HARDWARE_FIELDS.forEach(function (field) {
+      var el = document.getElementById(prefix + field[1]);
+      if (!el || el.getAttribute("data-validation-bound") === "1") return;
+      el.setAttribute("data-validation-bound", "1");
+      el.addEventListener("blur", function () {
+        var errors = validateHardwareFields(prefix);
+        clearFieldErrors(prefix);
+        var mine = errors.filter(function (e) { return e.id === el.id; });
+        if (mine.length) showFieldErrors(mine);
+      });
+    });
+  }
+
   function readHardwareFields(prefix) {
     var out = {};
     HARDWARE_FIELDS.forEach(function (field) {
@@ -160,7 +252,10 @@
       if (!raw) { out[field[0]] = null; return; }
       if (field[2] === "int") {
         var n = Number(raw);
-        if (!Number.isInteger(n)) throw new Error("Invalid hardware value for " + field[1]);
+        if (!Number.isInteger(n)) {
+          // Human-readable fallback; the UI validates before this is reached.
+          throw new Error((HARDWARE_FIELD_LABELS[field[1]] || field[1]) + " must be a whole number");
+        }
         out[field[0]] = n;
       } else {
         out[field[0]] = raw;
@@ -218,14 +313,122 @@
     if (platform === "linux") return "🐧";
     return "🪟";
   }
-  function toast(msg, type) {
-    var t = document.querySelector(".toast");
-    if (t) t.remove();
-    t = document.createElement("div");
-    t.className = "toast toast-" + (type || "success");
-    t.textContent = msg;
-    document.body.appendChild(t);
-    setTimeout(function () { t.remove(); }, 3000);
+  /**
+   * Toast (review item UE-03).
+   *
+   * The previous implementation deleted whatever toast was already showing, so
+   * "profile started" was routinely overwritten by the follow-up "environment
+   * risk" message and the user never saw it. It also had no ARIA role, which
+   * made every notification invisible to screen readers.
+   *
+   * Now: up to TOAST_MAX messages stack in document order; errors persist
+   * until dismissed (those are the ones users must act on); alerts carry
+   * role="alert" + aria-live="assertive".
+   *
+   * @param {string} msg
+   * @param {"success"|"error"|"warn"|"warning"|"info"} [type]
+   * @param {{detail?: string, ttlMs?: number, action?: {label: string, onClick: Function}}} [opts]
+   */
+  var TOAST_MAX = 3;
+  var TOAST_TTL_MS = { success: 3000, info: 4000, warn: 8000, error: 0 };
+
+  function toastStack() {
+    var el = document.getElementById("toast-stack");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast-stack";
+      el.className = "toast-stack";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  /** Trim the oldest dismissible toast; sticky errors are removed last. */
+  function enforceToastLimit(stack) {
+    while (stack.children.length > TOAST_MAX) {
+      var removable = null;
+      for (var i = 0; i < stack.children.length - 1; i++) {
+        if (stack.children[i].getAttribute("data-sticky") !== "1") { removable = stack.children[i]; break; }
+      }
+      stack.removeChild(removable || stack.firstChild);
+    }
+  }
+
+  function toast(msg, type, opts) {
+    opts = opts || {};
+    var level = type || "success";
+    if (level === "warning") level = "warn";
+    // UX-3: every error toast goes through the friendly-error translation so
+    // users see one-line actionable copy instead of raw exception text — and
+    // known failure classes also get a shortcut button to the relevant tab.
+    var feEx = (window.agentBrowser && window.agentBrowser.helpers && window.agentBrowser.helpers.friendlyErrorEx) || null;
+    if (level === "error" && typeof feEx === "function") {
+      try {
+        var ex = feEx(msg);
+        msg = ex.text;
+        if (ex.action && !opts.action) {
+          opts.action = { label: ex.action.label, onClick: ex.action.go };
+        }
+      } catch (e) { /* keep raw */ }
+    }
+    var stack = toastStack();
+    var isAlert = (level === "error" || level === "warn");
+    var sticky = level === "error";
+
+    var t = document.createElement("div");
+    t.className = "toast toast-" + level;
+    t.setAttribute("role", isAlert ? "alert" : "status");
+    t.setAttribute("aria-live", isAlert ? "assertive" : "polite");
+    if (sticky) t.setAttribute("data-sticky", "1");
+
+    var msgEl = document.createElement("div");
+    msgEl.className = "toast-msg";
+    msgEl.textContent = String(msg == null ? "" : msg);
+    t.appendChild(msgEl);
+
+    if (opts.detail) {
+      var d = document.createElement("div");
+      d.className = "toast-detail";
+      d.textContent = String(opts.detail);
+      t.appendChild(d);
+    }
+
+    if (opts.action && opts.action.label) {
+      var btn = document.createElement("button");
+      btn.className = "toast-action";
+      btn.type = "button";
+      btn.textContent = String(opts.action.label);
+      btn.addEventListener("click", function () {
+        try {
+          if (typeof opts.action.onClick === "function") opts.action.onClick();
+        } catch (e) {
+          console.error("[toast] action failed:", e);
+        }
+        if (t.parentNode) t.parentNode.removeChild(t);
+      });
+      t.appendChild(btn);
+    }
+
+    var close = document.createElement("button");
+    close.className = "toast-close";
+    close.type = "button";
+    close.setAttribute("aria-label", "Dismiss");
+    close.textContent = "\u00d7";
+    close.addEventListener("click", function () {
+      if (t.parentNode) t.parentNode.removeChild(t);
+    });
+    t.appendChild(close);
+
+    stack.appendChild(t);
+    enforceToastLimit(stack);
+
+    var ttl = typeof opts.ttlMs === "number" ? opts.ttlMs : (TOAST_TTL_MS[level] || 3000);
+    if (ttl > 0) {
+      setTimeout(function () {
+        if (t.parentNode) t.parentNode.removeChild(t);
+      }, ttl);
+    }
+    return t;
   }
 
   function esc(s) {
@@ -507,19 +710,124 @@
   // so profile/proxy delete (which call agentBrowser.confirm) threw "not a function".
   // agentBrowser.confirm(msg, onOk) opens the modal; doConfirm() runs onOk on submit.
   var _confirmCallback = null;
-  agentBrowser.confirm = function (msg, onOk) {
+  // Resolved(false) when the dialog closes without Confirm (Cancel button / Esc),
+  // so confirmAsync() callers can bail out of promise chains.
+  var _confirmCancelCallback = null;
+
+  /**
+   * Acknowledgement checkbox for high-risk actions (review item PL-09).
+   * A bulk delete is irreversible and takes the profile's cookies and
+   * localStorage with it, so above CONFIRM_ACK_THRESHOLD items the user has to
+   * confirm they understand before "Confirm" has any effect.
+   */
+  var CONFIRM_ACK_THRESHOLD = 10;
+
+  function renderConfirmAck(opts) {
+    var wrap = document.getElementById("dlg-confirm-ack-wrap");
+    var box = document.getElementById("dlg-confirm-ack");
+    var label = document.getElementById("dlg-confirm-ack-label");
+    if (!wrap || !box || !label) return;
+    if (!opts || !opts.ackLabel) {
+      wrap.style.display = "none";
+      box.checked = false;
+      return;
+    }
+    wrap.style.display = "flex";
+    box.checked = false;
+    label.textContent = String(opts.ackLabel);
+  }
+
+  agentBrowser.confirm = function (msg, onOk, opts) {
+    bindConfirmClose();
     _confirmCallback = typeof onOk === "function" ? onOk : null;
     var msgEl = document.getElementById("dlg-confirm-msg");
-    if (msgEl) msgEl.textContent = String(msg == null ? "" : msg);
+    var detailEl = document.getElementById("dlg-confirm-detail");
+    var titleEl = document.getElementById("dlg-confirm-title");
+    renderConfirmAck(opts);
+    if (opts && opts.title && titleEl) titleEl.textContent = String(opts.title);
+    else if (titleEl) titleEl.textContent = titleEl.getAttribute("data-default") || titleEl.textContent;
+    if (msgEl) {
+      // Support HTML detail list when opts.detailHtml is provided.
+      if (opts && opts.detailHtml) {
+        msgEl.innerHTML = esc(String(msg == null ? "" : msg));
+        if (detailEl) { detailEl.innerHTML = String(opts.detailHtml); detailEl.style.display = "block"; }
+      } else {
+        msgEl.textContent = String(msg == null ? "" : msg);
+        if (detailEl) { detailEl.textContent = ""; detailEl.style.display = "none"; }
+      }
+    }
+    var dlg = document.getElementById("dlg-confirm");
+    if (dlg && !dlg.open) dlg.showModal();
+  };
+  agentBrowser.confirmHtml = function (msgHtml, onOk, opts) {
+    _confirmCallback = typeof onOk === "function" ? onOk : null;
+    var msgEl = document.getElementById("dlg-confirm-msg");
+    var detailEl = document.getElementById("dlg-confirm-detail");
+    var titleEl = document.getElementById("dlg-confirm-title");
+    if (opts && opts.title && titleEl) titleEl.textContent = String(opts.title);
+    if (msgEl) msgEl.innerHTML = String(msgHtml || "");
+    if (detailEl) {
+      if (opts && opts.detailHtml) { detailEl.innerHTML = String(opts.detailHtml); detailEl.style.display = "block"; }
+      else { detailEl.textContent = ""; detailEl.style.display = "none"; }
+    }
     var dlg = document.getElementById("dlg-confirm");
     if (dlg && !dlg.open) dlg.showModal();
   };
   agentBrowser.doConfirm = function () {
+    // PL-09: block the action until the acknowledgement box is ticked.
+    var wrap = document.getElementById("dlg-confirm-ack-wrap");
+    var box = document.getElementById("dlg-confirm-ack");
+    if (wrap && box && wrap.style.display !== "none" && !box.checked) {
+      toast(
+        (window.i18n ? window.i18n.t("confirm.ack-required", "Please tick the acknowledgement box first") : "Please tick the acknowledgement box first"),
+        "error",
+      );
+      box.focus();
+      return;
+    }
     var dlg = document.getElementById("dlg-confirm");
-    if (dlg && dlg.open) dlg.close();
     var cb = _confirmCallback;
     _confirmCallback = null;
+    _confirmCancelCallback = null;
+    renderConfirmAck(null);
+    // close() last: its event must observe an already-consumed confirm so a
+    // late close event can never clobber a follow-up dialog's state.
+    if (dlg && dlg.open) dlg.close();
     if (cb) { try { cb(); } catch (e) { console.error("[confirm] callback failed:", e); } }
+  };
+
+  // Fire the cancel callback when the dialog closes without Confirm. The
+  // "close" event covers both the Cancel button and Esc; doConfirm() consumes
+  // the callbacks before closing, so a normal Confirm never lands here.
+  function bindConfirmClose() {
+    var dlg = document.getElementById("dlg-confirm");
+    if (!dlg || dlg.dataset.confirmCloseBound) return;
+    dlg.dataset.confirmCloseBound = "1";
+    // The "close" event can arrive AFTER a follow-up confirm() has already
+    // re-opened the dialog (e.g. sync push: warnings confirm → lock block →
+    // force confirm — Chromium does not order this task against the IPC tasks
+    // that trigger the follow-up). A stale event therefore runs while the
+    // dialog is open again and must be ignored; only a close that leaves the
+    // dialog closed (Cancel button / Esc) resolves the cancel path. doConfirm()
+    // consumes the callbacks before close(), so its own close event no-ops.
+    dlg.addEventListener("close", function () {
+      if (dlg.open) return;
+      var onCancel = _confirmCancelCallback;
+      _confirmCallback = null;
+      _confirmCancelCallback = null;
+      if (onCancel) { try { onCancel(); } catch (e) { console.error("[confirm] cancel callback failed:", e); } }
+    });
+  }
+  bindConfirmClose();
+
+  // Promise variant for flows that confirm mid-chain (e.g. sync push/pull).
+  // Resolves true on Confirm, false on Cancel/Esc.
+  agentBrowser.confirmAsync = function (msg, opts) {
+    bindConfirmClose();
+    return new Promise(function (resolve) {
+      _confirmCancelCallback = function () { resolve(false); };
+      agentBrowser.confirm(msg, function () { resolve(true); }, opts);
+    });
   };
 
   Object.assign(agentBrowser.helpers, {
@@ -546,6 +854,10 @@
     bindSkillCardActions: bindSkillCardActions,
     readHardwareFields: readHardwareFields,
     writeHardwareFields: writeHardwareFields,
+    validateHardwareFields: validateHardwareFields,
+    clearFieldErrors: clearFieldErrors,
+    showFieldErrors: showFieldErrors,
+    bindHardwareFieldValidation: bindHardwareFieldValidation,
     renderProxyOptions: renderProxyOptions,
     proxySelectionValue: proxySelectionValue,
     profileProxySelectionValue: profileProxySelectionValue,

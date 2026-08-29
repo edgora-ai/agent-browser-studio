@@ -184,7 +184,8 @@
       },
 
   extDelete: function(extId) {
-        if (!confirm(t('ext.confirm-delete','删除扩展 ') + extId + t('ext.confirm-delete-mid','?\n会从所有 profile 移除,磁盘文件也删除。'))) return;
+        var msg = t('ext.confirm-delete','删除扩展 ') + esc(extId) + t('ext.confirm-delete-mid','?\n会从所有 profile 移除,磁盘文件也删除。');
+        agentBrowser.confirm(msg, function() {
         var statusEl = document.getElementById('ext-install-status');
         if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Deleting ' + esc(extId) + '...</span>';
         api.settings.deleteRepositoryExtension(extId).then(function(r) {
@@ -197,7 +198,8 @@
             if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Delete failed') + '</span>';
             toast(r.error || 'Delete failed', 'error');
           }
-        });
+        }).catch(function(e) { toast(e.message || String(e), 'error'); });
+        }, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') });
       },
 
   extCheckUpdate: function(extId) {
@@ -302,7 +304,7 @@
     api.settings.extensionRepository(filter).then(function (entries) {
       if (statusEl) statusEl.textContent = (entries || []).length + ' extension(s) in private repository';
       if (!entries || entries.length === 0) {
-        container.innerHTML = '<div class="empty-state">No extensions in the private repository.<br>Click "+ Add Chrome Extension" to cache one from Chrome Web Store.</div>';
+        if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{empty:'No extensions in the private repository.'}); } else container.innerHTML = '<div class="empty-state">No extensions in the private repository.<br>Click "+ Add Chrome Extension" to cache one from Chrome Web Store.</div>';
         return;
       }
       container.innerHTML = entries.map(function (e) {
@@ -338,7 +340,7 @@
         } else if (action === "repo-delete") agentBrowser.extDelete(extId);
       };
     }).catch(function (e) {
-      container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
+      if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{error:e.message||String(e), retry:{cmd:'loadExtensionsTab'}}); } else container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   }
 })();

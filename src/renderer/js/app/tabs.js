@@ -49,8 +49,17 @@
 
   agentBrowser.switchTab = function (tab) {
     state.currentTab = tab;
-    document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.toggle('active', n.dataset.tab === tab); });
-    document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.toggle('active', c.id === 'tab-' + tab); });
+    document.querySelectorAll('.nav-item').forEach(function (n) {
+      var isActive = n.dataset.tab === tab;
+      n.classList.toggle('active', isActive);
+      n.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      n.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
+    document.querySelectorAll('.tab-content').forEach(function (c) {
+      var isActive = c.id === 'tab-' + tab;
+      c.classList.toggle('active', isActive);
+      c.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+    });
     agentBrowser.loadTab(tab);
   };
 
@@ -79,20 +88,38 @@
     if (window.i18n && window.i18n.apply) { try { window.i18n.apply(); } catch (e) {} }
   };
 
+  agentBrowser.renderViewState = function(el, state) {
+    if (!el) return;
+    if (state.loading) { el.innerHTML = '<div class="loading">' + esc(state.loading) + '</div>'; return; }
+    if (state.error) {
+      var friendly = agentBrowser.helpers && agentBrowser.helpers.friendlyError;
+      var errText = typeof friendly === "function" ? friendly(state.error) : state.error;
+      var msg = esc(errText);
+      var retry = state.retry ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.retry.cmd) + '"' + (state.retry.arg ? ' data-cmd-arg="' + escAttr(state.retry.arg) + '"' : '') + ' style="margin-top:8px;">Retry</button>' : '';
+      el.innerHTML = '<div class="empty-state" style="color:var(--danger);">' + msg + '<br>' + retry + '</div>';
+      return;
+    }
+    if (state.empty) {
+      var cta = state.cta ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.cta.cmd) + '" style="margin-top:8px;">' + esc(state.cta.label) + '</button>' : '';
+      el.innerHTML = '<div class="empty-state">' + esc(state.empty) + '<br>' + cta + '</div>';
+      return;
+    }
+  };
+
   agentBrowser.clearCache = function (dirId) { api.storage.clearCache(dirId).then(function (r) { toast(r.message || "Cache cleared", "success"); agentBrowser.loadStorage(); }); };
 
   agentBrowser.clearAllCaches = function () { api.storage.clearCache().then(function (r) { toast(r.message || "Caches cleared", "success"); agentBrowser.loadStorage(); }); };
 
   agentBrowser.loadStorage = function () {
     var list = document.getElementById("storage-profile-list");
-    list.innerHTML = '<div class="loading">Loading...</div>';
+    agentBrowser.renderViewState(list, { loading: "Loading storage..." });
     api.storage.info().then(function (info) {
       document.getElementById("stat-profile-total").textContent = fmt(info.totalProfileBytes || 0);
       document.getElementById("stat-disk-available").textContent = fmt(info.availableDiskBytes || 0);
       document.getElementById("stat-disk-usage").textContent = (info.diskUsagePercent || 0) + "%";
       var profiles = info.profiles || [];
       if (profiles.length === 0) {
-        list.innerHTML = '<div class="empty-state">No profile storage yet.</div>';
+        agentBrowser.renderViewState(list, { empty: "No profile storage yet.", cta: { label: "Create profile", cmd: "newProfile" } });
         return;
       }
       list.innerHTML = profiles.map(function (p) {
@@ -110,7 +137,7 @@
         if (card && card.dataset.dirId) agentBrowser.clearCache(card.dataset.dirId);
       };
     }).catch(function (e) {
-      list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
+      agentBrowser.renderViewState(list, { error: e.message || String(e), retry: { cmd: "loadStorage" } });
     });
   };
 })();

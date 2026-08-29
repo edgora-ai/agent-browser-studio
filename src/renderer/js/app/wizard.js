@@ -107,12 +107,25 @@
         statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
         advanceWizardStep(1);
       } else {
-        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + ((r && r.error) || (window.i18n ? window.i18n.t('wizard.step1.failed', 'Install failed') : 'Install failed')) + '</span>';
+        wizardEngineMissing(statusEl, (r && r.error) || (window.i18n ? window.i18n.t('wizard.step1.failed', 'Install failed') : 'Install failed'));
       }
     }).catch(function(e) {
-      statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + (e.message || 'Install failed') + '</span>';
+      wizardEngineMissing(statusEl, e.message || 'Install failed');
     });
   };
+
+  // Step-1 failure must never dead-end: point the user at the same escape
+  // paths the Profiles banner offers (pick a local build, or open the guide).
+  function wizardEngineMissing(statusEl, message) {
+    var hint = (window.i18n ? window.i18n.t('wizard.step1.hint', 'No usable build found. Select a local Chromium build or open the install guide, then verify again.') : 'No usable build found. Select a local Chromium build or open the install guide, then verify again.');
+    statusEl.innerHTML =
+      '<span style="color:var(--danger);">✗ ' + esc(message) + '</span>' +
+      '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">' + esc(hint) + '</div>' +
+      '<div class="btn-row" style="margin-top:6px;">' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' + esc(window.i18n ? window.i18n.t('engine.select', 'Select local build…') : 'Select local build…') + '</button>' +
+      '<button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showEngineGuide">' + esc(window.i18n ? window.i18n.t('engine.guide', 'Install guide') : 'Install guide') + '</button>' +
+      '</div>';
+  }
 
   // Wizard step 2: create first profile
   agentBrowser.wizardCreateProfile = function() {
@@ -226,5 +239,15 @@
   agentBrowser.maybeShowWizard = maybeShowWizard;
   agentBrowser.showWizard = showWizard;
   agentBrowser.advanceWizardStep = advanceWizardStep;
+  // Review item PL-08: "Don't show again" was permanent with no way back.
+  // This clears the dismissal so onboarding can be re-run from the UI.
+  agentBrowser.restartWizard = function() {
+    try {
+      localStorage.removeItem('agent-browser-studio-wizard-dismissed');
+      localStorage.removeItem('cloak-wizard-dismissed');
+    } catch (e) { /* storage disabled */ }
+    window.wizardDismissed = false;
+    showWizard();
+  };
 
 })();

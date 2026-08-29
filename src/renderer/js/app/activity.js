@@ -107,7 +107,8 @@
   agentBrowser.activityFilter = function() { agentBrowser.loadActivity(); };
 
   agentBrowser.activityClear = function() {
-    if (!confirm(t("activity.confirm.clear-all","清空所有审计记录？此操作不可撤销。"))) return;
-    api.audit.clear().then(function() { toast(t("activity.toast.cleared","已清空"), "success"); agentBrowser.loadActivity(); });
+    agentBrowser.confirm(t("activity.confirm.clear-all","清空所有审计记录？此操作不可撤销。"), function() {
+      api.audit.clear().then(function() { toast(t("activity.toast.cleared","已清空"), "success"); agentBrowser.loadActivity(); });
+    }, { ackLabel: t("confirm.ack.permanent","我了解此操作会永久删除数据且不可撤销。") });
   };
 })();

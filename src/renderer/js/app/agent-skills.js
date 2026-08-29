@@ -129,11 +129,13 @@
   };
 
   agentBrowser.removeSkill = function(id) {
-    if (!confirm('Remove or disable skill "' + id + '"?')) return;
-    R.agent.skills.remove(id).then(function(r) {
-      if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.skill.removed", "Skill removed/disabled") : "Skill removed/disabled"), 'success'); refreshSkillViews(); }
-      else toast((r && r.error) || 'Remove failed', 'error');
-    }).catch(function(e) { toast(e.message || String(e), 'error'); });
+    var msg = (window.i18n ? window.i18n.t("skill.remove-confirm", 'Remove or disable skill "{id}"?') : 'Remove or disable skill "{id}"?').replace("{id}", id);
+    agentBrowser.confirm(msg, function() {
+      R.agent.skills.remove(id).then(function(r) {
+        if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.skill.removed", "Skill removed/disabled") : "Skill removed/disabled"), 'success'); refreshSkillViews(); }
+        else toast((r && r.error) || 'Remove failed', 'error');
+      }).catch(function(e) { toast(e.message || String(e), 'error'); });
+    });
   };
 
   agentBrowser.setSkillEnabled = function(id, enabled) {

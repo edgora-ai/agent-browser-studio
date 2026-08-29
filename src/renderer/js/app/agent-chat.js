@@ -115,12 +115,13 @@
 
   agentBrowser.agentDeleteConv = function() {
     if (!state.agentActiveConvId) return;
-    if (!confirm(t('agent.delete-confirm', 'Delete this conversation? All messages will be lost.'))) return;
-    R.agent.conversations.delete(state.agentActiveConvId).then(function() {
-      state.agentActiveConvId = null;
-      state.agentMessages = [];
-      document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">No conversation selected</div><div class="chat-empty-hint">Select one from the sidebar or create a new one</div></div>';
-      agentBrowser.agentLoadConversations();
+    agentBrowser.confirm(t('agent.delete-confirm', 'Delete this conversation? All messages will be lost.'), function() {
+      R.agent.conversations.delete(state.agentActiveConvId).then(function() {
+        state.agentActiveConvId = null;
+        state.agentMessages = [];
+        document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">No conversation selected</div><div class="chat-empty-hint">Select one from the sidebar or create a new one</div></div>';
+        agentBrowser.agentLoadConversations();
+      });
     });
   };
 
@@ -172,6 +173,21 @@
     var rafPending = false;
     var lastRendered = '';
 
+    var isNearBottom = function(el) {
+      if (!el) return true;
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    var updateScrollAffordance = function() {
+      var wrap = document.getElementById('agent-chat-messages');
+      var btn = document.getElementById('agent-scroll-bottom');
+      if (!wrap || !btn) return;
+      var near = isNearBottom(wrap);
+      btn.style.display = near ? 'none' : 'block';
+      if (near) {
+        var badge = document.getElementById('agent-scroll-badge');
+        if (badge) badge.style.display = 'none';
+      }
+    };
     // Throttled incremental render: only re-render the active assistant bubble,
     // and at most once per animation frame, so long Markdown responses don't
     // thrash the whole message list on every token.
@@ -180,13 +196,19 @@
       rafPending = true;
       (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
         rafPending = false;
-        agentBrowser.agentRenderMessages();
+        var cont = document.getElementById('agent-chat-messages');
+        var shouldStick = isNearBottom(cont);
+        agentBrowser.agentRenderMessages({ preserveScroll: !shouldStick });
         var node = document.querySelector('#agent-chat-messages .chat-msg-agent:last-child .chat-bubble-agent');
         if (node && state.agentMessages[assistantIdx]) {
           node.innerHTML = renderChatMarkdown(state.agentMessages[assistantIdx].content);
         }
-        var cont = document.getElementById('agent-chat-messages');
-        if (cont) cont.scrollTop = cont.scrollHeight;
+        if (shouldStick && cont) cont.scrollTop = cont.scrollHeight;
+        else if (cont) {
+          var badge = document.getElementById('agent-scroll-badge');
+          if (badge) badge.style.display = 'inline-flex';
+        }
+        updateScrollAffordance();
       });
     };
     var onChunk = function(payload) {
@@ -276,8 +298,30 @@
     });
   };
 
-  agentBrowser.agentRenderMessages = function() {
+  agentBrowser.agentScrollBottom = function() {
     var el = document.getElementById('agent-chat-messages');
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    var badge = document.getElementById('agent-scroll-badge');
+    if (badge) badge.style.display = 'none';
+    var btn = document.getElementById('agent-scroll-bottom');
+    if (btn) btn.style.display = 'none';
+  };
+  agentBrowser.onAgentScroll = function() {
+    var wrap = document.getElementById('agent-chat-messages');
+    var btn = document.getElementById('agent-scroll-bottom');
+    if (!wrap || !btn) return;
+    var near = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+    btn.style.display = near ? 'none' : 'block';
+    if (near) {
+      var badge = document.getElementById('agent-scroll-badge');
+      if (badge) badge.style.display = 'none';
+    }
+  };
+  agentBrowser.agentRenderMessages = function(opts) {
+    var el = document.getElementById('agent-chat-messages');
+    var preserveScroll = !!(opts && opts.preserveScroll);
+    var prevTop = el ? el.scrollTop : 0;
     var html = '';
     for (var i = 0; i < state.agentMessages.length; i++) {
       var m = state.agentMessages[i];
@@ -303,6 +347,18 @@
       }
     }
     el.innerHTML = html || '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">Start a conversation</div><div class="chat-empty-hint">Type a message below to begin</div></div>';
-    el.scrollTop = el.scrollHeight;
+    if (preserveScroll) el.scrollTop = prevTop;
+    else el.scrollTop = el.scrollHeight;
+    // Keep the affordance in sync even for non-stream renders.
+    var wrap = document.getElementById('agent-chat-messages');
+    var btn = document.getElementById('agent-scroll-bottom');
+    if (wrap && btn) {
+      var near = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+      btn.style.display = near ? 'none' : 'block';
+      if (near) {
+        var badge = document.getElementById('agent-scroll-badge');
+        if (badge) badge.style.display = 'none';
+      }
+    }
   };
 })();

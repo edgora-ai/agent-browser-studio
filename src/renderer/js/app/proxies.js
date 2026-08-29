@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -113,11 +114,11 @@
         api.proxy.rotate(name).then(function (r) {
           if (r && r.info) {
             if (r.info.active && r.info.to) {
-              toast('已轮换到备用代理 ' + r.info.to + '（' + (r.info.reason || '健康不佳') + '）', "success");
+              toast(t('proxy.rotate.ok', 'Rotated to fallback proxy {name} ({reason})').replace('{name}', r.info.to).replace('{reason}', r.info.reason || t('proxy.rotate.reason-unhealthy', 'unhealthy')), "success");
             } else if (r.info.active) {
-              toast('该代理不健康，但未配置可用的备用代理', "error");
+              toast(t('proxy.rotate.no-fallback', 'This proxy is unhealthy and no healthy fallback is configured'), "error");
             } else {
-              toast('当前代理健康，无需轮换', "success");
+              toast(t('proxy.rotate.healthy', 'The current proxy is healthy — no rotation needed'), "success");
             }
             agentBrowser.refresh();
           } else {
@@ -233,7 +234,7 @@
               var label = document.createElement("label");
               label.className = "proxy-bind-item";
               label.innerHTML = '<input type="checkbox" data-dir-id="' + escAttr(p.dirId) + '"> <span>' + esc(p.name) + '</span>' +
-                (current ? '<span class="proxy-bind-current">当前: ' + esc(current) + '</span>' : '');
+                (current ? '<span class="proxy-bind-current">' + esc(t('proxy.bind.current', 'Current')) + ': ' + esc(current) + '</span>' : '');
               listEl.appendChild(label);
             });
           }
@@ -299,31 +300,31 @@
       }
   });
   function healthBadgeHtml(entry) {
-    if (!entry) return '<span class="proxy-health-badge health-none">未检测</span>';
+    if (!entry) return '<span class="proxy-health-badge health-none">' + esc(t('proxy.health.not-checked', 'Not checked')) + '</span>';
     var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
-    var label = entry.risk === "good" ? "良好" : entry.risk === "watch" ? "需关注" : "较差";
-    var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " ⏸冷却" : "";
+    var label = entry.risk === "good" ? t('proxy.health.good', 'Good') : entry.risk === "watch" ? t('proxy.health.watch', 'Watch') : t('proxy.health.poor', 'Poor');
+    var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " ⏸" + t('proxy.health.cooldown', 'Cooldown') : "";
     var history = entry.history || [];
     var latest = history.length ? history[history.length - 1] : null;
     var riskBadges = "";
     if (latest && latest.success && latest.hosting === true) {
-      riskBadges += ' <span class="proxy-idc-badge" title="出口为机房/IDC IP（' + escAttr([latest.org, latest.as].filter(Boolean).join(" · ") || "未知归属") + '）">🏭 IDC</span>';
+      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.idc-title', 'Exit is a datacenter/IDC IP ({org})').replace('{org}', [latest.org, latest.as].filter(Boolean).join(" · ") || t('proxy.health.unknown-org', 'unknown owner'))) + '">🏭 IDC</span>';
     }
     if (latest && latest.success && latest.isProxy === true) {
-      riskBadges += ' <span class="proxy-idc-badge" title="出口被标记为公共代理/VPN">⚠ 代理</span>';
+      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.proxy-title', 'Exit is flagged as a public proxy/VPN')) + '">⚠ ' + esc(t('proxy.health.proxy', 'Proxy')) + '</span>';
     }
-    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + '分' + cooldown + '</span>' + riskBadges;
+    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + ' ' + t('proxy.health.points', 'pts') + cooldown + '</span>' + riskBadges;
   }
 
   function renderHealthSummary(health) {
     var summary = (health && health.summary) || null;
     if (!summary || !summary.total) return "";
     return '<div class="proxy-health-summary">' +
-      '<span>代理健康 <b>' + summary.total + '</b></span>' +
-      '<span style="color:var(--success)">良好 <b>' + summary.good + '</b></span>' +
-      '<span style="color:var(--warning)">需关注 <b>' + summary.watch + '</b></span>' +
-      '<span style="color:var(--danger)">较差 <b>' + summary.poor + '</b></span>' +
-      (summary.inCooldown ? '<span>⏸ 冷却 <b>' + summary.inCooldown + '</b></span>' : '') +
+      '<span>' + esc(t('proxy.health.summary', 'Proxy health')) + ' <b>' + summary.total + '</b></span>' +
+      '<span style="color:var(--success)">' + esc(t('proxy.health.good', 'Good')) + ' <b>' + summary.good + '</b></span>' +
+      '<span style="color:var(--warning)">' + esc(t('proxy.health.watch', 'Watch')) + ' <b>' + summary.watch + '</b></span>' +
+      '<span style="color:var(--danger)">' + esc(t('proxy.health.poor', 'Poor')) + ' <b>' + summary.poor + '</b></span>' +
+      (summary.inCooldown ? '<span>⏸ ' + esc(t('proxy.health.cooldown', 'Cooldown')) + ' <b>' + summary.inCooldown + '</b></span>' : '') +
       '</div>';
   }
 
@@ -336,10 +337,10 @@
   }
 
   function healthRowsHtml(entry) {
-    var html = '<div class="info-row"><span>健康</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
-    if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>建议</span><span class="proxy-health-suggestion">' + esc(entry.suggestion) + '</span></div>';
-    if (entry && entry.bindings && entry.bindings.length) html += '<div class="info-row"><span>绑定</span><span>' + esc(entry.bindings.join(", ")) + '</span></div>';
-    html += '<div class="info-row proxy-history-row" style="display:none"><span>历史</span><span class="proxy-history-text"></span></div>';
+    var html = '<div class="info-row"><span>' + esc(t('proxy.row.health', 'Health')) + '</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
+    if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>' + esc(t('proxy.row.suggestion', 'Suggestion')) + '</span><span class="proxy-health-suggestion">' + esc(entry.suggestion) + '</span></div>';
+    if (entry && entry.bindings && entry.bindings.length) html += '<div class="info-row"><span>' + esc(t('proxy.row.bindings', 'Bindings')) + '</span><span>' + esc(entry.bindings.join(", ")) + '</span></div>';
+    html += '<div class="info-row proxy-history-row" style="display:none"><span>' + esc(t('proxy.row.history', 'History')) + '</span><span class="proxy-history-text"></span></div>';
     return html;
   }
 
@@ -358,7 +359,7 @@
         if (h.timezone) bits.push(h.timezone);
         if (h.provider) bits.push(h.provider);
         if (h.hosting === true) bits.push("🏭IDC");
-        if (h.isProxy === true) bits.push("⚠代理");
+        if (h.isProxy === true) bits.push("⚠" + t('proxy.health.proxy', 'Proxy'));
         if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
         return '<div style="color:var(--success);">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
       }
@@ -381,8 +382,8 @@
   function rotationRowsHtml(cfg) {
     var html = '';
     if (cfg.fallbacks && cfg.fallbacks.length) {
-      html += '<div class="info-row"><span>备用</span><span>' + esc(cfg.fallbacks.join(", ")) + '</span></div>' +
-        '<div class="info-row proxy-rotation-row" style="display:none"><span>轮换</span><span class="proxy-rotation-text"></span></div>';
+      html += '<div class="info-row"><span>' + esc(t('proxy.row.fallbacks', 'Fallbacks')) + '</span><span>' + esc(cfg.fallbacks.join(", ")) + '</span></div>' +
+        '<div class="info-row proxy-rotation-row" style="display:none"><span>' + esc(t('proxy.row.rotation', 'Rotation')) + '</span><span class="proxy-rotation-text"></span></div>';
     }
     return html;
   }
@@ -397,9 +398,9 @@
         var txt = card.querySelector('.proxy-rotation-text');
         if (!row || !txt || !r.info.active) return;
         if (r.info.to) {
-          txt.textContent = '⚠ ' + name + ' → ' + r.info.to + '（' + (r.info.reason || '健康不佳') + '）';
+          txt.textContent = '⚠ ' + name + ' → ' + r.info.to + ' (' + (r.info.reason || t('proxy.rotate.reason-unhealthy', 'unhealthy')) + ')';
         } else {
-          txt.textContent = '⚠ ' + name + ' 不健康，无可用备用';
+          txt.textContent = '⚠ ' + name + ' ' + t('proxy.rotate.row-no-fallback', 'is unhealthy and has no available fallback');
         }
         row.style.display = '';
       }).catch(function () {});
@@ -408,7 +409,7 @@
 
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
-    container.innerHTML = '<div class="loading">Loading proxies...</div>';
+    agentBrowser.renderViewState(container, { loading: "Loading proxies..." });
     api.proxy.healthGet().then(function (health) {
       window.__proxyHealth = health || { entries: [], summary: null };
     }).catch(function () {
@@ -418,7 +419,7 @@
     }).then(function (proxies) {
       var health = window.__proxyHealth || { entries: [], summary: null };
       if (!proxies || proxies.length === 0) {
-        container.innerHTML = '<div class="empty-state">No proxies configured.</div>';
+        agentBrowser.renderViewState(container, { empty: "No proxies configured.", cta: { label: "Add Proxy", cmd: "newProxy" } });
         return;
       }
       container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
@@ -434,11 +435,11 @@
           '<div class="card-actions">' +
             '<button class="btn btn-secondary btn-sm" data-action="detect-proxy">🔍 Detect</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="default-proxy">★ Default</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="clear-health">🧹 清除健康</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy">🔄 轮换</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="toggle-history">📈 历史</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="bind-profiles">📎 绑定</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="qrcode-proxy">📱 二维码</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">🧹 ' + esc(t('proxy.action.clear-health', 'Clear health')) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy" title="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '">🔄 ' + esc(t('proxy.action.rotate', 'Rotate')) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="toggle-history" title="' + escAttr(t('proxy.action.history', 'History')) + '">📈 ' + esc(t('proxy.action.history', 'History')) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="bind-profiles" title="' + escAttr(t('proxy.action.bind', 'Bind')) + '">📎 ' + esc(t('proxy.action.bind', 'Bind')) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="qrcode-proxy" title="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '">📱 ' + esc(t('proxy.action.qrcode', 'QR code')) + '</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
             '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
           '</div>' +
@@ -447,7 +448,7 @@
       attachProxyHandlers(container);
       loadRotationInfo(container);
     }).catch(function (e) {
-      container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
+      agentBrowser.renderViewState(container, { error: e.message || String(e), retry: { cmd: "loadProxies" } });
     });
   }
   function attachProxyHandlers(container) {
@@ -517,7 +518,7 @@
         if (r.country) parts.push(r.country);
         if (r.city) parts.push(r.city);
         if (r.hosting === true) parts.push("🏭IDC");
-        if (r.isProxy === true) parts.push("⚠代理");
+        if (r.isProxy === true) parts.push("⚠" + t('proxy.health.proxy', 'Proxy'));
         if (r.latencyMs) parts.push(r.latencyMs + "ms");
         if (el) el.textContent = parts.join(" | ") || "✅ OK";
       } else if (el) {

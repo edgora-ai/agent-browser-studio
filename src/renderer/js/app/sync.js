@@ -58,7 +58,7 @@
   agentBrowser.loadSyncPreview = function() {
     var listEl = document.getElementById('sync-preview');
     var messageEl = document.getElementById('sync-preview-message');
-    if (listEl) listEl.innerHTML = '<div class="loading">Loading...</div>';
+    if (listEl && window.agentBrowser&&window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(listEl,{loading:'Loading...'}); else if (listEl) listEl.innerHTML = '<div class="loading">Loading...</div>';
     if (messageEl) messageEl.textContent = 'Loading...';
     return fetchPreview().catch(function(e) {
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(t('sync.preview.load-failed-prefix','Preview 加载失败: ')) + esc(e.message || e) + '</div>';
@@ -80,21 +80,21 @@
     section = section || { localOnly: [], remoteOnly: [], changed: [] };
     var chips = [];
     var lines = [];
-    if (section.localOnly.length) chips.push('<span class="status-badge status-done">本地 +' + section.localOnly.length + '</span>');
-    if (section.remoteOnly.length) chips.push('<span class="status-badge status-running">远端 +' + section.remoteOnly.length + '</span>');
-    if (section.changed.length) chips.push('<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);">冲突 ' + section.changed.length + '</span>');
+    if (section.localOnly.length) chips.push('<span class="status-badge status-done">' + esc(t('sync.local', 'Local')) + ' +' + section.localOnly.length + '</span>');
+    if (section.remoteOnly.length) chips.push('<span class="status-badge status-running">' + esc(t('sync.remote', 'Remote')) + ' +' + section.remoteOnly.length + '</span>');
+    if (section.changed.length) chips.push('<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);">' + esc(t('sync.conflict', 'Conflict')) + ' ' + section.changed.length + '</span>');
     if (section.localOnly.length) {
-      lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">本地独有: ' + esc(section.localOnly.slice(0, 12).join(', ')) + (section.localOnly.length > 12 ? ' (+' + (section.localOnly.length - 12) + ')' : '') + '</div>');
+      lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">' + esc(t('sync.local-only', 'Local only')) + ': ' + esc(section.localOnly.slice(0, 12).join(', ')) + (section.localOnly.length > 12 ? ' (+' + (section.localOnly.length - 12) + ')' : '') + '</div>');
     }
     if (section.remoteOnly.length) {
-      lines.push('<div style="font-size:11px;color:var(--warning);word-break:break-all;">远端独有: ' + esc(section.remoteOnly.slice(0, 12).join(', ')) + (section.remoteOnly.length > 12 ? ' (+' + (section.remoteOnly.length - 12) + ')' : '') + '</div>');
+      lines.push('<div style="font-size:11px;color:var(--warning);word-break:break-all;">' + esc(t('sync.remote-only', 'Remote only')) + ': ' + esc(section.remoteOnly.slice(0, 12).join(', ')) + (section.remoteOnly.length > 12 ? ' (+' + (section.remoteOnly.length - 12) + ')' : '') + '</div>');
     }
     if (section.changed.length && conflictSelectable && sectionName) {
-      lines.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">逐条冲突决策（默认跟随全局策略，仅 Pull 生效）:</div>');
+      lines.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t('sync.per-item', 'Per-item conflict decisions (they default to the global strategy and apply to Pull only)')) + ':</div>');
       section.changed.forEach(function(c) {
         var value = globalStrategy === 'remote' || globalStrategy === 'newest' ? globalStrategy : 'local';
         var opts = ['local', 'remote', 'newest'].map(function(v) {
-          var label = v === 'local' ? '保留本地' : (v === 'remote' ? '采用远端' : '取较新');
+          var label = v === 'local' ? t('sync.keep-local', 'Keep local') : (v === 'remote' ? t('sync.take-remote', 'Take remote') : t('sync.take-newest', 'Take newest'));
           return '<option value="' + v + '"' + (v === value ? ' selected' : '') + '>' + label + '</option>';
         }).join('');
         lines.push('<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px;word-break:break-all;">' +
@@ -106,9 +106,9 @@
       var changedLines = section.changed.slice(0, 8).map(function(c) {
         return esc(c.id) + ' [' + esc((c.fields || []).join(', ')) + ']';
       });
-      lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">有变更: ' + esc(changedLines.join(' · ')) + (section.changed.length > 8 ? ' (+' + (section.changed.length - 8) + ')' : '') + '</div>');
+      lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">' + esc(t('sync.changed', 'Changed')) + ': ' + esc(changedLines.join(' · ')) + (section.changed.length > 8 ? ' (+' + (section.changed.length - 8) + ')' : '') + '</div>');
     }
-    if (!chips.length) lines.push('<div style="font-size:11px;color:var(--text-muted);">无差异</div>');
+    if (!chips.length) lines.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.no-diff', 'No differences')) + '</div>');
     return '<div class="profile-card">' +
       '<div class="card-header"><span class="name">' + esc(title) + '</span><span>' + chips.join(' ') + '</span></div>' +
       lines.join('') +
@@ -121,29 +121,29 @@
     if (!messageEl || !listEl) return;
     diff = diff || {};
     if (!diff.ok) {
-      messageEl.innerHTML = '⚠️ ' + esc(diff.message || '对比失败');
-      listEl.innerHTML = '<div class="empty-state">' + esc(diff.message || '对比失败') + '</div>';
+      messageEl.innerHTML = '⚠️ ' + esc(diff.message || t('sync.compare-failed', 'Comparison failed'));
+      listEl.innerHTML = '<div class="empty-state">' + esc(diff.message || t('sync.compare-failed', 'Comparison failed')) + '</div>';
       return;
     }
-    var timeHtml = diff.firstPush ? '  ·  远端尚无数据（首次推送）' : (diff.remoteTimestamp ? '  ·  远端最后同步: <strong>' + esc(escTime(diff.remoteTimestamp)) + '</strong>' : '');
-    messageEl.innerHTML = '✅ 对比完成' + timeHtml;
+    var timeHtml = diff.firstPush ? '  ·  ' + esc(t('sync.no-remote-yet', 'No remote data yet (first push)')) : (diff.remoteTimestamp ? '  ·  ' + esc(t('sync.remote-last-sync', 'Remote last synced')) + ': <strong>' + esc(escTime(diff.remoteTimestamp)) + '</strong>' : '');
+    messageEl.innerHTML = '✅ ' + esc(t('sync.compare-done', 'Comparison complete')) + timeHtml;
     var cards = [];
     if ((diff.pushWarnings || []).length) {
       cards.push('<div class="profile-card" style="border-color:var(--danger);">' +
-        '<div class="card-header"><span class="name" style="color:var(--danger);">⚠️ Push 会移除远端数据</span></div>' +
+        '<div class="card-header"><span class="name" style="color:var(--danger);">⚠️ ' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
         (diff.pushWarnings || []).map(function(w) { return '<div style="font-size:11px;color:var(--danger);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
     if ((diff.pullNotes || []).length) {
       cards.push('<div class="profile-card">' +
-        '<div class="card-header"><span class="name">ℹ️ Pull 会变更</span></div>' +
+        '<div class="card-header"><span class="name">ℹ️ ' + esc(t('sync.pull-will-change', 'Pull will change local data')) + '</span></div>' +
         (diff.pullNotes || []).map(function(w) { return '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
     var artifacts = diff.artifacts || {};
     cards.push('<div class="profile-card">' +
-      '<div class="card-header"><span class="name">远端数据工件</span></div>' +
-      '<div style="font-size:11px;color:var(--text-muted);">远端 cookies: ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
+      '<div class="card-header"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
+      '<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.remote-cookies', 'Remote cookies')) + ': ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
     cards.push(diffSectionCard('Profiles', diff.profiles, 'profiles', globalStrategy, true));
     cards.push(diffSectionCard('Proxies', diff.proxies, 'proxies', globalStrategy, true));
@@ -168,8 +168,8 @@
     if (messageEl) messageEl.textContent = 'Loading...';
     return fetchSyncDiff().catch(function(e) {
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(e.message || e) + '</div>';
-      if (messageEl) messageEl.textContent = '对比失败';
-      toast('对比失败: ' + (e.message || String(e)), 'error');
+      if (messageEl) messageEl.textContent = t('sync.compare-failed', 'Comparison failed');
+      toast(t('sync.compare-failed-prefix', 'Comparison failed: ') + (e.message || String(e)), 'error');
       return null;
     });
   };
@@ -184,16 +184,21 @@
       });
     }).then(function(diff) {
       if (diff && (diff.pushWarnings || []).length) {
-        var ok = confirm('⚠️ Push 会移除远端数据:\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n继续 Push?');
-        if (!ok) { if (reset) reset(); return null; }
+        var removeMsg = '⚠️ ' + t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
+        return agentBrowser.confirmAsync(removeMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(ok) {
+          if (!ok) { if (reset) reset(); return null; }
+          return api.sync.push();
+        });
       }
       return api.sync.push();
     }).then(function(r) {
       if (!r) return;
       if (!r.success && /locked by another device/i.test(r.message || '')) {
-        var forceOk = confirm('Push 被锁定保护拦截:\n\n' + r.message + '\n\n强制覆盖并继续?');
-        if (!forceOk) { if (reset) reset(); return null; }
-        return api.sync.push({ force: true });
+        var lockMsg = t('sync.push-blocked-by-lock', 'Push blocked by lock protection') + ':\n\n' + r.message + '\n\n' + t('sync.force-override', 'Override and continue?');
+        return agentBrowser.confirmAsync(lockMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(forceOk) {
+          if (!forceOk) { if (reset) reset(); return null; }
+          return api.sync.push({ force: true });
+        });
       }
       toast(r.message, r.success ? 'success' : 'error');
       if (r.success) agentBrowser.loadSyncConfig();
@@ -224,24 +229,31 @@
     });
     fetchPreview().then(function(preview) {
       var running = (preview && preview.runningProfiles) || [];
-      if (running.length) {
-        var ok = confirm(t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?'));
-        if (!ok) { if (reset) reset(); return; }
-      }
-      api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
-        toast(r.message, r.success ? 'success' : 'error');
-        if (!r.success) { agentBrowser.loadSyncPreview(); return; }
-        return api.app.reloadConfig().then(function() {
-          agentBrowser.loadSyncConfig();
+      var proceed = function() {
+        api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
+          toast(r.message, r.success ? 'success' : 'error');
+          if (!r.success) { agentBrowser.loadSyncPreview(); return; }
+          return api.app.reloadConfig().then(function() {
+            agentBrowser.loadSyncConfig();
+          }).catch(function(e) {
+            toast(t('sync.toast.reload-failed','Reload config failed: ') + (e.message || String(e)), 'error');
+            agentBrowser.loadSyncConfig();
+          });
         }).catch(function(e) {
-          toast(t('sync.toast.reload-failed','Reload config failed: ') + (e.message || String(e)), 'error');
-          agentBrowser.loadSyncConfig();
+          toast(t('sync.toast.pull-failed','Pull failed: ') + (e.message || String(e)), 'error');
+        }).finally(function() {
+          if (reset) reset();
         });
-      }).catch(function(e) {
-        toast(t('sync.toast.pull-failed','Pull failed: ') + (e.message || String(e)), 'error');
-      }).finally(function() {
-        if (reset) reset();
-      });
+      };
+      if (running.length) {
+        var runMsg = t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?');
+        agentBrowser.confirmAsync(runMsg).then(function(ok) {
+          if (!ok) { if (reset) reset(); return; }
+          proceed();
+        });
+        return;
+      }
+      proceed();
     }).catch(function(e) {
       toast(t('sync.toast.preview-failed','Preview failed: ') + (e.message || String(e)), 'error');
       if (reset) reset();
@@ -391,12 +403,13 @@
       if (!target || !panel.contains(target)) return;
       var deviceId = target.dataset.deviceId;
       if (!deviceId) return;
-      if (!window.confirm('Remove this member from the workspace?')) return;
-      api.team.removeMember(deviceId).then(function(r) {
-        if (!r || !r.success) { toast((r && r.error) || 'Remove failed', 'error'); return; }
-        toast('Member removed', 'success');
-        loadTeamPanel();
-      }).catch(function(e) { toast(e.message, 'error'); });
+      agentBrowser.confirm(t('team.remove-confirm', 'Remove this member from the workspace?'), function() {
+        api.team.removeMember(deviceId).then(function(r) {
+          if (!r || !r.success) { toast((r && r.error) || 'Remove failed', 'error'); return; }
+          toast('Member removed', 'success');
+          loadTeamPanel();
+        }).catch(function(e) { toast(e.message, 'error'); });
+      });
     };
     panel.onchange = function (event) {
       var sel = event.target.closest('.team-role-select');

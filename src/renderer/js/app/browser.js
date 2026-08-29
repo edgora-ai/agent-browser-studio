@@ -96,7 +96,7 @@
     var statusEl = document.getElementById("updates-status");
     var t = function (key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; };
     var doRender = function (state) {
-      if (!state) { card.innerHTML = '<div class="empty-state">No update state.</div>'; return; }
+      if (!state) { if(window.agentBrowser&&window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(card, {empty:"No data"}); else card.innerHTML = '<div class="empty-state">No update state.</div>'; return; }
       var rows = '';
       rows += '<div class="info-row"><span>' + esc(t("browser.updates.current", "Current version")) + '</span><span>' + esc(state.currentVersion || '?') + '</span></div>';
       rows += '<div class="info-row"><span>' + esc(t("browser.updates.active", "Active version")) + '</span><span>' + esc(state.activeVersion || '?') + '</span></div>';

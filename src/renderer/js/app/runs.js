@@ -47,7 +47,7 @@
     api.agentRuns.list().then(function(list) {
       var el = document.getElementById("agent-run-list");
       if (!list || list.length === 0) {
-        el.innerHTML = '<div class="empty-state">' + t("runs.empty-state", "还没有运行记录。<br>在 Agent 里发一条消息,或让定时任务跑一次,记录会出现在这里。") + '</div>';
+        if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{empty:t("runs.empty-state","暂无记录")}); else el.innerHTML = '<div class="empty-state">' + t("runs.empty-state", "还没有运行记录。<br>在 Agent 里发一条消息,或让定时任务跑一次,记录会出现在这里。") + '</div>';
         return;
       }
       el.innerHTML = groupRuns(list).map(function(item) {
@@ -68,7 +68,7 @@
         else if (btn.dataset.runAction === "delete") agentBrowser.runsDelete(runId);
         else if (btn.dataset.runAction === "retry") agentBrowser.runsRetry(runId);
       };
-    }).catch(function(e) { toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
+    }).catch(function(e) { var _el=document.getElementById("agent-run-list"); if(window.agentBrowser&&window.agentBrowser.renderViewState&&_el) window.agentBrowser.renderViewState(_el,{error:e.message||String(e), retry:{cmd:"loadRunsTab"}}); toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
   };
 
   // Batch runs from one automation job share source.jobId (one job = one batch
@@ -194,7 +194,7 @@
   }
 
   agentBrowser.runsRetry = function(runId) {
-    if (!confirm(t("runs.confirm.retry", "重试这个 profile 的 agent 任务?（会重新启动浏览器并按规则提示词再跑一次）"))) return;
+    agentBrowser.confirm(t("runs.confirm.retry", "重试这个 profile 的 agent 任务?（会重新启动浏览器并按规则提示词再跑一次）"), function() {
     api.automation.retryRun(runId).then(function(r) {
       if (!r.ok) {
         toast(t("runs.toast.retry-failed", "重试失败: ") + (r.error || "unknown"), "error");
@@ -205,10 +205,11 @@
     }).catch(function(e) {
       toast(t("runs.toast.retry-failed", "重试失败: ") + (e.message || String(e)), "error");
     });
+    });
   };
 
   agentBrowser.runsRetryJob = function(jobId) {
-    if (!confirm(t("runs.confirm.retry-all", "重试这个批次所有失败的 profile?（会按顺序重新启动浏览器并逐个重跑失败的任务）"))) return;
+    agentBrowser.confirm(t("runs.confirm.retry-all", "重试这个批次所有失败的 profile?（会按顺序重新启动浏览器并逐个重跑失败的任务）"), function() {
     api.automation.retryJob(jobId).then(function(r) {
       if (!r || typeof r.attempted !== "number") {
         toast(t("runs.toast.retry-failed", "重试失败: ") + ((r && r.error) || "unknown"), "error");
@@ -228,6 +229,7 @@
     }).catch(function(e) {
       toast(t("runs.toast.retry-failed", "重试失败: ") + (e.message || String(e)), "error");
     });
+    });
   };
 
   agentBrowser.runsOpen = function(runId) {
@@ -246,11 +248,12 @@
   };
 
   agentBrowser.runsClear = function() {
-    if (!confirm(t("runs.confirm.clear-all", "清空所有运行记录?"))) return;
-    api.agentRuns.clear().then(function(r) {
-      toast(t("runs.toast.cleared", "已清空 ") + (r.deleted || 0) + t("runs.toast.cleared-unit", " 条"), "success");
-      agentBrowser.loadRunsTab();
-    });
+    agentBrowser.confirm(t("runs.confirm.clear-all", "清空所有运行记录?"), function() {
+      api.agentRuns.clear().then(function(r) {
+        toast(t("runs.toast.cleared", "已清空 ") + (r.deleted || 0) + t("runs.toast.cleared-unit", " 条"), "success");
+        agentBrowser.loadRunsTab();
+      });
+    }, { ackLabel: t("confirm.ack.permanent","我了解此操作会永久删除数据且不可撤销。") });
   };
 
   function renderDetail(run) {
