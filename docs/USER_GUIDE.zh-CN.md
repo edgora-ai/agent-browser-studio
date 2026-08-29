@@ -1,245 +1,182 @@
-# Agent Browser Studio（Agent 浏览器工作台）使用手册
+# Agent Browser Studio 使用手册
 
-Agent Browser Studio（Agent 浏览器工作台）是一个本地桌面控制台，用于管理独立补丁 Chromium 引擎上的隔离浏览器配置文件、代理、AI 浏览器自动化、自动化任务、审计轨迹和 S3 兼容同步。
+Agent Browser Studio 是一个本地桌面控制台：在自研补丁版 Chromium 引擎（可选 Firefox）上管理隔离浏览器 profile，配套代理管理、AI 自动化、持久化任务、审计追踪和 S3 团队同步。
 
-> 请仅将 Agent Browser Studio 用于合法且已授权的工作流。禁止用于欺诈、垃圾信息、凭证攻击、未授权抓取、平台滥用、封禁规避，或滥用 Cookie、凭证、个人数据、商业机密等敏感信息。
+> 仅将本产品用于合法且获授权的场景。禁止用于欺诈、垃圾营销、凭据攻击、未授权抓取、平台滥用、封号规避，或滥用 cookie、凭据、个人数据与机密信息。详见 [ACCEPTABLE_USE.md](../ACCEPTABLE_USE.md)。
 
-## 1. 安装
+## 0. 控制台一览
 
-### 环境要求
+| 侧边栏 | 用途 |
+|---|---|
+| 📦 配置 | 创建、启动、停止、组织和清理浏览器 profile |
+| 🔌 代理 | 命名代理、健康分、自动轮换、一键绑定、二维码导出 |
+| 💾 存储 | 各 profile 磁盘占用、缓存清理、数据安全提醒 |
+| ☁️ 同步 | S3 备份、团队工作区（角色、签出锁）、push/pull 前差异预览 |
+| 🥷 浏览器引擎 | 校验受管引擎、DRM、启动安全门、应用更新 |
+| 🧩 扩展 | 全 profile 共享的私有扩展目录 |
+| 🔑 账号 | 平台账号（用户名、标签、绑定 profile）；密码永不在界面展示 |
+| 🤖 智能体 | 可操控 profile 的 AI 对话，含技能库与平台适配器 |
+| ⏰ 自动化 | 定时 / 单次 / 事件触发任务，带持久化 job 队列 |
+| 🤖 运行记录 | 每次智能体任务的分步执行轨迹 |
+| 📜 活动审计 | 谁在何时对哪个资产做了什么 |
+| 📊 数据库 | 智能体本地 SQLite（读 + 受门控的写） |
 
-- Apple Silicon macOS
-- Node.js 22.16 或更高版本
-- 使用 `npm run install:chromium -- /path/to/Chromium.app` 安装独立构建的 Chromium 补丁集，或通过 `AGENT_BROWSER_CHROMIUM_BINARY_PATH` 显式选择
+## 1. 安装与运行
 
-### 从源码启动
+当前要求：**Apple Silicon macOS**、Node.js 22.16+，以及放入受管缓存的独立构建 Chromium。
 
 ```bash
-git clone https://github.com/edgora-ai/browser-manger.git
-cd browser-manger
+git clone https://github.com/edgora-ai/agent-browser-studio.git
+cd agent-browser-studio
 npm install
 npm start
 ```
 
-开发检查：
+从预构建的 Chromium.app 安装引擎：
 
 ```bash
-npm run build
-npm test
+npm run verify:chromium -- /path/to/Chromium.app
+npm run install:chromium -- /path/to/Chromium.app
 ```
 
-## 2. 首次使用
+Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服务器模式（`--headless`）与 Docker 镜像用于 CI。
 
-首次启动时，若无托管 Chromium 二进制且无 profile，会显示 4 步向导：
+**引擎缺失时不会死胡同**：配置页顶部出现横幅，提供「选择本地构建…」和「安装指南」两个按钮，首启向导里也有同样的出路。
 
-1. **验证托管 Chromium** — 确认独立构建的引擎已安装。
-2. **创建首个 profile** — 设置名称、平台、时区、语言、硬件、WebRTC。
-3. **启动并检测指纹** — 启动 profile 并打开风险检测页面。
-4. **配置 AI Agent（可选）** — 跳转到 Agent 配置页接入 LLM provider。
+## 2. 首次运行
 
-"稍后" 仅本次会话隐藏向导；"不再显示" 持久化关闭。你也可以随时从各标签页手动执行这些步骤。
+没有引擎或没有 profile 时会出现 4 步向导：
 
-从 CloakLite 升级时，首次正常启动会把旧用户数据及有效的托管 Chromium 版本
-复制到 Agent Browser Studio 的新目录，核验复制后的 Profile 文件树，并保留旧应用、
-旧数据和旧缓存不动。新 Profile 使用 `ab_` 标识，迁移后的 `cb_` Profile 仍可继续使用。
+1. **校验受管 Chromium**——确认引擎，或选择本地构建。
+2. **创建第一个 profile**——只需填名字。
+3. **启动与风险检测**——启动 profile 并打开指纹检测页。
+4. **配置 AI 智能体（可选）**——跳转到 Agent 配置。
 
-macOS 上若存在旧 `v1:` 凭据，首次修复版启动可能会对 `CloakLite Safe Storage`
-发起一次受控授权。应用会原子地把全部旧字段转换到本地 AES-GCM 凭据库，之后不再
-重复申请；若拒绝授权，应用会停止启动并保持旧密文原样。在迁移成功前不要删除旧
-钥匙串项。
+「暂时跳过」仅本次会话隐藏；「不再显示」永久记住。向导可在「浏览器引擎」页重新触发。
 
-## 3. Profile 管理
+从 CloakLite 升级？首次启动会非破坏性地拷贝旧数据与引擎；旧 `cb_` profile 完全兼容。
 
-Profile 保存浏览器状态和指纹配置。
+## 3. 配置（Profiles）
 
-常用操作：
+### 创建
 
-- **Launch / Stop**：启动或停止托管 Chromium profile。
-- **Edit**：修改 profile 元数据和指纹字段。
-- **Chromium build**：使用最新安装的独立构建，或 pin 保留的精确版本用于回滚。
-- **Pass-through**：关闭托管的 UA/平台/语言/时区/WebRTC/GPU/屏幕/noise 消费者，以宿主原生身份进行对照。
-- **Clone / Batch create**：用确定性 seed 创建多个 profile。
-- **Consistency check**：检查 profile 的时区、语言、WebRTC、代理检测信息是否一致。
-- **Tags**：用标签组织批量操作和导出。
+- **+ 新建配置**：**只需填名字**——平台默认 Windows，身份字段由指纹种子自动派生，其余都在「⚙️ 高级配置」里（种子、时区、语言、WebRTC、地理位置、硬件覆盖、DRM、窗口标题、Web App URL）。
+- **🎯 业务预设**：一键预填一整套自洽身份（TikTok Shop US、Amazon 卖家 US、eBay UK、欧盟电商 DE、加密交易所 SG 等）。
+- **⚡ 快速创建**：免表单一键建号。
+- **📥 批量导入**：每行一个（`name, platform, locale, timezone, seed, webrtcIp`），也支持带表头 CSV。
 
-最佳实践：
+### 日常操作
 
-- 使用一致的命名方式，例如 `market-region-purpose-01`。
-- 使用 `amazon`、`qa`、`us`、`operator-a` 等标签。
-- 不要在无关工作流之间复用 Cookie 或账号状态。
-- 如果需要恢复同步的 localStorage/preferences，请先停止 profile。
+- **▶ 启动 / ⏹ 停止**。启动前会先跑安全检查（见「启动安全门」）。
+- 卡片工具：✎ 编辑、🍪 Cookie、🧩 扩展、📦 导出备份、✏️ 重命名、📝 备注、🔒 锁定到本机、📋 日志、🧬 漂移检测、🖥 环境检测、📡 WebRTC 诊断、🎬 DRM、🖥 App 模式。
+- **筛选与批量运营台**：按状态（运行中/已停止）和标签筛选，全选可见后批量启动 / 停止 / 分配代理 / 导出 / 删除；超过 10 个的批量删除需要勾选知悉框。
 
-## 4. 代理管理
+### 回收站（防误删）
 
-打开 **Proxies** 可添加命名 HTTP、SOCKS5、SOCKS5H 代理。
+删除的 profile 进入 **7 天回收站**——成功 toast 带「撤销」按钮，页头可查看与恢复；超过保留期自动物理清除。
 
-推荐流程：
+### 锁定（团队签出）
 
-1. 添加代理 host、port、type 和可选认证信息。
-2. 使用 **Detect** 测试连通性并获取出口地理信息。
-3. 将代理分配给指定 profile。
-4. 操作 profile 前运行 **Consistency Check**。
+🔒 **锁定到本机**表示该 profile 被本机签出。其他设备的 push 会被硬拦截（确认后仍可强制覆盖）。锁随同步传播。
 
-说明：
+### 指纹信任闭环
 
-- 代理凭证会在 IPC/UI/export 路径中脱敏。
-- 已验证的 Chromium 在 Browser 进程内处理 HTTP 407 凭证；带认证的 SOCKS5
-  TCP 使用临时回环桥，目标域名仍交由上游代理解析。
-- 在具备 UDP 认证传输前，受管代理会禁用 QUIC，避免流量绕过代理。
-- 代理地理检测结果会缓存，并参与一致性风险提示。
-- 生产使用中不要硬编码本地或私网端点。
+- **🧬 Drift**：把实时指纹与基线对比；高风险漂移可阻断启动（在「浏览器引擎 → 启动安全门」开关）。
+- **🖥 Env**：宿主级泄漏检查——DNS 解析器、中文系统字体（在 profile 内实测而非猜测）、代理 DNS 行为、rAF 帧间隔，每项给修复建议。
+- **📡 WebRTC**：在 profile 内跑真实 ICE 探针，验证宿主 IP 是否泄漏。
+- **📋 日志**：该 profile 的最近审计活动 + 浏览器启动日志尾部。
 
-## 5. Cookie、存储和扩展工具
+## 4. 代理
 
-Agent Browser Studio 可以通过 CDP 或在 profile 停止时读取本地文件来管理浏览器状态。
+- **+ 添加代理**（HTTP / SOCKS5 / SOCKS5H，可选凭据与绕过列表）。也可 **📥 导入** 粘贴列表（`type://user:pass@host:port`、`host:port` 或 CSV）、**📤 导出** CSV。
+- **不强制你用代理**：全新安装的 profile **直连**启动，直到你添加代理并标记 ★ 默认。profile 弹窗里会显示「直连（未配置默认代理）」，绝不偷偷走路由。
+- **🔍 检测**：测延迟、出口 IP、国家、时区，并标记 **🏭 机房（IDC）/ 公共代理**出口——这是账号风控最常见的来源。
+- **健康分**：每次检测滚动更新健康分、历史时间线和建议（例如「更换住宅出口」）。
+- **轮换与备用**：为代理配置备用列表；主代理劣化时 profile 自动切到第一个健康备用，恢复后自动回切；🔄 可手动轮换。
+- **📎 绑定**：一个对话框把代理批量绑到多个 profile；**📱 二维码**导出完整代理 URI（含凭据——请像密码一样保管）。
 
-敏感数据包括：
+## 5. 浏览器引擎页
 
-- Cookie
-- localStorage
-- preferences
-- bookmarks
-- extension state
-- screenshots
-- exported audit bundles
+- **独立引擎**：显示已安装构建；可按 profile 钉住精确版本以便回滚；**Verify** 运行严格校验。
+- **🎬 Widevine / DRM**：发现宿主 CDM、暂存托管副本、按 profile 启用，流媒体站可播。
+- **🛡 启动安全门**（每个开关即改即存）：
+  - 一致性冲突拦截（时区/语言/WebRTC 与代理）
+  - 机房/公共代理出口拦截
+  - 指纹漂移拦截
+  - 环境风控拦截
+  拦截发生在浏览器打开之前——保护的是账号，不只是提示。
+- **🔄 应用更新**：检查更新清单、暂存、激活、回滚；内置崩溃循环自动回滚。
 
-这些数据都应视为敏感数据，不要提交到 Git。
+## 6. 扩展
 
-### 扩展仓库
+全 profile 共享的私有目录：导入本地 CRX/ZIP 或解包目录、从 Chrome 商店添加、打标签、标记共享。profile 只需勾选启用哪些条目。解压有加固（路径穿越 / 符号链接拒绝、哈希校验）。
 
-扩展仓库可以导入本地 ZIP/CRX，也可以缓存 Chrome Web Store 扩展包。
+## 7. 账号
 
-安全控制包括：
+保存平台账号（URL、用户名、标签）并绑定 profile。密码静态加密且**永不展示**；「复制密码」在主进程解密后写剪贴板。**📥 批量导入**可为每个账号同时创建一个绑定的 profile；**⬇ 导出 CSV** 只含元数据。团队工作区启用后，viewer 角色不能读取或修改账号密码。
 
-- 安全 ZIP 解包
-- 拒绝符号链接和路径穿越
-- 同步恢复时校验 package hash 和 manifest hash
-- pull 时限制扩展数量和总字节数
+## 8. 智能体（AI）
 
-## 6. AI Agent
+- **配置**：OpenAI 兼容或 Claude，填 URL/密钥/模型（密钥静态加密、处处脱敏）。文件访问模式：沙箱目录 / 信任目录 / 完全开放（高风险）。
+- **对话**：流式对话 + 工具调用——智能体可以导航、点击、填表、截图、读 Cookie，对你指定的 profile 执行 HTTP/数据库/文件工具。敏感 HTTP 写操作和破坏性数据库操作会弹**审批对话框**（允许一次 / 总是 / 拒绝）。
+- **技能**：可复用的提示词/工具配方；支持导入导出共享目录。
+- **🔌 Adapter Hub**：15 个平台的版本化选择器配方（Amazon、Shopee、TikTok Shop、Instagram、Google Ads、X、LinkedIn、YouTube、交易所、欧盟商城…），智能体按页面加载用于登录检查与数据采集。
+- **运行记录页**把每次跑动记成分步轨迹（工具、变量、耗时）以便审计。
 
-打开 **Agent** 可配置 LLM Provider，并执行带工具调用的浏览器自动化。
+## 9. 自动化
 
-### 配置 LLM
+规则 = 触发器（cron、单次、profile 启动/退出事件）+ 动作（启停 profile、跑智能体任务、同步推拉、沙箱 JS）。执行是**持久化 job**：排队、并发受限、超时保护、指数退避重试，Jobs 列表可视可取消。月度/年度 cron 的 24.8 天溢出 bug 类已被回归测试覆盖。
 
-1. 打开 **Agent → Config**。
-2. 选择 OpenAI-compatible 或 Claude provider。
-3. 输入 API URL、API Key 和 Model。
-4. 保存配置。
+## 10. 同步与团队工作区
 
-### 常用 Agent 工具
+1. **配置**：endpoint、bucket、AccessKey、SecretKey（静态加密）。
+2. **起飞前预览**显示 push/pull 会动到什么；**Team Diff** 对比本地与远端，push 会**移除远端数据**前会先警告。
+3. **团队工作区（RBAC）**：owner / admin / member / viewer 角色随同步传播。viewer 只读；admin 管理成员；push 时执行策略。
+4. **签出锁**（见「配置」）防止两台设备互相覆盖。
 
-- Browser：navigate、click、type、screenshot、get text、get URL/title、cookies
-- Files：根据配置模式进行沙箱读写
-- HTTP：访问外部 API，写操作需要审批
-- DB：本地 Agent 数据库查询/执行，危险操作需要审批
-- Variables：当前 run 内的短期变量
+S3 bucket 属敏感存储：同步载荷已剥离密钥，但 cookie 与 profile 状态是真实账号数据。
 
-安全说明：
+## 11. 数据与备份——请读一次
 
-- 回复支持按 token 流式显示在聊天视图（OpenAI 兼容和 Claude provider）。
-- 每次发送都通过 stream id 关联，并发或过期发送不会污染其他助手消息。
-- HTTP 请求会阻断 localhost、私网、link-local、CGNAT 等目标。
-- HTTP 写方法需要用户审批。
-- 工具 trace 会脱敏请求/响应 body 和变量值。
-- LLM streaming 有总字节、事件、文本、工具参数和超时限制。
+- 一切都在**本机**：`<user-data>/profiles/…`（cookie、localStorage），以及加密凭据库与审计日志。
+- **磁盘坏 = 账号没了。** 至少启用其一：每个 profile 的 **📦 导出备份**、**☁️ 同步**到 S3、误删后的 **回收站**（7 天）。
+- 「存储」页展示各 profile 磁盘占用，并保留数据安全提醒。
 
-## 7. 自动化
+## 12. 集成面（开发者）
 
-Automation rules 支持按计划或手动触发动作。
+- **REST API** `127.0.0.1:26582`——`/openapi.json` 提供 OpenAPI 3.0，Bearer 鉴权（`AGENT_BROWSER_API_TOKEN`）。覆盖 profiles、proxies、accounts、automation、jobs、agent、DRM、team、updates。
+- **MCP 服务器** `127.0.0.1:26581`，供 Claude Code / Cursor 等 MCP 客户端连接。
+- **Python 与 JS SDK**（`sdk/python`、`sdk/js`）——其中 `connectPlaywright` / `connectPuppeteer` 一行代码拿到绑定受管 profile 的真实 Playwright/Puppeteer 浏览器。
 
-支持的模式包括：
+## 13. 推荐操作清单
 
-- 打开 profile
-- 运行 AI agent task
-- 执行沙箱 JavaScript
-- 导出数据
-- 检查 profile/proxy 一致性
-- 跟踪 durable jobs
+- 确认你对每个账号、站点、数据集都有授权。
+- 一个业务一个 profile；不相关账号间绝不共享 cookie。
+- 正式账号前先 **Detect** 代理并消除 🏭 机房警告。
+- 引擎升级或宿主变更后跑一遍 🧬 Drift / 🖥 Env。
+- API 密钥与同步凭据妥善保管；导出物虽去密钥但仍属敏感。
+- 有异动先看 📜 活动审计——每个敏感动作都有记录。
 
-使用 **Automation Jobs** 可以查看 queued、running、done、failed、skipped、cancelled 状态。Agent-task job 会关联到对应的 Agent Run trace。
+## 14. 故障排查
 
-## 8. 同步
+应用内的报错都是**人话 + 下一步建议**；原始技术信息始终可在开发者控制台查看。常见情况：
 
-Agent Browser Studio 支持通过 S3 兼容存储同步部分配置和 profile 数据。
+| 报错（意译） | 含义 | 处理 |
+|---|---|---|
+| 「该 profile 需要可用代理……已拒绝启动」 | 代理 fail-closed 保护 | 检查代理进程/端口与健康状态；重新分配或调整 profile 代理 |
+| 「受管浏览器引擎缺失」 | 没有可用引擎 | 浏览器引擎页 → 安装指南 / 选择本地构建 |
+| 「已拦截启动：指纹漂移……」 | 实时指纹 ≠ 基线 | 打开 🧬 Drift 查看；变更属有意则清除基线 |
+| 「启动被环境风控门拦截」 | DNS / 字体 / 代理 DNS 发现 | 打开 🖥 Env 查看与修复 |
+| 「连接被拒绝」 | 本地代理没起或端口不对 | 启动代理或改端口 |
+| 「权限不足……（viewer）」 | 团队角色只读 | 请管理员在团队设置中调整 |
+| Pull 跳过了部分 localStorage | 运行中 profile 受保护 | 停止后重试 pull |
 
-Push/Pull 前建议：
-
-1. 配置 endpoint、bucket、access key 和 secret key。
-2. 使用 **Preview** 查看影响范围和远端状态。
-3. 如果需要恢复 localStorage/preferences，请先停止正在运行的 profile。
-4. 将远端同步 bucket 视为敏感存储。
-
-同步加固包括：
-
-- sync-safe config 中移除 secret
-- 限制远端读取大小
-- 安全恢复 localStorage/preferences
-- 校验扩展 package hash
-- 限制扩展总字节数
-
-## 9. 导出和审计
-
-数据导出用于调试、评估和治理。
-
-导出脱敏包括：
-
-- 移除代理凭证
-- 移除 LLM/API secret-like 字段
-- Agent run variables 只导出 key/metadata，不导出原始值
-- 敏感 Agent DB scope 只导出表 metadata
-- HTTP body 在 trace 中脱敏
-
-即便如此，导出文件仍可能包含运营元数据、profile 名称、tags、URL、时间信息和非 secret 标识符，因此仍应视为敏感文件。
-
-## 10. 运营检查清单
-
-在业务工作流中使用 Agent Browser Studio 前：
-
-- 确认你对所有账号、网站和数据都有授权。
-- 审查平台条款和适用法律。
-- 不同账号/工作流使用独立 profile。
-- 操作 profile 前验证代理地理一致性。
-- 妥善保护 API Key 和同步凭证。
-- 分享审计/导出文件前先人工检查。
-- 修改安全敏感代码前后运行构建和测试。
-
-## 11. 常见问题
-
-### Electron 应用无法启动
+### 源码方式启动失败
 
 ```bash
-npm install
-npm run build
-npm start
+rm -rf node_modules && npm install && npm run build && npm start
 ```
 
-如果 Electron 下载不完整，可以重装依赖：
+### E2E 残留物
 
-```bash
-rm -rf node_modules
-npm install
-```
-
-### E2E 后测试数据残留
-
-E2E 测试会在 `tests/e2e/userdata/` 下生成本地数据。该目录已被忽略，可安全删除：
-
-```bash
-rm -rf tests/e2e/userdata tests/e2e/screenshots dist
-```
-
-### LLM 工具调用失败
-
-检查：
-
-- provider 类型
-- API URL 格式
-- API Key 是否有效
-- model 名称
-- 工具审批提示
-- 网络连接
-
-### Sync pull 跳过 profile 数据
-
-正在运行的 profile 可能会跳过 localStorage/preferences 恢复，以避免损坏数据。请先停止 profile 后再 pull。
+`tests/e2e/userdata/`、`tests/e2e/screenshots/`、`dist/` 是本地运行产物，可安全删除。

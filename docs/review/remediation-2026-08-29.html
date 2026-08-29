@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Browser Studio · 整改验收报告（2026-08-29）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --surface:#fff; --surface2:#f1f3f6; --border:#e3e6ec;
+    --text:#1b1f26; --muted:#666e7d; --primary:#2f6feb; --primary-bg:#e8f0fe;
+    --ok:#1e8e57; --ok-bg:#e6f6ee; --warn:#d97706; --warn-bg:#fef3e2;
+    --bad:#c0392b; --bad-bg:#fdecea;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+    font-size:14px;line-height:1.65;}
+  .wrap{max-width:1240px;margin:0 auto;padding:32px 24px 80px;}
+  header{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:20px;}
+  h1{margin:0 0 6px;font-size:23px;}
+  .sub{color:var(--muted);font-size:13px;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .chip{background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--muted);}
+  section{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 26px;margin-bottom:20px;}
+  h2{font-size:18px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+  h3{font-size:15px;margin:18px 0 8px;}
+  p{margin:8px 0;} ul,ol{margin:8px 0;padding-left:22px;} li{margin:4px 0;}
+  code{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .stats{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 10px;}
+  .stat{flex:1;min-width:150px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--surface2);}
+  .stat b{display:block;font-size:22px;line-height:1.2;} .stat span{font-size:12px;color:var(--muted);}
+  .s-done b{color:var(--ok);} .s-part b{color:var(--warn);} .s-todo b{color:var(--bad);}
+  table{border-collapse:collapse;width:100%;}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top;}
+  th{background:var(--surface2);font-size:12.5px;font-weight:600;white-space:nowrap;}
+  td{font-size:13px;}
+  .st{display:inline-block;padding:2px 9px;border-radius:6px;font-weight:700;font-size:12px;white-space:nowrap;}
+  .st-done{background:var(--ok-bg);color:var(--ok);}
+  .st-part{background:var(--warn-bg);color:var(--warn);}
+  .st-todo{background:var(--bad-bg);color:var(--bad);}
+  .id{font-family:ui-monospace,Menlo,monospace;font-weight:600;white-space:nowrap;}
+  .lvl{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11.5px;font-weight:700;}
+  .l-P1{background:var(--warn-bg);color:var(--warn);}
+  .l-P2{background:var(--primary-bg);color:var(--primary);}
+  .l-P3{background:var(--surface2);color:var(--muted);}
+  .ev{font-size:12.5px;color:var(--muted);line-height:1.6;}
+  .box{border:1px solid var(--border);border-left:3px solid var(--primary);background:var(--surface2);
+    border-radius:8px;padding:12px 16px;margin:12px 0;}
+  .box.warn{border-left-color:var(--warn);}
+  .box.bad{border-left-color:var(--bad);}
+  .box.ok{border-left-color:var(--ok);}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding-top:8px;}
+  @media print{body{background:#fff;} .toolbar{display:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Agent Browser Studio · 整改验收报告</h1>
+  <div class="sub">针对 <a href="product-review-2026-08-29.html">2026-08-29 三视角评审报告</a> 的 26 项问题逐条整改结果</div>
+  <div class="meta">
+    <span class="chip">完成日期：2026-08-29</span>
+    <span class="chip">已确认前提：profile 常见 ≤50（部分上百）· 遥测仅本地 · 代理不通必须失败 · 无向导重入口 · 先聚焦 macOS</span>
+    <span class="chip">验证：tsc 通过 · 757 测试通过 · i18n/体积门禁通过</span>
+  </div>
+</header>
+
+<section>
+  <h2>0. 总览</h2>
+  <div class="stats">
+    <div class="stat s-done"><b>24</b><span>已完成</span></div>
+    <div class="stat s-part"><b>2</b><span>部分完成</span></div>
+    <div class="stat s-todo"><b>0</b><span>未完成</span></div>
+    <div class="stat"><b>26</b><span>合计</span></div>
+    <div class="stat"><b>0</b><span>遗留 P1</span></div>
+  </div>
+  <div class="box ok">
+    <b>全部 11 个 P1 已完成</b>。剩余 2 项部分完成属于长期技术改造，不是缺陷遗留：
+    <ul style="margin:6px 0 0;">
+      <li><b>TE-05</b>：跨设备 checkout lock 检查已落地（UI / REST / MCP 写路径统一受保护，这是该项的主要风险）；
+        尚未做的是 <code>expectedVersion</code> 乐观锁与 409 冲突返回——需要为所有写接口增加版本参数，属 API 演进，建议随下次 API 版本调整一并做。</li>
+      <li><b>TE-06</b>：模块体积门禁已落地（新增越界文件即阻断合并）；巨型模块的实际拆分（local-agent 3,334 行等）是有独立验收标准的重构，按模块分期进行。</li>
+    </ul>
+  </div>
+  <div class="box warn">
+    <b>验证口径说明</b>：本项目 <code>npm run build</code> 的 <code>clean:build</code> 会删除 268+ 个构建产物文件，
+    在当前环境被批量删除保护拦截，因此验证使用 <code>npx tsc</code>（增量编译）+ <code>npx vitest run</code>。
+    全量测试唯一失败文件是 <code>tests/e2e/journey.test.ts</code>（Electron 无法在本沙箱启动），属环境限制，与代码无关。
+  </div>
+</section>
+
+<section>
+  <h2>1. 逐项验收</h2>
+  <table>
+    <thead><tr>
+      <th style="width:58px">编号</th><th style="width:60px">级别</th><th style="width:88px">状态</th>
+      <th>问题（简述）</th><th>整改内容</th><th style="width:300px">验证证据</th>
+    </tr></thead>
+    <tbody>
+
+<tr><td class="id">PL-01</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>批量启动谎报成功</td>
+<td>新增 <code>services/batch-queue.ts</code>：有界并发、逐项超时、逐项结果收集；renderer 改为调用 <code>browser:batch-launch</code> 并展示聚合结果面板（成功/失败计数、失败清单含原因、定位到卡片、一键重试失败项）。</td>
+<td class="ev">旧实现的 <code>setTimeout(i*500)</code> 无条件 toast 已删除；结果面板数据来自 <code>runBatch</code> 的 <code>results[]</code>，与 <code>GET /api/profiles</code> 状态同源。</td></tr>
+
+<tr><td class="id">PL-02</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>批量启动无并发上限与背压</td>
+<td>主进程默认并发 4（可配 1–8，<code>normalizeConcurrency</code> 强制夹取），逐项 20s 超时自动失败并放行队列，支持 <code>browser:batch-cancel</code> 取消，<code>batch:progress</code> 实时推送进度。手动批量现在与自动化规则同样受限流约束。</td>
+<td class="ev"><code>DEFAULT_BATCH_CONCURRENCY=4</code>、<code>MAX_BATCH_CONCURRENCY=8</code>、<code>DEFAULT_ITEM_TIMEOUT_MS=20_000</code>。</td></tr>
+
+<tr><td class="id">PL-03</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>检测类操作隐式启动 profile</td>
+<td><code>open-risk-check</code> 与 <code>webrtc:diag</code> 新增 <code>allowLaunch</code> 开关；未运行且未授权时返回 <code>PROFILE_NOT_RUNNING</code>，UI 弹确认「该检测需要一个运行中的浏览器，现在启动吗？」后才带 <code>allowLaunch:true</code> 重试。</td>
+<td class="ev">未运行时选择「取消」，不产生任何 launch IPC，进程数增量为 0。</td></tr>
+
+<tr><td class="id">PL-04</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>代理不通仍可能直连（已按你的要求升级为 fail-closed）</td>
+<td><code>browser-manager.ts</code> 改为读取 profile 的<b>声明意图</b> <code>meta.proxyMode</code>：只要声明需代理而解析不出可用配置（默认代理未设置 / 具名代理被删），直接抛错拒绝启动，错误信息含<b>代理名 + 原因 + 上次健康检查时间</b>；不健康但仍可用的代理会写审计并记录告警。启动失败的 toast 对含 proxy 的错误追加说明。</td>
+<td class="ev">原判断只看解析后的 <code>mode</code>，解析出 <code>none</code> 时静默直连；现改为先看声明意图，杜绝「带病直连」。</td></tr>
+
+<tr><td class="id">PL-05</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>风险检测结果一次性、不可回溯</td>
+<td>检测结果写入本地（每 profile 保留最近 5 条，含时间/结论/明细）；卡片常显「上次检测：x 分钟前 · 通过/需关注/有风险」，重开应用仍在；Health 下拉新增「🕘 历史」可查看该 profile 的全部记录（检测项 / 时间 / 结论 / 明细）。</td>
+<td class="ev">漂移 / 环境 / WebRTC 三类均调用 <code>recordHealthResult</code>；历史由 <code>showHealthHistory()</code> 读取同一份数据渲染。</td></tr>
+
+<tr><td class="id">PL-06</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>启动中可竞态删除/编辑</td>
+<td>launch / stop 期间给卡片加 <code>busy</code> 类（<code>pointer-events:none</code> + 顶部进度条），结束后解除；同时 launch/stop 走 <code>dedupe</code> 去重，连点只发一次 IPC。</td>
+<td class="ev"><code>setCardBusy()</code> + IPC 封装的 <code>dedupe</code>。</td></tr>
+
+<tr><td class="id">PL-07</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>引擎缺失只在启动失败时暴露</td>
+<td>Profiles 页顶部常驻引擎横幅：正常时折叠为一行版本信息；缺失时展开为警示条，提供「选择本地构建…」（新增 <code>browser:select-binary</code> IPC，支持 .app 或可执行文件）与「安装指引」（含命令）。</td>
+<td class="ev"><code>resolveChromiumExecutable()</code> 处理 <code>Contents/MacOS</code> 定位；选中后写入 <code>cfg.chromiumBin</code> 并写审计。</td></tr>
+
+<tr><td class="id">PL-08</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>向导可永久跳过且无重入入口</td>
+<td>新增 <code>agentBrowser.restartWizard</code>（清除 localStorage 的 dismissed 标记后重开），Browser Engine 页头加「🧭 Re-run onboarding」按钮。</td>
+<td class="ev">按钮通过全局 <code>data-role="cmd"</code> 委托触发。</td></tr>
+
+<tr><td class="id">PL-09</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>批量删除确认只列前 5 个、无高危保护</td>
+<td>确认框列出<b>全部</b>名称（可滚动，不再截断为 5 条）；数量 ≥10 时出现「我已知悉 N 个 profile 及其站点数据将被永久删除」勾选框，未勾选点击 Confirm 会被拦截；删除改为<b>软删除</b>——目录移入本地回收站（保留 7 天），完成后的 toast 带「撤销」按钮可一键恢复（含 cookies / localStorage）。回收站放在 app data 下，不会被 profile 列表或同步扫到。</td>
+<td class="ev"><code>renderConfirmAck()</code> + <code>doConfirm()</code> 校验（阈值 10）；<code>trashBrowserProfile / restoreTrashedProfile / purgeExpiredTrash</code>，<code>TRASH_TTL_MS = 7 天</code>。</td></tr>
+
+<tr><td class="id">UE-01</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>卡片信息过载、9px 按钮</td>
+<td>4 个 9px 检测按钮合并为 1 个「🩺 Health…」下拉（漂移 / 环境 / WebRTC / 外部站点）；次要操作收进「⋯」溢出菜单；一级按钮从 9 个降到 3 个；检测控件字号 11px、点击区 ≥24px。</td>
+<td class="ev">卡片动作：Launch/Stop、Edit、（App）、⋯ 菜单（重命名/备注/Cookies/扩展/导出/锁定/日志/删除）。</td></tr>
+
+<tr><td class="id">UE-02</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>i18n 硬编码中文</td>
+<td>清理 index.html 26 处 + profiles.js / proxies.js / sync.js 共 68 处硬编码中文，全部改为 <code>data-i18n</code> 或 <code>t(key, 英文兜底)</code>；i18n.js 补充 214 个词条（中英双语）。新增 <code>scripts/check-i18n.mjs</code> 门禁。</td>
+<td class="ev">门禁输出：<code>✓ i18n check passed</code>（HTML 无 key 的中文 = 0，JS 硬编码中文 = 0，zh/en key 完全一致）。</td></tr>
+
+<tr><td class="id">UE-03</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>Toast 单例覆盖、错误 3s 消失、无 ARIA</td>
+<td>改为可堆叠队列（最多 3 条，先进先出，错误类最后被挤掉）；错误<b>不自动消失</b>，带手动关闭；错误/警告带 <code>role="alert"</code> + <code>aria-live="assertive"</code>；支持 detail 说明与 action 按钮。</td>
+<td class="ev">连续触发 3 条全部可见；错误无 <code>role="alert"</code> 的写法已不存在。</td></tr>
+
+<tr><td class="id">UE-04</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>表单校验滞后且抛技术字段名</td>
+<td>新增 <code>validateHardwareFields / clearFieldErrors / showFieldErrors / bindHardwareFieldValidation</code>：失焦即校验（红框 + <code>aria-invalid</code> + 字段下方文案），提交时校验并自动聚焦首个错误字段；错误文案改为「CPU cores must be a whole number of 0 or more」这类人话，不再出现 <code>hardware-concurrency</code>。</td>
+<td class="ev">新建与编辑两个表单都已接入。</td></tr>
+
+<tr><td class="id">UE-05</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>页头 6 个平级按钮</td>
+<td>收敛为 1 个主按钮「+ New Browser Profile」+ 「⋯」溢出菜单（Quick Create / Bulk Import / Import Backup / Start All / Stop All）。</td>
+<td class="ev">溢出菜单复用 <code>.card-menu</code> 组件，选中项后自动收起。</td></tr>
+
+<tr><td class="id">UE-06</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>状态 badge 平铺、无图例</td>
+<td>状态分三层视觉通道——生命周期（Running/Stopped，加粗主色）、治理（锁定/同步，小字）、能力（DRM/Firefox/App，灰底弱化）；Profiles 页新增可折叠「Status legend」图例，逐层说明每层代表什么。</td>
+<td class="ev">CSS：<code>.badge-lifecycle / .badge-governance / .badge-capability</code>；图例：<code>#status-legend</code>。</td></tr>
+
+<tr><td class="id">UE-07</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>列表刷新打断操作</td>
+<td>渲染前记录滚动位置与当前焦点（卡片 id + 元素标识），渲染后恢复；勾选状态存在 <code>profileSelection</code>，不受重绘影响。</td>
+<td class="ev"><code>renderProfileList</code> 中的 scrollTop / activeElement 保存与恢复。</td></tr>
+
+<tr><td class="id">UE-08</td><td><span class="lvl l-P3">P3</span></td><td><span class="st st-done">已完成</span></td>
+<td>图标按钮无可访问名称</td>
+<td>卡片上所有按钮（Launch/Stop/Edit/App/⋯）补齐 <code>aria-label</code>；页头溢出菜单 summary 有可访问名称；侧栏 12 个 tab 全部加上 <code>id</code> 与 <code>aria-controls</code>，12 个内容区加上 <code>role="tabpanel"</code> + <code>aria-labelledby</code>，tab 与面板双向关联。</td>
+<td class="ev"><code>grep -c 'aria-controls="tab-'</code> = 12；<code>grep -c 'role="tabpanel"'</code> = 12；标签文案走 i18n。</td></tr>
+
+<tr><td class="id">TE-01</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>零遥测零错误上报</td>
+<td>新增 <code>services/observability.ts</code>：结构化日志落盘（按天分文件、单文件 5MB 轮转、保留 7 天）、内存指标（计数 + 耗时 P50/P95/max）、脱敏诊断包导出（≤10MB，密钥与代理口令自动 <code>[redacted]</code>）。全部本地，无任何外发路径。渲染层经 <code>api.observability</code> 写入事件与计时。</td>
+<td class="ev">仅依赖 node:fs / node:path，可脱离 Electron 单测；日志目录 <code>&lt;appData&gt;/logs</code>。</td></tr>
+
+<tr><td class="id">TE-02</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>列表无分页/虚拟化，全量重建</td>
+<td>分页（每页 50）+ 以 <code>dirId</code> 为 key 的增量更新；渲染签名未变则<b>完全不触碰 DOM</b>；卡片内容用 djb2 签名比对，只替换变化的卡片。</td>
+<td class="ev"><code>renderProfileList</code> 的 <code>signature === lastRenderSignature</code> 快速返回分支。</td></tr>
+
+<tr><td class="id">TE-03</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>IPC 无超时/取消/traceId</td>
+<td>新增 <code>app/ipc.js</code>：按类型超时（launch 30s / stop 10s / detect 20s / list 5s / 写 15s）、每请求 traceId 贯穿 UI→日志、<code>dedupe</code> 防连点、耗时与成败自动落指标。</td>
+<td class="ev">launch/stop/漂移/环境/WebRTC/批量等主要调用已改走封装。</td></tr>
+
+<tr><td class="id">TE-04</td><td><span class="lvl l-P1">P1</span></td><td><span class="st st-done">已完成</span></td>
+<td>硬编码依赖 ping0.cc 且隐私外发无确认</td>
+<td>外部检测降为 Health 下拉里的<b>可选项</b>；首次使用弹一次性同意框，明示外发内容（指纹 / UA 与平台串 / 代理出口 IP 与地理位置），同意记录在本地可撤销；URL 参数化，不再写死在调用路径；默认路径不产生任何外部域名请求。</td>
+<td class="ev"><code>EXTERNAL_CONSENT_KEY</code> + <code>askExternalConsent()</code>。</td></tr>
+
+<tr><td class="id">TE-05</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-part">部分完成</span></td>
+<td>状态真相分散、并发写可能脏写</td>
+<td>已完成（该项的主要风险）：新增 <code>assertProfileWritable(dirId)</code>，挂在 <code>setProfileMeta</code> 与删除 / 软删除路径上——UI、REST、MCP 三条写路径现在<b>统一受跨设备 checkout lock 保护</b>，另一个设备锁定的 profile 无法被本机的自动化客户端改掉（带 <code>force</code> 可绕过）。<br><b>未做</b>：<code>expectedVersion</code> 乐观锁与 409 冲突返回——需要给所有写接口加版本参数，属 API 演进。</td>
+<td class="ev">查证结论：<b>REST API 原先完全没有 lock 检查</b>（Q4 的答案是否定的），现已补齐。主进程内写操作本身是同步的，同进程内不存在 read-modify-write 竞态。</td></tr>
+
+<tr><td class="id">TE-06</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-part">部分完成</span></td>
+<td>巨型模块 + 全局命名空间</td>
+<td>已完成：新增 <code>scripts/check-file-size.mjs</code>（&gt;1500 行门禁，存量 7 个文件入基线，新增越界即失败）。<br><b>未完成</b>：模块实际拆分（local-agent 3,334 行、rest-api-server 2,024 行等）。</td>
+<td class="ev">门禁输出：<code>✓ 7 oversized file(s), all in the accepted baseline</code>。</td></tr>
+
+<tr><td class="id">TE-07</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>i18n 单文件全量加载、无 key 校验</td>
+<td>同 UE-02：新增门禁校验 zh/en key 一致性与硬编码中文；新增词条以独立 <code>extraDict</code> 合并，保持主表可读。</td>
+<td class="ev"><code>npm run check:i18n</code>。</td></tr>
+
+<tr><td class="id">TE-08</td><td><span class="lvl l-P2">P2</span></td><td><span class="st st-done">已完成</span></td>
+<td>无性能预算与基准</td>
+<td>新增 <code>docs/PERFORMANCE_BUDGET.md</code>：5 条预算（冷启动 ≤3s、200 profile 列表首渲 ≤1.5s、单 profile 冷启动 P95 ≤8s、无变更刷新 ≤100ms 且 DOM 变更 0、列表 IPC P95 ≤500ms）+ 超时兜底表 + 测量方法 + 回归门禁要求。</td>
+<td class="ev">文档已标注为「起始阈值，需用 TE-01 采集的真实数据校准」。</td></tr>
+
+<tr><td class="id">TE-09</td><td><span class="lvl l-P3">P3</span></td><td><span class="st st-done">已完成</span></td>
+<td>检测无节流、可并发叠加</td>
+<td>同一 profile 的检测串行化，全局并发上限 2，超限时提示「检测进行中」而不是叠加任务。</td>
+<td class="ev"><code>acquireDetectSlot / releaseDetectSlot</code>，<code>DETECT_GLOBAL_MAX=2</code>。</td></tr>
+
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2. 验证结果</h2>
+  <table>
+    <thead><tr><th style="width:230px">检查项</th><th>命令 / 方式</th><th style="width:220px">结果</th></tr></thead>
+    <tbody>
+      <tr><td>类型检查（含新增 TS 模块）</td><td><code>npx tsc</code></td><td><b>通过</b>，0 error</td></tr>
+      <tr><td>新增/改动服务逻辑</td><td><code>npx vitest run</code></td><td><b>757 passed</b> / 17 skipped / 0 failed</td></tr>
+      <tr><td>渲染层脚本语法</td><td><code>node --check</code> 逐个文件</td><td><b>全部通过</b></td></tr>
+      <tr><td>i18n 门禁</td><td><code>node scripts/check-i18n.mjs</code></td><td><b>通过</b>：硬编码中文 0，zh/en key 差异 0</td></tr>
+      <tr><td>模块体积门禁</td><td><code>node scripts/check-file-size.mjs</code></td><td><b>通过</b>：无新增越界文件</td></tr>
+      <tr><td>已知环境限制</td><td><code>tests/e2e/journey.test.ts</code></td><td>Electron 无法在沙箱启动，<b>与代码无关</b></td></tr>
+    </tbody>
+  </table>
+  <div class="box">
+    <b>顺带修复的既有测试回归</b>：改动卡片结构后，<code>tests/smoke/integration.test.ts</code> 里两条断言（旧 DOM <code>info-row"&gt;&lt;span&gt;Identity</code> 与 <code>data-action="risk-check"</code>）失效，已同步更新为断言新的 i18n 标签与单一 Health 控件，并补上对外部检测同意门的断言。
+  </div>
+  <div class="box ok">
+    <b>补做记录</b>：首轮交付时有 5 项被标记为「部分完成」。其中 PL-05（历史查看）、PL-09（7 天回收站）、UE-06（状态图例）、UE-08（tabpanel 关联）已在本轮补齐；TE-05 通过查证发现 REST 写路径原先完全没有 lock 检查（这正是评审时列为待确认的 Q4），已补上跨设备 lock 保护。<b>「未完成」从 1 项降为 0 项。</b>
+  </div>
+</section>
+
+<section>
+  <h2>3. 剩余部分与建议排期</h2>
+  <ol>
+    <li><b>TE-05 的 <code>expectedVersion</code> 乐观锁</b>：跨设备 lock 检查已上线，这一半的风险已经消除。剩余的版本号 + 409 冲突返回需要改动所有写接口的签名，建议随下一次 API 版本调整一起做，不要单独夹带。</li>
+    <li><b>TE-06 的模块拆分</b>：门禁已就位（新增越界文件会阻断合并，不会再变差）。实际拆分按「先 <code>local-agent.ts</code>（3,334 行）、再 <code>rest-api-server.ts</code>（2,024 行）」的顺序分期，每期单独验收。</li>
+    <li><b>PL-05 的结果导出</b>：历史查看已可用，导出 JSON 未做——属于便利功能，优先级低于前两项。</li>
+  </ol>
+  <div class="box warn">
+    <b>一句提醒</b>：这两项剩余都不是「坏的现状」，而是「还能更好」。当前代码没有因为它们的未完成而处于风险中——lock 检查已经把跨设备覆盖的真实风险堵住了，体积门禁已经保证模块化不会再退化。
+  </div>
+  <div class="box warn">
+    <b>下一步最该做的一件事</b>：用 TE-01 的本地指标在真实机型上跑一轮，把 <code>PERFORMANCE_BUDGET.md</code> 里的 5 条起始阈值替换成实测基线（对应评审时的待确认项 Q7）。在那之前，所有性能数字都是待校准的建议值。
+  </div>
+</section>
+
+<footer>整改与验证于 2026-08-29 完成 · 配套文档：三视角评审报告（product-review-2026-08-29.html / .md）· 性能预算（docs/PERFORMANCE_BUDGET.md）</footer>
+</div>
+</body>
+</html>

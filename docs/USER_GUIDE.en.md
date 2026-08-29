@@ -1,250 +1,182 @@
 # Agent Browser Studio User Guide
 
-Agent Browser Studio is a local desktop console for managing isolated profiles on its independently patched Chromium engine, proxies, AI-assisted browser automation, automation jobs, audit traces, and S3-compatible sync.
+Agent Browser Studio is a local desktop console for managing isolated browser profiles on an independently patched Chromium engine (with optional Firefox), proxies, AI-assisted automation, durable jobs, audit trails, and S3-compatible team sync.
 
-> Use Agent Browser Studio only for lawful and authorized workflows. Do not use it for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, or misuse of cookies, credentials, personal data, or confidential information.
+> Use Agent Browser Studio only for lawful and authorized workflows. Do not use it for fraud, spam, credential attacks, unauthorized scraping, platform abuse, ban evasion, or misuse of cookies, credentials, personal data, or confidential information. See [ACCEPTABLE_USE.md](../ACCEPTABLE_USE.md).
 
-## 1. Installation
+## 0. The console at a glance
 
-### Requirements
+| Sidebar tab | What it is for |
+|---|---|
+| 📦 Profiles | Create, launch, stop, organize, and clean up browser profiles |
+| 🔌 Proxies | Named proxies, health scoring, rotation, one-click binding, QR export |
+| 💾 Storage | Disk usage per profile, cache cleanup, data-safety reminders |
+| ☁️ Sync | S3 backup, team workspace (roles, locks), push/pull diff preview |
+| 🥷 Browser Engine | Verify the managed engine, DRM, launch safety gates, app updates |
+| 🧩 Extensions | Private extension catalog shared across profiles |
+| 🔑 Accounts | Platform accounts (usernames, tags, profile binding); secrets never shown in the UI |
+| 🤖 Agent | AI chat that can drive profiles, plus skills and platform adapters |
+| ⏰ Automation | Scheduled / one-shot / event-triggered tasks with durable jobs |
+| 🤖 Runs | Step-by-step traces of every agent task |
+| 📜 Activity | Audit timeline: who did what to which asset, and when |
+| 📊 Database | The agent's local SQLite database (read + guarded write) |
 
-- macOS on Apple Silicon
-- Node.js 22.16 or newer
-- An independently built Chromium patchset installed with `npm run install:chromium -- /path/to/Chromium.app`, or selected through `AGENT_BROWSER_CHROMIUM_BINARY_PATH`
+## 1. Install and run
 
-### Start from source
+Requirements today: **macOS on Apple Silicon**, Node.js 22.16+, and an independently built Chromium placed in the managed cache.
 
 ```bash
-git clone https://github.com/edgora-ai/browser-manger.git
-cd browser-manger
+git clone https://github.com/edgora-ai/agent-browser-studio.git
+cd agent-browser-studio
 npm install
 npm start
 ```
 
-For development checks:
+Install the engine from a prebuilt Chromium.app:
 
 ```bash
-npm run build
-npm test
+npm run verify:chromium -- /path/to/Chromium.app
+npm run install:chromium -- /path/to/Chromium.app
 ```
 
-## 2. First Run
+Windows / Linux paths exist but are not fully verified end-to-end yet; a headless server mode (`--headless`) and Docker image are available for CI.
 
-On first launch, if no managed Chromium binary and no profiles exist, a 4-step wizard appears:
+**If the engine is missing** the Profiles page shows a banner with **“Select local build…”** and **“Install guide”** buttons, and the first-run wizard offers the same two escape hatches — you never hit a dead end.
 
-1. **Verify Managed Chromium** — confirm the independently built engine is installed.
-2. **Create your first profile** — set name, platform, timezone, locale, hardware, WebRTC.
-3. **Launch & check fingerprint** — start the profile and open a risk-check page.
-4. **Configure AI Agent (optional)** — jump to the Agent config view to wire up an LLM provider.
+## 2. First run
 
-"Skip for now" hides the wizard only for this session; "Don't show again" persists dismissal. You can also run these steps manually from the tabs at any time.
+If no engine or no profiles exist, a 4-step wizard appears:
 
-When upgrading from CloakLite, the first normal launch copies the old user data
-and valid managed Chromium versions into the Agent Browser Studio directories.
-It verifies the copied Profile tree and leaves the old app, data, and cache
-untouched. New Profiles use `ab_` identifiers; migrated `cb_` Profiles remain
-fully supported.
+1. **Verify Managed Chromium** — confirm the engine (or pick a local build).
+2. **Create your first profile** — only a name is required.
+3. **Launch & risk check** — starts the profile and opens a fingerprint check page.
+4. **Configure the AI Agent (optional)** — jump to the Agent config view.
 
-On macOS, an existing `v1:` credential may require one controlled authorization
-to read `CloakLite Safe Storage`. The app converts all such fields atomically to
-its local AES-GCM vault and does not ask again. If access is denied, startup
-stops with the old ciphertext unchanged. Do not delete the legacy Keychain item
-until this migration has completed.
+“Skip for now” only hides the wizard for this session; “Don't show again” persists. The wizard can be re-run from the Browser Engine tab.
 
-## 3. Profile Management
+Upgrading from CloakLite? The first launch copies old data and engine builds non-destructively; legacy `cb_` profiles keep working.
 
-Profiles hold browser state and fingerprint configuration.
+## 3. Profiles
 
-Common actions:
+### Create
 
-- **Launch / Stop**: start or stop a managed Chromium profile.
-- **Edit**: update profile metadata and fingerprint fields.
-- **Chromium build**: use the newest installed independent build or pin an exact retained version for rollback.
-- **Pass-through**: disable managed UA/platform/locale/timezone/WebRTC/GPU/screen/noise consumers for a native-host comparison.
-- **Clone / Batch create**: create multiple profiles with deterministic seeds.
-- **Consistency check**: compare profile timezone, locale, WebRTC, and proxy detection data.
-- **Tags**: organize profiles for batch operations and exports.
+- **+ New Browser Profile** opens a form where **only the name is required** — platform defaults to Windows, identity fields auto-derive from the fingerprint seed, and everything else lives under **⚙️ Advanced configuration** (seed, timezone, locale, WebRTC, geolocation, hardware overrides, DRM, window-title, Web-App URL).
+- **🎯 Business Preset** pre-fills a coherent identity (TikTok Shop US, Amazon Seller US, eBay UK, EU commerce DE, crypto SG, and more).
+- **⚡ Quick Create** makes a profile in one click, no form.
+- **📥 Bulk Import** pastes one profile per line (`name, platform, locale, timezone, seed, webrtcIp`) or CSV with headers.
 
-Best practices:
+### Everyday operations
 
-- Keep profile naming consistent, for example `market-region-purpose-01`.
-- Use tags such as `amazon`, `qa`, `us`, `operator-a`.
-- Do not reuse cookies or account data across unrelated workflows.
-- Stop profiles before restoring synced localStorage/preferences.
+- **▶ Launch / ⏹ Stop** start and stop the profile's browser. Launch runs safety checks first (see *Launch safety gates*).
+- Per-profile tools: ✎ Edit, 🍪 Cookies, 🧩 Extensions, 📦 Export backup, ✏️ Rename, 📝 Note, 🔒 Lock to device, 📋 Logs, 🧬 Drift check, 🖥 Env check, 📡 WebRTC diagnostic, 🎬 DRM, 🖥 App mode.
+- **Filters & batch console**: filter by status (running/stopped) and tags, select all visible, then batch-launch, batch-stop, batch-assign a proxy, batch-export, or batch-delete. Bulk deletes above 10 items require an acknowledgement tick.
 
-## 4. Proxy Management
+### Trash (accident protection)
 
-Open **Proxies** to add named HTTP, SOCKS5, or SOCKS5H proxies.
+Deleted profiles go to a **trash area for 7 days** — the success toast has an **Undo** button, and trash can be inspected/restored from the Profiles header. Permanent purge happens automatically after the retention window.
 
-Recommended flow:
+### Locks (team checkout)
 
-1. Add proxy host, port, type, and optional credentials.
-2. Use **Detect** to test connectivity and collect exit geo information.
-3. Assign the proxy to a profile.
-4. Run **Consistency Check** before operating a profile.
+🔒 **Lock to device** marks a profile as checked out by this machine. Other devices' pushes are refused (force-push still possible after confirmation). The lock syncs with the profile.
 
-Notes:
+### Fingerprint trust loop
 
-- Proxy credentials are redacted in IPC/UI/export paths.
-- The verified Chromium build handles HTTP 407 credentials in the browser
-  process; authenticated SOCKS5 TCP uses an ephemeral loopback bridge and
-  keeps target DNS resolution at the upstream proxy.
-- Managed proxies disable QUIC until a UDP-capable authenticated transport is
-  available, so traffic fails closed instead of bypassing the proxy.
-- Proxy geo detection results are cached and used for consistency warnings.
-- Avoid hard-coding local/private endpoints for production use.
+- **🧬 Drift** compares the live fingerprint against the stored baseline; risky drift can block launch (toggle in Browser Engine → Launch safety gates).
+- **🖥 Env** checks host-level leaks: DNS resolvers, Chinese system fonts (measured inside the profile, not guessed), proxy DNS behavior, and rAF timing, each with a suggested fix.
+- **📡 WebRTC** runs a real ICE probe inside the profile and shows whether host IPs leak.
+- **📋 Logs** shows the profile's recent audit activity plus the browser launch log tail.
 
-## 5. Cookie, Storage, and Extension Tools
+## 4. Proxies
 
-Agent Browser Studio can inspect and manage browser state through CDP or local files when profiles are stopped.
+- **+ Add Proxy** (HTTP / SOCKS5 / SOCKS5H, optional credentials and bypass list). You can also paste a list via **📥 Import** (`type://user:pass@host:port`, `host:port`, or CSV) and **📤 Export** to CSV.
+- **No proxy is forced on you**: fresh installs launch profiles with a **direct connection** until you add a proxy and mark it ★ default. The profile dialog says “Direct (no default proxy configured)” so it is never a surprise.
+- **🔍 Detect** measures latency, exit IP, country, timezone, and flags **🏭 datacenter (IDC) / public-proxy** exits — the most common account-risk source.
+- **Health scoring**: every detection updates a rolling health score, history timeline, and suggestions (e.g. “switch to a residential exit”).
+- **Rotation & fallbacks**: configure fallback proxies per proxy; when the primary degrades, profiles automatically rotate to the first healthy fallback and rotate back on recovery. 🔄 Rotate forces it manually.
+- **📎 Bind** binds the proxy to many profiles in one dialog; **📱 QR** exports the full proxy URI (including credentials — treat the QR like a password) for phone setup.
 
-Sensitive data includes:
+## 5. Browser engine tab
 
-- Cookies
-- localStorage
-- preferences
-- bookmarks
-- extension state
-- screenshots
-- exported audit bundles
+- **Independent Browser Engine**: shows installed builds; pin an exact version per profile for rollback; **Verify** runs the strict check.
+- **🎬 Widevine / DRM**: detect the host CDM, stage a managed copy, and enable DRM per profile for streaming sites.
+- **🛡 Launch safety gates** (each toggle saves immediately):
+  - block on consistency conflict (timezone/locale/WebRTC vs proxy)
+  - block on datacenter/public-proxy exits
+  - block on fingerprint drift
+  - block on environment risk
+  Gates refuse the launch before a browser opens — protecting the account, not just warning.
+- **🔄 App Updates**: check the update manifest, stage, activate, and roll back releases; crash-loop auto-rollback is built in.
 
-Treat these artifacts as sensitive and do not commit them to Git.
+## 6. Extensions
 
-### Extension repository
+A private catalog shared by all profiles: import local CRX/ZIP or unpacked dirs, add from the Chrome Web Store, tag, and mark entries as shared. Profiles simply pick which catalog entries to enable. Extraction is hardened (path traversal / symlink rejection, hash checks).
 
-The extension repository can import local ZIP/CRX packages and cache Chrome Web Store packages.
+## 7. Accounts
 
-Safety controls include:
+Store platform accounts (URL, username, tags) and bind them to profiles. Passwords are encrypted at rest and **never displayed**; “copy password” decrypts in the main process and writes the clipboard. **📥 Bulk Import** can also create one bound profile per account, and **⬇ Export CSV** contains metadata only. When a Team Workspace is enabled, viewer roles cannot read or mutate account secrets.
 
-- safe ZIP extraction
-- symlink/path traversal rejection
-- package and manifest hash checks during sync restore
-- extension count and byte limits during pull
+## 8. Agent (AI)
 
-## 6. AI Agent
+- **Config**: pick OpenAI-compatible or Claude, set URL/key/model (keys are encrypted at rest, redacted everywhere). File access modes: sandbox dir / allowlist / open (high risk).
+- **Chat**: streaming chat with tool calling — the agent can navigate, click, fill forms, screenshot, read cookies, and run HTTP/DB/file tools on the profile you point it at. Sensitive HTTP writes and destructive DB operations trigger an **approval dialog** (allow once / always / deny).
+- **Skills**: reusable prompt/tool recipes; import/export shared catalogs.
+- **🔌 Adapter Hub**: versioned selector recipes for 15 platforms (Amazon, Shopee, TikTok Shop, Instagram, Google Ads, X, LinkedIn, YouTube, crypto exchanges, EU marketplaces, …) the agent loads for login checks and data collection.
+- **Runs tab** records every run as a step timeline (tools, variables, durations) for auditing.
 
-Open **Agent** to configure an LLM provider and run tool-calling browser automation.
+## 9. Automation
 
-### Configure LLM
+Rules combine triggers (cron, one-shot, profile launch/exit events) with actions (launch/stop profile, run an agent task, sync push/pull, sandboxed JS). Executions are **durable jobs**: queued, concurrency-limited, timeout-guarded, retried with backoff, and visible in the Jobs list with cancel support. A 24.8-day cron overflow bug class is covered by regression tests.
 
-1. Open **Agent → Config**.
-2. Select OpenAI-compatible or Claude provider.
-3. Enter API URL, API key, and model.
-4. Save configuration.
+## 10. Sync & team workspace
 
-### Common agent tools
+1. **Configuration**: endpoint, bucket, access key, secret key (encrypted at rest).
+2. **Pre-flight preview** shows what a push/pull will touch; **Team Diff** compares local vs remote and warns before a push would *remove* remote data.
+3. **Team Workspace (RBAC)**: owner / admin / member / viewer roles propagate with sync. Viewers are read-only; admins manage members; the manifest is enforced on push.
+4. **Checkout locks** (see Profiles) prevent two devices from overwriting each other.
 
-- Browser: navigate, click, type, screenshot, get text, get URL/title, cookies
-- Files: sandboxed read/write depending on configured mode
-- HTTP: external API requests with approval for write methods
-- DB: local agent database query/exec with destructive-operation approval
-- Variables: short-lived in-run variables
+Treat the S3 bucket as sensitive storage: secrets are stripped from sync payloads, but cookies and profile state are real account data.
 
-Security notes:
+## 11. Data & backups — please read once
 
-- Responses stream token-by-token into the chat view (OpenAI-compatible and Claude providers).
-- Each send is correlated by a stream id, so concurrent or stale sends do not overwrite the wrong assistant bubble.
-- HTTP requests block local/private/link-local/CGNAT targets.
-- HTTP write methods require approval.
-- Tool traces redact request/response bodies and variable values.
-- LLM streaming has byte, event, text, tool-argument, and timeout limits.
+- Everything lives on **this machine**: `<user-data>/profiles/…` (cookies, localStorage), plus the encrypted credential vault and audit logs.
+- **Disk failure = account loss.** Use at least one of: **📦 Export backup** per profile, **☁️ Sync** to an S3 bucket, or the **trash window** (7 days) for accidental deletes.
+- The Storage tab shows per-profile disk usage and keeps data-safety reminders visible.
 
-## 7. Automation
+## 12. Integration surfaces (for developers)
 
-Automation rules can run actions on schedules or manual triggers.
+- **REST API** on `127.0.0.1:26582` — OpenAPI 3.0 at `/openapi.json`, bearer-token auth (`AGENT_BROWSER_API_TOKEN`). Covers profiles, proxies, accounts, automation, jobs, agent, DRM, team, updates.
+- **MCP server** on `127.0.0.1:26581` for Claude Code / Cursor & other MCP clients.
+- **Python & JS SDKs** (`sdk/python`, `sdk/js`) — including `connectPlaywright` / `connectPuppeteer` one-call adapters that return a real Playwright/Puppeteer browser bound to a managed profile.
 
-Supported patterns include:
+## 13. Recommended operating checklist
 
-- opening profiles
-- running AI agent tasks
-- executing sandboxed JavaScript
-- exporting data
-- checking profile/proxy consistency
-- tracking durable jobs
+- Confirm authorization for every account, site, and dataset you touch.
+- One workflow per profile; never share cookies across unrelated accounts.
+- Run **Detect** on proxies and resolve 🏭 IDC warnings before serious accounts.
+- Run 🧬 Drift / 🖥 Env after any engine update or host change.
+- Keep API keys and sync credentials private; exports are metadata-safe but still sensitive.
+- Review 📜 Activity when something looks off — every sensitive action is recorded.
 
-Use **Automation Jobs** to inspect queued, running, completed, failed, skipped, and cancelled jobs. Agent-task jobs link to their Agent Run traces.
+## 14. Troubleshooting
 
-## 8. Sync
+Errors in the app are written in plain language with a suggested next step; the original technical text is always available in the developer console. Common cases:
 
-Agent Browser Studio supports S3-compatible sync for selected config and profile artifacts.
+| Message (paraphrased) | Meaning | Fix |
+|---|---|---|
+| “This profile needs a working proxy … Launch was refused” | Fail-closed proxy protection | Check the proxy process/port and health; re-assign or relax the profile's proxy |
+| “Managed browser engine is missing” | No usable engine build | Browser Engine tab → install guide / select local build |
+| “Launch blocked: fingerprint drift …” | Live fingerprint ≠ stored baseline | Open 🧬 Drift, review, clear baseline if the change was intended |
+| “Launch blocked by the environment risk gate” | DNS / fonts / proxy-DNS finding | Open 🖥 Env for findings and fixes |
+| “Connection refused” | Local proxy down or wrong port | Start the proxy or fix the port |
+| “Permission denied: … (viewer)” | Team role is read-only | Ask an admin to change your role |
+| Pull skipped some localStorage | Running profiles are protected | Stop those profiles and pull again |
 
-Before pushing or pulling:
-
-1. Configure endpoint, bucket, access key, and secret key.
-2. Use **Preview** to review affected profiles and remote state.
-3. Stop running profiles before pull if you need localStorage/preferences restored.
-4. Treat remote sync buckets as sensitive storage.
-
-Sync hardening includes:
-
-- secret stripping from sync-safe config
-- bounded remote reads
-- safe localStorage/preferences restore
-- extension package hash verification
-- aggregate extension byte limits
-
-## 9. Export and Audit
-
-Data export is intended for debugging, evaluation, and governance.
-
-Export redaction includes:
-
-- proxy credentials removed
-- LLM/API secret-like fields removed
-- agent run variables represented as keys/metadata, not values
-- database export limited to table metadata for sensitive agent DB scopes
-- HTTP bodies redacted in traces
-
-Still treat exports as sensitive because they may contain operational metadata, profile names, tags, URLs, timings, and non-secret identifiers.
-
-## 10. Recommended Operating Checklist
-
-Before using Agent Browser Studio in a business workflow:
-
-- Confirm you have authorization for all accounts, websites, and data.
-- Review platform terms and applicable laws.
-- Use separate profiles for unrelated accounts/workflows.
-- Verify proxy geo consistency before operating profiles.
-- Keep API keys and sync credentials private.
-- Review audit/export files before sharing.
-- Run updates and tests before modifying security-sensitive code.
-
-## 11. Troubleshooting
-
-### Electron app does not start
+### App does not start (source runs)
 
 ```bash
-npm install
-npm run build
-npm start
+rm -rf node_modules && npm install && npm run build && npm start
 ```
 
-If Electron was not downloaded correctly, reinstall dependencies:
+### E2E leftovers
 
-```bash
-rm -rf node_modules
-npm install
-```
-
-### Tests fail after E2E runs
-
-E2E tests generate local runtime data under `tests/e2e/userdata/`. This directory is ignored and can be removed safely:
-
-```bash
-rm -rf tests/e2e/userdata tests/e2e/screenshots dist
-```
-
-### LLM tool calling fails
-
-Check:
-
-- provider type
-- API URL format
-- API key validity
-- model name
-- tool approval prompts
-- network connectivity
-
-### Sync pull skips profile data
-
-Running profiles may skip localStorage/preferences restore to prevent corruption. Stop profiles and retry pull.
+`tests/e2e/userdata/`, `tests/e2e/screenshots/`, and `dist/` are local runtime artifacts and can be deleted safely.

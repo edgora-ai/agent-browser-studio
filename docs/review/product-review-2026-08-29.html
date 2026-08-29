@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Browser Studio · 三视角全面评审报告（2026-08-29）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --surface:#ffffff; --surface2:#f1f3f6; --border:#e3e6ec;
+    --text:#1b1f26; --text-muted:#666e7d; --primary:#2f6feb; --primary-bg:#e8f0fe;
+    --p0:#c0392b; --p0-bg:#fdecea; --p1:#d97706; --p1-bg:#fef3e2;
+    --p2:#2f6feb; --p2-bg:#e8f0fe; --p3:#6b7280; --p3-bg:#eef0f3;
+    --ok:#1e8e57; --ok-bg:#e6f6ee;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+    font-size:14px;line-height:1.65;}
+  .wrap{max-width:1480px;margin:0 auto;padding:32px 24px 80px;}
+  header.hd{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:20px;}
+  h1{margin:0 0 6px;font-size:24px;letter-spacing:-.2px;}
+  .sub{color:var(--text-muted);font-size:13px;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .chip{background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--text-muted);}
+  section{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 26px;margin-bottom:20px;}
+  h2{font-size:18px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+  h3{font-size:15px;margin:20px 0 8px;}
+  p{margin:8px 0;}
+  ul,ol{margin:8px 0;padding-left:22px;}
+  li{margin:4px 0;}
+  code{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  /* stats */
+  .stats{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 6px;}
+  .stat{flex:1;min-width:130px;border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:var(--surface2);}
+  .stat b{display:block;font-size:22px;line-height:1.2;}
+  .stat span{font-size:12px;color:var(--text-muted);}
+  .s-p0 b{color:var(--p0);} .s-p1 b{color:var(--p1);} .s-p2 b{color:var(--p2);} .s-p3 b{color:var(--p3);}
+  /* rubric */
+  table{border-collapse:collapse;width:100%;}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top;}
+  th{background:var(--surface2);font-size:12.5px;font-weight:600;white-space:nowrap;}
+  td{font-size:13px;}
+  /* toolbar */
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;}
+  .toolbar input{flex:1;min-width:200px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;color:var(--text);}
+  .fbtn{border:1px solid var(--border);background:#fff;border-radius:999px;padding:5px 13px;font-size:12.5px;cursor:pointer;color:var(--text-muted);}
+  .fbtn.on{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .fbtn:hover{border-color:var(--primary);}
+  .tbl-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:10px;}
+  /* issue table */
+  #issueTable{min-width:1360px;}
+  #issueTable th{position:sticky;top:0;z-index:2;}
+  #issueTable td{background:#fff;}
+  #issueTable tr:hover td{background:#fafbfd;}
+  .id{font-family:ui-monospace,Menlo,monospace;font-weight:600;white-space:nowrap;}
+  .view-tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11.5px;white-space:nowrap;}
+  .v-pm{background:#ede9fe;color:#5b3fa8;} .v-ue{background:#dcfce7;color:#166534;} .v-te{background:#dbeafe;color:#1e40af;}
+  .lvl{display:inline-block;padding:2px 9px;border-radius:6px;font-weight:700;font-size:12px;}
+  .l-P0{background:var(--p0-bg);color:var(--p0);} .l-P1{background:var(--p1-bg);color:var(--p1);}
+  .l-P2{background:var(--p2-bg);color:var(--p2);} .l-P3{background:var(--p3-bg);color:var(--p3);}
+  .basis{display:block;margin-top:5px;font-size:11.5px;color:var(--text-muted);line-height:1.5;}
+  .scope{font-size:12px;white-space:nowrap;}
+  .accept{font-size:12.5px;line-height:1.6;}
+  .accept b{color:var(--ok);}
+  .empty{padding:26px;text-align:center;color:var(--text-muted);display:none;}
+  /* top5 */
+  .top5{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px;}
+  .card{border:1px solid var(--border);border-radius:10px;padding:16px 18px;background:var(--surface2);}
+  .card.rank1{border-color:var(--p1);background:#fffbf3;}
+  .card h4{margin:0 0 6px;font-size:14.5px;}
+  .card .k{font-size:11.5px;color:var(--text-muted);margin-bottom:8px;}
+  .card ul{padding-left:18px;margin:6px 0 0;font-size:12.8px;}
+  .gain{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);font-size:12.5px;}
+  .gain b{color:var(--ok);}
+  /* todo */
+  .q td:first-child{font-weight:600;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;}
+  footer{color:var(--text-muted);font-size:12px;text-align:center;padding-top:8px;}
+  @media print{
+    body{background:#fff;} .toolbar{display:none;} #issueTable{min-width:0;}
+    section{break-inside:avoid;page-break-inside:avoid;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hd">
+  <h1>Agent Browser Studio · 三视角全面评审报告</h1>
+  <div class="sub">评审对象：Agent Browser Studio v1.0.0（桌面端 Electron，本地优先）<br>
+  评审范围：<b>Profiles 模块核心闭环</b>（列表/批量 → 新建/编辑 → 启动 → 风险检测）+ 跨模块共性问题（i18n、架构、可观测性）</div>
+  <div class="meta">
+    <span class="chip">评审日期：2026-08-29</span>
+    <span class="chip">代码基线：src/ 当前工作区</span>
+    <span class="chip">视角：产品经理 / 终端用户 / 系统架构</span>
+    <span class="chip">问题总数：26</span>
+    <span class="chip">P0：0 · P1：11 · P2：12 · P3：3</span>
+  </div>
+</header>
+
+<section>
+  <h2>0. 评审假设（模板中产品名为空，以下为我的推断，如与实际不符请指出后重评）</h2>
+  <ol>
+    <li><b>A1 评审对象</b>：模板中「产品名称／页面」未填写。我以当前工作区 <code>roxy-lite-cloak-oss</code> 的实际产品 <b>Agent Browser Studio</b> 为对象，聚焦其默认首屏与主线闭环 <b>Profiles 模块</b>；跨模块（i18n、架构、埋点）问题单列，不做逐页评审。</li>
+    <li><b>A2 目标用户</b>：授权场景下的多账号运营 / QA / 隐私隔离个人用户，macOS Apple Silicon 单机使用，团队规模 1–5 人（依据 README 的 team RBAC 与本地优先定位）。</li>
+    <li><b>A3 部署形态</b>：本地优先、无云端服务端；REST/MCP 仅 loopback。因此监控方案默认不外发（见 TE-01）。</li>
+    <li><b>A4 无实测基线</b>：未运行 E2E 与性能采集，所有耗时/容量阈值均为「建议起始阈值」，须用真实数据校准（见待确认 Q7）。</li>
+    <li><b>A5 判定口径</b>：严重级别按「后果严重度 × 发生概率 × 是否可自愈/有绕过方案」三因子判定，rubric 见下表。</li>
+  </ol>
+
+  <h3>严重级别判定依据（rubric）</h3>
+  <table>
+    <thead><tr><th style="width:70px">级别</th><th>定义</th><th>典型触发</th><th style="width:150px">修复时限</th></tr></thead>
+    <tbody>
+      <tr><td><span class="lvl l-P0">P0</span></td><td>数据丢失、密钥/凭据泄露、核心业务完全不可用，且无绕过方案</td><td>配置覆盖、明文密钥落盘、启动即崩溃</td><td>立即（阻断发版）</td></tr>
+      <tr><td><span class="lvl l-P1">P1</span></td><td>核心路径产生<b>错误结果</b>或不可用，发生概率高，用户可直接感知且不能自愈</td><td>谎报成功、状态不同步、无错误可见性、规模化后性能崩塌</td><td>本迭代</td></tr>
+      <tr><td><span class="lvl l-P2">P2</span></td><td>明显影响效率/可维护性，存在绕过方案，或仅在规模场景、边缘场景、竞态下触发</td><td>无并发限流、校验滞后、巨型模块、无类型</td><td>下两个迭代</td></tr>
+      <tr><td><span class="lvl l-P3">P3</span></td><td>打磨项：低概率、影响面小、不改变结论</td><td>无障碍标签、图例缺失、无节流</td><td>排期规划</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:10px">本次未发现 P0：安全边界（沙箱/CSP/凭据加密/SSRF 阻断/审批门）已在代码中落实，本次评审未做渗透测试，安全结论不构成审计意见。</p>
+
+  <div class="stats">
+    <div class="stat s-p0"><b>0</b><span>P0 阻断</span></div>
+    <div class="stat s-p1"><b>11</b><span>P1 本迭代必修</span></div>
+    <div class="stat s-p2"><b>12</b><span>P2 排期修复</span></div>
+    <div class="stat s-p3"><b>3</b><span>P3 打磨</span></div>
+    <div class="stat"><b>26</b><span>问题总数</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>1. 问题与优化清单</h2>
+  <div class="toolbar">
+    <input id="q" type="search" placeholder="搜索关键词：批量 / 启动 / i18n / 性能 / toast …">
+    <button class="fbtn on" data-f="view" data-v="all">全部视角</button>
+    <button class="fbtn" data-f="view" data-v="pm">产品逻辑</button>
+    <button class="fbtn" data-f="view" data-v="ue">UI 与交互</button>
+    <button class="fbtn" data-f="view" data-v="te">技术与架构</button>
+    <span style="width:10px"></span>
+    <button class="fbtn on" data-f="lvl" data-v="all">全部级别</button>
+    <button class="fbtn" data-f="lvl" data-v="P1">P1</button>
+    <button class="fbtn" data-f="lvl" data-v="P2">P2</button>
+    <button class="fbtn" data-f="lvl" data-v="P3">P3</button>
+    <span id="cnt" class="chip">显示 26 / 26</span>
+  </div>
+  <div class="tbl-scroll">
+  <table id="issueTable">
+    <thead><tr>
+      <th style="width:62px">编号</th>
+      <th style="width:82px">视角</th>
+      <th style="width:96px">问题类别</th>
+      <th style="width:340px">问题描述</th>
+      <th style="width:78px">影响范围</th>
+      <th style="width:170px">严重级别 + 判定依据</th>
+      <th style="width:330px">改进建议</th>
+      <th style="width:360px">可量化验收标准</th>
+    </tr></thead>
+    <tbody id="tbody">
+
+<!-- ============ 产品逻辑 ============ -->
+<tr data-view="pm" data-lvl="P1">
+  <td class="id">PL-01</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>业务闭环 / 结果正确性</td>
+  <td><b>批量启动谎报成功。</b><code>bulkStart</code> / <code>batchStartSelected</code> 用 <code>setTimeout(i*500)</code> 逐个调用 launch，<b>不等待任何 launch 的 Promise</b>，并在最后一个定时器里无条件 toast「N profiles started」。50 个里失败 20 个，用户看到的仍是 100% 成功。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">核心操作返回系统性错误结论，用户带着「未启动」的 profile 进入后续流程；无数据丢失，故非 P0。</span></td>
+  <td>改为 <code>Promise.allSettled</code> + 并发上限（见 PL-02）；弹出聚合结果面板：成功/失败计数、失败清单（名称+原因+「定位到卡片」链接）、一键重试失败项；操作全程可中断。</td>
+  <td class="accept">① 100 个 profile（其中 10 个代理不可达）批量启动，聚合面板在最后一个请求返回后 <b>≤1s</b> 内出现；② 面板成功/失败数与 <code>GET /api/profiles</code> 实际状态<b>逐条一致，误差 0</b>；③ 失败项点击「定位」后滚动到对应卡片并高亮 <b>2s</b>；④ 一键重试后失败数单调不增。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P1">
+  <td class="id">PL-02</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>异常与边界 / 并发</td>
+  <td><b>批量启动无并发上限与背压。</b>客户端仅靠 500ms 错峰，无最大并发数；主进程的 concurrency 限流（<code>automation.ts</code> ≤16）<b>只覆盖自动化规则，不覆盖手动批量启动</b>。50 个 Chromium 冷启动会同时压满 CPU/内存，UI 表现为「假死」。</td>
+  <td class="scope">用户 / 系统</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">规模化场景（&gt;20 profile）必然触发，资源耗尽导致整机不可用、用户无取消手段；新手小规模使用不触发。</span></td>
+  <td>UI 层与 IPC 层双层限流：全局并发 launch ≤4（可配置 1–8），队列可视化（排队中 x / 启动中 y / 失败 z），支持暂停与取消；单 profile 冷启动超 20s 自动标记失败并放行队列。</td>
+  <td class="accept">① 100 profile 批量启动，<code>ps</code> 每秒采样显示<b>并发 Chromium 进程峰值 ≤4</b>；② 主进程 CPU 峰值 <b>≤90%</b>、内存峰值 <b>≤8GB</b>（M 系列 16GB 机型）；③ 主线程无 <b>&gt;200ms</b> 长任务（Performance 录制全程）；④ 点「取消」后 <b>≤3s</b> 内不再新增启动。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P1">
+  <td class="id">PL-03</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>异常与边界 / 隐式副作用</td>
+  <td><b>检测类操作会隐式启动 profile。</b><code>open-risk-check</code> 在 profile 未运行时「auto-launches it first and waits for CDP readiness」（<code>ipc/browser.ts:337</code>），Drift / WebRTC 诊断同理。用户点「🔍 Check Risk」只是想看报告，却静默拉起一个浏览器进程（消耗资源、改变出口 IP 状态、可能产生风控行为）。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">不可预期的副作用 + 无撤回入口，且发生在「检查」这类用户预期为只读的操作上；有手动关闭的绕过方案，故非 P0。</span></td>
+  <td>默认改为「需运行才检测」并给出一次性选择：「立即启动并检测（会自动启动该 profile）」/「取消」；已运行时不再提示；检测结束给用户「是否关闭刚启动的实例」的选项（默认保留）。</td>
+  <td class="accept">① 对 stopped 的 profile 点击任意检测项，<b>必须</b>先出现含「将启动该 profile」文案的确认弹窗；② 选择「取消」时，进程数<b>增量为 0</b>，且不产生 launch IPC；③ 检测完成后 <b>100%</b> 出现「由本次检测启动，是否关闭」提示。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P2">
+  <td class="id">PL-04</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>异常与边界 / 降级</td>
+  <td><b>代理失效无前置预检与归因。</b>profile 绑定命名代理后被删除或健康检查失败时，卡片仅显示 <code>proxy missing:&lt;name&gt;</code>；启动失败的错误文案来自底层，不含代理名与最近一次健康检查时间，用户无法把「启动失败」归因到代理。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">仅在代理异常时触发，用户可通过去 Proxies 页自查绕过；但归因成本高，定为 P2（若确认当前为「带病启动成功」则升级 P1，见 Q5）。</span></td>
+  <td>启动前做代理预检（复用 <code>/api/proxies/health</code>）；失败时错误必须携带：代理名、失败原因、最近健康检查时间、「前往修复」直达按钮；卡片上代理行对不健康代理加警示色。</td>
+  <td class="accept">① 绑定不可达代理后启动，错误提示在 <b>≤300ms</b> 内可见，且同时包含<b>代理名 + 失败原因 + 上次检查时间</b>；② 点「前往修复」<b>≤2 步</b>到达该代理编辑弹窗；③ 不健康代理在卡片上以 <code>--danger</code> 色显示，5/5 用户能识别。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P1">
+  <td class="id">PL-05</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>需求完整性 / 业务闭环</td>
+  <td><b>风险检测结果一次性、不可回溯。</b>Check Risk / Drift / Env / WebRTC 四个入口以 9px 小按钮藏在「Hardware」行末尾；结果只渲染在弹窗里，关闭即丢失，无「上次检测时间/结论」、无历史、不可导出。而 README 的 first-run 把「launch → 检查」定义为核心闭环。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">核心闭环的产出不可留存，导致「风险治理」无法形成 PDCA；功能存在但等价于不存在，直接影响产品价值主张。</span></td>
+  <td>四项合并为卡片右上「健康检查」单一入口，一次跑完并输出 0–100 风险分 + 结论标签（安全/关注/高危）；结果写入 profile 记录，卡片显示「上次检测：3 分钟前 · 关注」，支持查看历史 N 次与导出 JSON。</td>
+  <td class="accept">① 从卡片到看见结论 <b>≤3 步</b>（点击健康检查 → 等待 → 结论）；② 默认全量四项检测 <b>≤15s</b>（P95 ≤25s）；③ 结论在 <b>7 天内</b>可回溯（重开弹窗仍显示上次结果与时间戳）；④ 导出 JSON 可被 <code>/api/profiles/{id}/drift</code> 结构校验通过。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P2">
+  <td class="id">PL-06</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>异常与边界 / 竞态</td>
+  <td><b>操作期无 busy 锁，存在启动/删除/编辑竞态。</b>删除接口限制「仅 stopped 可删」，但 UI 未在 launch in-flight 期间禁用 Edit/Delete/Lock/Export；乐观覆盖 <code>_profileRuntimeOverrides</code> 5s TTL 内 running 状态可能失准，用户在此窗口点删除可能命中不一致状态。</td>
+  <td class="scope">系统 / 用户</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">需 5s 窗口内的快速连点才触发，属竞态而非必现；一旦命中会导致用户困惑或误删未停实例。</span></td>
+  <td>发起任一写操作后该卡片进入 busy 态：禁用所有写按钮 + 主按钮转 spinner + 卡片顶部细进度条；busy 期间点击给出「操作进行中」提示；操作结束统一由事件驱动解除。</td>
+  <td class="accept">① launch 发起后 <b>200ms</b> 内点 Delete，按钮为 <code>disabled</code> 且产生 <b>0 次</b> 删除 IPC（spy 断言）；② busy 态在结果返回后 <b>≤200ms</b> 解除；③ 连续 10 次快速点击 Launch，实际 launch IPC <b>= 1</b>。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P2">
+  <td class="id">PL-07</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>需求完整性 / 失败闭环</td>
+  <td><b>引擎缺失的 fail-closed 未在 Profiles 页闭环。</b>README 明确「未安装独立 Chromium 时启动 fail-closed 而非下载替代」，但：侧栏状态只在初始化调用一次（后续靠 tray 10s 刷新），且 Profiles 页本身没有「引擎缺失」提示与「安装/定位二进制」入口，用户只能从底层错误里猜。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">仅影响首次安装/引擎被清理的用户，有文档可绕过（README Quick Start）；但这是新用户第一道门槛，转化损失显著。</span></td>
+  <td>Profiles 页顶部常驻引擎状态横幅（正常时折叠为一行小字）；缺失/版本不匹配时展开为警示条 + 「选择本地二进制 / 查看安装指引」按钮；Launch 前置短路检查，不再打到主进程。</td>
+  <td class="accept">① 引擎缺失时打开 Profiles 页，警示横幅在首屏 <b>≤2s</b> 内可见；② 从横幅到完成二进制选择 <b>≤3 步</b>；③ 该状态下点击 Launch <b>0 次</b> 启动 IPC，改为弹出引导。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P2">
+  <td class="id">PL-08</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>需求完整性 / 引导</td>
+  <td><b>首次运行向导可永久跳过且无重入入口。</b>dismiss 写入 localStorage 后即不再出现，设置页未提供「重新运行新手引导」（当前代码未见入口）；且触发条件为「无引擎 或 无 profile」二合一，已装引擎但 0 profile 的用户与全新用户看到同一套 4 步流程。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">只影响新用户与重装用户，老用户不受影响；可通过清 localStorage 绕过。</span></td>
+  <td>设置页新增「重新运行新手引导」；触发条件拆为三分支（缺引擎 / 缺 profile / 两者都缺），各自展示对应步骤；向导每步可跳过但保留进度条与「稍后完成」提醒。</td>
+  <td class="accept">① 设置页存在入口，点击后 <b>≤2 步</b>回到向导第 1 步；② 三种初始状态（fixture：无引擎 / 有引擎无 profile / 全新）分别命中对应分支，命中率 <b>100%</b>；③ 向导完成率埋点可查（依赖 TE-01）。</td>
+</tr>
+
+<tr data-view="pm" data-lvl="P2">
+  <td class="id">PL-09</td>
+  <td><span class="view-tag v-pm">产品经理</span></td>
+  <td>异常与边界 / 高危操作</td>
+  <td><b>批量删除的确认信息不完整。</b>确认弹窗用 <code>names.slice(0,5)</code> 只列前 5 个名称，选中 50 个时用户看不到完整清单；且无「输入名称以确认」的高危保护，与删除（不可逆、含 cookies/localStorage）的后果不匹配。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">需用户误操作才触发；删除后果不可逆（含站点登录态），但已有一次确认，故非 P1。</span></td>
+  <td>清单改为可滚动全量列表 + 「共 N 个，已显示 N/N」；数量 ≥10 时要求输入 <code>DELETE</code> 或勾选「我已知悉将删除 N 个 profile 及其站点数据」；删除后提供 7 天回收站。</td>
+  <td class="accept">① 选中 50 个删除，确认弹窗显示<b>全部 50 个名称</b>（可滚动）；② ≥10 个时未勾选知悉项，确认按钮 <code>disabled</code>；③ 删除后回收站保留 <b>7 天</b>，一键还原成功率 <b>100%</b>（含 cookies/localStorage 校验）。</td>
+</tr>
+
+<!-- ============ UI 与交互 ============ -->
+<tr data-view="ue" data-lvl="P1">
+  <td class="id">UE-01</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>信息层级</td>
+  <td><b>单卡片信息过载、主次不分。</b>一张 profile 卡同时承载：6 类 badge（running/lock/DRM/App/Firefox/tags）+ 9 个操作按钮（Launch/Stop/Edit/Cookies/Extensions/Export/Lock/Logs/Delete）+ 4 个检测按钮 + 1 个代理下拉 + 6 行 info-row；检测按钮字号 <b>9px</b>，低于可读下限，点击目标约 18px 高。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">每次使用都要在 13+ 个控件里找目标，是「每次都发生」的效率损失；无功能失效，故非 P0。</span></td>
+  <td>主操作保留 Launch/Stop/Edit/Delete 四个；Cookies/Extensions/Export/Lock/Logs 收进「⋯」溢出菜单；4 个检测项合并为「健康检查」（见 PL-05）；正文字号 ≥11px，图标按钮点击区 ≥24×24px。</td>
+  <td class="accept">① 单卡一级按钮 <b>≤4</b> 个，全部控件最小字号 <b>≥11px</b>，点击区域 <b>≥24×24px</b>；② 5 名用户在 10s 内正确说出「如何启动一个使用指定代理的 profile」的成功率 <b>≥4/5</b>；③ 完成「新建→指定代理→启动」的点击数 <b>≤6 次</b>。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P1">
+  <td class="id">UE-02</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>视觉一致性 / i18n</td>
+  <td><b>硬编码中文导致 i18n 失效。</b><code>index.html</code> 至少 <b>37 行</b>含中文且未带 <code>data-i18n</code>（筛选栏「状态/标签/全部/运行中/已停止/清除筛选/全选可见」、批量条「N 个已选/启动选中/停止选中/分配代理/导出选中/删除选中」），切换到 EN 后仍是中文；<code>profiles.js:103</code> 的环境风险 toast 硬编码中文，与同一函数内的英文 toast 混排。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">EN 用户每次进入 Profiles 页都会遇到中英混排，直接违背 README「zh-CN/en-US 双语文稿」的承诺，对外交付即被感知。</span></td>
+  <td>把上述字符串抽 key 进 <code>i18n.js</code> 并补 <code>data-i18n</code>；统一 toast 文案来源（禁止在业务代码里写字面量）；加 CI 检查拦截未带 key 的中文字符串（见 TE-07）。</td>
+  <td class="accept">① EN 模式下遍历 <code>#content</code> DOM，<b>中文字符数 = 0</b>（自动化测试断言，排除用户自定义名称）；② zh-CN 模式下无未翻译英文残留（白名单 ≤0）；③ CI 新增 lint 规则，违规行<b>阻断合并</b>。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P1">
+  <td class="id">UE-03</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>反馈与错误提示</td>
+  <td><b>Toast 单例且互相覆盖。</b><code>toast()</code> 先 <code>remove()</code> 已有节点再新建，3s 后自动消失，<b>无 <code>role="alert"</code> / <code>aria-live</code></b>；启动成功 toast 会被紧随的环境风险 toast 直接覆盖，用户永远看不到第一条，错误也无留存。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">错误信息不可达 = 用户无法自愈，且屏幕阅读器用户完全收不到反馈；每次多事件操作必现。</span></td>
+  <td>改为可堆叠队列（最多 3 条，FIFO）；错误类<b>不自动消失</b>（8s 或手动关闭），带 <code>role="alert"</code> + <code>aria-live="assertive"</code>，含「查看详情」跳转；同一事件同步写入 Activity 页，Toast 只是镜像。</td>
+  <td class="accept">① 连续触发 3 条 toast，<b>3 条同时可见</b>且顺序正确；② 错误 toast 从触发到 DOM 可见 <b>≤300ms</b>；③ 缺 <code>role="alert"</code> 时单测<b>失败</b>；④ VoiceOver 可朗读错误文案（人工验证 1 次/版本）。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P2">
+  <td class="id">UE-04</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>反馈与错误提示 / 表单校验</td>
+  <td><b>表单校验滞后且抛技术字段名。</b><code>readHardwareFields</code> 对非法整数直接 <code>throw new Error("Invalid hardware value for hardware-concurrency")</code>，最终以 toast 呈现技术字段名，未定位到具体输入框、未前置校验、未给出合法范围。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">仅在用户填错时触发，错误最终仍可见（可绕过：用户自行猜范围）；但技术字段名对终端用户零信息量。</span></td>
+  <td>字段级 inline 校验：失焦即校验，红框 + 「请输入 1–64 的整数」；提交时自动 focus 首个错误字段并滚动到可视区；错误文案零技术字段名，全部走 i18n。</td>
+  <td class="accept">① 输入 <code>abc</code> 并失焦，<b>≤300ms</b> 内该输入框下方出现错误文案且 <code>aria-invalid="true"</code>；② 提交含 3 个错误的表单，焦点自动落在<b>首个</b>错误字段；③ 错误文案中出现技术字段名的实例数 <b>= 0</b>。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P2">
+  <td class="id">UE-05</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>操作路径长度</td>
+  <td><b>首屏到「可用的 profile」路径过长。</b>README first-run 为 7 步；Profiles 页头平铺 6 个按钮（New / Quick Create / Bulk Import / Import Backup / Start All / Stop All），无主次、无引导，新用户无从判断从哪里开始。</td>
+  <td class="scope">用户 / 业务</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">老用户不受影响，新用户首次转化率受损；有文档可绕过。</span></td>
+  <td>页头只保留 1 个主按钮「+ New Profile」+ 一个「⋯」（导入/批量收纳）；Quick Create 为默认路径并预勾「创建后立即启动」；空列表态用插画+一句话引导替代空白网格。</td>
+  <td class="accept">① 新用户从冷启动到「第一个 profile 处于 running」<b>≤3 步、≤60s</b>；② 页头一级按钮数 <b>≤2</b>；③ 空列表态引导点击率（依赖 TE-01 埋点）<b>≥60%</b>。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P3">
+  <td class="id">UE-06</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>视觉一致性</td>
+  <td><b>状态语义混淆、无图例。</b>「running」用边框高亮，而 Sync / Lock / DRM / App / Firefox 用同权重 badge 平铺，running 与 locked 视觉权重接近；无图例说明各 badge 含义，新用户需悬停逐个试。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P3">P3</span><span class="basis">不改变操作结果，只增加认知成本；有 tooltip 可绕过。</span></td>
+  <td>状态分三层（生命周期 / 治理 / 能力），分别用边框色、图标、文字标签三种视觉通道区分；侧栏或页头提供可折叠图例。</td>
+  <td class="accept">① 5 名用户无提示区分「运行中 / 已锁定 / 已同步」正确率 <b>≥90%</b>；② badge 层级 <b>≤3</b> 类，同类视觉通道一致（设计走查通过）。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P2">
+  <td class="id">UE-07</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>交互连续性</td>
+  <td><b>列表刷新会打断用户操作。</b><code>loadProfiles</code> 用 <code>innerHTML</code> 整体重绘网格（软刷新 120ms debounce），任何一次启动/停止/切页都会重建全部卡片，正在聚焦的代理下拉、半勾选状态、滚动位置会丢失（交互层表现，根因见 TE-02）。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">在 &gt;20 profile 且需要连续操作时频繁发生，用户可手动恢复，无数据损失。</span></td>
+  <td>改为 keyed 增量更新（以 <code>dirId</code> 为 key）；刷新前保存 <code>scrollTop</code> 与 <code>document.activeElement</code> 的标识，刷新后恢复；无变更时跳过重绘。</td>
+  <td class="accept">① 对 100 个 profile 连续执行 10 次启动/停止，<b>滚动位置偏移 = 0px</b>，已勾选项 <b>100% 保留</b>；② 焦点在代理下拉时触发刷新，刷新后 <code>document.activeElement</code> 仍为该下拉；③ 数据无变更的刷新，DOM 变更节点数 <b>= 0</b>。</td>
+</tr>
+
+<tr data-view="ue" data-lvl="P3">
+  <td class="id">UE-08</td>
+  <td><span class="view-tag v-ue">终端用户</span></td>
+  <td>无障碍 / 可达性</td>
+  <td><b>图标按钮无可访问名称。</b>🍪🧩📦🔒📋🗑 等仅用 emoji + <code>title</code>，无 <code>aria-label</code>；侧栏 <code>role="tab"</code> 缺少对应的 <code>role="tabpanel"</code> 关联；检测按钮无 <code>aria-describedby</code>。</td>
+  <td class="scope">用户</td>
+  <td><span class="lvl l-P3">P3</span><span class="basis">仅影响辅助技术用户，占比较小；功能仍可通过 title tooltip 使用。</span></td>
+  <td>所有图标按钮补 <code>aria-label</code>（走 i18n）；tab/tabpanel 用 <code>aria-controls</code> 关联；关键操作支持键盘可达（Tab 顺序与视觉顺序一致，Enter/Space 触发）。</td>
+  <td class="accept">① axe-core 扫描 Profiles 页 <b>严重/中等问题 = 0</b>；② 所有可交互元素均有非空可访问名称（覆盖率 <b>100%</b>）；③ 纯键盘可完成「新建→启动→删除」全流程（无鼠标操作）。</td>
+</tr>
+
+<!-- ============ 技术与架构 ============ -->
+<tr data-view="te" data-lvl="P1">
+  <td class="id">TE-01</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>埋点与监控</td>
+  <td><b>零产品遥测、零错误上报。</b>全仓无 telemetry/analytics/Sentry/PostHog（grep 命中仅为 WebRTC 诊断字段）；渲染层仅 <b>6 处</b> <code>console.error</code> 且不会落盘；启动成功率、耗时分位、功能使用率、崩溃率<b>全部无数据</b>，只能靠用户主动反馈。这直接导致本报告所有量化验收标准当前无法被测量。</td>
+  <td class="scope">系统 / 业务</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">不修复则任何性能优化与体验改进的收益都无法验证，且线上问题不可发现；属「能力缺失」而非「故障」，故非 P0。</span></td>
+  <td>本地优先的可观测性三层：① 结构化日志落盘（rotating，单文件 ≤5MB，保留 7 天，含 traceId）；② 本地指标（launch 成功率/耗时 P50/P95、检测耗时、IPC 错误数、批量队列深度）；③ 用户自持上报开关（<b>默认关闭</b>，端点可配）；设置页「诊断与遥测」面板 + 一键导出诊断包。</td>
+  <td class="accept">① launch/stop/batch/检测 四类事件 <b>100%</b> 落盘且携带 traceId；② 本地指标面板可查 P50/P95，采样延迟 <b>≤60s</b>；③ 导出诊断包 <b>≤10MB</b>，明文密钥 grep 命中 <b>= 0</b>；④ 遥测默认关闭，开启需二次确认且可一键关闭并清除。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P1">
+  <td class="id">TE-02</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>性能与并发</td>
+  <td><b>列表无分页/虚拟化，全量重建。</b><code>loadProfiles</code> 每次 <code>innerHTML</code> 整体重绘，无分页、无虚拟化、无增量 diff；100+ profile 时首屏与每次刷新都是 O(n) DOM 重建，DOM 节点数量级随 profile 数线性增长。</td>
+  <td class="scope">系统 / 用户</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">决定产品的规模上限；&gt;50 profile 的重度用户（本产品目标客群）必然触发，且随使用时间必然恶化。</span></td>
+  <td>≥50 条启用虚拟滚动或分页（每页 50）；以 <code>dirId</code> 做 keyed diff 更新；首屏先渲染可视区，其余空闲时补齐；为列表渲染加耗时埋点（依赖 TE-01）。</td>
+  <td class="accept">① 200 个 profile 下列表<b>首次渲染 ≤1.5s</b>，滚动帧率 <b>≥55fps</b>；② 无变更刷新 DOM 变更节点 <b>= 0</b>；③ 渲染期间无 <b>&gt;50ms</b> 长任务；④ 1000 个 profile 下首屏 <b>≤3s</b>（分页方案）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P1">
+  <td class="id">TE-03</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>接口依赖 / 韧性</td>
+  <td><b>IPC 无统一超时、取消与 traceId。</b>agent 流有 120s abort、WebRTC 9s 超时、指纹采集 2s 超时，但 profile launch/stop/检测在渲染层只有 <code>.then/.catch</code> 裸调用，主进程阻塞时 UI 会<b>永久停在无反馈状态</b>，且无请求标识，日志无法串联。</td>
+  <td class="scope">系统 / 用户</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">主进程卡顿/引擎卡死场景下用户无自救手段（只能强杀应用），且与 TE-01 叠加导致问题不可诊断。</span></td>
+  <td>统一 IPC 封装：launch ≤30s、stop ≤10s、检测 ≤20s、列表 ≤5s 超时；每请求生成 traceId 贯穿 UI→IPC→service→日志；支持取消（AbortController）；按钮在飞行中禁用并展示已耗时。</td>
+  <td class="accept">① 注入 30s 延迟 mock，UI 在 <b>30s±1s</b> 抛出可理解错误并提供「重试」；② loading 期间重复点击产生的 IPC 调用数 <b>= 1</b>；③ 任一条日志可按 traceId 串联 UI 与服务端（抽样 20 条，串联成功率 <b>100%</b>）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P1">
+  <td class="id">TE-04</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>接口依赖 / 隐私</td>
+  <td><b>风险检测硬编码依赖第三方站点且无确认。</b><code>ipc/browser.ts:341</code> 硬编码 <code>https://ping0.cc/env</code>：① 第三方站点改版/限流/不可达即功能失效（外部 SPOF）；② 会把该 profile 的完整指纹与出口 IP 发送给第三方，属隐私外发，但 UI 仅在 tooltip 一句话说明，<b>无首次确认、无开关、无降级</b>。</td>
+  <td class="scope">业务 / 系统 / 用户</td>
+  <td><span class="lvl l-P1">P1</span><span class="basis">隐私外发无告知（合规风险）+ 外部依赖无降级（可用性风险），且本地已有 Drift/Env/WebRTC 可替代，无需承担该依赖。</span></td>
+  <td>默认改为<b>纯本地检测</b>（复用 drift/env-risk/webrtc 三项）；外部站点检测降为可选项、需一次性确认并明示外发字段（指纹 + 出口 IP + UA）；URL 可配置；不可达时 ≤10s 内降级为本地检测并明确标注。</td>
+  <td class="accept">① 默认路径下对非目标域名发起的请求数 <b>= 0</b>（网络日志断言）；② 开启外部检测前<b>必须</b>出现确认弹窗，文案含外发字段清单；③ ping0.cc 不可达（DNS mock）时 <b>≤10s</b> 内降级为本地检测并标注原因。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P2">
+  <td class="id">TE-05</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>数据流转 / 一致性</td>
+  <td><b>运行状态真相分散在三处。</b>主进程 browser-manager 进程表、<code>config.json</code> 持久化、渲染层 <code>window._profileRuntimeOverrides</code> 乐观覆盖（5s TTL + seq 防串）三者无统一版本号与事件序列，靠 5s 定时回读兜底；UI / REST / MCP 并发写同一 profile 时可能互相覆盖（profile 级 lock 是否存在于所有写路径待确认，见 Q4）。</td>
+  <td class="scope">系统</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">单人 GUI 操作基本不触发；多客户端（REST/MCP/多窗口）并发场景才暴露，且后果为状态不一致而非数据丢失。</span></td>
+  <td>统一为带 <code>version</code> 的事件流（<code>profile.status.changed</code>），主进程为唯一真相源，渲染层订阅 diff；所有写操作带 <code>expectedVersion</code>，冲突返回 409 并提示刷新；乐观覆盖改为由事件确认驱动而非定时过期。</td>
+  <td class="accept">① 并发 10 个 REST 写 + 10 个 UI 写，最终状态与<b>最后一次成功写</b>一致，脏写次数 <b>= 0</b>；② 冲突时返回 <b>409</b> 且 UI 弹出「已变更，刷新后重试」；③ UI 状态与 <code>GET /api/profiles/{id}/status</code> 一致性 <b>100%</b>（10 轮随机操作对拍）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P2">
+  <td class="id">TE-06</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>扩展性与可维护性</td>
+  <td><b>巨型模块 + 全局命名空间 + 无类型。</b>主进程 <code>local-agent.ts</code> 135.9KB、<code>rest-api-server.ts</code> 100KB、<code>browser-manager.ts</code> 87.7KB、<code>config-manager.ts</code> 75KB；渲染层 8.8k 行 vanilla JS 靠 <code>window.agentBrowser</code> 全局串联，24 个模块均以 <code>var toast = helpers.toast</code> 方式重复解构（<code>wizard.js</code> 前 48 行全是解构），加载顺序耦合 script 标签。</td>
+  <td class="scope">系统</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">不直接影响用户，但显著抬高每次改动的回归风险与新人上手成本；属技术债，需排期偿还。</span></td>
+  <td>按「引擎生命周期 / 指纹 / 进程管理 / CDP」拆分 browser-manager；渲染层迁移 ESM + TypeScript（至少先补 <code>api.d.ts</code> 并开 <code>tsc --noEmit</code>）；helpers 改为模块 import；CI 增加单文件行数阈值。</td>
+  <td class="accept">① 单文件 <b>≤1500 行</b>（CI 拦截，超限阻断合并）；② 核心 service 单测行覆盖 <b>≥60%</b>（先补基线，见 Q3）；③ 渲染层 <code>tsc --noEmit</code> <b>0 error</b>；④ 新增功能平均改动文件数下降 <b>≥30%</b>（以最近 10 个 PR 统计）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P2">
+  <td class="id">TE-07</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>可维护性 / i18n</td>
+  <td><b>i18n 单文件全量加载且无 key 校验。</b><code>i18n.js</code> 79KB 一次性加载 zh/en 全量字符串，无按模块懒加载、无缺失 key 告警、无 zh/en 一致性校验。是 UE-02 硬编码中文问题的系统性根因。</td>
+  <td class="scope">系统 / 用户</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">79KB 对本地桌面应用影响有限；主要危害是缺失 key 静默降级，与 UE-02 叠加。</span></td>
+  <td>按命名空间拆分（core/profiles/agent/…）；dev 模式缺失 key 显示 <code>[miss:key]</code>；CI 断言 zh/en key 集合完全一致 + 无未使用 key。</td>
+  <td class="accept">① zh/en key 集合<b>差异数 = 0</b>（CI 拦截）；② dev 模式缺失 key 渲染为可见标记（截图验证）；③ 首屏 i18n 加载体积下降 <b>≥40%</b>（拆分后按需加载）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P2">
+  <td class="id">TE-08</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>性能与并发 / 首屏</td>
+  <td><b>无性能预算与基准，验收无锚点。</b>未定义首屏渲染、冷启动、列表渲染的耗时预算，也无 CI 性能回归门禁；本报告的耗时阈值均为建议值，需实测校准。</td>
+  <td class="scope">系统 / 业务</td>
+  <td><span class="lvl l-P2">P2</span><span class="basis">本身不是缺陷，但使所有性能类验收失去基线；属工程体系缺口。</span></td>
+  <td>定义并落库 5 条预算：冷启动到可交互 ≤3s、首屏列表 ≤1.5s、单 profile 冷启动 P95 ≤8s、列表刷新无变更 ≤100ms、IPC P95 ≤500ms（列表类）；接入 CI 性能冒烟（本地 fixture 100 profile）。</td>
+  <td class="accept">① 5 条预算写入 <code>docs/</code> 并在 PR 模板中列出；② CI 每 PR 跑一次性能冒烟，回归超 <b>10%</b> 即告警；③ 每次发版输出一份性能基线报告（P50/P95）。</td>
+</tr>
+
+<tr data-view="te" data-lvl="P3">
+  <td class="id">TE-09</td>
+  <td><span class="view-tag v-te">系统架构</span></td>
+  <td>性能与并发 / 节流</td>
+  <td><b>检测类操作无节流与并发上限。</b>Drift / Env / WebRTC 会启动或复用浏览器做采集（WebRTC 单次 9s、指纹采集 2s），UI 连点即并发多个同类任务，批量场景下耗时与资源占用线性叠加。</td>
+  <td class="scope">系统</td>
+  <td><span class="lvl l-P3">P3</span><span class="basis">需用户连点或脚本调用才触发，单机场景影响有限；有等待即可绕过。</span></td>
+  <td>同一 profile 的检测串行化；全局检测并发 ≤2；按钮进入 loading 并禁用；重复点击合并为「检测进行中」提示。</td>
+  <td class="accept">① 连点 5 次 Check Risk，实际执行次数 <b>= 1</b>，其余 4 次被吞并并提示「检测进行中」；② 全局并发检测任务数 <b>≤2</b>（日志采样验证）。</td>
+</tr>
+
+    </tbody>
+  </table>
+  </div>
+  <div id="empty" class="empty">没有匹配的问题，试试换个关键词或筛选条件。</div>
+</section>
+
+<section>
+  <h2>2. Top 5 高优先级改进项</h2>
+  <div class="top5">
+
+    <div class="card rank1">
+      <h4>Top 1 · 建可观测性底座（TE-01）</h4>
+      <div class="k">P1 · 系统架构 · 埋点与监控 · 建议排在最前</div>
+      <p>当前零遥测、零错误上报，渲染层只有 6 处 console.error 且不落盘。这意味着：用户遇到启动失败我们不知道、性能退化我们看不见、本报告里所有量化验收标准当前<b>无法被测量</b>。</p>
+      <ul>
+        <li>结构化日志落盘（rotating，≤5MB/文件，7 天，带 traceId）</li>
+        <li>本地指标面板：launch 成功率、耗时 P50/P95、IPC 错误数、批量队列深度</li>
+        <li>可选外发遥测：<b>默认关闭</b>，端点自持，二次确认</li>
+        <li>一键导出诊断包（≤10MB，密钥已脱敏）</li>
+      </ul>
+      <div class="gain"><b>预期收益：</b>把「无法度量」变成可度量，线上问题从「等用户反馈」变为分钟级定位（MTTR 降低一个量级）；并为 Top2–Top5 提供验收数据来源。<b>它是其余四项的前置依赖。</b></div>
+    </div>
+
+    <div class="card rank1">
+      <h4>Top 2 · 批量操作的正确性与并发治理（PL-01 + PL-02）</h4>
+      <div class="k">P1 · 产品逻辑 · 结果正确性 / 并发</div>
+      <p>批量启动现在「发射后不管」：不等待 launch 结果，无论成败一律 toast「N profiles started」；且无并发上限，主进程的限流（≤16）只覆盖自动化规则，不覆盖手动批量。</p>
+      <ul>
+        <li><code>Promise.allSettled</code> 收集全部结果 + 并发上限 ≤4 + 队列可视化</li>
+        <li>聚合结果面板：成功/失败计数、失败清单（名称 + 原因 + 定位）、一键重试</li>
+        <li>支持暂停、取消；单项超时 20s 自动失败并放行队列</li>
+      </ul>
+      <div class="gain"><b>预期收益：</b>消除「谎报成功」这一信任杀手（运营场景最常见的批量操作）；峰值并发进程从 N 降到 ≤4，100 profile 批量启动从「卡死」变为可预期；失败定位时间从「人工逐个点」降到一次点击。</div>
+    </div>
+
+    <div class="card">
+      <h4>Top 3 · 反馈系统重构（UE-03，含 UE-04）</h4>
+      <div class="k">P1 · UI 与交互 · 反馈与错误提示</div>
+      <p>Toast 单例互相覆盖（启动成功会被紧随的环境风险提示直接顶掉），无 <code>role="alert"</code>/<code>aria-live</code>，错误 3s 自动消失且无处可查。用户收不到错误 = 无法自愈。</p>
+      <ul>
+        <li>可堆叠队列（≤3，FIFO）；错误类不自动消失</li>
+        <li><code>role="alert"</code> + <code>aria-live="assertive"</code>；含「查看详情」跳转</li>
+        <li>事件同步落 Activity 页，Toast 只作镜像</li>
+        <li>配套：表单改为字段级 inline 校验，错误文案零技术字段名</li>
+      </ul>
+      <div class="gain"><b>预期收益：</b>错误信息可达率从「部分」到 100%，减少「启动失败不知道为什么」类工单；顺带解决无障碍与校验体验，改动量小、影响面覆盖每一次操作，性价比最高。</div>
+    </div>
+
+    <div class="card">
+      <h4>Top 4 · 检查类操作的副作用与外部依赖（PL-03 + TE-04）</h4>
+      <div class="k">P1 · 产品逻辑 + 系统架构 · 隐式副作用 / 隐私外部依赖</div>
+      <p>两个问题叠加在同一入口：点「Check Risk」会<b>静默启动</b>未运行的 profile（用户以为只是只读检查）；检测本身硬编码访问 <code>https://ping0.cc/env</code>，把该 profile 的指纹与出口 IP 发给第三方，无确认、无开关、无降级。</p>
+      <ul>
+        <li>默认走<b>纯本地检测</b>（drift / env-risk / webrtc 三项已具备）</li>
+        <li>外部站点检测降为可选项：一次性确认 + 明示外发字段 + URL 可配</li>
+        <li>需启动才能检测时，先弹确认并说明「将启动该 profile」</li>
+        <li>外部不可达 ≤10s 内降级为本地检测并标注原因</li>
+      </ul>
+      <div class="gain"><b>预期收益：</b>同时消除合规风险（隐私外发无告知）、可用性风险（第三方 SPOF）与不可预期的资源副作用；本地检测更快（目标 ≤15s）且不依赖外网。</div>
+    </div>
+
+    <div class="card">
+      <h4>Top 5 · 列表性能与刷新不打断（TE-02 + UE-07）</h4>
+      <div class="k">P1/P2 · 系统架构 + 交互 · 规模上限</div>
+      <p>列表每次刷新 <code>innerHTML</code> 全量重建，无分页/虚拟化/diff。直接后果：规模上不去（100+ profile 掉帧），且每次启动/停止都会打断用户正在进行的勾选、滚动与下拉焦点。</p>
+      <ul>
+        <li>≥50 条启用虚拟滚动或分页（每页 50）+ <code>dirId</code> keyed diff</li>
+        <li>无变更刷新跳过重绘；保存并恢复 scrollTop 与 activeElement</li>
+        <li>配套 TE-08：确立 5 条性能预算并接入 CI 冒烟</li>
+      </ul>
+      <div class="gain"><b>预期收益：</b>把可用规模从「几十个 profile」提升到「数百个」；消除高频操作中的交互中断感。这是重度用户的留存放大型问题——用户 profile 数只增不减。</div>
+    </div>
+
+  </div>
+  <p style="margin-top:14px"><b>紧随其后（下一批）：</b>UE-02（i18n 硬编码中文，EN 用户必现）、PL-05（风险检测结果不可回溯）、PL-07（引擎缺失无引导）、TE-05（状态三处真相，多客户端并发脏写）。</p>
+</section>
+
+<section>
+  <h2>3. 待确认项（未明确之处，不臆造业务规则）</h2>
+  <table class="q">
+    <thead><tr><th style="width:60px">编号</th><th style="width:290px">待确认问题</th><th>为何阻塞 / 影响哪条结论</th></tr></thead>
+    <tbody>
+      <tr><td>Q1</td><td>典型用户的 profile 数量级是多少？</td><td>决定 TE-02 的分页/虚拟化阈值（当前建议 50）与 PL-02 的并发上限（当前建议 4）。若典型 &lt;20，两项可降级为 P2/P3。</td></tr>
+      <tr><td>Q2</td><td>是否允许任何形式的外发遥测？</td><td>决定 TE-01 的实现形态：纯本地落盘 vs 可选上报。若完全禁止外发，则只做本地日志 + 用户手动导出诊断包。</td></tr>
+      <tr><td>Q3</td><td>当前单测覆盖率基线？E2E 是否已进 CI？</td><td>README 称 E2E 未全量进 CI。TE-06 的「行覆盖 ≥60%」需先有基线；PL-01/TE-05 的并发一致性验收依赖 E2E 环境。</td></tr>
+      <tr><td>Q4</td><td>profile lock（checkout）是否对 UI / REST / MCP <b>所有</b>写路径强制生效？</td><td>决定 TE-05 的严重级别。若 lock 不覆盖 REST/MCP，多客户端并发脏写是必现问题，需从 P2 升级 P1。</td></tr>
+      <tr><td>Q5</td><td>代理失效时，启动应当 fail-closed 还是「警告后继续」？</td><td>决定 PL-04 级别。若当前是「带病启动成功」（用户以为走了代理、实际直连出口 IP），那是 P1 的隐私事故，须立即阻断。</td></tr>
+      <tr><td>Q6</td><td>设置页是否已有「重新运行向导」入口？</td><td>我在代码中未发现；若已有则 PL-08 降为 P3 或作废。</td></tr>
+      <tr><td>Q7</td><td>是否已有性能基线数据（首屏、冷启动 P50/P95）？</td><td>本报告所有耗时阈值（≤1.5s / ≤2s / ≤8s / ≤15s / ≤30s）均为建议起始值，需用真实数据校准后写入 TE-08 的性能预算。</td></tr>
+      <tr><td>Q8</td><td>Check Risk 依赖 ping0.cc 是否有商业/授权约定？是否必须保留？</td><td>决定 TE-04 是「降级为可选项」还是「直接移除」。若必须保留，需补站点可用性监控与 SLA 兜底。</td></tr>
+      <tr><td>Q9</td><td>Windows / Linux 是否在本次评审范围内？</td><td>README 称仅 macOS Apple Silicon 完整验证。本报告的性能与并发阈值均基于该平台，跨平台需重新采集。</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>4. 验收标准如何落地（避免变成纸面指标）</h2>
+  <ol>
+    <li><b>先装仪表再开车</b>：Top 1（TE-01）必须先做，否则其余 4 项的验收数据无从采集。</li>
+    <li><b>每条验收标准绑定一种验证方式</b>：自动化测试（DOM/网络/spy 断言，如「中文字符数 = 0」）、E2E 脚本（Playwright Electron，如「并发进程峰值 ≤4」）、人工走查（5 名用户，如「10s 内正确说出操作路径」）、CI 门禁（行数/覆盖率/i18n key 一致性）。</li>
+    <li><b>性能类必须有 fixture</b>：准备 100 / 1000 profile 两份 fixture，性能冒烟在固定机型（M 系列 16GB）上跑，回归超 10% 告警。</li>
+    <li><b>本期不做的事</b>：不新增功能；不动指纹/引擎等安全敏感面；不做安全审计结论（本次非渗透测试）。</li>
+  </ol>
+</section>
+
+<footer>基于代码静态走查与文档核对生成 · 量化阈值为建议起始值，需按 Q7 实测校准 · 2026-08-29</footer>
+</div>
+
+<script>
+(function(){
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#tbody tr'));
+  var fView = 'all', fLvl = 'all', kw = '';
+  var cnt = document.getElementById('cnt');
+  var empty = document.getElementById('empty');
+
+  function apply(){
+    var shown = 0;
+    rows.forEach(function(tr){
+      var okView = (fView === 'all') || (tr.dataset.view === fView);
+      var okLvl  = (fLvl  === 'all') || (tr.dataset.lvl  === fLvl);
+      var text = tr.textContent.toLowerCase();
+      var okKw = !kw || text.indexOf(kw) !== -1;
+      var show = okView && okLvl && okKw;
+      tr.style.display = show ? '' : 'none';
+      if (show) shown++;
+    });
+    cnt.textContent = '显示 ' + shown + ' / ' + rows.length;
+    empty.style.display = shown === 0 ? 'block' : 'none';
+  }
+
+  document.querySelectorAll('.fbtn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var f = btn.dataset.f;
+      document.querySelectorAll('.fbtn[data-f="' + f + '"]').forEach(function(b){
+        b.classList.remove('on');
+      });
+      btn.classList.add('on');
+      if (f === 'view') fView = btn.dataset.v; else fLvl = btn.dataset.v;
+      apply();
+    });
+  });
+
+  var input = document.getElementById('q');
+  var t = null;
+  input.addEventListener('input', function(){
+    clearTimeout(t);
+    var v = input.value.trim().toLowerCase();
+    t = setTimeout(function(){ kw = v; apply(); }, 120);
+  });
+
+  apply();
+})();
+</script>
+</body>
+</html>

@@ -12,5 +12,18 @@ export default defineConfig({
     exclude: ["node_modules", "dist", "tests/e2e/j[1-4]-*.test.ts"],
     globals: true,
     environment: "node",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov", "html"],
+      reportsDirectory: "coverage",
+      include: ["src/main/services/**", "src/main/ipc/**"],
+      exclude: ["src/tools/**", "src/main/services/__tests__/**"],
+      thresholds: {
+        statements: 40,
+        branches: 35,
+        functions: 40,
+        lines: 40,
+      },
+    },
   },
 });
