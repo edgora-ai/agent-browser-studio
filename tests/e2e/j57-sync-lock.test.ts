@@ -133,6 +133,55 @@ describe("J57 — team profile checkout locks", () => {
     expect(r.lock).toBeNull();
   }, 20000);
 
+  // UI-level coverage for the renderer confirm chain (confirmAsync rewrite):
+  // Push → removal warnings ack → lock block → force ack → force push lands.
+  it("UI push walks the confirm chain: warnings ack, lock block, force ack", async () => {
+    // Establish a fresh remote baseline, then inject a colleague lock so the
+    // UI force path triggers. Self-contained: does not depend on earlier tests.
+    const seeded = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.push({ force: true }));
+    expect(seeded.success).toBe(true);
+    const { payload, data } = decodeRemoteConfig(s3.get(CONFIG_KEY)!);
+    data.browserProfiles[p2].lock = { owner: "colleague-device-2", ownerName: "Colleague Mac 2", at: Date.now() };
+    payload.data = zlib.gzipSync(JSON.stringify(data, null, 2)).toString("base64");
+    s3.put(CONFIG_KEY, Buffer.from(JSON.stringify(payload)));
+
+    await h.page.evaluate(() => (window as any).agentBrowser.switchTab("sync"));
+    await h.page.locator('#tab-sync [data-cmd="syncPush"]').click({ timeout: 5000 });
+
+    // 1st dialog: push will remove remote data. Unticked ack must block.
+    await h.page.waitForSelector('#dlg-confirm[open]', { timeout: 10000 });
+    await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });
+    await h.page.waitForTimeout(200);
+    expect(await h.page.locator('#dlg-confirm[open]').count()).toBe(1);
+    await h.page.locator('#dlg-confirm-ack').check({ timeout: 5000 });
+    await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });
+
+    // Push proceeds, is refused by the colleague lock → force confirm opens.
+    // Wait for the dialog MESSAGE to switch to the force-override text rather
+    // than for close/open transitions (the second showModal can race the first close).
+    await h.page.waitForFunction(
+      () => {
+        const m = document.getElementById("dlg-confirm-msg");
+        return !!(m && m.textContent && /覆盖|Override/.test(m.textContent));
+      },
+      undefined,
+      { timeout: 10000 },
+    );
+    await h.page.locator('#dlg-confirm-ack').check({ timeout: 5000 });
+    await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });
+
+    // Force push landed: the remote no longer carries the colleague lock.
+    let landed = false;
+    for (let i = 0; i < 40 && !landed; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      const raw = s3.get(CONFIG_KEY);
+      if (!raw) continue;
+      landed = !decodeRemoteConfig(raw).data.browserProfiles[p2].lock;
+    }
+    expect(await h.page.locator('#dlg-confirm[open]').count(), "force dialog should be closed after submit").toBe(0);
+    expect(landed, "force push should clear the remote colleague lock").toBe(true);
+  }, 60000);
+
   it("no unexpected console errors", () => {
     const c = filterKnownConsoleErrors(h.consoleErrors).filter((e: string) =>
       !/file is not a database|connect to 127.0.0.1 port 1/i.test(e));

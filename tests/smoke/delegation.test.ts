@@ -73,8 +73,8 @@ function dispatch(el: any): { cmd: string; args: any[] } | null {
 describe("Delegation dispatch (HTML + delegation.js)", () => {
   it("all sidebar nav items resolve to switchTab(<tab>)", () => {
     const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf-8");
-    // Find each <li ... data-tab="..." data-cmd="switchTab" ...>
-    const navRe = /<li class="nav-item[^"]*" data-tab="([^"]+)"[^>]*data-cmd="switchTab"[^>]*>/g;
+    // Find each <li ... data-tab="..." data-cmd="switchTab" ...> (allow extra attrs like role/aria)
+    const navRe = /<li[^>]*data-tab="([^"]+)"[^>]*data-cmd="switchTab"[^>]*>/g;
     const tabs: string[] = [];
     let m: RegExpExecArray | null;
     while ((m = navRe.exec(html))) tabs.push(m[1]);

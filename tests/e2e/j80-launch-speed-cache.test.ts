@@ -66,6 +66,14 @@ describe('J80 — launch-path geo detection dedup + cache', () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
+    // A1: there is no built-in default proxy anymore — j80 tests same-proxy
+    // geo caching, so it must pin its own local proxy explicitly.
+    const added = await h.page.evaluate(() =>
+      (window as any).agentBrowser.api.proxy.add("j80-local", { type: "http", host: "127.0.0.1", port: 7890 }));
+    expect(added.success, "j80-local proxy add should succeed").toBe(true);
+    const marked = await h.page.evaluate(() =>
+      (window as any).agentBrowser.api.proxy.setDefault("j80-local"));
+    expect(marked.success, "setDefault should succeed").toBe(true);
   }, 60000);
 
   afterAll(async () => { if (h) await closeApp(h); }, 90000);

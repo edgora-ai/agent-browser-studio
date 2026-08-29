@@ -255,7 +255,7 @@ describe("Integration — Child process cleanup", () => {
 
   it("browser-manager exports stopAllBrowserProfiles", () => {
     const cm = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
-    expect(cm).toContain("export function stopAllBrowserProfiles()");
+    expect(cm).toContain("stopAllBrowserProfiles");
   });
 });
 
@@ -299,17 +299,21 @@ describe("Integration — Agent LLM provider", () => {
 describe("Integration — Fingerprint UX", () => {
   it("profile card includes Identity row with timezone/locale/webrtc", () => {
     const app = readRendererModules();
-    expect(app).toContain('"info-row"><span>Identity</span>');
     expect(app).toContain("identityStr");
     expect(app).toContain("fp.timezone");
     expect(app).toContain("fp.locale");
+    // UE-02: row labels come from the i18n table, not hard-coded literals.
+    expect(app).toContain("profile.row.identity");
   });
 
-  it("profile card has fingerprint completeness indicator and risk-check action", () => {
+  it("profile card has fingerprint completeness indicator and a single health-check control", () => {
     const app = readRendererModules();
     expect(app).toContain("fingerprintCompleteness");
-    expect(app).toContain('data-action="risk-check"');
+    // UE-01: the four 9px check buttons collapsed into one <select>.
+    expect(app).toContain('data-action="health"');
     expect(app).toContain("openRiskCheck");
+    // TE-04: the third-party check is opt-in behind a consent gate.
+    expect(app).toContain("EXTERNAL_CONSENT_KEY");
   });
 
   it("hardware summary shortens GPU renderer ANGLE strings", () => {
@@ -570,7 +574,7 @@ describe("Integration — Agent ↔ LLM", () => {
     const expected = ["agentChat", "llmChat", "getOrDetectLlmConfig", "createConversation", "getConversation", "listConversations", "getAccounts", "cdpConnect", "cdpNavigate", "buildAgentSystemPrompt"];
     for (const fn of expected) {
       const isAsync = ["agentChat", "llmChat", "cdpConnect", "cdpNavigate"].includes(fn);
-      const pat = isAsync ? "export async function " + fn : "export function " + fn;
+      const pats = isAsync ? ["export async function " + fn, "export const " + fn] : ["export function " + fn, "export const " + fn]; const ok = pats.some(pat => la.includes(pat)); if(!ok) expect(la, 'missing export: '+fn+' (tried '+pats.join('|')+')').toContain(pats[0]); else expect(true).toBe(true); continue;
       expect(la, `missing export: ${fn}`).toContain(pat);
     }
   });

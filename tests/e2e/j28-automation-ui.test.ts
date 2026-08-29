@@ -37,7 +37,7 @@ describe("J28 — automation tab UI CRUD", () => {
     await reload(h);
     expect(await cardCount(h)).toBe(0);
 
-    await h.page.locator('[data-cmd="automationNew"]').click({ timeout: 5000 });
+    await h.page.locator('#tab-automation .tab-header [data-cmd="automationNew"]').click({ timeout: 5000 });
     await h.page.waitForSelector("#dlg-automation[open]", { timeout: 5000 });
     await h.page.locator("#auto-name").fill("UI采集任务");
     await h.page.locator("#auto-trigger-type").selectOption("cron");
@@ -78,8 +78,9 @@ describe("J28 — automation tab UI CRUD", () => {
   }, 20000);
 
   it("deletes the rule via the card button + confirm", async () => {
-    await h.page.evaluate(() => { (window as any).confirm = () => true; });
     await h.page.locator('#automation-list [data-rule-action="delete"]').click({ timeout: 5000 });
+    await h.page.waitForSelector('#dlg-confirm[open]', { timeout: 5000 });
+    await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
     expect(await cardCount(h)).toBe(0);
     const rules = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.list());

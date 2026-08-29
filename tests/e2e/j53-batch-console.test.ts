@@ -23,6 +23,9 @@ describe("J53 — batch operations console", () => {
 
   beforeAll(async () => {
     h = await setupTestApp({ userDataDir: USERDATA });
+    // Pin the UI language: the app follows the OS locale (zh on zh hosts), and
+    // copy assertions below are written against the English strings.
+    await h.page.evaluate(() => { const i = (window as any).i18n; if (i && i.set) i.set("en-US"); });
     // A named proxy is available from the start so the batch dropdown includes it.
     await h.page.evaluate(() =>
       (window as any).agentBrowser.api.proxy.add("j53-proxy", { type: "http", host: "127.0.0.1", port: 7801 }));

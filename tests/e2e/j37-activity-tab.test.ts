@@ -107,8 +107,11 @@ describe("J37 — activity / audit tab", () => {
   }, 30000);
 
   it("clear empties the activity list", async () => {
-    await h.page.evaluate(() => { (window as any).confirm = () => true; (window as any).agentBrowser.switchTab("activity"); });
+    await h.page.evaluate(() => { (window as any).agentBrowser.switchTab("activity"); });
     await h.page.locator('#tab-activity [data-cmd="activityClear"]').click({ timeout: 5000 });
+    await h.page.waitForSelector('#dlg-confirm[open]', { timeout: 5000 });
+    await h.page.locator('#dlg-confirm-ack').check({ timeout: 5000 });
+    await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
     const html = await h.page.locator("#activity-list").innerHTML();
     expect(html).not.toContain("openai");
