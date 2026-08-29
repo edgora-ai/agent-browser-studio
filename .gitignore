@@ -34,5 +34,13 @@ tests/e2e/fixtures/
 .claude/
 
 # Python SDK artifacts
+scripts/diag*.mjs
+scripts/diag*.js
 __pycache__/
 *.pyc
+
+# Coverage output (local)
+coverage/
+
+# Parallel-session working memory (never commit)
+.workbuddy/
