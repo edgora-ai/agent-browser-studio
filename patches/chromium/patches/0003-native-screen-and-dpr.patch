@@ -1,16 +1,16 @@
 diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
-index 08db1e8..5f9cbd0 100644
+index 511fce6..d61b4fb 100644
 --- a/third_party/blink/renderer/core/frame/local_dom_window.cc
 +++ b/third_party/blink/renderer/core/frame/local_dom_window.cc
-@@ -41,6 +41,7 @@
+@@ -40,6 +40,7 @@
+ #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
  #include "net/storage_access_api/status.h"
  #include "third_party/blink/public/common/features.h"
- #include "third_party/blink/public/common/navigation/impression.h"
 +#include "third_party/blink/public/common/roxy_fingerprint_config.h"
  #include "third_party/blink/public/common/switches.h"
  #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
  #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
-@@ -1907,6 +1908,10 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
+@@ -1934,6 +1935,10 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
  }
  
  double LocalDOMWindow::devicePixelRatio() const {
@@ -22,18 +22,18 @@ index 08db1e8..5f9cbd0 100644
      return 0.0;
    }
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
-index 69ffc2b..56ec387 100644
+index ed50289..e5529fa 100644
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
-@@ -30,6 +30,7 @@
- 
+@@ -31,6 +31,7 @@
  #include "base/numerics/safe_conversions.h"
  #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
 +#include "third_party/blink/public/common/roxy_fingerprint_config.h"
  #include "third_party/blink/renderer/core/event_target_names.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
  #include "third_party/blink/renderer/core/frame/local_frame.h"
-@@ -79,18 +80,28 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
+@@ -88,18 +89,28 @@ bool Screen::AreWebExposedScreenPropertiesEqual(
  }
  
  int Screen::height() const {
@@ -62,7 +62,7 @@ index 69ffc2b..56ec387 100644
    // "If the user agent does not know the color depth or does not want to
    // return it for privacy considerations, it should return 24."
    //
-@@ -122,12 +133,18 @@ int Screen::availTop() const {
+@@ -131,12 +142,18 @@ int Screen::availTop() const {
  }
  
  int Screen::availHeight() const {

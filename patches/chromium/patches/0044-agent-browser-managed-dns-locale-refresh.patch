@@ -1,8 +1,8 @@
 diff --git a/android_webview/browser/aw_content_browser_client.cc b/android_webview/browser/aw_content_browser_client.cc
-index 26268a6..bbfbec8 100644
+index f270f57..5cfab25 100644
 --- a/android_webview/browser/aw_content_browser_client.cc
 +++ b/android_webview/browser/aw_content_browser_client.cc
-@@ -307,7 +307,8 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
+@@ -305,7 +305,8 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
          net::DnsOverHttpsConfig(),
          /*additional_dns_types_enabled=*/true,
          /*fallback_doh_nameservers=*/std::vector<net::IPEndPoint>(),
@@ -78,10 +78,10 @@ index d855df0..e2ae118 100644
  
    return SecureDnsConfig(secure_dns_mode, std::move(doh_config),
 diff --git a/content/renderer/renderer_main.cc b/content/renderer/renderer_main.cc
-index 5e40721..2be8616 100644
+index e011fd9..ac71f19 100644
 --- a/content/renderer/renderer_main.cc
 +++ b/content/renderer/renderer_main.cc
-@@ -54,6 +54,7 @@
+@@ -55,6 +55,7 @@
  #include "services/tracing/public/cpp/trace_startup.h"
  #include "skia/ext/font_utils.h"
  #include "third_party/blink/public/common/features.h"
@@ -89,7 +89,7 @@ index 5e40721..2be8616 100644
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
  #include "third_party/skia/include/core/SkFontMgr.h"
-@@ -163,12 +164,23 @@ int RendererMain(MainFunctionParams parameters) {
+@@ -164,12 +165,23 @@ int RendererMain(MainFunctionParams parameters) {
    base::apple::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool;
  #endif  // BUILDFLAG(IS_MAC)
  
@@ -115,10 +115,10 @@ index 5e40721..2be8616 100644
          command_line.GetSwitchValueASCII(switches::kLang);
      base::i18n::SetICUDefaultLocale(locale);
 diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
-index 948a875..0233b34 100644
+index e7bb591..86c9306 100644
 --- a/content/shell/browser/shell_content_browser_client.cc
 +++ b/content/shell/browser/shell_content_browser_client.cc
-@@ -775,7 +775,8 @@ void ShellContentBrowserClient::OnNetworkServiceCreated(
+@@ -817,7 +817,8 @@ void ShellContentBrowserClient::OnNetworkServiceCreated(
          net::DnsOverHttpsConfig(),
          /*additional_dns_types_enabled=*/true,
          /*fallback_doh_nameservers=*/{},
@@ -177,10 +177,10 @@ index add1443..51db864 100644
  
  }  // namespace net
 diff --git a/net/dns/dns_http_attempt.cc b/net/dns/dns_http_attempt.cc
-index 2120851..d41ab65 100644
+index 1f049eb..149114f 100644
 --- a/net/dns/dns_http_attempt.cc
 +++ b/net/dns/dns_http_attempt.cc
-@@ -70,7 +70,7 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -72,7 +72,7 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
                                 bool use_post,
                                 URLRequestContext* url_request_context,
                                 RequestPriority request_priority,
@@ -189,7 +189,7 @@ index 2120851..d41ab65 100644
      : DnsAttempt(doh_server_index),
        is_probe_(is_probe),
        request_priority_(request_priority),
-@@ -172,8 +172,13 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -175,8 +175,13 @@ DnsHTTPAttempt::DnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
    // Apply special policy to DNS lookups for for a DoH server hostname to
    // avoid deadlock and enable the use of preconfigured IP addresses.
    request_->SetSecureDnsPolicy(SecureDnsPolicy::kBootstrap);
@@ -218,10 +218,10 @@ index 39af55f..457c7ad 100644
  
    DnsHTTPAttempt(const DnsHTTPAttempt&) = delete;
 diff --git a/net/dns/dns_transaction.cc b/net/dns/dns_transaction.cc
-index cbd8f95..3b1fa1b 100644
+index 1f0d2e4..83ed259 100644
 --- a/net/dns/dns_transaction.cc
 +++ b/net/dns/dns_transaction.cc
-@@ -130,6 +130,11 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -131,6 +131,11 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
                               bool is_probe) {
    DCHECK(url_request_context);
  
@@ -233,7 +233,7 @@ index cbd8f95..3b1fa1b 100644
    std::unique_ptr<DnsQuery> query;
    if (attempts->empty()) {
      query =
-@@ -147,7 +152,8 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
+@@ -148,7 +153,8 @@ void ConstructDnsHTTPAttempt(base::WeakPtr<ResolveContext> resolve_context,
    attempts->push_back(std::make_unique<DnsHTTPAttempt>(
        std::move(resolve_context), session, doh_server_index, std::move(query),
        doh_server.server_template(), gurl_without_parameters,
@@ -244,10 +244,10 @@ index cbd8f95..3b1fa1b 100644
  
  // ----------------------------------------------------------------------------
 diff --git a/net/dns/host_resolver_manager_unittest.cc b/net/dns/host_resolver_manager_unittest.cc
-index dc22265..cbdb548 100644
+index c7e32c6..e6749aa 100644
 --- a/net/dns/host_resolver_manager_unittest.cc
 +++ b/net/dns/host_resolver_manager_unittest.cc
-@@ -8984,6 +8984,7 @@ TEST_F(HostResolverManagerDnsTest, SetDnsConfigOverrides) {
+@@ -8983,6 +8983,7 @@ TEST_F(HostResolverManagerDnsTest, SetDnsConfigOverrides) {
    const std::vector<IPEndPoint> fallback_doh_nameservers = {
        CreateExpected("8.8.8.8", net::dns_protocol::kDefaultPort)};
    overrides.fallback_doh_nameservers = fallback_doh_nameservers;
@@ -300,10 +300,10 @@ index dc30fe0..4c5ff90 100644
    // |hosts| is not supported for overriding except to clear it.
    bool clear_hosts = false;
 diff --git a/services/network/network_service.cc b/services/network/network_service.cc
-index 01b8e87..cd83a88 100644
+index 4718d88..5727f71 100644
 --- a/services/network/network_service.cc
 +++ b/services/network/network_service.cc
-@@ -760,7 +760,8 @@ void NetworkService::ConfigureStubHostResolver(
+@@ -767,7 +767,8 @@ void NetworkService::ConfigureStubHostResolver(
      const net::DnsOverHttpsConfig& dns_over_https_config,
      bool additional_dns_types_enabled,
      const std::vector<net::IPEndPoint>& fallback_doh_nameservers,
@@ -312,8 +312,8 @@ index 01b8e87..cd83a88 100644
 +    bool doh_via_proxy) {
    // Enable or disable the insecure part of DnsClient. "DnsClient" is the class
    // that implements the stub resolver.
-   net::HostResolverManager::InsecureDnsMode mode;
-@@ -786,6 +787,7 @@ void NetworkService::ConfigureStubHostResolver(
+   net::InsecureDnsMode mode;
+@@ -793,6 +794,7 @@ void NetworkService::ConfigureStubHostResolver(
    overrides.allow_dns_over_https_upgrade =
        base::FeatureList::IsEnabled(features::kDnsOverHttpsUpgrade);
    overrides.fallback_doh_nameservers = fallback_doh_nameservers;
@@ -322,10 +322,10 @@ index 01b8e87..cd83a88 100644
  
    const bool happy_eyeballs_v3_changed =
 diff --git a/services/network/network_service.h b/services/network/network_service.h
-index 37e43d9..68dd302 100644
+index b5bbb11..1450bf5 100644
 --- a/services/network/network_service.h
 +++ b/services/network/network_service.h
-@@ -181,7 +181,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
+@@ -183,7 +183,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
        const net::DnsOverHttpsConfig& dns_over_https_config,
        bool additional_dns_types_enabled,
        const std::vector<net::IPEndPoint>& fallback_doh_nameservers,
@@ -336,10 +336,10 @@ index 37e43d9..68dd302 100644
    void SetUpHttpAuth(
        mojom::HttpAuthStaticParamsPtr http_auth_static_params) override;
 diff --git a/services/network/network_service_unittest.cc b/services/network/network_service_unittest.cc
-index fec0a78..840196c 100644
+index abc40e9..2423081 100644
 --- a/services/network/network_service_unittest.cc
 +++ b/services/network/network_service_unittest.cc
-@@ -727,7 +727,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -730,7 +730,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -349,7 +349,7 @@ index fec0a78..840196c 100644
    EXPECT_TRUE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kOff,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -738,7 +739,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -741,7 +742,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -359,7 +359,7 @@ index fec0a78..840196c 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kOff,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -749,7 +751,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -752,7 +754,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -369,7 +369,7 @@ index fec0a78..840196c 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kAutomatic,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -760,7 +763,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
+@@ -763,7 +766,8 @@ TEST_F(NetworkServiceTest, DnsClientEnableDisable) {
        *net::DnsOverHttpsConfig::FromString("https://foo/"),
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -379,7 +379,7 @@ index fec0a78..840196c 100644
    EXPECT_FALSE(dns_client_ptr->CanUseInsecureDnsTransactions());
    EXPECT_EQ(net::SecureDnsMode::kAutomatic,
              dns_client_ptr->GetEffectiveConfig()->secure_dns_mode);
-@@ -783,7 +787,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
+@@ -786,7 +790,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -389,7 +389,7 @@ index fec0a78..840196c 100644
    EXPECT_TRUE(dns_client_ptr->CanQueryAdditionalTypesViaInsecureDns());
  
    service()->ConfigureStubHostResolver(
-@@ -792,7 +797,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
+@@ -795,7 +800,8 @@ TEST_F(NetworkServiceTest, HandlesAdditionalDnsQueryTypesEnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -399,7 +399,7 @@ index fec0a78..840196c 100644
    EXPECT_FALSE(dns_client_ptr->CanQueryAdditionalTypesViaInsecureDns());
  }
  
-@@ -812,7 +818,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
+@@ -815,7 +821,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -409,7 +409,7 @@ index fec0a78..840196c 100644
    EXPECT_TRUE(service()->host_resolver_manager()->IsHappyEyeballsV3Enabled());
  
    service()->ConfigureStubHostResolver(
-@@ -821,7 +828,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
+@@ -824,7 +831,8 @@ TEST_F(NetworkServiceTest, HappyEyeballsV3EnableDisable) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -419,7 +419,7 @@ index fec0a78..840196c 100644
    EXPECT_FALSE(service()->host_resolver_manager()->IsHappyEyeballsV3Enabled());
  }
  
-@@ -848,7 +856,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
+@@ -851,7 +859,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
        kConfig1,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -429,7 +429,7 @@ index fec0a78..840196c 100644
    EXPECT_EQ(kConfig1, dns_client_ptr->GetEffectiveConfig()->doh_config);
  
    // Enable DNS over HTTPS for two servers.
-@@ -858,7 +867,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
+@@ -861,7 +870,8 @@ TEST_F(NetworkServiceTest, DnsOverHttpsEnableDisable) {
        net::SecureDnsMode::kSecure, kConfig2,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -439,7 +439,7 @@ index fec0a78..840196c 100644
    EXPECT_EQ(kConfig2, dns_client_ptr->GetEffectiveConfig()->doh_config);
  }
  
-@@ -883,7 +893,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -886,7 +896,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -449,7 +449,7 @@ index fec0a78..840196c 100644
    EXPECT_EQ(kConfig, dns_client_ptr->GetEffectiveConfig()->doh_config);
    EXPECT_TRUE(dns_client_ptr->GetConfigOverridesForTesting()
                    .fallback_doh_nameservers->empty());
-@@ -900,7 +911,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -903,7 +914,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        net::SecureDnsMode::kAutomatic, kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/fallback_doh_nameservers,
@@ -459,7 +459,7 @@ index fec0a78..840196c 100644
    EXPECT_EQ(
        dns_client_ptr->GetConfigOverridesForTesting().fallback_doh_nameservers,
        fallback_doh_nameservers);
-@@ -913,7 +925,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
+@@ -916,7 +928,8 @@ TEST_F(NetworkServiceTest, AutomaticWithDohFallbackEnableDisable) {
        kConfig,
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -469,7 +469,7 @@ index fec0a78..840196c 100644
    EXPECT_EQ(kConfig, dns_client_ptr->GetEffectiveConfig()->doh_config);
    EXPECT_TRUE(dns_client_ptr->GetConfigOverridesForTesting()
                    .fallback_doh_nameservers->empty());
-@@ -943,7 +956,8 @@ TEST_F(NetworkServiceTest, DisableDohUpgradeProviders) {
+@@ -946,7 +959,8 @@ TEST_F(NetworkServiceTest, DisableDohUpgradeProviders) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/true,
        /*fallback_doh_nameservers=*/{},
@@ -479,7 +479,7 @@ index fec0a78..840196c 100644
  
    // Set valid DnsConfig.
    net::DnsConfig config;
-@@ -1909,7 +1923,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
+@@ -1912,7 +1926,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -489,7 +489,7 @@ index fec0a78..840196c 100644
    LoadURL(test_server()->GetURL("/echo"));
    EXPECT_EQ(net::OK, client()->completion_status().error_code);
  
-@@ -1919,7 +1934,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
+@@ -1922,7 +1937,8 @@ TEST_F(NetworkServiceTestWithService, EnableDisableHappyEyeballsV3AndLoad) {
        /*dns_over_https_config=*/{},
        /*additional_dns_types_enabled=*/false,
        /*fallback_doh_nameservers=*/{},
@@ -545,10 +545,10 @@ index 50fbf3f..fb9f5a2 100644
    bool clear_hosts = false;
  };
 diff --git a/services/network/public/mojom/network_service.mojom b/services/network/public/mojom/network_service.mojom
-index 3de362c..23fc0f7 100644
+index aa20580..22a51d1 100644
 --- a/services/network/public/mojom/network_service.mojom
 +++ b/services/network/public/mojom/network_service.mojom
-@@ -278,7 +278,8 @@ interface NetworkService {
+@@ -279,7 +279,8 @@ interface NetworkService {
                              DnsOverHttpsConfig dns_over_https_config,
                              bool additional_dns_types_enabled,
                              array<IPEndPoint> fallback_doh_nameservers,
@@ -627,10 +627,10 @@ index 7bb977d..e59e15d 100644
    }
    if (font_description.GenericFamily() != FontDescription::kStandardFamily &&
 diff --git a/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm b/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
-index c31a45b..91fddce 100644
+index 6232b3c..0215851 100644
 --- a/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
 +++ b/third_party/blink/renderer/platform/fonts/mac/font_cache_mac.mm
-@@ -375,12 +375,19 @@ bool IsSystemFontName(const AtomicString& font_name) {
+@@ -374,12 +374,19 @@ bool IsSystemFontName(const AtomicString& font_name) {
  
  const SimpleFontData* FontCache::GetLastResortFallbackFont(
      const FontDescription& font_description) {
@@ -652,7 +652,7 @@ index c31a45b..91fddce 100644
    if (simple_font_data)
      return simple_font_data;
  
-@@ -388,8 +395,7 @@ bool IsSystemFontName(const AtomicString& font_name) {
+@@ -387,8 +394,7 @@ bool IsSystemFontName(const AtomicString& font_name) {
    // where the user doesn't have it, we fall back on Lucida Grande because
    // that's guaranteed to be there, according to Nathan Taylor. This is good
    // enough to avoid a crash at least.

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build the independent Chromium 151 engine for Linux (x64/arm64).
+# Build the independent Chromium 152 engine for Linux (x64/arm64).
 #
 # Usage:
 #   ./patches/chromium/build-linux.sh [/path/to/chromium/src] [x64|arm64]
 #
-# First argument: Chromium source checkout (default: ./chromium-src-151 under
+# First argument: Chromium source checkout (default: ./chromium-src-152 under
 # the current directory). If missing, the script clones the pinned upstream
 # commit and runs gclient sync (requires depot_tools on PATH; on Debian/Ubuntu
 # also run install-build-deps.sh once). Second argument selects target_cpu
@@ -13,8 +13,8 @@ set -euo pipefail
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TARGET_CPU="${2:-x64}"
-CHROMIUM_SRC="${1:-$PWD/chromium-src-151}"
-CHROMIUM_COMMIT="ef35003457e93c278f911a334b06e4a5f8967e06"
+CHROMIUM_SRC="${1:-$PWD/chromium-src-152}"
+CHROMIUM_COMMIT="026bb13a93d60e7adfefa2bbf58d6f57c2d335cc"
 
 if [ ! -d "$CHROMIUM_SRC/.git" ]; then
   mkdir -p "$CHROMIUM_SRC"

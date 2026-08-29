@@ -1,10 +1,10 @@
 #!/bin/bash
-# Build the independent Chromium 151 engine for macOS (arm64/x64).
+# Build the independent Chromium 152 engine for macOS (arm64/x64).
 #
 # Usage:
 #   ./patches/chromium/build-macos.sh [/path/to/chromium/src] [arm64|x64]
 #
-# First argument: Chromium source checkout (default: ./chromium-src-151 under
+# First argument: Chromium source checkout (default: ./chromium-src-152 under
 # the current directory). If missing, the script clones the pinned upstream
 # commit and runs gclient sync (requires depot_tools on PATH). Second argument
 # selects target_cpu (default: arm64 — Apple Silicon; use x64 for Intel).
@@ -17,8 +17,8 @@ set -euo pipefail
 
 PATCH_ROOT="$(cd "$(dirname "$0")" && pwd)"
 TARGET_CPU="${2:-arm64}"
-CHROMIUM_SRC="${1:-$PWD/chromium-src-151}"
-CHROMIUM_COMMIT="ef35003457e93c278f911a334b06e4a5f8967e06"
+CHROMIUM_SRC="${1:-$PWD/chromium-src-152}"
+CHROMIUM_COMMIT="026bb13a93d60e7adfefa2bbf58d6f57c2d335cc"
 
 if [ ! -d "$CHROMIUM_SRC/.git" ]; then
   mkdir -p "$CHROMIUM_SRC"
