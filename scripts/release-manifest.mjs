@@ -133,7 +133,17 @@ export function runCli(argv) {
   return { manifest, outPath, top };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const _isMain =
+  typeof process !== "undefined" &&
+  process.argv[1] &&
+  (() => {
+    try {
+      return import.meta.url === pathToFileURL(process.argv[1]).href;
+    } catch {
+      return false;
+    }
+  })();
+if (_isMain) {
   try {
     runCli(process.argv.slice(2));
   } catch (e) {
