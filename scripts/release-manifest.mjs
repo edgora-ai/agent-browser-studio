@@ -36,7 +36,7 @@ export function sha256File(filePath) {
   return h.digest("hex");
 }
 
-/** Numeric dot-segment compare, newest first — mirrors update-manager.compareVersions. */
+/** Numeric dot-segment compare, newest first -- mirrors update-manager.compareVersions. */
 export function compareVersionsDesc(a, b) {
   const pa = String(a).split(".").map(Number);
   const pb = String(b).split(".").map(Number);
@@ -126,9 +126,9 @@ export function runCli(argv) {
   const outPath = args.out || "update-manifest.json";
   fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
   const top = manifest.releases[0];
-  console.log(`✓ ${outPath}`);
+  console.log(`OK ${outPath}`);
   for (const r of manifest.releases) {
-    console.log(`  ${r.version}  ${r.sha256 ? r.sha256.slice(0, 12) + "…" : "(no sha256)"}  ${r.url}`);
+    console.log(`  ${r.version}  ${r.sha256 ? r.sha256.slice(0, 12) + "..." : "(no sha256)"}  ${r.url}`);
   }
   return { manifest, outPath, top };
 }
@@ -137,7 +137,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   try {
     runCli(process.argv.slice(2));
   } catch (e) {
-    console.error("✗ " + (e?.message || e));
+    console.error("X " + (e?.message || e));
     process.exit(1);
   }
 }
