@@ -57,7 +57,15 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build (bash on Windows)
-        run: npm run build
+        run: |
+          rm -rf dist
+          npx tsc
+          mkdir -p dist/renderer dist/resources
+          cp -r src/renderer/index.html src/renderer/storage-migrate.html src/renderer/css src/renderer/js dist/renderer/
+          cp src/main/preload.cjs dist/main/
+          cp resources/tray-icon-Template.png dist/resources/
+          cp resources/icon.icns dist/resources/
+          node scripts/build-masque-bridge.mjs
       - name: Unit + smoke tests
         run: npx vitest run tests/unit tests/smoke
       - name: Coverage (unit + smoke, threshold gated)
