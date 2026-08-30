@@ -49,9 +49,15 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152
-          git -C chromium-src-152 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-152 && gclient sync -D
+          for i in 1 2 3; do
+            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+              break
+            fi
+            echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            sleep 30
+            if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
+          done
       - name: Install Linux build deps
         run: |
           cd chromium-src-152
@@ -105,9 +111,15 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152
-          git -C chromium-src-152 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-152 && gclient sync -D
+          for i in 1 2 3; do
+            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+              break
+            fi
+            echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            sleep 30
+            if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
+          done
       - name: Build independent engine
         run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium-src-152" x64
       - name: npm ci + controller build (bash)
@@ -161,9 +173,15 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       - name: Clone + sync pinned Chromium source
         run: |
-          git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152
-          git -C chromium-src-152 checkout "$CHROMIUM_COMMIT"
-          cd chromium-src-152 && gclient sync -D
+          for i in 1 2 3; do
+            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+              break
+            fi
+            echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            sleep 30
+            if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
+          done
       - name: Build independent engine (arm64)
         run: bash patches/chromium/build-macos.sh "${{ github.workspace }}/chromium-src-152" arm64
       - name: npm ci + build
