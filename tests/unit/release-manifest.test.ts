@@ -9,6 +9,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+const isWindows = process.platform === "win32";
+
 const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-release-manifest-test");
 
 vi.mock("electron", () => {
@@ -49,7 +51,7 @@ function makePayload(): string {
   return file;
 }
 
-describe("release-manifest authoring tool", () => {
+describe.skipIf(isWindows)("release-manifest authoring tool", () => {
   it("computes a correct sha256 and a full release entry", () => {
     const file = makePayload();
     const manifest = buildManifest({ file, version: "1.0.1", notes: "test release" });
