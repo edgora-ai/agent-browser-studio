@@ -57,7 +57,7 @@ describe("release-manifest authoring tool", () => {
     expect(manifest.releases).toHaveLength(1);
     const r = manifest.releases[0];
     expect(r.version).toBe("1.0.1");
-    expect(r.url).toBe(file); // no base-url → absolute local path
+    expect(r.url).toBe(file); // no base-url -> absolute local path
     expect(r.sha256).toBe(crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
     expect(r.publishedAt).toBeTruthy();
     expect(sha256File(file)).toBe(r.sha256);
