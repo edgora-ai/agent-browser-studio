@@ -14,6 +14,13 @@ name: Engine production verify (multi-platform)
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform filter (all = 3 platforms, ~2h; pick one for ~40min fast gate)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, linux, windows, macos]
   schedule:
     - cron: "17 3 * * 1"
   push:
@@ -31,6 +38,7 @@ env:
 
 jobs:
   linux-x64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
     name: Linux x64 · build → verify → e2e → package
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -51,7 +59,8 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # GitHub mirror is ~10x faster than googlesource for runners
+            if git clone --filter=blob:none https://github.com/chromium/chromium.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D --no-history); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -90,6 +99,7 @@ jobs:
           if-no-files-found: error
 
   windows-x64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     name: Windows x64 · build → verify → e2e → package
     runs-on: windows-latest
     timeout-minutes: 360
@@ -113,7 +123,8 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # GitHub mirror is ~10x faster than googlesource for runners
+            if git clone --filter=blob:none https://github.com/chromium/chromium.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D --no-history); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -155,6 +166,7 @@ jobs:
           if-no-files-found: error
 
   macos-arm64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
     name: macOS arm64 · build → verify → e2e → package → notarize
     runs-on: macos-14
     timeout-minutes: 360
@@ -175,7 +187,8 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # GitHub mirror is ~10x faster than googlesource for runners
+            if git clone --filter=blob:none https://github.com/chromium/chromium.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D --no-history); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
