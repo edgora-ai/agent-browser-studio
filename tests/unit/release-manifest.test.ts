@@ -29,7 +29,14 @@ vi.mock("electron", () => {
   };
 });
 
-import { buildManifest, sha256File, compareVersionsDesc, runCli } from "../../scripts/release-manifest.mjs";
+let buildManifest: any, sha256File: any, compareVersionsDesc: any, runCli: any;
+if (!isWindows) {
+  const m = await import(/* @vite-ignore */ "../../scripts/release-manifest.mjs");
+  buildManifest = m.buildManifest;
+  sha256File = m.sha256File;
+  compareVersionsDesc = m.compareVersionsDesc;
+  runCli = m.runCli;
+}
 import { parseUpdateManifest, checkForUpdates } from "../../src/main/services/update-manager.js";
 
 let tmp: string;
