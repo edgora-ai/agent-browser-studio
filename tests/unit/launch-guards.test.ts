@@ -30,12 +30,24 @@ describe("launch-guards", () => {
     expect(r.checked).toBe(false);
   });
 
-  it("env: high gate throws LaunchBlockedError", () => {
-    // Force a high finding by relying on real checkEnvironmentRisk with no proxy still high in test env
-    expect(() => runEnvironmentRiskGuard(
-      { auditHigh: vi.fn() },
-      { meta: { timezone: "UTC", locale: "en-US", platform: "windows" }, resolvedProxy: { mode: "none", config: null }, cfg: { blockOnEnvironmentRisk: true }, passThrough: false },
-    )).toThrow(LaunchBlockedError);
+  it("env: high gate throws LaunchBlockedError", async () => {
+    const mod = await import("../../src/main/services/environment-risk.js");
+    const spy = vi.spyOn(mod, "checkEnvironmentRisk").mockReturnValue({
+      ok: false,
+      hostPlatform: "linux",
+      hostLocale: "en-US",
+      resolvers: [],
+      cnFonts: [],
+      proxy: null as any,
+      raf: null as any,
+      findings: [{ severity: "high", code: "dns-resolver-leak", message: "x", fix: "y" }],
+    } as any);
+    try {
+      expect(() => runEnvironmentRiskGuard(
+        { auditHigh: vi.fn() },
+        { meta: { timezone: "UTC", locale: "en-US", platform: "windows" }, resolvedProxy: { mode: "none", config: null }, cfg: { blockOnEnvironmentRisk: true }, passThrough: false },
+      )).toThrow(LaunchBlockedError);
+    } finally { spy.mockRestore(); }
   });
 
   it("env: gate off does not throw", () => {

@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Unit + smoke tests
-        run: npx vitest run
+        run: npx vitest run tests/unit tests/smoke
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
 
@@ -59,7 +59,7 @@ jobs:
       - name: Build (bash on Windows)
         run: npm run build
       - name: Unit + smoke tests
-        run: npx vitest run
+        run: npx vitest run tests/unit tests/smoke
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
 
