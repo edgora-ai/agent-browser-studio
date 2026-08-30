@@ -133,11 +133,11 @@ export function runCli(argv) {
   return { manifest, outPath, top };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     runCli(process.argv.slice(2));
   } catch (e) {
-    console.error("X " + (e?.message || e));
+    console.error("X " + ((e && e.message) || String(e)));
     process.exit(1);
   }
 }

@@ -12,6 +12,9 @@ export default defineConfig({
     exclude: ["node_modules", "dist", "tests/e2e/j[1-4]-*.test.ts"],
     globals: true,
     environment: "node",
+    deps: {
+      inline: [/scripts\/release-manifest/],
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html"],
