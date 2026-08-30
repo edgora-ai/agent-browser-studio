@@ -24,7 +24,6 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const PRODUCT = "agent-browser-studio";
 const VERSION_RE = /^\d+(\.\d+)+$/;
@@ -133,17 +132,7 @@ export function runCli(argv) {
   return { manifest, outPath, top };
 }
 
-const _isMain =
-  typeof process !== "undefined" &&
-  process.argv[1] &&
-  (() => {
-    try {
-      return import.meta.url === pathToFileURL(process.argv[1]).href;
-    } catch {
-      return false;
-    }
-  })();
-if (_isMain) {
+if (process.argv[1] && String(process.argv[1]).endsWith("release-manifest.mjs")) {
   try {
     runCli(process.argv.slice(2));
   } catch (e) {
