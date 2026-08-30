@@ -3,7 +3,7 @@
 // parser (parseUpdateManifest) and surface as an available update via
 // checkForUpdates(). Without this, a hand-rolled publish flow could drift
 // from what update-manager.ts accepts.
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -27,14 +27,7 @@ vi.mock("electron", () => {
   };
 });
 
-let buildManifest: any, sha256File: any, compareVersionsDesc: any, runCli: any;
-beforeAll(async () => {
-  const m = await import("../../scripts/release-manifest.mjs");
-  buildManifest = m.buildManifest;
-  sha256File = m.sha256File;
-  compareVersionsDesc = m.compareVersionsDesc;
-  runCli = m.runCli;
-});
+import { buildManifest, sha256File, compareVersionsDesc, runCli } from "../../scripts/release-manifest.mjs";
 import { parseUpdateManifest, checkForUpdates } from "../../src/main/services/update-manager.js";
 
 let tmp: string;
