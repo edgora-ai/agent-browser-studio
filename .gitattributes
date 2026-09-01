@@ -2,3 +2,8 @@
 patches/chromium/args.gn text eol=lf
 patches/chromium/*.sha256 text eol=lf
 patches/chromium/files/** text eol=lf
+patches/firefox/*.sha256 text eol=lf
+patches/firefox/*.sha512 text eol=lf
+patches/firefox/mozconfig* text eol=lf
+patches/firefox/*.sh text eol=lf
+patches/firefox/files/** text eol=lf
