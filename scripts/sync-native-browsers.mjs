@@ -145,9 +145,22 @@ function targets(platform) {
 }
 
 function stageTree(src, staging) {
+  fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(staging), { recursive: true });
-  fs.cpSync(src, staging, { recursive: true });
+  const result = spawnSync("ditto", [src, staging], { encoding: "utf8" });
+  if (result.error || result.status !== 0 || !fs.existsSync(staging)) {
+    fail("ditto failed to stage a macOS browser bundle", String(result.stderr || result.error || "unknown error"));
+  }
   return staging;
+}
+
+function verifyMacBundle(bundlePath) {
+  const result = spawnSync("codesign", ["--verify", "--deep", "--strict", bundlePath], {
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) {
+    fail("staged macOS browser bundle has an invalid code signature", String(result.stderr || result.error || bundlePath));
+  }
 }
 
 function dittoZip(staging, outZip) {
@@ -172,6 +185,8 @@ const { chromiumApp, firefoxApp } = resolveSources(platform);
 if (platform === "mac") {
   const chromiumStage = stageTree(chromiumApp, path.join(outDir, ".stage", "Chromium.app"));
   const firefoxStage = stageTree(firefoxApp, path.join(outDir, ".stage", "Firefox.app"));
+  verifyMacBundle(chromiumStage);
+  verifyMacBundle(firefoxStage);
   dittoZip(chromiumStage, t.chromiumZip);
   dittoZip(firefoxStage, t.firefoxZip);
   const chromiumVersion = binVersion(path.join(chromiumStage, "Contents", "MacOS", "Chromium"));
