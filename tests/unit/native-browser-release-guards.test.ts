@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const SYNC_SCRIPT = path.join(ROOT, "scripts", "sync-native-browsers.mjs");
+const AFTER_PACK = path.join(ROOT, "scripts", "after-pack.mjs");
+const BUILDER_CONFIG = path.join(ROOT, "electron-builder.yml");
 const BUNDLED_RUNTIME = path.join(ROOT, "src", "main", "services", "bundled-native-browsers.ts");
 const CHROMIUM_MANAGER = path.join(ROOT, "src", "main", "services", "native-chromium-manager.ts");
 
@@ -16,6 +18,12 @@ describe("native browser release guards", () => {
     expect(script.indexOf("verifyMacBundle(chromiumStage)")).toBeLessThan(
       script.indexOf("dittoZip(chromiumStage"),
     );
+
+    const afterPack = fs.readFileSync(AFTER_PACK, "utf8");
+    expect(afterPack.match(/"--deep"/g)).toHaveLength(2);
+    expect(afterPack).toContain("the complete Electron app deeply");
+    expect(fs.readFileSync(BUILDER_CONFIG, "utf8"))
+      .toContain("electronDist: node_modules/electron/dist");
   });
 
   it("fails closed when unpacking and versions the extraction cache", () => {
