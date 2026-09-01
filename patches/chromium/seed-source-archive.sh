@@ -13,8 +13,18 @@ set -euo pipefail
 
 CHROMIUM_VERSION="${CHROMIUM_ARCHIVE_VERSION:-152.0.7977.72}"
 CHROMIUM_COMMIT="${CHROMIUM_ARCHIVE_COMMIT:-026bb13a93d60e7adfefa2bbf58d6f57c2d335cc}"
-GCLIENT_ROOT="${1:-$HOME/workspace/chromium-build-152}"
-ARCHIVE="${2:-$GCLIENT_ROOT/chromium-$CHROMIUM_VERSION.tar.gz}"
+
+normalize_path() {
+  local value="$1"
+  if command -v cygpath >/dev/null 2>&1 && [[ "$value" =~ ^[A-Za-z]:[\\/].* ]]; then
+    cygpath -u "$value"
+  else
+    printf '%s\n' "$value"
+  fi
+}
+
+GCLIENT_ROOT="$(normalize_path "${1:-$HOME/workspace/chromium-build-152}")"
+ARCHIVE="$(normalize_path "${2:-$GCLIENT_ROOT/chromium-$CHROMIUM_VERSION.tar.gz}")"
 CHROMIUM_SRC="$GCLIENT_ROOT/src"
 EXPECTED_ARCHIVE_SHA256="${CHROMIUM_ARCHIVE_SHA256:-}"
 if [[ "$CHROMIUM_VERSION" == "152.0.7977.65" && "$CHROMIUM_COMMIT" == "fc4d67f1788019a27e32511137ceccbd2fafdaaa" ]]; then
@@ -52,7 +62,7 @@ if [[ ! "$EXPECTED_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "error: no trusted SHA-256 is configured for Chromium $CHROMIUM_VERSION ($CHROMIUM_COMMIT)" >&2
   exit 2
 fi
-archive_sha256="$("${SHA256_COMMAND[@]}" "$ARCHIVE" | cut -d ' ' -f 1)"
+archive_sha256="$("${SHA256_COMMAND[@]}" < "$ARCHIVE" | cut -d ' ' -f 1)"
 if [[ "$archive_sha256" != "$EXPECTED_ARCHIVE_SHA256" ]]; then
   echo "error: Chromium archive SHA-256 mismatch: $archive_sha256 != $EXPECTED_ARCHIVE_SHA256" >&2
   exit 1

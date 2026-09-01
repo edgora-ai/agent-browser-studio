@@ -86,6 +86,8 @@ describe("Chromium macOS source and build scripts", () => {
     expect(fs.readFileSync(VERIFY_PROVENANCE, "utf8")).toContain(".chromium-source-commit");
     expect(prepare).toContain("GCLIENT_NO_HISTORY");
     expect(seed).toContain("tar -tf");
+    expect(seed).toContain("cygpath -u");
+    expect(seed).toContain('"${SHA256_COMMAND[@]}" < "$ARCHIVE"');
     expect(seed).toContain("contains an absolute or traversal path");
     expect(seed).toContain("trusted Chromium 152.0.7977.65 archive");
     expect(seed).toContain("Archive-SHA256");
