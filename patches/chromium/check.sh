@@ -35,6 +35,33 @@ if [[ ! -f "$CHROMIUM_SRC/chrome/renderer/chrome_content_renderer_client.cc" ]];
   exit 2
 fi
 
+provenance="$($PATCH_ROOT/verify-source-provenance.sh "$CHROMIUM_SRC" "$UPSTREAM_BASELINE")"
+
+# Archive-seeded source intentionally has a tiny synthetic Git history: the
+# trusted archive SHA and exact per-file delta establish source provenance,
+# while apply.sh records every successfully applied patch by its immutable
+# hash. Do not make git cat-file lazily fetch a multi-GiB upstream pack merely
+# to validate this already-patched build tree.
+if [[ -f "$CHROMIUM_SRC/.chromium-source-base-commit" ]]; then
+  GIT_DIR="$(git -C "$CHROMIUM_SRC" rev-parse --absolute-git-dir)"
+  STATE_DIR="$GIT_DIR/roxy-fingerprint-patches"
+  for patch in "$PATCH_ROOT"/patches/*.patch; do
+    patch_name="$(basename "$patch")"
+    marker="$STATE_DIR/$patch_name"
+    patch_hash="$(git -C "$CHROMIUM_SRC" hash-object "$patch")"
+    if [[ ! -f "$marker" || "$(<"$marker")" != "$patch_hash" ]]; then
+      echo "error: archive source patch is not recorded as applied: $patch_name" >&2
+      exit 2
+    fi
+    echo "ok: $patch_name"
+  done
+  test -s "$CHROMIUM_SRC/third_party/blink/public/common/roxy_fingerprint_config.h"
+  test -s "$CHROMIUM_SRC/third_party/blink/public/common/roxy_webrtc_rewriter.h"
+  echo "upstream baseline: $provenance"
+  echo "source payload: ok"
+  exit 0
+fi
+
 if ! git -C "$CHROMIUM_SRC" cat-file -e "${UPSTREAM_BASELINE}^{commit}"; then
   echo "error: pinned Chromium baseline is missing: $UPSTREAM_BASELINE" >&2
   exit 2

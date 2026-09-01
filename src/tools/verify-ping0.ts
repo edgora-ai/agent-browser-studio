@@ -266,9 +266,22 @@ function curlJson(proxyType: "http" | "socks5", host: string, port: number, url:
 }
 
 async function detectGeo(opts: Options): Promise<GeoInfo> {
-  const data = (await curlJson(opts.proxyType, opts.upstreamHost, opts.upstreamPort, "https://ipwho.is/")) as any;
+  let data: any = null;
+  const errors: string[] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    data = await curlJson(
+      opts.proxyType,
+      opts.upstreamHost,
+      opts.upstreamPort,
+      "https://ipwho.is/",
+      15,
+    );
+    if (data && data.success !== false) break;
+    errors.push(`attempt ${attempt}: ${data?.error || "no data"}`);
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   if (!data || data.success === false) {
-    throw new Error("Geo-IP detection through proxy failed: " + (data?.error || "no data"));
+    throw new Error("Geo-IP detection through proxy failed: " + errors.join("; "));
   }
   return {
     exitIp: data.ip || null,

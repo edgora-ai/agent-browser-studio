@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { openCardMenu } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j65");
@@ -116,8 +117,11 @@ describe("J65 — profile backup export/import", () => {
   it("profiles tab shows the export-backup button", async () => {
     await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
     await h.page.evaluate(() => (window as any).agentBrowser.loadProfiles());
-    await h.page.waitForSelector(".profile-card [data-action='export-archive']", { timeout: 5000 });
-    expect(await h.page.locator(".profile-card [data-action='export-archive']").count()).toBeGreaterThanOrEqual(1);
+    const card = h.page.locator("#profile-list .profile-card").first();
+    await card.waitFor({ state: "visible", timeout: 5000 });
+    await openCardMenu(card);
+    await h.page.waitForSelector("#profile-list .profile-card [data-action='export-archive']", { timeout: 5000 });
+    expect(await h.page.locator("#profile-list .profile-card [data-action='export-archive']").count()).toBeGreaterThanOrEqual(1);
     // Toolbar import-backup button exists.
     expect(await h.page.locator('[data-cmd="importProfileArchive"]').count()).toBe(1);
     // Batch bar exposes the export-selected action.

@@ -1263,6 +1263,7 @@
                 '<button type="button" data-action="export-archive">' + esc(t('profile.menu.export', '📦 Export backup')) + '</button>' +
                 '<button type="button" data-action="lock">' + esc(isLocked ? t('profile.menu.unlock', '🔓 Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
                 '<button type="button" data-action="logs">' + esc(t('profile.menu.logs', '📋 Logs')) + '</button>' +
+                '<button type="button" data-action="webrtc-diag">' + esc(t('webrtc.diag.title', '📡 In-browser WebRTC Diagnostics')) + '</button>' +
                 '<button type="button" class="danger" data-action="delete">' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
               '</div>' +
             '</details>' +
@@ -1347,9 +1348,15 @@
       return { dirId: p.dirId, html: html, sig: htmlSignature(html) };
     });
 
-    // Fast path: nothing changed -> touch no DOM at all.
+    // Fast path: nothing changed -> touch no DOM at all. Verify the DOM too:
+    // overlapping refreshes can replace the list with a loading placeholder
+    // after an earlier request has already recorded this data signature.
     var signature = cards.map(function (c) { return c.dirId + ":" + c.sig; }).join("|") + "#" + pageCount;
-    if (signature === lastRenderSignature) {
+    var renderedSignature = Array.prototype.map.call(
+      container.querySelectorAll(":scope > .profile-card"),
+      function (card) { return card.dataset.dirId + ":" + card.getAttribute("data-card-sig"); },
+    ).join("|") + "#" + pageCount;
+    if (signature === lastRenderSignature && renderedSignature === signature) {
       renderPagination(container, total, pageCount);
       return;
     }

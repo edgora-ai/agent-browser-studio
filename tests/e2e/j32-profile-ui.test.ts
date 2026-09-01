@@ -5,6 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { clickCardAction } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j32");
@@ -73,7 +74,7 @@ describe("J32 — profile card UI: launch / stop / edit / delete", () => {
   }, 20000);
 
   it("deletes the profile via the card Delete button + the confirm dialog", async () => {
-    await h.page.locator(`${card()} [data-action="delete"]`).click({ timeout: 5000 });
+    await clickCardAction(h.page.locator(card()), "delete");
     // Custom #dlg-confirm opens; click its Confirm submit button.
     await h.page.waitForSelector("#dlg-confirm[open]", { timeout: 5000 });
     await h.page.locator('#dlg-confirm button[type="submit"]').click({ timeout: 5000 });

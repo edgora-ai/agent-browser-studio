@@ -1,94 +1,221 @@
-# Chromium 152 upgrade plan
+# Chromium 152 upgrade record
 
-Status: **Phases 1–2 COMPLETE against `152.0.7977.72`** (2026-08-30): the full
-45-patch series applies with **0 rejects**, and the strict `check.sh` gate
-passes end-to-end on the 152 pinned baseline. **Phases 3–5 (build, corpora,
-full verification) remain** — the matrix stays at the verified Chromium
-`150.0.7871.114` build until they pass. This supersedes `151.0.7922.71` in
-[UPGRADE_151.md](UPGRADE_151.md); Phase 2 plumbing now targets 152.
+Status: **macOS arm64 COMPLETE and locally verified** (2026-09-01).
 
-## Target (decided 2026-08-30)
+The independent engine now runs Chromium `152.0.7977.72` at upstream commit
+`026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`. The built application was installed
+into the managed cache and passed the Stock-152 capability gate, the strict
+53-surface native verifier, a real proxy/Ping0 identity run, and the complete
+Electron E2E suite with the 152 executable explicitly selected.
 
-- **Upstream stable: `152.0.7977.72`** — the newest 152 stable tag on
-  `152.0.7977.x` (verified via `git ls-remote` against the GitHub mirror; tag
-  tip commit `026bb13a93`), fetched into the build tree as
-  `refs/tags/chromium-152-stable`.
-- Why skip 151: `151.0.7922.71` was already superseded by `.174`, and 152
-  stable shipped on schedule (2026-08-25). Shipping 151 in late August would
-  arrive already one major behind RoxyBrowser's 151 kernel (2026-08-20) and
-  behind stock stable. One larger rebase > two sequential ones.
-- RoxyBrowser shipped its own Chromium 151 kernel on 2026-08-20 with a
-  changelog note that their WebGL output is now aligned with Chrome — our
-  per-engine renderer composition (`composeGpuRenderer`, Slice 79 / 81.8)
-  already covers the same anomaly class on 150 and carries to 152 unchanged.
+Linux and Windows builds remain follow-up work; they were intentionally removed
+from the macOS-first critical path.
 
-## Upstream access
+## Target and source provenance
 
-The build tree is `~/workspace/chromium-build-151/src` (git-blob:none partial
-checkout; the name is historical). Tag staged with:
+- Chromium version: `152.0.7977.72`
+- Chromium commit: `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`
+- Local source: `~/workspace/chromium-build-152/src`
+- Output: `out/AgentBrowserRelease/Chromium.app`
 
+Git pack transfers repeatedly truncated on this network. The verified source tree
+therefore uses an immutable official archive plus exact per-file deltas:
+
+- Official archive: `chromium-152.0.7977.65-lite.tar.xz`
+- Archive base commit: `fc4d67f1788019a27e32511137ceccbd2fafdaaa`
+- Archive SHA-256:
+  `1a544857555a0c391753e7f9f3016cc07b0288d9da02260c451aa9082b305066`
+- `.65` → `.72` root delta: 174 commits, 172 changed entries, 170 regular
+  files verified by Git blob SHA, plus exact Dawn and DevTools gitlink deltas.
+
+`verify-source-provenance.sh` binds the trusted archive SHA and base commit to a
+small synthetic Git commit, then requires the exact `.chromium-source-commit`
+target. `check.sh` validates this archive+delta mode without triggering a
+multi-gigabyte lazy Git fetch.
+
+## Patchset result
+
+- Numbered patches: `0002`–`0050` (**49 patches**)
+- `PATCHSET.sha256`: **52/52 entries verified**
+  - `args.gn`
+  - 2 immutable Blink payload headers
+  - 49 numbered patches
+- Applied patch markers: 49
+- Reject files: 0
+
+The original 45-patch Chromium 152 rebase remains immutable. Compilation and
+resume defects were fixed with append-only patches:
+
+- `0047-fix-duplicate-cg-refresh-interval.patch` removes Chromium 152's duplicate
+  `GetCGRefreshInterval` definition while retaining the defensive managed version.
+- `0048-restore-evolved-fingerprint-payload.patch` restores payload evolution
+  lost by the old incremental `apply.sh` behavior, including the public
+  `agent-browser-fingerprint-config` protocol and managed generic-font resolver.
+- `0049-preserve-generic-font-family-semantics.patch` carries Blink's
+  generic-vs-quoted-family distinction into managed font resolution.
+- `0050-parse-managed-secure-dns-config.patch` implements the `secureDns`
+  configuration consumed by the managed DoH path, with bounded template count
+  and length.
+
+`apply.sh` now preserves evolved payloads on incremental resumes instead of
+copying the immutable base payload over already-applied changes.
+
+## macOS arm64 build
+
+Canonical release arguments remain enabled:
+
+- `is_official_build = true`
+- `is_component_build = false`
+- ThinLTO
+- `symbol_level = 0`
+- `chrome_pgo_phase = 0`
+- `proprietary_codecs = true`
+- `ffmpeg_branding = "Chrome"`
+- Widevine registration enabled
+- `target_cpu = "arm64"`
+- local Ninja concurrency `-j4`
+
+Verified build output:
+
+```text
+/Users/ahoo/workspace/chromium-build-152/src/out/AgentBrowserRelease/
+  Chromium.app/Contents/MacOS/Chromium
+
+Mach-O 64-bit executable arm64
+Chromium 152.0.7977.72
 ```
-git -c http.proxy=http://127.0.0.1:7890 fetch --depth=1 origin \
-  refs/tags/152.0.7977.72:refs/tags/chromium-152-stable --no-tags
+
+Unsigned build executable SHA-256:
+
+```text
+3c4a69566e78ba2fc053697ecd1956248a040e55f560ef751b78679c26b1603d
 ```
 
-Network note: the local proxy (127.0.0.1:7890) is flaky for large promisor
-blob batches — `git ls-remote`/tag fetch succeed with retries, but
-`checkout` may need several attempts (blobs arrive incrementally). If a
-checkout stalls, retry; every attempt makes forward progress. Switching the
-promisor remote to the GitHub mirror temporarily also works.
+The installer copied, ad-hoc signed, deep-verified and atomically installed the
+application at:
 
-## Conflict surface (measured 2026-08-30)
+```text
+~/.agent-browser-studio/chromium-152.0.7977.72/Chromium.app
+```
 
-- Files touched by our patch series: **95** (`/tmp/chromium-152-upgrade/touched.txt`, grep `^diff --git`).
-- Sequential dry-run on the real 152 tip (`upgrade-drive.sh`, `REF=chromium-152-stable`, 45 patches, `git apply --reject` attribution): **42 of 45 patches apply cleanly; 3 conflict with rejected hunks** (vs 151: 101 files, 22/44 clean, 17 conflicting — 152 is dramatically cleaner).
+Installed executable SHA-256 (different because code signing mutates Mach-O
+signature data):
 
-| Patches with rejected hunks | Files | Area |
-|---|---|---|
-| `0003-native-screen-and-dpr` | 2 (`local_dom_window.cc`, `screen.cc`) | include-block context drift — `navigation/impression.h` gone, `document.h` inserted |
-| `0025-native-timezone-identity` | 1 (`timezone_controller.cc`) | include-block drift — `features.h`/`switches.h` inserted |
-| `0044-agent-browser-managed-dns-locale-refresh` | 1 (`network_service.cc` signature) | `ConfigureStubHostResolver` gained a `provider` param in 152 — signature shift |
+```text
+f83b0a79a0776a19bfdb41fed2e92db0114326f4944152e5b27bd3f16b53ac2c
+```
 
-`0040` and `0042` report `OK*` (applied with `--reject`, no new `.rej`) — this is the expected false-positive when the pristine-`REF` drive harness does not overlay `files/` payloads, identical to the 151 run. Under the real `apply.sh` payload flow they apply strictly clean (`check.sh` proves it).
+Installer runtime build hash:
 
-Hot spots by value:
-- 152 has **no** `ui/display/mac/*` storm (151 dropped 6 backports as redundant), no `0042`/`0035` cluster, and no `BUILD.gn` churn.
+```text
+7944aa16909510c02fff7e1b237d5fc6466f8cd684a044a2843c94dbb31ea675
+```
 
-## Phase 1 rebase — results (2026-08-30)
+`codesign --verify --deep --strict` reports the managed bundle valid on disk and
+satisfying its Designated Requirement.
 
-Full-series drive re-run after regen: **0 rejected hunks across all 45 patches**.
+## Stock Chrome 152 gate
 
-Regenerated patches (minimal context re-insertion, no behavioral change):
-- `0003` — re-insert `roxy_fingerprint_config.h` include after `features.h` / after `permissions_policy_feature` (upstream added/removed lines around the insertion point).
-- `0025` — re-insert `roxy_fingerprint_config.h` include before `thread_safe_browser_interface_broker_proxy.h` (upstream inserted `features.h`/`switches.h` above it).
-- `0044` — add `bool doh_via_proxy` tail param to `NetworkService::ConfigureStubHostResolver` `.cc` signature to match the header the same patch already extends (upstream added a sibling param, shifting context by one line).
+Reference corpus:
 
-Harness: `patches/chromium/scripts/upgrade-drive.sh` (full-series dry-run) + `patches/chromium/scripts/upgrade-resolve.sh` (`prepare` → hand-edit `OUT/files` → `regen`).
+```text
+patches/chromium/corpora-152/stock-chrome-152.0.7977.64.json
+```
 
-## Phase 2 plumbing — results (2026-08-30)
+Result: **8/8 gates passed**.
 
-Everything that determines *which* Chromium gets built now targets 152;
-everything that *claims verification* intentionally still says 150 until phase 5:
+- UA version family: Chrome 152
+- WebGL Stock-152 SHA:
+  `8f97b97709c5c782ef0b5751e8c2217826721af0bfb8daeba76d29694d040bc2`
+- WebGPU Stock-152 SHA:
+  `d6f8c588d2270ff32761fa2d512820f27eb932248a492a536696bc60b42c4999`
+- WebGL Window/Worker parity
+- WebGPU Window/Worker parity
+- OPFS available
+- Full font canvas Stock-152 SHA parity
+- Font Window/Worker canvas parity
 
-- Pins bumped to `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc` (= tag `152.0.7977.72`):
-  `build-macos.sh`, `build-linux.sh`, `build-windows.sh`, `check.sh` (`UPSTREAM_BASELINE`),
-  `.github/workflows/engine-verify.yml` (`CHROMIUM_COMMIT`). Default checkout dirs renamed
-  `chromium-src-151` → `chromium-src-152`; `BUILD.txt` labels and `check.sh` comments → `chromium-152.0.7977.72`.
-  `apply.sh` comment → `152`.
-- `PATCHSET.sha256` regenerated — 3 regenerated patches failed hash verification; now 48/48 hashes verify.
-- Left at 150 on purpose (verified-state claims, flipped in phase 5):
-  `README*` "verified at" lines, `ALIGNMENT_MATRIX.md` baselines, corpus docs,
-  verifier fallback defaults (`src/tools/verify-ping0.ts`, `verify-managed-doh.ts`, `capture-font-corpus.ts`), unit-test sample strings.
+The gate now grants Local Font Access permission explicitly and applies bounded
+per-stage timeouts, so a permission prompt cannot hang verification indefinitely.
 
-## Phases
+## Strict native verifier
 
-1. ✅ **Rebase patch series onto 152** — DONE (2026-08-30). All conflicts resolved; full-series drive = 0 rejects; 3 patches regenerated.
-2. ✅ **Version plumbing** — DONE (2026-08-30). Build pins, CI env, baseline and `PATCHSET.sha256` moved to 152; verified-state strings intentionally untouched.
-3. **Build macOS arm64** via `build-macos.sh` into a separate output dir (`AgentBrowserRelease152`); never touch the known-good 150 install.
-4. **Re-baseline corpora against stock Chrome 152** — WEBGL / STORAGE / FONT / NETWORK_FINGERPRINT corpora were recorded from stock 150-era references; the acceptance gates fail closed on drift, so capture fresh stock-152 references first, then run the strict 53-surface verifier.
-5. **Full verification** — unit + e2e suites against the 152 binary, external ping0 baseline for both engines, then update ALIGNMENT_MATRIX baselines and mark the upgrade verified.
+Command:
 
-## Explicitly out of scope until phases 1–5 pass
+```bash
+npm run verify:chromium -- \
+  "$HOME/.agent-browser-studio/chromium-152.0.7977.72/Chromium.app"
+```
 
-- Shipping/installer defaults stay on the verified 150 engine.
-- No persona or identity-string changes ride along with the version bump.
+Result:
+
+```json
+{
+  "ok": true,
+  "version": "152.0.7977.72",
+  "checkedSurfaces": 53,
+  "sameSeedStable": true,
+  "differentSeedsDistinct": true,
+  "persistentProfileRestart": "full-surface-verified",
+  "passThrough": "verified-native-host-identity-and-theme"
+}
+```
+
+The verifier covers fresh and restarted Profiles, independent same/different
+seeds, `el-GR`/`el-CY`, headed/headless parity, incognito storage and native-host
+pass-through. It reports:
+
+- WebGL: four contexts, 26 WebGL1 parameters, 53 WebGL2 parameters and 24
+  shader-precision cases, exact Stock-152 SHA.
+- WebGPU: two contexts, 23 adapter features, 36 adapter limits, one default
+  device feature, 36 device limits and 10 WGSL language features, exact
+  Stock-152 SHA.
+- Fonts: 39 candidates, 390 generic metrics, 468 named metrics and 247 raster
+  cases per context; managed Local Font Access allow-list and ≤2 px Canvas/DOM
+  generic parity verified.
+- 61 system-theme checks, AAC/H.264, modern/legacy/Buckets/OPFS storage,
+  WebAuthn, CDP identity, build-version coherence and audio capture verified.
+
+Chromium 152 exposes extra experimental WebGPU capabilities when launched with
+`--enable-unsafe-webgpu`. That flag and `--ignore-gpu-blocklist` were removed
+from the stock-parity verifier; otherwise the verifier itself changed the
+surface it was trying to measure.
+
+## Application and external verification
+
+Explicit-152 full E2E command:
+
+```bash
+AGENT_BROWSER_CHROMIUM_BINARY_PATH="$HOME/.agent-browser-studio/chromium-152.0.7977.72/Chromium.app/Contents/MacOS/Chromium" \
+  npm run test:e2e
+```
+
+Result:
+
+```text
+Test Files  95 passed | 4 skipped (99)
+Tests       470 passed | 12 skipped (482)
+```
+
+Non-E2E suite:
+
+```text
+Test Files  75 passed
+Tests       803 passed
+```
+
+A real Ping0 run through the configured HTTP proxy reached `finished=true` and
+wrote `/private/tmp/ping0-chromium152/ping0-chromium152-local-1.json`
+(SHA-256 `0ba3e9c42d28d3a14ad7f9d134931661198746e690f8c2d95e63faf0684f9b05`).
+All browser identity categories passed (`identityFailures=0`). Its six reported
+failures were external network/site boundary signals (IDC, headless RAF sample,
+DNS/multi-exit and service-observed country mismatch), not browser identity
+surface failures.
+
+## Remaining work
+
+- Build and verify Linux and Windows on suitable runners.
+- Produce signed/notarized distribution artifacts where credentials and real
+  platform runners are available.
+- Keep retained Chromium 149/150 builds for explicit rollback tests; default
+  managed selection now chooses verified 152.

@@ -11,20 +11,31 @@ if [[ ! -f "$CHROMIUM_SRC/chrome/renderer/chrome_content_renderer_client.cc" ]];
   exit 2
 fi
 
+GIT_DIR="$(git -C "$CHROMIUM_SRC" rev-parse --absolute-git-dir)"
+STATE_DIR="$GIT_DIR/roxy-fingerprint-patches"
+mkdir -p "$STATE_DIR"
+
 copy_file() {
   local relative="$1"
   local source="$PATCH_ROOT/files/$relative"
   local target="$CHROMIUM_SRC/$relative"
   mkdir -p "$(dirname "$target")"
+  if [[ -e "$target" || -L "$target" ]]; then
+    if cmp -s "$source" "$target"; then
+      return
+    fi
+    if [[ -n "$(find "$STATE_DIR" -maxdepth 1 -type f -name '*.patch' -print -quit)" ]]; then
+      echo "preserving evolved payload: $relative"
+      return
+    fi
+    echo "error: refusing to overwrite an unexpected source payload: $target" >&2
+    exit 1
+  fi
   cp "$source" "$target"
 }
 
 copy_file "third_party/blink/public/common/roxy_fingerprint_config.h"
 copy_file "third_party/blink/public/common/roxy_webrtc_rewriter.h"
-
-GIT_DIR="$(git -C "$CHROMIUM_SRC" rev-parse --absolute-git-dir)"
-STATE_DIR="$GIT_DIR/roxy-fingerprint-patches"
-mkdir -p "$STATE_DIR"
 
 for patch in "$PATCH_ROOT"/patches/*.patch; do
   patch_name="$(basename "$patch")"

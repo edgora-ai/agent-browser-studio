@@ -31,13 +31,15 @@ APIs, closed, and deleted; the original Profile trees were not modified.
 All six observable RoxyChrome Profiles therefore expose one common deep
 capability corpus while varying the unmasked identity.
 
-## OSS Chromium 150 result
+## OSS Chromium 152 result
 
-The installed independent Chromium `150.0.7871.114`, configured as a Windows
-NVIDIA RTX 3060 Profile, produces the same normalized SHA-256 and exact
-Window/Worker parity. The strict verifier additionally repeats the corpus
-across independent Profiles, a same-Profile close/reopen, different seeds,
-Windows/macOS identities, `el-GR`/`el-CY`, and headed/headless modes.
+The installed independent Chromium `152.0.7977.72`, configured as a Windows
+NVIDIA RTX 3060 Profile, produces the same normalized SHA-256
+`8f97b97709c5c782ef0b5751e8c2217826721af0bfb8daeba76d29694d040bc2`
+and exact Window/Worker parity. The strict verifier repeats the corpus across
+independent Profiles, a same-Profile close/reopen, different seeds,
+Windows/macOS identities, `el-GR`/`el-CY`, headed/headless and native
+pass-through modes.
 
 The acceptance gate is implemented in
 `src/tools/webgl-corpus.ts` and `src/tools/verify-native-chromium.ts`. A future
@@ -47,7 +49,7 @@ reference. Product fingerprint baselines also retain a deep WebGL corpus hash
 so post-launch drift is auditable.
 
 No Chromium source change was required for this evidence: the existing native
-vendor/renderer implementation plus Chromium 150's underlying capability
+vendor/renderer implementation plus Chromium 152's underlying capability
 surface already matches the observable RoxyChrome corpus. Patch `0039` only
 aligns legacy Storage quota callbacks and does not alter WebGL; patch `0038`
 and all earlier patch bytes remain unchanged.

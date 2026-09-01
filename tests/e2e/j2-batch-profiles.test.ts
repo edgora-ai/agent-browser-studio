@@ -140,6 +140,7 @@ describe("J2 — Batch profile create / start-all / stop-all", () => {
   });
 
   it("Stop All terminates all 3 and ports refuse connections", async () => {
+    await closeAllDialogs(h.page);
     await clickCmd(h.page, "bulkStop");
     // Poll until none running (Stop All is renderer fan-out, each SIGTERM + 3s SIGKILL fallback)
     const start = Date.now();

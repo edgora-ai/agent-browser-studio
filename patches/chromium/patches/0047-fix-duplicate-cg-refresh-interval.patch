@@ -1,0 +1,28 @@
+diff --git a/ui/display/mac/screen_utils_mac.mm b/ui/display/mac/screen_utils_mac.mm
+--- a/ui/display/mac/screen_utils_mac.mm
++++ b/ui/display/mac/screen_utils_mac.mm
+@@ -72,24 +72,4 @@
+   }
+ }
+
+-base::TimeDelta GetCGRefreshInterval(CGDirectDisplayID display_id) {
+-  // Query the current display mode to retrieve its refresh rate.
+-  CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display_id);
+-  if (mode == nullptr) {
+-    return base::Hertz(60);
+-  }
+-
+-  double refresh_rate = CGDisplayModeGetRefreshRate(mode);
+-  CGDisplayModeRelease(mode);
+-
+-  // A refresh rate of 0 could indicate that the display does not have a fixed
+-  // refresh rate (e.g., variable refresh rate displays) or the query failed.
+-  // Fall back to a default of 60Hz.
+-  if (refresh_rate == 0.0) {
+-    return base::Hertz(60);
+-  }
+-
+-  return base::Hertz(refresh_rate);
+-}
+-
+ }  // namespace display

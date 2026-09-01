@@ -1,4 +1,4 @@
-# Agent Browser Chromium 150 patch set
+# Agent Browser Chromium 152 patch set
 
 This directory is the independent Chromium implementation used by
 Agent Browser Studio. It does not contain CloakBrowser Pro binaries, recovered
@@ -6,8 +6,8 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 
 ## Baseline
 
-- Chromium tag: `150.0.7871.114`
-- Commit: `f405107495a07cb1bfcf687d4af8d91117098db6`
+- Chromium tag: `152.0.7977.72`
+- Commit: `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`
 - Config switch: `--agent-browser-fingerprint-config=<base64url-json>`
 - Legacy compatibility switch: `--roxy-fingerprint-config=<base64url-json>`
 - Config schema: `1`
@@ -20,19 +20,21 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0044` chain therefore keeps
-the system-theme, occluded-input and managed-QUIC changes independently
-reviewable and revertible, while `check.sh` validates the complete order from
-the pinned upstream index regardless of the checkout's current HEAD.
+of rewriting an earlier patch. The current `0002`–`0050` chain keeps the
+system-theme, occluded-input, managed-QUIC, payload-resume and secure-DNS changes
+independently reviewable and revertible. `check.sh` validates exact Git checkouts
+or the trusted official-archive plus immutable-delta source chain.
 `PATCHSET.sha256` detects any rewrite of an already released patch or source
 payload, and `PATCH_HISTORY.md` records the OSS and Chromium source provenance.
 Patch `0042` adds the Agent Browser public protocol without rewriting
 `0002–0041`. Patch `0043` adds an advertised, managed-only switch that hides
 the missing-Google-API-key information bar without fabricating a key or
 enabling unavailable services. Patch `0044` keeps managed secure DNS inside
-the exit proxy (no host-resolver or out-of-proxy DoH probe), preserves the
-managed ICU locale and fonts, and keeps the native refresh rate; the next
-Chromium change must start at `0045`.
+the exit proxy, preserves managed ICU locale/fonts and keeps the native refresh
+rate. `0045`/`0046` add Widevine registration and the title prefix. The
+append-only `0047`–`0050` fixes discovered by the real 152 compile preserve
+payload evolution, generic-font semantics and secure-DNS parsing across
+incremental resumes. The next Chromium change must start at `0051`.
 
 ## Build configuration
 
@@ -110,7 +112,7 @@ profile's declared platform-authenticator identity. See
 `CAPABILITY_MATRIX.md` for the acceptance status and `CONFIG_COVERAGE.md` for
 the field-by-field native consumer audit.
 
-Chromium 150 additions preserve the managed identity across CDP user-agent
+The verified Chromium 152 build preserves the managed identity across CDP user-agent
 operations, bind browser-window bounds to the declared screen geometry, extend
 WebGPU adapter architecture/subgroup coherence, and keep trusted native input
 routing for CDP-driven mouse, keyboard and wheel events. Managed occluded

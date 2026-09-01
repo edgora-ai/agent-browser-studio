@@ -5,6 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as path from 'node:path';
 import { setupTestApp, closeApp, TestAppHandle } from './helpers/app.js';
 import { filterKnownConsoleErrors } from './helpers/diag.js';
+import { clickCmd } from './helpers/find.js';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j88');
@@ -23,7 +24,7 @@ describe('J88 — one-click Quick Create profile', () => {
     await h.page.waitForTimeout(400);
     const before = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.list());
 
-   await h.page.locator('[data-cmd="quickCreateProfile"]').click({ timeout: 5000 });
+   await clickCmd(h.page, "quickCreateProfile");
    const start = Date.now();
    let created = false;
    while (Date.now() - start < 15000) {

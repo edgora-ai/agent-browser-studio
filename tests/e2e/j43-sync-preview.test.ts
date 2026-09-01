@@ -5,6 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { dismissConfirm } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j43");
@@ -72,15 +73,8 @@ describe("J43 — sync pre-flight preview", () => {
   it("prompts before pull when running profiles would be skipped", async () => {
     await launchRunningProfile("J43-prompt", 43998);
     await h.page.evaluate(() => (window as any).agentBrowser.switchTab("sync"));
-    const dialogPromise = new Promise<string>((resolve) => {
-      h.page.once("dialog", async (dialog) => {
-        const message = dialog.message();
-        await dialog.dismiss();
-        resolve(message);
-      });
-    });
     await h.page.locator('[data-cmd="syncPull"]').click();
-    const dialogMessage = await dialogPromise;
+    const dialogMessage = await dismissConfirm(h.page);
     expect(dialogMessage).toContain("运行中 profile");
     expect(dialogMessage).toContain("跳过");
   }, 30000);

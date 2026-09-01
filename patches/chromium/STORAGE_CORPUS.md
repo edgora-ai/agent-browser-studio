@@ -53,3 +53,9 @@ the strict verifier passed 52 baseline surfaces plus this Storage corpus and
 61 system-theme cases, `424/424` tests passed, and patches `0002–0039` applied
 in order to a clean index at upstream commit
 `f405107495a07cb1bfcf687d4af8d91117098db6`.
+
+The same modern/legacy/Buckets/OPFS corpus was reverified on installed Chromium
+`152.0.7977.72` (commit
+`026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`) across Window/Worker,
+persistent/incognito and same-Profile restart paths as part of the passing
+53-surface native verifier.
