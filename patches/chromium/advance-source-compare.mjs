@@ -4,6 +4,7 @@
 // regular file is downloaded by immutable Git blob SHA and verified locally.
 // Gitlink changes are recorded and materialized later by gclient from DEPS.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -12,6 +13,7 @@ const TARGET_COMMIT = "026bb13a93d60e7adfefa2bbf58d6f57c2d335cc";
 const TARGET_VERSION = "152.0.7977.72";
 const EXPECTED_COMMITS = 174;
 const EXPECTED_FILES = 172;
+const EXPECTED_DELTA_SHA256 = "0d5cbb9363bf4b5b33bf77aac43a982cbf767a89875081645921db50b1185c2d";
 const GITLINK_PATHS = new Set([
   "third_party/dawn",
   "third_party/devtools-frontend/src",
@@ -49,6 +51,19 @@ if (
   summary.files !== EXPECTED_FILES
 ) {
   throw new Error(`GitHub compare response is incomplete or unexpected: ${JSON.stringify(summary)}`);
+}
+const deltaManifest = compare.files.map((file) => ({
+  filename: file.filename,
+  status: file.status,
+  sha: file.sha ?? null,
+  previousFilename: file.previous_filename ?? null,
+  newExecutable: /(?:^|\n)new file mode 100755(?:\n|$)/.test(file.patch || ""),
+}));
+const deltaSha256 = createHash("sha256")
+  .update(JSON.stringify(deltaManifest))
+  .digest("hex");
+if (deltaSha256 !== EXPECTED_DELTA_SHA256) {
+  throw new Error(`GitHub compare file manifest drifted: ${deltaSha256} != ${EXPECTED_DELTA_SHA256}`);
 }
 
 function safeTarget(relativePath) {
@@ -102,8 +117,11 @@ for (const [index, file] of compare.files.entries()) {
     console.log(`[${index + 1}/${EXPECTED_FILES}] removed ${file.filename}`);
     continue;
   }
-  if (!["modified", "added", "renamed", "copied", "changed"].includes(file.status) || !file.sha) {
-    throw new Error(`Unsupported compare status ${file.status} for ${file.filename}`);
+  if (
+    !["modified", "added", "renamed", "copied", "changed"].includes(file.status) ||
+    !/^[0-9a-f]{40}$/.test(file.sha || "")
+  ) {
+    throw new Error(`Unsupported or malformed compare entry ${file.status} for ${file.filename}`);
   }
   if (file.status === "renamed" && previousTarget && previousTarget !== target) {
     fs.rmSync(previousTarget, { recursive: true, force: true });

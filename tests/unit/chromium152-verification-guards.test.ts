@@ -39,7 +39,10 @@ describe("Chromium 152 verification guards", () => {
     expect(baseline).not.toContain('import { evaluateInPage } from "./page-eval.js"');
     const ping0 = fs.readFileSync(PING0, "utf8");
     expect(ping0).toContain("attempt <= 3");
-    expect(ping0).toContain('"https://ipwho.is/",\n      15');
+    expect(ping0).toMatch(/"https:\/\/ipwho\.is\/",\r?\n\s+15/);
+    expect(ping0).toContain("Unable to execute Chromium --version");
+    expect(ping0).toContain("Unable to parse Chromium version");
+    expect(ping0).not.toContain('return "150.0.7871.114"');
   });
 
   it("derives the pinned WebGPU SHA from the checked-in stock-152 corpus", () => {

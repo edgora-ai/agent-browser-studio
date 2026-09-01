@@ -11,6 +11,35 @@ if [[ ! -f "$CHROMIUM_SRC/chrome/renderer/chrome_content_renderer_client.cc" ]];
   exit 2
 fi
 
+if ! diff -u \
+  <(awk '{print $2}' "$PATCH_ROOT/PATCHSET.sha256" | LC_ALL=C sort) \
+  <(
+    cd "$PATCH_ROOT"
+    {
+      printf '%s\n' args.gn PATCHED_SOURCE.sha256
+      find files patches -type f | LC_ALL=C sort
+    } | LC_ALL=C sort
+  ); then
+  echo "error: PATCHSET.sha256 must list every patch and source payload exactly once" >&2
+  exit 2
+fi
+
+verify_sha256_manifest() {
+  local root="$1"
+  local manifest="$2"
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "$root" && shasum -a 256 -c "$manifest")
+  elif command -v sha256sum >/dev/null 2>&1; then
+    (cd "$root" && sha256sum -c "$manifest")
+  else
+    echo "error: shasum or sha256sum is required for source integrity verification" >&2
+    exit 2
+  fi
+}
+
+verify_sha256_manifest "$PATCH_ROOT" "$PATCH_ROOT/PATCHSET.sha256"
+echo "patch history: immutable payload verified"
+
 GIT_DIR="$(git -C "$CHROMIUM_SRC" rev-parse --absolute-git-dir)"
 STATE_DIR="$GIT_DIR/roxy-fingerprint-patches"
 mkdir -p "$STATE_DIR"
@@ -56,4 +85,6 @@ for patch in "$PATCH_ROOT"/patches/*.patch; do
   fi
 done
 
+verify_sha256_manifest "$CHROMIUM_SRC" "$PATCH_ROOT/PATCHED_SOURCE.sha256"
+echo "patched source: immutable final-file manifest verified"
 echo "Roxy fingerprint patch is ready in $CHROMIUM_SRC"

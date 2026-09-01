@@ -86,7 +86,8 @@ describe('J80 — launch-path geo detection dedup + cache', () => {
   }, 120000);
 
   it('successful geo detections are consistent and failures fall back safely', async () => {
-    if (first!.ip && second!.ip) expect(second!.ip).toBe(first!.ip);
+    expect(second!.ip === null).toBe(first!.ip === null);
+    if (first!.ip !== null) expect(second!.ip).toBe(first!.ip);
     expect(argValue(await readProcessArgs(first!.pid), '--fingerprint-timezone')).toBeTruthy();
     expect(argValue(await readProcessArgs(second!.pid), '--fingerprint-timezone')).toBeTruthy();
   }, 20000);

@@ -38,7 +38,7 @@ env:
 
 jobs:
   linux-x64:
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     name: Linux x64 · build → verify → e2e → package
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -100,7 +100,7 @@ jobs:
           if-no-files-found: error
 
   windows-x64:
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     name: Windows x64 · build → verify → e2e → package
     runs-on: windows-latest
     timeout-minutes: 360
@@ -168,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   macos-arm64:
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     name: macOS arm64 · build → verify → e2e → package → notarize
     runs-on: macos-14
     timeout-minutes: 360

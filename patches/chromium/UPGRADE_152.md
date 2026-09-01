@@ -27,17 +27,21 @@ therefore uses an immutable official archive plus exact per-file deltas:
   `1a544857555a0c391753e7f9f3016cc07b0288d9da02260c451aa9082b305066`
 - `.65` → `.72` root delta: 174 commits, 172 changed entries, 170 regular
   files verified by Git blob SHA, plus exact Dawn and DevTools gitlink deltas.
+- Root delta path/status/blob/mode manifest SHA-256:
+  `0d5cbb9363bf4b5b33bf77aac43a982cbf767a89875081645921db50b1185c2d`.
 
 `verify-source-provenance.sh` binds the trusted archive SHA and base commit to a
 small synthetic Git commit, then requires the exact `.chromium-source-commit`
-target. `check.sh` validates this archive+delta mode without triggering a
-multi-gigabyte lazy Git fetch.
+target. `apply.sh` and `check.sh` additionally verify full-file SHA-256 values
+for all 95 patched source files, so stale markers cannot hide post-apply source
+drift, without triggering a multi-gigabyte lazy Git fetch.
 
 ## Patchset result
 
 - Numbered patches: `0002`–`0050` (**49 patches**)
-- `PATCHSET.sha256`: **52/52 entries verified**
+- `PATCHSET.sha256`: **53/53 entries verified**
   - `args.gn`
+  - final SHA-256 manifest for all 95 patched Chromium source files
   - 2 immutable Blink payload headers
   - 49 numbered patches
 - Applied patch markers: 49

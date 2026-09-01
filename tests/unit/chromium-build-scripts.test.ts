@@ -14,6 +14,8 @@ const VERIFY_PROVENANCE = path.join(ROOT, "patches", "chromium", "verify-source-
 const APPLY_PATCHES = path.join(ROOT, "patches", "chromium", "apply.sh");
 const CHECK_PATCHES = path.join(ROOT, "patches", "chromium", "check.sh");
 const BUILD_MACOS = path.join(ROOT, "patches", "chromium", "build-macos.sh");
+const PATCHED_SOURCE = path.join(ROOT, "patches", "chromium", "PATCHED_SOURCE.sha256");
+const ENGINE_VERIFY = path.join(ROOT, ".github", "workflows", "engine-verify.yml");
 
 describe("Chromium macOS source and build scripts", () => {
   it("have valid bash syntax", () => {
@@ -46,6 +48,18 @@ describe("Chromium macOS source and build scripts", () => {
     );
     expect(secureDns).toContain('root->FindDict("secureDns")');
     expect(secureDns).toContain("secure_dns_templates_.size() >= 8");
+
+    const patchedSourceBytes = fs.readFileSync(PATCHED_SOURCE);
+    const patchedSource = patchedSourceBytes.toString("utf8").trim().split(/\r?\n/);
+    expect(patchedSource).toHaveLength(95);
+    expect(patchedSource.some((line) => line.endsWith("  third_party/blink/public/common/roxy_fingerprint_config.h"))).toBe(true);
+    const patchedSourceSha = createHash("sha256").update(patchedSourceBytes).digest("hex");
+    expect(fs.readFileSync(path.join(ROOT, "patches", "chromium", "PATCHSET.sha256"), "utf8"))
+      .toContain(`${patchedSourceSha}  PATCHED_SOURCE.sha256`);
+    expect(apply).toContain('verify_sha256_manifest "$CHROMIUM_SRC" "$PATCH_ROOT/PATCHED_SOURCE.sha256"');
+    const check = fs.readFileSync(CHECK_PATCHES, "utf8");
+    expect(check).toContain("verify_source_manifest");
+    expect(check).toContain("apply --cached --reverse --check");
   });
 
   it("prepares a standard resumable gclient root/src checkout", () => {
@@ -56,6 +70,12 @@ describe("Chromium macOS source and build scripts", () => {
     expect(script).toContain("--no-history");
     expect(script).toContain("CHROMIUM_PREPARE_MIN_FREE_GIB");
     expect(script).not.toContain("rm -rf");
+  });
+
+  it("runs every engine job for scheduled and version-tag events", () => {
+    const workflow = fs.readFileSync(ENGINE_VERIFY, "utf8");
+    expect(workflow.match(/github\.event_name != 'workflow_dispatch'/g)).toHaveLength(3);
+    expect(workflow).not.toMatch(/^\s*if: \$\{\{ inputs\.platform/m);
   });
 
   it("supports a provenance-checked archive seed when Git pack streams truncate", () => {
@@ -72,6 +92,9 @@ describe("Chromium macOS source and build scripts", () => {
     expect(seed).toContain("commit-tree");
     const advance = fs.readFileSync(ADVANCE_SOURCE, "utf8");
     expect(advance).toContain('const EXPECTED_FILES = 172');
+    expect(advance).toContain('const EXPECTED_DELTA_SHA256 = "0d5cbb9363bf4b5b33bf77aac43a982cbf767a89875081645921db50b1185c2d"');
+    expect(advance).toContain('createHash("sha256")');
+    expect(advance).toContain('!/^[0-9a-f]{40}$/.test(file.sha || "")');
     expect(advance).toContain("repos/chromium/chromium/git/blobs/");
     expect(advance).toContain("gitBlobSha(target)");
     expect(advance).toContain(".chromium-source-commit");
@@ -101,8 +124,9 @@ describe("Chromium macOS source and build scripts", () => {
         "MAJOR=152\nMINOR=0\nBUILD=7977\nPATCH=72\n",
       );
       fs.writeFileSync(path.join(archiveTree, "chrome", "renderer", "chrome_content_renderer_client.cc"), "// seed\n");
-      const archive = path.join(temp, "chromium.tar.gz");
-      execFileSync("tar", ["-czf", archive, "-C", temp, path.basename(archiveTree)]);
+      const archiveName = "chromium.tar.gz";
+      const archive = path.join(temp, archiveName);
+      execFileSync("tar", ["-czf", archiveName, path.basename(archiveTree)], { cwd: temp });
       const archiveSha256 = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
       execFileSync("bash", [SEED_ARCHIVE, root, archive], {
         stdio: "pipe",

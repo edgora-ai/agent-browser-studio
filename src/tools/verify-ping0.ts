@@ -1085,13 +1085,17 @@ export function categorizeFindings(findings: Array<any>): {
 }
 
 function browserVersionOf(browserPath: string): string {
+  let output: string;
   try {
-    const out = execFileSync(browserPath, ["--version"], { encoding: "utf8" });
-    const match = String(out).match(/\d+\.\d+\.\d+\.\d+/);
-    return match ? match[0] : "150.0.7871.114";
-  } catch {
-    return "150.0.7871.114";
+    output = execFileSync(browserPath, ["--version"], { encoding: "utf8" });
+  } catch (error) {
+    throw new Error(`Unable to execute Chromium --version: ${browserPath}`, { cause: error });
   }
+  const match = String(output).match(/\d+\.\d+\.\d+\.\d+/);
+  if (!match) {
+    throw new Error(`Unable to parse Chromium version from: ${String(output).trim() || "<empty>"}`);
+  }
+  return match[0];
 }
 
 async function main(): Promise<void> {
