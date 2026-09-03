@@ -8,6 +8,7 @@ import * as http from "node:http";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { startMockLlm, MockLlmServer } from "./helpers/mock-llm.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { acceptConfirm } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j63");
@@ -147,8 +148,8 @@ describe("J63 — batch run grouping + per-profile retry", () => {
     await h.page.evaluate(() => (window as any).agentBrowser.loadRunsTab());
     await h.page.waitForSelector(`.run-group-row[data-run-id="${failedRunId}"] [data-run-action="retry"]`, { timeout: 5000 });
 
-    h.page.once("dialog", async (dialog) => { await dialog.accept(); });
     await h.page.locator(`.run-group-row[data-run-id="${failedRunId}"] [data-run-action="retry"]`).click();
+    await acceptConfirm(h.page);
 
     await h.page.waitForFunction((rid: string) => (async () => {
       const runs: any[] = await (window as any).agentBrowser.api.agentRuns.list();
@@ -206,8 +207,8 @@ describe("J63 — batch run grouping + per-profile retry", () => {
     await h.page.evaluate(() => (window as any).agentBrowser.loadRunsTab());
     await h.page.waitForSelector('.run-group-card [data-group-action="retry-failed"]', { timeout: 5000 });
 
-    h.page.once("dialog", async (dialog) => { await dialog.accept(); });
     await h.page.locator('.run-group-card [data-group-action="retry-failed"]').first().click();
+    await acceptConfirm(h.page);
 
     await h.page.waitForFunction((jid: string) => (async () => {
       const runs: any[] = await (window as any).agentBrowser.api.agentRuns.list();

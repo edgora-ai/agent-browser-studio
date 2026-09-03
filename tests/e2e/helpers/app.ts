@@ -14,19 +14,16 @@ const execFileP = promisify(execFile);
 // cache or network service.
 function resolveManagedChromiumPath(env: NodeJS.ProcessEnv = process.env): string | null {
   const explicitPath = env.AGENT_BROWSER_CHROMIUM_BINARY_PATH || env.CLOAKLITE_CHROMIUM_BINARY_PATH;
-  if (explicitPath && fs.existsSync(explicitPath)) {
-    return explicitPath;
+  if (explicitPath) {
+    const resolved = path.resolve(explicitPath);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`Explicit Chromium binary does not exist: ${resolved}`);
+    }
+    return resolved;
   }
   const home = os.homedir();
   const currentCached = newestCachedBinary(path.join(home, ".agent-browser-studio"));
   if (currentCached) return currentCached;
-  if (process.platform === "darwin") {
-    const developmentBinary = path.resolve(
-      REPO, "..", "chromium-build-150", "src", "out",
-      "Chromium.app", "Contents", "MacOS", "Chromium",
-    );
-    if (fs.existsSync(developmentBinary)) return developmentBinary;
-  }
   return newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
 }
 
@@ -45,7 +42,7 @@ function newestCachedBinary(cacheDir: string): string | null {
   const candidates: Array<{ version: number[]; path: string }> = [];
   try {
     for (const entry of fs.readdirSync(cacheDir)) {
-      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})(?:\..*)?$/);
+      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
       if (!match) continue;
       const cand =
         process.platform === "win32"
@@ -139,6 +136,8 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   };
   const chromiumBin = resolveManagedChromiumPath(launchEnv);
   if (opts.allowProfileVersionSelection) {
+    delete launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH;
+    delete launchEnv.CLOAKLITE_CHROMIUM_BINARY_PATH;
     const cacheRoot = resolveManagedChromiumCacheRoot(launchEnv);
     if (cacheRoot && !launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR && !launchEnv.CLOAKLITE_CHROMIUM_CACHE_DIR) {
       launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR = cacheRoot;

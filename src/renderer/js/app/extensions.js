@@ -54,7 +54,7 @@
         agentBrowser._extDirId = dirId;
         api.profile.get(dirId).then(function(info) {
           document.getElementById('ext-dlg-title').textContent = 'Extensions — ' + (info.name || dirId.slice(0,8));
-        }).catch(function(){});
+        }).catch(function(e){ document.getElementById('ext-dlg-title').textContent = 'Extensions'; toast((e && e.message) || String(e), 'error'); });
         document.getElementById('ext-dlg-status').textContent = '';
         agentBrowser._extRefreshList();
         document.getElementById('dlg-extensions').showModal();

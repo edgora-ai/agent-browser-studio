@@ -50,9 +50,12 @@ describe("secrets vault (passthrough mode — Node, no safeStorage)", () => {
     expect(() => decryptSecret("v1:YWJj")).toThrow(/credential storage is unavailable/);
   });
 
-  it("decryptSecretOr falls back instead of throwing", () => {
-    expect(decryptSecretOr("v1:YWJj", "fallback")).toBe("fallback");
+  it("decryptSecretOr fails closed on corrupt encrypted values (no empty-as-credential)", () => {
+    // A corrupt encrypted value must throw a descriptive error — never return
+    // "" / fallback that a caller would send as a real credential (#29).
+    expect(() => decryptSecretOr("v1:YWJj", "fallback")).toThrow(/corrupt|credential/i);
     expect(decryptSecretOr("plain", "fallback")).toBe("plain");
+    expect(decryptSecretOr("plain")).toBe("plain");
   });
 
   it("null/undefined pass through safely", () => {

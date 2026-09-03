@@ -5,6 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { _electron as electron, ElectronApplication, Page } from "playwright";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { clickCardAction, clickCmd } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "../..");
 const MAIN = path.join(REPO, "dist", "main", "index.js");
@@ -136,7 +137,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
       console.log("[diag] open dialogs at start:", JSON.stringify(openDialogs));
       await page.locator('.nav-item[data-tab="profiles"]').click({ timeout: 5000 });
       await page.waitForTimeout(300);
-      await page.locator('[data-cmd="newProfile"]').click({ timeout: 5000 });
+      await clickCmd(page, "newProfile");
       await page.waitForSelector("#dlg-profile", { state: "visible", timeout: 5000 });
       await shot("03-new-profile-dialog");
 
@@ -168,7 +169,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
       // but if not, reopen it
       let dlgVisible = await page.locator("#dlg-profile").evaluate((d: any) => d.open).catch(() => false);
       if (!dlgVisible) {
-        await page.locator('[data-cmd="newProfile"]').click({ timeout: 5000 });
+        await clickCmd(page, "newProfile");
         await page.waitForSelector("#dlg-profile", { state: "visible", timeout: 5000 });
       }
       await page.locator("#new-profile-name").fill("E2E Test Profile", { timeout: 5000 });
@@ -189,7 +190,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
   it("opens edit dialog (agent-browser-meta-seed), Random works, Cancel closes it", async () => {
     try {
       await closeAllDialogs();
-      await page.locator(".profile-card [data-action='edit']").first().click({ timeout: 5000 });
+      await page.locator("#profile-list .profile-card [data-action='edit']").first().click({ timeout: 5000 });
       await page.waitForSelector("#dlg-agent-browser-seed", { state: "visible", timeout: 5000 });
       const seedVal = await page.locator("#agent-browser-meta-seed").inputValue();
       expect(seedVal, "edit seed should not be empty").not.toBe("");
@@ -214,7 +215,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
     await closeAllDialogs();
     await page.locator('.nav-item[data-tab="proxy"]').click();
     await page.waitForTimeout(200);
-    await page.locator('[data-cmd="newProxy"]').click();
+    await clickCmd(page, "newProxy");
     await page.waitForSelector("#dlg-proxy", { state: "visible" });
     await shot("08-proxy-dialog");
 
@@ -270,9 +271,9 @@ describe("E2E — Agent Browser Studio user journey", () => {
     await page.locator('.nav-item[data-tab="profiles"]').click();
     await page.waitForTimeout(400);
     // A profile card must exist from the earlier save test
-    const noteBtn = page.locator(".profile-card [data-action='note']").first();
-    expect(await noteBtn.count(), "profile note button missing").toBeGreaterThan(0);
-    await noteBtn.click({ timeout: 5000 });
+    const noteCard = page.locator("#profile-list .profile-card").first();
+    expect(await noteCard.count(), "profile card missing before adding a note").toBeGreaterThan(0);
+    await clickCardAction(noteCard, "note");
     await page.waitForSelector("#dlg-note", { state: "visible", timeout: 5000 });
 
     const noteText = "E2E journey note " + Date.now();
@@ -293,9 +294,9 @@ describe("E2E — Agent Browser Studio user journey", () => {
     await closeAllDialogs();
     await page.locator('.nav-item[data-tab="profiles"]').click();
     await page.waitForTimeout(300);
-    const cookieBtn = page.locator(".profile-card [data-action='cookies']").first();
-    expect(await cookieBtn.count(), "profile cookie button missing").toBeGreaterThan(0);
-    await cookieBtn.click({ timeout: 5000 });
+    const cookieCard = page.locator("#profile-list .profile-card").first();
+    expect(await cookieCard.count(), "profile card missing before opening cookies").toBeGreaterThan(0);
+    await clickCardAction(cookieCard, "cookies");
     await page.waitForSelector("#dlg-cookies", { state: "visible", timeout: 5000 });
     // The search input should be present and focusable
     await page.locator("#cookie-search").fill("example", { timeout: 5000 });

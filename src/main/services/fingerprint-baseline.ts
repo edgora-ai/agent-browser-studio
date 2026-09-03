@@ -8,7 +8,6 @@
 import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
 import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
 import { captureFontCorpusInPage } from "../../tools/font-corpus.js";
-import { evaluateInPage } from "./page-eval.js";
 import type { BrowserEngine } from "./browser-engine.js";
 
 const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
@@ -202,7 +201,8 @@ export type Fingerprint = Record<string, string | number | null | boolean>;
 /** Capture the live fingerprint from a running profile (CDP or BiDi by engine). */
 export async function captureFingerprint(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<Fingerprint> {
   // Keep the probe importable by the standalone Chromium verifier without
-  // loading Electron-only local-agent dependencies (page-eval lazy-loads).
+  // loading Electron-only config and local-agent dependencies.
+  const { evaluateInPage } = await import("./page-eval.js");
   const raw = await evaluateInPage(cdpPort, engine, CAPTURE_EXPRESSION, { timeoutMs: 20000 });
   const value = typeof raw === "string" ? raw : raw?.value;
   return typeof value === "string" ? JSON.parse(value) : (value || {});

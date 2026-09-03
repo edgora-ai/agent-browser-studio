@@ -8,7 +8,8 @@ are out of scope.
 
 ## Baselines
 
-- Stock Chromium/Chrome: `150.0.7871.114`.
+- Stock Chromium/Chrome native capability baseline: `152.0.7977.64` corpus;
+  independently built target: `152.0.7977.72`.
 - CloakBrowser wrapper baseline: public release
   [`0.5.7`](https://github.com/CloakHQ/CloakBrowser/releases/tag/v0.5.7).
   The platform-specific public binary baseline is Chromium
@@ -34,7 +35,7 @@ Status meanings:
 
 ## Identity and rendering
 
-| Capability | Current 150 state | Remaining alignment target | Completion evidence |
+| Capability | Current 152 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
 | UA, Navigator and UA-CH | verified | Preserve in top frame, subframes and all Worker types, including after CDP UA operations | DOM + request headers + high-entropy UA-CH across contexts |
 | Platform, language and DNT | verified | Preserve across Window, frames and Worker requests | DOM and loopback request-header comparison |
@@ -44,7 +45,7 @@ Status meanings:
 | AudioBuffer and analyser | verified | Add codec/audio-capability coherence | offline/realtime reads plus codec capability comparison |
 | ClientRects | verified | Preserve across zoom/DPR and repeated layout reads | repeat-read, zoom and cross-context checks |
 | WebGL identity | verified | Preserve the observable deep capability surface as Chromium evolves | Window/Worker WebGL 1/2: 39/36 extensions, 26/53 parameters and shader precision exactly match six observable RoxyChrome Profiles (`WEBGL_CORPUS.md`); the Windows renderer string is composed per engine — Chrome embeds the PCI device id (`(0x00002504)` form, ANGLE `Renderer11.cpp` behavior) while Firefox strips it (Mozilla privacy policy), so a Chromium profile never reports the Firefox-form string to Chrome-scanning platforms (roadmap Slice 79, 81.8 补集) |
-| WebGPU identity | verified | Preserve version-matched adapter/device capabilities and cross-API GPU identity | Window/Worker adapter/device info, 23 features, 36 limits and 11 WGSL features match Stock Chrome 150; Windows identity is more coherent than the observable RoxyChrome reference (`WEBGPU_CORPUS.md`) |
+| WebGPU identity | verified | Preserve version-matched adapter/device capabilities and cross-API GPU identity | Window/Worker adapter/device info, 23 adapter features (including `subgroup-size-control`), 36 limits, one default-device feature and 10 WGSL features exactly match Stock Chrome 152 SHA `d6f8c588…`; Windows identity remains coherent with WebGL (`WEBGPU_CORPUS.md`) |
 | Fonts | verified | Preserve target-platform metrics, fallback, emoji and system rendering coherence | Window/Worker equality across 39 candidates, 390 generic metrics, 468 named metrics and 247 rasters; Local Font Access has no configuration-external family and Canvas/DOM stays within 2 px (`FONT_CORPUS.md`) |
 | System colors and selection rendering | verified | Preserve the declared platform and seeded light/dark preference | 19 CSS system colors in preferred/light/dark schemes plus screenshot pixel evidence for Windows/macOS selection paint |
 | Speech voices | verified | Maintain locale/platform coherence and playable mapping | enumeration, repeat reads and successful playback selection |
@@ -57,11 +58,11 @@ Status meanings:
 
 ## Automation and network behavior
 
-| Capability | Current 150 state | Remaining alignment target | Completion evidence |
+| Capability | Current 152 state | Remaining alignment target | Completion evidence |
 |---|---|---|---|
 | `navigator.webdriver` and basic headless identity | stock/verified | Remain stock-looking without `--enable-automation` | headed/headless DOM and descriptor checks; e2e `j72` reads the live managed process command line and proves the feature-set delta vs the pass-through stock control is exactly the documented `ThrottleMainFrameTo60Hz` refresh-rate setting — no `--enable-automation`, no blink-features overrides, `MediaRouter` never disabled (Slice 47) |
-| CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 150 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
-| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | isolated-world actionability, full cross-origin OOPIF recursion, iframe content-quad coordinate mapping, post-settle re-scroll, occlusion fail-closed, explicit key-hold timing and installed Chromium 150 J44/J50; no page-world prototype modification |
+| CDP-generated input behavior | verified | Preserve native trusted-event routing as Chromium evolves | installed Chromium 152 trusted mouse/keyboard/wheel corpus, including exact occluded-window scroll offset/delta completion, with no untrusted events |
+| Humanized interaction policy | verified | Preserve seeded, bounded mouse, keyboard and scroll behavior at the app layer | isolated-world actionability, full cross-origin OOPIF recursion, iframe content-quad coordinate mapping, post-settle re-scroll, occlusion fail-closed, explicit key-hold timing and installed Chromium 152 J44/J50; no page-world prototype modification |
 | HTTP proxy authentication | verified | Preserve browser-only Basic/Digest challenge handling without an extension | real Electron/profile 407 E2E, one-shot-file deletion and extension-surface audit |
 | SOCKS5 TCP | verified | Preserve authenticated routing and proxy-side name resolution through the loopback bridge | unit rejection/echo corpus plus real Electron/Profile remote-domain E2E and bridge lifecycle check |
 | SOCKS5 UDP / QUIC / HTTP3 | verified | Preserve authenticated TCP/UDP routing, proxy-side DNS and fail-closed behavior on older/HTTP-only paths | profile-owned MASQUE bridge, per-flow SOCKS5 UDP ASSOCIATE, RFC 9297 oversized-datagram Capsule fallback and real Electron/Profile HTTP/3 E2E |
@@ -75,13 +76,13 @@ Status meanings:
 
 | Capability | Current state | Target | Completion evidence |
 |---|---|---|---|
-| Same-seed restart stability | verified | Preserve on Chromium 150 | at least two fresh user-data directories and one restart |
+| Same-seed restart stability | verified | Preserve on Chromium 152 | at least two fresh user-data directories and one same-Profile restart |
 | Cross-seed distinction | verified | Extend to all seeded deep surfaces | pairwise diff with required-distinct field set |
 | Joint hardware profiles | verified | Preserve versioned CPU/RAM/GPU/screen/DPR/font/audio tuples and reject incoherent overrides | 1,000-config Windows/macOS seed corpus, partial-constraint resolution, conflict rejection and native runtime checks |
 | Headed/headless parity | verified | Preserve the same declared identity with only measured stock differences | full 53-surface paired capture; only Stock-matched `screenY`/`innerHeight` window-decoration differences on macOS; e2e `j71` re-proves window geometry self-consistency — a real resize/move is followed by `window.*` while `screen.*` stays fixed (Slice 46) |
 | Persistent-context parity | verified | Preserve identity and capabilities after closing and reopening the same Profile | full 53-surface fresh-directory, same-directory restart and independent-directory comparison |
 | Pass-through/debug mode | verified | Preserve a stock comparison mode without mixed identity | 53-surface native-host comparison, including host theme, with all managed profile consumers disabled |
-| Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | installed Chromium 150/149 exact selection and rollback integration tests |
+| Version pin and rollback | verified | Select an installed exact build and retain previous known-good build | Chromium 152 default selection plus retained 150/149 exact pin, pass-through and rollback integration tests |
 | Signed multi-platform distribution | partial | macOS arm64/x64, Windows x64, Linux x64/arm64 | macOS arm64 engine + controller are verified and packaged; Linux (`patches/chromium/build-linux.sh` + `args.gn.linux`) and Windows (`patches/chromium/build-windows.sh` + `args.gn.win`) engine build paths are defined; `.github/workflows/engine-verify.yml` builds the pinned engine, runs the 53-surface strict verifier + full e2e against the freshly built binary, packages (AppImage/NSIS) and publishes sha256 checksums on Linux x64 and Windows x64 with opt-in signing; `ci.yml` also gates tsc/build/unit/smoke on Windows; checksums/signatures still require real platform runners (Slice 52) |
 
   Slice 66：macOS 构建路径补齐为独立脚本 `patches/chromium/build-macos.sh`（默认 arm64，支持 x64 交叉），`electron-builder.yml` mac 目标扩为 dmg arm64 + zip arm64/x64；`engine-verify.yml` 新增 `macos-arm64` job（macos-14：clone+sync 固定 commit → build-macos.sh → 53-surface verify → 全量 e2e → 打包 dmg/zip → 有 APPLE_ID/APPLE_TEAM_ID 时 `-c.mac.notarize=true` 公证 → sha256 校验和 → 上传 artifact）。本地可关账部分（脚本语法、YAML 结构、打包配置）已验证；真实 runner 上的构建/签名/公证执行仍需平台 runner（Slice 66） |
@@ -160,44 +161,35 @@ platform adapters are identical.
 
 ## Current verified build
 
-The independently built Chromium `150.0.7871.114` macOS arm64 binary at upstream
-commit `f405107495a07cb1bfcf687d4af8d91117098db6` passes the strict 53-surface
-verifier across a same-Profile close/reopen, an independent same-seed Profile,
-a different seed, `el-GR`/`el-CY` locale coherence, a full headed run and
-native-host pass-through. Headed/headless results are identical except for the
-same macOS window-decoration `screenY` and `innerHeight` differences measured
-from Stock Chrome 150 and the managed binary's no-config path. A further 61
-checks cover preferred/light/dark CSS system colors and actual selection
-screenshot pixels for both declared platforms. Verified runtime surfaces include
+The independently built Chromium `152.0.7977.72` macOS arm64 binary at upstream
+commit `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc` is installed under the managed
+cache and passes the strict 53-surface verifier with `ok: true`. Verification
+covers same-Profile close/reopen, an independent same-seed Profile, a different
+seed, `el-GR`/`el-CY`, a full headed run, incognito storage and native-host
+pass-through. Headed/headless results are identical except for the stock-matched
+macOS window-decoration `screenY`/`innerHeight` differences. A further 61 checks
+cover preferred/light/dark CSS system colors and actual selection paint for both
+declared platforms.
 
-Slice 48 fixes headless BeginFrame production on macOS: under `--headless`
-the CVDisplayLink begin frame source is bypassed and the 60 Hz timer drives
-frames, so `requestAnimationFrame`, screenshots and Playwright/Puppeteer
-actionability all work headless with the full managed fingerprint applied.
-Verified by `tests/e2e/j73-js-sdk-playwright.test.ts` (REST mirror, managed
-fingerprint + click, driver fast-fail, dirId attach).
-Window/Dedicated/Shared/Service Worker identity, AAC/H.264,
-audio capture, native modern/Buckets/legacy storage quota and OPFS/FileSystem
-persistent/incognito parity, WebAuthn, media-device remapping,
-WebRTC disable mode, the RoxyChrome-matched WebGL 1/2 capability hash, the
-Stock-150 WebGPU adapter/device capability hash, the Window/Worker/DOM/Local
-Access font corpus, CDP identity, system-theme
-coherence and exact
-build-version coherence.
+The Stock-152 narrow gate passes 8/8: UA 152, WebGL SHA `8f97b977…`, WebGPU SHA
+`d6f8c588…`, Window/Worker parity, OPFS and the full font canvas SHA/parity.
+Verified runtime surfaces include Window/Dedicated/Shared/Service Worker
+identity, AAC/H.264, audio capture, modern/Buckets/legacy storage quota and
+OPFS/FileSystem persistent/incognito parity, WebAuthn, media-device remapping,
+WebRTC disable mode, Local Font Access allow-listing, CDP identity, system theme
+and exact build-version coherence. A real proxy/Ping0 run completed all 11 stages
+with zero browser-identity failures; its six findings were external IDC/RAF/
+DNS/multi-exit/site-country boundary signals.
 
-The installed-cache journey retains Chromium `149.0.7827.22` alongside 150 and
-passes exact selection, rollback, pass-through, trusted humanized input and
-third-party-cookie compatibility/restoration and authenticated HTTP/SOCKS
-proxy routing. Patchset `0041` additionally advertises the managed QUIC
-capability and passes a real UDP-capable SOCKS5 HTTP/3 Profile journey with no
-license environment. J50 verifies trusted type/click/key input through two
-cross-origin OOPIF levels, late-layout reconciliation, covered-target rejection
-and exact explicit key-hold timing on both the source and installed Chromium
-builds. J51 verifies that the packaged controller has no upstream wrapper
-dependency or fallback: legacy wrapper environment variables are ignored and a
-missing independent build fails closed without downloads or cache writes.
-Installing the updated App leaves the existing CloakLite config and six-profile
-tree byte-for-byte unchanged.
+The installed-cache journey retains Chromium `149.0.7827.22` and
+`150.0.7871.114` alongside 152 and passes exact selection, rollback,
+pass-through, trusted humanized input, third-party-cookie restoration and
+HTTP/SOCKS proxy routing. Explicitly binding the complete application suite to
+the 152 executable passes 95 E2E files / 470 tests (4 files / 12 tests skipped
+by their declared conditions). J51 continues to prove that no upstream wrapper
+or fallback is selected and missing independent builds fail closed without
+downloads or cache writes. Full source/build/install evidence is recorded in
+`UPGRADE_152.md`.
 
 Using the stage labels in this matrix, 35 of 36 engine/network/lifecycle rows
 are currently `verified`, 1 is `partial`, and none is `missing`. The remaining
@@ -211,8 +203,8 @@ The alignment goal is complete only when all of the following are true:
 
 1. Every row above is `verified` or is explicitly proven to have stock-Chrome
    behavior; no `partial` or `missing` row remains in the agreed platform scope.
-2. The Chromium 150 patch series applies in order to a clean upstream index and
-   its source payload matches the built checkout.
+2. The Chromium 152 patch series applies in order to the verified source
+   provenance chain and its evolved payload matches the built checkout.
 3. The strict verifier covers Window, subframes, Dedicated/Shared/Service
    Workers, headed/headless and persistent contexts where applicable.
 4. Same identity is stable across fresh launches and restarts; different seeds

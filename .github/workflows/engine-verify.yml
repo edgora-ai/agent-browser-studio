@@ -14,6 +14,13 @@ name: Engine production verify (multi-platform)
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform filter (all = 3 platforms, ~2h; pick one for ~40min fast gate)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, linux, windows, macos]
   schedule:
     - cron: "17 3 * * 1"
   push:
@@ -31,6 +38,7 @@ env:
 
 jobs:
   linux-x64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux' }}
     name: Linux x64 · build → verify → e2e → package
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -51,10 +59,12 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            rm -rf chromium-src-152
             sleep 30
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
@@ -90,6 +100,7 @@ jobs:
           if-no-files-found: error
 
   windows-x64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     name: Windows x64 · build → verify → e2e → package
     runs-on: windows-latest
     timeout-minutes: 360
@@ -113,10 +124,12 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            rm -rf chromium-src-152
             sleep 30
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
@@ -155,10 +168,16 @@ jobs:
           if-no-files-found: error
 
   macos-arm64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos' }}
     name: macOS arm64 · build → verify → e2e → package → notarize
     runs-on: macos-14
     timeout-minutes: 360
     steps:
+      - name: Free disk (macOS image is 14 GiB, Chromium needs 40 GiB)
+        run: |
+          echo "Before:" && df -h /
+          sudo rm -rf /Library/Developer/CoreSimulator 2>/dev/null; sudo rm -rf ~/Library/Caches/* 2>/dev/null; brew cleanup -s 2>/dev/null || true
+          echo "After:" && df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -175,7 +194,8 @@ jobs:
         run: |
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
-            if git clone https://chromium.googlesource.com/chromium/src.git chromium-src-152 && git -C chromium-src-152 checkout "$CHROMIUM_COMMIT" && (cd chromium-src-152 && gclient sync -D); then
+            # Shallow fetch (~4 GiB vs ~40 GiB) — also add disk cleanup happens above for macos
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2

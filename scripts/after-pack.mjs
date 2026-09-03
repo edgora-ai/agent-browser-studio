@@ -9,12 +9,10 @@ import * as path from "node:path";
 // signature. A configured Developer ID signature is applied by electron-builder
 // after this hook and supersedes it.
 //
-// The bundle now embeds fully-built nested browsers (Chromium.app / Firefox.app)
-// under Resources/native-browsers. Those keep their own code signatures
-// untouched — recursive signing via --deep rewrites their Framework symlinks
-// and hardlink structure and fails with
-// "invalid destination for symbolic link in bundle", so the top-level app is
-// signed single-layer here and verification stays non-recursive.
+// macOS browser bundles are embedded as opaque .app.zip resources, so recursive
+// signing cannot rewrite their Framework symlinks or nested signatures. Re-sign
+// the complete Electron app deeply to replace stale framework/helper signatures;
+// the browser archives retain the signatures verified by sync-native-browsers.
 export default async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") return;
 
@@ -25,6 +23,7 @@ export default async function afterPack(context) {
 
   execFileSync("/usr/bin/codesign", [
     "--force",
+    "--deep",
     "--sign",
     "-",
     "--timestamp=none",
@@ -35,6 +34,7 @@ export default async function afterPack(context) {
 
   execFileSync("/usr/bin/codesign", [
     "--verify",
+    "--deep",
     "--strict",
     "--verbose=2",
     appPath,

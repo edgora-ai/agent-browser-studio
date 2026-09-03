@@ -197,11 +197,13 @@ export function registerProxyHandlers(): void {
     }
   });
 
-  // Export the current proxy store as a CSV document (passwords included for migration).
-  ipcMain.handle("proxy:export-csv", async () => {
+  // Export the current proxy store as a CSV document (passwords redacted
+  // unless the caller explicitly opts into a migration export).
+  ipcMain.handle("proxy:export-csv", async (_event, opts?: { includePasswords?: boolean }) => {
     try {
-      const csv = exportProxiesCsv();
-      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "user", detail: `exported CSV` });
+      const includePasswords = opts?.includePasswords === true;
+      const csv = exportProxiesCsv({ includePasswords });
+      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "user", detail: includePasswords ? "exported CSV (passwords included — user-confirmed migration)" : "exported CSV (passwords redacted)" });
       return { success: true, csv };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };

@@ -436,7 +436,7 @@
       renderTeamPanel(status);
     }).catch(function(e) {
       var panel = document.getElementById('team-panel');
-      if (panel) panel.innerHTML = '<div class="empty-state">Team panel failed: ' + esc(e.message || String(e)) + '</div>';
+      if (panel) panel.innerHTML = '<div class="empty-state">' + esc(t('team.panel.failed', 'Team panel failed: ') + (e.message || String(e))) + '</div>';
     });
   }
   agentBrowser.loadTeamPanel = loadTeamPanel;

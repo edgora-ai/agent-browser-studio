@@ -95,7 +95,7 @@
       },
 
   delProxy: function (name) {
-        agentBrowser.confirm('Delete proxy "' + name + '"?', function () {
+        agentBrowser.confirm(t('proxy.delete-confirm', 'Delete proxy "{name}"?').replace('{name}', name), function () {
           api.proxy.delete(name).then(function (r) {
             if (r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast(r.error || "Failed", "error");

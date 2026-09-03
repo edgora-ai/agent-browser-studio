@@ -121,6 +121,40 @@ export function markFailed(id: string, error: string): void {
 
 export function markSkipped(id: string, reason: string): void {
   getDb().prepare("UPDATE jobs SET status='skipped', result=?, finished_at=? WHERE id=?").run(String(reason).slice(0, 500), Date.now(), id);
+  pruneSkippedJobs();
+}
+
+/**
+ * Bound the jobs table: skipped rows are observability noise (a cron in
+ * cooldown writes one per tick forever), so cap them at KEEP_SKIPPED newest.
+ * Terminal done/failed/cancelled rows are capped at KEEP_TERMINAL newest.
+ * Runs against the same connection; best-effort, never throws.
+ */
+const KEEP_SKIPPED = 200;
+const KEEP_TERMINAL = 2000;
+
+export function pruneSkippedJobs(): number {
+  return pruneJobsByStatus("skipped", KEEP_SKIPPED);
+}
+
+export function pruneJobs(): number {
+  let total = 0;
+  total += pruneJobsByStatus("skipped", KEEP_SKIPPED);
+  for (const status of ["done", "failed", "cancelled"] as const) {
+    total += pruneJobsByStatus(status, KEEP_TERMINAL);
+  }
+  return total;
+}
+
+function pruneJobsByStatus(status: JobStatus, keep: number): number {
+  try {
+    const r = getDb().prepare(
+      "DELETE FROM jobs WHERE status=? AND id NOT IN (SELECT id FROM jobs WHERE status=? ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+    ).run(status, status, keep);
+    return Number(r.changes) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function markJobRunId(id: string, runId: string): void {

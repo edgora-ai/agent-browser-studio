@@ -57,7 +57,7 @@
         html += '</p>';
         html += '<div class="adapter-detail" style="display:none;margin-top:10px;background:var(--surface);padding:8px;border-radius:4px;font-size:11px;line-height:1.5;">';
         html += '<div><strong>Login URL hints:</strong> ' + esc((a.loginUrlHints || []).join(", ") || "n/a") + '</div>';
-        var recipeText = (a.recipes || []).map(function(r) { return r.name + ": " + r.goal + " (" + r.steps.join(" → ") + ")"; }).join("<br>");
+        var recipeText = (a.recipes || []).map(function(r) { return esc(r.name) + ": " + esc(r.goal) + " (" + esc((r.steps || []).join(" → ")) + ")"; }).join("<br>");
         html += '<div style="margin-top:6px;"><strong>Recipes:</strong><br>' + recipeText + '</div>';
         html += '<div style="margin-top:6px;"><strong>Notes:</strong> ' + esc(a.notes) + '</div>';
         html += '<div style="margin-top:6px;"><button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="adapterShowDetail" data-cmd-arg="' + escAttr(a.id) + '">🔎 Load full recipe (loginCheck + selectors)</button></div>';

@@ -2,6 +2,7 @@ appId: com.ahoo.agent-browser-studio
 productName: Agent Browser Studio
 copyright: Copyright © 2026
 afterPack: scripts/after-pack.mjs
+electronDist: node_modules/electron/dist
 
 icon: dist/resources/icon.icns
 

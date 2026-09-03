@@ -6,6 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { clickCmd } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j70");
@@ -14,7 +15,7 @@ const mainCard = () => '#proxy-list [data-proxy-name="test-proxy"]';
 function addProxyViaDialog(page: any, name: string, host: string, port: string, fallbacks?: string): Promise<void> {
   return page.evaluate(() => (window as any).agentBrowser.switchTab("proxy"))
     .then(() => page.waitForTimeout(200))
-    .then(() => page.locator('[data-cmd="newProxy"]').click({ timeout: 5000 }))
+    .then(() => clickCmd(page, "newProxy"))
     .then(() => page.waitForSelector("#dlg-proxy[open]", { timeout: 5000 }))
     .then(() => page.locator("#dlg-proxy-name").fill(name))
     .then(() => page.locator("#dlg-proxy-type").selectOption("http"))

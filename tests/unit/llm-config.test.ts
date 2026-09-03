@@ -34,7 +34,7 @@ import {
   saveLlmConfig,
   getOrDetectLlmConfig,
 } from "../../src/main/services/local-agent.js";
-import { resetSecretStorageForTests } from "../../src/main/services/secrets.js";
+import { resetSecretStorageForTests, initializeSecretStorage, planSecretStorage, decryptSecretOr } from "../../src/main/services/secrets.js";
 
 function freshConfig(): void {
   const cfg = getConfig();
@@ -44,6 +44,13 @@ function freshConfig(): void {
 
 describe("LLM config service", () => {
   beforeEach(() => {
+    resetSecretStorageForTests();
+    initializeSecretStorage(planSecretStorage({
+      userDataDir: TEST_USER_DATA,
+      platform: "darwin",
+      trustedMacSignature: false,
+      environment: {},
+    }));
     reloadConfig();
     freshConfig();
   });
@@ -72,6 +79,16 @@ describe("LLM config service", () => {
     expect(cfg.llm?.apiUrl).toBe("https://api.example.com/v1/chat/completions");
     expect(cfg.llm?.apiKey).toBeTruthy();
     expect(getLlmConfig()?.apiKey).toBeTruthy();
+    // Consumers decrypt for use (local-agent call sites use decryptSecretOr).
+    expect(decryptSecretOr(cfg.llm?.apiKey || "")).toBe("sk-abc");
+  });
+
+  it("encrypts the LLM apiKey at rest (no cleartext in config.json)", () => {
+    saveLlmConfig({ provider: "openai", apiKey: "sk-live-secret-xyz", model: "gpt-5.5" });
+    const raw = fs.readFileSync(path.join(TEST_USER_DATA, "config.json"), "utf8");
+    expect(raw).not.toContain("sk-live-secret-xyz");
+    // …and the stored value still decrypts for use.
+    expect(decryptSecretOr(getConfig().llm?.apiKey || "")).toBe("sk-live-secret-xyz");
   });
 
   it("keeps the previously-saved key when a redacted/empty key is submitted", () => {
@@ -91,7 +108,8 @@ describe("LLM config service", () => {
   it("getOrDetectLlmConfig returns the saved config first", () => {
     saveLlmConfig({ provider: "custom", apiKey: "sk-detect", apiUrl: "http://127.0.0.1:9999/v1/chat/completions" });
     const cfg = getOrDetectLlmConfig();
-    expect(cfg?.apiKey).toBe("sk-detect");
+    // Stored encrypted at rest; decrypts for use.
+    expect(decryptSecretOr(cfg?.apiKey || "")).toBe("sk-detect");
     expect(cfg?.provider).toBe("custom");
   });
 });

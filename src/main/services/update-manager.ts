@@ -9,6 +9,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import * as net from "node:net";
+import * as dns from "node:dns/promises";
 import { app } from "electron";
 import { getAppDataDir } from "./config-manager.js";
 import { extractZipArchive } from "./zip-writer.js";
@@ -168,9 +170,16 @@ export function getInstalledVersions(): string[] {
 
 // ── Manifest handling ──
 
+/** Version allowlist: dotted numerics only — also enforced on consume, so a
+ * tampered manifest cannot smuggle `../../evil` into the release-store path. */
+export const UPDATE_VERSION_RE = /^\d+(\.\d+){0,4}$/;
+
 function normalizeVersion(v: unknown): string {
   const s = String(v ?? "").trim();
   if (!s) throw new Error("Release is missing version");
+  if (!UPDATE_VERSION_RE.test(s)) {
+    throw new Error("Release has an invalid version (expected dotted numerics): " + JSON.stringify(s).slice(0, 80));
+  }
   return s;
 }
 
@@ -193,6 +202,9 @@ export function parseUpdateManifest(text: string): UpdateManifest {
     if (!r || typeof r !== "object") throw new Error("Update manifest contains an invalid release");
     const version = normalizeVersion(r.version);
     if (typeof r.url !== "string" || !r.url.trim()) throw new Error("Release " + version + " is missing url");
+    // sha256 stays optional at parse time (local directory payloads carry no
+    // hash by design); acquirePayload enforces it for every non-directory
+    // payload, so a hash-less remote/archive update is still rejected.
     if (r.sha256 != null && (typeof r.sha256 !== "string" || !/^[0-9a-fA-F]{64}$/.test(r.sha256))) {
       throw new Error("Release " + version + " has an invalid sha256");
     }
@@ -230,15 +242,96 @@ function resolveAgainst(base: string | null, url: string): string {
   return path.resolve(url);
 }
 
+/** Mirrors local-agent's SSRF guard: no loopback/link-local/private/multicast. */
+function isBlockedUpdateHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!h || h === "localhost" || h.endsWith(".localhost")) return true;
+  if (net.isIPv4(h)) {
+    const parts = h.split(".").map(Number);
+    return parts[0] === 0 || parts[0] === 10 || parts[0] === 127 ||
+      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      parts[0] >= 224;
+  }
+  if (net.isIPv6(h)) {
+    const first = Number.parseInt(h.split(":")[0] || "0", 16);
+    return h === "::1" || h === "::" || (first >= 0xfe80 && first <= 0xfebf) ||
+      h.startsWith("fc") || h.startsWith("fd");
+  }
+  return false;
+}
+
+/** A caller-supplied manifestUrl override must be http(s) to a public host —
+ * no file:// LFI, no absolute/relative local paths, no metadata/private IPs
+ * (DNS-resolved too). The configured default manifest is unaffected. */
+export async function assertSafeManifestUrl(raw: string): Promise<string> {
+  const url = String(raw || "").trim();
+  let parsed: URL;
+  try { parsed = new URL(url); }
+  catch { throw new Error("manifestUrl must be an absolute http(s) URL"); }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("manifestUrl must be http(s) — file:// and local paths are not allowed as overrides");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (isBlockedUpdateHost(host)) {
+    throw new Error("manifestUrl host is not allowed (loopback/private/link-local)");
+  }
+  if (!net.isIP(host)) {
+    let records: Array<{ address: string }> = [];
+    try { records = await dns.lookup(host, { all: true }); }
+    catch { throw new Error("manifestUrl host did not resolve"); }
+    if (!records.length) throw new Error("manifestUrl host did not resolve");
+    for (const r of records) {
+      if (isBlockedUpdateHost(r.address)) throw new Error("manifestUrl resolves to a blocked address");
+    }
+  }
+  return url;
+}
+
 async function readManifestText(manifestUrl: string): Promise<{ text: string; base: string | null }> {
   if (/^https?:\/\//i.test(manifestUrl)) {
-    const res = await fetch(manifestUrl);
+    const res = await fetchWithTimeout(manifestUrl, 15000, 1024 * 1024);
     if (!res.ok) throw new Error("Failed to fetch update manifest: HTTP " + res.status);
     return { text: await res.text(), base: manifestUrl };
   }
   const local = manifestUrl.replace(/^file:\/\//, "");
   if (!fs.existsSync(local)) throw new Error("Update manifest not found: " + local);
   return { text: fs.readFileSync(local, "utf8"), base: local };
+}
+
+/** fetch with timeout + streaming size cap (not buffer-then-check). */
+async function fetchWithTimeout(url: string, timeoutMs: number, maxBytes: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, redirect: "manual" });
+    if (!res.ok || !res.body) return res;
+    // Stream through a cap: abort before buffering past maxBytes.
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel(); } catch { /* ignore */ }
+        throw new Error("Response exceeds size cap (" + maxBytes + " bytes)");
+      }
+      chunks.push(value);
+    }
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
+    return new Response(merged, { status: res.status, statusText: res.statusText, headers: res.headers });
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new Error("Request timed out after " + timeoutMs + "ms: " + url);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Check a manifest for releases newer than the active version. */
@@ -316,13 +409,20 @@ async function fetchBytes(url: string): Promise<Buffer> {
  *  Returns { kind: "archive", bytes } or { kind: "dir", source }. */
 async function acquirePayload(release: UpdateRelease, manifestBase: string | null): Promise<{ kind: "archive"; bytes: Buffer } | { kind: "dir"; source: string }> {
   const url = resolveAgainst(manifestBase, release.url);
+  // Local directory payloads (dev/staging flow) carry no hash by design and
+  // are exempt. Every other payload kind must present a valid sha256 —
+  // otherwise a tampered manifest yields a spoofable update.
+  const isLocalDirPayload =
+    !/^https?:\/\//i.test(url) && !/^file:\/\//i.test(url) &&
+    fs.existsSync(url) && fs.statSync(url).isDirectory();
+  if (!isLocalDirPayload && typeof release.sha256 !== "string") {
+    throw new Error("Release " + release.version + " has no sha256 — refusing a hash-less update");
+  }
   if (/^https?:\/\//i.test(url) || /^file:\/\//i.test(url)) {
     const bytes = await fetchBytes(url);
-    if (release.sha256) {
-      const actual = sha256Hex(bytes);
-      if (actual !== release.sha256) {
-        throw new Error("sha256 mismatch for release " + release.version + ": expected " + release.sha256 + ", got " + actual);
-      }
+    const actual = sha256Hex(bytes);
+    if (actual !== (release.sha256 as string)) {
+      throw new Error("sha256 mismatch for release " + release.version + ": expected " + release.sha256 + ", got " + actual);
     }
     return { kind: "archive", bytes };
   }
@@ -331,11 +431,9 @@ async function acquirePayload(release: UpdateRelease, manifestBase: string | nul
     return { kind: "dir", source: local };
   }
   const bytes = await fetchBytes(local);
-  if (release.sha256) {
-    const actual = sha256Hex(bytes);
-    if (actual !== release.sha256) {
-      throw new Error("sha256 mismatch for release " + release.version + ": expected " + release.sha256 + ", got " + actual);
-    }
+  const actual = sha256Hex(bytes);
+  if (actual !== (release.sha256 as string)) {
+    throw new Error("sha256 mismatch for release " + release.version + ": expected " + release.sha256 + ", got " + actual);
   }
   return { kind: "archive", bytes };
 }
@@ -381,6 +479,8 @@ function isInstalled(state: UpdateState, version: string): boolean {
 
 /** Download + verify + stage a release payload under releases/<version>. */
 export async function installRelease(version: string, manifestUrl?: string): Promise<UpdateState> {
+  // Re-validate the requested version: it lands in filesystem paths below.
+  normalizeVersion(version);
   const { release, base } = await findRelease(version, manifestUrl);
   const state = loadUpdateState();
   const payloadDir = releasePayloadDir(version);

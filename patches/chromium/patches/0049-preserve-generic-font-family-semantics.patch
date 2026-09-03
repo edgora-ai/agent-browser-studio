@@ -1,0 +1,16 @@
+diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -184,9 +184,10 @@ class RoxyFingerprintConfig {
+   // limited to the portable Microsoft families present on supported macOS
+   // builders; profile-scoped runtime fonts can later provide exact Segoe and
+   // regional families without exposing unrelated host fonts.
+   std::optional<std::string> ManagedGenericFontFamily(
+-      std::string_view family) const {
+-    if (!enabled_ || platform_ != "Win32")
++      std::string_view family,
++      bool is_generic) const {
++    if (!is_generic || !enabled_ || platform_ != "Win32")
+       return std::nullopt;
+     const std::string normalized = LowerAscii(family);
+     if (normalized == "serif" || normalized == "ui-serif" ||

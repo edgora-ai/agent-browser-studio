@@ -593,23 +593,63 @@
     input: { type: true, checked: true, disabled: true },
   };
 
-  // Sanitize an HTML string from markdown: drop unknown tags (unwrap text),
-  // strip dangerous attributes, neutralize javascript:/data: URLs and event handlers.
+  // Sanitize an HTML string from markdown: allowlist-based, with no external
+  // purifier dependency (none is vendored). Unknown/unsafe tags are removed
+  // (dangerous content tags with their content); allowed tags keep only
+  // allowlisted attributes with safe URI schemes. Works with or without DOM.
+  var DANGEROUS_CONTENT_TAGS = {
+    script: true, style: true, iframe: true, object: true, embed: true,
+    form: true, noscript: true, template: true, link: true, meta: true,
+    base: true, frame: true, frameset: true,
+  };
+  var SAFE_URI_REGEXP = /^(?:(?:https?|mailto|tel):|#|\/|data:image\/(?:png|jpeg|gif|webp);base64,)/i;
   function sanitizeMdHtml(html) {
-    if (typeof window === "undefined" || !window.DOMPurify) {
-      // Fallback: minimal regex strip of <script>/<style>/on*= handlers/javascript: URLs
-      return String(html || "")
-        .replace(/<script[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[\s\S]*?<\/style>/gi, "")
-        .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-        .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-        .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-        .replace(/(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, "$1=\"#\"");
-    }
-    return window.DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: Object.keys(ALLOWED_MD_TAGS),
-      ALLOWED_ATTR: ["href", "title", "target", "rel", "src", "alt", "width", "height", "class", "align", "type", "checked", "disabled"],
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|#|\/|data:image\/(?:png|jpeg|gif|webp);base64,)/i,
+    var src = String(html || "");
+    // 1. Strip HTML comments (conditional comments / bogus markup).
+    src = src.replace(/<!--[\s\S]*?-->/g, "");
+    // 2. Strip dangerous content tags with their content.
+    var prev;
+    do {
+      prev = src;
+      src = src.replace(/<(script|style|iframe|object|embed|form|noscript|template|link|meta|base|frame|frameset)\b[^<>]*>[\s\S]*?<\/\1\s*>/gi, "");
+      src = src.replace(/<(script|style|iframe|object|embed|form|noscript|template|link|meta|base|frame|frameset)\b[^<>]*\/?>/gi, "");
+    } while (src !== prev);
+    // 3. Allowlist-filter remaining tags and attributes. The tag regex is
+    // `<`-bounded (not `>`-bounded) so a `>` inside a quoted attribute value
+    // cannot prematurely end the match and smuggle the rest through.
+    return src.replace(/<\/?([A-Za-z][A-Za-z0-9]*)((?:\s+[^\s=/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?)>/g, function (tag, name, attrs) {
+      var selfClose = /\/\s*$/.test(attrs || "");
+      var tagName = String(name || "").toLowerCase();
+      var isClose = tag.charAt(1) === "/";
+      if (!ALLOWED_MD_TAGS[tagName] || DANGEROUS_CONTENT_TAGS[tagName]) return "";
+      if (isClose) return "</" + tagName + ">";
+      var allowed = ALLOWED_MD_ATTRS[tagName] || {};
+      var out = "";
+      if (attrs) {
+        var attrRe = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+        var m;
+        while ((m = attrRe.exec(attrs)) !== null) {
+          var attrName = String(m[1] || "").toLowerCase();
+          if (!attrName || attrName.indexOf("on") === 0) continue;
+          if (attrName === "srcdoc" || attrName === "formaction" || attrName === "xlink:href") continue;
+          if (!allowed[attrName]) continue;
+          var val = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : null));
+          if (val === null) {
+            // Valueless attribute: only keep boolean checkbox attrs.
+            if (tagName === "input" && (attrName === "checked" || attrName === "disabled")) out += " " + attrName;
+            continue;
+          }
+          var decoded = String(val).replace(/&#x0*3[aA];?|&#58;?|&colon;|&tab;|&#x0*9;?|&#10;?|&#13;?/g, function (e) {
+            return e.toLowerCase().indexOf("3a") !== -1 || e === "&#58;" ? ":" : " ";
+          }).trim();
+          if ((attrName === "href" || attrName === "src") && !SAFE_URI_REGEXP.test(decoded)) continue;
+          if (tagName === "input" && attrName === "type" && decoded.toLowerCase() !== "checkbox") continue;
+          out += " " + attrName + '="' + decoded.replace(/&/g, "&amp;").replace(/"/g, "&quot;") + '"';
+        }
+      }
+      if (tagName === "a" && out.indexOf(" target=") === -1) out += ' target="_blank"';
+      if (tagName === "a" && out.indexOf(" rel=") === -1) out += ' rel="noopener noreferrer"';
+      return "<" + tagName + out + (selfClose ? " /" : "") + ">";
     });
   }
 
@@ -759,7 +799,11 @@
     var dlg = document.getElementById("dlg-confirm");
     if (dlg && !dlg.open) dlg.showModal();
   };
-  agentBrowser.confirmHtml = function (msgHtml, onOk, opts) {
+  // UNSAFE-CONTRACT: msgHtml/detailHtml are inserted as HTML without further
+  // sanitization. Callers MUST pass only static markup or esc()-escaped
+  // dynamic values — never raw profile/proxy/account names. (Covered by the
+  // confirmHtml-contract unit test: all in-repo callers esc() first.)
+  agentBrowser.confirmHtmlUnsafe = function (msgHtml, onOk, opts) {
     _confirmCallback = typeof onOk === "function" ? onOk : null;
     var msgEl = document.getElementById("dlg-confirm-msg");
     var detailEl = document.getElementById("dlg-confirm-detail");
@@ -773,6 +817,9 @@
     var dlg = document.getElementById("dlg-confirm");
     if (dlg && !dlg.open) dlg.showModal();
   };
+  // Back-compat alias (deprecated): prefer confirmHtmlUnsafe with esc()'d args,
+  // or confirm() for plain-text messages.
+  agentBrowser.confirmHtml = agentBrowser.confirmHtmlUnsafe;
   agentBrowser.doConfirm = function () {
     // PL-09: block the action until the acknowledgement box is ticked.
     var wrap = document.getElementById("dlg-confirm-ack-wrap");
@@ -836,6 +883,7 @@
     escAttr: escAttr,
     renderInlineMarkdown: renderInlineMarkdown,
     renderChatMarkdown: renderChatMarkdown,
+    sanitizeMdHtml: sanitizeMdHtml,
     safeCodeLanguage: safeCodeLanguage,
     shortPath: shortPath,
     fmt: fmt,

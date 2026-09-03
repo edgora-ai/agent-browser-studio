@@ -67,6 +67,13 @@ describe("audit-log", () => {
     expect(listAudit(10)).toEqual([]);
   });
 
+  it("seals the log owner-only (0600) on first append", () => {
+    recordAudit({ category: "x", action: "y", at: 1 });
+    if (process.platform !== "win32") {
+      expect(fs.statSync(tmp).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it("persists across re-reads (append-only file)", () => {
     recordAudit({ category: "a", action: "1", at: 1 });
     recordAudit({ category: "a", action: "2", at: 2 });

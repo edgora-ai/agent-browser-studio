@@ -32,13 +32,14 @@ const SYSTEM_COLOR_KEYWORDS = [
   "SelectedItem", "SelectedItemText", "VisitedText",
 ] as const;
 
-// Observed from six valid local RoxyChrome 149 Profiles spanning Win32/macOS
-// and Apple/AMD identities. All six had this exact WebGL 1/2 capability shape
-// while retaining distinct unmasked vendor/renderer strings.
-const ROXYCHROME_149_WEBGL_CAPABILITY_SHA256 =
+// The normalized WebGL capability shape is stable across the observed
+// RoxyChrome 149 profiles and the stock Chrome 151/152 reference corpora. The
+// WebGPU shape is pinned to stock Chrome 152, including subgroup-size-control.
+const STOCK_CHROME_152_WEBGL_CAPABILITY_SHA256 =
   "8f97b97709c5c782ef0b5751e8c2217826721af0bfb8daeba76d29694d040bc2";
-const STOCK_CHROME_150_WEBGPU_CAPABILITY_SHA256 =
-  "ad30297f9dce978014dd2ab257051036bc2a0a551f9b594478c5000e3eb88ebc";
+const STOCK_CHROME_152_WEBGPU_CAPABILITY_SHA256 =
+  "d6f8c588d2270ff32761fa2d512820f27eb932248a492a536696bc60b42c4999";
+const TARGET_CHROMIUM_VERSION = "152.0.7977.72";
 
 type SystemColorKeyword = typeof SYSTEM_COLOR_KEYWORDS[number];
 type Pixel = [number, number, number, number];
@@ -357,15 +358,21 @@ function resolveExecutable(input: string): string {
 }
 
 function detectVersion(executablePath: string): string {
+  let output: string;
   try {
-    const output = execFileSync(executablePath, ["--version"], {
+    output = execFileSync(executablePath, ["--version"], {
       encoding: "utf8",
       timeout: 10_000,
     });
-    return output.match(/\d+\.\d+\.\d+\.\d+/)?.[0] || "149.0.7827.22";
-  } catch {
-    return "149.0.7827.22";
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`Unable to execute Chromium --version for ${executablePath}: ${detail}`);
   }
+  const version = output.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+  if (!version) {
+    fail(`Unable to parse Chromium version from ${executablePath}: ${JSON.stringify(output.trim())}`);
+  }
+  return version;
 }
 
 async function startOrigin(): Promise<{ origin: string; crossOrigin: string; close: () => Promise<void> }> {
@@ -884,8 +891,6 @@ async function runOnce(
       viewport: null,
       args: [
         buildBrowserFingerprintArg(meta, version),
-        "--enable-unsafe-webgpu",
-        "--ignore-gpu-blocklist",
         "--use-fake-device-for-media-stream",
         "--use-fake-ui-for-media-stream",
         `--window-size=${config.screen.outerWidth},${config.screen.outerHeight}`,
@@ -1028,8 +1033,6 @@ async function capturePassThrough(
       timeout: 20_000,
       viewport: null,
       args: [
-        "--enable-unsafe-webgpu",
-        "--ignore-gpu-blocklist",
         "--host-resolver-rules=MAP roxy-cross.test 127.0.0.1",
         `--unsafely-treat-insecure-origin-as-secure=${crossOrigin}`,
       ],
@@ -1265,8 +1268,8 @@ function verifyExpected(
   }
   expectEqual(
     webGlCapabilitySha256(run.webgl.window),
-    ROXYCHROME_149_WEBGL_CAPABILITY_SHA256,
-    "WebGL 1/2 capability corpus vs observed RoxyChrome 149",
+    STOCK_CHROME_152_WEBGL_CAPABILITY_SHA256,
+    "WebGL 1/2 capability corpus vs Stock Chrome 152",
   );
   expectEqual(probe.webgpuVendor, config.webgpu.vendor, "WebGPU vendor");
   expectEqual(probe.webgpuArchitecture, config.webgpu.architecture, "WebGPU architecture");
@@ -1293,8 +1296,8 @@ function verifyExpected(
   }
   expectEqual(
     webGpuCapabilitySha256(run.webgpu.window),
-    STOCK_CHROME_150_WEBGPU_CAPABILITY_SHA256,
-    "WebGPU adapter/device corpus vs Stock Chrome 150",
+    STOCK_CHROME_152_WEBGPU_CAPABILITY_SHA256,
+    "WebGPU adapter/device corpus vs Stock Chrome 152",
   );
   expect(String(probe.workerIdentity || "").includes(config.userAgent), "Worker user agent did not match Window");
   expect(String(probe.workerIdentity || "").includes(config.platform), "Worker platform did not match Window");
@@ -1616,7 +1619,7 @@ async function main(): Promise<void> {
   if (!executableArg) fail("usage: npm run verify:chromium -- /path/to/Chromium[.app]");
   const executablePath = resolveExecutable(executableArg);
   const version = detectVersion(executablePath);
-  expect(Number(version.split(".")[0]) >= 149, `Chromium 149+ required, detected ${version}`);
+  expectEqual(version, TARGET_CHROMIUM_VERSION, "Chromium verification target version");
 
   const origin = await startOrigin();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-native-verify-"));
@@ -1791,14 +1794,14 @@ async function main(): Promise<void> {
       checkedSurfaces: STABLE_FIELDS.length,
       webglCapabilityCorpus: {
         contexts: 4,
-        roxyChrome149Sha256: webGlCapabilitySha256(first.result.webgl.window),
+        stockChrome152Sha256: webGlCapabilitySha256(first.result.webgl.window),
         webgl1Parameters: Object.keys(first.result.webgl.window.webgl1?.parameters || {}).length,
         webgl2Parameters: Object.keys(first.result.webgl.window.webgl2?.parameters || {}).length,
         shaderPrecisionCases: Object.keys(first.result.webgl.window.webgl1?.shaderPrecision || {}).length * 2,
       },
       webgpuCapabilityCorpus: {
         contexts: 2,
-        stockChrome150Sha256: webGpuCapabilitySha256(first.result.webgpu.window),
+        stockChrome152Sha256: webGpuCapabilitySha256(first.result.webgpu.window),
         adapterFeatures: first.result.webgpu.window.adapter?.features.length || 0,
         adapterLimits: Object.keys(first.result.webgpu.window.adapter?.limits || {}).length,
         deviceFeatures: first.result.webgpu.window.device?.features.length || 0,

@@ -1,6 +1,10 @@
-# Chromium Fingerprint Patch
+# Independent Browser Engine Patches
 
-The independent Chromium 149+ implementation now lives in
-[`chromium/`](./chromium/README.md). It uses the public Roxy fingerprint config
-schema and does not depend on the official CloakBrowser distribution or Pro
-binaries.
+The production Chromium 149+ implementation lives in
+[`chromium/`](./chromium/README.md). The macOS-first Firefox 154 native source,
+build and append-only patch chain is being established in
+[`firefox/`](./firefox/README.md); the existing stock-Firefox prefs/BiDi path
+remains its fallback until the native capability matrix passes.
+
+Both engines consume the public Agent Browser fingerprint config schema and do
+not depend on proprietary browser distributions or binaries.

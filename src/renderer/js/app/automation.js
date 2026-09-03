@@ -421,20 +421,25 @@
     p.then(function(r) {
       toast(r.success ? (id ? t('auto.saved','已更新') : t('auto.created','已创建')) : t('auto.save-failed','失败: ') + (r.error || ''), r.success ? 'success' : 'error');
       agentBrowser.loadAutomationTab();
-    });
+    }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };
 
   agentBrowser.automationToggle = function(rule) {
     if (!rule) return;
-    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function() { agentBrowser.loadAutomationTab(); });
+    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function() { agentBrowser.loadAutomationTab(); }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };
   agentBrowser.automationTest = function(ruleId) {
     toast(t('auto.test-running','测试运行中...'), 'info');
-    api.automation.testRun(ruleId).then(function(r) { toast((r.ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + r.result.slice(0,60), r.ok?'success':'error'); setTimeout(function(){ agentBrowser.loadAutomationTab(); }, 500); });
+    api.automation.testRun(ruleId).then(function(r) {
+      var ok = !!(r && r.ok);
+      var text = String((r && (r.result != null ? r.result : r.error)) || 'unknown error').slice(0, 60);
+      toast((ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + text, ok ? 'success' : 'error');
+      setTimeout(function(){ agentBrowser.loadAutomationTab(); }, 500);
+    }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };
   agentBrowser.automationDelete = function(ruleId) {
     agentBrowser.confirm(t('auto.confirm-delete','删除此任务?'), function() {
-      api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); });
+      api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
     });
   };
 })();

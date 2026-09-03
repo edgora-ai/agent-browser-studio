@@ -164,21 +164,36 @@ export class JobGuard {
   }
 }
 
-/** Race an async action against a timeout. Rejects with a timeout error on expiry. */
-export async function withTimeout<T>(fn: (signal?: AbortSignal) => Promise<T>, timeoutMs: number, label = "job"): Promise<T> {
+/**
+ * Race an async action against a timeout. Rejects with a timeout error on
+ * expiry. The loser is NOT left to run unattended: on timeout we abort the
+ * action's signal AND keep the returned promise tracked — callers must pass an
+ * `onTimeout` hook (used by automation to mark the job cancelled so a retry
+ * never fires while the zombie is still active) or await settlement.
+ */
+export async function withTimeout<T>(
+  fn: (signal?: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label = "job",
+  opts?: { onTimeout?: (loser: Promise<T>) => void },
+): Promise<T> {
   if (!(timeoutMs > 0)) return fn();
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
+  let loser: Promise<T> | null = null;
   try {
-    return await Promise.race([
-      fn(controller.signal),
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
+    const raced = new Promise<T>((resolve, reject) => {
+      loser = fn(controller.signal).then(resolve, reject) as Promise<T>;
+      timer = setTimeout(() => {
+        controller.abort();
+        try { opts?.onTimeout?.(loser as Promise<T>); } catch { /* never break the timeout path */ }
+        // Attach a no-op catch so the still-running loser cannot surface as an
+        // unhandled rejection when it settles after we've already rejected.
+        (loser as Promise<T>).then(() => {}, () => {});
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    return await raced;
   } finally {
     if (timer) clearTimeout(timer);
   }

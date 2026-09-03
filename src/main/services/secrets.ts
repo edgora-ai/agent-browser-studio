@@ -180,9 +180,26 @@ export function migrateSecret(stored: string): string {
   return encryptOsSecret(plain);
 }
 
-/** Decrypt if needed, never throw — consumption paths fail closed. */
+/**
+ * Decrypt if needed, never throw — but never silently return a *usable*
+ * fallback either. A corrupt `v2:`/`v1:` value used to decrypt to `""`, which
+ * callers then sent as a real (empty) password/Bearer key: the request failed
+ * with a confusing auth error instead of surfacing the corrupt vault entry.
+ * Now a corrupt *encrypted* value throws a descriptive error (fail-closed);
+ * plaintext and explicit fallbacks keep their old behavior.
+ */
 export function decryptSecretOr(stored: string, fallback = ""): string {
-  try { return decryptSecret(stored); } catch { return fallback; }
+  try {
+    return decryptSecret(stored);
+  } catch (e: any) {
+    if (isEncrypted(stored)) {
+      throw new Error(
+        "Stored credential is corrupt (decryption failed; vault key may have changed). " +
+        "Re-enter the credential. " + (e?.message || String(e)),
+      );
+    }
+    return fallback;
+  }
 }
 
 export function maybeEncrypt(plain: string): string {

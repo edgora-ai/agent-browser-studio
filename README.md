@@ -69,7 +69,7 @@ npm start
 
 ### Use the independent Chromium engine
 
-Build Chromium 150/151 with the independently maintained patch set under
+Build Chromium 152 with the independently maintained patch set under
 [`patches/chromium`](patches/chromium/README.md), verify it, and install it into
 the local OSS engine cache:
 
@@ -111,30 +111,24 @@ cause repeated macOS authorization prompts. Existing `CloakLite Safe Storage`
 values are converted once and atomically, without deleting the legacy
 Keychain item or writing plaintext to the config file.
 
-The current Apple Silicon build is verified at Chromium `150.0.7871.114` (151.0.7922.71 in-tree, verification pending for 151 — see patches/chromium/UPGRADE_151.md):
-the strict native harness passes all 53 checked surfaces, the modern/legacy
-Storage corpus, 61 system-theme checks and the deep Window/Worker/DOM/Local
-Access font corpus, including full WebGL 1/2 and WebGPU adapter/device
-capability corpora, same-Profile restart and headed/headless comparison, and
-the installed version/input/cookie/proxy journeys pass with Chromium 149
-retained for rollback. Patchset `0041` also verifies authenticated SOCKS5 TCP
-and UDP, proxy-side DNS and real Profile HTTP/3 through a profile-owned MASQUE
-bridge. The app-layer input gate additionally verifies trusted actions through
-two nested cross-origin frames, post-layout re-targeting, occlusion rejection
-and explicit key-hold timing. Patchset `0042` adds the public `agent-browser-*`
-runtime protocol while keeping the older `roxy-*` switches as transition aliases
-for retained Chromium 149 and early 150 builds. Patchset `0043` adds an explicit
-managed-runtime capability that suppresses Chromium's missing-Google-API-key
-information bar without adding a fake key or enabling unavailable Google
-services. Patchset `0044` keeps managed secure DNS -- including the DoH probe --
-inside the exit proxy with no host-resolver fallback, and preserves the managed
-ICU locale, font mapping and native refresh rate so DNS, fonts and frame timing
-stay consistent with the exit identity. RoxyChrome/CloakBrowser are used
-only as historical comparison targets, not runtime dependencies. Of 36
-engine/network/lifecycle gates, 35 are verified, none remains partial, and 1 is
-missing: signed multi-platform distribution. The controlled HTTP/HTTPS/WSS
-proxy timing/cache/header corpus and the Stock-150-exact direct
-TLS/HTTP2/HTTP3 fingerprint corpus are verified; see
+The current Apple Silicon build is verified at Chromium `152.0.7977.72`
+(commit `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`). The managed-cache bundle
+passes the Stock-152 WebGL/WebGPU/font/OPFS gate (8/8), the strict native harness
+(`ok: true`, 53 checked surfaces), 61 system-theme checks, persistent restart,
+headed/headless and native-host pass-through comparisons. The full application
+suite explicitly bound to the 152 executable passes 95 E2E files / 470 tests
+(with 4 files / 12 tests intentionally skipped), while 149/150 remain available
+for exact pin and rollback coverage. A real proxy/Ping0 run completed with zero
+browser-identity failures; its remaining findings were external proxy/site
+network-boundary signals. Patchsets `0041`–`0050` retain SOCKS5 TCP/UDP and
+HTTP/3 routing, the public `agent-browser-*` protocol, managed Google-key infobar
+suppression, proxy-bound secure DNS, native locale/font/refresh behavior,
+Widevine registration and append-only Chromium-152 compilation/resume fixes.
+RoxyChrome/CloakBrowser remain historical comparison targets, not runtime
+dependencies. The controlled HTTP/HTTPS/WSS and Stock-150 TLS/HTTP2/HTTP3 wire
+corpora remain the latest recorded network references; the 152 native
+capability evidence is documented in
+[`UPGRADE_152.md`](patches/chromium/UPGRADE_152.md) and
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md).
 
 ### Development checks
@@ -159,7 +153,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j50-nested-frame-humanization.t
 
 ## First-Run Workflow
 
-1. Install or configure the independently built Chromium 150 binary (149 can remain installed for rollback).
+1. Install or configure the independently built Chromium 152 binary (149/150 can remain installed for rollback).
 2. Open **Profiles** and create a profile.
 3. Optional: open **Proxies**, add a proxy, and assign it to the profile.
 4. Launch the profile and run **Check Risk** / consistency checks.

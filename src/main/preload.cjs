@@ -245,7 +245,7 @@ const api = {
   },
   audit: {
     list: (opts) => ipcRenderer.invoke("audit:list", opts),
-    clear: () => ipcRenderer.invoke("audit:clear"),
+    clear: (opts) => ipcRenderer.invoke("audit:clear", opts),
   },
   data: {
     export: (scope) => ipcRenderer.invoke("data:export", scope),

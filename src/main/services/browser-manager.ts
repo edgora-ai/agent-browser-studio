@@ -33,6 +33,7 @@ import { buildChromiumProxyUrl, proxyDetector, type ProxyDetectionResult } from 
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
+import { transact } from "./config/store.js";
 import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
@@ -514,12 +515,16 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
   const profileDir = path.join(getProfilesDir(), dirId);
   try {
     if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
-    try { const { transact } = require("./config/store.js"); let deleted=false; transact((draft:any)=>{ if(draft.browserProfiles?.[dirId]){ delete draft.browserProfiles[dirId]; deleted=true; } }); if(deleted) return true; } catch {}
-    const cfg = getConfig();
-    if (cfg.browserProfiles) { delete cfg.browserProfiles[dirId]; }
-    saveConfig(cfg as any);
-    return true;
-  } catch { return false; }
+  } catch (e: any) {
+    throw new Error(`Failed to remove profile directory: ${e?.message || String(e)}`);
+  }
+  // Single write path (no swallowed catch/boolean): a failed transact
+  // surfaces its error so callers can tell "rm failed" from "save failed".
+  let deleted = false;
+  transact((draft: any) => {
+    if (draft.browserProfiles?.[dirId]) { delete draft.browserProfiles[dirId]; deleted = true; }
+  });
+  return deleted;
 }
 
 export function listBrowserProfiles(): BrowserProfile[] {
@@ -598,6 +603,12 @@ export interface LaunchEnvCheck {
   checked: boolean;
   high?: boolean;
   findings?: EnvRiskFinding[];
+  error?: string;
+}
+
+export interface LaunchCookieCheck {
+  checked: boolean;
+  applied?: number;
   error?: string;
 }
 
@@ -1210,7 +1221,7 @@ async function launchFirefoxProfile(
   cfg: any,
   headless: boolean | undefined,
   releaseLaunchLock: (() => void) | null,
-): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
+): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
   const bin = findFirefoxBinary();
   if (!bin) {
     if (releaseLaunchLock) releaseLaunchLock();
@@ -1242,7 +1253,9 @@ async function launchFirefoxProfile(
 
   // Explicit free port (not 0): the BiDi endpoint is deterministic and the
   // `ps`-based port rediscovery (statusBrowser after an app restart) works.
-  const remotePort = findFreePort();
+  // Loopback-bound probe with error handling — never the sync wildcard bind
+  // (fail-closed: a listen failure rejects instead of crashing Electron main).
+  const remotePort = await findFreePortWithRetry(2);
   const args = buildFirefoxLaunchArgs({
     profileDir,
     remotePort,
@@ -1299,6 +1312,7 @@ async function launchFirefoxProfile(
   let bidiError: string | null = null;
   let driftCheck: LaunchDriftCheck = { checked: false };
   let envCheck: LaunchEnvCheck = { checked: false };
+  let cookieCheck: LaunchCookieCheck = { checked: false };
 
   try {
     // Long-lived BiDi session: the fingerprint preload script lives in the
@@ -1318,12 +1332,17 @@ async function launchFirefoxProfile(
       }
     }
 
-    // Queued cookie imports (shared with the Chromium pipeline).
+    // Queued cookie imports (shared with the Chromium pipeline). A failure is
+    // surfaced on the launch result — never a silent warn — so callers can see
+    // the session launched without its queued identity.
     try {
       const queuedCookies = await firefoxCookieService.applyQueuedImports(dirId);
+      cookieCheck = { checked: true, applied: queuedCookies };
       if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
     } catch (e: any) {
-      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, e?.message || e);
+      const msg = e?.message || String(e);
+      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, msg);
+      cookieCheck = { checked: true, applied: 0, error: msg };
     }
 
     // Post-launch fingerprint drift check — same gate as managed Chromium:
@@ -1360,8 +1379,8 @@ async function launchFirefoxProfile(
     // nothing is injected; real Firefox also exposes navigator.webdriver=true
     // under BiDi). Probe a fresh tab inside the launch session: webdriver must
     // be disarmed, the noise layer must be live, and the managed fields must
-    // match the profile's identity. A provably-dead injection blocks the
-    // launch by default (blockOnInjectionProbe=false escapes, like drift).
+    // match the profile's identity. Fail closed: an unconfirmed OR undecidable
+    // probe blocks the launch by default (blockOnInjectionProbe=false escapes).
     if (managedIdentity) {
       try {
         const entry = runningProcesses.get(dirId);
@@ -1458,10 +1477,10 @@ async function launchFirefoxProfile(
     action: "launch",
     target: dirId,
     actor: "user",
-    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"}`,
+    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"} cookies=${cookieCheck.checked ? (cookieCheck.error ? "failed: " + cookieCheck.error : "applied=" + (cookieCheck.applied ?? 0)) : "unchecked"}`,
   });
   if (releaseLaunchLock) releaseLaunchLock();
-  return { pid, cdpPort: actualPort, driftCheck, envCheck };
+  return { pid, cdpPort: actualPort, driftCheck, envCheck, cookieCheck };
 }
 
 import { stopBrowser as _stopBrowser, statusBrowser as _statusBrowser, stopAllBrowserProfiles as _stopAll, getCdpWebSocketUrl as _getCdpUrl, findBrowserByProfile as _findByProfile } from "./browser/lifecycle.js";
@@ -2095,9 +2114,16 @@ async function findFreePortWithRetry(retries = 2): Promise<number> {
 }
 function findFreePort(): number {
   // Sync fallback for legacy call sites: best-effort single probe.
+  // Binds loopback only and cleans up synchronously; throws (instead of
+  // crashing via an unhandled 'error' event) when no port is available.
+  // New call sites must use findFreePortWithRetry (async, with retries).
   const srv = net.createServer();
-  srv.listen(0);
-  const port = (srv.address() as net.AddressInfo).port;
+  srv.on("error", () => { /* handled below via address check */ });
+  srv.listen(0, "127.0.0.1");
+  const addr = srv.address();
   srv.close();
-  return port;
+  if (!addr || typeof addr === "string" || typeof (addr as net.AddressInfo).port !== "number") {
+    throw new Error("No free loopback port available");
+  }
+  return (addr as net.AddressInfo).port;
 }

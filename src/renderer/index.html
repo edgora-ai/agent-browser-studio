@@ -824,9 +824,9 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Proxy QR Export Dialog ── -->
-<dialog id="dlg-proxy-qr" style="max-width:420px;width:92%;">
+<dialog id="dlg-proxy-qr" aria-labelledby="dlg-proxy-qr-title" style="max-width:420px;width:92%;">
  <form method="dialog">
- <h3 style="margin:0 0 8px;">📱 <span data-i18n="proxy.qr.title">代理二维码</span></h3>
+ <h3 id="dlg-proxy-qr-title" style="margin:0 0 8px;">📱 <span data-i18n="proxy.qr.title">代理二维码</span></h3>
  <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;" data-i18n="proxy.qr.hint">用微信/手机扫码获取完整代理配置（含账号密码）。</p>
  <div style="text-align:center;">
  <img id="dlg-proxy-qr-img" alt="QR" style="max-width:280px;width:100%;image-rendering:pixelated;">
@@ -839,7 +839,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- ── Confirm Dialog ── -->
-<dialog id="dlg-confirm">
+<dialog id="dlg-confirm" aria-labelledby="dlg-confirm-title">
  <form method="dialog" data-role="submit" data-submit-cmd="doConfirm">
  <h3 id="dlg-confirm-title" data-default="Confirm" data-i18n="common.confirm">Confirm</h3>
  <p id="dlg-confirm-msg"></p>
@@ -981,9 +981,9 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </form>
 </dialog>
 
-<dialog id="dlg-skill-import" class="dialog-wide">
+<dialog id="dlg-skill-import" aria-labelledby="dlg-skill-import-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="importSharedSkills">
- <h3>Import Shared Skill Catalog</h3>
+ <h3 id="dlg-skill-import-title">Import Shared Skill Catalog</h3>
  <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Paste exported skill catalog JSON. Imported skills are stored disabled by default until you enable them.</p>
  <div class="form-row"><label for="skill-import-json">Catalog JSON</label><textarea id="skill-import-json" rows="10" placeholder='[{"id":"example-skill","prompt":"..."}]' required></textarea></div>
  <div id="skill-import-status" style="font-size:11px;color:var(--text-muted);margin-top:4px;"></div>
@@ -995,9 +995,9 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Note dialog -->
-<dialog id="dlg-note">
+<dialog id="dlg-note" aria-labelledby="dlg-note-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveNote">
- <h3>✏️ Profile Note</h3>
+ <h3 id="dlg-note-title">✏️ Profile Note</h3>
  <input type="hidden" id="note-dir-id">
  <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" rows="3" placeholder="Add a note for this profile..."></textarea></div>
  <div class="btn-row">
@@ -1057,16 +1057,16 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Automation log detail dialog -->
-<dialog id="dlg-auto-log" class="dialog-wide">
+<dialog id="dlg-auto-log" aria-labelledby="dlg-auto-log-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 style="margin:0;" data-i18n="dlg.log-title">📋 Execution Record Detail</h3>
+ <h3 id="dlg-auto-log-title" style="margin:0;" data-i18n="dlg.log-title">📋 Execution Record Detail</h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-auto-log">✕</button>
  </div>
  <pre id="auto-log-detail" style="font-size:12px;max-height:400px;overflow:auto;background:var(--surface);padding:12px;border-radius:4px;white-space:pre-wrap;font-family:var(--mono);"></pre>
 </dialog>
 
 <!-- Automation job detail dialog -->
-<dialog id="dlg-auto-job" class="dialog-wide">
+<dialog id="dlg-auto-job" aria-labelledby="auto-job-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 style="margin:0;">🧾 <span id="auto-job-title">Job Detail</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-auto-job">✕</button>
@@ -1076,7 +1076,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 
 <!-- Workflow editor dialog -->
-<dialog id="dlg-agent-run" aria-labelledby="dlg-agent-run-title" class="dialog-wide">
+<dialog id="dlg-agent-run" aria-labelledby="agent-run-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 style="margin:0;">🤖 <span id="agent-run-title">Run Detail</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-agent-run">✕</button>

@@ -28,26 +28,28 @@ architecture and AMD adapter identity, including when their Window platform
 and WebGL renderer declared a Windows D3D GPU. That mixed identity is not used
 as the OSS acceptance target.
 
-## Stock Chrome and OSS Chromium 150
+## Stock Chrome and OSS Chromium 152
 
-Stock Chrome `150.0.7871.114` exposes the same feature/limit/device corpus plus
-the version-added `immediate_address_space` WGSL language feature, producing
-SHA-256 `ad30297f9dce978014dd2ab257051036bc2a0a551f9b594478c5000e3eb88ebc`.
-The independent OSS Chromium `150.0.7871.114` matches that hash exactly.
+Stock Chrome `152.0.7977.64` exposes 23 adapter features, 36 adapter limits, one
+default-device feature, 36 device limits and 10 WGSL language features. The
+152 surface includes `subgroup-size-control`; normalized SHA-256 is
+`d6f8c588d2270ff32761fa2d512820f27eb932248a492a536696bc60b42c4999`.
+The installed independent OSS Chromium `152.0.7977.72` matches that hash exactly
+in Window and Worker contexts.
 
-Unlike the observable RoxyChrome Windows reference, the OSS adapter and device
-identity are derived from the same joint hardware persona as WebGL. For
-example, the Windows RTX 3060 corpus reports NVIDIA / Ampere in both Window and
-Worker adapter/device info while preserving the Stock 150 capabilities.
+Unlike the observable RoxyChrome Windows reference, OSS adapter and device
+identity derive from the same joint hardware persona as WebGL. A Windows RTX
+3060 profile reports NVIDIA / Ampere and the configured 32/32 subgroup identity
+in Window and Worker adapter/device info while retaining Stock-152 capabilities.
 
 The strict verifier captures the corpus across independent Profiles, a
 same-Profile close/reopen, different seeds, Windows/macOS identities,
-`el-GR`/`el-CY`, and headed/headless modes. Product fingerprint baselines also
-retain a deep WebGPU hash for drift detection. Any feature, limit, device,
-WGSL, context or identity drift fails the gate.
+`el-GR`/`el-CY`, headed/headless and native pass-through modes. Product
+fingerprint baselines retain the deep hash for drift detection. Any feature,
+limit, device, WGSL, context or identity drift fails the gate.
 
-No new Chromium patch was required: patches `0020` and `0031` already provide
-native adapter/device identity coherence, and the underlying Chromium 150
-capability surface is exact Stock. Patch `0039` only aligns legacy Storage
-quota callbacks and does not alter WebGPU; patch `0038` and all earlier patch
-bytes remain unchanged.
+The verifier deliberately does not pass `--enable-unsafe-webgpu` or
+`--ignore-gpu-blocklist`: Chromium 152 exposes extra experimental features and
+WGSL extensions under those flags, so using them would change the stock surface
+being measured. Native identity patches `0020` and `0031` require no capability
+spoofing; only adapter/device identity fields are managed.

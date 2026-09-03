@@ -206,7 +206,7 @@
       },
 
   delProfile: function (dirId) {
-        agentBrowser.confirm("Delete profile? All data will be removed.", function () {
+        agentBrowser.confirm(window.i18n ? window.i18n.t("profile.delete-confirm", "Delete profile? All data will be removed.") : "Delete profile? All data will be removed.", function () {
           api.browser.delete(dirId).then(function (r) {
             if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
@@ -535,7 +535,7 @@
       if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
       agentBrowser.batch.run({ kind: "launch", dirIds: stopped.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
-    }).catch(function(){});
+    }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
   };
 
   agentBrowser.bulkStop = function() {
@@ -544,7 +544,7 @@
       if (running.length === 0) { toast(t("toast.bulk.none-running", "No profiles are running"), "success"); return; }
       agentBrowser.batch.run({ kind: "stop", dirIds: running.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
-    }).catch(function(){});
+    }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
   };
 
   // ── Batch operations console (filter / select / batch actions) ──
@@ -1263,6 +1263,7 @@
                 '<button type="button" data-action="export-archive">' + esc(t('profile.menu.export', '📦 Export backup')) + '</button>' +
                 '<button type="button" data-action="lock">' + esc(isLocked ? t('profile.menu.unlock', '🔓 Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
                 '<button type="button" data-action="logs">' + esc(t('profile.menu.logs', '📋 Logs')) + '</button>' +
+                '<button type="button" data-action="webrtc-diag">' + esc(t('webrtc.diag.title', '📡 In-browser WebRTC Diagnostics')) + '</button>' +
                 '<button type="button" class="danger" data-action="delete">' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
               '</div>' +
             '</details>' +
@@ -1347,9 +1348,15 @@
       return { dirId: p.dirId, html: html, sig: htmlSignature(html) };
     });
 
-    // Fast path: nothing changed -> touch no DOM at all.
+    // Fast path: nothing changed -> touch no DOM at all. Verify the DOM too:
+    // overlapping refreshes can replace the list with a loading placeholder
+    // after an earlier request has already recorded this data signature.
     var signature = cards.map(function (c) { return c.dirId + ":" + c.sig; }).join("|") + "#" + pageCount;
-    if (signature === lastRenderSignature) {
+    var renderedSignature = Array.prototype.map.call(
+      container.querySelectorAll(":scope > .profile-card"),
+      function (card) { return card.dataset.dirId + ":" + card.getAttribute("data-card-sig"); },
+    ).join("|") + "#" + pageCount;
+    if (signature === lastRenderSignature && renderedSignature === signature) {
       renderPagination(container, total, pageCount);
       return;
     }

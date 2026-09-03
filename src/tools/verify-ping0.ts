@@ -266,9 +266,22 @@ function curlJson(proxyType: "http" | "socks5", host: string, port: number, url:
 }
 
 async function detectGeo(opts: Options): Promise<GeoInfo> {
-  const data = (await curlJson(opts.proxyType, opts.upstreamHost, opts.upstreamPort, "https://ipwho.is/")) as any;
+  let data: any = null;
+  const errors: string[] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    data = await curlJson(
+      opts.proxyType,
+      opts.upstreamHost,
+      opts.upstreamPort,
+      "https://ipwho.is/",
+      15,
+    );
+    if (data && data.success !== false) break;
+    errors.push(`attempt ${attempt}: ${data?.error || "no data"}`);
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   if (!data || data.success === false) {
-    throw new Error("Geo-IP detection through proxy failed: " + (data?.error || "no data"));
+    throw new Error("Geo-IP detection through proxy failed: " + errors.join("; "));
   }
   return {
     exitIp: data.ip || null,
@@ -1072,13 +1085,17 @@ export function categorizeFindings(findings: Array<any>): {
 }
 
 function browserVersionOf(browserPath: string): string {
+  let output: string;
   try {
-    const out = execFileSync(browserPath, ["--version"], { encoding: "utf8" });
-    const match = String(out).match(/\d+\.\d+\.\d+\.\d+/);
-    return match ? match[0] : "150.0.7871.114";
-  } catch {
-    return "150.0.7871.114";
+    output = execFileSync(browserPath, ["--version"], { encoding: "utf8" });
+  } catch (error) {
+    throw new Error(`Unable to execute Chromium --version: ${browserPath}`, { cause: error });
   }
+  const match = String(output).match(/\d+\.\d+\.\d+\.\d+/);
+  if (!match) {
+    throw new Error(`Unable to parse Chromium version from: ${String(output).trim() || "<empty>"}`);
+  }
+  return match[0];
 }
 
 async function main(): Promise<void> {

@@ -15,7 +15,12 @@ services:
       # then copy the built chrome into this dir):
       - ./chromium:/opt/chromium
     environment:
-      AGENT_BROWSER_API_TOKEN: change-me
+      # REQUIRED: generate one per deployment, e.g.
+      #   export AGENT_BROWSER_API_TOKEN="$(openssl rand -hex 32)"
+      # The compose file intentionally ships no default: starting with an
+      # unset/placeholder token fails closed (see rest-api-server startup
+      # guard) instead of exposing a guessable credential on published ports.
+      AGENT_BROWSER_API_TOKEN: ${AGENT_BROWSER_API_TOKEN:?set AGENT_BROWSER_API_TOKEN before 'docker compose up'}
       AGENT_BROWSER_CHROMIUM_BINARY_PATH: /opt/chromium/chrome
     restart: unless-stopped
 
