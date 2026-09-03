@@ -100,7 +100,13 @@ export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintC
   // Worker-identity block for the shim (G1): computed HERE (TS side) because
   // the page realm executing the preload has no `config` binding — the
   // generated worker script receives the persona fields as plain JSON.
-  const wcfgJson = JSON.stringify({
+  // Worker-identity literal, evaluated ONCE at preload-build time (TS side)
+  // and substituted into the __WCFG_LITERAL__ placeholder after the template
+  // closes. It must be plain source text — the worker-shim block is itself a
+  // runtime string template inside the page script, so a TS-side const
+  // reference would emit a bare identifier and a second JSON.stringify would
+  // emit a quoted string; either way the worker reads undefined (R3 #56).
+  const wcfgLiteral: string = JSON.stringify({
     platform: config.platform,
     oscpu: config.platform === "MacIntel" ? "Intel Mac OS X 10.15" : config.platform === "Linux armv81" ? "Linux armv8l" : "Windows NT 10.0; Win64; x64",
     appVersion: config.platform === "MacIntel" ? "5.0 (Macintosh)" : config.platform === "Linux armv81" ? "5.0 (Android)" : "5.0 (Windows)",
@@ -110,7 +116,7 @@ export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintC
     timezone: config.timezone,
     canvasSeed: config.canvas && config.canvas.enabled ? config.canvas.seed : null,
   });
-  return `(function(){
+  const preload = `(function(){
 "use strict";
 var cfg = ${json};
 var seedFromHex = function(hex){ var n=0; for(var i=0;i<hex.length&&i<8;i++){ n=(n*16+parseInt(hex[i],16))>>>0; } return n||1; };
@@ -1180,9 +1186,11 @@ if (cfg.audio.enabled) {
         // oscpu, appVersion, hardwareConcurrency, maxTouchPoints, webdriver,
         // languages) and timezone would otherwise expose the HOST identity the
         // window realm is masking — the classic two-realm cross-check.
-        // NOTE: the wcfg literal is evaluated in buildFirefoxFingerprintPreloadScript
-        // (TS side) and embedded as plain JSON — the page realm has no config.
-        'var wcfg=' + ${JSON.stringify(wcfgJson)} + ';' +
+        // NOTE: the persona literal is baked in at preload-build time via the
+        // WCFG_LITERAL placeholder below (string-replaced TS-side after the
+        // template closes). A second JSON.stringify would emit a quoted string
+        // and the worker realm would read every field as undefined (R3 #56).
+        'var wcfg=__WCFG_LITERAL__;' +
         'if(typeof navigator!=="undefined"){try{' +
         'var WNP=Object.getPrototypeOf(navigator)||navigator;' +
         'function wval(o,k,v){try{var d=Object.getOwnPropertyDescriptor(o,k);if(d&&!d.configurable)return;Object.defineProperty(o,k,{configurable:true,get:function(){return v;}});}catch(e){}}' +
@@ -1328,6 +1336,8 @@ if (cfg.audio.enabled) {
   } catch (e) {}
 })();
 })();`;
+  if (!preload.includes("__WCFG_LITERAL__")) throw new Error("wcfg placeholder missing from preload template");
+  return preload.split("__WCFG_LITERAL__").join(wcfgLiteral);
 }
 
 /**

@@ -72,8 +72,18 @@
     });
   };
 
+  function findAdapterCard(id) {
+    // Dataset scan — never interpolate a catalog-controlled id into a
+    // selector string (R3 #55: crafted id breaks querySelector).
+    var cards = document.querySelectorAll('.adapter-card[data-adapter-id]');
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute('data-adapter-id') === String(id)) return cards[i];
+    }
+    return null;
+  }
+
   agentBrowser.adapterToggle = function(id) {
-    var card = document.querySelector('.adapter-card[data-adapter-id="' + id + '"]');
+    var card = findAdapterCard(id);
     if (!card) return;
     var detail = card.querySelector('.adapter-detail');
     if (!detail) return;
@@ -84,7 +94,7 @@
   };
 
   agentBrowser.adapterShowDetail = function(id) {
-    var card = document.querySelector('.adapter-card[data-adapter-id="' + id + '"]');
+    var card = findAdapterCard(id);
     var holder = card ? card.querySelector('.adapter-full-detail') : null;
     if (!holder) return;
     holder.innerHTML = '<div class="loading">Loading full recipe...</div>';

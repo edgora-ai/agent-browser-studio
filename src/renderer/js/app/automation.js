@@ -136,7 +136,7 @@
     if (!sel) return;
     var selected = sel.value;
     sel.innerHTML = '<option value="">' + esc(t('auto.no-template', '(不使用模板)')) + '</option>' + taskTemplates.map(function(tpl) {
-      return '<option value="' + escAttr(t.id) + '">' + esc(t.title) + ' · ' + esc(t.category) + ' · ' + esc(t.riskLevel) + '</option>';
+      return '<option value="' + escAttr(tpl.id) + '">' + esc(tpl.title) + ' · ' + esc(tpl.category) + ' · ' + esc(tpl.riskLevel) + '</option>';
     }).join('');
     if (selected) sel.value = selected;
   }

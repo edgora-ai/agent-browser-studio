@@ -67,6 +67,7 @@ import {
   detectFirefoxVersion,
   findFirefoxBinary,
   getFirefoxStatus,
+  normalizeManagedFirefoxVersion,
   sanitizeBrowserEngine,
   spawnFirefoxWithDebugInfo,
   writeFirefoxUserJs,
@@ -295,7 +296,11 @@ export function createBrowserProfile(opts: {
     name: opts.name,
     engine,
     fingerprintMode,
-    browserVersion: normalizeManagedChromiumVersion(opts.browserVersion),
+    // Engine-aware version pin (R3 #58): Firefox pins like "154.0" would be
+    // rejected by the Chromium 4-segment validator — validate per engine.
+    browserVersion: engine === "firefox"
+      ? normalizeManagedFirefoxVersion(opts.browserVersion)
+      : normalizeManagedChromiumVersion(opts.browserVersion),
     allowThirdPartyCookies: normalizeBoolean(opts.allowThirdPartyCookies, "third-party cookie compatibility"),
     fingerprintSeed: normalizeFingerprintSeed(opts.fingerprintSeed || Math.floor(Math.random() * 90000) + 10000),
     platform: normalizePlatform(opts.platform || (process.platform === "darwin" ? "macos" : "windows")),

@@ -208,6 +208,9 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
 
   it("worker shim re-applies persona identity, timezone and canvas noise (G1/G5)", () => {
     expect(script).toContain("var wcfg=");
+    // wcfg must be an object literal, not a double-serialized string (R3 #56).
+    expect(script).toMatch(/var wcfg=\{"platform":/);
+    expect(script).not.toMatch(/var wcfg="\\?\{/);
     expect(script).toContain('wval(WNP,"platform"');
     expect(script).toContain('wval(WNP,"webdriver"');
     expect(script).toContain('wget(WNP,"languages"');

@@ -61,6 +61,17 @@ describe("script-sandbox", () => {
     )).toThrow(/code generation|disallowed/i);
   });
 
+  it("BLOCKS the host-timer constructor path (R3: setTimeout was host-bound)", () => {
+    // Round-3 regression: timers were host-realm functions, so
+    // setTimeout.constructor compiled in the host realm. Timers are now
+    // sandbox-realm wrappers; string compilation throws.
+    expect(() => runSandboxed("return setTimeout.constructor('return 42')();")).toThrow(/code generation|disallowed/i);
+    expect(() => runSandboxed(
+      "return setTimeout.constructor('return process.getBuiltinModule(\"child_process\").execSync(\"echo PWNED\").toString()')();",
+    )).toThrow(/code generation|disallowed/i);
+    expect(() => runSandboxed("return queueMicrotask.constructor('return 1')();")).toThrow(/code generation|disallowed/i);
+  });
+
   it("throws on empty script", () => {
     expect(() => runSandboxed("   ")).toThrow(/empty/i);
   });

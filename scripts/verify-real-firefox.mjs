@@ -83,7 +83,7 @@ async function launchFirefox(name, { extraPrefs, tz } = {}) {
 }
 
 const identity = buildFirefoxManagedIdentity(
-  { fingerprintSeed: 20240819, platform: "mac", locale: "en-US", timezone: "America/New_York" },
+  { fingerprintSeed: 20240819, platform: "macos", locale: "en-US", timezone: "America/New_York" },
   "154.0",
 );
 

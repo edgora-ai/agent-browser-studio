@@ -50,18 +50,19 @@ const GLOBAL_NAMES = [
 export function runSandboxed(code: string, ctx: SandboxContext = {}, timeoutMs = 30_000): unknown {
   if (typeof code !== "string" || code.trim() === "") throw new Error("empty script");
   const hostLogger = typeof ctx.logger === "function" ? ctx.logger : () => {};
-  // Plain object with a null prototype: no host Object.prototype in the chain.
-  // Timer + microtask functions are bound host references installed as plain
-  // values (calling them is safe; their .constructor is host Function, but
-  // string compilation is killed by codeGeneration below, and they are
-  // function objects whose only use is invocation).
-  const context = vm.createContext({
-    setTimeout: setTimeout.bind(globalThis),
-    clearTimeout: clearTimeout.bind(globalThis),
-    setInterval: setInterval.bind(globalThis),
-    clearInterval: clearInterval.bind(globalThis),
-    queueMicrotask: queueMicrotask.bind(globalThis),
-  }, {
+  // Timers CANNOT be host-bound functions: any host-realm function value in
+  // the context exposes `fn.constructor` = host Function, whose string
+  // compilation ignores this context's codeGeneration lock (verified RCE via
+  // setTimeout.constructor + process.getBuiltinModule). Instead the raw host
+  // timers live OUTSIDE the context object (closure locals of this module
+  // function — invisible to guest code) and the guest only ever sees
+  // sandbox-realm wrappers created by the bootstrap evaluation below.
+  const rawSetTimeout = setTimeout.bind(globalThis);
+  const rawClearTimeout = clearTimeout.bind(globalThis);
+  const rawSetInterval = setInterval.bind(globalThis);
+  const rawClearInterval = clearInterval.bind(globalThis);
+  const rawQueueMicrotask = queueMicrotask.bind(globalThis);
+  const context = vm.createContext(Object.create(null), {
     codeGeneration: { strings: false, wasm: false },
   });
   // Intrinsics inside the sandbox realm (NOT the host's): freezing these
@@ -79,6 +80,15 @@ export function runSandboxed(code: string, ctx: SandboxContext = {}, timeoutMs =
     var __stringifyLocal = __stringify;
     var __bridgeLogLocal = __bridgeLog;
     var __envJsonLocal = __envJson;
+    // Sandbox-realm timer wrappers: guest sees THESE functions (created by
+    // this evaluation, so .constructor is the sandbox Function with string
+    // compilation disabled). The raw host timers are NOT context properties.
+    var __rawTimers = __timers;
+    this.setTimeout = function(fn, ms) { return __rawTimers.setTimeout(fn, ms); };
+    this.clearTimeout = function(h) { return __rawTimers.clearTimeout(h); };
+    this.setInterval = function(fn, ms) { return __rawTimers.setInterval(fn, ms); };
+    this.clearInterval = function(h) { return __rawTimers.clearInterval(h); };
+    this.queueMicrotask = function(fn) { return __rawTimers.queueMicrotask(fn); };
     this.__hostLog = function(parts) { return __bridgeLogLocal(parts); };
     this.console = {
       log: function() { var s = __stringifyLocal; return __hostLog(Array.prototype.slice.call(arguments).map(function(a){ return s(a); })); },
@@ -102,21 +112,29 @@ export function runSandboxed(code: string, ctx: SandboxContext = {}, timeoutMs =
       return typeof v === "string" ? v : JSON.stringify(v);
     } catch { return String(v); }
   };
-  // __bridgeLog / __stringify / __envJson are the ONLY host values injected,
-  // and they are plain data + a minimal bridge (no closures with useful
-  // constructors reachable: the guest only ever calls them, and their
-  // .constructor is looked up on the host Function — but with
-  // codeGeneration.strings=false the resulting Function constructor throws
-  // on string compilation, closing the RCE path).
+  // __bridgeLog / __stringify / __envJson / __timers are bootstrap-lexical
+  // host values, deleted from the context right after bootstrap. The guest
+  // evaluation cannot see them. __timers carries the raw host timers into the
+  // bootstrap closures ONLY so sandbox-realm wrappers can be built around
+  // them — the wrappers' .constructor is the sandbox Function (string
+  // compilation disabled), closing the host-Function RCE path.
   (context as any).__bridgeLog = (parts: unknown[]) => {
     try { hostLogger(parts.map((p) => String(p)).join(" ")); } catch { /* ignore */ }
   };
   (context as any).__stringify = (v: unknown) => stringify(v);
   (context as any).__envJson = JSON.stringify(ctx.env || {});
+  (context as any).__timers = {
+    setTimeout: rawSetTimeout,
+    clearTimeout: rawClearTimeout,
+    setInterval: rawSetInterval,
+    clearInterval: rawClearInterval,
+    queueMicrotask: rawQueueMicrotask,
+  };
   vm.runInContext(bootstrap, context, { filename: "sandbox-bootstrap", timeout: 2000 });
   delete (context as any).__bridgeLog;
   delete (context as any).__stringify;
   delete (context as any).__envJson;
+  delete (context as any).__timers;
   // Wrap in an IIFE so top-level `return` works (matches the old new Function shape).
   const wrapped = "(function(){\n" + code + "\n})();";
   // vm throws ERR_SCRIPT_EXECUTION_TIMEOUT on sync-loop overrun.

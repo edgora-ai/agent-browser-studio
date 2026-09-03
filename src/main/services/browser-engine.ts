@@ -38,6 +38,21 @@ export function sanitizeBrowserEngine(value: unknown): BrowserEngine {
   return value === "firefox" ? "firefox" : "chromium";
 }
 
+/**
+ * Engine-aware version pin for profile creation (R3 #58): Firefox pins look
+ * like "154.0" (1-3 dotted numerics), Chromium pins are exact 4-segment.
+ * Returns null for unset/auto. Throws on malformed input (fail-closed: a bad
+ * pin must not silently become "auto").
+ */
+export function normalizeManagedFirefoxVersion(value: unknown): string | null {
+  if (value === undefined || value === null || value === "" || value === "auto") return null;
+  const s = String(value).trim();
+  if (!/^\d+(\.\d+){0,2}$/.test(s)) {
+    throw new Error(`Invalid Firefox version: ${JSON.stringify(s.slice(0, 40))}`);
+  }
+  return s;
+}
+
 // ═══════════════════════════════════════════════════════════
 // Firefox binary discovery
 // ═══════════════════════════════════════════════════════════
