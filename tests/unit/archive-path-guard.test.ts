@@ -44,10 +44,10 @@ describe("archive-path-guard", () => {
   });
 
   it("rejects export destinations outside the allowlist (e.g. /etc/hosts, ~/.zshrc)", () => {
-    expect(() => assertSafeArchiveExportPath("/etc/hosts.zip")).toThrow(/Refusing symlink parent|not in allowed directory/i);
+    expect(() => assertSafeArchiveExportPath("/etc/hosts.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
     expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc"))).toThrow(/must be a \.zip/i);
     expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc.zip"))).toThrow(/not in allowed directory/i);
-    expect(() => assertSafeArchiveExportPath("/tmp/../etc/passwd.zip")).toThrow(/Refusing symlink parent|not in allowed directory/i);
+    expect(() => assertSafeArchiveExportPath("/tmp/../etc/passwd.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
   });
 
   it("rejects non-zip export paths and NUL bytes", () => {
@@ -78,6 +78,35 @@ describe("archive-path-guard", () => {
     const zipLink = path.join(tmpRoot, "src-link.zip");
     fs.symlinkSync(zipPath, zipLink);
     expect(() => assertSafeArchiveImportPath(zipLink)).toThrow(/symlink/i);
+  });
+
+  it("rejects symlink ANCESTORS above the immediate parent (R5 #70)", () => {
+    if (process.platform === "win32") return; // symlink privileges vary on CI
+    // Escape target: a dir OUTSIDE every allowed root. Prefer the app-data
+    // backups dir's parent subtree is allowed... so instead use a fresh dir
+    // under the test tmpRoot's PARENT (os.tmpdir itself is allowed, but the
+    // escape works when the LINK lives in an allowed root and points at a
+    // location whose realpath is outside ALL allowed roots).
+    //
+    // Portable construction: link inside tmpRoot (allowed) -> target is a
+    // sibling of tmpRoot that we then REMOVE from allowed consideration by
+    // pointing at os.homedir() (never an allowed root) via a subdir we can
+    // create. HOME is always writable by the test user.
+    const outsideBase = path.join(os.homedir(), ".agent-browser-guard-probe-outside");
+    fs.rmSync(outsideBase, { recursive: true, force: true });
+    const outside = path.join(outsideBase, "secret");
+    const link = path.join(tmpRoot, "link");
+    const sub = path.join(link, "sub");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, link);
+    try {
+      // Immediate parent (link/sub resolved lexically) looks innocent, but an
+      // ancestor is a symlink escaping every allowed root.
+      expect(() => assertSafeArchiveExportPath(path.join(sub, "evil.zip"))).toThrow(/symlink/i);
+      expect(() => assertSafeArchiveExportDir(sub)).toThrow(/symlink/i);
+    } finally {
+      fs.rmSync(outsideBase, { recursive: true, force: true });
+    }
   });
 
   it("import validates existence, extension and symlink, not strict allowlist", () => {

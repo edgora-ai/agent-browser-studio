@@ -716,4 +716,22 @@ describe("Agent Run normalization", () => {
     expect(getConfig().browserProfiles![dirId2].engine).toBe("chromium");
     expect(getConfig().browserProfiles![dirId2].name).toBe("Bad");
   });
+
+  it("accepts engine-aware version pins (Firefox 154.0 alongside Chromium)", () => {
+    // R5: config-manager ran every pin through the Chromium validator.
+    const fx = "ab_fx_pin_test";
+    setProfileMeta(fx, { name: "FxPin", engine: "firefox" as any });
+    setProfileMeta(fx, { browserVersion: "154.0" as any });
+    reloadConfig();
+    expect(getConfig().browserProfiles![fx].browserVersion).toBe("154.0");
+
+    const cr = "ab_cr_pin_test";
+    setProfileMeta(cr, { name: "CrPin", browserVersion: "150.0.7871.114" as any });
+    reloadConfig();
+    expect(getConfig().browserProfiles![cr].browserVersion).toBe("150.0.7871.114");
+
+    // Malformed pins still fail closed on both engines.
+    expect(() => setProfileMeta(fx, { browserVersion: "../../evil" as any })).toThrow(/firefox version/i);
+    expect(() => setProfileMeta(cr, { browserVersion: "154.0" as any })).toThrow(/chromium version/i);
+  });
 });

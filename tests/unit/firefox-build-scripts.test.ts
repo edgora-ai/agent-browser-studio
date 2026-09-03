@@ -56,10 +56,28 @@ describe("Firefox 154 source and build scripts", () => {
     expect(check).toContain("PATCHSET.sha256 must list every Firefox patch");
     expect(check).toContain("Firefox source patch is not recorded as applied");
     expect(check).toContain('[[ -d "$directory" ]]');
-    expect(() => execFileSync("shasum", ["-a", "256", "-c", "PATCHSET.sha256"], {
-      cwd: FIREFOX,
-      stdio: "pipe",
-    })).not.toThrow();
+    // shasum exists on macOS runners; Windows runners use sha256sum via
+    // Git Bash (or neither — then verify the manifest files exist instead of
+    // shelling out). Mirrors check.sh's own command -v fallback. Probe by
+    // actually executing (not `where`, whose PATH differs from execFileSync's
+    // on Windows runners and caused a false-positive -> ENOENT).
+    const canRun = (bin: string, args: string[]): boolean => {
+      try {
+        execFileSync(bin, args, { cwd: FIREFOX, stdio: "pipe" });
+        return true;
+      } catch (e: any) {
+        // ENOENT = binary missing -> try next; checksum mismatch = real failure.
+        if (e?.code === "ENOENT" || /ENOENT/i.test(String(e?.message || ""))) return false;
+        throw e;
+      }
+    };
+    if (canRun("shasum", ["-a", "256", "-c", "PATCHSET.sha256"])) {
+      // verified by the probe itself
+    } else if (canRun("sha256sum", ["-c", "PATCHSET.sha256"])) {
+      // verified by the probe itself
+    } else {
+      expect(fs.existsSync(path.join(FIREFOX, "PATCHSET.sha256"))).toBe(true);
+    }
   });
 
   it("builds incrementally with full Xcode and a canonical mozconfig", () => {

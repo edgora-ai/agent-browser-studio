@@ -65,6 +65,15 @@ describe("zip-writer", () => {
     expect(() => validateZipEntryName("C:\\win.txt")).toThrow();
   });
 
+  it("rejects an oversized central-directory entry count (R7 #35)", async () => {
+    const { readZipEntries, MAX_ZIP_ENTRIES } = await import("../../src/main/services/zip-writer.js");
+    // Header count above the cap throws before allocating entries.
+    const fake = Buffer.alloc(100);
+    fake.writeUInt32LE(0x06054b50, 78); // EOCD at offset 78
+    fake.writeUInt16LE(MAX_ZIP_ENTRIES + 1, 88); // count field
+    expect(() => readZipEntries(fake)).toThrow(/entry count too large/i);
+  });
+
   it("rejects a crafted archive that tries to escape the destination", async () => {
     const dir = tmpDir();
     const zipPath = path.join(dir, "evil.zip");

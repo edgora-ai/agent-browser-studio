@@ -101,9 +101,13 @@ function sanitizeImportedMeta(raw: any): Record<string, unknown> {
   const str = (v: unknown, max: number, fallback: string | null): string | null => (isStr(v) ? v.slice(0, max) : fallback);
   const mode = (v: unknown, allowed: string[], fallback: string): string =>
     isStr(v) && allowed.includes(v) ? v : fallback;
+  // Engine first (R6 #73): the version pin validates per engine, so a
+  // Firefox "154.0" pin must not be re-validated as Chromium on import.
+  const engine = raw?.engine === "firefox" ? "firefox" : "chromium";
   return {
     name: str(raw?.name, 120, "Imported profile") || "Imported profile",
     fingerprintMode: mode(raw?.fingerprintMode, ["off", "managed"], "managed"),
+    engine,
     browserVersion: str(raw?.browserVersion, 80, null),
     allowThirdPartyCookies: raw?.allowThirdPartyCookies === true,
     fingerprintSeed: isInt(raw?.fingerprintSeed) ? raw.fingerprintSeed : Math.floor(Math.random() * 90000) + 10000,

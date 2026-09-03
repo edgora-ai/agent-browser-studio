@@ -1333,6 +1333,11 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       return { status: 400, body: { error: "decision must be once, always or deny" } };
     }
     const id = decodeURIComponent(mApprovalResolve[1]);
+    // No programmatic self-approval (R4 #65 — same rule as MCP): allow
+    // decisions must come from the UI dialog; API callers may only deny.
+    if (decision !== "deny") {
+      return { status: 403, body: { error: "Approval allow-decisions must come from the UI approval dialog (human-in-the-loop); API callers may only deny" } };
+    }
     const ok = resolveApproval(id, decision);
     if (!ok) return { status: 404, body: { error: "Approval request not found" } };
     recordAudit({ category: "approval", action: "resolve", target: id, actor: "api", detail: "decision=" + decision });

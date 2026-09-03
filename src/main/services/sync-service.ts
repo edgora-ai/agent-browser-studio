@@ -457,9 +457,20 @@ export const syncService = {
         }
         extensionBytes += pkg.length;
         if (extensionBytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
-        const tmpFile = path.join(os.tmpdir(), `agent-browser-ext-pull-${extId}-${Date.now()}.${remoteEntry.source === "chrome-web-store" ? "crx" : "zip"}`);
+        // Unpredictable staging dir + O_EXCL create (R5 #69): a predictable
+        // /tmp name lets a local link-plant redirect attacker-influenced S3
+        // bytes through a pre-planted symlink.
+        const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ext-pull-"));
+        const tmpFile = path.join(stageDir, `pkg.${remoteEntry.source === "chrome-web-store" ? "crx" : "zip"}`);
         try {
-          fs.writeFileSync(tmpFile, pkg, { mode: 0o600 });
+          const fd = fs.openSync(tmpFile, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+          try {
+            const st = fs.fstatSync(fd);
+            if (!st.isFile()) throw new Error("Refusing to stage extension package through a non-file");
+            fs.writeFileSync(fd, pkg);
+          } finally {
+            try { fs.closeSync(fd); } catch { /* ignore */ }
+          }
           assertSyncNotAborted(signal);
           await restoreSyncedExtensionPackage(extId, tmpFile, remoteEntry, signal);
           assertSyncNotAborted(signal);
@@ -469,6 +480,7 @@ export const syncService = {
           console.error(`[sync] pull: failed to install extension ${extId.slice(0, 16)}:`, e.message);
         } finally {
           try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+          try { fs.rmdirSync(stageDir); } catch { /* ignore */ }
         }
       }
 
@@ -1208,6 +1220,7 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
     profiles[dirId] = {
       name: String(profile.name || dirId.slice(0, 8)),
       fingerprintMode: profile.fingerprintMode === "off" ? "off" : "managed",
+      engine: profile.engine === "firefox" ? "firefox" : "chromium",
       browserVersion: typeof profile.browserVersion === "string" ? profile.browserVersion : null,
       allowThirdPartyCookies: profile.allowThirdPartyCookies === true,
       fingerprintSeed: Number.isInteger(profile.fingerprintSeed) ? profile.fingerprintSeed : 12345,

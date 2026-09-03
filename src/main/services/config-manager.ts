@@ -16,7 +16,17 @@ import {
   usingEncryption,
 } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
-import { sanitizeBrowserEngine } from "./browser-engine.js";
+import { normalizeManagedFirefoxVersion, sanitizeBrowserEngine } from "./browser-engine.js";
+
+/** Engine-aware version-pin normalization (R5): Firefox pins ("154.0") must
+ * not go through the Chromium 4-segment validator. Engine is resolved first
+ * from the same object so get/set/merge all agree. */
+function normalizeProfileBrowserVersion(profile: { engine?: unknown; browserVersion?: unknown }): string | null {
+  const engine = sanitizeBrowserEngine((profile as any)?.engine);
+  return engine === "firefox"
+    ? normalizeManagedFirefoxVersion((profile as any)?.browserVersion)
+    : normalizeManagedChromiumVersion((profile as any)?.browserVersion);
+}
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import type { WebRtcDiagnosticsEntry } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
@@ -1077,7 +1087,7 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     name: cp.name,
     fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
     engine: sanitizeBrowserEngine(cp.engine),
-    browserVersion: normalizeManagedChromiumVersion(cp.browserVersion),
+    browserVersion: normalizeProfileBrowserVersion(cp),
     allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
     proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
     proxyName: cp.proxyName || null,
@@ -1159,7 +1169,8 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
   if (meta.engine !== undefined) next.engine = sanitizeBrowserEngine(meta.engine);
   if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
-  if (meta.browserVersion !== undefined) next.browserVersion = normalizeManagedChromiumVersion(meta.browserVersion);
+  // Engine may change in the same patch: resolve against the merged engine.
+  if (meta.browserVersion !== undefined) next.browserVersion = normalizeProfileBrowserVersion({ ...next, browserVersion: meta.browserVersion });
   if (meta.allowThirdPartyCookies !== undefined) next.allowThirdPartyCookies = sanitizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility");
   if (meta.platform !== undefined) next.platform = sanitizeBrowserPlatform(meta.platform);
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
@@ -1277,6 +1288,11 @@ function loadConfig(): MgmtConfig {
   }
 
   try {
+    // Stat cap (R7 #35): a 1 GiB --file must not spike RSS before JSON.parse.
+    const st = fs.statSync(configPath);
+    if (st.size > 64 * 1024 * 1024) {
+      throw new Error(`config.json too large (${st.size} bytes, max 64 MiB)`);
+    }
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<MgmtConfig>;
     return mergeConfig(DefaultConfig, parsed, "load");
@@ -1417,7 +1433,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       }
       profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
       profile.engine = sanitizeBrowserEngine(profile.engine);
-      profile.browserVersion = normalizeManagedChromiumVersion(profile.browserVersion);
+      profile.browserVersion = normalizeProfileBrowserVersion(profile);
       profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
       profile.platform = profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
         ? profile.platform : "windows";
@@ -1473,7 +1489,10 @@ function normalizeLlmConfig(raw: any): LlmConfig | undefined {
 
 function normalizeAccounts(raw: any): PlatformAccount[] {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 1000).map((item: any) => {
+  if (raw.length > MERGE_CAPS.accounts) {
+    console.warn(`[config] accounts list truncated: ${raw.length} -> ${MERGE_CAPS.accounts} entries kept`);
+  }
+  return raw.slice(0, MERGE_CAPS.accounts).map((item: any) => {
     if (!item || typeof item !== "object") return null;
     const platformUrl = sanitizeOptionalText(item.platformUrl, 1000);
     const platformUserName = sanitizeOptionalText(item.platformUserName, 200);
@@ -1503,9 +1522,15 @@ const AUTOMATION_TRIGGER_TYPES = new Set(["cron", "once", "event"]);
 const AUTOMATION_ACTION_TYPES = new Set(["launch-profile", "stop-profile", "agent-task", "sync-push", "sync-pull", "custom-js", "run-workflow"]);
 const AUTOMATION_EVENTS = new Set(["profile:launched", "profile:exited"]);
 
+/** Caps for bounded normalization (R7 #36): truncation is logged, never silent. */
+export const MERGE_CAPS = { automation: 500, accounts: 1000, agentRuns: 200, runSteps: 500 } as const;
+
 function normalizeAutomationRules(raw: any): AutomationRule[] {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 500).map((item: any): AutomationRule | null => {
+  if (raw.length > MERGE_CAPS.automation) {
+    console.warn(`[config] automation list truncated: ${raw.length} -> ${MERGE_CAPS.automation} entries kept`);
+  }
+  return raw.slice(0, MERGE_CAPS.automation).map((item: any): AutomationRule | null => {
     if (!item || typeof item !== "object") return null;
     const id = String(item.id || "").trim();
     if (!/^rule_[a-zA-Z0-9_-]{1,64}$/.test(id)) return null;
@@ -1632,7 +1657,10 @@ function normalizeAgentRunStep(raw: any, index: number): AgentRunStep | null {
 function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[] {
   if (!Array.isArray(raw)) return [];
   // Keep the NEWEST 200 runs (drop oldest).
-  const recent = raw.length > 200 ? raw.slice(raw.length - 200) : raw;
+  if (raw.length > MERGE_CAPS.agentRuns) {
+    console.warn(`[config] agentRuns truncated: ${raw.length} -> ${MERGE_CAPS.agentRuns} newest kept`);
+  }
+  const recent = raw.length > MERGE_CAPS.agentRuns ? raw.slice(raw.length - MERGE_CAPS.agentRuns) : raw;
   return recent.map((r: any): AgentRun | null => {
     if (!r || typeof r !== "object") return null;
     const id = String(r.id || "").trim();

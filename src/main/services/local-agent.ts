@@ -1374,6 +1374,15 @@ export async function cdpEvaluate(client: CdpClient, expression: string): Promis
     returnByValue: true,
     awaitPromise: true,
   });
+  // Surface page exceptions (R6 #74): without this a throwing page resolves
+  // undefined — silent data loss, and inconsistent with the BiDi path which
+  // rejects (bidi-client throws "BiDi evaluate failed in page:").
+  if (result?.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description
+      || result.exceptionDetails.text
+      || "page evaluation failed";
+    throw new Error(description);
+  }
   return result.result?.value;
 }
 

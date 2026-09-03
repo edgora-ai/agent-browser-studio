@@ -10,7 +10,7 @@ import { onEvent } from "./event-bus.js";
 import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
 import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, pruneJobs, getJob } from "./job-store.js";
-import { runSandboxed } from "./script-sandbox.js";
+import { runSandboxedWithHandle } from "./script-sandbox.js";
 import { validateCron, parseCronField } from "./cron-validate.js";
 
 
@@ -143,13 +143,20 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         if (!a.jsCode) throw new Error("missing jsCode");
         assertActionNotAborted(context.signal);
         // Sandboxed: no require/process/fs/global; sync-loop timeout bounded.
+        // Intervals are disposed on settle so cron runs cannot leak repeating
+        // host timers across executions (R6 #72).
         const logs: string[] = [];
-        const r = await Promise.resolve(runSandboxed(a.jsCode, {
+        const handle = runSandboxedWithHandle(a.jsCode, {
           logger: (m: string) => { logs.push(m); if (logs.length <= 20) console.log(`[custom-js:${rule.name}] ${m}`); },
-        }, Math.min(runTimeoutMsFor(rule), 60_000)));
-        assertActionNotAborted(context.signal);
-        const summary = logs.length ? ` (logs: ${logs.slice(0, 3).join(" | ")})` : "";
-        return `js result: ${JSON.stringify(r).slice(0, 200)}${summary}`;
+        }, Math.min(runTimeoutMsFor(rule), 60_000));
+        try {
+          const r = await Promise.resolve(handle.result);
+          assertActionNotAborted(context.signal);
+          const summary = logs.length ? ` (logs: ${logs.slice(0, 3).join(" | ")})` : "";
+          return `js result: ${JSON.stringify(r).slice(0, 200)}${summary}`;
+        } finally {
+          handle.dispose();
+        }
       }
       default:
         throw new Error(`unknown action type: ${a.type}`);

@@ -82,6 +82,16 @@ describe("local agent HTTP approval", () => {
     await expect(promise).resolves.toMatchObject({ skipped: true, decision: "deny" });
   });
 
+  it("classifies comment/CTE-prefixed DELETE as db-destroy (R6 #71)", async () => {
+    const { classifyDbSql } = approvalGate;
+    expect(classifyDbSql("DELETE FROM users").category).toBe("db-destroy");
+    expect(classifyDbSql("/* x */ DELETE FROM users").category).toBe("db-destroy");
+    expect(classifyDbSql("-- c\nDELETE FROM users").category).toBe("db-destroy");
+    expect(classifyDbSql("WITH m AS (SELECT 1) DELETE FROM users").category).toBe("db-destroy");
+    expect(classifyDbSql("SELECT * FROM users").category).toBe("db-write");
+    expect(classifyDbSql("INSERT INTO t VALUES (1)").category).toBe("db-write");
+  });
+
   it("cancels pending http_request approvals when the agent run is aborted", async () => {
     const allowed = new Set(["http_request"]);
     const controller = new AbortController();

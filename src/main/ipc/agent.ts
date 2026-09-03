@@ -593,7 +593,12 @@ export function registerAgentHandlers(): void {
       if (!win || win.isDestroyed()) {
         return { success: false, error: "approval:resolve rejected: untrusted sender" };
       }
-      return { success: resolveApproval(id, decision as any) };
+      // Allowlist the decision (R4): arbitrary strings resolve as allow
+      // (approval-gate treats anything !== "deny" as allowed).
+      if (decision !== "once" && decision !== "always" && decision !== "deny") {
+        return { success: false, error: "decision must be once, always or deny" };
+      }
+      return { success: resolveApproval(id, decision) };
     } catch {
       return { success: false, error: "approval:resolve rejected: sender check failed" };
     }

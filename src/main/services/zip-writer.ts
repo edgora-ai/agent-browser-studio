@@ -261,6 +261,10 @@ function findEndOfCentralDirectory(zip: Buffer): number {
   return -1;
 }
 
+/** Cap central-directory entry count (R7 #35): count is a 16-bit header
+ * field — a crafted 60k-entry archive otherwise allocates unboundedly. */
+export const MAX_ZIP_ENTRIES = 20000;
+
 export function readZipEntries(zip: Buffer): ZipEntry[] {
   const eocdOffset = findEndOfCentralDirectory(zip);
   if (eocdOffset < 0) throw new Error("ZIP end-of-central-directory not found");
@@ -269,6 +273,9 @@ export function readZipEntries(zip: Buffer): ZipEntry[] {
   const cdOffset = zip.readUInt32LE(eocdOffset + 16);
   if (count === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
     throw new Error("ZIP64 archives are not supported");
+  }
+  if (count > MAX_ZIP_ENTRIES) {
+    throw new Error(`ZIP entry count too large: ${count} (max ${MAX_ZIP_ENTRIES})`);
   }
   const entries: ZipEntry[] = [];
   let p = cdOffset;
@@ -307,8 +314,11 @@ export function extractZipEntry(zip: Buffer, entry: ZipEntry): Buffer {
   if (end > zip.length) throw new Error("ZIP entry exceeds archive bounds");
   const raw = zip.subarray(start, end);
   let content: Buffer;
-  if (method === 0) content = raw;
-  else if (method === 8) content = zlib.inflateRawSync(raw, { maxOutputLength: entry.uncompressedSize });
+  if (method === 0) content = Buffer.from(raw);
+  // R7 #35: never trust the header's uncompressedSize as the inflate cap — a
+  // crafted 0xFFFFFFFF size allocates 4 GiB before maxTotalBytes can trip.
+  // Cap per-call at 512 MiB (callers enforce tighter per-entry/total caps).
+  else if (method === 8) content = zlib.inflateRawSync(raw, { maxOutputLength: 512 * 1024 * 1024 });
   else throw new Error("Unsupported ZIP compression method: " + method);
   if (content.length !== entry.uncompressedSize) throw new Error("ZIP entry size mismatch");
   if (crc32(content) !== entry.crc) throw new Error("ZIP entry CRC mismatch");

@@ -73,7 +73,7 @@ import {
   writeFirefoxUserJs,
   type FirefoxStatus,
 } from "./browser-engine.js";
-import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
+import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, normalizeFirefoxVersion, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
 import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, registerFirefoxSession, dropFirefoxSession, getRegisteredFirefoxSession, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
@@ -357,6 +357,9 @@ export interface TrashEntry {
   dirId: string;
   name: string;
   deletedAt: number;
+  /** Full profile meta snapshot (R6 #73): restore must bring back engine,
+   * version pin, proxy, fingerprint — not a fresh chromium shell. */
+  meta?: Record<string, unknown>;
 }
 
 function readTrashIndex(): TrashEntry[] {
@@ -426,7 +429,12 @@ export function trashBrowserProfile(dirId: string, opts?: { force?: boolean }): 
   }
 
   const entries = readTrashIndex().filter((e) => e.dirId !== dirId);
-  entries.push({ dirId, name: meta?.name || dirId.slice(0, 8), deletedAt: Date.now() });
+  entries.push({
+    dirId,
+    name: meta?.name || dirId.slice(0, 8),
+    deletedAt: Date.now(),
+    meta: meta ? structuredClone(meta) : undefined,
+  });
   writeTrashIndex(entries);
 
   recordAudit({
@@ -462,12 +470,14 @@ export function restoreTrashedProfile(dirId: string): boolean {
     transact((draft: any) => {
       draft.browserProfiles = draft.browserProfiles || {};
       if (!draft.browserProfiles[dirId]) {
-        draft.browserProfiles[dirId] = {
-          dirId,
-          name: entry.name || dirId.slice(0, 8),
-          createdAt: Date.now(),
-          engine: "chromium",
-        };
+        draft.browserProfiles[dirId] = entry.meta
+          ? { ...(entry.meta as object), dirId, createdAt: Date.now() }
+          : {
+              dirId,
+              name: entry.name || dirId.slice(0, 8),
+              createdAt: Date.now(),
+              engine: "chromium",
+            };
       }
       restored = true;
     });
@@ -551,7 +561,12 @@ export function listBrowserProfiles(): BrowserProfile[] {
       version: engine === "firefox"
         ? (getFirefoxStatus().version || "?")
         : (normalizeManagedChromiumVersion(m.browserVersion) || getRuntimeChromiumVersion() || "?"),
-      browserVersion: normalizeManagedChromiumVersion(m.browserVersion),
+      // Engine-aware pin display (R4): a Firefox "154.0" pin must not go
+      // through the Chromium 4-segment validator (it throws and breaks the
+      // entire profile list).
+      browserVersion: engine === "firefox"
+        ? normalizeManagedFirefoxVersion(m.browserVersion)
+        : normalizeManagedChromiumVersion(m.browserVersion),
       engine,
       fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
       allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
@@ -1242,7 +1257,9 @@ async function launchFirefoxProfile(
     );
   }
   const firefoxVersion = detectFirefoxVersion(bin);
-  if (meta.browserVersion && firefoxVersion && firefoxVersion !== meta.browserVersion) {
+  // Compare major.minor (R4): a legal "154.0" pin must match a "154.0.1"
+  // binary — strict string inequality would always block.
+  if (meta.browserVersion && firefoxVersion && normalizeFirefoxVersion(firefoxVersion) !== normalizeFirefoxVersion(meta.browserVersion)) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(`Profile requires Firefox ${meta.browserVersion}, but the installed binary is ${firefoxVersion}`);
   }
