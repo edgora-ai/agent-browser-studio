@@ -18,6 +18,8 @@ export interface AuditEntry {
 }
 
 const CAP = 2000;
+/** Per-entry size cap (R7 #37): a 50 MB detail line must not land verbatim. */
+const MAX_ENTRY_BYTES = 8 * 1024;
 let _path: string | null = null;
 
 function logPath(): string {
@@ -49,10 +51,27 @@ function sealLogFile(p: string): void {
 
 /** Append an audit entry. Safe to call from hot paths — best-effort, never throws.
  * The log may carry URLs/SQL/paths, so the file is owner-only (0600) — created
- * with O_CREAT|O_EXCL when missing, chmod-enforced on every append. */
+ * with O_CREAT|O_EXCL when missing, chmod-enforced on every append.
+ * Entry fields are length-capped (R7 #37): unbounded detail/target strings
+ * are truncated with a marker instead of landing verbatim. */
+function capField(v: unknown, max: number): string | undefined {
+  if (typeof v !== "string" || !v) return v as string | undefined;
+  if (Buffer.byteLength(v, "utf8") <= max) return v;
+  return v.slice(0, max) + `…[truncated ${v.length} chars]`;
+}
+
 export function recordAudit(entry: Omit<AuditEntry, "id" | "at"> & { at?: number }): void {
   try {
-    const full: AuditEntry = { id: newId(), at: entry.at ?? Date.now(), ...entry };
+    const full: AuditEntry = {
+      id: newId(),
+      at: entry.at ?? Date.now(),
+      ...entry,
+      category: String(entry.category || "").slice(0, 64),
+      action: String(entry.action || "").slice(0, 64),
+      target: capField(entry.target, 256),
+      actor: capField(entry.actor, 128),
+      detail: capField(entry.detail, MAX_ENTRY_BYTES),
+    };
     const line = JSON.stringify(full) + "\n";
     const p = logPath();
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -75,9 +94,22 @@ function trimIfNeeded(p: string): void {
     if (stat.size < 512 * 1024) return; // < 512KB, leave it
     const lines = fs.readFileSync(p, "utf-8").split("\n").filter(Boolean);
     const keep = lines.slice(lines.length - CAP);
-    const tmp = p + ".tmp";
-    fs.writeFileSync(tmp, keep.join("\n") + "\n", { encoding: "utf-8", mode: 0o600 });
+    // Unique tmp + O_EXCL (R7 #37): the old fixed ".tmp" name raced between
+    // concurrent writers. fsync file + dir before rename for durability.
+    const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+    try {
+      fs.writeFileSync(fd, keep.join("\n") + "\n", "utf-8");
+      try { fs.fsyncSync(fd); } catch { /* best effort */ }
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, p);
+    try {
+      const dirFd = fs.openSync(path.dirname(p), "r");
+      try { fs.fsyncSync(dirFd); } catch { /* best effort */ }
+      fs.closeSync(dirFd);
+    } catch { /* best effort on non-POSIX */ }
   } catch { /* ignore */ }
 }
 

@@ -18,7 +18,7 @@ import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
 import { sanitizeBrowserEngine } from "../services/browser-engine.js";
-import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect } from "../services/local-agent.js";
+import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect, assertSafeNavigationUrl } from "../services/local-agent.js";
 import {
   runBatch,
   normalizeConcurrency,
@@ -510,7 +510,17 @@ export function registerBrowserHandlers(): void {
   handleBrowser("open-risk-check", async (_event, params: { dirId: string; allowLaunch?: boolean; url?: string }) => {
     const { dirId } = params;
     validateDirId(dirId);
-    const url = String(params?.url || "https://ping0.cc/env");
+    // Privileged-browser navigation allowlist (R7 #39): a compromised
+    // renderer must not drive the profile to an arbitrary URL (metadata IP,
+    // attacker host). Custom URLs go through the same SSRF guard as agent
+    // navigation; the default ping0 URL is always allowed.
+    const rawUrl = String(params?.url || "https://ping0.cc/env");
+    let url: string;
+    try {
+      url = await assertSafeNavigationUrl(rawUrl);
+    } catch (e: any) {
+      return { success: false, error: `Refused unsafe navigation URL: ${e?.message || String(e)}` };
+    }
 
     let status = statusBrowser(dirId);
     let cdpPort = status.cdpPort || 0;
@@ -562,8 +572,14 @@ export function registerBrowserHandlers(): void {
     const cfg = getConfig() as any;
     const meta = cfg.browserProfiles?.[dirId];
     if (!meta) return { success: false, error: "Profile not found" };
-    const appUrl = String(params.url && params.url.trim() ? params.url : (meta.appUrl || "")).trim();
-    if (!appUrl) return { success: false, error: "No Web App URL configured for this profile" };
+    const rawAppUrl = String(params.url && params.url.trim() ? params.url : (meta.appUrl || "")).trim();
+    if (!rawAppUrl) return { success: false, error: "No Web App URL configured for this profile" };
+    let appUrl: string;
+    try {
+      appUrl = await assertSafeNavigationUrl(rawAppUrl);
+    } catch (e: any) {
+      return { success: false, error: `Refused unsafe navigation URL: ${e?.message || String(e)}` };
+    }
 
     let status = statusBrowser(dirId);
     let cdpPort = status.cdpPort || 0;

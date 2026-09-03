@@ -1883,7 +1883,7 @@ function buildOpenApi(): any {
       },
       "/api/agent/db/query": {
         post: {
-          summary: "Run a read-only SQL query (SELECT/WITH/PRAGMA/EXPLAIN only)",
+          summary: "Run a read-only SQL query (SELECT/WITH/EXPLAIN only; PRAGMA via exec, approval-gated)",
           requestBody: { content: { "application/json": { schema: { type: "object", required: ["sql"], properties: { sql: { type: "string" } } } } } },
           responses: ok("Query rows (capped at 1000)"),
         },

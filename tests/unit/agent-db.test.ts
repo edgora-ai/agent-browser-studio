@@ -44,6 +44,13 @@ describe("Agent DB (node:sqlite)", () => {
     expect(() => agentDbQuery("DROP TABLE t")).toThrow();
   });
 
+  it("db_query rejects PRAGMA (write side effects; use approval-gated db_exec) (R7 #41)", () => {
+    // Either the allowlist error or the explicit PRAGMA error is acceptable —
+    // both refuse the statement; the point is no PRAGMA executes via query.
+    expect(() => agentDbQuery("PRAGMA journal_mode=WAL")).toThrow(/PRAGMA|只允许 SELECT/i);
+    expect(() => agentDbQuery("/* x */ PRAGMA journal_mode=WAL")).toThrow(/PRAGMA|只允许 SELECT/i);
+  });
+
   it("db_exec rejects SELECT", () => {
     agentDbExec("CREATE TABLE t (v INTEGER)");
     expect(() => agentDbExec("SELECT * FROM t")).toThrow();

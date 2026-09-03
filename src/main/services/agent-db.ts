@@ -33,7 +33,7 @@ export function _setDbForTesting(testDb: DatabaseSync | null): void {
   db = testDb;
 }
 
-const READONLY_RE = /^\s*(SELECT|WITH|PRAGMA|EXPLAIN)\b/i;
+const READONLY_RE = /^\s*(SELECT|WITH|EXPLAIN)\b/i;
 const ROW_CAP = 1000;
 const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
@@ -43,10 +43,16 @@ export interface QueryResult {
   truncated: boolean;
 }
 
-/** Read-only query (SELECT/WITH/PRAGMA/EXPLAIN). Caps rows at 1000. */
+/** Read-only query (SELECT/WITH/EXPLAIN). Caps rows at 1000.
+ * PRAGMA removed from the allowlist (R7 #41): PRAGMA journal_mode etc. have
+ * write side effects — routing them through the read path bypasses the
+ * destroy-approval gate. Use db_exec (approval-gated) for PRAGMA. */
 export function agentDbQuery(sql: string, params?: unknown[]): QueryResult {
   if (!READONLY_RE.test(sql)) {
-    throw new Error("db_query 只允许 SELECT/WITH/PRAGMA/EXPLAIN;写操作请用 db_exec");
+    throw new Error("db_query 只允许 SELECT/WITH/EXPLAIN;写操作请用 db_exec");
+  }
+  if (/^\s*PRAGMA\b/i.test(sql.replace(/^(--[^\n]*\n|\s|\(\*[\s\S]*?\*\/)*/, ""))) {
+    throw new Error("db_query 不允许 PRAGMA（可能有写副作用）;请用 db_exec（需审批）");
   }
   const stmt = getDb().prepare(sql);
   const all = params && params.length ? stmt.all(...(params as any[])) : stmt.all();

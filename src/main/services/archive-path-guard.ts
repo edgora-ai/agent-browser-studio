@@ -295,3 +295,40 @@ export function assertSafeArchiveImportPath(zipPath: string): string {
 export function _getAllowedRootsForTest(): string[] {
   return getAllowedRoots();
 }
+
+/**
+ * Sensitive-local-path gate for read surfaces outside the archive allowlist
+ * (R7 #40: extension local-install). System files (/etc, keys, tokens) must
+ * never enter staging — error oracles alone leak existence/content.
+ */
+export function assertNoSensitiveLocalPath(p: string): string {
+  const resolved = path.resolve(String(p || "").trim());
+  assertNoNul(resolved);
+  const lower = resolved.toLowerCase();
+  const sensitivePrefixes = [
+    "/etc", "/private/etc",
+    "/var/root", "/private/var/root",
+    "/root",
+  ];
+  for (const prefix of sensitivePrefixes) {
+    if (lower === prefix || lower.startsWith(prefix + path.sep)) {
+      throw new Error(`Refusing sensitive system path: ${resolved}`);
+    }
+  }
+  const home = (() => { try { return os.homedir(); } catch { return ""; } })();
+  if (home) {
+    const base = path.basename(resolved);
+    const sensitiveHome = new Set([
+      ".ssh", ".gnupg", ".aws", ".config", ".pki",
+      ".zshrc", ".bashrc", ".profile", ".netrc", ".git-credentials",
+    ]);
+    const rel = path.relative(home, resolved);
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      const top = rel.split(path.sep)[0];
+      if (sensitiveHome.has(top) || sensitiveHome.has(base)) {
+        throw new Error(`Refusing sensitive home path: ${resolved}`);
+      }
+    }
+  }
+  return resolved;
+}
