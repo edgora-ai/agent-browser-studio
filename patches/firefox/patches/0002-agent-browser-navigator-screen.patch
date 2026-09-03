@@ -1,0 +1,1233 @@
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+index b83896074f5ae4c453e351f593c4923df3bd4f03..e3100ec1f0564895b133d5bdc2758ce27296f650 100644
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include "Geolocation.h"
+ #include "base/basictypes.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Components.h"
+ #include "mozilla/ContentBlockingNotifier.h"
+ #include "mozilla/MemoryReporting.h"
+@@ -274,6 +275,13 @@ void Navigator::Invalidate() {
+ 
+ void Navigator::GetUserAgent(nsAString& aUserAgent, CallerType aCallerType,
+                              ErrorResult& aRv) const {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aUserAgent.Assign(config->mUserAgent);
++      return;
++    }
++  }
++
+   nsCOMPtr<nsPIDOMWindowInner> window;
+ 
+   if (mWindow) {
+@@ -321,6 +329,13 @@ void Navigator::GetAppCodeName(nsAString& aAppCodeName, ErrorResult& aRv) {
+ 
+ void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
+                               ErrorResult& aRv) const {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aAppVersion.Assign(config->mAppVersion);
++      return;
++    }
++  }
++
+   nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
+ 
+   nsresult rv = GetAppVersion(
+@@ -436,6 +451,13 @@ void Navigator::GetLanguages(nsTArray<nsString>& aLanguages) {
+ 
+ void Navigator::GetPlatform(nsAString& aPlatform, CallerType aCallerType,
+                             ErrorResult& aRv) const {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aPlatform.Assign(config->mPlatform);
++      return;
++    }
++  }
++
+   if (mWindow) {
+     BrowsingContext* bc = mWindow->GetBrowsingContext();
+     nsString customPlatform;
+@@ -462,6 +484,11 @@ void Navigator::GetPlatform(nsAString& aPlatform, CallerType aCallerType,
+ void Navigator::GetOscpu(nsAString& aOSCPU, CallerType aCallerType,
+                          ErrorResult& aRv) const {
+   if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aOSCPU.Assign(config->mOscpu);
++      return;
++    }
++
+     // If fingerprinting resistance is on, we will spoof this value. See
+     // nsRFPService.h for details about spoofed values.
+     if (nsContentUtils::ShouldResistFingerprinting(GetDocShell(),
+@@ -699,7 +726,13 @@ bool Navigator::GlobalPrivacyControl() {
+          gpcStatus;
+ }
+ 
+-uint64_t Navigator::HardwareConcurrency() {
++uint64_t Navigator::HardwareConcurrency(CallerType aCallerType) {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      return config->mHardwareConcurrency;
++    }
++  }
++
+   workerinternals::RuntimeService* rts =
+       workerinternals::RuntimeService::GetOrCreateService();
+   if (!rts) {
+@@ -909,6 +942,12 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
+     return bc->Top()->GetMaxTouchPointsOverride();
+   }
+ 
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      return config->mMaxTouchPoints;
++    }
++  }
++
+   // The maxTouchPoints is going to reveal the detail of users' hardware. So,
+   // we will spoof it into 0 if fingerprinting resistance is on.
+   if (aCallerType != CallerType::System &&
+@@ -2360,7 +2399,11 @@ dom::PrivateAttribution* Navigator::PrivateAttribution() {
+ }
+ 
+ /* static */
+-bool Navigator::Webdriver() {
++bool Navigator::Webdriver(CallerType aCallerType) {
++  if (aCallerType != CallerType::System && agentbrowser::IsEnabled()) {
++    return false;
++  }
++
+ #ifdef ENABLE_WEBDRIVER
+   nsCOMPtr<nsIMarionette> marionette = do_GetService(NS_MARIONETTE_CONTRACTID);
+   if (marionette) {
+diff --git a/dom/base/Navigator.h b/dom/base/Navigator.h
+index d303ab778fb5a4381d5f5b5db6288175538c2ab5..e5254a8735d3fe5fe9fa4de66d89df003c236466 100644
+--- a/dom/base/Navigator.h
++++ b/dom/base/Navigator.h
+@@ -178,7 +178,7 @@ class Navigator final : public nsISupports, public nsWrapperCache {
+   void GetBuildID(nsAString& aBuildID, CallerType aCallerType,
+                   ErrorResult& aRv) const;
+   bool JavaEnabled() { return false; }
+-  uint64_t HardwareConcurrency();
++  uint64_t HardwareConcurrency(CallerType aCallerType);
+   bool TaintEnabled() { return false; }
+ 
+   already_AddRefed<LegacyMozTCPSocket> MozTCPSocket();
+@@ -224,7 +224,7 @@ class Navigator final : public nsISupports, public nsWrapperCache {
+   dom::ModelContext* ModelContext();
+   dom::PrivateAttribution* PrivateAttribution();
+ 
+-  static bool Webdriver();
++  static bool Webdriver(CallerType aCallerType);
+ 
+   void GetLanguages(nsTArray<nsString>& aLanguages);
+ 
+diff --git a/dom/base/ScreenOrientation.cpp b/dom/base/ScreenOrientation.cpp
+index ac29045d1564bc79aec823a3fce9ec9c5a3f8a61..58f1818d91ded2fcdc4de986168bca0275007d3d 100644
+--- a/dom/base/ScreenOrientation.cpp
++++ b/dom/base/ScreenOrientation.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "ScreenOrientation.h"
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/DOMEventTargetHelper.h"
+ #include "mozilla/Hal.h"
+ #include "mozilla/Preferences.h"
+@@ -31,6 +32,21 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
+ NS_IMPL_ADDREF_INHERITED(ScreenOrientation, DOMEventTargetHelper)
+ NS_IMPL_RELEASE_INHERITED(ScreenOrientation, DOMEventTargetHelper)
+ 
++static bool GetAgentBrowserOrientation(CallerType aCallerType,
++                                       OrientationType& aOrientation) {
++  if (aCallerType == CallerType::System) {
++    return false;
++  }
++  const auto* config = agentbrowser::GetScreenOverrides();
++  if (!config) {
++    return false;
++  }
++  aOrientation = config->mHeight > config->mWidth
++                     ? OrientationType::Portrait_primary
++                     : OrientationType::Landscape_primary;
++  return true;
++}
++
+ static OrientationType InternalOrientationToType(
+     hal::ScreenOrientation aOrientation) {
+   switch (aOrientation) {
+@@ -693,6 +709,11 @@ void ScreenOrientation::CleanupFullscreenListener() {
+ }
+ 
+ OrientationType ScreenOrientation::DeviceType(CallerType aCallerType) const {
++  OrientationType agentOrientation;
++  if (GetAgentBrowserOrientation(aCallerType, agentOrientation)) {
++    return agentOrientation;
++  }
++
+   if (nsContentUtils::ShouldResistFingerprinting(
+           aCallerType, GetRelevantGlobal(), RFPTarget::ScreenOrientation)) {
+     Document* doc = GetResponsibleDocument();
+@@ -707,6 +728,11 @@ OrientationType ScreenOrientation::DeviceType(CallerType aCallerType) const {
+ }
+ 
+ uint16_t ScreenOrientation::DeviceAngle(CallerType aCallerType) const {
++  OrientationType orientation;
++  if (GetAgentBrowserOrientation(aCallerType, orientation)) {
++    return 0;
++  }
++
+   if (nsContentUtils::ShouldResistFingerprinting(
+           aCallerType, GetRelevantGlobal(), RFPTarget::ScreenOrientation)) {
+     Document* doc = GetResponsibleDocument();
+@@ -722,6 +748,11 @@ uint16_t ScreenOrientation::DeviceAngle(CallerType aCallerType) const {
+ 
+ OrientationType ScreenOrientation::GetType(CallerType aCallerType,
+                                            ErrorResult& aRv) const {
++  OrientationType agentOrientation;
++  if (GetAgentBrowserOrientation(aCallerType, agentOrientation)) {
++    return agentOrientation;
++  }
++
+   Document* doc = GetResponsibleDocument();
+   BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
+   if (!bc) {
+@@ -740,6 +771,11 @@ OrientationType ScreenOrientation::GetType(CallerType aCallerType,
+ 
+ uint16_t ScreenOrientation::GetAngle(CallerType aCallerType,
+                                      ErrorResult& aRv) const {
++  OrientationType orientation;
++  if (GetAgentBrowserOrientation(aCallerType, orientation)) {
++    return 0;
++  }
++
+   Document* doc = GetResponsibleDocument();
+   BrowsingContext* bc = doc ? doc->GetBrowsingContext() : nullptr;
+   if (!bc) {
+diff --git a/dom/base/nsGlobalWindowInner.cpp b/dom/base/nsGlobalWindowInner.cpp
+index dae9afcc358d5aca052568ea19fada394ff8db81..2fdc36d6323accee807e276bcdd10aecac7c7b36 100644
+--- a/dom/base/nsGlobalWindowInner.cpp
++++ b/dom/base/nsGlobalWindowInner.cpp
+@@ -42,6 +42,7 @@
+ #include "jsfriendapi.h"
+ #include "mozIDOMWindow.h"
+ #include "moz_external_vr.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/AlreadyAddRefed.h"
+ #include "mozilla/AppShutdown.h"
+ #include "mozilla/ArrayIterator.h"
+@@ -3718,27 +3719,33 @@ void nsGlobalWindowInner::SetName(const nsAString& aName,
+ }
+ 
+ double nsGlobalWindowInner::GetInnerWidth(ErrorResult& aError) {
+-  FORWARD_TO_OUTER_OR_THROW(GetInnerWidthOuter, (aError), aError, 0);
++  return GetInnerWidth(CallerType::System, aError);
++}
++
++double nsGlobalWindowInner::GetInnerWidth(CallerType aCallerType,
++                                          ErrorResult& aError) {
++  FORWARD_TO_OUTER_OR_THROW(GetInnerWidthOuter, (aCallerType, aError), aError,
++                            0);
+ }
+ 
+ nsresult nsGlobalWindowInner::GetInnerWidth(double* aWidth) {
+   ErrorResult rv;
+-  // Callee doesn't care about the caller type, but play it safe.
+   *aWidth = GetInnerWidth(rv);
+   return rv.StealNSResult();
+ }
+ 
+ double nsGlobalWindowInner::GetInnerHeight(ErrorResult& aError) {
+-  // We ignore aCallerType; we only have that argument because some other things
+-  // called by GetReplaceableWindowCoord need it.  If this ever changes, fix
+-  //   nsresult nsGlobalWindowInner::GetInnerHeight(double* aInnerWidth)
+-  // to actually take a useful CallerType and pass it in here.
+-  FORWARD_TO_OUTER_OR_THROW(GetInnerHeightOuter, (aError), aError, 0);
++  return GetInnerHeight(CallerType::System, aError);
++}
++
++double nsGlobalWindowInner::GetInnerHeight(CallerType aCallerType,
++                                           ErrorResult& aError) {
++  FORWARD_TO_OUTER_OR_THROW(GetInnerHeightOuter, (aCallerType, aError), aError,
++                            0);
+ }
+ 
+ nsresult nsGlobalWindowInner::GetInnerHeight(double* aHeight) {
+   ErrorResult rv;
+-  // Callee doesn't care about the caller type, but play it safe.
+   *aHeight = GetInnerHeight(rv);
+   return rv.StealNSResult();
+ }
+@@ -3804,6 +3811,12 @@ double nsGlobalWindowInner::GetDevicePixelRatio(CallerType aCallerType,
+                                                 ErrorResult& aError) {
+   ENSURE_ACTIVE_DOCUMENT(aError, 0.0);
+ 
++  if (aCallerType != CallerType::System && !IsChromeWindow()) {
++    if (const auto* config = agentbrowser::GetScreenOverrides()) {
++      return config->mDevicePixelRatio;
++    }
++  }
++
+   RefPtr<nsPresContext> presContext = GetPresContextForRatio(mDoc);
+   if (NS_WARN_IF(!presContext)) {
+     // Still nothing, oh well.
+diff --git a/dom/base/nsGlobalWindowInner.h b/dom/base/nsGlobalWindowInner.h
+index 65339914b0802ab43d3892e4607b661d13643579..f90adef52b60766306a056c8a3d5173c575455f8 100644
+--- a/dom/base/nsGlobalWindowInner.h
++++ b/dom/base/nsGlobalWindowInner.h
+@@ -1011,7 +1011,11 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
+ 
+  public:
+   MOZ_CAN_RUN_SCRIPT double GetInnerWidth(mozilla::ErrorResult& aError);
++  MOZ_CAN_RUN_SCRIPT double GetInnerWidth(mozilla::dom::CallerType aCallerType,
++                                          mozilla::ErrorResult& aError);
+   MOZ_CAN_RUN_SCRIPT double GetInnerHeight(mozilla::ErrorResult& aError);
++  MOZ_CAN_RUN_SCRIPT double GetInnerHeight(mozilla::dom::CallerType aCallerType,
++                                           mozilla::ErrorResult& aError);
+   int32_t GetScreenX(mozilla::dom::CallerType aCallerType,
+                      mozilla::ErrorResult& aError);
+   int32_t GetScreenY(mozilla::dom::CallerType aCallerType,
+diff --git a/dom/base/nsGlobalWindowOuter.cpp b/dom/base/nsGlobalWindowOuter.cpp
+index 30d5d8483979aae6026d696691286a1cbff036f9..5878e278c68bef70d15f25788a65775c4ea8d560 100644
+--- a/dom/base/nsGlobalWindowOuter.cpp
++++ b/dom/base/nsGlobalWindowOuter.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Assertions.h"
+ #include "mozilla/ScopeExit.h"
+ #include "nsDeviceContext.h"
+@@ -3482,6 +3483,24 @@ nsresult nsGlobalWindowOuter::GetInnerSize(CSSSize& aSize) {
+ }
+ 
+ double nsGlobalWindowOuter::GetInnerWidthOuter(ErrorResult& aError) {
++  return GetInnerWidthOuter(CallerType::System, aError);
++}
++
++double nsGlobalWindowOuter::GetInnerWidthOuter(CallerType aCallerType,
++                                               ErrorResult& aError) {
++  if (aCallerType != CallerType::System && !IsChromeWindow() &&
++      mBrowsingContext && mBrowsingContext->IsTop()) {
++    if (const auto* config = agentbrowser::GetScreenOverrides()) {
++      if (mDoc) {
++        Maybe<CSSIntSize> deviceSize = GetRDMDeviceSize(*mDoc);
++        if (deviceSize.isSome()) {
++          return deviceSize->width;
++        }
++      }
++      return config->mOuterWidth;
++    }
++  }
++
+   CSSSize size;
+   aError = GetInnerSize(size);
+   return size.width;
+@@ -3493,6 +3512,24 @@ nsresult nsGlobalWindowOuter::GetInnerWidth(double* aInnerWidth) {
+ }
+ 
+ double nsGlobalWindowOuter::GetInnerHeightOuter(ErrorResult& aError) {
++  return GetInnerHeightOuter(CallerType::System, aError);
++}
++
++double nsGlobalWindowOuter::GetInnerHeightOuter(CallerType aCallerType,
++                                                ErrorResult& aError) {
++  if (aCallerType != CallerType::System && !IsChromeWindow() &&
++      mBrowsingContext && mBrowsingContext->IsTop()) {
++    if (const auto* config = agentbrowser::GetScreenOverrides()) {
++      if (mDoc) {
++        Maybe<CSSIntSize> deviceSize = GetRDMDeviceSize(*mDoc);
++        if (deviceSize.isSome()) {
++          return deviceSize->height;
++        }
++      }
++      return config->mOuterHeight;
++    }
++  }
++
+   CSSSize size;
+   aError = GetInnerSize(size);
+   return size.height;
+@@ -3505,6 +3542,18 @@ nsresult nsGlobalWindowOuter::GetInnerHeight(double* aInnerHeight) {
+ 
+ CSSIntSize nsGlobalWindowOuter::GetOuterSize(CallerType aCallerType,
+                                              ErrorResult& aError) {
++  if (aCallerType != CallerType::System && !IsChromeWindow()) {
++    if (const auto* config = agentbrowser::GetScreenOverrides()) {
++      if (mDoc) {
++        Maybe<CSSIntSize> deviceSize = GetRDMDeviceSize(*mDoc);
++        if (deviceSize.isSome()) {
++          return *deviceSize;
++        }
++      }
++      return {config->mOuterWidth, config->mOuterHeight};
++    }
++  }
++
+   if (nsIGlobalObject::ShouldResistFingerprinting(aCallerType,
+                                                   RFPTarget::WindowOuterSize)) {
+     if (BrowsingContext* bc = GetBrowsingContext()) {
+@@ -3562,6 +3611,12 @@ CSSPoint nsGlobalWindowOuter::ScreenEdgeSlop() {
+ 
+ CSSIntPoint nsGlobalWindowOuter::GetScreenXY(CallerType aCallerType,
+                                              ErrorResult& aError) {
++  if (aCallerType != CallerType::System && !IsChromeWindow()) {
++    if (const auto* config = agentbrowser::GetScreenOverrides()) {
++      return {config->mWindowX, config->mWindowY};
++    }
++  }
++
+   // When resisting fingerprinting, always return (0,0)
+   if (nsIGlobalObject::ShouldResistFingerprinting(aCallerType,
+                                                   RFPTarget::WindowScreenXY)) {
+@@ -3745,9 +3800,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
+ 
+       // Get the screen dimensions
+       // XXX This should use nsIScreenManager once it's fully fleshed out.
+-      int32_t screenLeft = screen->AvailLeft();
+-      int32_t screenWidth = screen->AvailWidth();
+-      int32_t screenHeight = screen->AvailHeight();
++      int32_t screenLeft = screen->AvailLeft(aCallerType);
++      int32_t screenWidth = screen->AvailWidth(aCallerType);
++      int32_t screenHeight = screen->AvailHeight(aCallerType);
+ #if defined(XP_MACOSX)
+       /* The mac's coordinate system is different from the assumed Windows'
+          system. It offsets by the height of the menubar so that a window
+@@ -3756,9 +3811,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
+          the Avail... coordinates is overloaded. Here we allow a window
+          to be placed at (0,0) because it does make sense to do so.
+       */
+-      int32_t screenTop = screen->Top();
++      int32_t screenTop = screen->Top(aCallerType);
+ #else
+-      int32_t screenTop = screen->AvailTop();
++      int32_t screenTop = screen->AvailTop(aCallerType);
+ #endif
+ 
+       if (aLeft) {
+diff --git a/dom/base/nsGlobalWindowOuter.h b/dom/base/nsGlobalWindowOuter.h
+index fa95821e51984beb7e4672bb82038adb0f8e97d2..0a5e7235e6a3787b9583a691225b170ee186bc70 100644
+--- a/dom/base/nsGlobalWindowOuter.h
++++ b/dom/base/nsGlobalWindowOuter.h
+@@ -638,12 +638,16 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
+ 
+  public:
+   MOZ_CAN_RUN_SCRIPT double GetInnerWidthOuter(mozilla::ErrorResult& aError);
++  MOZ_CAN_RUN_SCRIPT double GetInnerWidthOuter(
++      mozilla::dom::CallerType aCallerType, mozilla::ErrorResult& aError);
+ 
+  protected:
+   MOZ_CAN_RUN_SCRIPT nsresult GetInnerWidth(double* aInnerWidth) override;
+ 
+  public:
+   MOZ_CAN_RUN_SCRIPT double GetInnerHeightOuter(mozilla::ErrorResult& aError);
++  MOZ_CAN_RUN_SCRIPT double GetInnerHeightOuter(
++      mozilla::dom::CallerType aCallerType, mozilla::ErrorResult& aError);
+ 
+  protected:
+   MOZ_CAN_RUN_SCRIPT nsresult GetInnerHeight(double* aInnerHeight) override;
+diff --git a/dom/base/nsScreen.cpp b/dom/base/nsScreen.cpp
+index 3b48a7f1e2549f9fa9beed1f3726f4fc3b1fca72..aa1e0a3809e6f2be7fc871bca981b75ccd9dddb6 100644
+--- a/dom/base/nsScreen.cpp
++++ b/dom/base/nsScreen.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "nsScreen.h"
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/GeckoBindings.h"
+ #include "mozilla/dom/BrowsingContextBinding.h"
+ #include "mozilla/dom/Document.h"
+@@ -44,7 +45,17 @@ NS_IMPL_RELEASE_INHERITED(nsScreen, DOMEventTargetHelper)
+ NS_IMPL_CYCLE_COLLECTION_INHERITED(nsScreen, DOMEventTargetHelper,
+                                    mScreenOrientation)
+ 
+-int32_t nsScreen::PixelDepth() {
++int32_t nsScreen::PixelDepth(CallerType aCallerType) {
++  if (aCallerType != CallerType::System) {
++    if (nsGlobalWindowInner* owner = GetOwnerWindow()) {
++      if (!owner->IsChromeWindow()) {
++        if (const auto* config = agentbrowser::GetScreenOverrides()) {
++          return config->mPixelDepth;
++        }
++      }
++    }
++  }
++
+   // Return 24 to prevent fingerprinting.
+   if (ShouldResistFingerprinting(RFPTarget::ScreenPixelDepth)) {
+     return 24;
+@@ -67,7 +78,28 @@ nsDeviceContext* nsScreen::GetDeviceContext() const {
+   return nsLayoutUtils::GetDeviceContextForScreenInfo(GetOuter());
+ }
+ 
+-CSSIntRect nsScreen::GetRect() {
++CSSIntRect nsScreen::GetRect(CallerType aCallerType) {
++  if (aCallerType != CallerType::System) {
++    if (nsGlobalWindowInner* owner = GetOwnerWindow()) {
++      if (!owner->IsChromeWindow()) {
++        if (const auto* config = agentbrowser::GetScreenOverrides()) {
++          if (Document* doc = owner->GetExtantDoc()) {
++            if (Maybe<CSSIntSize> deviceSize =
++                    nsGlobalWindowOuter::GetRDMDeviceSize(*doc)) {
++              return {0, 0, deviceSize->width, deviceSize->height};
++            }
++          }
++          if (BrowsingContext* bc = owner->GetBrowsingContext()) {
++            if (auto size = bc->GetScreenAreaOverride()) {
++              return {{}, *size};
++            }
++          }
++          return {0, 0, config->mWidth, config->mHeight};
++        }
++      }
++    }
++  }
++
+   // Return window inner rect to prevent fingerprinting.
+   if (ShouldResistFingerprinting(RFPTarget::ScreenRect)) {
+     return GetTopWindowInnerRectForRFP();
+@@ -99,7 +131,29 @@ CSSIntRect nsScreen::GetRect() {
+   return CSSIntRect::FromAppUnitsRounded(context->GetRect());
+ }
+ 
+-CSSIntRect nsScreen::GetAvailRect() {
++CSSIntRect nsScreen::GetAvailRect(CallerType aCallerType) {
++  if (aCallerType != CallerType::System) {
++    if (nsGlobalWindowInner* owner = GetOwnerWindow()) {
++      if (!owner->IsChromeWindow()) {
++        if (const auto* config = agentbrowser::GetScreenOverrides()) {
++          if (Document* doc = owner->GetExtantDoc()) {
++            if (Maybe<CSSIntSize> deviceSize =
++                    nsGlobalWindowOuter::GetRDMDeviceSize(*doc)) {
++              return {0, 0, deviceSize->width, deviceSize->height};
++            }
++          }
++          if (BrowsingContext* bc = owner->GetBrowsingContext()) {
++            if (auto size = bc->GetScreenAreaOverride()) {
++              return {{}, *size};
++            }
++          }
++          return {config->mAvailLeft, config->mAvailTop, config->mAvailWidth,
++                  config->mAvailHeight};
++        }
++      }
++    }
++  }
++
+   // Return window inner rect to prevent fingerprinting.
+   if (ShouldResistFingerprinting(RFPTarget::ScreenAvailRect)) {
+     return GetTopWindowInnerRectForRFP();
+diff --git a/dom/base/nsScreen.h b/dom/base/nsScreen.h
+index 4614516ff0a477acdb1f4535b91e90115166a8c1..7078596ca4d1bb0757b148bf6423e64507d46b0f 100644
+--- a/dom/base/nsScreen.h
++++ b/dom/base/nsScreen.h
+@@ -33,18 +33,36 @@ class nsScreen : public mozilla::DOMEventTargetHelper {
+ 
+   nsPIDOMWindowOuter* GetOuter() const;
+ 
+-  int32_t Top() { return GetRect().y; }
+-  int32_t Left() { return GetRect().x; }
+-  int32_t Width() { return GetRect().Width(); }
+-  int32_t Height() { return GetRect().Height(); }
++  int32_t Top(mozilla::dom::CallerType aCallerType) {
++    return GetRect(aCallerType).y;
++  }
++  int32_t Left(mozilla::dom::CallerType aCallerType) {
++    return GetRect(aCallerType).x;
++  }
++  int32_t Width(mozilla::dom::CallerType aCallerType) {
++    return GetRect(aCallerType).Width();
++  }
++  int32_t Height(mozilla::dom::CallerType aCallerType) {
++    return GetRect(aCallerType).Height();
++  }
+ 
+-  int32_t AvailTop() { return GetAvailRect().y; }
+-  int32_t AvailLeft() { return GetAvailRect().x; }
+-  int32_t AvailWidth() { return GetAvailRect().Width(); }
+-  int32_t AvailHeight() { return GetAvailRect().Height(); }
++  int32_t AvailTop(mozilla::dom::CallerType aCallerType) {
++    return GetAvailRect(aCallerType).y;
++  }
++  int32_t AvailLeft(mozilla::dom::CallerType aCallerType) {
++    return GetAvailRect(aCallerType).x;
++  }
++  int32_t AvailWidth(mozilla::dom::CallerType aCallerType) {
++    return GetAvailRect(aCallerType).Width();
++  }
++  int32_t AvailHeight(mozilla::dom::CallerType aCallerType) {
++    return GetAvailRect(aCallerType).Height();
++  }
+ 
+-  int32_t PixelDepth();
+-  int32_t ColorDepth() { return PixelDepth(); }
++  int32_t PixelDepth(mozilla::dom::CallerType aCallerType);
++  int32_t ColorDepth(mozilla::dom::CallerType aCallerType) {
++    return PixelDepth(aCallerType);
++  }
+ 
+   // Media Capabilities extension
+   mozilla::dom::ScreenColorGamut ColorGamut() const {
+@@ -89,8 +107,8 @@ class nsScreen : public mozilla::DOMEventTargetHelper {
+ 
+  protected:
+   nsDeviceContext* GetDeviceContext() const;
+-  mozilla::CSSIntRect GetRect();
+-  mozilla::CSSIntRect GetAvailRect();
++  mozilla::CSSIntRect GetRect(mozilla::dom::CallerType aCallerType);
++  mozilla::CSSIntRect GetAvailRect(mozilla::dom::CallerType aCallerType);
+   mozilla::CSSIntRect GetTopWindowInnerRectForRFP();
+   bool IsFullscreen() const;
+ 
+diff --git a/dom/webidl/Navigator.webidl b/dom/webidl/Navigator.webidl
+index d586dc5e43881bae1aef0a9c62b7d2b47f3cac70..91f2505402d7c97ab38145c63d09fe3bea4f54d8 100644
+--- a/dom/webidl/Navigator.webidl
++++ b/dom/webidl/Navigator.webidl
+@@ -304,6 +304,7 @@ partial interface Navigator {
+ };
+ 
+ interface mixin NavigatorConcurrentHardware {
++  [NeedsCallerType]
+   readonly attribute unsigned long long hardwareConcurrency;
+ };
+ 
+@@ -315,7 +316,7 @@ partial interface Navigator {
+ 
+ // https://w3c.github.io/webdriver/webdriver-spec.html#interface
+ interface mixin NavigatorAutomationInformation {
+-  [Constant, Cached]
++  [Constant, Cached, NeedsCallerType]
+   readonly attribute boolean webdriver;
+ };
+ 
+diff --git a/dom/webidl/Screen.webidl b/dom/webidl/Screen.webidl
+index c0c475bac6ed5b489db9608951af39db8dba5b27..57c154f4ad9fbec5157f4b0093efa05fd3e5d90c 100644
+--- a/dom/webidl/Screen.webidl
++++ b/dom/webidl/Screen.webidl
+@@ -6,17 +6,17 @@
+ interface Screen : EventTarget {
+   // CSSOM-View
+   // http://dev.w3.org/csswg/cssom-view/#the-screen-interface
+-  readonly attribute long availWidth;
+-  readonly attribute long availHeight;
+-  readonly attribute long width;
+-  readonly attribute long height;
+-  readonly attribute long colorDepth;
+-  readonly attribute long pixelDepth;
++  [NeedsCallerType] readonly attribute long availWidth;
++  [NeedsCallerType] readonly attribute long availHeight;
++  [NeedsCallerType] readonly attribute long width;
++  [NeedsCallerType] readonly attribute long height;
++  [NeedsCallerType] readonly attribute long colorDepth;
++  [NeedsCallerType] readonly attribute long pixelDepth;
+ 
+-  readonly attribute long top;
+-  readonly attribute long left;
+-  readonly attribute long availTop;
+-  readonly attribute long availLeft;
++  [NeedsCallerType] readonly attribute long top;
++  [NeedsCallerType] readonly attribute long left;
++  [NeedsCallerType] readonly attribute long availTop;
++  [NeedsCallerType] readonly attribute long availLeft;
+ 
+   /**
+    * DEPRECATED, use ScreenOrientation API instead.
+diff --git a/dom/webidl/Window.webidl b/dom/webidl/Window.webidl
+index 87efe769a8e2d2f8d3502957127de50aed1e9971..c4191015847190625f22da9aae85eb79a4016913 100644
+--- a/dom/webidl/Window.webidl
++++ b/dom/webidl/Window.webidl
+@@ -312,8 +312,8 @@ partial interface Window {
+   [Throws, ChromeOnly] undefined moveResize(long x, long y, long w, long h);
+ 
+   // viewport
+-  [Replaceable, Throws] readonly attribute double innerWidth;
+-  [Replaceable, Throws] readonly attribute double innerHeight;
++  [Replaceable, Throws, NeedsCallerType] readonly attribute double innerWidth;
++  [Replaceable, Throws, NeedsCallerType] readonly attribute double innerHeight;
+ 
+   // viewport scrolling
+   undefined scroll(unrestricted double x, unrestricted double y);
+diff --git a/dom/workers/WorkerNavigator.cpp b/dom/workers/WorkerNavigator.cpp
+index 519668019e4532e97231be959c69efd3ad3995d0..06ac7542e5f481b51007e85d3846e069b44f8674 100644
+--- a/dom/workers/WorkerNavigator.cpp
++++ b/dom/workers/WorkerNavigator.cpp
+@@ -9,6 +9,7 @@
+ #include "RuntimeService.h"
+ #include "WorkerRunnable.h"
+ #include "WorkerScope.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/dom/LockManager.h"
+ #include "mozilla/dom/MediaCapabilities.h"
+ #include "mozilla/dom/Navigator.h"
+@@ -138,6 +139,11 @@ void WorkerNavigator::GetAppVersion(nsString& aAppVersion,
+   MOZ_ASSERT(workerPrivate);
+ 
+   if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aAppVersion.Assign(config->mAppVersion);
++      return;
++    }
++
+     if (workerPrivate->ShouldResistFingerprinting(
+             RFPTarget::NavigatorAppVersion)) {
+       // See nsRFPService.h for spoofed value.
+@@ -159,6 +165,13 @@ void WorkerNavigator::GetPlatform(nsString& aPlatform, CallerType aCallerType,
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aPlatform.Assign(config->mPlatform);
++      return;
++    }
++  }
++
+   // navigator.platform is the same for default and spoofed values. The
+   // "general.platform.override" pref should override the default platform,
+   // but the spoofed platform should override the pref.
+@@ -216,6 +229,13 @@ class GetUserAgentRunnable final : public WorkerMainThreadRunnable {
+ 
+ void WorkerNavigator::GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+                                    ErrorResult& aRv) const {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      aUserAgent.Assign(config->mUserAgent);
++      return;
++    }
++  }
++
+   WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+   MOZ_ASSERT(workerPrivate);
+ 
+@@ -226,7 +246,13 @@ void WorkerNavigator::GetUserAgent(nsString& aUserAgent, CallerType aCallerType,
+   runnable->Dispatch(workerPrivate, Canceling, aRv);
+ }
+ 
+-uint64_t WorkerNavigator::HardwareConcurrency() const {
++uint64_t WorkerNavigator::HardwareConcurrency(CallerType aCallerType) const {
++  if (aCallerType != CallerType::System) {
++    if (const auto* config = agentbrowser::GetNavigatorOverrides()) {
++      return config->mHardwareConcurrency;
++    }
++  }
++
+   RuntimeService* rts = RuntimeService::GetService();
+   MOZ_ASSERT(rts);
+ 
+diff --git a/dom/workers/WorkerNavigator.h b/dom/workers/WorkerNavigator.h
+index 2f9e06bcb087ca34ddf0a278245a745ff6c845c4..fa12cab69ef6eafb4d0dbb559dc740572919ae17 100644
+--- a/dom/workers/WorkerNavigator.h
++++ b/dom/workers/WorkerNavigator.h
+@@ -107,7 +107,7 @@ class WorkerNavigator final : public nsWrapperCache {
+ 
+   void SetLanguages(const nsTArray<nsString>& aLanguages);
+ 
+-  uint64_t HardwareConcurrency() const;
++  uint64_t HardwareConcurrency(CallerType aCallerType) const;
+ 
+   StorageManager* Storage();
+ 
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index efb27a2ceabfa2362097940736c8907213802f8c..61b05418f9ec59b7db258bf8e108867548971915 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -4,18 +4,21 @@
+ 
+ #include "mozilla/AgentBrowserFingerprint.h"
+ 
++#include <cmath>
+ #include <stdio.h>
+ 
++#include "js/JSON.h"
++#include "js/PropertyAndElement.h"
++#include "mozilla/Atomics.h"
+ #include "mozilla/Base64.h"
++#include "mozilla/CmdLineAndEnvUtils.h"
+ #include "mozilla/Preferences.h"
+ #include "mozilla/StaticPtr.h"
+ #include "mozilla/dom/ScriptSettings.h"
+-#include "js/JSON.h"
+-#include "js/PropertyAndElement.h"
++#include "nsJSUtils.h"
+ #include "nsTArray.h"
+ #include "prenv.h"
+ #include "xpcpublic.h"
+-#include "mozilla/CmdLineAndEnvUtils.h"
+ 
+ namespace mozilla::agentbrowser {
+ 
+@@ -26,14 +29,103 @@ constexpr uint32_t kMaxDecodedConfigLength = 64 * 1024;
+ constexpr uint32_t kMaxEncodedConfigLength = 87382;
+ 
+ struct Snapshot final {
+-  Snapshot(nsCString&& aEncoded, nsCString&& aDecoded)
+-      : mEncoded(std::move(aEncoded)), mDecoded(std::move(aDecoded)) {}
++  Snapshot(nsCString&& aEncoded, nsCString&& aDecoded,
++           NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen)
++      : mEncoded(std::move(aEncoded)),
++        mDecoded(std::move(aDecoded)),
++        mNavigator(std::move(aNavigator)),
++        mScreen(std::move(aScreen)) {}
+ 
+   const nsCString mEncoded;
+   const nsCString mDecoded;
++  const NavigatorOverrideConfig mNavigator;
++  const ScreenOverrideConfig mScreen;
+ };
+ 
+ StaticAutoPtr<Snapshot> sSnapshot;
++Atomic<Snapshot*, ReleaseAcquire> sPublishedSnapshot(nullptr);
++
++void SetInvalidField(nsACString& aError, const char* aField) {
++  aError.AssignLiteral("invalid-field:");
++  aError.Append(aField);
++}
++
++bool GetRequiredProperty(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                         const char* aName, JS::MutableHandle<JS::Value> aValue,
++                         nsACString& aError) {
++  if (!JS_GetProperty(aCx, aObject, aName, aValue)) {
++    JS_ClearPendingException(aCx);
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  return true;
++}
++
++bool GetRequiredInt32(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                      const char* aName, int32_t aMinimum, int32_t aMaximum,
++                      int32_t& aResult, nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError) ||
++      !value.isInt32()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult = value.toInt32();
++  if (aResult < aMinimum || aResult > aMaximum) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  return true;
++}
++
++bool GetRequiredDouble(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                       const char* aName, double aMinimum, double aMaximum,
++                       double& aResult, nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError) ||
++      !value.isNumber()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult = value.toNumber();
++  if (!std::isfinite(aResult) || aResult < aMinimum || aResult > aMaximum) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  return true;
++}
++
++bool GetRequiredBoolean(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                        const char* aName, bool& aResult, nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError) ||
++      !value.isBoolean()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult = value.toBoolean();
++  return true;
++}
++
++bool GetRequiredString(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                       const char* aName, nsAString& aResult,
++                       nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError) ||
++      !value.isString()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  nsAutoJSString string;
++  if (!string.init(aCx, value.toString()) || string.IsEmpty() ||
++      string.Length() > 512) {
++    JS_ClearPendingException(aCx);
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult.Assign(string);
++  return true;
++}
+ 
+ nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
+                       nsACString& aError) {
+@@ -63,7 +155,9 @@ nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
+   return NS_OK;
+ }
+ 
+-nsresult ValidateSchema(const nsACString& aDecoded, nsACString& aError) {
++nsresult ParseConfig(const nsACString& aDecoded,
++                     NavigatorOverrideConfig& aNavigator,
++                     ScreenOverrideConfig& aScreen, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+   if (!jsapi.Init(xpc::PrivilegedJunkScope())) {
+     aError.AssignLiteral("js-context-unavailable");
+@@ -82,13 +176,158 @@ nsresult ValidateSchema(const nsACString& aDecoded, nsACString& aError) {
+ 
+   JS::Rooted<JSObject*> object(cx, &parsed.toObject());
+   JS::Rooted<JS::Value> schemaVersion(cx);
+-  if (!JS_GetProperty(cx, object, "schemaVersion", &schemaVersion)) {
++  if (!GetRequiredProperty(cx, object, "schemaVersion", &schemaVersion,
++                           aError) ||
++      !schemaVersion.isInt32() || schemaVersion.toInt32() != 1) {
++    aError.AssignLiteral("unsupported-schema-version");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  JS::Rooted<JS::Value> platformValue(cx);
++  if (!GetRequiredProperty(cx, object, "platform", &platformValue, aError) ||
++      !platformValue.isString()) {
++    SetInvalidField(aError, "platform");
++    return NS_ERROR_INVALID_ARG;
++  }
++  nsAutoJSString platform;
++  if (!platform.init(cx, platformValue.toString())) {
+     JS_ClearPendingException(cx);
+-    aError.AssignLiteral("missing-schema-version");
++    SetInvalidField(aError, "platform");
+     return NS_ERROR_INVALID_ARG;
+   }
+-  if (!schemaVersion.isInt32() || schemaVersion.toInt32() != 1) {
+-    aError.AssignLiteral("unsupported-schema-version");
++  if (platform.EqualsLiteral("Win32")) {
++    aNavigator.mPlatform.AssignLiteral("Win32");
++    aNavigator.mOscpu.AssignLiteral("Windows NT 10.0; Win64; x64");
++    aNavigator.mAppVersion.AssignLiteral("5.0 (Windows)");
++  } else if (platform.EqualsLiteral("MacIntel")) {
++    aNavigator.mPlatform.AssignLiteral("MacIntel");
++    aNavigator.mOscpu.AssignLiteral("Intel Mac OS X 10.15");
++    aNavigator.mAppVersion.AssignLiteral("5.0 (Macintosh)");
++  } else if (platform.EqualsLiteral("Linux armv81")) {
++    aNavigator.mPlatform.AssignLiteral("Linux armv81");
++    aNavigator.mOscpu.AssignLiteral("Linux armv8l");
++    aNavigator.mAppVersion.AssignLiteral("5.0 (Android)");
++  } else {
++    SetInvalidField(aError, "platform");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  nsAutoString configAppVersion;
++  if (!GetRequiredString(cx, object, "appVersion", configAppVersion, aError) ||
++      !configAppVersion.Equals(aNavigator.mAppVersion)) {
++    aError.AssignLiteral("incoherent-app-version");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  nsAutoString platformVersion;
++  if (!GetRequiredString(cx, object, "platformVersion", platformVersion,
++                         aError) ||
++      (platform.EqualsLiteral("Win32") &&
++       !platformVersion.EqualsLiteral("10.0.0")) ||
++      (platform.EqualsLiteral("MacIntel") &&
++       !platformVersion.EqualsLiteral("15.7.0")) ||
++      (platform.EqualsLiteral("Linux armv81") &&
++       !platformVersion.EqualsLiteral("13.0.0") &&
++       !platformVersion.EqualsLiteral("14.0.0"))) {
++    aError.AssignLiteral("incoherent-platform-version");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  nsAutoString expectedUserAgent;
++  if (platform.EqualsLiteral("Win32")) {
++    expectedUserAgent.AssignLiteral(
++        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:");
++    expectedUserAgent.AppendASCII(MOZ_APP_VERSION);
++    expectedUserAgent.AppendLiteral(") Gecko/20100101 Firefox/");
++  } else if (platform.EqualsLiteral("MacIntel")) {
++    expectedUserAgent.AssignLiteral(
++        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:");
++    expectedUserAgent.AppendASCII(MOZ_APP_VERSION);
++    expectedUserAgent.AppendLiteral(") Gecko/20100101 Firefox/");
++  } else {
++    expectedUserAgent.AssignLiteral("Mozilla/5.0 (Android ");
++    if (platformVersion.EqualsLiteral("13.0.0")) {
++      expectedUserAgent.AppendLiteral("13");
++    } else {
++      expectedUserAgent.AppendLiteral("14");
++    }
++    expectedUserAgent.AppendLiteral("; Mobile; rv:");
++    expectedUserAgent.AppendASCII(MOZ_APP_VERSION);
++    expectedUserAgent.AppendLiteral(") Gecko/");
++    expectedUserAgent.AppendASCII(MOZ_APP_VERSION);
++    expectedUserAgent.AppendLiteral(" Firefox/");
++  }
++  expectedUserAgent.AppendASCII(MOZ_APP_VERSION);
++  if (!GetRequiredString(cx, object, "userAgent", aNavigator.mUserAgent,
++                         aError) ||
++      !aNavigator.mUserAgent.Equals(expectedUserAgent)) {
++    aError.AssignLiteral("incoherent-user-agent");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  int32_t hardwareConcurrency = 0;
++  if (!GetRequiredInt32(cx, object, "hardwareConcurrency", 1, 64,
++                        hardwareConcurrency, aError)) {
++    return NS_ERROR_INVALID_ARG;
++  }
++  aNavigator.mHardwareConcurrency = static_cast<uint32_t>(hardwareConcurrency);
++
++  int32_t maxTouchPoints = 0;
++  if (!GetRequiredInt32(cx, object, "maxTouchPoints", 0, 100, maxTouchPoints,
++                        aError)) {
++    return NS_ERROR_INVALID_ARG;
++  }
++  aNavigator.mMaxTouchPoints = static_cast<uint32_t>(maxTouchPoints);
++
++  JS::Rooted<JS::Value> screenValue(cx);
++  if (!GetRequiredProperty(cx, object, "screen", &screenValue, aError) ||
++      !screenValue.isObject()) {
++    SetInvalidField(aError, "screen");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> screen(cx, &screenValue.toObject());
++  if (!GetRequiredInt32(cx, screen, "width", 1, 10000, aScreen.mWidth,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "height", 1, 10000, aScreen.mHeight,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "availLeft", -10000, 10000,
++                        aScreen.mAvailLeft, aError) ||
++      !GetRequiredInt32(cx, screen, "availTop", -10000, 10000,
++                        aScreen.mAvailTop, aError) ||
++      !GetRequiredInt32(cx, screen, "availWidth", 1, 10000, aScreen.mAvailWidth,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "availHeight", 1, 10000,
++                        aScreen.mAvailHeight, aError) ||
++      !GetRequiredInt32(cx, screen, "colorDepth", 1, 64, aScreen.mColorDepth,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "pixelDepth", 1, 64, aScreen.mPixelDepth,
++                        aError) ||
++      !GetRequiredDouble(cx, screen, "devicePixelRatio", 0.1, 10.0,
++                         aScreen.mDevicePixelRatio, aError) ||
++      !GetRequiredInt32(cx, screen, "windowX", -10000, 10000, aScreen.mWindowX,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "windowY", -10000, 10000, aScreen.mWindowY,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "outerWidth", 1, 10000, aScreen.mOuterWidth,
++                        aError) ||
++      !GetRequiredInt32(cx, screen, "outerHeight", 1, 10000,
++                        aScreen.mOuterHeight, aError) ||
++      !GetRequiredBoolean(cx, screen, "mobile", aScreen.mMobile, aError)) {
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  const bool android = platform.EqualsLiteral("Linux armv81");
++  if (aScreen.mAvailLeft < 0 || aScreen.mAvailTop < 0 ||
++      aScreen.mAvailLeft + aScreen.mAvailWidth > aScreen.mWidth ||
++      aScreen.mAvailTop + aScreen.mAvailHeight > aScreen.mHeight ||
++      aScreen.mWindowX < 0 || aScreen.mWindowY < 0 ||
++      aScreen.mWindowX + aScreen.mOuterWidth > aScreen.mWidth ||
++      aScreen.mWindowY + aScreen.mOuterHeight > aScreen.mHeight ||
++      aScreen.mColorDepth != aScreen.mPixelDepth ||
++      aScreen.mMobile != android ||
++      (android ? aNavigator.mMaxTouchPoints == 0
++               : aNavigator.mMaxTouchPoints != 0)) {
++    aError.AssignLiteral("incoherent-screen-geometry");
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
+@@ -96,7 +335,8 @@ nsresult ValidateSchema(const nsACString& aDecoded, nsACString& aError) {
+ }
+ 
+ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+-                         nsACString& aError) {
++                         NavigatorOverrideConfig&& aNavigator,
++                         ScreenOverrideConfig&& aScreen, nsACString& aError) {
+   if (sSnapshot) {
+     if (sSnapshot->mEncoded.Equals(aEncoded)) {
+       return NS_OK;
+@@ -105,10 +345,29 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+     return NS_ERROR_ALREADY_INITIALIZED;
+   }
+ 
+-  sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded));
++  sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded),
++                           std::move(aNavigator), std::move(aScreen));
++  sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+ }
+ 
++nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
++  nsAutoCString decoded;
++  nsresult rv = DecodeConfig(aEncoded, decoded, aError);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++
++  NavigatorOverrideConfig navigator;
++  ScreenOverrideConfig screen;
++  rv = ParseConfig(decoded, navigator, screen, aError);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++  return InstallSnapshot(std::move(aEncoded), std::move(decoded),
++                         std::move(navigator), std::move(screen), aError);
++}
++
+ }  // namespace
+ 
+ void DumpCapabilities(const char* aBuildID) {
+@@ -119,7 +378,7 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"buildId\":\"%s\","
+       "\"sourceStamp\":\"%s\","
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+-      "\"snapshot-v1\"]}\n",
++      "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -138,16 +397,7 @@ nsresult InitializeParent(bool aNativeRequired, nsACString& aError) {
+     return NS_ERROR_NOT_AVAILABLE;
+   }
+ 
+-  nsAutoCString decoded;
+-  rv = DecodeConfig(encoded, decoded, aError);
+-  if (NS_FAILED(rv)) {
+-    return rv;
+-  }
+-  rv = ValidateSchema(decoded, aError);
+-  if (NS_FAILED(rv)) {
+-    return rv;
+-  }
+-  rv = InstallSnapshot(nsCString(encoded), std::move(decoded), aError);
++  rv = DecodeParseAndInstall(nsCString(encoded), aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+@@ -165,16 +415,8 @@ nsresult InitializeChild() {
+     return NS_OK;
+   }
+ 
+-  nsAutoCString encoded(inherited);
+-  nsAutoCString decoded;
+   nsAutoCString error;
+-  nsresult rv = DecodeConfig(encoded, decoded, error);
+-  if (NS_SUCCEEDED(rv)) {
+-    rv = ValidateSchema(decoded, error);
+-  }
+-  if (NS_SUCCEEDED(rv)) {
+-    rv = InstallSnapshot(std::move(encoded), std::move(decoded), error);
+-  }
++  nsresult rv = DecodeParseAndInstall(nsCString(inherited), error);
+   if (NS_FAILED(rv)) {
+     fprintf(stderr, "AGENT_BROWSER_NATIVE_CONFIG_ERROR: child-%s\n",
+             error.get());
+@@ -182,16 +424,28 @@ nsresult InitializeChild() {
+   return rv;
+ }
+ 
+-bool IsEnabled() { return sSnapshot != nullptr; }
++bool IsEnabled() { return sPublishedSnapshot != nullptr; }
+ 
+ const nsCString& EncodedConfig() {
+   static const nsCString sEmpty;
+-  return sSnapshot ? sSnapshot->mEncoded : sEmpty;
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? snapshot->mEncoded : sEmpty;
+ }
+ 
+ const nsCString& DecodedConfig() {
+   static const nsCString sEmpty;
+-  return sSnapshot ? sSnapshot->mDecoded : sEmpty;
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? snapshot->mDecoded : sEmpty;
++}
++
++const NavigatorOverrideConfig* GetNavigatorOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mNavigator : nullptr;
++}
++
++const ScreenOverrideConfig* GetScreenOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mScreen : nullptr;
+ }
+ 
+ }  // namespace mozilla::agentbrowser
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index 15c356b39242ebbaf5fff1948f556263907eb521..8daccf405dcca8b94f8d6644efc11fa258d19115 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -5,6 +5,8 @@
+ #ifndef mozilla_AgentBrowserFingerprint_h
+ #define mozilla_AgentBrowserFingerprint_h
+ 
++#include <stdint.h>
++
+ #include "nsError.h"
+ #include "nsString.h"
+ 
+@@ -16,6 +18,32 @@ inline constexpr const char kConfigEnvironment[] =
+ inline constexpr const char kSourceStamp[] =
+     "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc";
+ 
++struct NavigatorOverrideConfig final {
++  nsString mPlatform;
++  nsString mOscpu;
++  nsString mAppVersion;
++  nsString mUserAgent;
++  uint32_t mHardwareConcurrency = 1;
++  uint32_t mMaxTouchPoints = 0;
++};
++
++struct ScreenOverrideConfig final {
++  int32_t mWidth = 0;
++  int32_t mHeight = 0;
++  int32_t mAvailLeft = 0;
++  int32_t mAvailTop = 0;
++  int32_t mAvailWidth = 0;
++  int32_t mAvailHeight = 0;
++  int32_t mColorDepth = 0;
++  int32_t mPixelDepth = 0;
++  double mDevicePixelRatio = 1.0;
++  int32_t mWindowX = 0;
++  int32_t mWindowY = 0;
++  int32_t mOuterWidth = 0;
++  int32_t mOuterHeight = 0;
++  bool mMobile = false;
++};
++
+ void DumpCapabilities(const char* aBuildID);
+ 
+ nsresult InitializeParent(bool aNativeRequired, nsACString& aError);
+@@ -24,6 +52,8 @@ nsresult InitializeChild();
+ bool IsEnabled();
+ const nsCString& EncodedConfig();
+ const nsCString& DecodedConfig();
++const NavigatorOverrideConfig* GetNavigatorOverrides();
++const ScreenOverrideConfig* GetScreenOverrides();
+ 
+ }  // namespace mozilla::agentbrowser
+ 
+diff --git a/xpfe/appshell/AppWindow.cpp b/xpfe/appshell/AppWindow.cpp
+index 02d21cf65cb92cf91d4e9041db513ef68998c6e2..117d1b89f8b6ae5d1782591e00e51d1285d3132d 100644
+--- a/xpfe/appshell/AppWindow.cpp
++++ b/xpfe/appshell/AppWindow.cpp
+@@ -1032,8 +1032,8 @@ NS_IMETHODIMP AppWindow::GetAvailScreenSize(int32_t* aAvailWidth,
+   RefPtr<nsScreen> screen = window->GetScreen();
+   NS_ENSURE_STATE(screen);
+ 
+-  *aAvailWidth = screen->AvailWidth();
+-  *aAvailHeight = screen->AvailHeight();
++  *aAvailWidth = screen->AvailWidth(mozilla::dom::CallerType::System);
++  *aAvailHeight = screen->AvailHeight(mozilla::dom::CallerType::System);
+   return NS_OK;
+ }
+ 

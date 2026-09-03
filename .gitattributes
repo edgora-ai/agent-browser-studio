@@ -7,3 +7,5 @@ patches/firefox/*.sha512 text eol=lf
 patches/firefox/mozconfig* text eol=lf
 patches/firefox/*.sh text eol=lf
 patches/firefox/files/** text eol=lf
+patches/firefox/scripts/** text eol=lf
+patches/firefox/corpora-154/** text eol=lf

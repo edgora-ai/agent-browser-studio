@@ -1,0 +1,456 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "macos-arm64",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless-native-canvas",
+    "fingerprintConfig": {
+      "schemaVersion": 1,
+      "seed": 154102,
+      "platform": "Win32",
+      "platformVersion": "10.0.0",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+      "appVersion": "5.0 (Windows)",
+      "vendor": "",
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "hardwareConcurrency": 12,
+      "deviceMemory": 16,
+      "maxTouchPoints": 0,
+      "hardwareProfile": {
+        "id": "win-nvidia-rtx3060-12c-16gb-1080p",
+        "source": "seeded",
+        "fontProfile": "windows-portable",
+        "audioProfile": "chromium-desktop"
+      },
+      "screen": {
+        "width": 1920,
+        "height": 1080,
+        "availLeft": 0,
+        "availTop": 0,
+        "availWidth": 1920,
+        "availHeight": 1032,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 1,
+        "windowX": 32,
+        "windowY": 32,
+        "outerWidth": 1280,
+        "outerHeight": 800,
+        "mobile": false
+      },
+      "storageQuotaBytes": 125829120000,
+      "canvas": {
+        "enabled": true,
+        "seed": "dbc492d80345a599"
+      },
+      "audio": {
+        "enabled": true,
+        "seed": "0d1bf59990f22075",
+        "amplitude": 1e-7
+      },
+      "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+      },
+      "webgpu": {
+        "mode": "webgl",
+        "vendor": "NVIDIA",
+        "architecture": "Ampere",
+        "device": "NVIDIA GeForce RTX 3060",
+        "description": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "subgroupMinSize": 32,
+        "subgroupMaxSize": 32
+      },
+      "webauthn": {
+        "enabled": true,
+        "conditionalGet": true,
+        "conditionalCreate": true,
+        "hybridTransport": true,
+        "passkeyPlatformAuthenticator": true,
+        "userVerifyingPlatformAuthenticator": true
+      },
+      "speechSynthesis": {
+        "enabled": true,
+        "voices": [
+          {
+            "name": "Microsoft David - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Mark - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Zira - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          }
+        ]
+      },
+      "webrtc": {
+        "mode": "real",
+        "publicIp": null
+      },
+      "timezone": "America/New_York",
+      "geolocation": {
+        "mode": "real",
+        "latitude": null,
+        "longitude": null,
+        "accuracy": null
+      },
+      "mediaDevices": {
+        "enabled": true,
+        "audioInputs": 1,
+        "videoInputs": 1,
+        "audioOutputs": 1
+      },
+      "secureDns": {
+        "enabled": false,
+        "templates": []
+      },
+      "fonts": [
+        "Arial",
+        "Arial Unicode MS",
+        "Comic Sans MS",
+        "Courier New",
+        "Georgia",
+        "Impact",
+        "Tahoma",
+        "Times New Roman",
+        "Trebuchet MS",
+        "Verdana"
+      ],
+      "doNotTrack": "1",
+      "pluginProfile": {
+        "pdfViewerEnabled": true,
+        "plugins": [
+          {
+            "name": "Internal PDF Plugin",
+            "filename": "pdfium.dll",
+            "description": "Portable Document Format",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf"
+              }
+            ]
+          },
+          {
+            "name": "Widevine Content Decryption Module",
+            "filename": "widevinecdm.dll",
+            "description": "Enables Widevine decryption for HTML audio/video content.",
+            "mimeTypes": []
+          }
+        ],
+        "mimeTypes": [
+          {
+            "type": "application/pdf",
+            "suffixes": "pdf"
+          }
+        ]
+      }
+    },
+    "comparisonSeed": "0000000000000000",
+    "preloadScript": false,
+    "nativeRequired": true
+  },
+  "capabilities": {
+    "product": "agent-browser-firefox",
+    "capabilitySchemaVersion": 1,
+    "browserVersion": "154.0",
+    "buildId": "20260902091224",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "capabilities": [
+      "config-v1",
+      "native-required-v1",
+      "snapshot-v1",
+      "navigator-v1",
+      "screen-v1",
+      "canvas-v1",
+      "webgl-v1",
+      "webgpu-v1",
+      "audio-v1",
+      "geolocation-v1",
+      "storage-quota-v1",
+      "media-devices-v1",
+      "speech-voices-v1"
+    ]
+  },
+  "hashes": {
+    "managed": {
+      "window2d": "82cd1442",
+      "window2dBlob": "6a0576fc",
+      "window2dUrl": "90ad717b",
+      "windowOffscreen": "82cd1442",
+      "windowOffscreenBlob": "6a0576fc",
+      "iframe2d": "82cd1442",
+      "iframe2dBlob": "6a0576fc",
+      "iframe2dUrl": "90ad717b",
+      "iframeOffscreen": "82cd1442",
+      "iframeOffscreenBlob": "6a0576fc",
+      "webgl": "230bace8",
+      "webglBlob": "e1a9d508",
+      "webglUrl": "7b4a054b",
+      "webglFloat": "fecf0024",
+      "offscreenWebgl": "230bace8",
+      "offscreenWebglBlob": "e1a9d508",
+      "offscreenWebglFloat": "fecf0024",
+      "iframeWebgl": "230bace8",
+      "iframeWebglBlob": "e1a9d508",
+      "iframeWebglUrl": "7b4a054b",
+      "iframeWebglFloat": "fecf0024",
+      "iframeOffscreenWebgl": "230bace8",
+      "iframeOffscreenWebglBlob": "e1a9d508",
+      "iframeOffscreenWebglFloat": "fecf0024",
+      "dedicatedWorker": "82cd1442",
+      "dedicatedWorkerBlob": "6a0576fc",
+      "dedicatedWorkerWebgl": "230bace8",
+      "dedicatedWorkerWebglBlob": "e1a9d508",
+      "dedicatedWorkerWebglFloat": "fecf0024",
+      "sharedWorker": "82cd1442",
+      "sharedWorkerBlob": "6a0576fc",
+      "sharedWorkerWebgl": "230bace8",
+      "sharedWorkerWebglBlob": "e1a9d508",
+      "sharedWorkerWebglFloat": "fecf0024"
+    },
+    "differentSeed": {
+      "window2d": "baf54545",
+      "window2dBlob": "a43a1ddc",
+      "window2dUrl": "d9659a1f",
+      "windowOffscreen": "baf54545",
+      "windowOffscreenBlob": "a43a1ddc",
+      "iframe2d": "baf54545",
+      "iframe2dBlob": "a43a1ddc",
+      "iframe2dUrl": "d9659a1f",
+      "iframeOffscreen": "baf54545",
+      "iframeOffscreenBlob": "a43a1ddc",
+      "webgl": "0c774a11",
+      "webglBlob": "d9e8f547",
+      "webglUrl": "9850c4f1",
+      "webglFloat": "f9970880",
+      "offscreenWebgl": "0c774a11",
+      "offscreenWebglBlob": "d9e8f547",
+      "offscreenWebglFloat": "f9970880",
+      "iframeWebgl": "0c774a11",
+      "iframeWebglBlob": "d9e8f547",
+      "iframeWebglUrl": "9850c4f1",
+      "iframeWebglFloat": "f9970880",
+      "iframeOffscreenWebgl": "0c774a11",
+      "iframeOffscreenWebglBlob": "d9e8f547",
+      "iframeOffscreenWebglFloat": "f9970880",
+      "dedicatedWorker": "baf54545",
+      "dedicatedWorkerBlob": "a43a1ddc",
+      "dedicatedWorkerWebgl": "0c774a11",
+      "dedicatedWorkerWebglBlob": "d9e8f547",
+      "dedicatedWorkerWebglFloat": "f9970880",
+      "sharedWorker": "baf54545",
+      "sharedWorkerBlob": "a43a1ddc",
+      "sharedWorkerWebgl": "0c774a11",
+      "sharedWorkerWebglBlob": "d9e8f547",
+      "sharedWorkerWebglFloat": "f9970880"
+    },
+    "stock": {
+      "window2d": "ad4714ba",
+      "window2dBlob": "fdfe743a",
+      "window2dUrl": "2551a599",
+      "windowOffscreen": "ad4714ba",
+      "windowOffscreenBlob": "fdfe743a",
+      "iframe2d": "ad4714ba",
+      "iframe2dBlob": "fdfe743a",
+      "iframe2dUrl": "2551a599",
+      "iframeOffscreen": "ad4714ba",
+      "iframeOffscreenBlob": "fdfe743a",
+      "webgl": "6a51958b",
+      "webglBlob": "3a701913",
+      "webglUrl": "54c80b2c",
+      "webglFloat": "158b4c45",
+      "offscreenWebgl": "6a51958b",
+      "offscreenWebglBlob": "3a701913",
+      "offscreenWebglFloat": "158b4c45",
+      "iframeWebgl": "6a51958b",
+      "iframeWebglBlob": "3a701913",
+      "iframeWebglUrl": "54c80b2c",
+      "iframeWebglFloat": "158b4c45",
+      "iframeOffscreenWebgl": "6a51958b",
+      "iframeOffscreenWebglBlob": "3a701913",
+      "iframeOffscreenWebglFloat": "158b4c45",
+      "dedicatedWorker": "ad4714ba",
+      "dedicatedWorkerBlob": "fdfe743a",
+      "dedicatedWorkerWebgl": "6a51958b",
+      "dedicatedWorkerWebglBlob": "3a701913",
+      "dedicatedWorkerWebglFloat": "158b4c45",
+      "sharedWorker": "ad4714ba",
+      "sharedWorkerBlob": "fdfe743a",
+      "sharedWorkerWebgl": "6a51958b",
+      "sharedWorkerWebglBlob": "3a701913",
+      "sharedWorkerWebglFloat": "158b4c45"
+    }
+  },
+  "surfaces": {
+    "window": {
+      "canvas2d": {
+        "pixelsHash": "82cd1442",
+        "pixelsLength": 12288,
+        "pixelsStable": true,
+        "pixelsReplayStable": true,
+        "blobHash": "6a0576fc",
+        "blobLength": 2352,
+        "blobStable": true,
+        "blobReplayStable": true,
+        "dataUrlHash": "90ad717b",
+        "dataUrlLength": 3158,
+        "dataUrlStable": true,
+        "dataUrlReplayStable": true
+      },
+      "offscreen2d": {
+        "pixelsHash": "82cd1442",
+        "pixelsLength": 12288,
+        "pixelsStable": true,
+        "pixelsReplayStable": true,
+        "blobHash": "6a0576fc",
+        "blobLength": 2352,
+        "blobStable": true,
+        "blobReplayStable": true
+      },
+      "webgl": {
+        "supported": true,
+        "pixelsHash": "230bace8",
+        "pixelsStable": true,
+        "blobHash": "e1a9d508",
+        "blobStable": true,
+        "dataUrlHash": "7b4a054b",
+        "dataUrlStable": true,
+        "floatReadPixels": {
+          "supported": true,
+          "hash": "fecf0024",
+          "stable": true
+        }
+      },
+      "offscreenWebgl": {
+        "supported": true,
+        "pixelsHash": "230bace8",
+        "pixelsStable": true,
+        "blobHash": "e1a9d508",
+        "blobStable": true,
+        "floatReadPixels": {
+          "supported": true,
+          "hash": "fecf0024",
+          "stable": true
+        }
+      }
+    },
+    "iframe": {
+      "canvas2d": {
+        "pixelsHash": "82cd1442",
+        "pixelsLength": 12288,
+        "pixelsStable": true,
+        "pixelsReplayStable": true,
+        "blobHash": "6a0576fc",
+        "blobLength": 2352,
+        "blobStable": true,
+        "blobReplayStable": true,
+        "dataUrlHash": "90ad717b",
+        "dataUrlLength": 3158,
+        "dataUrlStable": true,
+        "dataUrlReplayStable": true
+      },
+      "offscreen2d": {
+        "pixelsHash": "82cd1442",
+        "pixelsLength": 12288,
+        "pixelsStable": true,
+        "pixelsReplayStable": true,
+        "blobHash": "6a0576fc",
+        "blobLength": 2352,
+        "blobStable": true,
+        "blobReplayStable": true
+      },
+      "webgl": {
+        "supported": true,
+        "pixelsHash": "230bace8",
+        "pixelsStable": true,
+        "blobHash": "e1a9d508",
+        "blobStable": true,
+        "dataUrlHash": "7b4a054b",
+        "dataUrlStable": true,
+        "floatReadPixels": {
+          "supported": true,
+          "hash": "fecf0024",
+          "stable": true
+        }
+      },
+      "offscreenWebgl": {
+        "supported": true,
+        "pixelsHash": "230bace8",
+        "pixelsStable": true,
+        "blobHash": "e1a9d508",
+        "blobStable": true,
+        "floatReadPixels": {
+          "supported": true,
+          "hash": "fecf0024",
+          "stable": true
+        }
+      }
+    },
+    "dedicatedWorker": {
+      "supported": true,
+      "value": {
+        "canvas2d": {
+          "pixelsHash": "82cd1442",
+          "pixelsStable": true,
+          "pixelsReplayStable": true,
+          "blobHash": "6a0576fc",
+          "blobStable": true,
+          "blobReplayStable": true
+        },
+        "webgl": {
+          "supported": true,
+          "pixelsHash": "230bace8",
+          "pixelsStable": true,
+          "blobHash": "e1a9d508",
+          "blobStable": true,
+          "floatReadPixels": {
+            "supported": true,
+            "hash": "fecf0024",
+            "stable": true
+          }
+        }
+      }
+    },
+    "sharedWorker": {
+      "supported": true,
+      "value": {
+        "canvas2d": {
+          "pixelsHash": "82cd1442",
+          "pixelsStable": true,
+          "pixelsReplayStable": true,
+          "blobHash": "6a0576fc",
+          "blobStable": true,
+          "blobReplayStable": true
+        },
+        "webgl": {
+          "supported": true,
+          "pixelsHash": "230bace8",
+          "pixelsStable": true,
+          "blobHash": "e1a9d508",
+          "blobStable": true,
+          "floatReadPixels": {
+            "supported": true,
+            "hash": "fecf0024",
+            "stable": true
+          }
+        }
+      }
+    }
+  }
+}

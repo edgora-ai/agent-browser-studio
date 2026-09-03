@@ -1,0 +1,358 @@
+diff --git a/dom/ipc/ContentProcess.cpp b/dom/ipc/ContentProcess.cpp
+index 235691e..097b7ea 100644
+--- a/dom/ipc/ContentProcess.cpp
++++ b/dom/ipc/ContentProcess.cpp
+@@ -5,6 +5,7 @@
+ #include "ContentProcess.h"
+ 
+ #include "js/Initialization.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Preferences.h"
+ 
+ #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
+@@ -181,6 +182,11 @@ void ContentProcess::InfallibleInit(int aArgc, char* aArgv[]) {
+     MOZ_CRASH("NS_InitXPCOM failed");
+   }
+ 
++  rv = mozilla::agentbrowser::InitializeChild();
++  if (NS_FAILED(rv)) {
++    MOZ_CRASH("Agent Browser fingerprint snapshot validation failed");
++  }
++
+   // "app-startup" is the name of both the category and the event
+   NS_CreateServicesFromCategory("app-startup", nullptr, "app-startup", nullptr);
+ 
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+new file mode 100644
+index 0000000..efb27a2
+--- /dev/null
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -0,0 +1,197 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "mozilla/AgentBrowserFingerprint.h"
++
++#include <stdio.h>
++
++#include "mozilla/Base64.h"
++#include "mozilla/Preferences.h"
++#include "mozilla/StaticPtr.h"
++#include "mozilla/dom/ScriptSettings.h"
++#include "js/JSON.h"
++#include "js/PropertyAndElement.h"
++#include "nsTArray.h"
++#include "prenv.h"
++#include "xpcpublic.h"
++#include "mozilla/CmdLineAndEnvUtils.h"
++
++namespace mozilla::agentbrowser {
++
++namespace {
++
++constexpr uint32_t kMaxDecodedConfigLength = 64 * 1024;
++// ceil(65536 * 4 / 3), for unpadded base64url with Reject padding.
++constexpr uint32_t kMaxEncodedConfigLength = 87382;
++
++struct Snapshot final {
++  Snapshot(nsCString&& aEncoded, nsCString&& aDecoded)
++      : mEncoded(std::move(aEncoded)), mDecoded(std::move(aDecoded)) {}
++
++  const nsCString mEncoded;
++  const nsCString mDecoded;
++};
++
++StaticAutoPtr<Snapshot> sSnapshot;
++
++nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
++                      nsACString& aError) {
++  if (aEncoded.IsEmpty()) {
++    aError.AssignLiteral("missing-config");
++    return NS_ERROR_INVALID_ARG;
++  }
++  if (aEncoded.Length() > kMaxEncodedConfigLength) {
++    aError.AssignLiteral("encoded-config-too-large");
++    return NS_ERROR_FILE_TOO_BIG;
++  }
++
++  FallibleTArray<uint8_t> decoded;
++  nsresult rv =
++      Base64URLDecode(aEncoded, Base64URLDecodePaddingPolicy::Reject, decoded);
++  if (NS_FAILED(rv)) {
++    aError.AssignLiteral("invalid-base64url");
++    return rv;
++  }
++  if (decoded.Length() > kMaxDecodedConfigLength) {
++    aError.AssignLiteral("decoded-config-too-large");
++    return NS_ERROR_FILE_TOO_BIG;
++  }
++
++  aDecoded.Assign(reinterpret_cast<const char*>(decoded.Elements()),
++                  decoded.Length());
++  return NS_OK;
++}
++
++nsresult ValidateSchema(const nsACString& aDecoded, nsACString& aError) {
++  dom::AutoJSAPI jsapi;
++  if (!jsapi.Init(xpc::PrivilegedJunkScope())) {
++    aError.AssignLiteral("js-context-unavailable");
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
++  JSContext* cx = jsapi.cx();
++  NS_ConvertUTF8toUTF16 utf16(aDecoded);
++  JS::Rooted<JS::Value> parsed(cx, JS::NullValue());
++  if (!JS_ParseJSON(cx, utf16.BeginReading(), utf16.Length(), &parsed) ||
++      !parsed.isObject()) {
++    JS_ClearPendingException(cx);
++    aError.AssignLiteral("invalid-json");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  JS::Rooted<JSObject*> object(cx, &parsed.toObject());
++  JS::Rooted<JS::Value> schemaVersion(cx);
++  if (!JS_GetProperty(cx, object, "schemaVersion", &schemaVersion)) {
++    JS_ClearPendingException(cx);
++    aError.AssignLiteral("missing-schema-version");
++    return NS_ERROR_INVALID_ARG;
++  }
++  if (!schemaVersion.isInt32() || schemaVersion.toInt32() != 1) {
++    aError.AssignLiteral("unsupported-schema-version");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  return NS_OK;
++}
++
++nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
++                         nsACString& aError) {
++  if (sSnapshot) {
++    if (sSnapshot->mEncoded.Equals(aEncoded)) {
++      return NS_OK;
++    }
++    aError.AssignLiteral("snapshot-already-initialized");
++    return NS_ERROR_ALREADY_INITIALIZED;
++  }
++
++  sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded));
++  return NS_OK;
++}
++
++}  // namespace
++
++void DumpCapabilities(const char* aBuildID) {
++  printf(
++      "{\"product\":\"agent-browser-firefox\","
++      "\"capabilitySchemaVersion\":1,"
++      "\"browserVersion\":\"%s\","
++      "\"buildId\":\"%s\","
++      "\"sourceStamp\":\"%s\","
++      "\"capabilities\":[\"config-v1\",\"native-required-v1\","
++      "\"snapshot-v1\"]}\n",
++      MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
++  fflush(stdout);
++}
++
++nsresult InitializeParent(bool aNativeRequired, nsACString& aError) {
++  aError.Truncate();
++  if (!aNativeRequired) {
++    SaveToEnv("AGENT_BROWSER_FIREFOX_CONFIG=");
++    return NS_OK;
++  }
++
++  nsAutoCString encoded;
++  nsresult rv = Preferences::GetCString(kConfigPref, encoded);
++  if (NS_FAILED(rv) || encoded.IsEmpty()) {
++    aError.AssignLiteral("missing-config");
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
++  nsAutoCString decoded;
++  rv = DecodeConfig(encoded, decoded, aError);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++  rv = ValidateSchema(decoded, aError);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++  rv = InstallSnapshot(nsCString(encoded), std::move(decoded), aError);
++  if (NS_FAILED(rv)) {
++    return rv;
++  }
++
++  nsAutoCString environment(kConfigEnvironment);
++  environment.Append('=');
++  environment.Append(encoded);
++  SaveToEnv(environment.get());
++  return NS_OK;
++}
++
++nsresult InitializeChild() {
++  const char* inherited = PR_GetEnv(kConfigEnvironment);
++  if (!inherited || !*inherited) {
++    return NS_OK;
++  }
++
++  nsAutoCString encoded(inherited);
++  nsAutoCString decoded;
++  nsAutoCString error;
++  nsresult rv = DecodeConfig(encoded, decoded, error);
++  if (NS_SUCCEEDED(rv)) {
++    rv = ValidateSchema(decoded, error);
++  }
++  if (NS_SUCCEEDED(rv)) {
++    rv = InstallSnapshot(std::move(encoded), std::move(decoded), error);
++  }
++  if (NS_FAILED(rv)) {
++    fprintf(stderr, "AGENT_BROWSER_NATIVE_CONFIG_ERROR: child-%s\n",
++            error.get());
++  }
++  return rv;
++}
++
++bool IsEnabled() { return sSnapshot != nullptr; }
++
++const nsCString& EncodedConfig() {
++  static const nsCString sEmpty;
++  return sSnapshot ? sSnapshot->mEncoded : sEmpty;
++}
++
++const nsCString& DecodedConfig() {
++  static const nsCString sEmpty;
++  return sSnapshot ? sSnapshot->mDecoded : sEmpty;
++}
++
++}  // namespace mozilla::agentbrowser
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+new file mode 100644
+index 0000000..15c356b
+--- /dev/null
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -0,0 +1,30 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef mozilla_AgentBrowserFingerprint_h
++#define mozilla_AgentBrowserFingerprint_h
++
++#include "nsError.h"
++#include "nsString.h"
++
++namespace mozilla::agentbrowser {
++
++inline constexpr const char kConfigPref[] = "agent.browser.fingerprint.config";
++inline constexpr const char kConfigEnvironment[] =
++    "AGENT_BROWSER_FIREFOX_CONFIG";
++inline constexpr const char kSourceStamp[] =
++    "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc";
++
++void DumpCapabilities(const char* aBuildID);
++
++nsresult InitializeParent(bool aNativeRequired, nsACString& aError);
++nsresult InitializeChild();
++
++bool IsEnabled();
++const nsCString& EncodedConfig();
++const nsCString& DecodedConfig();
++
++}  // namespace mozilla::agentbrowser
++
++#endif  // mozilla_AgentBrowserFingerprint_h
+diff --git a/toolkit/xre/moz.build b/toolkit/xre/moz.build
+index 19215ef..09343bf 100644
+--- a/toolkit/xre/moz.build
++++ b/toolkit/xre/moz.build
+@@ -32,6 +32,7 @@ EXPORTS += [
+ ]
+ 
+ EXPORTS.mozilla += [
++    "AgentBrowserFingerprint.h",
+     "AutoSQLiteLifetime.h",
+     "Bootstrap.h",
+     "CmdLineAndEnvUtils.h",
+@@ -138,6 +139,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
+ 
+ UNIFIED_SOURCES += [
+     "/toolkit/mozapps/update/common/commonupdatedir.cpp",
++    "AgentBrowserFingerprint.cpp",
+     "AutoSQLiteLifetime.cpp",
+     "Bootstrap.cpp",
+     "CmdLineAndEnvUtils.cpp",
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 4df0d95..4f52149 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -6,6 +6,7 @@
+ #include "mozilla/dom/ContentChild.h"
+ #include "mozilla/ipc/GeckoChildProcessHost.h"
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/AppShutdown.h"
+ #include "mozilla/Assertions.h"
+ #include "mozilla/Attributes.h"
+@@ -307,6 +308,8 @@ constexpr nsLiteralCString kStartupTokenNames[] = {
+ int gArgc;
+ char** gArgv;
+ 
++static bool gAgentBrowserNativeRequired = false;
++
+ static const char gToolkitVersion[] = MOZ_STRINGIFY(GRE_MILESTONE);
+ // The gToolkitBuildID global is defined to MOZ_BUILDID via gen_buildid.py
+ // in toolkit/library. See related comment in toolkit/library/moz.build.
+@@ -4317,6 +4320,15 @@ int XREMain::XRE_mainInit(bool* aExitFlag,
+   nsresult rv = NS_CreateNativeAppSupport(getter_AddRefs(mNativeApp));
+   if (NS_FAILED(rv)) return 1;
+ 
++  // Capability attestation takes priority over version/help and never opens a
++  // profile or initializes full XPCOM.
++  if (ARG_FOUND == CheckArg("agent-browser-capabilities")) {
++    mozilla::agentbrowser::DumpCapabilities(gAppData ? gAppData->buildID
++                                                     : nullptr);
++    *aExitFlag = true;
++    return 0;
++  }
++
+   // Handle --*version arguments early to avoid initializing full XPCOM.
+   // Note: we *cannot* handle --help here, as it requires more components
+   // to be initialized.
+@@ -4332,6 +4344,9 @@ int XREMain::XRE_mainInit(bool* aExitFlag,
+     return 0;
+   }
+ 
++  gAgentBrowserNativeRequired =
++      ARG_FOUND == CheckArg("agent-browser-native-required");
++
+   if (CheckForUserMismatch()) {
+     return 1;
+   }
+@@ -4754,7 +4769,10 @@ int XREMain::XRE_mainInit(bool* aExitFlag,
+ #if defined(MOZ_HAS_REMOTE)
+   // Handle the --new-instance command line arguments.
+   ar = CheckArg("new-instance");
+-  if (ar == ARG_FOUND || EnvHasValue("MOZ_NEW_INSTANCE")) {
++  if (ar == ARG_FOUND || EnvHasValue("MOZ_NEW_INSTANCE") ||
++      gAgentBrowserNativeRequired) {
++    // Native-required launches must validate their own profile config instead
++    // of forwarding the command line to an already running stock instance.
+     mDisableRemoteClient = true;
+   }
+ #else
+@@ -6024,6 +6042,15 @@ nsresult XREMain::XRE_mainRun() {
+       xpc::InitializeJSContext();
+     }
+ 
++    nsAutoCString agentBrowserError;
++    rv = mozilla::agentbrowser::InitializeParent(
++        gAgentBrowserNativeRequired, agentBrowserError);
++    if (NS_FAILED(rv)) {
++      fprintf(stderr, "AGENT_BROWSER_NATIVE_CONFIG_ERROR: %s\n",
++              agentBrowserError.get());
++      return rv;
++    }
++
+     // Finally, now that JS has been initialized, we can finish pref loading.
+     // This needs to happen after JS and XPConnect initialization because
+     // AutoConfig files require JS execution. Note that this means AutoConfig

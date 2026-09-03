@@ -48,6 +48,10 @@ import {
   normalizeManagedChromiumVersion,
 } from "./native-chromium-manager.js";
 import {
+  compareFirefoxVersions,
+  normalizeManagedFirefoxVersion,
+} from "./native-firefox-manager.js";
+import {
   LEGACY_NATIVE_PROXY_AUTH_SWITCH,
   NATIVE_PROXY_AUTH_SWITCH,
   NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH,
@@ -72,6 +76,11 @@ import {
   type FirefoxStatus,
 } from "./browser-engine.js";
 import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
+import {
+  firefoxNativeModeRequested,
+  supportsFirefoxNativeConfig,
+  supportsFirefoxNativeParity,
+} from "./firefox-native-capabilities.js";
 import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, registerFirefoxSession, dropFirefoxSession, getRegisteredFirefoxSession, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
@@ -294,7 +303,9 @@ export function createBrowserProfile(opts: {
     name: opts.name,
     engine,
     fingerprintMode,
-    browserVersion: normalizeManagedChromiumVersion(opts.browserVersion),
+    browserVersion: engine === "firefox"
+      ? normalizeManagedFirefoxVersion(opts.browserVersion)
+      : normalizeManagedChromiumVersion(opts.browserVersion),
     allowThirdPartyCookies: normalizeBoolean(opts.allowThirdPartyCookies, "third-party cookie compatibility"),
     fingerprintSeed: normalizeFingerprintSeed(opts.fingerprintSeed || Math.floor(Math.random() * 90000) + 10000),
     platform: normalizePlatform(opts.platform || (process.platform === "darwin" ? "macos" : "windows")),
@@ -541,7 +552,9 @@ export function listBrowserProfiles(): BrowserProfile[] {
       version: engine === "firefox"
         ? (getFirefoxStatus().version || "?")
         : (normalizeManagedChromiumVersion(m.browserVersion) || getRuntimeChromiumVersion() || "?"),
-      browserVersion: normalizeManagedChromiumVersion(m.browserVersion),
+      browserVersion: engine === "firefox"
+        ? normalizeManagedFirefoxVersion(m.browserVersion)
+        : normalizeManagedChromiumVersion(m.browserVersion),
       engine,
       fingerprintMode: normalizeFingerprintMode(m.fingerprintMode),
       allowThirdPartyCookies: normalizeBoolean(m.allowThirdPartyCookies, "third-party cookie compatibility"),
@@ -1219,7 +1232,8 @@ async function launchFirefoxProfile(
     );
   }
   const firefoxVersion = detectFirefoxVersion(bin);
-  if (meta.browserVersion && firefoxVersion && firefoxVersion !== meta.browserVersion) {
+  if (meta.browserVersion && firefoxVersion &&
+      compareFirefoxVersions(firefoxVersion, meta.browserVersion) !== 0) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(`Profile requires Firefox ${meta.browserVersion}, but the installed binary is ${firefoxVersion}`);
   }
@@ -1227,6 +1241,16 @@ async function launchFirefoxProfile(
   const profileDir = path.join(getProfilesDir(), dirId);
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
+  const nativeRequested = firefoxNativeModeRequested();
+  const nativeConfig = supportsFirefoxNativeConfig(bin);
+  const nativeParity = supportsFirefoxNativeParity(bin);
+  if (managedIdentity && nativeRequested && !nativeConfig) {
+    if (releaseLaunchLock) releaseLaunchLock();
+    throw new Error(
+      "Firefox native-only A/B mode was requested, but the selected binary lacks the binary-attested config-v1, native-required-v1, and snapshot-v1 capabilities.",
+    );
+  }
+  const nativeMode = managedIdentity !== null && nativeConfig && (nativeParity || nativeRequested);
   const resolvedProxy = resolveProfileProxySecret(dirId);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
@@ -1237,7 +1261,7 @@ async function launchFirefoxProfile(
     useGpu: true,
     sandboxPermission: true,
     colorScheme: "system",
-    ...(managedIdentity ? { extraPrefs: managedIdentity.prefs } : {}),
+    ...(managedIdentity ? { extraPrefs: nativeMode ? managedIdentity.nativePrefs : managedIdentity.prefs } : {}),
   });
 
   // Explicit free port (not 0): the BiDi endpoint is deterministic and the
@@ -1249,6 +1273,7 @@ async function launchFirefoxProfile(
     headless,
     platform: meta.platform,
     appUrl: meta.appUrl || undefined,
+    nativeRequired: nativeMode,
   });
 
   const logFile = getLaunchLogPath(dirId);
@@ -1308,7 +1333,7 @@ async function launchFirefoxProfile(
         const conn = await connectBidi(info.bidiWebSocketUrl, { timeoutMs: 15000 });
         runningProcesses.get(dirId)!.bidiConn = conn;
         registerFirefoxSession(info.actualPort ?? info.marionettePort ?? remotePort, conn);
-        if (managedIdentity) {
+        if (managedIdentity && !nativeMode) {
           const scriptId = await bidiAddPreloadScript(conn, managedIdentity.preloadScript, 15000);
           bidiInjected = scriptId !== null;
           bidiSessionId = scriptId;
@@ -1316,6 +1341,18 @@ async function launchFirefoxProfile(
       } catch (e: any) {
         bidiError = e?.message || String(e);
       }
+    }
+
+    const liveBidi = runningProcesses.get(dirId)?.bidiConn;
+    if (managedIdentity && !liveBidi) {
+      throw new Error(
+        `Firefox managed identity requires a live BiDi session${bidiError ? `: ${bidiError}` : "."}`,
+      );
+    }
+    if (managedIdentity && !nativeMode && !bidiInjected) {
+      throw new Error(
+        `Fingerprint injection probe blocked — BiDi preload registration failed${bidiError ? `: ${bidiError}` : "."}`,
+      );
     }
 
     // Queued cookie imports (shared with the Chromium pipeline).
@@ -1362,7 +1399,7 @@ async function launchFirefoxProfile(
     // be disarmed, the noise layer must be live, and the managed fields must
     // match the profile's identity. A provably-dead injection blocks the
     // launch by default (blockOnInjectionProbe=false escapes, like drift).
-    if (managedIdentity) {
+    if (managedIdentity && !nativeMode) {
       try {
         const entry = runningProcesses.get(dirId);
         const conn = entry?.bidiConn;
@@ -1458,7 +1495,7 @@ async function launchFirefoxProfile(
     action: "launch",
     target: dirId,
     actor: "user",
-    detail: `firefox ${firefoxVersion || "?"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"}`,
+    detail: `firefox ${firefoxVersion || "?"} mode=${nativeMode ? "native" : "fallback"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"}`,
   });
   if (releaseLaunchLock) releaseLaunchLock();
   return { pid, cdpPort: actualPort, driftCheck, envCheck };

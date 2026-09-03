@@ -267,7 +267,7 @@ export interface BrowserFingerprintConfig {
   platformVersion: string;
   userAgent: string;
   appVersion: string;
-  vendor: "Google Inc.";
+  vendor: "Google Inc." | "";
   languages: string[];
   hardwareConcurrency: number;
   deviceMemory: number;
@@ -302,6 +302,8 @@ export interface BrowserFingerprintConfig {
     mode: "webgl";
     vendor: string;
     architecture: string;
+    device: string;
+    description: string;
     subgroupMinSize: number;
     subgroupMaxSize: number;
   };
@@ -366,10 +368,10 @@ export function composeGpuRenderer(baseRenderer: string, gpuDeviceId: string | n
 }
 
 /**
- * Build the versioned, public configuration consumed by our Chromium fork.
+ * Build the versioned, public configuration consumed by our native engines.
  * This deliberately does not reuse RoxyChrome's encrypted lumi.conf format.
- * `engine` selects the WebGL renderer composition (device-id embedding is
- * Chrome-only; see composeGpuRenderer).
+ * `engine` selects engine-shaped UA/appVersion and WebGL renderer composition
+ * (device-id embedding is Chrome-only; see composeGpuRenderer).
  */
 export function buildBrowserFingerprintConfig(
   meta: BrowserFingerprintMeta,
@@ -379,7 +381,9 @@ export function buildBrowserFingerprintConfig(
 ): BrowserFingerprintConfig {
   const seed = normalizeSeed(meta.fingerprintSeed);
   const platform = normalizePlatform(meta.platform);
-  const version = normalizeChromiumVersion(chromiumVersion);
+  const version = engine === "firefox"
+    ? normalizeFirefoxVersion(chromiumVersion)
+    : normalizeChromiumVersion(chromiumVersion);
   const locale = normalizeLocale(meta.locale);
   const languages = locale.includes("-") ? [locale, locale.split("-")[0]] : [locale];
   const { persona, source: personaSource } = selectHardwarePersona(seed, platform, meta);
@@ -404,7 +408,20 @@ export function buildBrowserFingerprintConfig(
     : platform === "Linux armv81"
       ? `Linux; Android ${persona.androidVersion}; ${persona.deviceModel}`
       : "Windows NT 10.0; Win64; x64";
-  const ua = `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} ${isAndroid ? "Mobile " : ""}Safari/537.36`;
+  const ua = engine === "firefox"
+    ? platform === "MacIntel"
+      ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:${version}) Gecko/20100101 Firefox/${version}`
+      : platform === "Linux armv81"
+        ? `Mozilla/5.0 (Android ${persona.androidVersion}; Mobile; rv:${version}) Gecko/${version} Firefox/${version}`
+        : `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${version}) Gecko/20100101 Firefox/${version}`
+    : `Mozilla/5.0 (${osToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version} ${isAndroid ? "Mobile " : ""}Safari/537.36`;
+  const appVersion = engine === "firefox"
+    ? platform === "MacIntel"
+      ? "5.0 (Macintosh)"
+      : platform === "Linux armv81"
+        ? "5.0 (Android)"
+        : "5.0 (Windows)"
+    : ua.replace(/^Mozilla\//, "");
   const webgl = {
     vendor: persona.gpuVendor,
     renderer: composeGpuRenderer(persona.gpuRenderer, persona.gpuDeviceId, engine),
@@ -416,8 +433,8 @@ export function buildBrowserFingerprintConfig(
     platform,
     platformVersion: platform === "MacIntel" ? "15.7.0" : platform === "Linux armv81" ? `${persona.androidVersion}.0.0` : "10.0.0",
     userAgent: ua,
-    appVersion: ua.replace(/^Mozilla\//, ""),
-    vendor: "Google Inc.",
+    appVersion,
+    vendor: engine === "firefox" ? "" : "Google Inc.",
     languages,
     hardwareConcurrency: persona.hardwareConcurrency,
     deviceMemory: persona.deviceMemory,
@@ -448,7 +465,7 @@ export function buildBrowserFingerprintConfig(
     canvas: { enabled: true, seed: deriveSeed(seed, "canvas") },
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
     webgl,
-    webgpu: deriveWebGpuIdentity(webgl.vendor, webgl.renderer),
+    webgpu: deriveWebGpuIdentity(webgl.vendor, persona.gpuRenderer),
     webauthn: {
       enabled: true,
       conditionalGet: true,
@@ -511,6 +528,12 @@ function normalizeChromiumVersion(value: string | null): string {
   return match?.[0] || "149.0.7827.22";
 }
 
+function normalizeFirefoxVersion(value: string | null): string {
+  const match = value?.match(/(\d+)(?:\.(\d+))?/);
+  if (!match) return "154.0";
+  return match[2] === undefined ? `${match[1]}.0` : `${match[1]}.${match[2]}`;
+}
+
 function normalizeLocale(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "en-US";
   try {
@@ -529,6 +552,7 @@ function deriveWebGpuIdentity(
   webglRenderer: string,
 ): BrowserFingerprintConfig["webgpu"] {
   const identity = `${webglVendor} ${webglRenderer}`;
+  const device = deriveWebGpuDevice(webglRenderer);
   let vendor = "Google";
   for (const vendor of ["NVIDIA", "AMD", "Apple", "Intel", "Qualcomm", "ARM", "Imagination", "Microsoft", "Google"]) {
     if (new RegExp(`\\b${vendor}\\b`, "i").test(identity)) {
@@ -536,6 +560,8 @@ function deriveWebGpuIdentity(
         mode: "webgl",
         vendor,
         architecture: deriveWebGpuArchitecture(vendor, identity),
+        device,
+        description: webglRenderer,
         subgroupMinSize: vendor === "Intel" ? 8 : 32,
         subgroupMaxSize: vendor === "AMD" ? 64 : 32,
       };
@@ -544,7 +570,9 @@ function deriveWebGpuIdentity(
   return {
     mode: "webgl",
     vendor,
-    architecture: "",
+    architecture: "generic",
+    device,
+    description: webglRenderer,
     subgroupMinSize: 32,
     subgroupMaxSize: 32,
   };
@@ -557,7 +585,24 @@ function deriveWebGpuArchitecture(vendor: string, identity: string): string {
   if (vendor === "AMD") return "RDNA 2";
   if (vendor === "ARM") return /Immortalis|G71\d|G61\d/i.test(identity) ? "Valhall 4th Gen" : "Valhall";
   if (vendor === "Qualcomm") return /740|750/i.test(identity) ? "Adreno 7xx" : "Adreno 6xx";
-  return "";
+  if (vendor === "Google" && /Mali-G71\d/i.test(identity)) return "Valhall 3rd Gen";
+  return "generic";
+}
+
+function deriveWebGpuDevice(renderer: string): string {
+  const patterns = [
+    /NVIDIA GeForce RTX\s*\d+(?:\s*Ti)?/i,
+    /Intel\(R\) (?:UHD|Iris(?:\(R\))? Xe)[^,)]*Graphics(?:\s*\d+)?/i,
+    /AMD Radeon(?:\(TM\))?[^,)]*Graphics/i,
+    /Apple M\d+(?: Pro| Max| Ultra)?/i,
+    /Adreno \(TM\) \d+/i,
+    /(?:Mali|Immortalis)-G\d+/i,
+  ];
+  for (const pattern of patterns) {
+    const match = renderer.match(pattern);
+    if (match) return match[0];
+  }
+  return renderer;
 }
 
 function selectSpeechVoices(

@@ -62,6 +62,8 @@ describe("Agent Browser fingerprint config", () => {
       mode: "webgl",
       vendor: "NVIDIA",
       architecture: "Ampere",
+      device: "NVIDIA GeForce RTX 3060",
+      description: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
       subgroupMinSize: 32,
       subgroupMaxSize: 32,
     });
@@ -114,6 +116,8 @@ describe("Agent Browser fingerprint config", () => {
       mode: "webgl",
       vendor: "Apple",
       architecture: "metal-3",
+      device: "Apple M2 Pro",
+      description: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
       subgroupMinSize: 32,
       subgroupMaxSize: 32,
     });
@@ -168,10 +172,22 @@ describe("Agent Browser fingerprint config", () => {
     const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114", null, "firefox");
     expect(chromium.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)");
     expect(firefox.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    expect(firefox.userAgent).toBe("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0");
+    expect(firefox.appVersion).toBe("5.0 (Windows)");
+    expect(firefox.vendor).toBe("");
+    expect(chromium.vendor).toBe("Google Inc.");
+    expect(chromium.userAgent).toContain("Chrome/150.0.7871.114");
     // Chrome's device-id form must be a strict refinement of the persona base string.
     expect(chromium.webgl.renderer.startsWith(firefox.webgl.renderer.split(" Direct3D11")[0])).toBe(true);
     // WebGPU identity derivation is unaffected by the embedded device id.
     expect(chromium.webgpu).toEqual(firefox.webgpu);
+  });
+
+  it("aligns Firefox Android UA with the seeded Android platform version", () => {
+    const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 154004, platform: "android" }, "154.0", null, "firefox");
+    expect(firefox.platformVersion).toBe("13.0.0");
+    expect(firefox.userAgent).toContain("(Android 13; Mobile; rv:154.0)");
+    expect(firefox.appVersion).toBe("5.0 (Android)");
   });
 
   it("keeps Metal and Android renderer forms shared across engines (no device id exists there)", () => {

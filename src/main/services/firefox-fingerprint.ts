@@ -2,9 +2,9 @@
 //
 // Chromium gets fingerprint management natively: our patched build reads the
 // `--agent-browser-fingerprint-config=` switch and hosts the values at the
-// renderer level. Stock Firefox has no such patch, so we deliver the same
-// BrowserFingerprintConfig through the two channels Firefox actually has
-// (the same ones Roxy's real RoxyFirefox uses):
+// renderer level. Managed stock Firefox still uses the fallback channels below;
+// patched Firefox consumes the same BrowserFingerprintConfig through its native
+// profile-pref snapshot whenever the binary advertises the required capability.
 //
 //   1. prefs (`user.js` family) — what Firefox can express as preferences:
 //      UA override, hardwareConcurrency, language, DNT, WebGL enabled;
@@ -23,7 +23,11 @@
 
 import type { BrowserFingerprintMeta } from "../types.js";
 import type { BrowserFingerprintConfig, SecureDnsConfig } from "./browser-fingerprint-config.js";
-import { buildBrowserFingerprintConfig } from "./browser-fingerprint-config.js";
+import {
+  buildBrowserFingerprintConfig,
+  encodeBrowserFingerprintConfig,
+} from "./browser-fingerprint-config.js";
+import { FIREFOX_NATIVE_CONFIG_PREF } from "./firefox-native-capabilities.js";
 
 /** Normalize a detected Firefox version ("135.0.1") to its major.minor. */
 export function normalizeFirefoxVersion(value: string | null | undefined): string {
@@ -41,13 +45,15 @@ export function normalizeFirefoxVersion(value: string | null | undefined): strin
 export function buildFirefoxUserAgent(
   platform: "Win32" | "MacIntel" | "Linux armv81",
   firefoxVersion: string | null | undefined,
+  platformVersion?: string | null,
 ): string {
   const version = normalizeFirefoxVersion(firefoxVersion);
   if (platform === "MacIntel") {
     return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:${version}) Gecko/20100101 Firefox/${version}`;
   }
   if (platform === "Linux armv81") {
-    return `Mozilla/5.0 (Android 14; Mobile; rv:${version}) Gecko/${version} Firefox/${version}`;
+    const androidVersion = platformVersion?.match(/^(13|14)\./)?.[1] || "14";
+    return `Mozilla/5.0 (Android ${androidVersion}; Mobile; rv:${version}) Gecko/${version} Firefox/${version}`;
   }
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${version}) Gecko/20100101 Firefox/${version}`;
 }
@@ -62,7 +68,7 @@ export function buildFirefoxFingerprintPrefs(
   config: BrowserFingerprintConfig,
   firefoxVersion: string | null | undefined,
 ): Record<string, string | number | boolean> {
-  const ua = buildFirefoxUserAgent(config.platform, firefoxVersion);
+  const ua = buildFirefoxUserAgent(config.platform, firefoxVersion, config.platformVersion);
   const prefs: Record<string, string | number | boolean> = {
     "general.useragent.override": ua,
     "general.useragent.site_specific_overrides": false,
@@ -95,6 +101,16 @@ export function buildFirefoxFingerprintPrefs(
  * drives Chromium is embedded here, so one profile configuration produces the
  * same identity intent on both engines (drift baseline stays comparable).
  */
+export function buildFirefoxNativeFingerprintPrefs(
+  config: BrowserFingerprintConfig,
+  firefoxVersion: string | null | undefined,
+): Record<string, string | number | boolean> {
+  return {
+    ...buildFirefoxFingerprintPrefs(config, firefoxVersion),
+    [FIREFOX_NATIVE_CONFIG_PREF]: encodeBrowserFingerprintConfig(config),
+  };
+}
+
 export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintConfig): string {
   const json = JSON.stringify(config);
   // Worker-identity block for the shim (G1): computed HERE (TS side) because
@@ -463,47 +479,30 @@ function patchWebglContext(ctx){
   proto.getContext = ctxFn;
 })();
 
-// ── WebGPU adapter identity (Firefox 137+ ships WebGPU) ──
-// requestAdapter is a GPU.prototype method; patching it on the navigator.gpu
-// instance leaks an own property the engine does not have.
+// ── WebGPU adapter identity (Firefox 154 exposes adapter.info as an object) ──
+// Patch the native GPUAdapterInfo prototype so both GPUAdapter.info and
+// GPUDevice.adapterInfo share one identity without adding instance properties or
+// wrapping requestAdapter promises. Features, limits, subgroup sizes and WGSL
+// exposure remain native.
 (function(){
   var gpuInfo = cfg.webgpu;
-  if (!gpuInfo || typeof navigator === "undefined" || !navigator.gpu || typeof navigator.gpu.requestAdapter !== "function") return;
-  var gpuProto = null;
-  try { gpuProto = navigator.gpu.constructor.prototype; } catch (e) {}
-  if (!gpuProto || typeof gpuProto.requestAdapter !== "function") return;
-  try {
-    var origRequestAdapter = gpuProto.requestAdapter;
-    var requestAdapterFn = function(opts){
-      var promise = origRequestAdapter.call(this, opts);
-      if (!promise || typeof promise.then !== "function") return promise;
-      return promise.then(function(adapter){
-        if (adapter && typeof adapter.info === "function") {
-          try {
-            var origInfo = adapter.info;
-            var infoFn = function(){
-              return origInfo.call(this).then(function(info){
-                var out = {};
-                Object.assign(out, info);
-                if (gpuInfo.vendor) out.vendor = gpuInfo.vendor;
-                if (gpuInfo.architecture) out.architecture = gpuInfo.architecture;
-                if (gpuInfo.device) out.device = gpuInfo.device;
-                if (gpuInfo.description) out.description = gpuInfo.description;
-                if (gpuInfo.subgroupMinSize) out.subgroupMinSize = gpuInfo.subgroupMinSize;
-                if (gpuInfo.subgroupMaxSize) out.subgroupMaxSize = gpuInfo.subgroupMaxSize;
-                return out;
-              });
-            };
-            if (fakeFns) fakeFns.add(maskLen(infoFn));
-            adapter.info = infoFn;
-          } catch (e) {}
-        }
-        return adapter;
-      });
-    };
-    if (fakeFns) fakeFns.add(maskLen(requestAdapterFn));
-    Object.defineProperty(gpuProto, "requestAdapter", { configurable: true, value: requestAdapterFn });
-  } catch (e) {}
+  var Ctor = typeof GPUAdapterInfo === "function" ? GPUAdapterInfo : null;
+  if (!gpuInfo || !Ctor || !Ctor.prototype) return;
+  var fields = ["vendor", "architecture", "device", "description"];
+  for (var gi = 0; gi < fields.length; gi++) {
+    let field = fields[gi];
+    let value = gpuInfo[field];
+    if (typeof value !== "string" || !value) continue;
+    let descriptor = Object.getOwnPropertyDescriptor(Ctor.prototype, field);
+    if (!descriptor || descriptor.configurable !== true) continue;
+    let getter = function(){ return value; };
+    if (fakeFns) fakeFns.add(maskLen(getter));
+    Object.defineProperty(Ctor.prototype, field, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get: getter,
+    });
+  }
 })();
 
 // ── audio noise (OfflineAudioContext render path) ──
@@ -1285,13 +1284,20 @@ export function buildFirefoxManagedIdentity(
   meta: BrowserFingerprintMeta,
   firefoxVersion: string | null | undefined,
   secureDns: SecureDnsConfig | null = null,
-): { config: BrowserFingerprintConfig; prefs: Record<string, string | number | boolean>; preloadScript: string; userAgent: string } {
-  const config = buildBrowserFingerprintConfig(meta, null, secureDns, "firefox");
+): {
+  config: BrowserFingerprintConfig;
+  prefs: Record<string, string | number | boolean>;
+  nativePrefs: Record<string, string | number | boolean>;
+  preloadScript: string;
+  userAgent: string;
+} {
+  const config = buildBrowserFingerprintConfig(meta, firefoxVersion ?? null, secureDns, "firefox");
   return {
     config,
     prefs: buildFirefoxFingerprintPrefs(config, firefoxVersion),
+    nativePrefs: buildFirefoxNativeFingerprintPrefs(config, firefoxVersion),
     preloadScript: buildFirefoxFingerprintPreloadScript(config),
-    userAgent: buildFirefoxUserAgent(config.platform, firefoxVersion),
+    userAgent: buildFirefoxUserAgent(config.platform, firefoxVersion, config.platformVersion),
   };
 }
 

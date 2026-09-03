@@ -28,6 +28,17 @@ import * as path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { ProxyConfig } from "../types.js";
 import { bundledFirefoxBinaryPath } from "./bundled-native-browsers.js";
+import {
+  findManagedFirefoxBinary,
+  getManagedFirefoxRoot,
+} from "./native-firefox-manager.js";
+import {
+  FIREFOX_NATIVE_REQUIRED_SWITCH,
+  firefoxNativeModeRequested,
+  readFirefoxNativeCapabilityReport,
+  supportsFirefoxNativeConfig,
+  supportsFirefoxNativeParity,
+} from "./firefox-native-capabilities.js";
 
 export type BrowserEngine = "chromium" | "firefox";
 
@@ -66,10 +77,12 @@ export function defaultFirefoxBinaryPaths(platform: NodeJS.Platform = process.pl
   }
 }
 
-/** Find the Firefox binary (env override wins, then the bundled copy, then platform defaults). */
+/** Find Firefox: explicit override, managed native cache, bundled copy, then system stock. */
 export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = getFirefoxBinaryOverride(env);
   if (override) return fs.existsSync(override) ? override : null;
+  const managed = findManagedFirefoxBinary(null, getManagedFirefoxRoot(env));
+  if (managed) return managed.binaryPath;
   const bundled = bundledFirefoxBinaryPath();
   if (bundled) return bundled;
   for (const candidate of defaultFirefoxBinaryPaths()) {
@@ -108,10 +121,12 @@ export interface FirefoxStatus {
   installed: boolean;
   path: string | null;
   version: string | null;
-  /** Native `--fingerprint-*` patch parity is NOT delivered on stock Firefox. */
-  fingerprintParity: false;
-  /** What the runtime DOES deliver (Slice 79): prefs + BiDi preload injection. */
-  managedInjection: "prefs+bidi-preload" | "none";
+  fingerprintParity: boolean;
+  managedInjection: "native" | "prefs+bidi-preload" | "none";
+  nativeConfig: boolean;
+  nativeRequested: boolean;
+  nativeCapabilities: readonly string[];
+  sourceStamp: string | null;
   hint: string;
 }
 
@@ -125,18 +140,43 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
       version: null,
       fingerprintParity: false,
       managedInjection: "none",
+      nativeConfig: false,
+      nativeRequested: firefoxNativeModeRequested(env),
+      nativeCapabilities: [],
+      sourceStamp: null,
       hint: `Firefox binary not found. Install Firefox or set ${FIREFOX_ENV}.`,
     };
+  }
+  const report = readFirefoxNativeCapabilityReport(bin);
+  const nativeConfig = supportsFirefoxNativeConfig(bin);
+  const fingerprintParity = supportsFirefoxNativeParity(bin);
+  const nativeRequested = firefoxNativeModeRequested(env);
+  const nativeActive = nativeConfig && (fingerprintParity || nativeRequested);
+  const nativeCapabilities = report?.capabilities ?? [];
+  let hint: string;
+  if (nativeRequested && !nativeConfig) {
+    hint = "Firefox native-only A/B mode was requested, but the selected binary lacks config-v1/native-required-v1/snapshot-v1; launch will fail closed.";
+  } else if (nativeActive) {
+    hint = fingerprintParity
+      ? "Firefox uses the binary-attested native fingerprint engine; BiDi remains available for automation."
+      : "Firefox native-only A/B mode is active with partial capabilities; fingerprint parity remains false.";
+  } else if (report) {
+    hint = "Firefox exposes partial native capabilities; production keeps the complete prefs + BiDi preload fallback.";
+  } else {
+    hint = "Firefox is driven via WebDriver BiDi + user.js with the complete managed preload fallback.";
   }
   return {
     engine: "firefox",
     installed: true,
     path: bin,
     version: detectFirefoxVersion(bin),
-    fingerprintParity: false,
-    managedInjection: "prefs+bidi-preload",
-    hint: "Firefox is driven via WebDriver BiDi + user.js (RoxyFirefox-aligned). " +
-      "Managed identity = prefs + preload injection (Slice 79); native --fingerprint-* patch parity is a known follow-up.",
+    fingerprintParity,
+    managedInjection: nativeActive ? "native" : "prefs+bidi-preload",
+    nativeConfig,
+    nativeRequested,
+    nativeCapabilities,
+    sourceStamp: report?.sourceStamp ?? null,
+    hint,
   };
 }
 
@@ -152,6 +192,8 @@ export interface FirefoxLaunchArgsOpts {
   platform?: "windows" | "macos" | "android";
   /** First-tab URL (Web App / PWA-ish mode; Firefox has no --app= flag). */
   appUrl?: string | null;
+  /** Require binary-native config validation before Firefox opens a window. */
+  nativeRequired?: boolean;
 }
 
 /**
@@ -166,9 +208,16 @@ export interface FirefoxLaunchArgsOpts {
  *    a fresh instance on macOS/Linux (Firefox for Windows does not accept it).
  */
 export function buildFirefoxLaunchArgs(opts: FirefoxLaunchArgsOpts): string[] {
-  const args: string[] = ["-profile", opts.profileDir, "--marionette", "--remote-debugging-port", String(opts.remotePort ?? 0)];
+  // NOTE: no `--marionette` here. The Marionette protocol's accessibility
+  // service injects a root accessible object into every content document;
+  // navigating a heavy third-party app (ping0.cc/env) with Marionette enabled
+  // deterministically wedges the content process's BiDi session ("BiDi request
+  // failed"), while pure `--remote-debugging-port` (BiDi-only) stays healthy.
+  // The app drives Firefox over BiDi only, so Marionette is dead weight.
+  const args: string[] = ["-profile", opts.profileDir, "--remote-debugging-port", String(opts.remotePort ?? 0)];
   if (opts.platform !== "windows") args.push("-new-instance");
   if (opts.headless) args.push("-headless");
+  if (opts.nativeRequired) args.push(FIREFOX_NATIVE_REQUIRED_SWITCH);
   if (opts.appUrl) args.push(opts.appUrl);
   args.push("-no-remote");
   return args;

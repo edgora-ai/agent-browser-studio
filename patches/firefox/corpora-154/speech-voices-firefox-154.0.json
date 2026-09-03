@@ -1,0 +1,1589 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "darwin",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless-native-speech-voices",
+    "preloadScript": false,
+    "nativeRequired": true,
+    "fingerprintConfig": {
+      "schemaVersion": 1,
+      "seed": 154107,
+      "platform": "MacIntel",
+      "platformVersion": "15.7.0",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+      "appVersion": "5.0 (Macintosh)",
+      "vendor": "",
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "hardwareConcurrency": 12,
+      "deviceMemory": 16,
+      "maxTouchPoints": 0,
+      "hardwareProfile": {
+        "id": "mac-apple-m2pro-12c-16gb-1728x1117",
+        "source": "seeded",
+        "fontProfile": "macos-system",
+        "audioProfile": "chromium-desktop"
+      },
+      "screen": {
+        "width": 1728,
+        "height": 1117,
+        "availLeft": 0,
+        "availTop": 25,
+        "availWidth": 1728,
+        "availHeight": 1092,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 2,
+        "windowX": 32,
+        "windowY": 57,
+        "outerWidth": 1280,
+        "outerHeight": 800,
+        "mobile": false
+      },
+      "storageQuotaBytes": 125829120000,
+      "canvas": {
+        "enabled": true,
+        "seed": "e8a9306f110c2bb4"
+      },
+      "audio": {
+        "enabled": true,
+        "seed": "0dfff50495e1c240",
+        "amplitude": 1e-7
+      },
+      "webgl": {
+        "vendor": "Google Inc. (Apple)",
+        "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)"
+      },
+      "webgpu": {
+        "mode": "webgl",
+        "vendor": "Apple",
+        "architecture": "metal-3",
+        "device": "Apple M2 Pro",
+        "description": "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
+        "subgroupMinSize": 32,
+        "subgroupMaxSize": 32
+      },
+      "webauthn": {
+        "enabled": true,
+        "conditionalGet": true,
+        "conditionalCreate": true,
+        "hybridTransport": true,
+        "passkeyPlatformAuthenticator": true,
+        "userVerifyingPlatformAuthenticator": true
+      },
+      "speechSynthesis": {
+        "enabled": true,
+        "voices": [
+          {
+            "name": "Samantha",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Alex",
+            "lang": "en-US",
+            "localService": true
+          }
+        ]
+      },
+      "webrtc": {
+        "mode": "real",
+        "publicIp": null
+      },
+      "timezone": "America/Los_Angeles",
+      "geolocation": {
+        "mode": "real",
+        "latitude": null,
+        "longitude": null,
+        "accuracy": null
+      },
+      "mediaDevices": {
+        "enabled": true,
+        "audioInputs": 1,
+        "videoInputs": 1,
+        "audioOutputs": 1
+      },
+      "secureDns": {
+        "enabled": false,
+        "templates": []
+      },
+      "fonts": [
+        "Apple Chancery",
+        "Apple Color Emoji",
+        "Arial",
+        "Avenir",
+        "Courier New",
+        "Georgia",
+        "Helvetica",
+        "Hoefler Text",
+        "Menlo",
+        "Monaco",
+        "Optima",
+        "Palatino",
+        "Papyrus",
+        "STIX Two Math",
+        "San Francisco",
+        "Times",
+        "Times New Roman",
+        "Trebuchet MS",
+        "Verdana"
+      ],
+      "doNotTrack": "1",
+      "pluginProfile": {
+        "pdfViewerEnabled": true,
+        "plugins": [
+          {
+            "name": "Internal PDF Plugin",
+            "filename": "libpdf.dylib",
+            "description": "Portable Document Format",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf"
+              }
+            ]
+          },
+          {
+            "name": "Widevine Content Decryption Module",
+            "filename": "libwidevinecdm.dylib",
+            "description": "Enables Widevine decryption for HTML audio/video content.",
+            "mimeTypes": []
+          }
+        ],
+        "mimeTypes": [
+          {
+            "type": "application/pdf",
+            "suffixes": "pdf"
+          }
+        ]
+      }
+    }
+  },
+  "capabilities": {
+    "product": "agent-browser-firefox",
+    "capabilitySchemaVersion": 1,
+    "browserVersion": "154.0",
+    "buildId": "20260902091224",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "capabilities": [
+      "config-v1",
+      "native-required-v1",
+      "snapshot-v1",
+      "navigator-v1",
+      "screen-v1",
+      "canvas-v1",
+      "webgl-v1",
+      "webgpu-v1",
+      "audio-v1",
+      "geolocation-v1",
+      "storage-quota-v1",
+      "media-devices-v1",
+      "speech-voices-v1"
+    ]
+  },
+  "evidence": {
+    "managed": {
+      "initial": [
+        {
+          "name": "Samantha",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:0"
+        },
+        {
+          "name": "Alex",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:1"
+        }
+      ],
+      "voicesChangedFired": false,
+      "afterEvent": null,
+      "repeatCount": 2,
+      "sameFirstObject": true,
+      "getVoicesDescriptor": {
+        "source": "function getVoices() {\n    [native code]\n}",
+        "writable": true
+      },
+      "worker": {
+        "speech": "undefined",
+        "speechSynth": "undefined",
+        "voice": "undefined"
+      }
+    },
+    "managedRestart": {
+      "initial": [
+        {
+          "name": "Samantha",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:0"
+        },
+        {
+          "name": "Alex",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:1"
+        }
+      ],
+      "voicesChangedFired": false,
+      "afterEvent": null
+    },
+    "multi": {
+      "initial": [
+        {
+          "name": "Samantha",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:0"
+        },
+        {
+          "name": "Daniel",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:1"
+        },
+        {
+          "name": "Melina",
+          "lang": "el-GR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:2"
+        }
+      ],
+      "voicesChangedFired": false,
+      "afterEvent": null
+    },
+    "zh": {
+      "initial": [
+        {
+          "name": "Tingting",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:persona:0"
+        }
+      ],
+      "voicesChangedFired": false,
+      "afterEvent": null
+    },
+    "disabled": {
+      "initial": [],
+      "voicesChangedFired": true,
+      "afterEvent": [
+        {
+          "name": "Albert",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Albert"
+        },
+        {
+          "name": "Alice",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.it-IT.Alice"
+        },
+        {
+          "name": "Soumya",
+          "lang": "kn-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.kn-IN.Alpana"
+        },
+        {
+          "name": "Alva",
+          "lang": "sv-SE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.sv-SE.Alva"
+        },
+        {
+          "name": "Aman",
+          "lang": "en-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.Aman"
+        },
+        {
+          "name": "Amélie",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.fr-CA.Amelie"
+        },
+        {
+          "name": "Amira",
+          "lang": "ms-MY",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ms-MY.Amira"
+        },
+        {
+          "name": "Anna",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.de-DE.Anna"
+        },
+        {
+          "name": "Aru",
+          "lang": "kk-KZ",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.Aru"
+        },
+        {
+          "name": "Bad News",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.BadNews"
+        },
+        {
+          "name": "Bahh",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Bahh"
+        },
+        {
+          "name": "Bells",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Bells"
+        },
+        {
+          "name": "Boing",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Boing"
+        },
+        {
+          "name": "Bubbles",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Bubbles"
+        },
+        {
+          "name": "Carmit",
+          "lang": "he-IL",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.he-IL.Carmit"
+        },
+        {
+          "name": "Cellos",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Cellos"
+        },
+        {
+          "name": "Damayanti",
+          "lang": "id-ID",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.id-ID.Damayanti"
+        },
+        {
+          "name": "Daniel",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-GB.Daniel"
+        },
+        {
+          "name": "Daria",
+          "lang": "bg-BG",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.bg-BG.Daria"
+        },
+        {
+          "name": "Wobble",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Deranged"
+        },
+        {
+          "name": "Eddy (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Eddy"
+        },
+        {
+          "name": "Eddy (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Eddy"
+        },
+        {
+          "name": "Eddy (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Eddy"
+        },
+        {
+          "name": "Eddy (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Eddy"
+        },
+        {
+          "name": "Eddy (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Eddy"
+        },
+        {
+          "name": "Eddy (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Eddy"
+        },
+        {
+          "name": "Eddy (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Eddy"
+        },
+        {
+          "name": "Eddy (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Eddy"
+        },
+        {
+          "name": "Eddy (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Eddy"
+        },
+        {
+          "name": "Eddy (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Eddy"
+        },
+        {
+          "name": "Eddy (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Eddy"
+        },
+        {
+          "name": "Eddy (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Eddy"
+        },
+        {
+          "name": "Eddy (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Eddy"
+        },
+        {
+          "name": "Eddy (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Eddy"
+        },
+        {
+          "name": "Ellen",
+          "lang": "nl-BE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.nl-BE.Ellen"
+        },
+        {
+          "name": "Flo (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Flo"
+        },
+        {
+          "name": "Flo (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Flo"
+        },
+        {
+          "name": "Flo (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Flo"
+        },
+        {
+          "name": "Flo (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Flo"
+        },
+        {
+          "name": "Flo (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Flo"
+        },
+        {
+          "name": "Flo (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Flo"
+        },
+        {
+          "name": "Flo (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Flo"
+        },
+        {
+          "name": "Flo (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Flo"
+        },
+        {
+          "name": "Flo (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Flo"
+        },
+        {
+          "name": "Flo (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Flo"
+        },
+        {
+          "name": "Flo (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Flo"
+        },
+        {
+          "name": "Flo (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Flo"
+        },
+        {
+          "name": "Flo (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Flo"
+        },
+        {
+          "name": "Flo (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Flo"
+        },
+        {
+          "name": "Fred",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Fred"
+        },
+        {
+          "name": "Geeta",
+          "lang": "te-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.te-IN.Geeta"
+        },
+        {
+          "name": "Good News",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.GoodNews"
+        },
+        {
+          "name": "Grandma (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Grandma"
+        },
+        {
+          "name": "Grandma (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Grandma"
+        },
+        {
+          "name": "Grandma (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Grandma"
+        },
+        {
+          "name": "Grandma (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Grandma"
+        },
+        {
+          "name": "Grandma (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Grandma"
+        },
+        {
+          "name": "Grandma (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Grandma"
+        },
+        {
+          "name": "Grandma (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Grandma"
+        },
+        {
+          "name": "Grandma (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Grandma"
+        },
+        {
+          "name": "Grandma (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Grandma"
+        },
+        {
+          "name": "Grandma (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Grandma"
+        },
+        {
+          "name": "Grandma (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Grandma"
+        },
+        {
+          "name": "Grandma (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Grandma"
+        },
+        {
+          "name": "Grandma (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Grandma"
+        },
+        {
+          "name": "Grandma (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Grandma"
+        },
+        {
+          "name": "Grandpa (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Grandpa"
+        },
+        {
+          "name": "Grandpa (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Grandpa"
+        },
+        {
+          "name": "Grandpa (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Grandpa"
+        },
+        {
+          "name": "Grandpa (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Grandpa"
+        },
+        {
+          "name": "Grandpa (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Grandpa"
+        },
+        {
+          "name": "Grandpa (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Grandpa"
+        },
+        {
+          "name": "Grandpa (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Grandpa"
+        },
+        {
+          "name": "Grandpa (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Grandpa"
+        },
+        {
+          "name": "Grandpa (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Grandpa"
+        },
+        {
+          "name": "Grandpa (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Grandpa"
+        },
+        {
+          "name": "Grandpa (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Grandpa"
+        },
+        {
+          "name": "Grandpa (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Grandpa"
+        },
+        {
+          "name": "Grandpa (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Grandpa"
+        },
+        {
+          "name": "Grandpa (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Grandpa"
+        },
+        {
+          "name": "Jester",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Hysterical"
+        },
+        {
+          "name": "Ioana",
+          "lang": "ro-RO",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ro-RO.Ioana"
+        },
+        {
+          "name": "Jacques",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Jacques"
+        },
+        {
+          "name": "Joana",
+          "lang": "pt-PT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.pt-PT.Joana"
+        },
+        {
+          "name": "Junior",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Junior"
+        },
+        {
+          "name": "Kanya",
+          "lang": "th-TH",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.th-TH.Kanya"
+        },
+        {
+          "name": "Karen",
+          "lang": "en-AU",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-AU.Karen"
+        },
+        {
+          "name": "Kathy",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Kathy"
+        },
+        {
+          "name": "Kyoko",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ja-JP.Kyoko"
+        },
+        {
+          "name": "Lana",
+          "lang": "hr-HR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.hr-HR.Lana"
+        },
+        {
+          "name": "Laura",
+          "lang": "sk-SK",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.sk-SK.Laura"
+        },
+        {
+          "name": "Lekha",
+          "lang": "hi-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.hi-IN.Lekha"
+        },
+        {
+          "name": "Lesya",
+          "lang": "uk-UA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.uk-UA.Lesya"
+        },
+        {
+          "name": "Linh",
+          "lang": "vi-VN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.vi-VN.Linh"
+        },
+        {
+          "name": "Luciana",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.pt-BR.Luciana"
+        },
+        {
+          "name": "Majed",
+          "lang": "ar-001",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ar-001.Maged"
+        },
+        {
+          "name": "Tünde",
+          "lang": "hu-HU",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.hu-HU.Mariska"
+        },
+        {
+          "name": "Meijia",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.zh-TW.Meijia"
+        },
+        {
+          "name": "Melina",
+          "lang": "el-GR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.el-GR.Melina"
+        },
+        {
+          "name": "Milena",
+          "lang": "ru-RU",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ru-RU.Milena"
+        },
+        {
+          "name": "Moira",
+          "lang": "en-IE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-IE.Moira"
+        },
+        {
+          "name": "Mónica",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.es-ES.Monica"
+        },
+        {
+          "name": "Montse",
+          "lang": "ca-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ca-ES.Montserrat"
+        },
+        {
+          "name": "Nora",
+          "lang": "nb-NO",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.nb-NO.Nora"
+        },
+        {
+          "name": "Ona",
+          "lang": "lt-LT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.Ona"
+        },
+        {
+          "name": "Organ",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Organ"
+        },
+        {
+          "name": "Paulina",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.es-MX.Paulina"
+        },
+        {
+          "name": "Piya",
+          "lang": "bn-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.bn-IN.Paya"
+        },
+        {
+          "name": "Superstar",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Princess"
+        },
+        {
+          "name": "Ralph",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Ralph"
+        },
+        {
+          "name": "Reed (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Reed"
+        },
+        {
+          "name": "Reed (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Reed"
+        },
+        {
+          "name": "Reed (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Reed"
+        },
+        {
+          "name": "Reed (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Reed"
+        },
+        {
+          "name": "Reed (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Reed"
+        },
+        {
+          "name": "Reed (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Reed"
+        },
+        {
+          "name": "Reed (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Reed"
+        },
+        {
+          "name": "Reed (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Reed"
+        },
+        {
+          "name": "Reed (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Reed"
+        },
+        {
+          "name": "Reed (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Reed"
+        },
+        {
+          "name": "Reed (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Reed"
+        },
+        {
+          "name": "Reed (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Reed"
+        },
+        {
+          "name": "Reed (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Reed"
+        },
+        {
+          "name": "Rishi",
+          "lang": "en-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-IN.Rishi"
+        },
+        {
+          "name": "Rocko (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Rocko"
+        },
+        {
+          "name": "Rocko (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Rocko"
+        },
+        {
+          "name": "Rocko (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Rocko"
+        },
+        {
+          "name": "Rocko (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Rocko"
+        },
+        {
+          "name": "Rocko (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Rocko"
+        },
+        {
+          "name": "Rocko (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Rocko"
+        },
+        {
+          "name": "Rocko (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Rocko"
+        },
+        {
+          "name": "Rocko (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Rocko"
+        },
+        {
+          "name": "Rocko (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Rocko"
+        },
+        {
+          "name": "Rocko (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Rocko"
+        },
+        {
+          "name": "Rocko (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Rocko"
+        },
+        {
+          "name": "Rocko (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Rocko"
+        },
+        {
+          "name": "Rocko (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Rocko"
+        },
+        {
+          "name": "Rocko (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Rocko"
+        },
+        {
+          "name": "Samantha",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-US.Samantha"
+        },
+        {
+          "name": "Sandy (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Sandy"
+        },
+        {
+          "name": "Sandy (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Sandy"
+        },
+        {
+          "name": "Sandy (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Sandy"
+        },
+        {
+          "name": "Sandy (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Sandy"
+        },
+        {
+          "name": "Sandy (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Sandy"
+        },
+        {
+          "name": "Sandy (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Sandy"
+        },
+        {
+          "name": "Sandy (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Sandy"
+        },
+        {
+          "name": "Sandy (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Sandy"
+        },
+        {
+          "name": "Sandy (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Sandy"
+        },
+        {
+          "name": "Sandy (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Sandy"
+        },
+        {
+          "name": "Sandy (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Sandy"
+        },
+        {
+          "name": "Sandy (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Sandy"
+        },
+        {
+          "name": "Sandy (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Sandy"
+        },
+        {
+          "name": "Sandy (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Sandy"
+        },
+        {
+          "name": "Sara",
+          "lang": "da-DK",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.da-DK.Sara"
+        },
+        {
+          "name": "Satu",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.fi-FI.Satu"
+        },
+        {
+          "name": "Shelley (German (Germany))",
+          "lang": "de-DE",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.de-DE.Shelley"
+        },
+        {
+          "name": "Shelley (English (UK))",
+          "lang": "en-GB",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-GB.Shelley"
+        },
+        {
+          "name": "Shelley (English (US))",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.en-US.Shelley"
+        },
+        {
+          "name": "Shelley (Spanish (Spain))",
+          "lang": "es-ES",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-ES.Shelley"
+        },
+        {
+          "name": "Shelley (Spanish (Mexico))",
+          "lang": "es-MX",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.es-MX.Shelley"
+        },
+        {
+          "name": "Shelley (Finnish (Finland))",
+          "lang": "fi-FI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fi-FI.Shelley"
+        },
+        {
+          "name": "Shelley (French (Canada))",
+          "lang": "fr-CA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-CA.Shelley"
+        },
+        {
+          "name": "Shelley (French (France))",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.fr-FR.Shelley"
+        },
+        {
+          "name": "Shelley (Italian (Italy))",
+          "lang": "it-IT",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.it-IT.Shelley"
+        },
+        {
+          "name": "Shelley (Japanese (Japan))",
+          "lang": "ja-JP",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ja-JP.Shelley"
+        },
+        {
+          "name": "Shelley (Korean (South Korea))",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.ko-KR.Shelley"
+        },
+        {
+          "name": "Shelley (Portuguese (Brazil))",
+          "lang": "pt-BR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.pt-BR.Shelley"
+        },
+        {
+          "name": "Shelley (Chinese (China mainland))",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-CN.Shelley"
+        },
+        {
+          "name": "Shelley (Chinese (Taiwan))",
+          "lang": "zh-TW",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.eloquence.zh-TW.Shelley"
+        },
+        {
+          "name": "Sinji",
+          "lang": "zh-HK",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.zh-HK.Sinji"
+        },
+        {
+          "name": "Tara",
+          "lang": "en-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.Tara"
+        },
+        {
+          "name": "Tessa",
+          "lang": "en-ZA",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.en-ZA.Tessa"
+        },
+        {
+          "name": "Thomas",
+          "lang": "fr-FR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.fr-FR.Thomas"
+        },
+        {
+          "name": "Tina",
+          "lang": "sl-SI",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.sl-SI.Tina"
+        },
+        {
+          "name": "Tingting",
+          "lang": "zh-CN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.zh-CN.Tingting"
+        },
+        {
+          "name": "Trinoids",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Trinoids"
+        },
+        {
+          "name": "Vani",
+          "lang": "ta-IN",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ta-IN.Vani"
+        },
+        {
+          "name": "Whisper",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Whisper"
+        },
+        {
+          "name": "Xander",
+          "lang": "nl-NL",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.nl-NL.Xander"
+        },
+        {
+          "name": "Yelda",
+          "lang": "tr-TR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.tr-TR.Yelda"
+        },
+        {
+          "name": "Yuna",
+          "lang": "ko-KR",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.ko-KR.Yuna"
+        },
+        {
+          "name": "Zarvox",
+          "lang": "en-US",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.speech.synthesis.voice.Zarvox"
+        },
+        {
+          "name": "Zosia",
+          "lang": "pl-PL",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.pl-PL.Zosia"
+        },
+        {
+          "name": "Zuzana",
+          "lang": "cs-CZ",
+          "localService": true,
+          "default": false,
+          "voiceURI": "urn:moz-tts:osx:com.apple.voice.compact.cs-CZ.Zuzana"
+        }
+      ]
+    },
+    "rfp": {
+      "initial": [],
+      "voicesChangedFired": false,
+      "afterEvent": [],
+      "getVoicesDescriptor": {
+        "source": "function getVoices() {\n    [native code]\n}",
+        "writable": true
+      }
+    }
+  }
+}

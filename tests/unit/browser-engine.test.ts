@@ -72,6 +72,9 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(missing.installed).toBe(false);
     expect(missing.path).toBeNull();
     expect(missing.fingerprintParity).toBe(false);
+    expect(missing.nativeConfig).toBe(false);
+    expect(missing.nativeCapabilities).toEqual([]);
+    expect(missing.sourceStamp).toBeNull();
     expect(missing.hint).toContain("Firefox binary not found");
 
     const real = makeFakeFirefox("139.0");
@@ -79,23 +82,33 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(ok.installed).toBe(true);
     expect(ok.path).toBe(real);
     expect(ok.version).toBe("139.0");
+
+    const requested = getFirefoxStatus({
+      AGENT_BROWSER_FIREFOX_BINARY_PATH: real,
+      AGENT_BROWSER_FIREFOX_NATIVE: "1",
+    } as any);
+    expect(requested.nativeRequested).toBe(true);
+    expect(requested.nativeConfig).toBe(false);
+    expect(requested.hint).toContain("launch will fail closed");
   });
 
-  it("buildFirefoxLaunchArgs mirrors RoxyFirefox (-profile + --marionette + remote debugging + -no-remote)", () => {
+  it("buildFirefoxLaunchArgs uses -profile + remote debugging + -no-remote (BiDi-only, no Marionette)", () => {
     const args = buildFirefoxLaunchArgs({
       profileDir: "/tmp/fx-profile",
       remotePort: 39201,
       headless: true,
       platform: "macos",
       appUrl: "https://example.com",
+      nativeRequired: true,
     });
     expect(args[0]).toBe("-profile");
     expect(args).toContain("/tmp/fx-profile");
-    expect(args).toContain("--marionette"); // Roxy enables Marionette
+    expect(args).not.toContain("--marionette"); // Marionette's a11y service wedges BiDi on heavy pages
     expect(args).toContain("--remote-debugging-port");
     expect(args).toContain("39201");
     expect(args).toContain("-new-instance"); // non-Windows
     expect(args).toContain("-headless");
+    expect(args).toContain("--agent-browser-native-required");
     expect(args).toContain("https://example.com");
     expect(args[args.length - 1]).toBe("-no-remote"); // Roxy appends -no-remote last
 

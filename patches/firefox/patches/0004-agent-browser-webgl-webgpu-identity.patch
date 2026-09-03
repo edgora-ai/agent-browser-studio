@@ -1,0 +1,328 @@
+diff --git a/dom/canvas/ClientWebGLContext.cpp b/dom/canvas/ClientWebGLContext.cpp
+index 8227a5d..ebf485f 100644
+--- a/dom/canvas/ClientWebGLContext.cpp
++++ b/dom/canvas/ClientWebGLContext.cpp
+@@ -19,6 +19,7 @@
+ #include "gfxCrashReporterUtils.h"
+ #include "js/PropertyAndElement.h"  // JS_DefineElement
+ #include "js/ScalarType.h"          // js::Scalar::Type
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Base64.h"
+ #include "mozilla/EnumeratedRange.h"
+ #include "mozilla/RandomNum.h"
+@@ -45,6 +46,7 @@
+ #include "mozilla/layers/WebRenderUserData.h"
+ #include "nsContentUtils.h"
+ #include "nsDisplayList.h"
++#include "nsIPrincipal.h"
+ 
+ namespace mozilla {
+ 
+@@ -2390,6 +2392,14 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+   // -
+ 
+   if (!debug) {
++    nsIPrincipal* principal = PrincipalOrNull();
++    const bool unrestrictedPrincipal =
++        !principal || principal->IsSystemPrincipal() ||
++        principal->SchemeIs("chrome") || principal->SchemeIs("resource") ||
++        principal->GetIsAddonOrExpandedAddonPrincipal();
++    const auto* agentOverrides =
++        unrestrictedPrincipal ? nullptr : agentbrowser::GetWebGLOverrides();
++
+     const auto GetUnmaskedRenderer = [&]() {
+       const auto prefLock = StaticPrefs::webgl_override_unmasked_renderer();
+       if (!prefLock->IsEmpty()) {
+@@ -2416,6 +2426,10 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+         break;
+ 
+       case LOCAL_GL_RENDERER: {
++        if (agentOverrides) {
++          ret = Some(ToString(agentOverrides->mRenderer));
++          break;
++        }
+         bool allowRenderer = StaticPrefs::webgl_enable_renderer_query();
+         if (ShouldResistFingerprinting(RFPTarget::WebGLRenderInfo) ||
+             ShouldResistFingerprinting(RFPTarget::WebGLRendererConstant)) {
+@@ -2455,6 +2469,14 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
+           EnqueueError_ArgEnum("pname", pname);
+           return;
+         }
++        if (agentOverrides) {
++          ret = Some(ToString(
++              pname == dom::WEBGL_debug_renderer_info_Binding::
++                           UNMASKED_VENDOR_WEBGL
++                  ? agentOverrides->mVendor
++                  : agentOverrides->mRenderer));
++          break;
++        }
+ 
+         switch (pname) {
+           case dom::WEBGL_debug_renderer_info_Binding::UNMASKED_RENDERER_WEBGL:
+diff --git a/dom/webgpu/Adapter.cpp b/dom/webgpu/Adapter.cpp
+index 568509a..1be5b8b 100644
+--- a/dom/webgpu/Adapter.cpp
++++ b/dom/webgpu/Adapter.cpp
+@@ -12,16 +12,51 @@
+ #include "SupportedFeatures.h"
+ #include "SupportedLimits.h"
+ #include "ipc/WebGPUChild.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/dom/BindingDeclarations.h"
+ #include "mozilla/dom/Promise.h"
+ #include "mozilla/dom/WebGPUBinding.h"
+ #include "mozilla/webgpu/ffi/wgpu.h"
++#include "nsIGlobalObject.h"
++#include "nsIPrincipal.h"
+ 
+ namespace mozilla::webgpu {
+ 
+ GPU_IMPL_CYCLE_COLLECTION(AdapterInfo, mParent)
+ GPU_IMPL_JS_WRAP(AdapterInfo)
+ 
++static const agentbrowser::WebGPUOverrideConfig* AgentOverridesFor(
++    const AdapterInfo& aInfo) {
++  nsIGlobalObject* global = aInfo.GetParentObject();
++  nsIPrincipal* principal = global ? global->PrincipalOrNull() : nullptr;
++  if (!principal || principal->IsSystemPrincipal() ||
++      principal->SchemeIs("chrome") || principal->SchemeIs("resource") ||
++      principal->GetIsAddonOrExpandedAddonPrincipal()) {
++    return nullptr;
++  }
++  return agentbrowser::GetWebGPUOverrides();
++}
++
++void AdapterInfo::GetVendor(nsString& aValue) const {
++  const auto* config = AgentOverridesFor(*this);
++  aValue = config ? config->mVendor : nsString();
++}
++
++void AdapterInfo::GetArchitecture(nsString& aValue) const {
++  const auto* config = AgentOverridesFor(*this);
++  aValue = config ? config->mArchitecture : nsString();
++}
++
++void AdapterInfo::GetDevice(nsString& aValue) const {
++  const auto* config = AgentOverridesFor(*this);
++  aValue = config ? config->mDevice : nsString();
++}
++
++void AdapterInfo::GetDescription(nsString& aValue) const {
++  const auto* config = AgentOverridesFor(*this);
++  aValue = config ? config->mDescription : nsString();
++}
++
+ uint32_t AdapterInfo::SubgroupMinSize() const {
+   // From the spec. at
+   // <https://www.w3.org/TR/2025/CRD-webgpu-20250319/#dom-gpuadapterinfo-subgroupminsize>:
+diff --git a/dom/webgpu/Adapter.h b/dom/webgpu/Adapter.h
+index e071a6f..f43f969 100644
+--- a/dom/webgpu/Adapter.h
++++ b/dom/webgpu/Adapter.h
+@@ -57,10 +57,10 @@ class AdapterInfo final : public nsWrapperCache, public ChildOf<Adapter> {
+   /// Changing implementation in a way that increases fingerprinting
+   /// surface? Please create a bug in [Core::Privacy: Anti
+   /// Tracking](https://bugzilla.mozilla.org/enter_bug.cgi?product=Core&component=Privacy%3A%20Anti-Tracking)
+-  void GetVendor(nsString& s) const { s = nsString(); }
+-  void GetArchitecture(nsString& s) const { s = nsString(); }
+-  void GetDevice(nsString& s) const { s = nsString(); }
+-  void GetDescription(nsString& s) const { s = nsString(); }
++  void GetVendor(nsString&) const;
++  void GetArchitecture(nsString&) const;
++  void GetDevice(nsString&) const;
++  void GetDescription(nsString&) const;
+   uint32_t SubgroupMinSize() const;
+   uint32_t SubgroupMaxSize() const;
+   bool IsFallbackAdapter() const;
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index a660197..6faeb46 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -31,18 +31,23 @@ constexpr uint32_t kMaxEncodedConfigLength = 87382;
+ struct Snapshot final {
+   Snapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+            NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen,
+-           CanvasOverrideConfig&& aCanvas)
++           CanvasOverrideConfig&& aCanvas, WebGLOverrideConfig&& aWebGL,
++           WebGPUOverrideConfig&& aWebGPU)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+         mNavigator(std::move(aNavigator)),
+         mScreen(std::move(aScreen)),
+-        mCanvas(std::move(aCanvas)) {}
++        mCanvas(std::move(aCanvas)),
++        mWebGL(std::move(aWebGL)),
++        mWebGPU(std::move(aWebGPU)) {}
+ 
+   const nsCString mEncoded;
+   const nsCString mDecoded;
+   const NavigatorOverrideConfig mNavigator;
+   const ScreenOverrideConfig mScreen;
+   const CanvasOverrideConfig mCanvas;
++  const WebGLOverrideConfig mWebGL;
++  const WebGPUOverrideConfig mWebGPU;
+ };
+ 
+ StaticAutoPtr<Snapshot> sSnapshot;
+@@ -194,7 +199,9 @@ nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
+ nsresult ParseConfig(const nsACString& aDecoded,
+                      NavigatorOverrideConfig& aNavigator,
+                      ScreenOverrideConfig& aScreen,
+-                     CanvasOverrideConfig& aCanvas, nsACString& aError) {
++                     CanvasOverrideConfig& aCanvas,
++                     WebGLOverrideConfig& aWebGL,
++                     WebGPUOverrideConfig& aWebGPU, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+   if (!jsapi.Init(xpc::PrivilegedJunkScope())) {
+     aError.AssignLiteral("js-context-unavailable");
+@@ -383,13 +390,62 @@ nsresult ParseConfig(const nsACString& aDecoded,
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
++  JS::Rooted<JS::Value> webglValue(cx);
++  if (!GetRequiredProperty(cx, object, "webgl", &webglValue, aError) ||
++      !webglValue.isObject()) {
++    SetInvalidField(aError, "webgl");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> webgl(cx, &webglValue.toObject());
++  if (!GetRequiredString(cx, webgl, "vendor", aWebGL.mVendor, aError) ||
++      !GetRequiredString(cx, webgl, "renderer", aWebGL.mRenderer, aError)) {
++    SetInvalidField(aError, "webgl");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  JS::Rooted<JS::Value> webgpuValue(cx);
++  if (!GetRequiredProperty(cx, object, "webgpu", &webgpuValue, aError) ||
++      !webgpuValue.isObject()) {
++    SetInvalidField(aError, "webgpu");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> webgpu(cx, &webgpuValue.toObject());
++  nsAutoString webgpuMode;
++  int32_t subgroupMinSize = 0;
++  int32_t subgroupMaxSize = 0;
++  if (!GetRequiredString(cx, webgpu, "mode", webgpuMode, aError) ||
++      !webgpuMode.EqualsLiteral("webgl") ||
++      !GetRequiredString(cx, webgpu, "vendor", aWebGPU.mVendor, aError) ||
++      !GetRequiredString(cx, webgpu, "architecture", aWebGPU.mArchitecture,
++                         aError) ||
++      !GetRequiredString(cx, webgpu, "device", aWebGPU.mDevice, aError) ||
++      !GetRequiredString(cx, webgpu, "description", aWebGPU.mDescription,
++                         aError) ||
++      !GetRequiredInt32(cx, webgpu, "subgroupMinSize", 1, 128,
++                        subgroupMinSize, aError) ||
++      !GetRequiredInt32(cx, webgpu, "subgroupMaxSize", 1, 128,
++                        subgroupMaxSize, aError)) {
++    SetInvalidField(aError, "webgpu");
++    return NS_ERROR_INVALID_ARG;
++  }
++  if (subgroupMinSize > subgroupMaxSize ||
++      (aWebGL.mVendor.Find(aWebGPU.mVendor) == kNotFound &&
++       aWebGL.mRenderer.Find(aWebGPU.mVendor) == kNotFound) ||
++      aWebGPU.mDescription.Find(aWebGPU.mDevice) == kNotFound ||
++      !aWebGPU.mDescription.Equals(aWebGL.mRenderer)) {
++    aError.AssignLiteral("incoherent-gpu-identity");
++    return NS_ERROR_INVALID_ARG;
++  }
++
+   return NS_OK;
+ }
+ 
+ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                          NavigatorOverrideConfig&& aNavigator,
+                          ScreenOverrideConfig&& aScreen,
+-                         CanvasOverrideConfig&& aCanvas, nsACString& aError) {
++                         CanvasOverrideConfig&& aCanvas,
++                         WebGLOverrideConfig&& aWebGL,
++                         WebGPUOverrideConfig&& aWebGPU, nsACString& aError) {
+   if (sSnapshot) {
+     if (sSnapshot->mEncoded.Equals(aEncoded)) {
+       return NS_OK;
+@@ -400,7 +456,8 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+ 
+   sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded),
+                            std::move(aNavigator), std::move(aScreen),
+-                           std::move(aCanvas));
++                           std::move(aCanvas), std::move(aWebGL),
++                           std::move(aWebGPU));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+ }
+@@ -415,13 +472,16 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+   NavigatorOverrideConfig navigator;
+   ScreenOverrideConfig screen;
+   CanvasOverrideConfig canvas;
+-  rv = ParseConfig(decoded, navigator, screen, canvas, aError);
++  WebGLOverrideConfig webgl;
++  WebGPUOverrideConfig webgpu;
++  rv = ParseConfig(decoded, navigator, screen, canvas, webgl, webgpu, aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+   return InstallSnapshot(std::move(aEncoded), std::move(decoded),
+                          std::move(navigator), std::move(screen),
+-                         std::move(canvas), aError);
++                         std::move(canvas), std::move(webgl), std::move(webgpu),
++                         aError);
+ }
+ 
+ }  // namespace
+@@ -435,7 +495,7 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"sourceStamp\":\"%s\","
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+       "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
+-      "\"canvas-v1\"]}\n",
++      "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -510,6 +570,16 @@ const CanvasOverrideConfig* GetCanvasOverrides() {
+   return snapshot ? &snapshot->mCanvas : nullptr;
+ }
+ 
++const WebGLOverrideConfig* GetWebGLOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mWebGL : nullptr;
++}
++
++const WebGPUOverrideConfig* GetWebGPUOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mWebGPU : nullptr;
++}
++
+ bool IsCanvasNoiseEnabled() {
+   const CanvasOverrideConfig* config = GetCanvasOverrides();
+   return config && config->mEnabled;
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index d1e0588..396b5c7 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -50,6 +50,18 @@ struct CanvasOverrideConfig final {
+   std::array<uint8_t, 32> mKey{};
+ };
+ 
++struct WebGLOverrideConfig final {
++  nsString mVendor;
++  nsString mRenderer;
++};
++
++struct WebGPUOverrideConfig final {
++  nsString mVendor;
++  nsString mArchitecture;
++  nsString mDevice;
++  nsString mDescription;
++};
++
+ void DumpCapabilities(const char* aBuildID);
+ 
+ nsresult InitializeParent(bool aNativeRequired, nsACString& aError);
+@@ -61,6 +73,8 @@ const nsCString& DecodedConfig();
+ const NavigatorOverrideConfig* GetNavigatorOverrides();
+ const ScreenOverrideConfig* GetScreenOverrides();
+ const CanvasOverrideConfig* GetCanvasOverrides();
++const WebGLOverrideConfig* GetWebGLOverrides();
++const WebGPUOverrideConfig* GetWebGPUOverrides();
+ bool IsCanvasNoiseEnabled();
+ 
+ }  // namespace mozilla::agentbrowser

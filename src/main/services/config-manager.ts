@@ -18,6 +18,7 @@ import {
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
 import { sanitizeBrowserEngine } from "./browser-engine.js";
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
+import { normalizeManagedFirefoxVersion } from "./native-firefox-manager.js";
 import type { WebRtcDiagnosticsEntry } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
@@ -1068,6 +1069,12 @@ function isUnsafeBypassHost(host: string): boolean {
 
 // ── Profile metadata ──
 
+function normalizeProfileBrowserVersion(engine: unknown, version: unknown): string | null {
+  return sanitizeBrowserEngine(engine) === "firefox"
+    ? normalizeManagedFirefoxVersion(version)
+    : normalizeManagedChromiumVersion(version);
+}
+
 export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
   validateDirId(dirId);
   const cfg = getConfig();
@@ -1077,7 +1084,7 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     name: cp.name,
     fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
     engine: sanitizeBrowserEngine(cp.engine),
-    browserVersion: normalizeManagedChromiumVersion(cp.browserVersion),
+    browserVersion: normalizeProfileBrowserVersion(cp.engine, cp.browserVersion),
     allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
     proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
     proxyName: cp.proxyName || null,
@@ -1157,9 +1164,15 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
-  if (meta.engine !== undefined) next.engine = sanitizeBrowserEngine(meta.engine);
+  if (meta.engine !== undefined) {
+    const currentEngine = sanitizeBrowserEngine(current.engine);
+    next.engine = sanitizeBrowserEngine(meta.engine);
+    if (meta.browserVersion === undefined && next.engine !== currentEngine) next.browserVersion = null;
+  }
   if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
-  if (meta.browserVersion !== undefined) next.browserVersion = normalizeManagedChromiumVersion(meta.browserVersion);
+  if (meta.browserVersion !== undefined) {
+    next.browserVersion = normalizeProfileBrowserVersion(next.engine, meta.browserVersion);
+  }
   if (meta.allowThirdPartyCookies !== undefined) next.allowThirdPartyCookies = sanitizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility");
   if (meta.platform !== undefined) next.platform = sanitizeBrowserPlatform(meta.platform);
   if (meta.timezone !== undefined) next.timezone = sanitizeOptionalTimezone(meta.timezone);
@@ -1409,7 +1422,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       }
       profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
       profile.engine = sanitizeBrowserEngine(profile.engine);
-      profile.browserVersion = normalizeManagedChromiumVersion(profile.browserVersion);
+      profile.browserVersion = normalizeProfileBrowserVersion(profile.engine, profile.browserVersion);
       profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
       profile.platform = profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
         ? profile.platform : "windows";

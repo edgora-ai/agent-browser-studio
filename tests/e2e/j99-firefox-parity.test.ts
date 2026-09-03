@@ -19,7 +19,9 @@ const USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j99');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'j99-fx-'));
 const FAKE_FX = path.join(TMP, 'fake-firefox.js');
 const RECORD = path.join(TMP, 'bidi-record.jsonl');
+const NATIVE_RECORD = path.join(TMP, 'native-bidi-record.jsonl');
 const STATE = path.join(TMP, 'fx-state.json');
+const NATIVE_USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j99-native');
 
 // ── Fake Firefox binary ──────────────────────────────────────────────────────
 // A node script the launcher can find via AGENT_BROWSER_FIREFOX_BINARY_PATH.
@@ -36,6 +38,7 @@ const WS_PATH = process.env.AB_FAKE_FX_WS || '';
 const { WebSocketServer } = WS_PATH ? require(WS_PATH) : require('ws');
 const RECORD = process.env.AB_FAKE_FX_RECORD || '';
 const STATE = process.env.AB_FAKE_FX_STATE || '';
+const NATIVE_CAPS = process.env.AB_FAKE_FX_NATIVE_CAPS === '1';
 let n = 0;
 function record(m) { if (RECORD) { try { fs.appendFileSync(RECORD, JSON.stringify(Object.assign({ pid: process.pid }, m)) + '\\n'); } catch (e) {} } }
 function cannedFingerprint() {
@@ -128,7 +131,16 @@ function answer(method, params) {
   }
   return undefined;
 }
-if (process.argv.indexOf('--version') !== -1) { process.stdout.write('Mozilla Firefox 138.0.2\\n'); process.exit(0); }
+if (process.argv.indexOf('--agent-browser-capabilities') !== -1) {
+  const report = NATIVE_CAPS ? {
+    product: 'agent-browser-firefox', capabilitySchemaVersion: 1,
+    browserVersion: '154.0', buildId: '20260902025601',
+    sourceStamp: '9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc',
+    capabilities: ['config-v1', 'native-required-v1', 'snapshot-v1'],
+  } : {};
+  process.stdout.write(JSON.stringify(report) + '\\n'); process.exit(0);
+}
+if (process.argv.indexOf('--version') !== -1) { process.stdout.write('Mozilla Firefox ' + (NATIVE_CAPS ? '154.0' : '138.0.2') + '\\n'); process.exit(0); }
 const pIdx = process.argv.indexOf('--remote-debugging-port');
 const port = pIdx !== -1 ? Number(process.argv[pIdx + 1]) : 19222;
 const wss = new WebSocketServer({ port: port, host: '127.0.0.1', path: '/session' });
@@ -149,16 +161,22 @@ wss.on('connection', (ws) => {
   ws.on('close', () => record({ t: 'ws-close' }));
 });
 wss.on('listening', () => {
-  process.stderr.write('WebDriver BiDi listening on ws://127.0.0.1:' + port + '/session\\n');
-  process.stdout.write('Marionette  INFO  Listening on port ' + port + '\\n');
+  const announce = () => {
+    process.stderr.write('WebDriver BiDi listening on ws://127.0.0.1:' + port + '/session\\n');
+    process.stdout.write('Marionette  INFO  Listening on port ' + port + '\\n');
+  };
+  let bidiDead = false;
+  if (STATE) { try { bidiDead = !!(JSON.parse(fs.readFileSync(STATE, 'utf-8')).shift || {}).bidiDead; } catch (e) {} }
+  if (bidiDead) wss.close(announce); else announce();
 });
 process.on('SIGTERM', () => { try { wss.close(); } catch (e) {} process.exit(0); });
 process.on('uncaughtException', (e) => { record({ t: 'uncaught', error: String(e && e.stack || e) }); process.exit(1); });
 process.on('unhandledRejection', (e) => record({ t: 'unhandledRejection', error: String(e && e.stack || e) }));
 process.on('exit', (code, signal) => record({ t: 'exit', code: code, signal: signal }));
-record({ t: 'boot', port: port });
+record({ t: 'boot', port: port, args: process.argv.slice(2) });
 `;
   fs.writeFileSync(FAKE_FX, script, { mode: 0o755 });
+  fs.writeFileSync(path.join(TMP, 'XUL'), 'prefix-\"product\":\"agent-browser-firefox\"-suffix');
 }
 
 function apiRequest(port: number, token: string, method: string, p: string, body?: any): Promise<{ status: number; body: any }> {
@@ -186,13 +204,13 @@ function apiRequest(port: number, token: string, method: string, p: string, body
   });
 }
 
-function readRecord(): any[] {
-  if (!fs.existsSync(RECORD)) return [];
-  return fs.readFileSync(RECORD, 'utf-8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+function readRecord(recordPath = RECORD): any[] {
+  if (!fs.existsSync(recordPath)) return [];
+  return fs.readFileSync(recordPath, 'utf-8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 
-function recordHas(pred: (m: any) => boolean): boolean {
-  return readRecord().some(pred);
+function recordHas(pred: (m: any) => boolean, recordPath = RECORD): boolean {
+  return readRecord(recordPath).some(pred);
 }
 
 function setState(shift: Record<string, unknown> | null): void {
@@ -277,7 +295,9 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
     expect(preloads.length).toBeGreaterThan(0);
     expect(preloads[0].script).toContain('seedFromHex(cfg.canvas.seed)');
     expect(preloads[0].script).toContain('OffscreenCanvasRenderingContext2D.prototype');
-    expect(preloads[0].script).toContain('navigator.gpu.requestAdapter');
+    expect(preloads[0].script).toContain('typeof GPUAdapterInfo === "function"');
+    expect(preloads[0].script).toContain('Object.defineProperty(Ctor.prototype, field');
+    expect(preloads[0].script).not.toContain('typeof adapter.info === "function"');
     expect(preloads[0].script).toContain('Navigator.prototype, "platform"');
 
     // Queued cookies were applied over BiDi storage.setCookie and the queue cleared.
@@ -443,4 +463,102 @@ describe('J99 — Firefox parity over fake Firefox + BiDi', () => {
       !/file is not a database|connect to 127.0.0.1 port 1|ECONNREFUSED/i.test(e));
     expect(errs.length, errs.join('\n')).toBe(0);
   });
+});
+
+describe('J99 — Firefox partial-native A/B routing', () => {
+  let h: TestAppHandle;
+  let dirId = '';
+
+  beforeAll(async () => {
+    fs.rmSync(NATIVE_USERDATA, { recursive: true, force: true });
+    fs.rmSync(NATIVE_RECORD, { force: true });
+    writeFakeFirefox();
+    setState(null);
+    h = await setupTestApp({
+      userDataDir: NATIVE_USERDATA,
+      env: {
+        AGENT_BROWSER_FIREFOX_BINARY_PATH: FAKE_FX,
+        AGENT_BROWSER_FIREFOX_NATIVE: '1',
+        AB_FAKE_FX_NATIVE_CAPS: '1',
+        AB_FAKE_FX_RECORD: NATIVE_RECORD,
+        AB_FAKE_FX_STATE: STATE,
+        AB_FAKE_FX_WS: path.join(REPO, 'node_modules', 'ws'),
+      },
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    if (h) await closeApp(h);
+  }, 90000);
+
+  it('writes native config and required flag while retaining BiDi without a preload', async () => {
+    const engineStatus = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.engineStatus());
+    expect(engineStatus.firefox).toMatchObject({
+      installed: true,
+      version: '154.0',
+      managedInjection: 'native',
+      fingerprintParity: false,
+      nativeConfig: true,
+      nativeRequested: true,
+      sourceStamp: '9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc',
+    });
+    expect(engineStatus.firefox.nativeCapabilities).toEqual([
+      'config-v1', 'native-required-v1', 'snapshot-v1',
+    ]);
+
+    const created = await h.page.evaluate(() => (window as any).agentBrowser.api.browser.create({
+      name: 'J99-Firefox-Native', engine: 'firefox', platform: 'macos',
+      browserVersion: '154.0', locale: 'en-US', timezone: 'America/New_York',
+    }));
+    dirId = created.dirId;
+    const launched: any = await h.page.evaluate(async (id: string) => {
+      const result: any = await (window as any).agentBrowser.api.browser.launch(id);
+      return { success: result.success, error: result.error || '', pid: result.pid };
+    }, dirId);
+    expect(launched.success, launched.error).toBe(true);
+    expect(launched.pid).toBeGreaterThan(0);
+
+    const userJs = fs.readFileSync(path.join(NATIVE_USERDATA, 'profiles', dirId, 'user.js'), 'utf8');
+    const encoded = userJs.match(/user_pref\("agent\.browser\.fingerprint\.config",\s*"([^"]+)"\);/)?.[1];
+    expect(encoded).toBeTruthy();
+    const config = JSON.parse(Buffer.from(encoded!, 'base64url').toString('utf8'));
+    expect(config.schemaVersion).toBe(1);
+    expect(config.platform).toBe('MacIntel');
+
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline && !recordHas((entry) => entry.t === 'boot', NATIVE_RECORD)) {
+      await sleep(200);
+    }
+    const records = readRecord(NATIVE_RECORD);
+    const boot = records.find((entry) => entry.t === 'boot');
+    expect(boot?.args).toContain('--agent-browser-native-required');
+    expect(records.some((entry) => entry.t === 'cmd' && entry.method === 'session.new')).toBe(true);
+    expect(records.some((entry) => entry.t === 'preload')).toBe(false);
+    expect(records.some((entry) => entry.t === 'eval' && entry.expr.includes('roxy-managed-probe'))).toBe(false);
+
+    const stopped = await h.page.evaluate(async (id: string) => {
+      const result: any = await (window as any).agentBrowser.api.browser.stop(id);
+      return { success: result.success ?? result.ok, error: result.error || '' };
+    }, dirId);
+    expect(stopped.success).toBe(true);
+  }, 60000);
+
+  it('fails closed when native mode cannot establish its retained BiDi session', async () => {
+    const stopDeadline = Date.now() + 15000;
+    while (Date.now() < stopDeadline) {
+      const status = await h.page.evaluate(async (id: string) =>
+        (window as any).agentBrowser.api.browser.status(id), dirId);
+      if (!status.running) break;
+      await sleep(250);
+    }
+    setState({ bidiDead: true });
+    fs.rmSync(NATIVE_RECORD, { force: true });
+    const launched: any = await h.page.evaluate(async (id: string) => {
+      const result: any = await (window as any).agentBrowser.api.browser.launch(id);
+      return { success: result.success, error: result.error || '' };
+    }, dirId);
+    expect(launched.success, JSON.stringify(launched)).toBe(false);
+    expect(launched.error).toMatch(/requires a live BiDi session|BiDi preload registration failed/i);
+    setState(null);
+  }, 45000);
 });

@@ -6,6 +6,7 @@ import {
   normalizeFirefoxVersion,
   buildFirefoxUserAgent,
   buildFirefoxFingerprintPrefs,
+  buildFirefoxNativeFingerprintPrefs,
   buildFirefoxFingerprintPreloadScript,
   buildFirefoxManagedIdentity,
   buildInjectionProbeExpression,
@@ -14,6 +15,7 @@ import {
   shouldBlockInjectionProbe,
 } from "../../src/main/services/firefox-fingerprint.js";
 import { buildBrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
+import { FIREFOX_NATIVE_CONFIG_PREF } from "../../src/main/services/firefox-native-capabilities.js";
 import type { BrowserFingerprintMeta, BrowserFingerprintConfig } from "../../src/main/types.js";
 
 function meta(overrides: Partial<BrowserFingerprintMeta> = {}): BrowserFingerprintMeta {
@@ -33,6 +35,7 @@ describe("buildFirefoxUserAgent", () => {
 
   it("builds a mobile Firefox UA for Android personas", () => {
     expect(buildFirefoxUserAgent("Linux armv81", "137.0.2")).toBe("Mozilla/5.0 (Android 14; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0");
+    expect(buildFirefoxUserAgent("Linux armv81", "137.0.2", "13.0.0")).toBe("Mozilla/5.0 (Android 13; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0");
   });
 
   it("overrides platform/oscpu/appVersion and touch surface for Android personas", () => {
@@ -165,10 +168,15 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     // Shared WebGL patch helper used by BOTH the page canvas and offscreen.
     expect(script).toContain("function patchWebglContext(ctx)");
     expect(script).toContain('typeof OffscreenCanvas !== "undefined" ? OffscreenCanvas.prototype : null');
-    // WebGPU adapter identity (navigator.gpu / adapter.info, Firefox 137+).
-    expect(script).toContain("navigator.gpu.requestAdapter");
-    expect(script).toContain("gpuInfo.vendor");
-    expect(script).toContain("subgroupMinSize");
+    // Firefox 154 exposes GPUAdapter.info as a SameObject attribute. Patch the
+    // shared native info prototype so adapter and device identity agree while
+    // subgroup sizes/features/limits remain native.
+    expect(script).toContain('typeof GPUAdapterInfo === "function"');
+    expect(script).toContain('var fields = ["vendor", "architecture", "device", "description"]');
+    expect(script).toContain('Object.defineProperty(Ctor.prototype, field');
+    expect(script).toContain("GPUDevice.adapterInfo");
+    expect(script).not.toContain('typeof adapter.info === "function"');
+    expect(script).not.toContain("out.subgroupMinSize");
   });
 
   it("is deterministic for the same seed (drift-stable identity)", () => {
@@ -224,8 +232,15 @@ describe("buildFirefoxManagedIdentity", () => {
   it("produces a coherent bundle of config/prefs/script/UA", () => {
     const bundle = buildFirefoxManagedIdentity(meta({ fingerprintSeed: 555, locale: "de-DE", platform: "windows" }), "138.0");
     expect(bundle.userAgent).toContain("Firefox/138.0");
+    expect(bundle.config.userAgent).toBe(bundle.userAgent);
+    expect(bundle.config.appVersion).toBe("5.0 (Windows)");
     expect(bundle.prefs["general.useragent.override"]).toBe(bundle.userAgent);
     expect(bundle.prefs["dom.maxHardwareConcurrency"]).toBe(bundle.config.hardwareConcurrency);
+    expect(bundle.nativePrefs).toEqual(buildFirefoxNativeFingerprintPrefs(bundle.config, "138.0"));
+    const encoded = bundle.nativePrefs[FIREFOX_NATIVE_CONFIG_PREF];
+    expect(typeof encoded).toBe("string");
+    expect(JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"))).toEqual(bundle.config);
+    expect(bundle.prefs[FIREFOX_NATIVE_CONFIG_PREF]).toBeUndefined();
     expect(bundle.preloadScript).toContain(bundle.config.seed.toString());
     expect(bundle.preloadScript).toContain("cfg.screen.width");
   });

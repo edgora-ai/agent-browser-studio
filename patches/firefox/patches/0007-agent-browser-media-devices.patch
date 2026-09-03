@@ -1,0 +1,448 @@
+diff --git a/dom/media/MediaDevices.cpp b/dom/media/MediaDevices.cpp
+index 5c4939e..070f265 100644
+--- a/dom/media/MediaDevices.cpp
++++ b/dom/media/MediaDevices.cpp
+@@ -8,6 +8,7 @@
+ #include "MediaEngine.h"
+ #include "MediaEngineFake.h"
+ #include "MediaTrackConstraints.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/MediaManager.h"
+ #include "mozilla/StaticPrefs_media.h"
+ #include "mozilla/dom/BrowsingContext.h"
+@@ -187,7 +188,15 @@ already_AddRefed<Promise> MediaDevices::EnumerateDevices(ErrorResult& aRv) {
+   if (NS_WARN_IF(aRv.Failed())) {
+     return nullptr;
+   }
++  // The caller decision is captured synchronously at this WebIDL boundary;
++  // the async enumeration below must not re-derive it from the then-current
++  // subject principal. RFP-active windows keep the stock RFP roster.
++  const bool applyAgentOverrides =
++      agentbrowser::GetMediaDevicesOverrides() && owner &&
++      !owner->AsGlobal()->ShouldResistFingerprinting(RFPTarget::MediaDevices) &&
++      agentbrowser::ShouldApplyContentOverrides(owner->AsGlobal());
+   mPendingEnumerateDevicesPromises.AppendElement(p);
++  mPendingEnumerateDevicesAgentOverrides.AppendElement(applyAgentOverrides);
+   MaybeResumeDeviceExposure();
+   return p.forget();
+ }
+@@ -218,6 +227,8 @@ void MediaDevices::MaybeResumeDeviceExposure() {
+       [self = RefPtr(this), this,
+        haveDeviceListChange = mHaveUnprocessedDeviceListChange,
+        enumerateDevicesPromises = std::move(mPendingEnumerateDevicesPromises),
++       enumerateDevicesAgentOverrides =
++           std::move(mPendingEnumerateDevicesAgentOverrides),
+        shouldResistFingerprinting](
+           RefPtr<const MediaDeviceSetRefCnt> aAllDevices) mutable {
+         RefPtr<MediaDeviceSetRefCnt> exposedDevices =
+@@ -233,6 +244,7 @@ void MediaDevices::MaybeResumeDeviceExposure() {
+         }
+         if (!enumerateDevicesPromises.IsEmpty()) {
+           ResumeEnumerateDevices(std::move(enumerateDevicesPromises),
++                                 std::move(enumerateDevicesAgentOverrides),
+                                  std::move(exposedDevices));
+         }
+       },
+@@ -465,24 +477,42 @@ bool MediaDevices::ShouldQueueDeviceChange(
+ 
+ void MediaDevices::ResumeEnumerateDevices(
+     nsTArray<RefPtr<Promise>>&& aPromises,
++    nsTArray<bool>&& aApplyAgentOverrides,
+     RefPtr<const MediaDeviceSetRefCnt> aExposedDevices) const {
+   nsCOMPtr<nsPIDOMWindowInner> window = GetOwnerWindow();
+   if (!window) {
+     return;  // Leave Promise pending after navigation by design.
+   }
++  MOZ_ASSERT(aPromises.Length() == aApplyAgentOverrides.Length());
+   MediaManager::Get()
+       ->AnonymizeDevices(window, std::move(aExposedDevices))
+       ->Then(GetCurrentSerialEventTarget(), __func__,
+-             [self = RefPtr(this), this, promises = std::move(aPromises)](
++             [self = RefPtr(this), this, promises = std::move(aPromises),
++              applyAgentOverrides = std::move(aApplyAgentOverrides)](
+                  const LocalDeviceSetPromise::ResolveOrRejectValue&
+                      aLocalDevices) {
+                nsPIDOMWindowInner* window = GetWindowIfCurrent();
+                if (!window) {
+                  return;  // Leave Promises pending after navigation by design.
+                }
+-               for (const RefPtr<Promise>& promise : promises) {
++               for (uint32_t i = 0; i < promises.Length(); i++) {
++                 const RefPtr<Promise>& promise = promises[i];
++                 // Re-check the RFP gate at resolution time: a
++                 // resistFingerprinting flip between the WebIDL boundary and
++                 // now must resolve the stock roster, not a stale persona
++                 // decision. Caller eligibility is deliberately NOT re-checked
++                 // here: on the event loop the subject principal is the
++                 // system principal, so the synchronous capture at the
++                 // WebIDL boundary is the authoritative caller decision.
++                 const bool applyAgentOverride =
++                     i < applyAgentOverrides.Length() &&
++                     applyAgentOverrides[i] &&
++                     !window->AsGlobal()->ShouldResistFingerprinting(
++                         RFPTarget::MediaDevices);
+                  if (aLocalDevices.IsReject()) {
+                    aLocalDevices.RejectValue()->Reject(promise);
++                 } else if (applyAgentOverride) {
++                   ResolveAgentEnumerateDevicesPromise(promise);
+                  } else {
+                    ResolveEnumerateDevicesPromise(
+                        promise, *aLocalDevices.ResolveValue());
+@@ -491,6 +521,163 @@ void MediaDevices::ResumeEnumerateDevices(
+              });
+ }
+ 
++void MediaDevices::ResolveAgentEnumerateDevicesPromise(
++    Promise* aPromise) const {
++  nsTArray<RefPtr<MediaDeviceInfo>> infos;
++  const auto* config = agentbrowser::GetMediaDevicesOverrides();
++  nsCOMPtr<nsPIDOMWindowInner> window = GetOwnerWindow();
++  if (!config || !window) {
++    aPromise->MaybeResolve(std::move(infos));
++    return;
++  }
++  Document* doc = window->GetExtantDoc();
++  const bool dropMics =
++      !doc || !FeaturePolicyUtils::IsFeatureAllowed(doc, u"microphone"_ns);
++  const bool dropCams =
++      !doc || !FeaturePolicyUtils::IsFeatureAllowed(doc, u"camera"_ns);
++  const bool dropSpeakers =
++      !doc || !Preferences::GetBool("media.setsinkid.enabled") ||
++      !FeaturePolicyUtils::IsFeatureAllowed(doc, u"speaker-selection"_ns);
++  const bool legacy = IsLegacyMode(window);
++  const bool capturePermitted =
++      legacy && MediaManager::Get()->IsActivelyCapturingOrHasAPermission(
++                    window->WindowID());
++
++  // Anonymized ids must be bound to the origin (including origin attributes,
++  // so containers and private windows stay isolated), the profile persona seed
++  // and the window, exactly like the stock per-origin anonymization: stable
++  // across restarts but never correlated across origins or containers.
++  nsAutoCString originKey("agent-browser-media-devices-v1\x1f");
++  if (nsIPrincipal* principal = window->AsGlobal()->PrincipalOrNull()) {
++    nsAutoCString origin;
++    if (NS_SUCCEEDED(principal->GetOrigin(origin))) {
++      originKey.Append(origin);
++    }
++    originKey.Append('\x1f');
++    nsAutoCString originAttributesSuffix;
++    principal->OriginAttributesRef().CreateSuffix(originAttributesSuffix);
++    originKey.Append(originAttributesSuffix);
++    if (origin.IsEmpty() || origin.EqualsLiteral("null")) {
++      // Opaque origins carry no correlatable origin; salt with the window id
++      // so distinct null-principal documents cannot share persona ids.
++      originKey.AppendPrintf("\x1fwindow-%llu",
++                             static_cast<unsigned long long>(window->WindowID()));
++    }
++  }
++  originKey.Append('\x1f');
++  if (const auto* canvas = agentbrowser::GetCanvasOverrides()) {
++    for (uint8_t byte : canvas->mKey) {
++      originKey.AppendPrintf("%02x", byte);
++    }
++  }
++
++  const auto* screen = agentbrowser::GetScreenOverrides();
++  const bool mobile = screen && screen->mMobile;
++
++  auto anonymizedId = [&](const nsString& aRaw) {
++    nsString id(aRaw);
++    if (NS_FAILED(nsContentUtils::AnonymizeId(
++            id, originKey, nsContentUtils::OriginFormat::Plain))) {
++      id.Truncate();
++    }
++    return id;
++  };
++  auto anonymizedGroup = [&](const nsLiteralString& aRaw) {
++    nsString group(aRaw);
++    // Session-salt groups with the window id, mirroring the stock path.
++    group.AppendInt(window->WindowID());
++    if (NS_FAILED(nsContentUtils::AnonymizeId(
++            group, originKey, nsContentUtils::OriginFormat::Plain))) {
++      group.Truncate();
++    }
++    return group;
++  };
++
++  const nsString audioGroup =
++      anonymizedGroup(u"agent-browser-group-audio"_ns);
++  const nsString videoGroup =
++      anonymizedGroup(u"agent-browser-group-video"_ns);
++
++  const bool exposeMic = CanExposeInfo(MediaDeviceKind::Audioinput) || legacy;
++  const bool exposeCam = CanExposeInfo(MediaDeviceKind::Videoinput) || legacy;
++  const bool micLabel = legacy ? capturePermitted : exposeMic;
++  const bool camLabel = legacy ? capturePermitted : exposeCam;
++  // Stock FilterExposedDevices() keeps only the first microphone and camera
++  // when their info cannot be exposed outside legacy mode; the persona roster
++  // applies the same cap so pre-permission enumeration stays stock-shaped.
++  const uint32_t micCount = exposeMic ? config->mAudioInputs
++                                      : std::min(config->mAudioInputs, 1u);
++  const uint32_t camCount = exposeCam ? config->mVideoInputs
++                                      : std::min(config->mVideoInputs, 1u);
++
++  auto appendDevice = [&](MediaDeviceKind aKind, const nsString& aRawId,
++                          const nsString& aGroup, const nsString& aLabel,
++                          bool aExposeInfo, bool aExposeLabel) {
++    nsString id = aExposeInfo ? anonymizedId(aRawId) : u""_ns;
++    infos.AppendElement(MakeRefPtr<MediaDeviceInfo>(
++        id, aKind, aExposeLabel ? aLabel : u""_ns,
++        aExposeInfo ? aGroup : u""_ns));
++  };
++
++  if (!dropMics) {
++    for (uint32_t i = 0; i < micCount; i++) {
++      nsAutoString rawId(u"agent-browser-mic-"_ns);
++      rawId.AppendInt(i);
++      nsAutoString label;
++      if (i == 0) {
++        label = mobile ? u"Microphone"_ns : u"Default - 'default'"_ns;
++      } else {
++        label = u"Microphone ("_ns;
++        label.AppendInt(i + 1);
++        label.Append(u')');
++      }
++      appendDevice(MediaDeviceKind::Audioinput, rawId, audioGroup, label,
++                   exposeMic, micLabel);
++    }
++  }
++  if (!dropCams) {
++    for (uint32_t i = 0; i < camCount; i++) {
++      nsAutoString rawId(u"agent-browser-cam-"_ns);
++      rawId.AppendInt(i);
++      nsAutoString label;
++      if (i == 0) {
++        label =
++            mobile ? u"Rear Camera"_ns : u"FaceTime HD Camera (Built-in)"_ns;
++      } else {
++        label = u"Camera ("_ns;
++        label.AppendInt(i + 1);
++        label.Append(u')');
++      }
++      appendDevice(MediaDeviceKind::Videoinput, rawId, videoGroup, label,
++                   exposeCam, camLabel);
++    }
++  }
++  // Stock exposes outputs when microphone info can be exposed or when the
++  // page holds an explicit selectAudioOutput() grant; the persona roster
++  // mirrors that rule. CanExposeInfo(Audiooutput) is true for every output
++  // that survives the stock filter, and in legacy mode labels stay hidden
++  // until capture is permitted — both gating rules are preserved.
++  if (!dropSpeakers && (mCanExposeMicrophoneInfo ||
++                        !mExplicitlyGrantedAudioOutputRawIds.IsEmpty())) {
++    const bool speakerLabel = legacy ? capturePermitted : true;
++    for (uint32_t i = 0; i < config->mAudioOutputs; i++) {
++      nsAutoString rawId(u"agent-browser-speaker-"_ns);
++      rawId.AppendInt(i);
++      nsAutoString label;
++      if (i == 0) {
++        label = u"Default - 'default'"_ns;
++      } else {
++        label = u"Speaker ("_ns;
++        label.AppendInt(i + 1);
++        label.Append(u')');
++      }
++      appendDevice(MediaDeviceKind::Audiooutput, rawId, audioGroup, label,
++                   true, speakerLabel);
++    }
++  }
++  aPromise->MaybeResolve(std::move(infos));
++}
++
+ void MediaDevices::ResolveEnumerateDevicesPromise(
+     Promise* aPromise, const LocalMediaDeviceSet& aDevices) const {
+   nsCOMPtr<nsPIDOMWindowInner> window = GetOwnerWindow();
+diff --git a/dom/media/MediaDevices.h b/dom/media/MediaDevices.h
+index f9945da..b14fbd1 100644
+--- a/dom/media/MediaDevices.h
++++ b/dom/media/MediaDevices.h
+@@ -107,6 +107,7 @@ class MediaDevices final : public DOMEventTargetHelper {
+   void MaybeResumeDeviceExposure();
+   void ResumeEnumerateDevices(
+       nsTArray<RefPtr<Promise>>&& aPromises,
++      nsTArray<bool>&& aApplyAgentOverrides,
+       RefPtr<const MediaDeviceSetRefCnt> aExposedDevices) const;
+   RefPtr<MediaDeviceSetRefCnt> FilterExposedDevices(
+       const MediaDeviceSet& aDevices) const;
+@@ -114,9 +115,17 @@ class MediaDevices final : public DOMEventTargetHelper {
+   bool ShouldQueueDeviceChange(const MediaDeviceSet& aExposedDevices) const;
+   void ResolveEnumerateDevicesPromise(
+       Promise* aPromise, const LocalMediaDeviceSet& aDevices) const;
++  // Resolves with the managed agent-browser persona roster, preserving the
++  // stock permission/feature-policy gating shape (labels and ids stay empty
++  // until capture permission is granted).
++  void ResolveAgentEnumerateDevicesPromise(Promise* aPromise) const;
+ 
+   nsTHashSet<nsString> mExplicitlyGrantedAudioOutputRawIds;
+   nsTArray<RefPtr<Promise>> mPendingEnumerateDevicesPromises;
++  // Parallel to mPendingEnumerateDevicesPromises: whether the caller captured
++  // at the EnumerateDevices() WebIDL boundary receives the managed
++  // agent-browser persona roster instead of the physical one.
++  nsTArray<bool> mPendingEnumerateDevicesAgentOverrides;
+   // Set only once, if and when required.
+   mutable nsString mDefaultOutputLabel;
+ 
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index b6c3812..451a826 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -38,8 +38,9 @@ struct Snapshot final {
+            NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen,
+            CanvasOverrideConfig&& aCanvas, AudioOverrideConfig&& aAudio,
+            GeolocationOverrideConfig&& aGeolocation,
+-           StorageOverrideConfig&& aStorage, WebGLOverrideConfig&& aWebGL,
+-           WebGPUOverrideConfig&& aWebGPU)
++           StorageOverrideConfig&& aStorage,
++           MediaDevicesOverrideConfig&& aMediaDevices,
++           WebGLOverrideConfig&& aWebGL, WebGPUOverrideConfig&& aWebGPU)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+         mNavigator(std::move(aNavigator)),
+@@ -48,6 +49,7 @@ struct Snapshot final {
+         mAudio(std::move(aAudio)),
+         mGeolocation(std::move(aGeolocation)),
+         mStorage(std::move(aStorage)),
++        mMediaDevices(std::move(aMediaDevices)),
+         mWebGL(std::move(aWebGL)),
+         mWebGPU(std::move(aWebGPU)) {}
+ 
+@@ -59,6 +61,7 @@ struct Snapshot final {
+   const AudioOverrideConfig mAudio;
+   const GeolocationOverrideConfig mGeolocation;
+   const StorageOverrideConfig mStorage;
++  const MediaDevicesOverrideConfig mMediaDevices;
+   const WebGLOverrideConfig mWebGL;
+   const WebGPUOverrideConfig mWebGPU;
+ };
+@@ -264,6 +267,7 @@ nsresult ParseConfig(const nsACString& aDecoded,
+                      AudioOverrideConfig& aAudio,
+                      GeolocationOverrideConfig& aGeolocation,
+                      StorageOverrideConfig& aStorage,
++                     MediaDevicesOverrideConfig& aMediaDevices,
+                      WebGLOverrideConfig& aWebGL,
+                      WebGPUOverrideConfig& aWebGPU, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+@@ -519,6 +523,32 @@ nsresult ParseConfig(const nsACString& aDecoded,
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
++  JS::Rooted<JS::Value> mediaDevicesValue(cx);
++  if (!GetRequiredProperty(cx, object, "mediaDevices", &mediaDevicesValue,
++                           aError) ||
++      !mediaDevicesValue.isObject()) {
++    SetInvalidField(aError, "mediaDevices");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> mediaDevices(cx, &mediaDevicesValue.toObject());
++  uint64_t audioInputs = 0;
++  uint64_t videoInputs = 0;
++  uint64_t audioOutputs = 0;
++  if (!GetRequiredBoolean(cx, mediaDevices, "enabled",
++                          aMediaDevices.mEnabled, aError) ||
++      !GetRequiredUInt64(cx, mediaDevices, "audioInputs", 0, 16, audioInputs,
++                         aError) ||
++      !GetRequiredUInt64(cx, mediaDevices, "videoInputs", 0, 16, videoInputs,
++                         aError) ||
++      !GetRequiredUInt64(cx, mediaDevices, "audioOutputs", 0, 16, audioOutputs,
++                         aError)) {
++    SetInvalidField(aError, "mediaDevices");
++    return NS_ERROR_INVALID_ARG;
++  }
++  aMediaDevices.mAudioInputs = static_cast<uint32_t>(audioInputs);
++  aMediaDevices.mVideoInputs = static_cast<uint32_t>(videoInputs);
++  aMediaDevices.mAudioOutputs = static_cast<uint32_t>(audioOutputs);
++
+   JS::Rooted<JS::Value> webglValue(cx);
+   if (!GetRequiredProperty(cx, object, "webgl", &webglValue, aError) ||
+       !webglValue.isObject()) {
+@@ -576,6 +606,7 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                          AudioOverrideConfig&& aAudio,
+                          GeolocationOverrideConfig&& aGeolocation,
+                          StorageOverrideConfig&& aStorage,
++                         MediaDevicesOverrideConfig&& aMediaDevices,
+                          WebGLOverrideConfig&& aWebGL,
+                          WebGPUOverrideConfig&& aWebGPU, nsACString& aError) {
+   if (sSnapshot) {
+@@ -590,7 +621,8 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                            std::move(aNavigator), std::move(aScreen),
+                            std::move(aCanvas), std::move(aAudio),
+                            std::move(aGeolocation), std::move(aStorage),
+-                           std::move(aWebGL), std::move(aWebGPU));
++                           std::move(aMediaDevices), std::move(aWebGL),
++                           std::move(aWebGPU));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+ }
+@@ -608,10 +640,11 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+   AudioOverrideConfig audio;
+   GeolocationOverrideConfig geolocation;
+   StorageOverrideConfig storage;
++  MediaDevicesOverrideConfig mediaDevices;
+   WebGLOverrideConfig webgl;
+   WebGPUOverrideConfig webgpu;
+   rv = ParseConfig(decoded, navigator, screen, canvas, audio, geolocation,
+-                   storage, webgl, webgpu, aError);
++                   storage, mediaDevices, webgl, webgpu, aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+@@ -619,7 +652,8 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+                          std::move(navigator), std::move(screen),
+                          std::move(canvas), std::move(audio),
+                          std::move(geolocation), std::move(storage),
+-                         std::move(webgl), std::move(webgpu), aError);
++                         std::move(mediaDevices), std::move(webgl),
++                         std::move(webgpu), aError);
+ }
+ 
+ }  // namespace
+@@ -634,7 +668,7 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+       "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
+       "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\",\"audio-v1\","
+-      "\"geolocation-v1\",\"storage-quota-v1\"]}\n",
++      "\"geolocation-v1\",\"storage-quota-v1\",\"media-devices-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -724,6 +758,14 @@ const StorageOverrideConfig* GetStorageOverrides() {
+   return snapshot ? &snapshot->mStorage : nullptr;
+ }
+ 
++const MediaDevicesOverrideConfig* GetMediaDevicesOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  if (!snapshot || !snapshot->mMediaDevices.mEnabled) {
++    return nullptr;
++  }
++  return &snapshot->mMediaDevices;
++}
++
+ const WebGLOverrideConfig* GetWebGLOverrides() {
+   Snapshot* snapshot = sPublishedSnapshot;
+   return snapshot ? &snapshot->mWebGL : nullptr;
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index 04d88bd..a2f66ef 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -71,6 +71,13 @@ struct StorageOverrideConfig final {
+   uint64_t mQuotaBytes = 0;
+ };
+ 
++struct MediaDevicesOverrideConfig final {
++  bool mEnabled = false;
++  uint32_t mAudioInputs = 0;
++  uint32_t mVideoInputs = 0;
++  uint32_t mAudioOutputs = 0;
++};
++
+ struct WebGLOverrideConfig final {
+   nsString mVendor;
+   nsString mRenderer;
+@@ -97,6 +104,7 @@ const CanvasOverrideConfig* GetCanvasOverrides();
+ const AudioOverrideConfig* GetAudioOverrides();
+ const GeolocationOverrideConfig* GetGeolocationOverrides();
+ const StorageOverrideConfig* GetStorageOverrides();
++const MediaDevicesOverrideConfig* GetMediaDevicesOverrides();
+ const WebGLOverrideConfig* GetWebGLOverrides();
+ const WebGPUOverrideConfig* GetWebGPUOverrides();
+ bool IsManagedContentGlobal(nsIGlobalObject* aGlobal);
