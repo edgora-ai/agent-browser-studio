@@ -1517,8 +1517,8 @@
     var rows = [];
     rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + ((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + ((res.cnFonts || []).join(', ') || esc(t("common.none", "none"))) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + esc((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + esc((res.cnFonts || []).join(', ') || t("common.none", "none")) + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.proxy", "Proxy")) + ': ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
     if (res.raf && res.raf.samples > 0) {
       rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(String(res.raf.medianMs)) + 'ms ≈ ' + esc(String(res.raf.refreshHz)) + 'Hz (' + esc(String(res.raf.samples)) + ' samples, ' + (res.raf.standard ? 'standard' : 'non-standard') + ')</div>');

@@ -592,6 +592,37 @@ export function listBrowserProfiles(): BrowserProfile[] {
 // Launch / Stop
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Shared proxy fail-closed gate (review item PL-04, R2 #46): if the profile
+ * asked for a proxy and none is resolvable, launching would silently fall
+ * back to a direct connection and expose the host IP. Both the Chromium and
+ * the Firefox paths must call this before writing prefs / spawning.
+ */
+export function assertProxyResolvable(meta: any, cfg: any, resolvedProxy: { mode: string; name?: string | null; config: any }): void {
+  const declaredProxyMode = String(meta.proxyMode || (meta.proxyName ? "named" : "none"));
+  const proxyWasRequested = declaredProxyMode !== "none" && declaredProxyMode !== "off";
+  const defaultModeUnconfigured = declaredProxyMode === "default" && !cfg.defaultProxy;
+  if (proxyWasRequested && !defaultModeUnconfigured && (!resolvedProxy.config || resolvedProxy.mode === "none")) {
+    const label = resolvedProxy.name || meta.proxyName || cfg.defaultProxy || declaredProxyMode;
+    const health = getProxyHealthEntry(String(label));
+    const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+    const reason = !label || label === declaredProxyMode
+      ? declaredProxyMode === "default"
+        ? "no default proxy is configured"
+        : "the named proxy no longer exists"
+      : "it is not configured";
+    throw new Error(
+      `Profile requires proxy "${label}" but ${reason}. ` +
+      `Refusing to launch without it — a direct connection would expose your real IP. ` +
+      `(proxy: ${label}, last health check: ${when})`,
+    );
+  }
+  if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
+    const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
+    throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
+  }
+}
+
 export interface LaunchDriftCheck {
   checked: boolean;
   risky?: boolean;
@@ -693,32 +724,8 @@ export async function launchBrowser(
   // for one and we cannot produce a usable config, launching would silently
   // fall back to a direct connection and expose the host IP. Refuse instead,
   // and name the proxy plus its last health check so the user can act.
-  const declaredProxyMode = String(meta.proxyMode || (meta.proxyName ? "named" : "none"));
-  const proxyWasRequested = declaredProxyMode !== "none" && declaredProxyMode !== "off";
-  // "default" mode with no default proxy configured means the user never
-  // asked for a proxy (fresh install): a direct connection is the expected
-  // behavior, not a fail-closed error. Only a default proxy that EXISTS but
-  // cannot be resolved, or a named proxy, is refuse-to-launch territory.
-  const defaultModeUnconfigured = declaredProxyMode === "default" && !cfg.defaultProxy;
-  if (proxyWasRequested && !defaultModeUnconfigured && (!resolvedProxy.config || resolvedProxy.mode === "none")) {
-    const label = resolvedProxy.name || meta.proxyName || cfg.defaultProxy || declaredProxyMode;
-    const health = getProxyHealthEntry(String(label));
-    const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
-    const reason = !label || label === declaredProxyMode
-      ? declaredProxyMode === "default"
-        ? "no default proxy is configured"
-        : "the named proxy no longer exists"
-      : "it is not configured";
-    throw new Error(
-      `Profile requires proxy "${label}" but ${reason}. ` +
-      `Refusing to launch without it — a direct connection would expose your real IP. ` +
-      `(proxy: ${label}, last health check: ${when})`,
-    );
-  }
-  if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
-    const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
-    throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
-  }
+  // Shared with the Firefox path via assertProxyResolvable (R2 #46).
+  assertProxyResolvable(meta, cfg, resolvedProxy);
   // Surface a degraded (but configured) proxy so the failure is attributable
   // later: a launch that fails while the proxy is unhealthy is not mysterious.
   if (resolvedProxy.name) {
@@ -1239,6 +1246,9 @@ async function launchFirefoxProfile(
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
   const resolvedProxy = resolveProfileProxySecret(dirId);
+  // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
+  // unresolvable proxy must refuse — never write a direct user.js.
+  assertProxyResolvable(meta, cfg, resolvedProxy);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
   writeFirefoxUserJs(profileDir, {
@@ -1382,9 +1392,20 @@ async function launchFirefoxProfile(
     // match the profile's identity. Fail closed: an unconfirmed OR undecidable
     // probe blocks the launch by default (blockOnInjectionProbe=false escapes).
     if (managedIdentity) {
+      // No BiDi connection at all (connect failed, endpoint never announced)
+      // means the preload could not possibly be registered — fail closed like
+      // an undecidable probe instead of launching silently uninjected (R2 #47).
+      // blockOnInjectionProbe=false opts out explicitly.
+      const entry = runningProcesses.get(dirId);
+      const conn = entry?.bidiConn;
+      if (!conn && cfg.blockOnInjectionProbe !== false) {
+        const reason = "Fingerprint injection probe blocked — no BiDi connection, so the managed preload could not be registered" +
+          (bidiError ? " (BiDi error: " + bidiError + ")" : "") +
+          ". Set blockOnInjectionProbe=false to launch without this verification.";
+        recordAudit({ category: "profile", action: "injection-probe-block", target: dirId, actor: "auto", detail: reason });
+        throw new Error(reason);
+      }
       try {
-        const entry = runningProcesses.get(dirId);
-        const conn = entry?.bidiConn;
         if (conn) {
           const expected = buildInjectionProbeExpectation(managedIdentity.config);
           const expression = buildInjectionProbeExpression();

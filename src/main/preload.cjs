@@ -241,7 +241,7 @@ const api = {
   },
   approval: {
     list: () => ipcRenderer.invoke("approval:list"),
-    resolve: (id, decision) => ipcRenderer.invoke("approval:resolve", id, decision),
+    resolve: (id, decision, opts) => ipcRenderer.invoke("approval:resolve", id, decision, opts),
   },
   audit: {
     list: (opts) => ipcRenderer.invoke("audit:list", opts),

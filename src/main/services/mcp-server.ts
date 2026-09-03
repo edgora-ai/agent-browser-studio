@@ -20,7 +20,19 @@ import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, findRun
 import { listSkillRepository, getSkill, installSkill } from "./skill-repository.js";
 import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platform-adapters.js";
 import { listPendingApprovals, resolveApproval } from "./approval-gate.js";
+import { requireSettingsMutation } from "./team.js";
 import { agentDbTables } from "./agent-db.js";
+
+/** Team RBAC for mutation-class MCP tools (R2 #50): mirrors the REST gates.
+ * Returns an error string when denied, null when allowed. */
+function denyMcpMutation(): string | null {
+  try {
+    const r = requireSettingsMutation();
+    return r.ok ? null : (r.error || "Permission denied");
+  } catch (e: any) {
+    return e?.message || String(e);
+  }
+}
 
 let server: http.Server | null = null;
 let serverListening = false;
@@ -371,6 +383,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       }
     }
     case "agent_browser_agent_chat": {
+      const deniedChat = denyMcpMutation();
+      if (deniedChat) return { error: deniedChat };
       const conversationId = args?.conversationId;
       const message = args?.message;
       if (typeof conversationId !== "string" || !conversationId || typeof message !== "string" || !message) {
@@ -463,6 +477,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       return { approvals: listPendingApprovals() };
     }
     case "agent_browser_approval_resolve": {
+      const deniedApproval = denyMcpMutation();
+      if (deniedApproval) return { error: deniedApproval };
       const id = args?.approvalId;
       const decision = args?.decision;
       if (typeof id !== "string" || !id) return { error: "approvalId is required" };

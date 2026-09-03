@@ -148,10 +148,10 @@
         statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step2.done', 'Profile created') : 'Profile created') + '</span>';
         advanceWizardStep(2);
       } else {
-        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + ((r && r.error) || (window.i18n ? window.i18n.t('wizard.step2.failed', 'Create failed') : 'Create failed')) + '</span>';
+        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step2.failed', 'Create failed') : 'Create failed')) + '</span>';
       }
     }).catch(function(e) {
-      statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + (e.message || 'Create failed') + '</span>';
+      statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || 'Create failed') + '</span>';
     });
   };
 
@@ -176,12 +176,12 @@
         // Advance to the optional AI configuration step instead of auto-closing.
         advanceWizardStep(3);
       } else {
-        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + ((r && r.error) || (window.i18n ? window.i18n.t('wizard.step3.failed', 'Launch failed') : 'Launch failed')) + '</span>';
+        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step3.failed', 'Launch failed') : 'Launch failed')) + '</span>';
         if (btn) btn.disabled = false;
       }
     }).catch(function(e) {
       var statusEl = document.getElementById('wizard-step3-status');
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + (e.message || 'Error') + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || 'Error') + '</span>';
       if (btn) btn.disabled = false;
     });
   };

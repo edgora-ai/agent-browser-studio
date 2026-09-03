@@ -556,6 +556,12 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "GET" && p === "/api/proxies/export") {
     try {
       const includePasswords = String(url.searchParams.get("includePasswords") || "").toLowerCase() === "true";
+      // Bulk password export is a secret operation (R2 #51): same gate as the
+      // single-account password endpoint. Redacted export stays open.
+      if (includePasswords) {
+        const deny = requireRestAccountSecret();
+        if (deny) return deny;
+      }
       recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "api", detail: includePasswords ? "exported CSV (passwords included)" : "exported CSV (passwords redacted)" });
       return { status: 200, body: { success: true, csv: exportProxiesCsv({ includePasswords }) } };
     } catch (e: any) {

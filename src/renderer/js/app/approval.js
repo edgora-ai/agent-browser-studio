@@ -30,9 +30,10 @@
     if (!currentRequest) return;
     var id = currentRequest.id;
     close();
-    api.approval.resolve(id, mode === "always" ? "always" : "once").then(function() {
+    api.approval.resolve(id, mode === "always" ? "always" : "once", { confirmed: true }).then(function(r) {
+      if (r && r.success === false) { toast(r.error || t("approval.failed", "授权失败"), "error"); return; }
       toast(mode === "always" ? t("approval.allowed-always","已允许(永久)") : t("approval.allowed","已允许"), "success");
-    });
+    }).catch(function(e) { toast((e && e.message) || String(e), "error"); });
   };
 
   agentBrowser.approvalDeny = function(arg) {
@@ -41,9 +42,10 @@
     if (currentRequest) {
       var id = currentRequest.id;
       close();
-      api.approval.resolve(id, "deny").then(function() {
+      api.approval.resolve(id, "deny", { confirmed: true }).then(function(r) {
+        if (r && r.success === false) { toast(r.error || t("approval.failed", "授权失败"), "error"); return; }
         toast(t("approval.denied","已拒绝"), "info");
-      });
+      }).catch(function(e) { toast((e && e.message) || String(e), "error"); });
     } else {
       close();
     }
