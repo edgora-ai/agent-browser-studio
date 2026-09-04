@@ -56,7 +56,30 @@
 | A6 | API token 走 env（ps 可见） | 默认改 keychain 读取，env 仅覆盖 | 📋 未排期（P3） | — |
 | Q1 | j53 批量控制台 3 例失败 | j53 6/6 全绿 | ✅ | 根因=测试对机器语言隐含依赖，语言钉住修复 |
 
-## 五、发布前置清单（PM-1 执行时逐项打勾）
+## 五、R8 三角色评估修复批（2026-09-04，PR #79）
+
+> 范围：架构 + 产品逻辑 + UX 三角色只读评估 → P0/P1/P2 实证 → 分批修复。
+> 指纹基线：我方 Chromium 150 ping0 92/green vs RoxyChrome 149 真实 profile 82/yellow（`docs/verification/roxy-comparison.md`）。
+
+| # | 问题 | 修复 | 状态 | 证据 |
+|---|---|---|---|---|
+| R8-P0-1 | 单删旁路回收站（delProfile 直调 browser:delete 硬删） | 单删改走 profile:trash 软删 + 12s Undo；确认文案对齐软删（中英） | ✅ | `profiles.js` delProfile；`i18n.js` profile.delete-confirm；PR #79 |
+| R8-P0-2 | 可观测性内存日志明文（obs:events 回读原文） | log() 存前 redactSensitive；日志/诊断包 0600；SENSITIVE_KEY 补全 | ✅ | `tests/unit/observability-redaction.test.ts` 6 例 ✓ |
+| R8-P1-1 | batch traceId 双 ID 断链 | runBatch 接受 traceId；batch-launch/stop 透传 renderer jobId | ✅ | `batch-queue.ts` + `ipc/browser.ts`；PR #79 |
+| R8-P1-2 | mergeConfig 未知键透传 + 承载字段丢失 | 严格白名单（未知键丢弃）+ device/gates/team/maxJobs/DoH 保留分支 | ✅ | `tests/unit/config-merge-whitelist.test.ts` 4 例 ✓ |
+| R8-P1-3 | data-export jobs 自由文本未脱敏 | jobs 分支过 redactSensitive | ✅ | `data-export.ts`；PR #79 |
+| R8-P1-4 | ip-api.com 明文 HTTP | 升级 https | ✅ | `proxy-detector.ts`；PR #79 |
+| R8-P1-5 | 检测主侧无节流（REST/MCP 旁路 renderer 上限） | detect:proxy-by-name in-flight 合并 | ✅ | `ipc/detect.ts` dedupeDetection；PR #79 |
+| R8-P1-6 | 指标 key 未限界 | 500 key cap + 128 字符 + finite 校验 | ✅ | observability-redaction P1-8 段 ✓ |
+| R8-P2-1 | 批量无互斥 + 进度条无取消 | 第二批拒绝并提示；进度条加取消按钮 | ✅ | `batch-ui.js`；`i18n.js` batch.cancel/already-running |
+| R8-P2-2 | 引擎缺失事后报错 | launch/bulkStart 早拒 + 直达引导 | ✅ | `profiles.js` engineMissing/guideToEngine |
+| R8-P2-3 | 向导外部检测旁路同意 | 共享 ensureExternalRiskConsent 网关；向导走网关+启动确认 | ✅ | `profiles.js` + `wizard.js`；PR #79 |
+| R8-P0-3 | 并发写丢写（架构原 P0） | 降级：transact 同步原子，单进程无真竞态；多实例场景记 P2 | 📋 观察项 | 实证见 PR #79 描述 |
+| R8-P2-4 | 写操作裸 api 调用无超时（~20 处） | proxies.js 8 处 + profiles.js 12 处走 wcall（write/15s）；读调用保持直调 | ✅ | `proxies.js` wcall；`profiles.js` wcall；PR #79 |
+
+验证：unit 76 files / 721 passed（含新增 10），tsc clean，check-i18n clean；PR #79 CI（Linux✅/E2E✅/Windows⏳）。
+
+## 六、发布前置清单（PM-1 执行时逐项打勾）
 
 - [ ] engine-verify.yml 在真实 runner 跑绿（linux-x64 / windows-x64 / macos-arm64）
 - [ ] 4 个安装包 + sha256 + BUILD.txt 上传 GitHub Releases

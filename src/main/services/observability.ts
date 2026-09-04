@@ -55,7 +55,7 @@ const DEFAULTS = {
   timingSamples: 200,
 };
 
-const SENSITIVE_KEY = /(pass|token|secret|apikey|api_key|authorization|cookie|credential|private)/i;
+const SENSITIVE_KEY = /(pass|pwd|token|secret|apikey|api_key|accesskey|access_key|authorization|bearer|cookie|credential|private|mnemonic|session|sid\b)/i;
 const REDACTED = "[redacted]";
 
 let options: Required<Pick<ObservabilityOptions, "maxFileBytes" | "retentionDays" | "enabled">> & { dir: string | null } = {
@@ -96,7 +96,8 @@ function ensureDir(): string | null {
   const dir = logDir();
   if (!dir) return null;
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(dir, 0o700); } catch { /* best effort on non-POSIX */ }
     return dir;
   } catch {
     return null;
@@ -130,7 +131,15 @@ function activeFile(): string | null {
     const candidate = path.join(dir, i === 0 ? `${base}.log` : `${base}-${i}.log`);
     try {
       const exists = fs.existsSync(candidate);
-      if (!exists || fs.statSync(candidate).size < options.maxFileBytes) {
+      if (!exists) {
+        // Owner-only from birth: appendFileSync would create 0666&~umask.
+        const fd = fs.openSync(candidate, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+        fs.closeSync(fd);
+        currentFilePath = candidate;
+        pruneOldFiles(dir);
+        return candidate;
+      }
+      if (fs.statSync(candidate).size < options.maxFileBytes) {
         currentFilePath = candidate;
         pruneOldFiles(dir);
         return candidate;
@@ -215,20 +224,27 @@ function normalizeLevel(level: unknown): LogLevel {
 /**
  * Append one structured event. Never throws: observability must not be able to
  * break the feature it is observing.
+ *
+ * Privacy (R8 P0-1): the in-memory ring is the read-back path for `obs:events`
+ * and the diagnostics bundle, so it must never hold plaintext secrets. The
+ * entry is redacted BEFORE it is stored; the returned handle is the redacted
+ * copy so callers cannot keep a plaintext reference either. Disk was already
+ * redacted — memory was not.
  */
 export function log(level: LogLevel, event: string, fields: Record<string, unknown> = {}): LogEntry {
-  const entry: LogEntry = { ts: Date.now(), level: normalizeLevel(level), event: String(event) };
+  const raw: LogEntry = { ts: Date.now(), level: normalizeLevel(level), event: String(event) };
   for (const [key, value] of Object.entries(fields || {})) {
     if (value === undefined) continue;
-    entry[key] = value;
+    raw[key] = value;
   }
 
+  const entry = redactSensitive(raw);
   memoryEvents.push(entry);
   if (memoryEvents.length > DEFAULTS.memoryEvents) memoryEvents.splice(0, memoryEvents.length - DEFAULTS.memoryEvents);
 
   try {
     const file = activeFile();
-    if (file) fs.appendFileSync(file, JSON.stringify(redactSensitive(entry)) + "\n", "utf-8");
+    if (file) fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf-8");
   } catch {
     /* disk full / permissions — drop the write, keep the app running */
   }
@@ -250,20 +266,50 @@ export function getRecentEvents(limit = 200, filter?: { level?: LogLevel; event?
 
 // ── Metrics ────────────────────────────────────────────────────────────────
 
+// Renderer-reachable metric names are untrusted input (obs:timing/counter/gauge
+// accept arbitrary strings). Bound both the name length and the key-space size
+// so a hostile renderer cannot grow the maps without limit (R8 P1-8).
+const MAX_METRIC_NAME_LEN = 128;
+const MAX_METRIC_KEYS = 500;
+
+function sanitizeMetricName(name: unknown): string | null {
+  const s = String(name || "unnamed").slice(0, MAX_METRIC_NAME_LEN);
+  if (!s) return null;
+  return s;
+}
+
+function metricKeyAllowed(map: Map<string, unknown>, name: string): boolean {
+  return map.has(name) || map.size < MAX_METRIC_KEYS;
+}
+
 export function recordCounter(name: string, delta = 1): void {
-  counters.set(name, (counters.get(name) || 0) + delta);
+  const key = sanitizeMetricName(name);
+  if (!key) return;
+  if (!metricKeyAllowed(counters, key)) return;
+  const d = Number(delta);
+  counters.set(key, (counters.get(key) || 0) + (Number.isFinite(d) ? d : 1));
 }
 
 export function setGauge(name: string, value: number): void {
-  gauges.set(name, value);
+  const key = sanitizeMetricName(name);
+  if (!key) return;
+  if (!metricKeyAllowed(gauges, key)) return;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return;
+  gauges.set(key, v);
 }
 
 export function recordTiming(name: string, ms: number): void {
-  const samples = timings.get(name) || [];
-  samples.push(ms);
+  const key = sanitizeMetricName(name);
+  if (!key) return;
+  if (!metricKeyAllowed(timings, key)) return;
+  const v = Number(ms);
+  if (!Number.isFinite(v) || v < 0) return;
+  const samples = timings.get(key) || [];
+  samples.push(v);
   if (samples.length > DEFAULTS.timingSamples) samples.splice(0, samples.length - DEFAULTS.timingSamples);
-  timings.set(name, samples);
-  timingLast.set(name, Date.now());
+  timings.set(key, samples);
+  timingLast.set(key, Date.now());
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -344,7 +390,14 @@ export function exportDiagnosticBundle(extra: Record<string, unknown> = {}): Dia
 
   const filePath = path.join(dir, `diagnostics-${Date.now()}.json`);
   try {
-    fs.writeFileSync(filePath, payload, "utf-8");
+    // Owner-only like the audit log: bundles embed proxy/account metadata.
+    const fd = fs.openSync(filePath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+    try {
+      fs.writeFileSync(fd, payload, "utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
+    try { fs.chmodSync(filePath, 0o600); } catch { /* best effort on non-POSIX */ }
     const bytes = fs.statSync(filePath).size;
     log("info", "diagnostics.exported", { filePath, bytes });
     return { success: true, filePath, bytes };

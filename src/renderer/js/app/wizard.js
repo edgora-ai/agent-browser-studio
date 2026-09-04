@@ -155,13 +155,41 @@
     });
   };
 
-  // Wizard step 3: launch + risk check
+  // Wizard step 3: launch + risk check.
+  // R8 P2-5: this used to call api.browser.openRiskCheck directly, bypassing
+  // both the external-site consent dialog and the launch confirmation. Route
+  // through the shared gateway so the wizard obeys the same rules as cards.
   agentBrowser.wizardLaunchAndCheck = function() {
     var dirId = state.wizardDirId;
     if (!dirId) { advanceWizardStep(3); return; }
+    if (typeof agentBrowser.ensureExternalRiskConsent === "function") {
+      agentBrowser.ensureExternalRiskConsent(dirId, function () { wizardRiskCheckAfterConsent(dirId); });
+      return;
+    }
+    wizardRiskCheckAfterConsent(dirId);
+  };
+
+  function wizardRiskCheckAfterConsent(dirId) {
     var btn = document.querySelector('.wizard-step[data-step="3"] button');
     if (btn) btn.disabled = true;
-    api.browser.openRiskCheck(dirId).then(function(r) {
+    api.browser.status(dirId).then(function (s) {
+      if (s && s.running) { wizardOpenRiskCheck(dirId); return; }
+      agentBrowser.confirm(
+        window.i18n ? window.i18n.t("risk.launch.msg", "This check needs a running browser. Start the profile now?") : "This check needs a running browser. Start the profile now?",
+        function () { wizardOpenRiskCheck(dirId, true); },
+        { title: window.i18n ? window.i18n.t("risk.launch.title", "Start profile for check") : "Start profile for check" },
+      );
+      if (btn) btn.disabled = false;
+    }).catch(function (e) {
+      toast(e.message || "Error", "error");
+      if (btn) btn.disabled = false;
+    });
+  }
+
+  function wizardOpenRiskCheck(dirId, allowLaunch) {
+    var btn = document.querySelector('.wizard-step[data-step="3"] button');
+    if (btn) btn.disabled = true;
+    api.browser.openRiskCheck(dirId, { allowLaunch: !!allowLaunch }).then(function(r) {
       var statusEl = document.getElementById('wizard-step3-status') || (function() {
         var el = document.createElement('div');
         el.id = 'wizard-step3-status';

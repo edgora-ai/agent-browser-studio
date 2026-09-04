@@ -50,6 +50,19 @@
       wrap.appendChild(bar);
       el.appendChild(wrap);
     }
+    // R8 P2-1: the old progress bar had no cancel — a 50-profile batch was
+    // uninterruptible from the UI. The button calls cancelActive(), which
+    // flips the cooperative flag so queued items stop starting.
+    var cancelBtn = document.getElementById("batch-progress-cancel");
+    if (!cancelBtn) {
+      cancelBtn = document.createElement("button");
+      cancelBtn.id = "batch-progress-cancel";
+      cancelBtn.className = "btn btn-secondary btn-sm";
+      cancelBtn.type = "button";
+      cancelBtn.textContent = t("batch.cancel", "Cancel");
+      cancelBtn.addEventListener("click", function () { cancelActive(); });
+      el.appendChild(cancelBtn);
+    }
     var pct = total ? Math.round((done / total) * 100) : 0;
     label.textContent = t("batch.progress", "Working…") + " " + done + "/" + total;
     bar.style.width = pct + "%";
@@ -74,6 +87,13 @@
     var kind = opts.kind === "stop" ? "stop" : "launch";
     var dirIds = (opts.dirIds || []).filter(Boolean);
     if (!dirIds.length) return Promise.resolve(null);
+    // R8 P2-2: batches used to overwrite activeJob, so two concurrent runs
+    // each drove 4 Chromium launches (8 total) and scrambled progress.
+    // Refuse a second batch while one is in flight.
+    if (activeJob) {
+      toast(t("batch.already-running", "A batch operation is already running — cancel it first"), "info");
+      return Promise.resolve(null);
+    }
 
     var concurrency = Math.min(8, Math.max(1, Number(opts.concurrency) || DEFAULT_CONCURRENCY));
     var jobId = agentBrowser.ipc.newTraceId();

@@ -23,6 +23,20 @@ function cacheEntryFromDetection(result: ProxyDetectionResult): ProxyDetectionCa
   };
 }
 
+// R8 P1-5: main-side in-flight dedupe for detection. The renderer caps
+// concurrent checks, but REST/MCP/proxies-page callers bypass it — without
+// this, rapid repeats fan out parallel curl storms against the same proxy.
+const inflightDetections = new Map<string, Promise<unknown>>();
+function dedupeDetection<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inflightDetections.get(key);
+  if (existing) return existing as Promise<T>;
+  const p = fn().finally(() => {
+    if (inflightDetections.get(key) === p) inflightDetections.delete(key);
+  });
+  inflightDetections.set(key, p);
+  return p;
+}
+
 export function registerDetectHandlers(): void {
   ipcMain.handle("detect:proxy", async (_event, config: ProxyConfig) => {
     return proxyDetector.detect(config);
@@ -33,6 +47,8 @@ export function registerDetectHandlers(): void {
   });
 
   ipcMain.handle("detect:proxy-by-name", async (_event, name: string) => {
+    const key = `by-name:${String(name)}`;
+    return dedupeDetection(key, async () => {
     const config = getProxySecret(name);
     if (!config) return { success: false, error: "Proxy not found" };
     const result = await proxyDetector.detect(config);
@@ -56,6 +72,7 @@ export function registerDetectHandlers(): void {
       console.warn(`[detect] failed to persist proxy detection for ${name}:`, e);
     }
     return result;
+    });
   });
 
   ipcMain.handle("detect:webrtc-leak", async (_event, config: ProxyConfig) => {

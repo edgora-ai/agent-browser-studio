@@ -461,7 +461,9 @@ export const proxyDetector = {
         parse: fromIpapi,
       },
       {
-        url: "http://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,timezone,lat,lon,isp,org,as,proxy,hosting",
+        // R8 P1-6: ip-api.com supports HTTPS — never send the exit-IP lookup
+        // (which reveals the user's proxy egress) over plaintext HTTP.
+        url: "https://ip-api.com/json/?fields=status,message,query,country,countryCode,region,regionName,city,timezone,lat,lon,isp,org,as,proxy,hosting",
         timeoutSeconds: 2,
         parse: fromIpApi,
       },

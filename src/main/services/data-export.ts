@@ -6,6 +6,7 @@ import { getConfig } from "./config-manager.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { listJobs } from "./job-store.js";
 import { agentDbTables } from "./agent-db.js";
+import { redactSensitive } from "./observability.js";
 
 export type ExportScope = "profiles" | "proxies" | "accounts" | "runs" | "jobs" | "db" | "all";
 
@@ -79,7 +80,9 @@ export function exportData(scope: ExportScope): { scope: string; exportedAt: num
     }));
   }
   if (want("runs")) out.runs = agentRunRecorder.listRuns().slice(0, 200).map(redactAgentRun);
-  if (want("jobs")) out.jobs = listJobs({ limit: 500 });
+  // R8 P1-9: job result/error are free-text (custom-js output, agent errors)
+  // and may embed secrets — pass through the same redactor as the log path.
+  if (want("jobs")) out.jobs = redactSensitive(listJobs({ limit: 500 }));
   if (want("db")) {
     try {
       out.db = agentDbTables().map((t: any) => ({ name: t.name, rowCount: t.rowCount }));

@@ -15,7 +15,7 @@ import {
   migrateSecret,
   usingEncryption,
 } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig, TeamConfig } from "../types.js";
 import { normalizeManagedFirefoxVersion, sanitizeBrowserEngine } from "./browser-engine.js";
 
 /** Engine-aware version-pin normalization (R5): Firefox pins ("154.0") must
@@ -1470,11 +1470,66 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   }
   if (parsed.llm) merged.llm = normalizeLlmConfig(parsed.llm);
   if (parsed.accounts) merged.accounts = normalizeAccounts(parsed.accounts);
+  // Load-bearing scalar/object fields that are NOT in DefaultConfig but MUST
+  // survive a save round-trip (R8 P0-3 follow-through): launch gates, device
+  // identity, team manifest, automation concurrency, managed DoH override.
+  // Each is validated permissively (load path must not throw on old files).
+  if (typeof parsed.deviceId === "string" && parsed.deviceId) merged.deviceId = parsed.deviceId.slice(0, 64);
+  if (typeof parsed.deviceName === "string" && parsed.deviceName) merged.deviceName = parsed.deviceName.slice(0, 40);
+  for (const flag of ["blockOnConsistencyConflict", "blockOnProxyRisk", "blockOnFingerprintDrift", "blockOnEnvironmentRisk", "blockOnInjectionProbe"] as const) {
+    if (typeof (parsed as any)[flag] === "boolean") (merged as any)[flag] = (parsed as any)[flag];
+  }
+  if (Number.isFinite((parsed as any).maxConcurrentJobs)) {
+    merged.maxConcurrentJobs = Math.max(1, Math.min(32, Math.floor((parsed as any).maxConcurrentJobs)));
+  }
+  if (typeof (parsed as any).managedSecureDnsUrl === "string" && (parsed as any).managedSecureDnsUrl) {
+    (merged as any).managedSecureDnsUrl = (parsed as any).managedSecureDnsUrl.slice(0, 1000);
+  }
+  if (parsed.team && typeof parsed.team === "object") {
+    const normalizedTeam = normalizeTeamManifest(parsed.team);
+    if (normalizedTeam) merged.team = normalizedTeam;
+  }
   for (const [key, value] of Object.entries(parsed)) {
     if (key in merged || key === "cloakBin" || key === "cloakProfiles" || key === "profiles" || key === "firefoxProfiles" || key === "chromeProfiles" || key === "chromeBin") continue;
-    (merged as any)[key] = value;
+    // Unknown top-level keys are dropped (strict whitelist): silently
+    // persisting attacker/foreign keys through config.json is a P1-12
+    // finding from the R8 architecture review, and every load-bearing field
+    // now has an explicit branch above. Surface the drop in dev logs.
+    if (process.env.NODE_ENV !== "test") console.warn(`[config] ignoring unknown top-level config key: ${key}`);
+    void value;
   }
   return merged;
+}
+
+/**
+ * Minimal structural validation for a persisted team manifest.
+ * Full RBAC normalization lives in team.ts (sanitizeTeam) — this loader-side
+ * copy avoids a static import cycle (team.ts imports getConfig/saveConfig
+ * from this module). Shape-checked only: members with deviceId strings,
+ * owner fallback, capped lengths.
+ */
+function normalizeTeamManifest(raw: unknown): TeamConfig | null {
+  if (!raw || typeof raw !== "object") return null;
+  const t = raw as any;
+  const members = Array.isArray(t.members)
+    ? t.members
+        .filter((m: any) => m && typeof m.deviceId === "string" && m.deviceId)
+        .map((m: any) => ({
+          deviceId: String(m.deviceId).slice(0, 64),
+          name: String(m.name || "").slice(0, 40) || String(m.deviceId).slice(0, 8),
+          role: m.role === "owner" || m.role === "admin" || m.role === "member" ? m.role : "viewer",
+          addedAt: Number.isFinite(m.addedAt) ? m.addedAt : 0,
+        }))
+        .slice(0, 50)
+    : [];
+  if (!members.length) return null;
+  return {
+    name: String(t.name || "").slice(0, 60) || "Workspace",
+    ownerDeviceId: String(t.ownerDeviceId || members[0].deviceId).slice(0, 64),
+    members,
+    enabled: t.enabled !== false,
+    updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : 0,
+  };
 }
 
 function normalizeLlmConfig(raw: any): LlmConfig | undefined {

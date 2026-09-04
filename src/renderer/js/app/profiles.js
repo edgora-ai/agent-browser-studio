@@ -54,6 +54,12 @@
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
 
+  // R8 P1-3 (round 2): profile/proxy writes go through the shared IPC wrapper
+  // (hard timeout per kind) instead of bare api.*.then calls.
+  function wcall(key, fn, opts) {
+    return agentBrowser.ipc.call(key, fn, opts || { kind: "write" });
+  }
+
   function readGeolocationFields(prefix) {
     var mode = document.getElementById(prefix + "geolocation-mode").value;
     if (mode !== "custom") {
@@ -97,8 +103,27 @@
     });
   }
 
+  // R8 P2-3: refuse launch early when the engine is known-missing, with a
+  // direct path to the fix — instead of a doomed IPC + post-hoc toast.
+  function engineMissing() {
+    return !!(lastEngineInfo && !lastEngineInfo.installed);
+  }
+  function guideToEngine() {
+    agentBrowser.confirmHtml(
+      esc(t("engine.guide.title", "Install the independent Chromium build")),
+      function () { agentBrowser.selectChromiumBinary(); },
+      {
+        title: esc(t("engine.guide.heading", "Install guide")),
+        detailHtml: '<div style="font-size:12px;line-height:1.6;">' +
+          esc(t("engine.missing", "No managed Chromium installed — profiles cannot start until you point at a local build.")) +
+          '</div>',
+      },
+    );
+  }
+
   Object.assign(agentBrowser, {
   launch: function (dirId) {
+        if (engineMissing()) { guideToEngine(); return; }
         // PL-06: block edit/delete while the launch is in flight.
         setCardBusy(dirId, true);
         agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId); }, { kind: "launch", dedupe: true })
@@ -206,11 +231,23 @@
       },
 
   delProfile: function (dirId) {
-        agentBrowser.confirm(window.i18n ? window.i18n.t("profile.delete-confirm", "Delete profile? All data will be removed.") : "Delete profile? All data will be removed.", function () {
-          api.browser.delete(dirId).then(function (r) {
-            if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
-            else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
-          }).catch(function (e) { toast(e.message, "error"); });
+        // R8 P0: single delete used to bypass the trash via api.browser.delete
+        // (hard delete, no undo). Route it through the same soft-delete path
+        // as batch delete so every UI deletion is recoverable for 7 days.
+        // `browser:delete` stays as the hard-delete channel for the REST API.
+        agentBrowser.confirm(window.i18n ? window.i18n.t("profile.delete-confirm", "Delete profile? It stays recoverable in the trash for 7 days.") : "Delete profile? It stays recoverable in the trash for 7 days.", function () {
+          agentBrowser.ipc.call("profile.trash:" + dirId, function () { return api.profile.trash(dirId); }, { kind: "write" })
+            .then(function (r) {
+              if (r && r.success) {
+                toast(window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted", "success", {
+                  ttlMs: 12000,
+                  detail: window.i18n ? window.i18n.t("toast.trash.hint", "Kept in the trash for 7 days.") : "Kept in the trash for 7 days.",
+                  action: { label: window.i18n ? window.i18n.t("toast.undo", "Undo") : "Undo", onClick: function () { restoreFromTrash([dirId]); } },
+                });
+                agentBrowser.refresh();
+              }
+              else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
+            }).catch(function (e) { toast(e.message, "error"); });
         });
       },
 
@@ -224,7 +261,7 @@
         var dirId = document.getElementById("rename-dir-id").value;
         var newName = document.getElementById("rename-name").value.trim();
         if (!newName) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
-        api.browser.setMeta(dirId, { name: newName }).then(function (r) {
+        wcall("browser.setMeta", function () { return api.browser.setMeta(dirId, { name: newName }); }).then(function (r) {
           document.getElementById("dlg-rename").close();
           if (r.success) { toast((window.i18n ? window.i18n.t("toast.renamed", "Renamed") : "Renamed"), "success"); agentBrowser.refresh(); }
           else toast(r.error || "Failed", "error");
@@ -233,7 +270,7 @@
 
   proxyChanged: function (dirId, selectEl) {
         var selection = parseProxySelection(selectEl.value, "none");
-        api.proxy.setProfile(dirId, selection.name, selection.mode).then(function (r) {
+        wcall("proxy.setProfile", function () { return api.proxy.setProfile(dirId, selection.name, selection.mode); }).then(function (r) {
           if (r && r.success === false) { toast(r.error || (window.i18n ? window.i18n.t("toast.proxy.update-failed", "Proxy update failed") : "Proxy update failed"), "error"); agentBrowser.refresh(); return; }
           toast((window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated"), "success"); agentBrowser.refresh();
         }).catch(function (e) { toast(e.message, "error"); });
@@ -348,7 +385,7 @@
 
   quickCreateProfile: function () {
         var base = (window.i18n ? window.i18n.t("profiles.quick-name", "Quick Profile") : "Quick Profile");
-        api.browser.create({ name: base }).then(function(r) {
+        wcall("browser.create", function () { return api.browser.create({ name: base }); }).then(function(r) {
           if (!r || !r.dirId) { toast((r && r.error) || "Quick create failed", "error"); return; }
           toast((window.i18n ? window.i18n.t("toast.profile.quick-created", "Profile created") : "Profile created") + ": " + base, "success");
           loadProfiles();
@@ -406,7 +443,7 @@
         catch (e) { toast(e.message || String(e), "error"); return; }
 
         var engine = (document.getElementById("new-profile-browser").value === "firefox") ? "firefox" : undefined;
-        api.browser.create(Object.assign({
+        wcall("browser.create", function () { return api.browser.create(Object.assign({
           name: name,
           engine: engine,
           fingerprintMode: fingerprintMode,
@@ -423,7 +460,7 @@
           windowTitlePrefix: windowTitlePrefix,
           proxyName: proxySelection.name,
           businessPresetId: businessPresetId,
-        }, geolocation, hardware)).then(function(r) {
+        }, geolocation, hardware)); }).then(function(r) {
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           loadProfiles();
@@ -450,7 +487,7 @@
     var statusEl = document.getElementById("bulk-import-status");
     if (!text) { statusEl.innerHTML = '<span style="color:var(--danger);">Enter profile definitions</span>'; return; }
     // Parse via the shared CSV parser (supports header + per-row proxy/tags).
-    api.browser.parseBulkCsv(text).then(function(res) {
+    wcall("browser.parseBulkCsv", function () { return api.browser.parseBulkCsv(text); }).then(function(res) {
       if (!res || !res.ok || !res.specs || !res.specs.length) {
         statusEl.innerHTML = '<span style="color:var(--danger);">No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)</span>';
         return;
@@ -468,7 +505,7 @@
         // Per-row proxy wins; else the dialog's fallback selection.
         var proxyMode = s.proxyName ? "named" : fallbackProxy.mode;
         var proxyName = s.proxyName || fallbackProxy.name;
-        api.browser.create({
+        wcall("browser.create", function () { return api.browser.create({
           name: s.name,
           platform: s.platform || "windows",
           locale: s.locale,
@@ -483,7 +520,7 @@
           proxyMode: proxyMode,
           proxyName: proxyName,
           tags: s.tags || []
-        }).then(function() {
+        }); }).then(function() {
           done++;
           statusEl.innerHTML = '<span style="color:var(--primary);">' + done + '/' + total + ' imported...</span>';
           processNext(idx + 1);
@@ -494,7 +531,7 @@
   };
 
   agentBrowser.exportProfileArchive = function(dirId) {
-    api.profile.exportArchive(dirId).then(function(r) {
+    wcall("profile.exportArchive", function () { return api.profile.exportArchive(dirId); }).then(function(r) {
       if (!r || !r.success) {
         toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
         return;
@@ -506,7 +543,7 @@
   };
 
   agentBrowser.importProfileArchive = function() {
-    api.profile.importArchives().then(function(r) {
+    wcall("profile.importArchives", function () { return api.profile.importArchives(); }).then(function(r) {
       if (!r || !r.success) {
         toast(t("toast.profile.import-failed", "Import failed: ") + ((r && r.error) || "unknown"), "error");
         return;
@@ -530,6 +567,7 @@
   function finishBatch() { agentBrowser.refresh(); }
 
   agentBrowser.bulkStart = function() {
+    if (engineMissing()) { guideToEngine(); return; }
     api.browser.list().then(function(profiles) {
       var stopped = (profiles || []).filter(function(p) { return !p.running; });
       if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
@@ -634,7 +672,7 @@
     var proxyName = proxyValue || null;
     var total = sel.length, done = 0, errors = 0;
     sel.forEach(function (dirId) {
-      api.proxy.setProfile(dirId, proxyName, mode).then(function (r) {
+      wcall("proxy.setProfile:" + dirId, function () { return api.proxy.setProfile(dirId, proxyName, mode); }).then(function (r) {
         done++;
         if (r && r.success === false) errors++;
         if (done === total) {
@@ -893,7 +931,7 @@
     detectGlobalCount = Math.max(0, detectGlobalCount - 1);
   }
 
-  function askExternalConsent(dirId) {
+  function askExternalConsent(dirId, onGranted) {
     var detail = '<div style="font-size:12px;line-height:1.6;">' +
       esc(t("risk.external.body", "This check opens an external site inside the profile. That site will receive this profile's fingerprint and its proxy exit IP.")) +
       '</div><ul style="font-size:11.5px;color:var(--text-muted);margin:8px 0 0 18px;padding:0;">' +
@@ -905,11 +943,24 @@
       esc(t("risk.external.title", "Send this profile's fingerprint to an external site?")),
       function () {
         grantExternalRiskConsent();
-        agentBrowser.openRiskCheck(dirId);
+        if (typeof onGranted === "function") onGranted();
+        else agentBrowser.openRiskCheck(dirId);
       },
       { title: esc(t("risk.external.heading", "External risk check")), detailHtml: detail },
     );
   }
+
+  // R8 P2-5: shared external-consent gateway. The wizard used to call
+  // api.browser.openRiskCheck directly, bypassing the consent dialog —
+  // every entry point to an external check must go through here.
+  agentBrowser.ensureExternalRiskConsent = function (dirId, onGranted) {
+    if (hasExternalRiskConsent()) {
+      if (typeof onGranted === "function") onGranted();
+      return true;
+    }
+    askExternalConsent(dirId, onGranted);
+    return false;
+  };
 
   function confirmLaunchForCheck(dirId) {
     agentBrowser.confirm(
@@ -949,16 +1000,24 @@
   agentBrowser.openRiskCheck = function(dirId) {
     // Consent first (TE-04): nothing leaves the machine until the user agrees.
     if (!hasExternalRiskConsent()) { askExternalConsent(dirId); return; }
+    openRiskCheckAfterConsent(dirId);
+  };
+
+  function openRiskCheckAfterConsent(dirId) {
     api.browser.status(dirId).then(function(s) {
       if (s && s.running) { runRiskCheck(dirId, false); return; }
       confirmLaunchForCheck(dirId);
     }).catch(function(e) { toast(e.message || String(e), "error"); });
-  };
+  }
 
   // ── Engine banner (review item PL-07) ──
   // Without this, a missing Chromium build only showed up as a launch failure
   // plus a small red dot in the sidebar; new users had no in-app recovery path.
+  // R8 P2-3: the banner state is also cached so launch()/bulkStart can refuse
+  // early with guidance instead of firing a doomed IPC and toasting afterwards.
+  var lastEngineInfo = null;
   function renderEngineBanner(info) {
+    lastEngineInfo = info || null;
     var el = document.getElementById("engine-banner");
     if (!el) return;
     if (info && info.installed) {
@@ -1019,7 +1078,7 @@
     var dirId = document.getElementById("note-dir-id").value;
     var note = document.getElementById("note-text").value.trim();
     document.getElementById("dlg-note").close();
-    api.browser.setMeta(dirId, { note: note }).then(function(r) {
+    wcall("browser.setMeta", function () { return api.browser.setMeta(dirId, { note: note }); }).then(function(r) {
       if (r.success) { toast((window.i18n ? window.i18n.t("toast.note.saved", "Note saved") : "Note saved"), "success"); agentBrowser.refresh(); }
       else toast((window.i18n ? window.i18n.t("toast.note.save-failed", "Failed to save note") : "Failed to save note"), "error");
     });
@@ -1061,7 +1120,7 @@
     if (!Number.isInteger(seed) || seed < 1 || seed > 999999) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
     if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
     var promises = [];
-    promises.push(api.browser.setMeta(dirId, Object.assign({
+    promises.push(wcall("browser.setMeta", function () { return api.browser.setMeta(dirId, Object.assign({
       name: name, fingerprintMode: fingerprintMode, browserVersion: browserVersion,
       allowThirdPartyCookies: allowThirdPartyCookies,
       drm: drm,
@@ -1070,7 +1129,7 @@
       proxyMode: proxySelection.mode, proxyName: proxySelection.name,
       appUrl: appUrl,
       windowTitlePrefix: windowTitlePrefix
-    }, geolocation, hardware)));
+    }, geolocation, hardware)); }));
     Promise.all(promises).then(function(r) {
       if (r[0] && r[0].success) { toast((window.i18n ? window.i18n.t("toast.profile.saved", "Profile saved") : "Profile saved"), "success"); loadProfiles(); }
       else toast((r[0] && r[0].error) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save"), "error");
@@ -1729,7 +1788,7 @@
   agentBrowser.toggleLock = function(dirId, card) {
     var locked = card ? card.dataset.lock === "1" : false;
     var apply = function() {
-      api.browser.setLock(dirId, !locked).then(function(r) {
+      wcall("browser.setLock", function () { return api.browser.setLock(dirId, !locked); }).then(function(r) {
         if (!r || !r.success) { toast((r && r.error) || 'Lock failed', 'error'); return; }
         toast(locked ? t('profile.lock.unlocked', '🔓 Unlocked (remember to push)') : t('profile.lock.locked', '🔒 Locked to this device (remember to push)'), 'success');
         agentBrowser.loadProfiles();

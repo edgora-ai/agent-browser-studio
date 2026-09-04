@@ -47,6 +47,12 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  // R8 P1-3 (round 2): route proxy writes through the shared IPC wrapper so
+  // every mutation has a hard timeout instead of hanging forever when the
+  // main process stalls. Reads stay direct (list/get are cheap and frequent).
+  function wcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "write" });
+  }
   Object.assign(agentBrowser, {
   detectProxy: function (name) {
         var el = document.getElementById("detect-" + name);
@@ -70,7 +76,7 @@
       },
 
   setDefault: function (name) {
-        api.proxy.setDefault(name).then(function (r) {
+        wcall("proxy.setDefault", function () { return api.proxy.setDefault(name); }).then(function (r) {
           if (r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.default-set", "Default set") : "Default set"), "success"); agentBrowser.refresh(); }
           else toast(r.error || "Failed", "error");
         });
@@ -96,7 +102,7 @@
 
   delProxy: function (name) {
         agentBrowser.confirm(t('proxy.delete-confirm', 'Delete proxy "{name}"?').replace('{name}', name), function () {
-          api.proxy.delete(name).then(function (r) {
+          wcall("proxy.delete", function () { return api.proxy.delete(name); }).then(function (r) {
             if (r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast(r.error || "Failed", "error");
           }).catch(function (e) { toast(e.message, "error"); });
@@ -104,14 +110,14 @@
       },
 
   clearHealth: function (name) {
-        api.proxy.healthClear(name).then(function (r) {
+        wcall("proxy.healthClear", function () { return api.proxy.healthClear(name); }).then(function (r) {
           if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.health-cleared", "Health cleared") : "Health cleared"), "success"); agentBrowser.refresh(); }
           else toast((r && r.error) || "Failed", "error");
         }).catch(function (e) { toast(e.message, "error"); });
       },
 
   rotateProxy: function (name) {
-        api.proxy.rotate(name).then(function (r) {
+        wcall("proxy.rotate", function () { return api.proxy.rotate(name); }).then(function (r) {
           if (r && r.info) {
             if (r.info.active && r.info.to) {
               toast(t('proxy.rotate.ok', 'Rotated to fallback proxy {name} ({reason})').replace('{name}', r.info.to).replace('{reason}', r.info.reason || t('proxy.rotate.reason-unhealthy', 'unhealthy')), "success");
@@ -169,11 +175,11 @@
         function done() { toast(oldName ? (window.i18n ? window.i18n.t("toast.proxy.updated", "Proxy updated") : "Proxy updated") : "Proxy added", "success"); document.getElementById("dlg-proxy").close(); agentBrowser.refresh(); }
         function fail(e) { toast((e && e.message) || "Failed", "error"); }
         if (oldName && oldName !== name) {
-          api.proxy.rename(oldName, name, config).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
+          wcall("proxy.rename", function () { return api.proxy.rename(oldName, name, config); }).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
         } else if (oldName) {
-          api.proxy.update(oldName, config).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
+          wcall("proxy.update", function () { return api.proxy.update(oldName, config); }).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
         } else {
-          api.proxy.add(name, config).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
+          wcall("proxy.add", function () { return api.proxy.add(name, config); }).then(function (r) { if (r && r.success === false) fail(r); else done(); }).catch(fail);
         }
       },
 
@@ -190,7 +196,7 @@
         var statusEl = document.getElementById("dlg-proxy-import-status");
         if (!text) { toast((window.i18n ? window.i18n.t("proxy.import.need-text", "请输入代理列表") : "请输入代理列表"), "error"); return; }
         statusEl.innerHTML = (window.i18n ? window.i18n.t("proxy.import.progress", "导入中…") : "导入中…");
-        api.proxy.importText(text, replace).then(function (r) {
+        wcall("proxy.importText", function () { return api.proxy.importText(text, replace); }).then(function (r) {
           if (!r || r.success === false) { statusEl.innerHTML = "<span style='color:var(--danger)'>" + esc((r && r.error) || "Failed") + "</span>"; return; }
           var rep = r.report || {};
           var imported = (rep.imported || []).length;
@@ -205,7 +211,7 @@
       },
 
   exportProxies: function () {
-        api.proxy.exportCsv().then(function (r) {
+        wcall("proxy.exportCsv", function () { return api.proxy.exportCsv(); }).then(function (r) {
           if (!r || r.success === false) { toast((r && r.error) || "Failed", "error"); return; }
           var blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
           var url = URL.createObjectURL(blob);
@@ -259,7 +265,7 @@
         var done = 0;
         var failed = 0;
         ids.forEach(function (dirId) {
-          api.proxy.setProfile(dirId, proxyName, "named").then(function (r) {
+          wcall("proxy.setProfile:" + dirId, function () { return api.proxy.setProfile(dirId, proxyName, "named"); }).then(function (r) {
             done++;
             if (!r || r.success === false) failed++;
             finishBind();

@@ -299,13 +299,14 @@ export function registerBrowserHandlers(): void {
     const concurrency = normalizeConcurrency(params?.concurrency);
     const signal = { cancelled: false };
     activeBatchJobs.set(jobId, signal);
-    logInfo("batch.launch.start", { jobId, total: dirIds.length, concurrency });
+    logInfo("batch.launch.start", { jobId, traceId: jobId, total: dirIds.length, concurrency });
     try {
       const result = await runBatch<string>({
         items: dirIds,
         label: "launch",
         concurrency,
         signal,
+        traceId: jobId,
         onProgress: (done, total) => emitProgress(event, { jobId, kind: "launch", done, total }),
         worker: async (dirId) => {
           const r = await launchBrowser(dirId);
@@ -328,13 +329,14 @@ export function registerBrowserHandlers(): void {
     const concurrency = normalizeConcurrency(params?.concurrency);
     const signal = { cancelled: false };
     activeBatchJobs.set(jobId, signal);
-    logInfo("batch.stop.start", { jobId, total: dirIds.length, concurrency });
+    logInfo("batch.stop.start", { jobId, traceId: jobId, total: dirIds.length, concurrency });
     try {
       const result = await runBatch<string>({
         items: dirIds,
         label: "stop",
         concurrency,
         signal,
+        traceId: jobId,
         onProgress: (done, total) => emitProgress(event, { jobId, kind: "stop", done, total }),
         worker: async (dirId) => {
           const ok = stopBrowser(dirId);

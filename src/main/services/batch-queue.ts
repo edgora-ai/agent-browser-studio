@@ -47,6 +47,12 @@ export interface BatchOptions<T> {
   signal?: BatchSignal;
   onProgress?: (done: number, total: number, latest: BatchItemResult<T>) => void;
   label?: string;
+  /**
+   * Join key for renderer→main log correlation (R8 P1-1). The renderer
+   * generates the batch jobId and passes it as traceId so both sides log
+   * the same id; falls back to a fresh id for direct (non-UI) callers.
+   */
+  traceId?: string;
 }
 
 export function normalizeConcurrency(value: unknown): number {
@@ -93,7 +99,9 @@ export async function runBatch<T>(opts: BatchOptions<T>): Promise<BatchResult<T>
   const timeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : DEFAULT_ITEM_TIMEOUT_MS;
   const signal = opts.signal;
   const label = opts.label || "batch";
-  const traceId = newTraceId();
+  // R8 P1-1: prefer the caller-supplied join key so renderer logs and
+  // main-process logs share one id for the same batch.
+  const traceId = typeof opts.traceId === "string" && opts.traceId ? opts.traceId : newTraceId();
   const startedAt = Date.now();
 
   const results: BatchItemResult<T>[] = new Array(items.length);
