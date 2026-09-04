@@ -522,11 +522,25 @@ function patchWebglContext(ctx){
 // through the same AudioBuffer objects, so it inherits the noise.
 if (cfg.audio.enabled) {
   (function(){
-    var rng = mulberry32(seedFromHex(cfg.audio.seed));
+    var audioSeed = seedFromHex(cfg.audio.seed);
     var amp = cfg.audio.amplitude > 0 ? cfg.audio.amplitude : 0.0000001;
-    var noisify = function(data){
+    // Fixed-stream deterministic noise (stable-x3 fix): the old shared
+    // mulberry32 stream made readback depend on call history — any change in
+    // how many times a probe touches a buffer shifted every later value.
+    // Instead every noisify rebuilds the stream from the bare seed, so the
+    // same input always yields the same output regardless of probe call order
+    // or count; each owner object is noised at most once (getChannelData
+    // returns a live view — re-noising would accumulate). Identical renderings
+    // therefore always read back identical.
+    var noisedOwners = typeof WeakSet !== "undefined" ? new WeakSet() : null;
+    var noisify = function(data, owner){
       if (!data || !data.length) return data;
-      for (var i = 0; i < data.length; i++) data[i] = data[i] + (rng() - 0.5) * amp;
+      if (owner && noisedOwners) {
+        if (noisedOwners.has(owner)) return data;
+        noisedOwners.add(owner);
+      }
+      var stream = mulberry32(audioSeed >>> 0);
+      for (var i = 0; i < data.length; i++) data[i] = data[i] + (stream() - 0.5) * amp;
       return data;
     };
     var proto = typeof AudioBuffer !== "undefined" ? AudioBuffer.prototype : null;
@@ -535,7 +549,7 @@ if (cfg.audio.enabled) {
       try {
         var copyFn = function(source){
           var copy = source instanceof Float32Array ? new Float32Array(source) : source;
-          noisify(copy);
+          noisify(copy, null);
           return origCopy.call(this, copy, arguments[1], arguments[2]);
         };
         if (fakeFns) fakeFns.add(maskLen(copyFn));
@@ -550,8 +564,9 @@ if (cfg.audio.enabled) {
       try {
         var getFn = function(channel){
           // Noise the live channel view in place (getChannelData returns the
-          // buffer's own data, not a copy) — bounded, deterministic per seed.
-          return noisify(origGet.call(this, channel));
+          // buffer's own data, not a copy) — idempotent per buffer, so
+          // repeated reads never accumulate.
+          return noisify(origGet.call(this, channel), this);
         };
         if (fakeFns) fakeFns.add(maskLen(getFn));
         Object.defineProperty(proto, "getChannelData", {
@@ -568,7 +583,7 @@ if (cfg.audio.enabled) {
           var orig = analyserProto[name];
           var fn = function(array){
             var out = orig.call(this, array);
-            if (array && (array instanceof Float32Array || array instanceof Uint8Array)) noisify(array);
+            if (array && (array instanceof Float32Array || array instanceof Uint8Array)) noisify(array, array);
             return out;
           };
           if (fakeFns) fakeFns.add(maskLen(fn));
