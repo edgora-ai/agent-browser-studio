@@ -28,7 +28,7 @@ function normalizeProfileBrowserVersion(profile: { engine?: unknown; browserVers
     : normalizeManagedChromiumVersion((profile as any)?.browserVersion);
 }
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
-import type { WebRtcDiagnosticsEntry } from "../types.js";
+import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
@@ -55,6 +55,7 @@ const DefaultConfig: MgmtConfig = {
   proxyDetections: {},
   proxyHealth: {},
   webrtcDiagnostics: {},
+  envRiskDiagnostics: {},
   sync: {
     enabled: false,
     endpoint: "",
@@ -196,6 +197,29 @@ export function clearWebRtcDiagnostics(dirId: string): void {
   validateDirId(dirId);
   const cfg = getConfig();
   if (cfg.webrtcDiagnostics) delete cfg.webrtcDiagnostics[dirId];
+  saveConfig(cfg);
+}
+
+const MAX_ENV_RISK_DIAG_HISTORY = 20;
+
+export function getEnvRiskDiagnostics(dirId: string): EnvRiskDiagnosticsEntry[] {
+  const cfg = getConfig();
+  const list = cfg.envRiskDiagnostics && Object.hasOwn(cfg.envRiskDiagnostics, dirId) ? cfg.envRiskDiagnostics[dirId] : null;
+  return Array.isArray(list) ? list : [];
+}
+
+export function setEnvRiskDiagnostics(dirId: string, entries: EnvRiskDiagnosticsEntry[]): void {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  cfg.envRiskDiagnostics = cfg.envRiskDiagnostics || {};
+  cfg.envRiskDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_ENV_RISK_DIAG_HISTORY);
+  saveConfig(cfg);
+}
+
+export function clearEnvRiskDiagnostics(dirId: string): void {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  if (cfg.envRiskDiagnostics) delete cfg.envRiskDiagnostics[dirId];
   saveConfig(cfg);
 }
 
@@ -1384,6 +1408,13 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     for (const [dirId, entries] of Object.entries(parsed.webrtcDiagnostics)) {
       if (!Array.isArray(entries)) continue;
       merged.webrtcDiagnostics[dirId] = (entries as WebRtcDiagnosticsEntry[]).slice(-MAX_WEBRTC_DIAG_HISTORY);
+    }
+  }
+  if (parsed.envRiskDiagnostics && typeof parsed.envRiskDiagnostics === "object") {
+    merged.envRiskDiagnostics = {};
+    for (const [dirId, entries] of Object.entries(parsed.envRiskDiagnostics)) {
+      if (!Array.isArray(entries)) continue;
+      merged.envRiskDiagnostics[dirId] = (entries as EnvRiskDiagnosticsEntry[]).slice(-MAX_ENV_RISK_DIAG_HISTORY);
     }
   }
   if (parsed.sync) {

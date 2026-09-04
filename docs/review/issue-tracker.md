@@ -79,7 +79,19 @@
 
 验证：unit 76 files / 721 passed（含新增 10），tsc clean，check-i18n clean；PR #79 CI（Linux✅/E2E✅/Windows⏳）。
 
-## 六、发布前置清单（PM-1 执行时逐项打勾）
+## 六、R9 第二轮修复批（2026-09-04，PR #80）
+
+| # | 问题 | 修复 | 状态 | 证据 |
+|---|---|---|---|---|
+| R9-P3-4 | 批量删除确认文案与软删矛盾（"permanent/无法撤销"） | 文案改为 trash+7天+运行中跳过（中英） | ✅ | `profiles.js` buildDeleteConfirm；`i18n.js`；PR #80 |
+| R9-P3-3 | api.d.ts 签名漂移（trash 三件套 + openRiskCheck opts 缺失） | 补 trash/trashRestore/trashList + openRiskCheck opts + envRisk* + EnvRiskDiagnosticsEntry | ✅ | `api.d.ts`；PR #80 |
+| R9-P1-2 | 卡片 busy 锁重绘丢失 + 键盘可绕过 | busyCards map + 渲染期 disabled/aria-busy + handler 短路 + toast | ✅ | `profiles.js` busyCards/applyCardBusy；PR #80 |
+| R9-P1-4 | env-risk 报告无持久化（关 dialog 即丢） | EnvRiskDiagnosticsEntry 类型 + config 三件套 + merge/DefaultConfig + env-risk-history/clear IPC + preload + 对话框历史区 | ✅ | `tests/unit/env-risk-diagnostics.test.ts` 3 例 ✓；PR #80 |
+| R9-P1-3 | 回收站无 UI（7 天承诺够不着） | 页头 ⋯ 菜单 Trash 入口 + dlg-trash + 逐项恢复 | ✅ | `index.html`；`profiles.js` showTrash；PR #80 |
+
+验证：unit 77 files / 724 passed（含新增 3），tsc clean，check-i18n clean；PR #80 CI 待定。
+
+## 七、发布前置清单（PM-1 执行时逐项打勾）
 
 - [ ] engine-verify.yml 在真实 runner 跑绿（linux-x64 / windows-x64 / macos-arm64）
 - [ ] 4 个安装包 + sha256 + BUILD.txt 上传 GitHub Releases

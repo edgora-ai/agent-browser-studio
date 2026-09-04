@@ -7,6 +7,9 @@
   var state = agentBrowser.state;
   var profileFilter = { status: "all", tags: [] };
   var profileSelection = {};
+  // R9 P1-2: in-flight launch/stop per card. Kept outside the DOM so a list
+  // re-render (keyed diff rebuilds card nodes) cannot drop the busy state.
+  var busyCards = {};
   var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
@@ -684,6 +687,57 @@
     });
   };
 
+  // R9 P1-3: trash browser — the 7-day recovery promise needs a visible
+  // entry point, otherwise it is only reachable via the 12s undo toast.
+  agentBrowser.showTrash = function () {
+    var dlg = document.getElementById("dlg-trash");
+    var listEl = document.getElementById("trash-list");
+    if (!dlg || !listEl) return;
+    listEl.innerHTML = '<div class="loading">' + esc(t("trash.loading", "Loading trash…")) + '</div>';
+    if (!dlg.open) dlg.showModal();
+    agentBrowser.ipc.call("profile.trash-list", function () { return api.profile.trashList(); }, { kind: "list" })
+      .then(function (r) {
+        renderTrashList(listEl, (r && r.entries) || []);
+      })
+      .catch(function (e) {
+        listEl.innerHTML = '<div class="empty-state">' + esc(e.message || String(e)) + '</div>';
+      });
+  };
+
+  function renderTrashList(listEl, entries) {
+    if (!entries.length) {
+      listEl.innerHTML = '<div class="empty-state">' + esc(t("trash.empty", "Trash is empty — deleted profiles stay here for 7 days.")) + '</div>';
+      return;
+    }
+    listEl.innerHTML = entries.map(function (en) {
+      var when = en.deletedAt ? new Date(en.deletedAt).toLocaleString() : "?";
+      var name = esc(en.name || (en.dirId || "").slice(0, 8));
+      var id = escAttr(en.dirId || "");
+      var state = en.recoverable
+        ? '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>'
+        : '<span style="font-size:11px;color:var(--danger);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>';
+      return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
+        '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + name + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted);">' + esc(when) + '</div></div>' + state + '</div>';
+    }).join("");
+    // Wire restore buttons (re-rendered each open, so direct binding is fine).
+    Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-restore]"), function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-trash-restore");
+        btn.setAttribute("disabled", "disabled");
+        agentBrowser.ipc.call("profile.trash-restore:" + id, function () { return api.profile.trashRestore(id); }, { kind: "write" })
+          .then(function (r) {
+            if (r && r.success) {
+              toast(t("toast.trash.restore-ok", "Restored {n} profiles").replace("{n}", 1), "success");
+              loadProfiles();
+              agentBrowser.showTrash();
+            } else toast((r && r.error) || t("toast.failed", "Failed"), "error");
+          })
+          .catch(function (e) { toast(e.message || String(e), "error"); });
+      });
+    });
+  }
+
   // PL-09: restores are serialised so two profiles never race for the same
   // directory while it is being moved back out of the trash.
   function restoreFromTrash(ids) {
@@ -741,14 +795,17 @@
     var names = sel.map(function(id) { return nameMap[id] || id.slice(0, 8); });
     // PL-09: list every profile. The old dialog capped the list at five names,
     // so confirming "delete 50" only ever showed five of them.
+    // R9 P3-4: the old copy claimed "cannot be undone / permanently deleted"
+    // but deletes are soft (trash + undo + 7-day recovery). Say what actually
+    // happens: running profiles are refused by the backend and counted failed.
     var detail = '<div style="max-height:180px;overflow:auto;">' +
       names.map(function(n) { return "• " + esc(n); }).join("<br>") +
       '</div><div style="margin-top:8px;color:var(--danger);">' +
-      esc(t("confirm.delete.warning", "This cannot be undone. Cookies and local storage are deleted with the profile. Running profiles must be stopped first.")) +
+      esc(t("confirm.delete.warning", "Profiles move to the trash and stay recoverable for 7 days. Running profiles are skipped (stop them first).")) +
       "</div>";
     var opts = { title: t("confirm.delete.title", "Delete profiles"), detailHtml: detail };
     if (sel.length >= 10) {
-      opts.ackLabel = t("confirm.delete.ack", "I understand that {n} profiles and their site data will be permanently deleted.").replace("{n}", sel.length);
+      opts.ackLabel = t("confirm.delete.ack", "I understand that {n} profiles will be moved to the trash.").replace("{n}", sel.length);
     }
     agentBrowser.confirm(
       t("confirm.delete.msg", "Delete {n} selected profile(s)?").replace("{n}", sel.length),
@@ -1234,6 +1291,10 @@
 
       var cardHtmlFn = function (p) {
         var isRunning = p.running;
+        // R9 P1-2: render the in-flight busy state so a list re-render cannot
+        // re-enable a card mid-launch (setCardBusy also patches live nodes).
+        var isBusy = !!busyCards[p.dirId];
+        var disAttr = isBusy ? " disabled" : "";
         var date = p.lastModified ? new Date(p.lastModified).toLocaleDateString() : "?";
         var proxyStr = proxyDisplayLabel(p);
 
@@ -1287,7 +1348,7 @@
 
         var proxyOptsHtml = renderProxyOptions(proxies, profileProxySelectionValue(p, "none"), true);
 
-        return '<div class="profile-card' + (isRunning ? ' running' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '">' +
+        return '<div class="profile-card' + (isRunning ? ' running' : '') + (isBusy ? ' busy' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '" aria-busy="' + (isBusy ? 'true' : 'false') + '">' +
           '<div class="card-header">' +
             '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
             '<span class="name" title="' + escAttr(t('profile.name.title', 'Click to rename')) + '" data-action="rename">' + esc(p.name) + '</span>' +
@@ -1307,9 +1368,9 @@
           ((p.tags || []).length ? '<div class="info-row"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
           '<div class="card-actions">' +
             (isRunning
-              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '">⏹ ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
-              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '">▶ ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
-            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '">✎ ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
+              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>⏹ ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
+              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>▶ ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
+            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>✎ ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
             (p.appUrl ? '<button class="btn btn-secondary btn-sm" data-action="open-app" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">🖥 ' + esc(t('profile.action.app', 'App')) + '</button> ' : '') +
             // ── UE-08: every control has an accessible name ──
             '<details class="card-menu">' +
@@ -1323,7 +1384,7 @@
                 '<button type="button" data-action="lock">' + esc(isLocked ? t('profile.menu.unlock', '🔓 Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
                 '<button type="button" data-action="logs">' + esc(t('profile.menu.logs', '📋 Logs')) + '</button>' +
                 '<button type="button" data-action="webrtc-diag">' + esc(t('webrtc.diag.title', '📡 In-browser WebRTC Diagnostics')) + '</button>' +
-                '<button type="button" class="danger" data-action="delete">' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
+                '<button type="button" class="danger" data-action="delete"' + disAttr + '>' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
               '</div>' +
             '</details>' +
           '</div>' +
@@ -1462,14 +1523,27 @@
     renderPagination(container, total, pageCount);
   }
 
-  // ── Card busy state (review item PL-06) ──
+  // ── Card busy state (review item PL-06, R9 P1-2) ──
   // While a launch/stop is in flight the card is dimmed and stops accepting
   // input, so a user cannot race a delete against a browser that is starting.
+  // CSS pointer-events:none blocks mouse, but keyboard/screen-reader users can
+  // still activate buttons — so also flip real `disabled` + aria-disabled.
   function setCardBusy(dirId, busy) {
+    if (busy) busyCards[dirId] = true;
+    else delete busyCards[dirId];
     var card = document.querySelector('#profile-list .profile-card[data-dir-id="' + String(dirId).replace(/"/g, "") + '"]');
     if (!card) return;
+    applyCardBusy(card, busy);
+  }
+  function applyCardBusy(card, busy) {
     if (busy) card.classList.add("busy");
     else card.classList.remove("busy");
+    card.setAttribute("aria-busy", busy ? "true" : "false");
+    var ctrls = card.querySelectorAll("button, select, input");
+    Array.prototype.forEach.call(ctrls, function (el) {
+      if (busy) el.setAttribute("disabled", "disabled");
+      else el.removeAttribute("disabled");
+    });
   }
 
   function closeAllCardMenus() {
@@ -1486,6 +1560,13 @@
       var dirId = card.dataset.dirId;
       var action = target.dataset.action;
       if (!dirId || action === "proxy") return;
+      // R9 P1-2: belt and suspenders — disabled buttons already block mouse
+      // and keyboard activation, but the handler is the last gate for any
+      // path that reaches here (e.g. details-menu summary toggles).
+      if (busyCards[dirId] && action !== "stop") {
+        toast(t("toast.card.busy", "This profile is busy — wait for the current operation to finish"), "info");
+        return;
+      }
       closeAllCardMenus();
       if (action === "rename") agentBrowser.renameProfile(dirId, card.querySelector(".name")?.textContent || "");
       else if (action === "note") agentBrowser.addNote(dirId);
@@ -1597,20 +1678,56 @@
       '</div>';
   }
 
+  // R9 P1-4: persisted history with detail replay (mirrors webrtc diag).
+  var currentEnvRiskDirId = null;
+  function renderEnvRiskHistory(dirId) {
+    var histEl = document.getElementById("env-risk-history");
+    if (!histEl || !dirId) return;
+    api.browser.envRiskHistory(dirId).then(function (h) {
+      var entries = (h && h.entries) || [];
+      if (!entries.length) {
+        histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("env.risk.no-history", "No history yet")) + '</div>';
+        return;
+      }
+      var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("env.risk.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
+      entries.slice().reverse().forEach(function (en) {
+        var ts = en.at ? new Date(en.at).toLocaleString() : "?";
+        var badge = en.ok ? "✅" : "⚠";
+        html += '<div style="font-size:11px;margin-top:4px;">' + badge + " " + esc(ts) + " — " + esc(en.summary || "") + '</div>';
+      });
+      histEl.innerHTML = html;
+    }).catch(function () { histEl.innerHTML = ""; });
+  }
+
   agentBrowser.openEnvRisk = function(dirId) {
     var dlg = document.getElementById('dlg-env-risk');
     var body = document.getElementById('env-risk-body');
     if (!dlg) { toast(t('env.dialog.unavailable', 'Env check dialog unavailable'), 'error'); return; }
     if (!acquireDetectSlot(dirId)) return;
+    currentEnvRiskDirId = dirId;
     if (body) body.innerHTML = '<div class="loading">' + esc(t('env.checking', 'Checking host environment…')) + '</div>';
+    var histEl = document.getElementById("env-risk-history");
+    if (histEl) histEl.innerHTML = "";
     dlg.showModal();
     agentBrowser.ipc.call("browser.envRisk", function () { return api.browser.envRisk(dirId); }, { kind: "detect" })
       .then(function (r) {
         releaseDetectSlot(dirId);
         if (r && r.ok) recordHealthResult(dirId, "env", summarizeEnvRisk(r)); // PL-05
         renderEnvRisk(r);
+        renderEnvRiskHistory(dirId);
       })
       .catch(function (e) { releaseDetectSlot(dirId); renderEnvRisk({ ok: false, error: e.message || String(e) }); });
+  };
+
+  agentBrowser.envRiskClear = function() {
+    if (!currentEnvRiskDirId) return;
+    var dirId = currentEnvRiskDirId;
+    agentBrowser.ipc.call("browser.envRiskClear", function () { return api.browser.envRiskClear(dirId); }, { kind: "write" })
+      .then(function () {
+        toast(t("env.risk.cleared", "Environment risk history cleared"), "success");
+        renderEnvRiskHistory(dirId);
+      })
+      .catch(function (e) { toast(e.message || String(e), "error"); });
   };
 
 

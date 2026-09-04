@@ -57,6 +57,7 @@
    <button type="button" data-role="cmd" data-cmd="importProfileArchive" data-i18n="profiles.import-archive">📦 Import Backup</button>
    <button type="button" data-role="cmd" data-cmd="bulkStart" data-i18n="profiles.start-all">▶ Start All</button>
    <button type="button" data-role="cmd" data-cmd="bulkStop" data-i18n="profiles.stop-all">⏹ Stop All</button>
+   <button type="button" data-role="cmd" data-cmd="showTrash" data-i18n="profiles.trash">🗑 Trash</button>
   </div>
  </details>
  </div>
@@ -528,11 +529,13 @@
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
   <h3 style="margin:0 0 10px;" id="dlg-env-risk-title" data-i18n="env.risk.title">🖥 Host environment risk check</h3>
-  <div id="env-risk-body" style="max-height:62vh;overflow:auto;">Loading...</div>
+  <div id="env-risk-body" style="max-height:52vh;overflow:auto;">Loading...</div>
+  <div id="env-risk-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskClear" data-i18n="env.risk.clear">🗑 Clear history</button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+  </div>
  </div>
-</div>
 </dialog>
 
 <!-- ── WebRTC Diagnostics Dialog ── -->
@@ -1284,6 +1287,15 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div class="btn-row" style="margin-top:18px;border-top:1px solid var(--border);padding-top:10px;">
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="wizardSkip" data-i18n="wizard.skip">Skip for now</button>
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="wizardNeverShow" data-i18n="wizard.never">Don't show again</button>
+ </div>
+</dialog>
+
+<!-- ══════ Trash (R9 P1-3: 7-day recoverable delete needs a UI) ══════ -->
+<dialog id="dlg-trash" aria-labelledby="dlg-trash-title" style="min-width:420px;max-width:600px;">
+ <h3 id="dlg-trash-title" style="margin:0 0 10px;" data-i18n="trash.title">🗑 Trash — deleted profiles (7 days)</h3>
+ <div id="trash-list" style="max-height:50vh;overflow:auto;">Loading...</div>
+ <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
  </div>
 </dialog>
 

@@ -89,6 +89,17 @@ export interface ProxyHealthSummary {
   lastCheckedAt: number | null;
 }
 
+export interface EnvRiskDiagnosticsEntry {
+  at: number;
+  ok: boolean;
+  high: number;
+  medium: number;
+  summary: string;
+  findings: Array<{ severity: string; code: string; message: string; fix: string }>;
+  resolvers: string[];
+  cnFonts: string[];
+}
+
 export interface BrowserProfileInfo {
   dirId: string;
   name: string;
@@ -187,6 +198,10 @@ export interface AgentBrowserAPI {
     get: (dirId: string) => Promise<any>;
     create: (name: string, options?: any) => Promise<{ dirId: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
+    // R9 P3-3: soft-delete channel the UI deletes through (7-day trash).
+    trash: (dirId: string) => Promise<{ success: boolean; error?: string }>;
+    trashRestore: (dirId: string) => Promise<{ success: boolean; error?: string }>;
+    trashList: () => Promise<{ success: boolean; entries: Array<{ dirId: string; name: string; deletedAt: number; recoverable: boolean }>; error?: string }>;
     rename: (dirId: string, name: string) => Promise<{ success: boolean; error?: string }>;
     cookies: (dirId: string, filter?: string) => Promise<any[]>;
     setCookie: (dirId: string, cookie: any) => Promise<{ success: boolean; error?: string }>;
@@ -273,7 +288,10 @@ export interface AgentBrowserAPI {
     status: (dirId: string) => Promise<any>;
     setSeed: (dirId: string, seed: number) => Promise<{ success: boolean }>;
     setMeta: (dirId: string, meta: any) => Promise<{ success: boolean }>;
-    openRiskCheck: (dirId: string) => Promise<{ success: boolean; error?: string }>;
+    openRiskCheck: (dirId: string, opts?: { allowLaunch?: boolean; url?: string }) => Promise<{ success: boolean; error?: string; code?: string; autoLaunched?: boolean }>;
+    envRisk: (dirId: string) => Promise<{ ok: boolean; result?: any; error?: string }>;
+    envRiskHistory: (dirId: string) => Promise<{ ok: boolean; entries: EnvRiskDiagnosticsEntry[]; error?: string }>;
+    envRiskClear: (dirId: string) => Promise<{ ok: boolean; error?: string }>;
   };
   agent: {
     llmConfig: () => Promise<RedactedLlmConfig | null>;

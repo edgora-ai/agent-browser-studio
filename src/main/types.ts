@@ -72,6 +72,19 @@ export interface ProxyHealthEntry {
 
 export type ProxyMode = "none" | "default" | "named";
 
+/** One persisted host-environment risk snapshot for a profile (R9 P1-4). */
+export interface EnvRiskDiagnosticsEntry {
+  at: number;
+  ok: boolean;
+  high: number;
+  medium: number;
+  summary: string;
+  /** Full findings for detail replay (capped at persist time). */
+  findings: Array<{ severity: string; code: string; message: string; fix: string }>;
+  resolvers: string[];
+  cnFonts: string[];
+}
+
 /** One persisted in-browser WebRTC diagnostics run for a profile. */
 export interface WebRtcDiagnosticsEntry {
   at: number;
@@ -301,6 +314,8 @@ export interface MgmtConfig {
   proxyDetections?: Record<string, ProxyDetectionCacheEntry>;
   proxyHealth?: Record<string, ProxyHealthEntry>;
   webrtcDiagnostics?: Record<string, WebRtcDiagnosticsEntry[]>;
+  /** Persisted host-environment risk snapshots per profile (R9 P1-4, mirrors webrtcDiagnostics). */
+  envRiskDiagnostics?: Record<string, EnvRiskDiagnosticsEntry[]>;
   sync: SyncConfig;
   browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;

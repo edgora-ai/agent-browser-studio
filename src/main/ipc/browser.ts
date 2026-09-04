@@ -9,10 +9,37 @@ import {
 } from "../services/browser-manager.js";
 import * as fs from "node:fs";
 import { listAudit } from "../services/audit-log.js";
-import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection } from "../services/config-manager.js";
+import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection, getEnvRiskDiagnostics, setEnvRiskDiagnostics, clearEnvRiskDiagnostics } from "../services/config-manager.js";
 import { checkProfileConsistency } from "../services/consistency-check.js";
 import { captureFingerprint, diffFingerprints, hasRiskyDrift, checkPersonaConsistency, mismatchesAsDrift } from "../services/fingerprint-baseline.js";
-import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "../services/environment-risk.js";
+import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, summarizeEnvFindings, type EnvironmentRiskResult } from "../services/environment-risk.js";
+import type { EnvRiskDiagnosticsEntry } from "../types.js";
+
+/** Append one persisted env-risk snapshot (R9 P1-4). Findings capped so a pathological host cannot bloat config.json. */
+function persistEnvRiskSnapshot(dirId: string, result: EnvironmentRiskResult): void {
+  try {
+    const findings = Array.isArray(result?.findings) ? result.findings : [];
+    const entry: EnvRiskDiagnosticsEntry = {
+      at: Date.now(),
+      ok: result?.ok === true,
+      high: findings.filter((f) => f?.severity === "high").length,
+      medium: findings.filter((f) => f?.severity === "medium").length,
+      summary: summarizeEnvFindings(findings) || (result?.ok ? "no findings" : "check completed"),
+      findings: findings.slice(0, 20).map((f) => ({
+        severity: String(f?.severity || "info").slice(0, 16),
+        code: String(f?.code || "").slice(0, 80),
+        message: String(f?.message || "").slice(0, 500),
+        fix: String(f?.fix || "").slice(0, 500),
+      })),
+      resolvers: Array.isArray(result?.resolvers) ? result.resolvers.slice(0, 10).map((r: any) => String(r?.address || r || "").slice(0, 64)) : [],
+      cnFonts: Array.isArray(result?.cnFonts) ? result.cnFonts.slice(0, 20).map((f: any) => String(f || "").slice(0, 120)) : [],
+    };
+    const history = getEnvRiskDiagnostics(dirId);
+    setEnvRiskDiagnostics(dirId, [...history, entry]);
+  } catch {
+    /* persistence must never break the check itself */
+  }
+}
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
@@ -216,6 +243,8 @@ export function registerBrowserHandlers(): void {
   });
 
   // Host environment risk check (DNS resolvers / CN fonts / proxy DNS / RAF).
+  // R9 P1-4: every run is persisted (mirrors webrtc:diag-history) so the
+  // report survives dialog close and supports detail replay + export.
   handleBrowser("env-risk", async (_event, dirId: string) => {
     try {
       validateDirId(dirId);
@@ -224,10 +253,30 @@ export function registerBrowserHandlers(): void {
       if (!meta) return { ok: false, error: "Profile not found" };
       const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
       const st = statusBrowser(dirId);
-      if (st.running && st.cdpPort) {
-        return { ok: true, result: await checkEnvironmentRiskRuntime(profile, st.cdpPort) };
-      }
-      return { ok: true, result: checkEnvironmentRisk(profile) };
+      const result = st.running && st.cdpPort
+        ? await checkEnvironmentRiskRuntime(profile, st.cdpPort)
+        : checkEnvironmentRisk(profile);
+      persistEnvRiskSnapshot(dirId, result);
+      return { ok: true, result };
+    } catch (e: any) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  });
+
+  handleBrowser("env-risk-history", async (_event, dirId: string) => {
+    try {
+      validateDirId(dirId);
+      return { ok: true, entries: getEnvRiskDiagnostics(dirId) };
+    } catch (e: any) {
+      return { ok: false, entries: [], error: e.message || String(e) };
+    }
+  });
+
+  handleBrowser("env-risk-clear", async (_event, dirId: string) => {
+    try {
+      validateDirId(dirId);
+      clearEnvRiskDiagnostics(dirId);
+      return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e.message || String(e) };
     }

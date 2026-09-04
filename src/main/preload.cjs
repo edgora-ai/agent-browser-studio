@@ -150,6 +150,8 @@ const api = {
     captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
     envRisk: (dirId) => ipcRenderer.invoke("browser:env-risk", dirId),
+    envRiskHistory: (dirId) => ipcRenderer.invoke("browser:env-risk-history", dirId),
+    envRiskClear: (dirId) => ipcRenderer.invoke("browser:env-risk-clear", dirId),
     // PL-07: pick a local Chromium build when no managed engine is installed.
     selectBinary: () => ipcRenderer.invoke("browser:select-binary"),
     setLock: (dirId, locked) => ipcRenderer.invoke("browser:set-lock", { dirId, locked }),
