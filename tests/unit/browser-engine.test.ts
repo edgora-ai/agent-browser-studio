@@ -72,6 +72,9 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(detectFirefoxVersion("evil;id")).toBeNull();
     expect(detectFirefoxVersion("evil`id`")).toBeNull();
     expect(detectFirefoxVersion("evil$(id)")).toBeNull();
+    // Backslash is a Windows path separator, not a metacharacter — .cmd
+    // shims must not be rejected (broke Windows CI).
+    expect(detectFirefoxVersion("C:\\Tools\\firefox.cmd & calc.exe")).toBeNull();
   });
 
   it("getFirefoxStatus reports not-installed gracefully, and installed with version when present", () => {

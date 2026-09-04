@@ -477,17 +477,22 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       return { approvals: listPendingApprovals() };
     }
     case "agent_browser_approval_resolve": {
-      const deniedApproval = denyMcpMutation();
-      if (deniedApproval) return { error: deniedApproval };
+      // No programmatic self-approval (R4 #64): an MCP client resolving its
+      // own agent_chat approval would defeat the human-in-the-loop gate the
+      // approval exists for. Deny is safe (refuse); allow-decisions must come
+      // from the UI (IPC approval:resolve with confirmed+sender).
       const id = args?.approvalId;
       const decision = args?.decision;
       if (typeof id !== "string" || !id) return { error: "approvalId is required" };
       if (decision !== "once" && decision !== "always" && decision !== "deny") {
         return { error: "decision must be once, always or deny" };
       }
-      const ok = resolveApproval(id, decision);
-      if (!ok) return { error: "Approval request not found" };
-      return { success: true, approvalId: id, decision };
+      if (decision === "deny") {
+        const ok = resolveApproval(id, decision);
+        if (!ok) return { error: "Approval request not found" };
+        return { success: true, approvalId: id, decision };
+      }
+      return { error: "Approval allow-decisions must come from the UI approval dialog (human-in-the-loop); MCP may only deny" };
     }
     case "agent_browser_db_tables": {
       return { tables: agentDbTables() };
@@ -593,7 +598,16 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     // MCP endpoints
     if (url.pathname === "/mcp" && req.method === "POST") {
       const body = await readBody(req);
-      const json = safeJson(body);
+      let json: any;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        // Malformed JSON is a client error (R7 #38) — never silently treat
+        // it as an empty request the way safeJson did (200 result:null).
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } }));
+        return;
+      }
       const sseRes = sseClients.get(sessionId);
       if (sseRes) {
         res.writeHead(202);
@@ -648,7 +662,14 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     // JSON-RPC without /mcp prefix
     if (req.method === "POST" && url.pathname === "/") {
       const body = await readBody(req);
-      const json = safeJson(body);
+      let json: any;
+      try {
+        json = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } }));
+        return;
+      }
       if (json.method === "initialize") {
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({
@@ -799,6 +820,12 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
   return buf.toString("utf-8");
 }
 
+/**
+ * Lenient JSON parse for NON-request paths only (SSE payloads etc.). Request
+ * bodies must use strict JSON.parse with a 400 on failure (R7 #38) — a
+ * malformed request silently becoming {} turns protocol errors into
+ * confusing downstream behavior (200 result:null).
+ */
 function safeJson(text: string): any {
   try { return JSON.parse(text); } catch { return {}; }
 }

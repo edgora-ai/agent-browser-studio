@@ -74,6 +74,14 @@ describe("audit-log", () => {
     }
   });
 
+  it("truncates unbounded entry fields (R7 #37)", () => {
+    recordAudit({ category: "x", action: "y", detail: "A".repeat(50_000), at: 1 });
+    const list = listAudit(10);
+    expect(list.length).toBe(1);
+    expect(list[0].detail!.length).toBeLessThan(20_000);
+    expect(list[0].detail).toMatch(/truncated/);
+  });
+
   it("persists across re-reads (append-only file)", () => {
     recordAudit({ category: "a", action: "1", at: 1 });
     recordAudit({ category: "a", action: "2", at: 2 });

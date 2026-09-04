@@ -269,11 +269,23 @@ app.whenReady().then(async () => {
   // app — including running profiles and the scheduler — down with it.
   // Both handlers log through observability so the event lands in the
   // diagnostic bundle and recent-events ring.
+  //
+  // Crash-counter wiring (R7 #42): uncaughtException means main-process state
+  // may be torn (half-written config, broken singleton) — limping on hides
+  // the crash loop from auto-rollback. Record the crash AND exit(1) so the
+  // exit-code path bumps crashCount; unhandledRejection stays survive-and-log
+  // (a single rejected promise does not tear process state).
   process.on("unhandledRejection", (reason) => {
     logWarn("app.unhandled-rejection", { reason: reason instanceof Error ? reason.stack || reason.message : String(reason) });
   });
   process.on("uncaughtException", (err: Error) => {
+    // logError appends synchronously to the log file, noteAppCrashed writes
+    // the update state synchronously — both land before exit below.
     logError("app.uncaught-exception", { error: err.stack || err.message });
+    try { noteAppCrashed(); } catch { /* best effort — exiting anyway */ }
+    // Exit non-zero so supervisors and the exit-code crash path agree this
+    // was a crash, not a clean quit (feeds auto-rollback crashCount).
+    process.exit(1);
   });
   // Local-only observability: structured log + metrics under the app data dir.
   // Nothing here is transmitted anywhere; see services/observability.ts.

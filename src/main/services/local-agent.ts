@@ -1374,6 +1374,15 @@ export async function cdpEvaluate(client: CdpClient, expression: string): Promis
     returnByValue: true,
     awaitPromise: true,
   });
+  // Surface page exceptions (R6 #74): without this a throwing page resolves
+  // undefined — silent data loss, and inconsistent with the BiDi path which
+  // rejects (bidi-client throws "BiDi evaluate failed in page:").
+  if (result?.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description
+      || result.exceptionDetails.text
+      || "page evaluation failed";
+    throw new Error(description);
+  }
   return result.result?.value;
 }
 
@@ -2610,7 +2619,8 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
       return await agentWriteFile(args);
     }
     case "db_query": {
-      // Read-only SQL (SELECT/WITH/PRAGMA). Safe — no approval needed.
+      // Read-only SQL (SELECT/WITH/EXPLAIN; PRAGMA excluded — side effects).
+      // Safe — no approval needed.
       const sql = normalizeToolString(args.sql, "sql", 10000);
       const params = Array.isArray(args.params) ? args.params : undefined;
       return agentDbQuery(sql, params);
@@ -3150,7 +3160,7 @@ External system tools (integrate with APIs and files):
 - set_var(key, value) — Store a value for reuse LATER in this same run (e.g. an ID pulled from an API, used to fill a form, then posted back).
 - get_var(key) — Read a value previously set in this run. Returns {key, value} or null.
 - read_file(path) / write_file(path, content) — Read/write files (UTF-8 text). Access is bounded by the Agent File Access setting.
-- db_query(sql, params?) — Read-only SQL (SELECT/WITH/PRAGMA) on a shared, persistent SQLite database. Data survives across runs — use it to remember state (orders processed, last-seen IDs, customer status).
+- db_query(sql, params?) — Read-only SQL (SELECT/WITH/EXPLAIN; PRAGMA excluded — use db_exec) on a shared, persistent SQLite database. Data survives across runs — use it to remember state (orders processed, last-seen IDs, customer status).
 - db_exec(sql, params?) — Write/DDL (INSERT/UPDATE/DELETE/CREATE/ALTER/DROP) on the same database. Destructive ops (DROP/DELETE/TRUNCATE) require user approval and will pause until authorized. Prefer parameterized queries (use ? + params).
 
 For branching/repetition (if/loop over a list), reason about it directly — iterate by calling tools multiple times based on data you read. Do NOT try to hardcode fixed sequences; adapt to what the API/DOM actually returns.

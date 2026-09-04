@@ -135,6 +135,14 @@ export async function installLocalExtension(localPath: string, opts: { shared?: 
   const signal = opts.signal;
   assertExtensionNotAborted(signal);
   const resolved = path.resolve(String(localPath || "").trim());
+  // Fail closed on sensitive reads (R7 #40): /etc/hosts-style paths pass
+  // existsSync and then surface content through error oracles / staging.
+  // Reuse the archive-guard ancestor walk — extension staging is the same
+  // arbitrary-local-path-read surface as archive import.
+  {
+    const { assertNoSensitiveLocalPath } = await import("./archive-path-guard.js");
+    assertNoSensitiveLocalPath(resolved);
+  }
   if (!fs.existsSync(resolved)) throw new Error(`Local extension path does not exist: ${resolved}`);
 
   const isDir = fs.statSync(resolved).isDirectory();

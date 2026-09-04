@@ -109,6 +109,78 @@ function getExistingParentRealPath(p: string): string | null {
   }
 }
 
+/**
+ * Resolve EVERY ancestor of `p` through symlinks (R5 #70): a lexical
+ * isPathInside check passes `~/Downloads/link/sub/evil.zip` when `link` is a
+ * symlink to ~/.ssh, because only the immediate parent was lstat-checked.
+ * Walk each ancestor with lstat and reject any symlink component.
+ */
+function assertNoSymlinkAncestors(p: string, roots: string[]): void {
+  const abs = path.resolve(p);
+  const parts = abs.split(path.sep).filter(Boolean);
+  // Check every prefix from the root down (skip the filesystem root itself),
+  // but resolve the ALLOWED ROOTS first: system symlinks such as /etc ->
+  // private/etc, /tmp -> private/tmp and /var -> private/var (macOS) are
+  // platform facts, not attacker plants. An ancestor is only suspicious when
+  // it is a symlink AND its realpath escapes every allowed root's realpath
+  // AND the realpath of the full destination itself.
+  const realRoots = new Set<string>();
+  for (const r of roots) {
+    try { realRoots.add(fs.realpathSync(r)); } catch { realRoots.add(path.resolve(r)); }
+  }
+  // Fully-resolved destination for the benign-symlink test below. Walk up
+  // until an existing ancestor is found (parents may not exist yet), then
+  // realpath THAT and re-append the missing tail — realpathSync on a
+  // non-existent path throws, so resolve piecewise.
+  let destFullReal = abs;
+  {
+    let existing = abs;
+    const missing: string[] = [];
+    while (true) {
+      try {
+        const realBase = fs.realpathSync(existing);
+        destFullReal = path.join(realBase, ...missing.reverse());
+        break;
+      } catch {
+        const parent = path.dirname(existing);
+        if (parent === existing) { destFullReal = abs; break; }
+        missing.push(path.basename(existing));
+        existing = parent;
+      }
+    }
+  }
+  let cur: string = path.sep;
+  for (const part of parts.slice(0, -1)) {
+    cur = path.join(cur, part);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(cur);
+    } catch (e: any) {
+      if (e && e.code === "ENOENT") return; // nothing more to check below
+      throw e;
+    }
+    if (!st.isSymbolicLink()) continue;
+    let real: string;
+    try { real = fs.realpathSync(cur); } catch { real = path.resolve(cur); }
+    // The symlink is benign when EITHER the link target stays inside an
+    // allowed root OR the fully-resolved destination stays inside one (e.g.
+    // /var -> /private/var with tmpdir under /var/folders: the ancestor
+    // looks foreign lexically, but the real destination is allowed).
+    let inside = false;
+    for (const rr of realRoots) {
+      if (real === rr || isPathInside(real, rr)) { inside = true; break; }
+    }
+    if (!inside) {
+      for (const rr of realRoots) {
+        if (destFullReal === rr || isPathInside(destFullReal, rr)) { inside = true; break; }
+      }
+    }
+    if (!inside) {
+      throw new Error(`Refusing symlink ancestor: ${cur} -> ${real}`);
+    }
+  }
+}
+
 function isInsideAllowedRoots(resolved: string, existingReal: string | null): boolean {
   const roots = getAllowedRoots();
   for (const root of roots) {
@@ -137,6 +209,9 @@ export function assertSafeArchiveExportPath(destPath: string): string {
   // Disallow obvious sensitive dotfiles even inside allowed roots? Keep minimal:
   // the allowlist already blocks ~/.zshrc etc. because homedir itself is not allowed.
   assertNotSymlink(resolved);
+  // Reject symlink ANYWHERE in the ancestor chain (R5 #70), not just the
+  // immediate parent — a lexical allowlist check cannot see through them.
+  assertNoSymlinkAncestors(resolved, getAllowedRoots());
   // If parent exists and is symlink, reject.
   const parent = path.dirname(resolved);
   if (fs.existsSync(parent)) {
@@ -177,6 +252,7 @@ export function assertSafeArchiveExportDir(destDir: string): string {
   if (path.extname(resolved).toLowerCase() === ".zip") {
     throw new Error("Export directory must be a directory, not a .zip file");
   }
+  assertNoSymlinkAncestors(resolved, getAllowedRoots());
   if (fs.existsSync(resolved)) {
     const st = fs.lstatSync(resolved);
     if (st.isSymbolicLink()) throw new Error(`Refusing symlink path: ${resolved}`);
@@ -218,4 +294,41 @@ export function assertSafeArchiveImportPath(zipPath: string): string {
 // For tests / diagnostics.
 export function _getAllowedRootsForTest(): string[] {
   return getAllowedRoots();
+}
+
+/**
+ * Sensitive-local-path gate for read surfaces outside the archive allowlist
+ * (R7 #40: extension local-install). System files (/etc, keys, tokens) must
+ * never enter staging — error oracles alone leak existence/content.
+ */
+export function assertNoSensitiveLocalPath(p: string): string {
+  const resolved = path.resolve(String(p || "").trim());
+  assertNoNul(resolved);
+  const lower = resolved.toLowerCase();
+  const sensitivePrefixes = [
+    "/etc", "/private/etc",
+    "/var/root", "/private/var/root",
+    "/root",
+  ];
+  for (const prefix of sensitivePrefixes) {
+    if (lower === prefix || lower.startsWith(prefix + path.sep)) {
+      throw new Error(`Refusing sensitive system path: ${resolved}`);
+    }
+  }
+  const home = (() => { try { return os.homedir(); } catch { return ""; } })();
+  if (home) {
+    const base = path.basename(resolved);
+    const sensitiveHome = new Set([
+      ".ssh", ".gnupg", ".aws", ".config", ".pki",
+      ".zshrc", ".bashrc", ".profile", ".netrc", ".git-credentials",
+    ]);
+    const rel = path.relative(home, resolved);
+    if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      const top = rel.split(path.sep)[0];
+      if (sensitiveHome.has(top) || sensitiveHome.has(base)) {
+        throw new Error(`Refusing sensitive home path: ${resolved}`);
+      }
+    }
+  }
+  return resolved;
 }

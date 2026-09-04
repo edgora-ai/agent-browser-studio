@@ -37,15 +37,83 @@ function newId(): string {
   return "appr_" + Math.random().toString(36).slice(2, 10);
 }
 
+/**
+ * Strip leading SQL comments/CTE prefix for risk classification (R6 #71).
+ * SQLite skips `--...`, `/* ... *\/` and `WITH ...` prefixes before the
+ * real statement, but the old classifier anchored DELETE at string start —
+ * so `/* x *\/ DELETE FROM users` classified as db-write and executed with
+ * no destroy-approval. Fail closed: anything unrecognized as safe is destroy.
+ */
+function stripLeadingSqlNoise(sql: string): string {
+  let s = String(sql || "");
+  for (let guard = 0; guard < 10; guard++) {
+    const t = s.trimStart();
+    if (t.startsWith("--")) {
+      const nl = t.indexOf("\n");
+      s = nl === -1 ? "" : t.slice(nl + 1);
+      continue;
+    }
+    if (t.startsWith("/*")) {
+      const end = t.indexOf("*/");
+      s = end === -1 ? "" : t.slice(end + 2);
+      continue;
+    }
+    // WITH cte AS (...) — the CTE body itself contains SELECT, so skip
+    // forward to the statement keyword that FOLLOWS the CTE definitions:
+    // scan top-level (depth 0, outside strings) words and take the first
+    // DELETE/INSERT/UPDATE/DROP/TRUNCATE/CREATE/ALTER/SELECT/VALUES.
+    const m = /^\s*WITH\b/i.exec(t);
+    if (m) {
+      let i = m[0].length;
+      let depth = 0;
+      let inStr: string | null = null;
+      let word = "";
+      let rest = "";
+      const flush = () => {
+        const u = word.toUpperCase();
+        if (/^(DELETE|INSERT|UPDATE|DROP|TRUNCATE|CREATE|ALTER|SELECT|VALUES)$/.test(u)) {
+          rest = t.slice(i - word.length);
+          return true;
+        }
+        word = "";
+        return false;
+      };
+      for (; i < t.length; i++) {
+        const c = t[i];
+        if (inStr) {
+          if (c === inStr && t[i - 1] !== "\\") inStr = null;
+          continue;
+        }
+        if (c === "'" || c === '"' || c === "`") { inStr = c; continue; }
+        if (c === "(") { depth++; word = ""; continue; }
+        if (c === ")") { depth = Math.max(0, depth - 1); word = ""; continue; }
+        if (/[A-Za-z_]/.test(c)) { word += c; continue; }
+        if (depth === 0 && word && flush()) break;
+        if (!/[A-Za-z_]/.test(c)) word = "";
+      }
+      if (!rest && depth === 0 && word && /^(DELETE|INSERT|UPDATE|DROP|TRUNCATE|CREATE|ALTER|SELECT|VALUES)$/i.test(word)) {
+        rest = t.slice(t.length - word.length);
+      }
+      s = rest || "";
+      continue;
+    }
+    return t;
+  }
+  return s.trimStart();
+}
+
 /** Classify a db_exec SQL statement by risk. */
 export function classifyDbSql(sql: string): { category: ApprovalRequest["category"]; signature: string } {
   const trimmed = sql.trim().replace(/\s+/g, " ");
   const upper = trimmed.toUpperCase();
-  // Destructive: DROP, DELETE, TRUNCATE
-  if (/\b(DROP|TRUNCATE)\b/.test(upper) || /^\s*DELETE\b/.test(upper)) {
-    // Signature: verb + table name if extractable
-    const m = trimmed.match(/^\s*(?:DROP\s+TABLE|DELETE\s+FROM|TRUNCATE\s+TABLE)\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)/i);
-    return { category: "db-destroy", signature: m ? upper.split(/\s+/).slice(0, 2).join(" ") + " " + m[1].toLowerCase() : upper.slice(0, 40) };
+  const head = stripLeadingSqlNoise(sql);
+  const headUpper = head.toUpperCase();
+  // Destructive: DROP, DELETE, TRUNCATE — matched on the de-noised head, so
+  // comment/CTE-prefixed statements cannot dodge the destroy gate.
+  if (/\b(DROP|TRUNCATE)\b/.test(headUpper) || /^\s*DELETE\b/.test(headUpper)) {
+    // Signature: verb + table name if extractable (from the de-noised head).
+    const m = head.match(/^\s*(?:DROP\s+TABLE|DELETE\s+FROM|TRUNCATE\s+TABLE)\s+["`]?([a-zA-Z_][a-zA-Z0-9_]*)/i);
+    return { category: "db-destroy", signature: m ? headUpper.split(/\s+/).slice(0, 2).join(" ") + " " + m[1].toLowerCase() : headUpper.slice(0, 40) };
   }
   // Other writes: INSERT/UPDATE/CREATE/ALTER
   return { category: "db-write", signature: upper.slice(0, 40) };

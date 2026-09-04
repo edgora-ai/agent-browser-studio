@@ -111,7 +111,9 @@ export function detectFirefoxVersion(bin: string): string | null {
   // Shell-metacharacter guard: the win32 shim path below spawns via a shell,
   // and `bin` comes from an env override. A value like `evil.cmd & calc.exe`
   // must never execute — reject it before it reaches spawnSync.
-  if (/[&|;`$<>(){}$!\\\n\r]/.test(bin)) return null;
+  // NOTE: backslash is a normal Windows path separator (C:\...), NOT a shell
+  // metacharacter — it must not be in the reject set (broke .cmd shims).
+  if (/[&|;`$<>(){}$!\n\r]/.test(bin)) return null;
   const isShim = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
   const attempts: boolean[] = isShim ? [false, true] : [false];
   const run = (useShell: boolean): ReturnType<typeof spawnSync> | null => {

@@ -72,6 +72,18 @@ describe("script-sandbox", () => {
     expect(() => runSandboxed("return queueMicrotask.constructor('return 1')();")).toThrow(/code generation|disallowed/i);
   });
 
+  it("tracks intervals via handle and dispose() clears them (R6 #72)", async () => {
+    const { runSandboxedWithHandle, _sandboxIntervalCountForTests } = await import("../../src/main/services/script-sandbox.js");
+    const before = _sandboxIntervalCountForTests();
+    const handle = runSandboxedWithHandle("setInterval(function(){}, 50); setInterval(function(){}, 50); return 'ok';", {}, 1000);
+    expect(handle.result).toBe("ok");
+    expect(handle.pendingIntervals()).toBe(2);
+    expect(_sandboxIntervalCountForTests()).toBe(before + 2);
+    handle.dispose();
+    expect(handle.pendingIntervals()).toBe(0);
+    expect(_sandboxIntervalCountForTests()).toBe(before);
+  });
+
   it("throws on empty script", () => {
     expect(() => runSandboxed("   ")).toThrow(/empty/i);
   });

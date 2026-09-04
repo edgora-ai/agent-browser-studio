@@ -110,7 +110,9 @@ describe("Chromium macOS source and build scripts", () => {
     expect(check).toContain("archive source patch is not recorded as applied");
   });
 
-  it("seeds archive provenance without adding the source tree to Git", () => {
+  // Windows Git Bash tar/gzip of even a tiny tree can exceed the 5s default
+  // vitest timeout on loaded CI runners — allow 60s (Linux/macOS unaffected).
+  it("seeds archive provenance without adding the source tree to Git", { timeout: 60000 }, () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), "chromium-archive-seed-"));
     try {
       const root = path.join(temp, "build");
