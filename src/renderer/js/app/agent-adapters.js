@@ -57,7 +57,7 @@
         html += '</p>';
         html += '<div class="adapter-detail" style="display:none;margin-top:10px;background:var(--surface);padding:8px;border-radius:4px;font-size:11px;line-height:1.5;">';
         html += '<div><strong>Login URL hints:</strong> ' + esc((a.loginUrlHints || []).join(", ") || "n/a") + '</div>';
-        var recipeText = (a.recipes || []).map(function(r) { return r.name + ": " + r.goal + " (" + r.steps.join(" → ") + ")"; }).join("<br>");
+        var recipeText = (a.recipes || []).map(function(r) { return esc(r.name) + ": " + esc(r.goal) + " (" + esc((r.steps || []).join(" → ")) + ")"; }).join("<br>");
         html += '<div style="margin-top:6px;"><strong>Recipes:</strong><br>' + recipeText + '</div>';
         html += '<div style="margin-top:6px;"><strong>Notes:</strong> ' + esc(a.notes) + '</div>';
         html += '<div style="margin-top:6px;"><button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="adapterShowDetail" data-cmd-arg="' + escAttr(a.id) + '">🔎 Load full recipe (loginCheck + selectors)</button></div>';
@@ -72,8 +72,18 @@
     });
   };
 
+  function findAdapterCard(id) {
+    // Dataset scan — never interpolate a catalog-controlled id into a
+    // selector string (R3 #55: crafted id breaks querySelector).
+    var cards = document.querySelectorAll('.adapter-card[data-adapter-id]');
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute('data-adapter-id') === String(id)) return cards[i];
+    }
+    return null;
+  }
+
   agentBrowser.adapterToggle = function(id) {
-    var card = document.querySelector('.adapter-card[data-adapter-id="' + id + '"]');
+    var card = findAdapterCard(id);
     if (!card) return;
     var detail = card.querySelector('.adapter-detail');
     if (!detail) return;
@@ -84,7 +94,7 @@
   };
 
   agentBrowser.adapterShowDetail = function(id) {
-    var card = document.querySelector('.adapter-card[data-adapter-id="' + id + '"]');
+    var card = findAdapterCard(id);
     var holder = card ? card.querySelector('.adapter-full-detail') : null;
     if (!holder) return;
     holder.innerHTML = '<div class="loading">Loading full recipe...</div>';

@@ -206,7 +206,7 @@
       },
 
   delProfile: function (dirId) {
-        agentBrowser.confirm("Delete profile? All data will be removed.", function () {
+        agentBrowser.confirm(window.i18n ? window.i18n.t("profile.delete-confirm", "Delete profile? All data will be removed.") : "Delete profile? All data will be removed.", function () {
           api.browser.delete(dirId).then(function (r) {
             if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted"), "success"); agentBrowser.refresh(); }
             else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
@@ -535,7 +535,7 @@
       if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
       agentBrowser.batch.run({ kind: "launch", dirIds: stopped.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
-    }).catch(function(){});
+    }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
   };
 
   agentBrowser.bulkStop = function() {
@@ -544,7 +544,7 @@
       if (running.length === 0) { toast(t("toast.bulk.none-running", "No profiles are running"), "success"); return; }
       agentBrowser.batch.run({ kind: "stop", dirIds: running.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
-    }).catch(function(){});
+    }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
   };
 
   // ── Batch operations console (filter / select / batch actions) ──
@@ -1517,8 +1517,8 @@
     var rows = [];
     rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + ((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + ((res.cnFonts || []).join(', ') || esc(t("common.none", "none"))) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + esc((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + esc((res.cnFonts || []).join(', ') || t("common.none", "none")) + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.proxy", "Proxy")) + ': ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
     if (res.raf && res.raf.samples > 0) {
       rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(String(res.raf.medianMs)) + 'ms ≈ ' + esc(String(res.raf.refreshHz)) + 'Hz (' + esc(String(res.raf.samples)) + ' samples, ' + (res.raf.standard ? 'standard' : 'non-standard') + ')</div>');

@@ -209,7 +209,7 @@ export function registerBrowserHandlers(): void {
   }) => {
     try {
       const r = await launchBrowser(params.dirId);
-      return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck };
+      return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

@@ -218,6 +218,6 @@
       fsAllowlist = (cfg && cfg.allowlist) || [];
       renderFsAllowlist();
       updateFsVisibility();
-    }).catch(function(){});
+    }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
   };
 })();

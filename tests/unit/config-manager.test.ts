@@ -421,17 +421,17 @@ describe("Config Manager (real functions)", () => {
     expect(before.some((r: any) => r.id === "run_ar1_probe")).toBe(false);
   });
 
-  it("normalizes corrupt config to defaults and backs up the original", () => {
+  it("refuses to load corrupt config (fail-safe: never run on wiped defaults)", () => {
     const configPath = getConfigPath();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, "{{{corrupt json}}}", "utf-8");
 
-    reloadConfig();
-    const cfg = getConfig();
-    expect(cfg.version).toBe(4);
-    // A .bak file should be created
-    const bakFiles = fs.readdirSync(path.dirname(configPath)).filter((f) => f.endsWith(".bak"));
-    expect(bakFiles.length).toBeGreaterThanOrEqual(1);
+    expect(() => reloadConfig()).toThrow(/corrupt/i);
+    // A timestamped .corrupt backup is kept for manual salvage, and the
+    // corrupt original is left in place (never replaced by defaults).
+    const corruptFiles = fs.readdirSync(path.dirname(configPath)).filter((f) => f.endsWith(".corrupt"));
+    expect(corruptFiles.length).toBeGreaterThanOrEqual(1);
+    expect(fs.readFileSync(configPath, "utf-8")).toBe("{{{corrupt json}}}");
   });
 
   it("relocates extension repository paths without discarding profiles or proxies", () => {

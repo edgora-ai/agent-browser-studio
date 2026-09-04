@@ -49,6 +49,21 @@ export function sanitizeBrowserEngine(value: unknown): BrowserEngine {
   return value === "firefox" ? "firefox" : "chromium";
 }
 
+/**
+ * Engine-aware version pin for profile creation (R3 #58): Firefox pins look
+ * like "154.0" (1-3 dotted numerics), Chromium pins are exact 4-segment.
+ * Returns null for unset/auto. Throws on malformed input (fail-closed: a bad
+ * pin must not silently become "auto").
+ */
+export function normalizeManagedFirefoxVersion(value: unknown): string | null {
+  if (value === undefined || value === null || value === "" || value === "auto") return null;
+  const s = String(value).trim();
+  if (!/^\d+(\.\d+){0,2}$/.test(s)) {
+    throw new Error(`Invalid Firefox version: ${JSON.stringify(s.slice(0, 40))}`);
+  }
+  return s;
+}
+
 // ═══════════════════════════════════════════════════════════
 // Firefox binary discovery
 // ═══════════════════════════════════════════════════════════
@@ -93,6 +108,10 @@ export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string 
 
 /** Detect the Firefox product version via `firefox --version`. */
 export function detectFirefoxVersion(bin: string): string | null {
+  // Shell-metacharacter guard: the win32 shim path below spawns via a shell,
+  // and `bin` comes from an env override. A value like `evil.cmd & calc.exe`
+  // must never execute — reject it before it reaches spawnSync.
+  if (/[&|;`$<>(){}$!\\\n\r]/.test(bin)) return null;
   const isShim = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
   const attempts: boolean[] = isShim ? [false, true] : [false];
   const run = (useShell: boolean): ReturnType<typeof spawnSync> | null => {
@@ -218,7 +237,15 @@ export function buildFirefoxLaunchArgs(opts: FirefoxLaunchArgsOpts): string[] {
   if (opts.platform !== "windows") args.push("-new-instance");
   if (opts.headless) args.push("-headless");
   if (opts.nativeRequired) args.push(FIREFOX_NATIVE_REQUIRED_SWITCH);
-  if (opts.appUrl) args.push(opts.appUrl);
+  if (opts.appUrl) {
+    // Dash guard: a value like `-profile /evil` must never become a flag.
+    // sanitizeAppUrl already restricts the product path to http(s)/data, but
+    // this exported builder defends direct callers too.
+    if (opts.appUrl.startsWith("-")) {
+      throw new Error("Refusing to pass a dash-leading appUrl as a launch argument");
+    }
+    args.push(opts.appUrl);
+  }
   args.push("-no-remote");
   return args;
 }
@@ -307,13 +334,13 @@ export function spawnFirefoxWithDebugInfo(
     child.on("error", (err) => {
       finish(() => { clearTimeout(timer); reject(err); });
     });
-    child.on("exit", (code) => {
-      if (code !== 0 && code !== null) {
-        finish(() => {
-          clearTimeout(timer);
-          reject(new Error(`Firefox exited early (code ${code}) before announcing a debugging port`));
-        });
-      }
+    // Any pre-announce exit rejects promptly — a code-0 or signal death must
+    // not hang the launch on the 60s timer while holding the launch lock.
+    child.on("exit", (code, signal) => {
+      finish(() => {
+        clearTimeout(timer);
+        reject(new Error(`Firefox exited early (${signal ? "signal " + signal : "code " + String(code)}) before announcing a debugging port`));
+      });
     });
   });
 }
@@ -462,8 +489,11 @@ export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
   return lines.join("\n") + "\n";
 }
 
-/** Ensure a Firefox profile dir exists and (re)write managed prefs into it. */
+/** Ensure a Firefox profile dir exists and (re)write managed prefs into it.
+ * The file carries the proxy password in plaintext (Gecko has no sealed-pref
+ * channel), so it is written owner-only (0600) like the Chromium-side secrets. */
 export function writeFirefoxUserJs(profileDir: string, opts: FirefoxUserJsOpts, file = "user.js"): void {
   fs.mkdirSync(profileDir, { recursive: true });
-  fs.writeFileSync(path.join(profileDir, file), buildFirefoxUserJs(opts), "utf8");
+  fs.writeFileSync(path.join(profileDir, file), buildFirefoxUserJs(opts), { encoding: "utf8", mode: 0o600 });
+  try { fs.chmodSync(path.join(profileDir, file), 0o600); } catch { /* best effort on non-POSIX */ }
 }

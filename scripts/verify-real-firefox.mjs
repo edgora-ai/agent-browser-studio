@@ -53,12 +53,22 @@ async function launchFirefox(name, { extraPrefs, tz } = {}) {
     writeFirefoxUserJs(profileDir, { extraPrefs, useGpu: true, sandboxPermission: true, colorScheme: "system", dohUrl: null });
   }
   const port = await freePort();
+  // Bounded stderr tail (P2-7): a verbose binary must not grow memory without
+  // limit while we poll for the BiDi endpoint.
+  const ERR_CAP = 64 * 1024;
   let childErr = "";
   const child = spawn(FX, ["-profile", profileDir, `--remote-debugging-port=${port}`, "--headless", "--no-remote"], {
     stdio: ["ignore", "ignore", "pipe"],
     ...(tz ? { env: { ...process.env, TZ: tz } } : {}),
   });
-  child.stderr.on("data", (d) => { childErr += String(d); });
+  child.on("error", (err) => {
+    console.error(`spawn failed (${name}):`, err?.message || String(err));
+    process.exitCode = 1;
+  });
+  child.stderr.on("data", (d) => {
+    childErr += String(d);
+    if (childErr.length > ERR_CAP) childErr = childErr.slice(-ERR_CAP);
+  });
   console.log(`step1: spawned firefox (${name}) port ${port}`);
   const connectWithRetry = async () => {
     for (let i = 0; i < 60; i++) {

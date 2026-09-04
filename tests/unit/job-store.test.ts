@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   _setDbForTesting, enqueueJob, markRunning, markDone, markFailed, markSkipped,
-  markJobRunId, markCancelled, getJob, listJobs, recoverInterruptedJobs,
+  markJobRunId, markCancelled, getJob, listJobs, recoverInterruptedJobs, pruneJobs,
 } from "../../src/main/services/job-store.js";
 
 beforeEach(() => {
@@ -147,5 +147,23 @@ describe("job-store", () => {
 
   it("getJob returns null for an unknown id", () => {
     expect(getJob("nope")).toBeNull();
+  });
+
+  it("caps skipped rows so a cooldown cron cannot grow the table forever", () => {
+    for (let i = 0; i < 250; i++) {
+      const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
+      markSkipped(j.id, "skipped: cooldown");
+    }
+    expect(listJobs({ status: "skipped", limit: 1000 }).length).toBeLessThanOrEqual(200);
+  });
+
+  it("pruneJobs caps terminal rows too", () => {
+    for (let i = 0; i < 100; i++) {
+      const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
+      markRunning(j.id, 0);
+      markDone(j.id, "ok");
+    }
+    expect(listJobs({ status: "done", limit: 10000 }).length).toBe(100);
+    expect(pruneJobs()).toBe(0); // under cap: nothing pruned
   });
 });

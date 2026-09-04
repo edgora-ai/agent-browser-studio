@@ -59,7 +59,7 @@
         var list = document.getElementById("cookie-list");
         api.profile.cookies(dirId, filter || "").then(function (cookies) {
           if (!cookies || cookies.length === 0) {
-            list.innerHTML = '<div class="empty-state">No cookies found.</div>';
+            list.innerHTML = '<div class="empty-state">' + esc(window.i18n ? window.i18n.t("cookies.empty", "No cookies found.") : "No cookies found.") + '</div>';
             return;
           }
           list.innerHTML = '<table class="cookie-table"><thead><tr><th>Domain</th><th>Name</th><th>Value</th><th>Expires</th><th></th></tr></thead><tbody>' +

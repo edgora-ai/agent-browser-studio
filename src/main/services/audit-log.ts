@@ -36,14 +36,29 @@ function newId(): string {
   return `a_${Date.now().toString(36)}_${_seq.toString(36)}`;
 }
 
-/** Append an audit entry. Safe to call from hot paths — best-effort, never throws. */
+/** Ensure the audit log exists owner-only before first append. */
+function sealLogFile(p: string): void {
+  try {
+    const fd = fs.openSync(p, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+    fs.closeSync(fd);
+  } catch (e: any) {
+    if (e?.code !== "EEXIST") throw e;
+  }
+  try { fs.chmodSync(p, 0o600); } catch { /* best effort on non-POSIX */ }
+}
+
+/** Append an audit entry. Safe to call from hot paths — best-effort, never throws.
+ * The log may carry URLs/SQL/paths, so the file is owner-only (0600) — created
+ * with O_CREAT|O_EXCL when missing, chmod-enforced on every append. */
 export function recordAudit(entry: Omit<AuditEntry, "id" | "at"> & { at?: number }): void {
   try {
     const full: AuditEntry = { id: newId(), at: entry.at ?? Date.now(), ...entry };
     const line = JSON.stringify(full) + "\n";
     const p = logPath();
     fs.mkdirSync(path.dirname(p), { recursive: true });
+    sealLogFile(p);
     fs.appendFileSync(p, line, { encoding: "utf-8" });
+    try { fs.chmodSync(p, 0o600); } catch { /* best effort on non-POSIX */ }
     // Ring-buffer: trim if the file grew past CAP lines (cheap-ish, amortized).
     trimIfNeeded(p);
   } catch {

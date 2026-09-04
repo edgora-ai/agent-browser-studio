@@ -116,7 +116,13 @@ export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintC
   // Worker-identity block for the shim (G1): computed HERE (TS side) because
   // the page realm executing the preload has no `config` binding — the
   // generated worker script receives the persona fields as plain JSON.
-  const wcfgJson = JSON.stringify({
+  // Worker-identity literal, evaluated ONCE at preload-build time (TS side)
+  // and substituted into the __WCFG_LITERAL__ placeholder after the template
+  // closes. It must be plain source text — the worker-shim block is itself a
+  // runtime string template inside the page script, so a TS-side const
+  // reference would emit a bare identifier and a second JSON.stringify would
+  // emit a quoted string; either way the worker reads undefined (R3 #56).
+  const wcfgLiteral: string = JSON.stringify({
     platform: config.platform,
     oscpu: config.platform === "MacIntel" ? "Intel Mac OS X 10.15" : config.platform === "Linux armv81" ? "Linux armv8l" : "Windows NT 10.0; Win64; x64",
     appVersion: config.platform === "MacIntel" ? "5.0 (Macintosh)" : config.platform === "Linux armv81" ? "5.0 (Android)" : "5.0 (Windows)",
@@ -126,7 +132,7 @@ export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintC
     timezone: config.timezone,
     canvasSeed: config.canvas && config.canvas.enabled ? config.canvas.seed : null,
   });
-  return `(function(){
+  const preload = `(function(){
 "use strict";
 var cfg = ${json};
 var seedFromHex = function(hex){ var n=0; for(var i=0;i<hex.length&&i<8;i++){ n=(n*16+parseInt(hex[i],16))>>>0; } return n||1; };
@@ -415,6 +421,9 @@ if (cfg.canvas.enabled) {
       Wrapped.prototype = RealCtor.prototype;
       if (typeof Object.setPrototypeOf === "function") Object.setPrototypeOf(Wrapped, RealCtor);
       if (fakeFns) fakeFns.add(maskLen(Wrapped));
+      // Mask the function name too: Intl.DateTimeFormat.name reading
+      // "Wrapped" is a one-line detector (only length used to be masked).
+      try { Object.defineProperty(Wrapped, "name", { value: ctorName, configurable: true }); } catch (e) {}
       Object.defineProperty(Intl, ctorName, { configurable: true, value: Wrapped });
     } catch (e) {}
   }
@@ -505,20 +514,28 @@ function patchWebglContext(ctx){
   }
 })();
 
-// ── audio noise (OfflineAudioContext render path) ──
+// ── audio noise (AudioBuffer readback paths) ──
+// NOTE (honest scope): the fallback preload noises copyToChannel AND the
+// primary readback sinks (getChannelData, AnalyserNode frequency/time-domain
+// getters). A scanner reading via the standard getChannelData/Analyser path
+// would otherwise see host hardware. OfflineAudioContext rendering flows
+// through the same AudioBuffer objects, so it inherits the noise.
 if (cfg.audio.enabled) {
   (function(){
     var rng = mulberry32(seedFromHex(cfg.audio.seed));
     var amp = cfg.audio.amplitude > 0 ? cfg.audio.amplitude : 0.0000001;
+    var noisify = function(data){
+      if (!data || !data.length) return data;
+      for (var i = 0; i < data.length; i++) data[i] = data[i] + (rng() - 0.5) * amp;
+      return data;
+    };
     var proto = typeof AudioBuffer !== "undefined" ? AudioBuffer.prototype : null;
     if (proto && typeof proto.copyToChannel === "function") {
       var origCopy = proto.copyToChannel;
       try {
         var copyFn = function(source){
           var copy = source instanceof Float32Array ? new Float32Array(source) : source;
-          if (copy && copy.length) {
-            for (var i = 0; i < copy.length; i++) copy[i] = copy[i] + (rng() - 0.5) * amp;
-          }
+          noisify(copy);
           return origCopy.call(this, copy, arguments[1], arguments[2]);
         };
         if (fakeFns) fakeFns.add(maskLen(copyFn));
@@ -527,6 +544,41 @@ if (cfg.audio.enabled) {
           value: copyFn,
         });
       } catch (e) {}
+    }
+    if (proto && typeof proto.getChannelData === "function") {
+      var origGet = proto.getChannelData;
+      try {
+        var getFn = function(channel){
+          // Noise the live channel view in place (getChannelData returns the
+          // buffer's own data, not a copy) — bounded, deterministic per seed.
+          return noisify(origGet.call(this, channel));
+        };
+        if (fakeFns) fakeFns.add(maskLen(getFn));
+        Object.defineProperty(proto, "getChannelData", {
+          configurable: true,
+          value: getFn,
+        });
+      } catch (e) {}
+    }
+    var analyserProto = typeof AnalyserNode !== "undefined" ? AnalyserNode.prototype : null;
+    if (analyserProto) {
+      var patchAnalyser = function(name){
+        try {
+          if (typeof analyserProto[name] !== "function") return;
+          var orig = analyserProto[name];
+          var fn = function(array){
+            var out = orig.call(this, array);
+            if (array && (array instanceof Float32Array || array instanceof Uint8Array)) noisify(array);
+            return out;
+          };
+          if (fakeFns) fakeFns.add(maskLen(fn));
+          Object.defineProperty(analyserProto, name, { configurable: true, value: fn });
+        } catch (e) {}
+      };
+      patchAnalyser("getFloatFrequencyData");
+      patchAnalyser("getByteFrequencyData");
+      patchAnalyser("getFloatTimeDomainData");
+      patchAnalyser("getByteTimeDomainData");
     }
   })();
 }
@@ -1133,9 +1185,11 @@ if (cfg.audio.enabled) {
         // oscpu, appVersion, hardwareConcurrency, maxTouchPoints, webdriver,
         // languages) and timezone would otherwise expose the HOST identity the
         // window realm is masking — the classic two-realm cross-check.
-        // NOTE: the wcfg literal is evaluated in buildFirefoxFingerprintPreloadScript
-        // (TS side) and embedded as plain JSON — the page realm has no config.
-        'var wcfg=' + ${JSON.stringify(wcfgJson)} + ';' +
+        // NOTE: the persona literal is baked in at preload-build time via the
+        // WCFG_LITERAL placeholder below (string-replaced TS-side after the
+        // template closes). A second JSON.stringify would emit a quoted string
+        // and the worker realm would read every field as undefined (R3 #56).
+        'var wcfg=__WCFG_LITERAL__;' +
         'if(typeof navigator!=="undefined"){try{' +
         'var WNP=Object.getPrototypeOf(navigator)||navigator;' +
         'function wval(o,k,v){try{var d=Object.getOwnPropertyDescriptor(o,k);if(d&&!d.configurable)return;Object.defineProperty(o,k,{configurable:true,get:function(){return v;}});}catch(e){}}' +
@@ -1223,6 +1277,10 @@ if (cfg.audio.enabled) {
       return new RealWorker(url, opts);
     }
     ShimmedWorker.prototype = RealWorker.prototype;
+    // Name/length masking: Worker.name reading "ShimmedWorker" is a one-line
+    // detector (same class of issue as the Intl name fix).
+    try { Object.defineProperty(ShimmedWorker, "name", { value: "Worker", configurable: true }); } catch (e) {}
+    try { Object.defineProperty(ShimmedWorker, "length", { value: 1, configurable: true }); } catch (e) {}
     var RealShared = typeof window.SharedWorker === "function" ? window.SharedWorker : null;
     function ShimmedShared(url, name, opts){
       var named = typeof name === "string";
@@ -1238,6 +1296,10 @@ if (cfg.audio.enabled) {
       return real(url);
     }
     if (RealShared) ShimmedShared.prototype = RealShared.prototype;
+    if (RealShared) {
+      try { Object.defineProperty(ShimmedShared, "name", { value: "SharedWorker", configurable: true }); } catch (e) {}
+      try { Object.defineProperty(ShimmedShared, "length", { value: 1, configurable: true }); } catch (e) {}
+    }
     try {
       Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: ShimmedWorker });
       try { ShimmedWorker.__roxyFontsInstalled = true; } catch (e) {}
@@ -1273,6 +1335,8 @@ if (cfg.audio.enabled) {
   } catch (e) {}
 })();
 })();`;
+  if (!preload.includes("__WCFG_LITERAL__")) throw new Error("wcfg placeholder missing from preload template");
+  return preload.split("__WCFG_LITERAL__").join(wcfgLiteral);
 }
 
 /**
@@ -1410,7 +1474,13 @@ export function judgeInjectionProbe(response: any, expected: InjectionProbeExpec
   };
 }
 
-/** Block rule: an injection we cannot prove is a silent-failure launch gate. */
+/** Block rule: fail closed. A managed-identity launch is blocked unless the
+ * probe positively confirms the injection. That covers a provably-dead
+ * injection (checked, not confirmed) AND an undecidable probe (unchecked or
+ * ambiguous, e.g. both BiDi attempts threw) — launching with zero injection
+ * would be a silent-failure launch. `blockOnInjectionProbe=false` opts out. */
 export function shouldBlockInjectionProbe(check: InjectionProbeCheck, blockOnInjectionProbe: unknown): boolean {
-  return !!check.checked && !check.confirmed && !check.ambiguous && blockOnInjectionProbe !== false;
+  if (blockOnInjectionProbe === false) return false;
+  if (check.checked && !check.ambiguous) return !check.confirmed;
+  return true;
 }

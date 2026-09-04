@@ -20,7 +20,15 @@ export function registerUpdateHandlers(): void {
 
   ipcMain.handle("updates:check", async (_event, { manifestUrl }: { manifestUrl?: string } = {}) => {
     try {
-      const result = await checkForUpdates(manifestUrl);
+      // Caller-supplied overrides are untrusted: validate before fetching.
+      // (The UI never sends an override; this closes the SSRF/LFI path for
+      // compromised renderers or future callers.)
+      let safeUrl: string | undefined;
+      if (manifestUrl != null && manifestUrl !== "") {
+        const { assertSafeManifestUrl } = await import("../services/update-manager.js");
+        safeUrl = await assertSafeManifestUrl(manifestUrl);
+      }
+      const result = await checkForUpdates(safeUrl);
       return { success: true, ...result };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };

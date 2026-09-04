@@ -157,4 +157,22 @@ describe("withTimeout", () => {
     const v = await withTimeout(async () => 7, 0);
     expect(v).toBe(7);
   });
+
+  it("fires onTimeout with the still-running loser and suppresses its late rejection", async () => {
+    let aborted = false;
+    let seenLoser: Promise<string> | null = null;
+    const slow = (signal?: AbortSignal) => new Promise<string>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        aborted = true;
+        // Settles AFTER the timeout already rejected — must not surface.
+        setTimeout(() => reject(new Error("late zombie failure")), 10);
+      }, { once: true });
+    });
+    await expect(withTimeout(slow, 30, "job", { onTimeout: (loser) => { seenLoser = loser; } }))
+      .rejects.toThrow(/timed out after 30ms/);
+    expect(aborted).toBe(true);
+    expect(seenLoser).not.toBeNull();
+    // Give the zombie time to settle; no unhandled rejection may escape.
+    await new Promise((r) => setTimeout(r, 50));
+  });
 });

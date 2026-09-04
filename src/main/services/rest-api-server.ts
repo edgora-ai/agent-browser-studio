@@ -18,7 +18,7 @@ import {
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
-import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion } from "./update-manager.js";
+import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion, assertSafeManifestUrl } from "./update-manager.js";
 import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret, requireSettingsMutation } from "./team.js";
 import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
@@ -65,9 +65,18 @@ let server: http.Server | null = null;
 let serverListening = false;
 const API_DEFAULT_PORT = 26582;
 let apiPort = configuredApiPort();
-const API_TOKEN = process.env.AGENT_BROWSER_API_TOKEN
-  || process.env.CLOAK_API_TOKEN
-  || createLocalToken();
+const PLACEHOLDER_TOKENS = new Set(["change-me", "changeme", "token", "test", "password", "secret"]);
+function resolveApiToken(): string {
+  const fromEnv = process.env.AGENT_BROWSER_API_TOKEN || process.env.CLOAK_API_TOKEN;
+  // Fail closed on placeholder credentials: a shipped "change-me" on published
+  // ports is worse than no server. Docker/headless deployments must export a
+  // real token; desktop use falls back to a per-boot random local token.
+  if (fromEnv && PLACEHOLDER_TOKENS.has(fromEnv.trim().toLowerCase())) {
+    throw new Error("Refusing to start with a placeholder API token (AGENT_BROWSER_API_TOKEN=change-me). Set a real token.");
+  }
+  return fromEnv || createLocalToken();
+}
+const API_TOKEN = resolveApiToken();
 
 function configuredApiPort(): number {
   const value = Number(process.env.AGENT_BROWSER_API_PORT ?? process.env.CLOAK_API_PORT ?? API_DEFAULT_PORT);
@@ -314,7 +323,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const opts = await readJson(req);
       const r = await launchBrowser(dirId, { headless: Boolean(opts && opts.headless) });
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
-      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck } };
+      return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -546,8 +555,15 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   }
   if (method === "GET" && p === "/api/proxies/export") {
     try {
-      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "api", detail: "exported CSV" });
-      return { status: 200, body: { success: true, csv: exportProxiesCsv() } };
+      const includePasswords = String(url.searchParams.get("includePasswords") || "").toLowerCase() === "true";
+      // Bulk password export is a secret operation (R2 #51): same gate as the
+      // single-account password endpoint. Redacted export stays open.
+      if (includePasswords) {
+        const deny = requireRestAccountSecret();
+        if (deny) return deny;
+      }
+      recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "api", detail: includePasswords ? "exported CSV (passwords included)" : "exported CSV (passwords redacted)" });
+      return { status: 200, body: { success: true, csv: exportProxiesCsv({ includePasswords }) } };
     } catch (e: any) {
       return { status: 500, body: { error: e.message || String(e) } };
     }
@@ -635,7 +651,11 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "POST" && p === "/api/updates/check") {
     try {
       const body = await readJson(req);
-      const result = await checkForUpdates(body?.manifestUrl);
+      let safeUrl: string | undefined;
+      if (body?.manifestUrl != null && body.manifestUrl !== "") {
+        safeUrl = await assertSafeManifestUrl(String(body.manifestUrl));
+      }
+      const result = await checkForUpdates(safeUrl);
       return { status: 200, body: { success: true, ...result } };
     } catch (e: any) {
       return { status: 400, body: { error: e?.message || String(e) } };

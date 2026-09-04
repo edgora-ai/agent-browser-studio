@@ -229,12 +229,18 @@ function csvEscape(value: string): string {
   return /[,"\n]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
 }
 
-/** Serialize the current proxy store as a CSV document (passwords included for migration). */
-export function exportProxiesCsv(): string {
+/**
+ * Serialize the current proxy store as a CSV document.
+ * Passwords are REDACTED by default — pass `{ includePasswords: true }` only
+ * for an explicit user-confirmed migration export (the caller must audit it).
+ */
+export function exportProxiesCsv(opts?: { includePasswords?: boolean }): string {
+  const includePasswords = opts?.includePasswords === true;
   const rows = getProxyList().map((p) => {
     const secret = getProxySecret(p.name);
     const cfg = (secret || p.config) as any;
-    return [p.name, cfg.type || "http", cfg.host || "", String(cfg.port ?? ""), cfg.username || "", cfg.password || ""]
+    const password = includePasswords ? (cfg.password || "") : "";
+    return [p.name, cfg.type || "http", cfg.host || "", String(cfg.port ?? ""), cfg.username || "", password]
       .map((v) => csvEscape(String(v))).join(",");
   });
   return ["name,type,host,port,username,password", ...rows].join("\n");

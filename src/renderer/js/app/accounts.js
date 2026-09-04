@@ -76,8 +76,8 @@
         html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="Copy username">👤</button> ';
         html += passBtn;
         html += bindBtn;
-        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">Edit</button>';
-        html += '<button class="btn btn-danger btn-sm" onclick="agentBrowser.agentDeleteAccount(' + i + ')">Del</button>';
+        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">' + esc(window.i18n ? window.i18n.t("accounts.edit", "Edit") : "Edit") + '</button>';
+        html += '<button class="btn btn-danger btn-sm" onclick="agentBrowser.agentDeleteAccount(' + i + ')">' + esc(window.i18n ? window.i18n.t("accounts.delete", "Del") : "Del") + '</button>';
         html += '</div>';
         html += '</div>';
         if (chips) html += '<div style="margin-top:6px;">' + chips + '</div>';

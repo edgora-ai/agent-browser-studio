@@ -580,7 +580,22 @@ export function registerAgentHandlers(): void {
   // ════════════════════════════════════════════════════════
 
   ipcMain.handle("approval:list", async () => listPendingApprovals());
-  ipcMain.handle("approval:resolve", async (_e, id: string, decision: string) => {
-    return { success: resolveApproval(id, decision as any) };
+  // Destructive-adjacent (self-approval bypass = prompt bypass): require the
+  // same confirmed+sender gate as audit:clear (R2 #49). A bare invoke from
+  // injected renderer JS is rejected without touching the pending map.
+  ipcMain.handle("approval:resolve", async (event, id: string, decision: string, opts?: { confirmed?: boolean }) => {
+    try {
+      if (!opts || opts.confirmed !== true) {
+        return { success: false, error: "approval:resolve requires explicit user confirmation (pass { confirmed: true })" };
+      }
+      const { BrowserWindow } = await import("electron");
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win || win.isDestroyed()) {
+        return { success: false, error: "approval:resolve rejected: untrusted sender" };
+      }
+      return { success: resolveApproval(id, decision as any) };
+    } catch {
+      return { success: false, error: "approval:resolve rejected: sender check failed" };
+    }
   });
 }

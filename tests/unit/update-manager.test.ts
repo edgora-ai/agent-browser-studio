@@ -113,6 +113,25 @@ describe("manifest parsing", () => {
     expect(() => parseUpdateManifest(JSON.stringify({ product: "agent-browser-studio", releases: [{ version: "1.0.0", url: "x", sha256: "zz" }] }))).toThrow(/sha256/i);
     expect(() => parseUpdateManifest("not json")).toThrow(/JSON/i);
   });
+
+  it("rejects traversal versions in the manifest (release-store escape)", () => {
+    for (const evil of ["../../evil", "..\\evil", "1.0.0/../../x", "/absolute", "1.0.0;rm"]) {
+      expect(() => parseUpdateManifest(JSON.stringify({
+        product: "agent-browser-studio",
+        releases: [{ version: evil, url: "x.zip", sha256: "a".repeat(64) }],
+      }))).toThrow(/version/i);
+    }
+    expect(() => parseUpdateManifest(JSON.stringify({
+      product: "agent-browser-studio",
+      releases: [{ version: "", url: "x.zip", sha256: "a".repeat(64) }],
+    }))).toThrow(/missing version/i);
+    // Dotted numerics (incl. Chromium-style 4-segment) still pass.
+    const ok = parseUpdateManifest(JSON.stringify({
+      product: "agent-browser-studio",
+      releases: [{ version: "150.0.7871.114", url: "x.zip", sha256: "a".repeat(64) }],
+    }));
+    expect(ok.releases[0].version).toBe("150.0.7871.114");
+  });
 });
 
 describe("update check", () => {
@@ -164,6 +183,28 @@ describe("install / activate / rollback", () => {
     expect(state.activeVersion).toBe("1.1.0");
     expect(state.previousVersion).toBe(current);
     expect(state.installed.find((i) => i.version === "1.1.0")?.status).toBe("active");
+  });
+
+  it("rejects unsafe manifestUrl overrides (file://, local path, metadata IP)", async () => {
+    const { assertSafeManifestUrl } = await import("../../src/main/services/update-manager.js");
+    await expect(assertSafeManifestUrl("file:///etc/passwd")).rejects.toThrow(/http\(s\)|not allowed/i);
+    await expect(assertSafeManifestUrl("/etc/passwd")).rejects.toThrow(/absolute http/i);
+    await expect(assertSafeManifestUrl("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/not allowed|blocked/i);
+    await expect(assertSafeManifestUrl("http://127.0.0.1:9999/update.json")).rejects.toThrow(/not allowed|blocked/i);
+    await expect(assertSafeManifestUrl("ftp://example.com/x.json")).rejects.toThrow(/http\(s\)/i);
+  });
+
+  it("refuses a hash-less archive payload (spoofable update)", async () => {
+    const zipPath = path.join(os.tmpdir(), "ab-upd-nohash-" + Date.now() + ".zip");
+    await writeZipArchive(zipPath, [
+      { name: "version.txt", data: Buffer.from("3.0.0") },
+    ]);
+    const dir = makeManifestDir("nohash");
+    const manifestPath = writeManifest(dir, "update.json", {
+      product: "agent-browser-studio",
+      releases: [{ version: "3.0.0", url: zipPath }],
+    });
+    await expect(installRelease("3.0.0", manifestPath)).rejects.toThrow(/no sha256|hash-less/i);
   });
 
   it("verifies sha256 for archive payloads and rejects mismatches", async () => {

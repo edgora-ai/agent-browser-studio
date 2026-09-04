@@ -119,7 +119,7 @@
       R.agent.conversations.delete(state.agentActiveConvId).then(function() {
         state.agentActiveConvId = null;
         state.agentMessages = [];
-        document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">No conversation selected</div><div class="chat-empty-hint">Select one from the sidebar or create a new one</div></div>';
+        document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">' + esc(t('agent.no-conv-title', 'No conversation selected')) + '</div><div class="chat-empty-hint">' + esc(t('agent.no-conv-hint', 'Select one from the sidebar or create a new one')) + '</div></div>';
         agentBrowser.agentLoadConversations();
       });
     });
@@ -346,7 +346,7 @@
         html += '<div style="padding:0 12px 4px;font-size:10px;color:var(--text-muted);">↳ ' + esc(m.content).slice(0, 160) + '</div>';
       }
     }
-    el.innerHTML = html || '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">Start a conversation</div><div class="chat-empty-hint">Type a message below to begin</div></div>';
+    el.innerHTML = html || '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">' + esc(t('agent.start-title', 'Start a conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.start-hint', 'Type a message below to begin')) + '</div></div>';
     if (preserveScroll) el.scrollTop = prevTop;
     else el.scrollTop = el.scrollHeight;
     // Keep the affordance in sync even for non-stream renders.

@@ -151,6 +151,17 @@ describe("importProxies / exportProxiesCsv (real store)", () => {
     expect(csv).toContain("3.3.3.3,90");
   });
 
+  it("redacts passwords by default and includes them only on explicit opt-in", () => {
+    const parsed = parseProxyText("name,host,port,username,password\np,1.1.1.1,8080,user1,secret1\n").proxies;
+    const report = importProxies(parsed);
+    expect(report.imported).toEqual(["p"]);
+    const redacted = exportProxiesCsv();
+    expect(redacted).toContain("p,http,1.1.1.1,8080,user1,");
+    expect(redacted).not.toContain("secret1");
+    const migration = exportProxiesCsv({ includePasswords: true });
+    expect(migration).toContain("secret1");
+  });
+
   it("escapes CSV fields containing commas or quotes", () => {
     const parsed = parseProxyText("name,host,port,username\n\"a,b\",1.1.1.1,80,\"x,y\"\n").proxies;
     expect(parsed).toHaveLength(1);

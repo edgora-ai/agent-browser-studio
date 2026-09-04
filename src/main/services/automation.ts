@@ -9,7 +9,7 @@ import { syncService } from "./sync-service.js";
 import { onEvent } from "./event-bus.js";
 import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
-import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, getJob } from "./job-store.js";
+import { enqueueJob, markRunning, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, pruneJobs, getJob } from "./job-store.js";
 import { runSandboxed } from "./script-sandbox.js";
 import { validateCron, parseCronField } from "./cron-validate.js";
 
@@ -314,7 +314,14 @@ async function runRule(rule: AutomationRule, attempt = 0, source: "cron" | "once
           signal?.removeEventListener("abort", abort);
           if (job?.id) activeJobControllers.delete(job.id);
         });
-      }, cfg.runTimeoutMs, `automation:${rule.name}`);
+      }, cfg.runTimeoutMs, `automation:${rule.name}`, {
+        // The timed-out action keeps running until it observes the abort
+        // (e.g. a profile launch already past the point of no return). Mark
+        // its job cancelled so the retry below never double-executes while
+        // the zombie is still active — the zombie's own completion path sees
+        // the cancelled flag and records cancelled, not done.
+        onTimeout: () => { if (job?.id) cancelledJobIds.add(job.id); },
+      });
       ok = true;
       console.log(`[automation] ✅ ${rule.name}: ${resultText}`);
     } catch (e: any) {
@@ -522,6 +529,10 @@ export function startScheduler(): void {
       const n = recoverInterruptedJobs();
       if (n > 0) console.log(`[automation] recovered ${n} interrupted job(s)`);
     } catch (e) { console.error("[automation] job recovery failed:", e); }
+    try {
+      const pruned = pruneJobs();
+      if (pruned > 0) console.log(`[automation] pruned ${pruned} old job row(s)`);
+    } catch (e) { console.error("[automation] job prune failed:", e); }
   }
   registerEventTriggers();
   reloadSchedule();

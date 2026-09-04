@@ -1294,15 +1294,23 @@ function loadConfig(): MgmtConfig {
     const parsed = JSON.parse(raw) as Partial<MgmtConfig>;
     return mergeConfig(DefaultConfig, parsed, "load");
   } catch (e) {
+    // Fail safe, never fail silent: a corrupt config must NOT be replaced by
+    // factory defaults in memory (the next saveConfig would then persist the
+    // wipe and destroy proxies/profiles/accounts). Back the corrupt file up,
+    // but throw so the caller surfaces the failure instead of running on
+    // empty defaults. A timestamped .corrupt backup is kept for manual salvage.
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupPath = `${configPath}.${timestamp}.bak`;
-    console.error(`Failed to parse config.json, moved corrupt file to ${backupPath} and using defaults:`, e);
+    const backupPath = `${configPath}.${timestamp}.corrupt`;
+    console.error(`Refusing to load corrupt config.json (backed up to ${backupPath}):`, e);
     try {
-      fs.renameSync(configPath, backupPath);
+      fs.copyFileSync(configPath, backupPath);
     } catch (backupError) {
-      console.error("Failed to back up corrupt config.json; leaving original file in place:", backupError);
+      console.error("Failed to back up corrupt config.json:", backupError);
     }
-    return structuredClone(DefaultConfig);
+    throw new Error(
+      `config.json is corrupt and was NOT loaded (backup: ${backupPath}). ` +
+      `Fix or remove it before starting. Refusing to run on factory defaults.`,
+    );
   }
 }
 
@@ -1465,9 +1473,12 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
 function normalizeLlmConfig(raw: any): LlmConfig | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const provider = raw.provider === "openai" || raw.provider === "claude" || raw.provider === "custom" ? raw.provider : "openai";
-  const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
-  if (!apiKey) return undefined;
-  if (apiKey.length > 4096) throw new Error("LLM API key exceeds maximum length");
+  const incoming = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
+  if (!incoming) return undefined;
+  if (incoming.length > 4096) throw new Error("LLM API key exceeds maximum length");
+  // Encrypt at rest like every other secret (proxy/account/sync). Already-
+  // encrypted values (re-saves, migrations) pass through untouched.
+  const apiKey = isEncrypted(incoming) ? incoming : encryptSecret(incoming);
   const apiUrl = sanitizeOptionalText(raw.apiUrl, 1000) || undefined;
   const model = sanitizeOptionalText(raw.model, 200) || undefined;
   return { provider, apiKey, apiUrl, model };

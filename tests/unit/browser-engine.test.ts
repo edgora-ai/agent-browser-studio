@@ -67,6 +67,13 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(detectFirefoxVersion(path.join(tempDir, "does-not-exist"))).toBeNull();
   });
 
+  it("detectFirefoxVersion rejects shell metacharacters in the binary path", () => {
+    expect(detectFirefoxVersion("evil.cmd & calc.exe")).toBeNull();
+    expect(detectFirefoxVersion("evil;id")).toBeNull();
+    expect(detectFirefoxVersion("evil`id`")).toBeNull();
+    expect(detectFirefoxVersion("evil$(id)")).toBeNull();
+  });
+
   it("getFirefoxStatus reports not-installed gracefully, and installed with version when present", () => {
     const missing = getFirefoxStatus({ AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(tempDir, "nope") } as any);
     expect(missing.installed).toBe(false);
@@ -118,6 +125,11 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     const auto = buildFirefoxLaunchArgs({ profileDir: "/tmp/fx2" });
     expect(auto).toContain("--remote-debugging-port");
     expect(auto[auto.indexOf("--remote-debugging-port") + 1]).toBe("0");
+  });
+
+  it("buildFirefoxLaunchArgs rejects dash-leading appUrl (flag injection)", () => {
+    expect(() => buildFirefoxLaunchArgs({ profileDir: "/p", appUrl: "-profile /evil" })).toThrow(/dash-leading/i);
+    expect(() => buildFirefoxLaunchArgs({ profileDir: "/p", appUrl: "--marionette" })).toThrow(/dash-leading/i);
   });
 
   it("extracts the WebDriver BiDi WebSocket URL and Marionette port from Firefox output", () => {
@@ -209,5 +221,32 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     const content = fs.readFileSync(path.join(dir, "user.js"), "utf8");
     expect(content).toContain("intl.locale.requested");
     expect(fs.existsSync(path.join(dir, "user.js"))).toBe(true);
+  });
+
+  it("writeFirefoxUserJs seals user.js owner-only (proxy password at rest)", () => {
+    const dir = path.join(tempDir, "fx-profile-secret");
+    writeFirefoxUserJs(dir, { proxy: { type: "http", host: "1.2.3.4", port: 8080, username: "u", password: "s3cret" } as any });
+    const st = fs.statSync(path.join(dir, "user.js"));
+    if (process.platform !== "win32") {
+      expect(st.mode & 0o777).toBe(0o600);
+    }
+    expect(fs.readFileSync(path.join(dir, "user.js"), "utf8")).toContain("s3cret");
+  });
+
+  it("spawnFirefoxWithDebugInfo rejects promptly on early exit (code 0 / signal)", async () => {
+    let deadBin: string;
+    if (process.platform === "win32") {
+      deadBin = path.join(tempDir, "fake-firefox-dead.cmd");
+      fs.writeFileSync(deadBin, "@exit 0\n", "utf8");
+    } else {
+      deadBin = path.join(tempDir, "fake-firefox-dead");
+      fs.writeFileSync(deadBin, "#!/bin/sh\nexit 0\n", "utf8");
+      fs.chmodSync(deadBin, 0o755);
+    }
+    const started = Date.now();
+    await expect(spawnFirefoxWithDebugInfo(deadBin, ["-profile", "/tmp/fx"], { timeoutMs: 30000 }))
+      .rejects.toThrow(/exited early/i);
+    // Must fail fast — not sit on the 30s timer holding the launch lock.
+    expect(Date.now() - started).toBeLessThan(10000);
   });
 });

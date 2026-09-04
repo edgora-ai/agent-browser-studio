@@ -101,7 +101,12 @@
     }
     if (state.empty) {
       var cta = state.cta ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.cta.cmd) + '" style="margin-top:8px;">' + esc(state.cta.label) + '</button>' : '';
-      el.innerHTML = '<div class="empty-state">' + esc(state.empty) + '<br>' + cta + '</div>';
+      // Empty-state copy may carry <br> line breaks from translations (#14);
+      // render through the shared allowlist sanitizer instead of esc() so the
+      // breaks work but no other markup can execute.
+      var sanitize = agentBrowser.helpers && agentBrowser.helpers.sanitizeMdHtml;
+      var emptyHtml = typeof sanitize === "function" ? sanitize(String(state.empty)) : esc(state.empty);
+      el.innerHTML = '<div class="empty-state">' + emptyHtml + '<br>' + cta + '</div>';
       return;
     }
   };

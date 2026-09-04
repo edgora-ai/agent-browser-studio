@@ -139,6 +139,8 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain("new RealCtor(want, arg)");
     expect(script).toContain("let Wrapped");
     expect(script).toContain("let RealCtor");
+    // The wrapper must not be name-detectable (P2-5).
+    expect(script).toContain('Object.defineProperty(Wrapped, "name"');
   });
 
   it("patches timezone via Intl.resolvedOptions + Date.getTimezoneOffset", () => {
@@ -159,6 +161,12 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain('speechSynthesis.getVoices');
     expect(script).toContain("cfg.storageQuotaBytes");
     expect(script).toContain("copyToChannel");
+    // Primary readback sinks — not just copyToChannel (#18).
+    expect(script).toContain("getChannelData");
+    expect(script).toContain("getFloatFrequencyData");
+    expect(script).toContain("getByteFrequencyData");
+    expect(script).toContain("getFloatTimeDomainData");
+    expect(script).toContain("getByteTimeDomainData");
   });
 
   it("reaches OffscreenCanvas 2d + WebGL and WebGPU adapter identity (Slice 79.1)", () => {
@@ -208,6 +216,9 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
 
   it("worker shim re-applies persona identity, timezone and canvas noise (G1/G5)", () => {
     expect(script).toContain("var wcfg=");
+    // wcfg must be an object literal, not a double-serialized string (R3 #56).
+    expect(script).toMatch(/var wcfg=\{"platform":/);
+    expect(script).not.toMatch(/var wcfg="\\?\{/);
     expect(script).toContain('wval(WNP,"platform"');
     expect(script).toContain('wval(WNP,"webdriver"');
     expect(script).toContain('wget(WNP,"languages"');
@@ -289,16 +300,19 @@ describe("injection self-check probe (Slice 79.2)", () => {
     expect(check.mismatches).toEqual(expect.arrayContaining(["platform", "language", "screenWidth", "hardwareConcurrency"]));
   });
 
-  it("is ambiguous (never blocking) when the probe could not decide", () => {
+  it("blocks (fail-closed) when the probe could not decide", () => {
+    // Both BiDi attempts threw: undecidable probe must not launch silently.
     const check = judgeInjectionProbe(null, exp);
     expect(check.checked).toBe(false);
     expect(check.ambiguous).toBe(true);
-    expect(shouldBlockInjectionProbe(check, undefined)).toBe(false);
+    expect(shouldBlockInjectionProbe(check, undefined)).toBe(true);
+    expect(shouldBlockInjectionProbe(check, false)).toBe(false);
 
     const noWebdriver = judgeInjectionProbe({ platform: "MacIntel" }, exp);
     expect(noWebdriver.checked).toBe(true);
     expect(noWebdriver.ambiguous).toBe(true);
-    expect(shouldBlockInjectionProbe(noWebdriver, undefined)).toBe(false);
+    expect(shouldBlockInjectionProbe(noWebdriver, undefined)).toBe(true);
+    expect(shouldBlockInjectionProbe(noWebdriver, false)).toBe(false);
   });
 
   it("expectation mirrors the preload's own patch surface (platform/language/screen/hwc/webdriver)", () => {

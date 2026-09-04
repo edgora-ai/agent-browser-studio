@@ -33,6 +33,7 @@ import { buildChromiumProxyUrl, proxyDetector, type ProxyDetectionResult } from 
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
+import { transact } from "./config/store.js";
 import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
@@ -49,7 +50,6 @@ import {
 } from "./native-chromium-manager.js";
 import {
   compareFirefoxVersions,
-  normalizeManagedFirefoxVersion,
 } from "./native-firefox-manager.js";
 import {
   LEGACY_NATIVE_PROXY_AUTH_SWITCH,
@@ -70,6 +70,7 @@ import {
   detectFirefoxVersion,
   findFirefoxBinary,
   getFirefoxStatus,
+  normalizeManagedFirefoxVersion,
   sanitizeBrowserEngine,
   spawnFirefoxWithDebugInfo,
   writeFirefoxUserJs,
@@ -303,6 +304,8 @@ export function createBrowserProfile(opts: {
     name: opts.name,
     engine,
     fingerprintMode,
+    // Engine-aware version pin (R3 #58): Firefox pins like "154.0" would be
+    // rejected by the Chromium 4-segment validator — validate per engine.
     browserVersion: engine === "firefox"
       ? normalizeManagedFirefoxVersion(opts.browserVersion)
       : normalizeManagedChromiumVersion(opts.browserVersion),
@@ -525,12 +528,16 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
   const profileDir = path.join(getProfilesDir(), dirId);
   try {
     if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
-    try { const { transact } = require("./config/store.js"); let deleted=false; transact((draft:any)=>{ if(draft.browserProfiles?.[dirId]){ delete draft.browserProfiles[dirId]; deleted=true; } }); if(deleted) return true; } catch {}
-    const cfg = getConfig();
-    if (cfg.browserProfiles) { delete cfg.browserProfiles[dirId]; }
-    saveConfig(cfg as any);
-    return true;
-  } catch { return false; }
+  } catch (e: any) {
+    throw new Error(`Failed to remove profile directory: ${e?.message || String(e)}`);
+  }
+  // Single write path (no swallowed catch/boolean): a failed transact
+  // surfaces its error so callers can tell "rm failed" from "save failed".
+  let deleted = false;
+  transact((draft: any) => {
+    if (draft.browserProfiles?.[dirId]) { delete draft.browserProfiles[dirId]; deleted = true; }
+  });
+  return deleted;
 }
 
 export function listBrowserProfiles(): BrowserProfile[] {
@@ -600,6 +607,37 @@ export function listBrowserProfiles(): BrowserProfile[] {
 // Launch / Stop
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Shared proxy fail-closed gate (review item PL-04, R2 #46): if the profile
+ * asked for a proxy and none is resolvable, launching would silently fall
+ * back to a direct connection and expose the host IP. Both the Chromium and
+ * the Firefox paths must call this before writing prefs / spawning.
+ */
+export function assertProxyResolvable(meta: any, cfg: any, resolvedProxy: { mode: string; name?: string | null; config: any }): void {
+  const declaredProxyMode = String(meta.proxyMode || (meta.proxyName ? "named" : "none"));
+  const proxyWasRequested = declaredProxyMode !== "none" && declaredProxyMode !== "off";
+  const defaultModeUnconfigured = declaredProxyMode === "default" && !cfg.defaultProxy;
+  if (proxyWasRequested && !defaultModeUnconfigured && (!resolvedProxy.config || resolvedProxy.mode === "none")) {
+    const label = resolvedProxy.name || meta.proxyName || cfg.defaultProxy || declaredProxyMode;
+    const health = getProxyHealthEntry(String(label));
+    const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+    const reason = !label || label === declaredProxyMode
+      ? declaredProxyMode === "default"
+        ? "no default proxy is configured"
+        : "the named proxy no longer exists"
+      : "it is not configured";
+    throw new Error(
+      `Profile requires proxy "${label}" but ${reason}. ` +
+      `Refusing to launch without it — a direct connection would expose your real IP. ` +
+      `(proxy: ${label}, last health check: ${when})`,
+    );
+  }
+  if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
+    const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
+    throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
+  }
+}
+
 export interface LaunchDriftCheck {
   checked: boolean;
   risky?: boolean;
@@ -611,6 +649,12 @@ export interface LaunchEnvCheck {
   checked: boolean;
   high?: boolean;
   findings?: EnvRiskFinding[];
+  error?: string;
+}
+
+export interface LaunchCookieCheck {
+  checked: boolean;
+  applied?: number;
   error?: string;
 }
 
@@ -695,32 +739,8 @@ export async function launchBrowser(
   // for one and we cannot produce a usable config, launching would silently
   // fall back to a direct connection and expose the host IP. Refuse instead,
   // and name the proxy plus its last health check so the user can act.
-  const declaredProxyMode = String(meta.proxyMode || (meta.proxyName ? "named" : "none"));
-  const proxyWasRequested = declaredProxyMode !== "none" && declaredProxyMode !== "off";
-  // "default" mode with no default proxy configured means the user never
-  // asked for a proxy (fresh install): a direct connection is the expected
-  // behavior, not a fail-closed error. Only a default proxy that EXISTS but
-  // cannot be resolved, or a named proxy, is refuse-to-launch territory.
-  const defaultModeUnconfigured = declaredProxyMode === "default" && !cfg.defaultProxy;
-  if (proxyWasRequested && !defaultModeUnconfigured && (!resolvedProxy.config || resolvedProxy.mode === "none")) {
-    const label = resolvedProxy.name || meta.proxyName || cfg.defaultProxy || declaredProxyMode;
-    const health = getProxyHealthEntry(String(label));
-    const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
-    const reason = !label || label === declaredProxyMode
-      ? declaredProxyMode === "default"
-        ? "no default proxy is configured"
-        : "the named proxy no longer exists"
-      : "it is not configured";
-    throw new Error(
-      `Profile requires proxy "${label}" but ${reason}. ` +
-      `Refusing to launch without it — a direct connection would expose your real IP. ` +
-      `(proxy: ${label}, last health check: ${when})`,
-    );
-  }
-  if (resolvedProxy.mode !== "none" && !resolvedProxy.config) {
-    const label = resolvedProxy.name ? `"${resolvedProxy.name}"` : resolvedProxy.mode;
-    throw new Error(`Profile proxy ${label} is not configured; refusing to launch without the requested proxy`);
-  }
+  // Shared with the Firefox path via assertProxyResolvable (R2 #46).
+  assertProxyResolvable(meta, cfg, resolvedProxy);
   // Surface a degraded (but configured) proxy so the failure is attributable
   // later: a launch that fails while the proxy is unhealthy is not mysterious.
   if (resolvedProxy.name) {
@@ -1223,7 +1243,7 @@ async function launchFirefoxProfile(
   cfg: any,
   headless: boolean | undefined,
   releaseLaunchLock: (() => void) | null,
-): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
+): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
   const bin = findFirefoxBinary();
   if (!bin) {
     if (releaseLaunchLock) releaseLaunchLock();
@@ -1252,6 +1272,9 @@ async function launchFirefoxProfile(
   }
   const nativeMode = managedIdentity !== null && nativeConfig && (nativeParity || nativeRequested);
   const resolvedProxy = resolveProfileProxySecret(dirId);
+  // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
+  // unresolvable proxy must refuse — never write a direct user.js.
+  assertProxyResolvable(meta, cfg, resolvedProxy);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
   writeFirefoxUserJs(profileDir, {
@@ -1266,7 +1289,9 @@ async function launchFirefoxProfile(
 
   // Explicit free port (not 0): the BiDi endpoint is deterministic and the
   // `ps`-based port rediscovery (statusBrowser after an app restart) works.
-  const remotePort = findFreePort();
+  // Loopback-bound probe with error handling — never the sync wildcard bind
+  // (fail-closed: a listen failure rejects instead of crashing Electron main).
+  const remotePort = await findFreePortWithRetry(2);
   const args = buildFirefoxLaunchArgs({
     profileDir,
     remotePort,
@@ -1324,6 +1349,7 @@ async function launchFirefoxProfile(
   let bidiError: string | null = null;
   let driftCheck: LaunchDriftCheck = { checked: false };
   let envCheck: LaunchEnvCheck = { checked: false };
+  let cookieCheck: LaunchCookieCheck = { checked: false };
 
   try {
     // Long-lived BiDi session: the fingerprint preload script lives in the
@@ -1355,12 +1381,17 @@ async function launchFirefoxProfile(
       );
     }
 
-    // Queued cookie imports (shared with the Chromium pipeline).
+    // Queued cookie imports (shared with the Chromium pipeline). A failure is
+    // surfaced on the launch result — never a silent warn — so callers can see
+    // the session launched without its queued identity.
     try {
       const queuedCookies = await firefoxCookieService.applyQueuedImports(dirId);
+      cookieCheck = { checked: true, applied: queuedCookies };
       if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
     } catch (e: any) {
-      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, e?.message || e);
+      const msg = e?.message || String(e);
+      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, msg);
+      cookieCheck = { checked: true, applied: 0, error: msg };
     }
 
     // Post-launch fingerprint drift check — same gate as managed Chromium:
@@ -1397,12 +1428,24 @@ async function launchFirefoxProfile(
     // nothing is injected; real Firefox also exposes navigator.webdriver=true
     // under BiDi). Probe a fresh tab inside the launch session: webdriver must
     // be disarmed, the noise layer must be live, and the managed fields must
-    // match the profile's identity. A provably-dead injection blocks the
-    // launch by default (blockOnInjectionProbe=false escapes, like drift).
+    // match the profile's identity. Fail closed: an unconfirmed OR undecidable
+    // probe blocks the launch by default (blockOnInjectionProbe=false escapes).
+    // Native mode registers no preload, so the probe only runs on fallback.
     if (managedIdentity && !nativeMode) {
+      // No BiDi connection at all (connect failed, endpoint never announced)
+      // means the preload could not possibly be registered — fail closed like
+      // an undecidable probe instead of launching silently uninjected (R2 #47).
+      // blockOnInjectionProbe=false opts out explicitly.
+      const entry = runningProcesses.get(dirId);
+      const conn = entry?.bidiConn;
+      if (!conn && cfg.blockOnInjectionProbe !== false) {
+        const reason = "Fingerprint injection probe blocked — no BiDi connection, so the managed preload could not be registered" +
+          (bidiError ? " (BiDi error: " + bidiError + ")" : "") +
+          ". Set blockOnInjectionProbe=false to launch without this verification.";
+        recordAudit({ category: "profile", action: "injection-probe-block", target: dirId, actor: "auto", detail: reason });
+        throw new Error(reason);
+      }
       try {
-        const entry = runningProcesses.get(dirId);
-        const conn = entry?.bidiConn;
         if (conn) {
           const expected = buildInjectionProbeExpectation(managedIdentity.config);
           const expression = buildInjectionProbeExpression();
@@ -1495,10 +1538,10 @@ async function launchFirefoxProfile(
     action: "launch",
     target: dirId,
     actor: "user",
-    detail: `firefox ${firefoxVersion || "?"} mode=${nativeMode ? "native" : "fallback"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"}`,
+    detail: `firefox ${firefoxVersion || "?"} mode=${nativeMode ? "native" : "fallback"} port=${actualPort} bidi=${info.bidiWebSocketUrl ? "yes" : "no"} injected=${bidiInjected ? "yes" : "no"}${bidiError ? " bidiError=" + bidiError : ""} drift=${driftCheck.checked ? (driftCheck.risky ? "risky" : "ok") : "unchecked"} cookies=${cookieCheck.checked ? (cookieCheck.error ? "failed: " + cookieCheck.error : "applied=" + (cookieCheck.applied ?? 0)) : "unchecked"}`,
   });
   if (releaseLaunchLock) releaseLaunchLock();
-  return { pid, cdpPort: actualPort, driftCheck, envCheck };
+  return { pid, cdpPort: actualPort, driftCheck, envCheck, cookieCheck };
 }
 
 import { stopBrowser as _stopBrowser, statusBrowser as _statusBrowser, stopAllBrowserProfiles as _stopAll, getCdpWebSocketUrl as _getCdpUrl, findBrowserByProfile as _findByProfile } from "./browser/lifecycle.js";
@@ -2132,9 +2175,16 @@ async function findFreePortWithRetry(retries = 2): Promise<number> {
 }
 function findFreePort(): number {
   // Sync fallback for legacy call sites: best-effort single probe.
+  // Binds loopback only and cleans up synchronously; throws (instead of
+  // crashing via an unhandled 'error' event) when no port is available.
+  // New call sites must use findFreePortWithRetry (async, with retries).
   const srv = net.createServer();
-  srv.listen(0);
-  const port = (srv.address() as net.AddressInfo).port;
+  srv.on("error", () => { /* handled below via address check */ });
+  srv.listen(0, "127.0.0.1");
+  const addr = srv.address();
   srv.close();
-  return port;
+  if (!addr || typeof addr === "string" || typeof (addr as net.AddressInfo).port !== "number") {
+    throw new Error("No free loopback port available");
+  }
+  return (addr as net.AddressInfo).port;
 }

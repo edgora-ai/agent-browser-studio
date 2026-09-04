@@ -48,7 +48,7 @@
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   agentBrowser.agentLoadSkills = function() {
     var el = document.getElementById('agent-skills-list');
-    el.innerHTML = '<div class="loading">Loading skills...</div>';
+    el.innerHTML = '<div class="loading">' + esc(window.i18n ? window.i18n.t("skills.loading", "Loading skills...") : "Loading skills...") + '</div>';
     R.agent.skills.list().then(function(skills) {
       if (!skills || skills.length === 0) {
         el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No skills in your marketplace. Add or import a skill to get started.</div>';
@@ -65,15 +65,15 @@
     closeDialogIfOpen('dlg-skill-market');
     clearSkillEditor();
     if (!skillId) {
-      document.getElementById('skill-editor-title').textContent = 'Add Agent Skill';
+      document.getElementById('skill-editor-title').textContent = window.i18n ? window.i18n.t("skills.editor.add", "Add Agent Skill") : "Add Agent Skill";
       document.getElementById('dlg-skill-editor').showModal();
       return;
     }
     R.agent.skills.list().then(function(skills) {
       var skill = (skills || []).find(function(s) { return s.id === skillId; });
       if (!skill) { toast((window.i18n ? window.i18n.t("toast.skill.not-found", "Skill not found") : "Skill not found"), 'error'); return; }
-      if (skill.source === 'built-in') { toast('Built-in skills can be enabled, disabled, or shared, but not edited.', 'error'); return; }
-      document.getElementById('skill-editor-title').textContent = 'Edit Agent Skill';
+      if (skill.source === 'built-in') { toast(window.i18n ? window.i18n.t("skills.builtin-readonly", "Built-in skills can be enabled, disabled, or shared, but not edited.") : "Built-in skills can be enabled, disabled, or shared, but not edited.", 'error'); return; }
+      document.getElementById('skill-editor-title').textContent = window.i18n ? window.i18n.t("skills.editor.edit", "Edit Agent Skill") : "Edit Agent Skill";
       document.getElementById('skill-id').value = skill.id || '';
       document.getElementById('skill-id').disabled = true;
       document.getElementById('skill-version').value = skill.version || '1.0.0';
@@ -95,9 +95,9 @@
     var title = document.getElementById('skill-title').value.trim();
     var prompt = document.getElementById('skill-prompt').value.trim();
     var statusEl = document.getElementById('skill-save-status');
-    if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(id)) { toast('Invalid skill ID. Use lowercase letters, numbers, dot, underscore, or dash.', 'error'); return; }
+    if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(id)) { toast(window.i18n ? window.i18n.t("toast.skill.invalid-id", "Invalid skill ID. Use lowercase letters, numbers, dot, underscore, or dash.") : "Invalid skill ID. Use lowercase letters, numbers, dot, underscore, or dash.", 'error'); return; }
     if (!title || !prompt) { toast((window.i18n ? window.i18n.t("toast.skill.fields-required", "Title and prompt are required") : "Title and prompt are required"), 'error'); return; }
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Saving skill...</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">' + esc(window.i18n ? window.i18n.t("skills.saving", "Saving skill...") : "Saving skill...") + '</span>';
     var skill = {
       id: id,
       name: id,
