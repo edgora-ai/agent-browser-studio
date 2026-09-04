@@ -12,6 +12,7 @@
 import type { CookieInfo } from "../types.js";
 import { connectBidi, bidiGetCookies, bidiSetCookie, bidiDeleteCookies, type BidiConnection, type BidiCookie } from "./bidi-client.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
+import { runningProcesses } from "./browser/runtime-table.js";
 import { cdpCookieService, readQueuedCookieImports, clearQueuedCookieImports } from "./cdp-cookie-service.js";
 
 /** Map a BiDi `storage.getCookies` entry to the product's CookieInfo. */
@@ -74,11 +75,18 @@ async function withBidiClient<T>(
   }
 }
 
-/** True when the profile runs Firefox with a BiDi endpoint we can drive. */
+/** True when the profile runs Firefox with a BiDi endpoint we can drive.
+ * Sync by design (R7 #76): the async getRunningPort returns a Promise which
+ * is never === null — comparing it directly made this always truthy. Read
+ * the runtime table synchronously instead (runtime-table has no
+ * browser-manager dependency, so no import cycle). */
 export function hasRunningFirefox(dirId: string): boolean {
   try {
     if (getProfileEngineByDirId(dirId) !== "firefox") return false;
-    return getRunningPort(dirId) !== null;
+    const entry = runningProcesses.get(dirId);
+    if (!entry) return false;
+    try { process.kill(entry.pid, 0); } catch { return false; }
+    return typeof entry.port === "number" && entry.port > 0;
   } catch {
     return false;
   }
