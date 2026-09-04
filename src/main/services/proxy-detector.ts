@@ -29,6 +29,38 @@ export interface ProxyDetectionResult {
   error: string | null;
 }
 
+/**
+ * TCP liveness probe for launch fail-closed (R10 product P1-1): verify
+ * `host:port` accepts a connection before spawning a browser through it.
+ * This only proves "something listens" — not proxy-protocol correctness —
+ * but it catches the common dead-proxy case (wrong port, process down)
+ * without paying a full geo-IP round trip. Resolves true when connected,
+ * false on timeout/refusal (never throws).
+ */
+export function probeProxyPort(config: Pick<ProxyConfig, "host" | "port">, timeoutMs = 3000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const host = String(config?.host || "");
+    const port = Number(config?.port);
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    const done = (v: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.destroy(); } catch { /* already closed */ }
+      resolve(v);
+    };
+    const socket = net.connect({ host, port });
+    const timer = setTimeout(() => done(false), Math.max(500, timeoutMs));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.once("timeout", () => done(false));
+  });
+}
+
 function emptyResult(success: boolean, error?: string): ProxyDetectionResult {
   return {
     success,

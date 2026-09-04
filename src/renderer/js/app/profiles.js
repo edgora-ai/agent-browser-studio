@@ -108,8 +108,15 @@
 
   // R8 P2-3: refuse launch early when the engine is known-missing, with a
   // direct path to the fix — instead of a doomed IPC + post-hoc toast.
+  // R10 P1-3: the guard is engine-aware. Chromium checks the managed build;
+  // Firefox checks the installed Firefox. The old guard blocked Firefox
+  // profiles when Chromium was missing (and vice versa).
+  var lastFirefoxInfo = null;
   function engineMissing() {
     return !!(lastEngineInfo && !lastEngineInfo.installed);
+  }
+  function firefoxMissing() {
+    return !!(lastFirefoxInfo && !lastFirefoxInfo.installed);
   }
   function guideToEngine() {
     agentBrowser.confirmHtml(
@@ -123,10 +130,33 @@
       },
     );
   }
-
-  Object.assign(agentBrowser, {
-  launch: function (dirId) {
+  function guideToFirefox() {
+    agentBrowser.confirmHtml(
+      esc(t("engine.firefox-guide.title", "Install Firefox")),
+      function () { /* informational only */ },
+      {
+        title: esc(t("engine.firefox-guide.heading", "Install guide")),
+        detailHtml: '<div style="font-size:12px;line-height:1.6;">' +
+          esc(t("engine.firefox-missing", "No Firefox installation was found — Firefox profiles cannot start until you install Firefox.")) +
+          '</div>',
+      },
+    );
+  }
+  /** Engine-aware pre-launch gate. cb receives nothing; call launch IPC inside. */
+  function withEngineGate(dirId, cb) {
+    api.browser.list().then(function (profiles) {
+      var meta = (profiles || []).filter(function (p) { return p.dirId === dirId; })[0] || {};
+      var engine = meta.engine || "chromium";
+      if (engine === "firefox") {
+        if (firefoxMissing()) { guideToFirefox(); return; }
+      } else {
         if (engineMissing()) { guideToEngine(); return; }
+      }
+      cb();
+    }).catch(function () { cb(); }); // list failed — let the main process decide
+  }
+
+  function launchInner(dirId) {
         // PL-06: block edit/delete while the launch is in flight.
         setCardBusy(dirId, true);
         agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId); }, { kind: "launch", dedupe: true })
@@ -149,6 +179,11 @@
           })
           .catch(function (e) { toast(e.message, "error"); })
           .then(function () { setCardBusy(dirId, false); });
+  }
+
+  Object.assign(agentBrowser, {
+  launch: function (dirId) {
+        withEngineGate(dirId, function () { launchInner(dirId); });
       },
 
   stop: function (dirId) {
@@ -570,10 +605,16 @@
   function finishBatch() { agentBrowser.refresh(); }
 
   agentBrowser.bulkStart = function() {
-    if (engineMissing()) { guideToEngine(); return; }
     api.browser.list().then(function(profiles) {
       var stopped = (profiles || []).filter(function(p) { return !p.running; });
       if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
+      // R10 P1-3: engine-aware preflight — only refuse the subset whose
+      // engine is actually missing. The old gate blocked Firefox batches
+      // when Chromium was missing (and vice versa).
+      var needChromium = stopped.some(function (p) { return (p.engine || "chromium") !== "firefox"; });
+      var needFirefox = stopped.some(function (p) { return (p.engine || "chromium") === "firefox"; });
+      if (needChromium && !needFirefox && engineMissing()) { guideToEngine(); return; }
+      if (needFirefox && !needChromium && firefoxMissing()) { guideToFirefox(); return; }
       agentBrowser.batch.run({ kind: "launch", dirIds: stopped.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
     }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
@@ -713,9 +754,12 @@
       var when = en.deletedAt ? new Date(en.deletedAt).toLocaleString() : "?";
       var name = esc(en.name || (en.dirId || "").slice(0, 8));
       var id = escAttr(en.dirId || "");
+      // R10 UX P1-1: every entry gets Restore + permanent Delete. Purge is
+      // irreversible — the handler asks for an explicit ack first.
+      var actions = '<button class="btn btn-danger btn-sm" data-trash-purge="' + id + '" data-trash-name="' + escAttr(en.name || en.dirId || "") + '">' + esc(t("trash.purge", "Delete forever")) + '</button>';
       var state = en.recoverable
-        ? '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>'
-        : '<span style="font-size:11px;color:var(--danger);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>';
+        ? '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>' + actions
+        : '<span style="font-size:11px;color:var(--danger);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>' + actions;
       return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
         '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + name + '</div>' +
         '<div style="font-size:11px;color:var(--text-muted);">' + esc(when) + '</div></div>' + state + '</div>';
@@ -734,6 +778,27 @@
             } else toast((r && r.error) || t("toast.failed", "Failed"), "error");
           })
           .catch(function (e) { toast(e.message || String(e), "error"); });
+      });
+    });
+    Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-purge]"), function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-trash-purge");
+        var nm = btn.getAttribute("data-trash-name") || id;
+        agentBrowser.confirm(
+          t("trash.purge-confirm", "Permanently delete \"{name}\"? This cannot be undone.").replace("{name}", nm),
+          function () {
+            agentBrowser.ipc.call("profile.trash-purge:" + id, function () { return api.profile.trashPurge(id); }, { kind: "write" })
+              .then(function (r) {
+                if (r && r.success) {
+                  toast(t("trash.purged", "Permanently deleted"), "success");
+                  loadProfiles();
+                  agentBrowser.showTrash();
+                } else toast((r && r.error) || t("toast.failed", "Failed"), "error");
+              })
+              .catch(function (e) { toast(e.message || String(e), "error"); });
+          },
+          { title: t("trash.purge-title", "Delete forever?") },
+        );
       });
     });
   }
@@ -1113,7 +1178,7 @@
       {
         title: esc(t("engine.guide.heading", "Install guide")),
         detailHtml: '<div style="font-size:12px;line-height:1.6;">' +
-          esc(t("engine.guide.body", "Build Chromium 150/151 with the maintained patch set, verify it, then install it into the local engine cache:")) +
+          esc(t("engine.guide.body", "Build Chromium with the maintained patch set (see the required version under patches/), verify it, then install it into the local engine cache:")) +
           '</div><pre style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;overflow:auto;margin:8px 0 0;">' +
           esc("npm run verify:chromium -- /path/to/Chromium.app\nnpm run install:chromium -- /path/to/Chromium.app") +
           "</pre>",
@@ -1202,11 +1267,15 @@
       api.browser.list().catch(function () { return []; }),
       api.proxy.list(),
       api.browser.binary().catch(function () { return null; }),
+      // R10 P1-3: cache the Firefox engine state too, so the launch gate
+      // can tell "Chromium missing" from "Firefox missing".
+      (api.browser.engineStatus ? api.browser.engineStatus().catch(function () { return null; }) : Promise.resolve(null)),
     ]).then(function (results) {
       var browserProfiles = results[0] || [];
       var proxies = results[1];
       // PL-07: surface the engine state on the page that needs it.
       renderEngineBanner(results[2]);
+      if (results[3] && results[3].firefox) lastFirefoxInfo = results[3].firefox;
 
       // Build a proxy lookup map for legacy renderer-side fallback.
       var proxyMap = {};
@@ -1593,6 +1662,15 @@
         return;
       }
       var action = target && target.dataset ? target.dataset.action : null;
+      // R10 UX P2-3: onchange was the unguarded twin of onclick — a proxy or
+      // health change mid-launch raced the starting browser. Same short-circuit.
+      var changeCard = target && target.closest ? target.closest(".profile-card") : null;
+      var changeDirId = changeCard && changeCard.dataset.dirId;
+      if (changeDirId && busyCards[changeDirId] && (action === "proxy" || action === "health")) {
+        toast(t("toast.card.busy", "This profile is busy — wait for the current operation to finish"), "info");
+        if (action === "health") target.value = "";
+        return;
+      }
       if (action === "proxy") {
         var pcard = target.closest(".profile-card");
         if (pcard && pcard.dataset.dirId) agentBrowser.proxyChanged(pcard.dataset.dirId, target);

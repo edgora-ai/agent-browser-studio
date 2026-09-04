@@ -224,18 +224,25 @@ export function teamStatus() {
   };
 }
 
-/** Pure, sync-safe serialization of a team manifest (no secrets). */
+/** Pure, sync-safe serialization of a team manifest (no secrets).
+ * R10 P1-3: field contract mirrors config-manager normalizeTeamManifest
+ * (trim deviceId, drop blanks, cap lengths, cap 50 members). Keep them in
+ * lockstep — see the comment there. */
 export function sanitizeTeam(team: TeamConfig | null | undefined): TeamConfig | null {
   if (!team || typeof team !== "object") return null;
   const members = Array.isArray(team.members)
     ? team.members
-        .filter((m) => m && typeof m.deviceId === "string" && m.deviceId)
-        .map((m) => ({
-          deviceId: String(m.deviceId).slice(0, 64),
-          name: String(m.name || "").slice(0, 40) || String(m.deviceId).slice(0, 8),
-          role: ROLE_ORDER[m.role] ? m.role : "viewer",
-          addedAt: Number.isFinite(m.addedAt) ? m.addedAt : 0,
-        }))
+        .filter((m) => m && typeof m.deviceId === "string" && String(m.deviceId).trim())
+        .map((m) => {
+          const deviceId = String(m.deviceId).trim().slice(0, 64);
+          return {
+            deviceId,
+            name: String(m.name || "").slice(0, 40) || deviceId.slice(0, 8),
+            role: ROLE_ORDER[m.role] ? m.role : "viewer",
+            addedAt: Number.isFinite(m.addedAt) ? m.addedAt : 0,
+          };
+        })
+        .slice(0, 50)
     : [];
   if (!members.length) return null;
   return {

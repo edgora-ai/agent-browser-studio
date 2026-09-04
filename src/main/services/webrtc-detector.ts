@@ -24,19 +24,27 @@ function execCurlAsync(args: string[], timeoutSeconds: number): Promise<string> 
   return new Promise((resolve) => {
     const child = spawn("curl", args);
     let stdout = "";
+    let settled = false;
+    const done = (v: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(v);
+    };
+    // R10 P1-2: two-stage kill — SIGTERM first, SIGKILL 2s later. A bare
+    // kill() leaves zombies when curl ignores SIGTERM (DNS/proxy handshake).
     const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
-      resolve("");
+      try { child.kill(); } catch { /* already gone */ }
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, 2000);
+      done("");
     }, (timeoutSeconds + 1) * 1000);
 
     child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
     child.on("close", () => {
-      clearTimeout(timer);
-      resolve(stdout.trim());
+      done(stdout.trim());
     });
     child.on("error", () => {
-      clearTimeout(timer);
-      resolve("");
+      done("");
     });
   });
 }

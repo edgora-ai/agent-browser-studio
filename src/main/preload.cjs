@@ -12,6 +12,7 @@ const api = {
     trash: (dirId) => ipcRenderer.invoke("profile:trash", dirId),
     trashRestore: (dirId) => ipcRenderer.invoke("profile:trash-restore", dirId),
     trashList: () => ipcRenderer.invoke("profile:trash-list"),
+    trashPurge: (dirId) => ipcRenderer.invoke("profile:trash-purge", dirId),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
     exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
     importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),

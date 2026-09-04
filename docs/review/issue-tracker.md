@@ -91,7 +91,26 @@
 
 验证：unit 77 files / 724 passed（含新增 3），tsc clean，check-i18n clean；PR #80 CI 待定。
 
-## 七、发布前置清单（PM-1 执行时逐项打勾）
+## 七、R10 第三轮修复批（2026-09-04，PR #80 同分支追加）
+
+| # | 问题 | 修复 | 状态 | 证据 |
+|---|---|---|---|---|
+| R10-P0-1 | runs 导出自由文本透传（与 NEVER 承诺矛盾） | step.error/run.error 过 redactSensitive | ✅ | `data-export.ts` redactAgentRun；PR #80 |
+| R10-P0-2 | 主侧 detect 无超时（curl 僵尸） | 四 handler 25s withTimeout；launch/stop 不设（杀回复造谎报，靠幂等收敛，注释说明） | ✅ | `ipc/detect.ts`；PR #80 |
+| R10-P1-1 | audit 无服务端脱敏（SQL 原文入库） | choke-point redactSensitive + inline secret scrub | ✅ | `audit-log.ts` safeField；既有 9 例绿 |
+| R10-P1-2 | webrtc curl kill 不可靠 | settled 标志 + SIGTERM→SIGKILL 二阶段 | ✅ | `webrtc-detector.ts`；PR #80 |
+| R10-P1-3 | team 双实现漂移（50 cap/trim 单边） | 两边 trim+50 cap + lockstep 注释 | ✅ | `team.ts` + `config-manager.ts`；PR #80 |
+| R10-P1-1p | launch 前无拨测 + unhealthy 放行 | probeProxyPort TCP 3s + assertProxyLaunchable（Chromium/Firefox 共用） | ✅ | `tests/unit/proxy-launch-gate.test.ts` 3 例 ✓；PR #80 |
+| R10-P1-3p | 引擎守卫只认 Chromium | engine-status 缓存 + 按 engine 分流 + Firefox 指引 + bulkStart 分组预检 | ✅ | `profiles.js` withEngineGate；PR #80 |
+| R10-UX-P1-1 | 回收站无彻底删除入口 | purgeTrashedProfile + IPC + per-item Delete forever（二次确认） | ✅ | `browser-manager.ts`/`profile.ts`/preload/api.d.ts；PR #80 |
+| R10-UX-P2-3 | onchange 旁路 busy 锁 | proxy/health 短路 + toast | ✅ | `profiles.js` onchange；PR #80 |
+| R10-UX-P3-2 | 引擎指引文案版本滞后 | 去具体版本号（指 patches/） | ✅ | `i18n.js` + fallback；PR #80 |
+
+验证：unit 78 files / 727 passed（含新增 3），tsc clean，check-i18n clean。
+
+下批（R11）候选：batchAssignProxy 互斥、历史详情回放、risk 导出 scope、合规提示、向导断点恢复、trash 定时清扫、Firefox drift persona/consistency 对齐。
+
+## 八、发布前置清单（PM-1 执行时逐项打勾）
 
 - [ ] engine-verify.yml 在真实 runner 跑绿（linux-x64 / windows-x64 / macos-arm64）
 - [ ] 4 个安装包 + sha256 + BUILD.txt 上传 GitHub Releases

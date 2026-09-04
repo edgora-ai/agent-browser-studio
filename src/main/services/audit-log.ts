@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAppDataDir } from "./config-manager.js";
+import { redactSensitive } from "./observability.js";
 
 export interface AuditEntry {
   id: string;
@@ -53,11 +54,27 @@ function sealLogFile(p: string): void {
  * The log may carry URLs/SQL/paths, so the file is owner-only (0600) — created
  * with O_CREAT|O_EXCL when missing, chmod-enforced on every append.
  * Entry fields are length-capped (R7 #37): unbounded detail/target strings
- * are truncated with a marker instead of landing verbatim. */
+ * are truncated with a marker instead of landing verbatim.
+ * R10 P1-1: fields pass through redactSensitive at the single choke point,
+ * so a careless caller (e.g. SQL verbatim in detail) cannot land a secret —
+ * the previous "no secrets" contract relied on all 119 callers being careful. */
 function capField(v: unknown, max: number): string | undefined {
   if (typeof v !== "string" || !v) return v as string | undefined;
   if (Buffer.byteLength(v, "utf8") <= max) return v;
   return v.slice(0, max) + `…[truncated ${v.length} chars]`;
+}
+
+/** Scrub `password=...` / `token: ...` style pairs inside free text (SQL, error strings). */
+function scrubInlineSecrets(text: string): string {
+  return text.replace(
+    /(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|auth[_-]?token|bearer)\s*[:=]\s*['"]?[^'"\s,}]+['"]?/gi,
+    "$1=[redacted]",
+  );
+}
+
+function safeField(v: unknown, max: number): string | undefined {
+  if (typeof v !== "string" || !v) return v as string | undefined;
+  return scrubInlineSecrets(redactSensitive(capField(v, max)) as string);
 }
 
 export function recordAudit(entry: Omit<AuditEntry, "id" | "at"> & { at?: number }): void {
@@ -68,9 +85,9 @@ export function recordAudit(entry: Omit<AuditEntry, "id" | "at"> & { at?: number
       ...entry,
       category: String(entry.category || "").slice(0, 64),
       action: String(entry.action || "").slice(0, 64),
-      target: capField(entry.target, 256),
-      actor: capField(entry.actor, 128),
-      detail: capField(entry.detail, MAX_ENTRY_BYTES),
+      target: safeField(entry.target, 256),
+      actor: safeField(entry.actor, 128),
+      detail: safeField(entry.detail, MAX_ENTRY_BYTES),
     };
     const line = JSON.stringify(full) + "\n";
     const p = logPath();

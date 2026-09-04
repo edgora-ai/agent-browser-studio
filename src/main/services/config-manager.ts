@@ -1536,21 +1536,26 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
  * Minimal structural validation for a persisted team manifest.
  * Full RBAC normalization lives in team.ts (sanitizeTeam) — this loader-side
  * copy avoids a static import cycle (team.ts imports getConfig/saveConfig
- * from this module). Shape-checked only: members with deviceId strings,
- * owner fallback, capped lengths.
+ * from this module).
+ * R10 P1-3: keep the two implementations in lockstep — the field contract is
+ * (trim deviceId, drop blanks, cap lengths, cap 50 members, role allowlist).
+ * If sanitizeTeam changes, update this function to match (and vice versa).
  */
 function normalizeTeamManifest(raw: unknown): TeamConfig | null {
   if (!raw || typeof raw !== "object") return null;
   const t = raw as any;
   const members = Array.isArray(t.members)
     ? t.members
-        .filter((m: any) => m && typeof m.deviceId === "string" && m.deviceId)
-        .map((m: any) => ({
-          deviceId: String(m.deviceId).slice(0, 64),
-          name: String(m.name || "").slice(0, 40) || String(m.deviceId).slice(0, 8),
-          role: m.role === "owner" || m.role === "admin" || m.role === "member" ? m.role : "viewer",
-          addedAt: Number.isFinite(m.addedAt) ? m.addedAt : 0,
-        }))
+        .filter((m: any) => m && typeof m.deviceId === "string" && String(m.deviceId).trim())
+        .map((m: any) => {
+          const deviceId = String(m.deviceId).trim().slice(0, 64);
+          return {
+            deviceId,
+            name: String(m.name || "").slice(0, 40) || deviceId.slice(0, 8),
+            role: m.role === "owner" || m.role === "admin" || m.role === "member" ? m.role : "viewer",
+            addedAt: Number.isFinite(m.addedAt) ? m.addedAt : 0,
+          };
+        })
         .slice(0, 50)
     : [];
   if (!members.length) return null;

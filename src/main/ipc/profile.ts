@@ -13,6 +13,7 @@ import {
   restoreTrashedProfile,
   listTrashedProfiles,
   purgeExpiredTrash,
+  purgeTrashedProfile,
 } from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
 import { validateDirId } from "../services/utils.js";
@@ -121,6 +122,16 @@ export function registerProfileHandlers(): void {
       return { success: true, entries: listTrashedProfiles() };
     } catch (e: any) {
       return { success: false, entries: [], error: e.message };
+    }
+  });
+
+  // R10 UX P1-1: permanent delete of one trashed profile. The UI gates this
+  // behind a type-to-confirm dialog — there is no undo after this returns.
+  ipcMain.handle("profile:trash-purge", async (_event, dirId: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      return { success: purgeTrashedProfile(dirId) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
     }
   });
 

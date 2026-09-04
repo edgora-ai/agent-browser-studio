@@ -33,6 +33,9 @@ function redactProxyDetection(d: any) {
 
 function redactAgentRun(run: any) {
   if (!run) return run;
+  // R10 P0-1: step/run error are free-text (tool output, agent errors) and
+  // may embed secrets — redact like the jobs path, or the file-header
+  // "Secrets are NEVER exported" promise is broken for runs.
   return {
     id: run.id,
     name: run.name,
@@ -45,12 +48,12 @@ function redactAgentRun(run: any) {
       id: step.id,
       tool: step.tool,
       ok: step.ok,
-      error: step.error,
+      error: redactSensitive(step.error),
       durationMs: step.durationMs,
       timestamp: step.timestamp,
     })) : [],
     variableKeys: Object.keys(run.variables || {}),
-    error: run.error,
+    error: redactSensitive(run.error),
   };
 }
 

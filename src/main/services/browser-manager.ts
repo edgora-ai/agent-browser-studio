@@ -29,7 +29,7 @@ import {
   startAuthenticatedSocksBridge,
 } from "./authenticated-socks-bridge.js";
 import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
-import { buildChromiumProxyUrl, proxyDetector, type ProxyDetectionResult } from "./proxy-detector.js";
+import { buildChromiumProxyUrl, proxyDetector, probeProxyPort, type ProxyDetectionResult } from "./proxy-detector.js";
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
@@ -501,6 +501,30 @@ export function restoreTrashedProfile(dirId: string): boolean {
   return restored;
 }
 
+/**
+ * Permanently delete one trashed profile (R10 UX P1-1): remove the trashed
+ * data directory and drop the index entry. Requires a UI double-confirm —
+ * this is irreversible, unlike restore. Also clears index-only leftovers
+ * whose data directory is already gone (unrecoverable entries).
+ */
+export function purgeTrashedProfile(dirId: string): boolean {
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
+  validateDirId(dirId);
+  const entries = readTrashIndex();
+  const entry = entries.find((e) => e.dirId === dirId);
+  if (!entry) throw new Error("That profile is not in the trash");
+  const target = path.join(trashRoot(), dirId);
+  try {
+    if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+  } catch (e: any) {
+    throw new Error(`Failed to remove trashed data: ${e?.message || String(e)}`);
+  }
+  writeTrashIndex(entries.filter((e) => e.dirId !== dirId));
+  recordAudit({ category: "profile", action: "purge", target: dirId, actor: "user", detail: `permanently deleted "${entry.name}" from trash` });
+  return true;
+}
+
 /** Permanently remove trash entries older than the retention window. */
 export function purgeExpiredTrash(ttlMs: number = TRASH_TTL_MS): string[] {
   const cutoff = Date.now() - ttlMs;
@@ -648,6 +672,56 @@ export function assertProxyResolvable(meta: any, cfg: any, resolvedProxy: { mode
   }
 }
 
+/**
+ * Shared launch-time proxy liveness gate (R10 product P1-1/P1-2): after
+ * assertProxyResolvable passes, refuse when the proxy is known-unhealthy
+ * (consecutive health failures) or fails a TCP liveness probe. Both the
+ * Chromium and Firefox paths must call this before spawning — a configured-
+ * but-dead proxy used to launch a browser that could never load a page,
+ * with the blame landing on engine/network instead of the proxy.
+ */
+export async function assertProxyLaunchable(
+  dirId: string,
+  resolvedProxy: { mode: string; name?: string | null; config: any },
+): Promise<void> {
+  if (resolvedProxy.name) {
+    const health = getProxyHealthEntry(resolvedProxy.name);
+    if (health && health.consecutiveFailures > 0) {
+      const when = health.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+      recordAudit({
+        category: "proxy",
+        action: "launch-blocked-unhealthy-proxy",
+        target: resolvedProxy.name,
+        actor: "auto",
+        detail: `profile ${dirId.slice(0, 8)}: ${health.consecutiveFailures} consecutive failure(s), risk=${health.risk}, last check ${when}`,
+      });
+      throw new Error(
+        `Profile proxy "${resolvedProxy.name}" is unhealthy (${health.consecutiveFailures} consecutive failure(s), last health check: ${when}). ` +
+        `Refusing to launch a browser that cannot load pages — fix the proxy or assign a healthy one.`,
+      );
+    }
+  }
+  if (resolvedProxy.config?.host && resolvedProxy.config?.port) {
+    const alive = await probeProxyPort(resolvedProxy.config, 3000);
+    if (!alive) {
+      const label = resolvedProxy.name || `${resolvedProxy.config.host}:${resolvedProxy.config.port}`;
+      const health = resolvedProxy.name ? getProxyHealthEntry(resolvedProxy.name) : null;
+      const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+      recordAudit({
+        category: "proxy",
+        action: "launch-blocked-dead-proxy",
+        target: label,
+        actor: "auto",
+        detail: `profile ${dirId.slice(0, 8)}: TCP probe to ${resolvedProxy.config.host}:${resolvedProxy.config.port} failed, last health check: ${when}`,
+      });
+      throw new Error(
+        `Profile proxy "${label}" is unreachable (${resolvedProxy.config.host}:${resolvedProxy.config.port} refused the connection). ` +
+        `Refusing to launch — check the proxy process and port (last health check: ${when}).`,
+      );
+    }
+  }
+}
+
 export interface LaunchDriftCheck {
   checked: boolean;
   risky?: boolean;
@@ -751,24 +825,7 @@ export async function launchBrowser(
   // and name the proxy plus its last health check so the user can act.
   // Shared with the Firefox path via assertProxyResolvable (R2 #46).
   assertProxyResolvable(meta, cfg, resolvedProxy);
-  // Surface a degraded (but configured) proxy so the failure is attributable
-  // later: a launch that fails while the proxy is unhealthy is not mysterious.
-  if (resolvedProxy.name) {
-    const health = getProxyHealthEntry(resolvedProxy.name);
-    if (health && health.consecutiveFailures > 0) {
-      console.warn(
-        `[agent-browser] profile ${dirId.slice(0, 8)} launching through proxy "${resolvedProxy.name}" ` +
-        `with ${health.consecutiveFailures} consecutive failure(s); last check ${new Date(health.lastCheckedAt).toISOString()}`,
-      );
-      recordAudit({
-        category: "proxy",
-        action: "launch-with-unhealthy-proxy",
-        target: resolvedProxy.name,
-        actor: "auto",
-        detail: `profile ${dirId.slice(0, 8)}: ${health.consecutiveFailures} consecutive failure(s), risk=${health.risk}`,
-      });
-    }
-  }
+  await assertProxyLaunchable(dirId, resolvedProxy);
   // Health-based rotation: when the configured proxy was unhealthy and a
   // healthy fallback was selected, record it (health counters + audit) so the
   // rotation is visible and attributable.
@@ -1286,6 +1343,8 @@ async function launchFirefoxProfile(
   // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
   // unresolvable proxy must refuse — never write a direct user.js.
   assertProxyResolvable(meta, cfg, resolvedProxy);
+  // R10: same liveness gate as Chromium (dead/unhealthy proxy refuses).
+  await assertProxyLaunchable(dirId, resolvedProxy);
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
   writeFirefoxUserJs(profileDir, {

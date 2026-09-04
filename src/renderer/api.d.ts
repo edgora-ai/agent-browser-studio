@@ -202,6 +202,7 @@ export interface AgentBrowserAPI {
     trash: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     trashRestore: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     trashList: () => Promise<{ success: boolean; entries: Array<{ dirId: string; name: string; deletedAt: number; recoverable: boolean }>; error?: string }>;
+    trashPurge: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     rename: (dirId: string, name: string) => Promise<{ success: boolean; error?: string }>;
     cookies: (dirId: string, filter?: string) => Promise<any[]>;
     setCookie: (dirId: string, cookie: any) => Promise<{ success: boolean; error?: string }>;
