@@ -707,25 +707,44 @@
     agentBrowser.batch.run({ kind: "stop", dirIds: sel }).then(finishBatch, finishBatch);
   };
 
+  // R11 P2-1: in-flight guard for proxy assignment. The old forEach fired N
+  // unbounded parallel writes with no mutual exclusion against batch
+  // launch/stop or a second assign — batches interleaved and double-toasted.
+  var assignInFlight = false;
   agentBrowser.batchAssignProxy = function() {
     var sel = selectedProfileIds();
     if (!sel.length) return;
+    if (assignInFlight) {
+      toast(t("batch.already-running", "A batch operation is already running — cancel it first"), "info");
+      return;
+    }
     var proxyEl = document.getElementById("batch-assign-proxy");
     var proxyValue = proxyEl ? proxyEl.value : "";
     var mode = proxyValue ? "named" : "default";
     var proxyName = proxyValue || null;
     var total = sel.length, done = 0, errors = 0;
-    sel.forEach(function (dirId) {
+    assignInFlight = true;
+    function finish() {
+      if (done !== total) return;
+      assignInFlight = false;
+      if (errors) toast(t("toast.batch.assign-partial", "Assigned {ok}/{total} profiles ({failed} failed)").replace("{ok}", total - errors).replace("{total}", total).replace("{failed}", errors), "error");
+      else toast(t("toast.batch.assign-ok", "Assigned the proxy to {n} profiles").replace("{n}", total), "success");
+      loadProfiles();
+    }
+    // Bounded parallelism (4, matching the batch runner) instead of N-way fan-out.
+    var queue = sel.slice();
+    var workers = Math.min(4, queue.length);
+    function next() {
+      var dirId = queue.shift();
+      if (!dirId) return;
       wcall("proxy.setProfile:" + dirId, function () { return api.proxy.setProfile(dirId, proxyName, mode); }).then(function (r) {
         done++;
         if (r && r.success === false) errors++;
-        if (done === total) {
-          if (errors) toast(t("toast.batch.assign-partial", "Assigned {ok}/{total} profiles ({failed} failed)").replace("{ok}", total - errors).replace("{total}", total).replace("{failed}", errors), "error");
-          else toast(t("toast.batch.assign-ok", "Assigned the proxy to {n} profiles").replace("{n}", total), "success");
-          loadProfiles();
-        }
-      }).catch(function () { done++; errors++; if (done === total) { toast(t("toast.batch.assign-done", "Assigned {ok}/{total} profiles").replace("{ok}", total - errors).replace("{total}", total), "error"); loadProfiles(); } });
-    });
+        finish();
+        next();
+      }).catch(function () { done++; errors++; finish(); next(); });
+    }
+    for (var i = 0; i < workers; i++) next();
   };
 
   // R9 P1-3: trash browser — the 7-day recovery promise needs a visible
@@ -1757,23 +1776,55 @@
   }
 
   // R9 P1-4: persisted history with detail replay (mirrors webrtc diag).
+  // R11 UX P2-2: rows expand to replay the full findings of that run.
   var currentEnvRiskDirId = null;
+  var envRiskHistoryCache = [];
+  function findingCardHtml(f) {
+    var color = f.severity === 'high' ? 'var(--danger)' : (f.severity === 'medium' ? 'var(--warning)' : 'var(--text-muted)');
+    var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
+    return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
+      '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(String(f.severity || "").toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">💡 ' + esc(f.fix) + '</div>' +
+    '</div>';
+  }
   function renderEnvRiskHistory(dirId) {
     var histEl = document.getElementById("env-risk-history");
     if (!histEl || !dirId) return;
     api.browser.envRiskHistory(dirId).then(function (h) {
       var entries = (h && h.entries) || [];
+      envRiskHistoryCache = entries;
       if (!entries.length) {
         histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("env.risk.no-history", "No history yet")) + '</div>';
         return;
       }
       var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("env.risk.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
       entries.slice().reverse().forEach(function (en) {
+        var idx = entries.indexOf(en);
         var ts = en.at ? new Date(en.at).toLocaleString() : "?";
         var badge = en.ok ? "✅" : "⚠";
-        html += '<div style="font-size:11px;margin-top:4px;">' + badge + " " + esc(ts) + " — " + esc(en.summary || "") + '</div>';
+        html += '<div class="env-hist-row" data-env-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
+          badge + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
+          '<div class="env-hist-detail" data-env-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;flex-direction:column;gap:6px;"></div>';
       });
       histEl.innerHTML = html;
+      Array.prototype.forEach.call(histEl.querySelectorAll("[data-env-hist]"), function (row) {
+        function toggle() {
+          var idx = Number(row.getAttribute("data-env-hist"));
+          var detail = histEl.querySelector('[data-env-hist-detail="' + idx + '"]');
+          if (!detail) return;
+          var open = detail.style.display !== "none";
+          if (open) { detail.style.display = "none"; detail.style.flexDirection = ""; return; }
+          var en = envRiskHistoryCache[idx] || {};
+          var findings = en.findings || [];
+          detail.innerHTML = findings.length
+            ? findings.map(findingCardHtml).join("")
+            : '<div style="font-size:11px;color:var(--text-muted);">' + esc(t("env.no-risk", "No environment risk found")) + '</div>';
+          detail.style.display = "flex";
+        }
+        row.addEventListener("click", toggle);
+        row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+      });
     }).catch(function () { histEl.innerHTML = ""; });
   }
 

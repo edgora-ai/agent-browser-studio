@@ -89,9 +89,9 @@
 | R9-P1-4 | env-risk 报告无持久化（关 dialog 即丢） | EnvRiskDiagnosticsEntry 类型 + config 三件套 + merge/DefaultConfig + env-risk-history/clear IPC + preload + 对话框历史区 | ✅ | `tests/unit/env-risk-diagnostics.test.ts` 3 例 ✓；PR #80 |
 | R9-P1-3 | 回收站无 UI（7 天承诺够不着） | 页头 ⋯ 菜单 Trash 入口 + dlg-trash + 逐项恢复 | ✅ | `index.html`；`profiles.js` showTrash；PR #80 |
 
-验证：unit 77 files / 724 passed（含新增 3），tsc clean，check-i18n clean；PR #80 CI 待定。
+验证：unit 77 files / 724 passed（含新增 3），tsc clean，check-i18n clean；PR #80 ✅ MERGED (aa28ae9)。
 
-## 七、R10 第三轮修复批（2026-09-04，PR #80 同分支追加）
+## 七、R10 第三轮修复批（2026-09-04，PR #81）
 
 | # | 问题 | 修复 | 状态 | 证据 |
 |---|---|---|---|---|
@@ -110,7 +110,23 @@
 
 下批（R11）候选：batchAssignProxy 互斥、历史详情回放、risk 导出 scope、合规提示、向导断点恢复、trash 定时清扫、Firefox drift persona/consistency 对齐。
 
-## 八、发布前置清单（PM-1 执行时逐项打勾）
+## 八、R11 第四轮修复批（2026-09-04，PR #82）
+
+| # | 问题 | 修复 | 状态 | 证据 |
+|---|---|---|---|---|
+| R11-P2-2 | trash 过期只在开对话框时清扫（7 天不真实） | 启动 sweep 一次 + 每日定时 purgeExpiredTrash | ✅ | `index.ts`；PR #82 |
+| R11-P2-1 | batchAssignProxy 无界 fan-out + 无互斥 | in-flight guard + 定界并发 4 | ✅ | `profiles.js` batchAssignProxy；PR #82 |
+| R11-P3-1 | 合规边界产品内无提示 | profile/proxy 对话框非阻断提示（zh+en） | ✅ | `index.html` + `i18n.js` compliance.*；PR #82 |
+| R11-P2-4 | 导出无 risk scope | risk scope（health+env+webrtc 摘要，脱敏，纳入 all） | ✅ | `data-export.ts`；PR #82 |
+| R11-UX-P2-2 | env-risk 历史只有摘要行 | 行展开回放全量 findings（键盘可达） | ✅ | `profiles.js` renderEnvRiskHistory；PR #82 |
+| R11-P2-3 | 向导无断点恢复 | localStorage checkpoint（step+dirId），重开续跑 | ✅ | `wizard.js`；PR #82 |
+| R11-P1-4 | Firefox 缺 consistency 预检 | runConsistencyGate 两引擎共用（默认 warn） | ✅ | `browser-manager.ts`；PR #82 |
+
+验证：unit 78 files / 727 passed，tsc clean，check-i18n clean；PR #82 CI 待定。
+
+下批（R12）候选：Firefox cookie/drift-persona 语义对齐、webrtc 历史回放、trash-list 定时改推模式、PM-6/A4/A6 决策项。
+
+## 九、发布前置清单（PM-1 执行时逐项打勾）
 
 - [ ] engine-verify.yml 在真实 runner 跑绿（linux-x64 / windows-x64 / macos-arm64）
 - [ ] 4 个安装包 + sha256 + BUILD.txt 上传 GitHub Releases

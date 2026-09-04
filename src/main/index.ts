@@ -26,7 +26,7 @@ import { startScheduler } from "./services/automation.js";
 import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
-import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs } from "./services/browser-manager.js";
+import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } from "./services/browser-manager.js";
 import { migrateSecrets, getAppDataDir } from "./services/config-manager.js";
 import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
@@ -258,6 +258,21 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  // R11 P2-2: trash retention is real — sweep once at startup and daily
+  // after. Previously purgeExpiredTrash only ran when the trash dialog was
+  // opened, so "7 days" never elapsed for users who never opened it.
+  try {
+    const startupPurged = purgeExpiredTrash();
+    if (startupPurged.length) console.log("[trash] startup sweep purged " + startupPurged.length + " expired profile(s)");
+  } catch { /* best effort */ }
+  setInterval(() => {
+    try {
+      const purged = purgeExpiredTrash();
+      if (purged.length) console.log("[trash] daily sweep purged " + purged.length + " expired profile(s)");
+    } catch (error) {
+      console.error("[trash] daily sweep failed:", error);
+    }
+  }, 24 * 60 * 60 * 1000).unref();
   // Version-aware release store: auto-rollback after a crash loop,
   // then mark the run healthy once the app has been up for a while.
   const updateState = noteAppStarted();

@@ -596,6 +596,8 @@
       "dlg.job-title-fallback": "Job 详情",
 
       // ── Common buttons ──
+      "compliance.profile-hint": "⚖️ 仅可用于您有授权的账号与站点 — 请遵守各站点的服务条款。详见仓库 ACCEPTABLE_USE.md。",
+      "compliance.proxy-hint": "⚖️ 仅可使用您拥有或有授权的代理。",
       "common.cancel": "取消",
       "common.save": "保存",
       "common.import": "导入",
@@ -1380,6 +1382,8 @@
       "dlg.run-title-fallback": "Run Detail",
       "dlg.job-title-fallback": "Job Detail",
 
+      "compliance.profile-hint": "⚖️ Use only with accounts and sites you are authorized for — respect each site's Terms of Service. See ACCEPTABLE_USE.md in the repo.",
+      "compliance.proxy-hint": "⚖️ Use only proxies you own or are authorized to use.",
       "common.cancel": "Cancel",
       "common.save": "Save",
       "common.import": "Import",
@@ -1644,6 +1648,7 @@
       "env.risk.cleared": "环境风险历史已清除",
       "env.risk.history": "历史记录 ({n})",
       "env.risk.no-history": "暂无历史记录",
+      "env.risk.expand": "点击回放详情",
       "common.none": "无",
       "webrtc.diag.clear": "🗑 清除历史",
       "webrtc.diag.no-history": "暂无历史记录",
@@ -1884,6 +1889,7 @@
       "env.risk.cleared": "Environment risk history cleared",
       "env.risk.history": "History ({n})",
       "env.risk.no-history": "No history yet",
+      "env.risk.expand": "Click to replay details",
       "common.none": "none",
       "webrtc.diag.clear": "🗑 Clear history",
       "webrtc.diag.no-history": "No history yet",

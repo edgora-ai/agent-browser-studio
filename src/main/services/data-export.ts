@@ -8,7 +8,7 @@ import { listJobs } from "./job-store.js";
 import { agentDbTables } from "./agent-db.js";
 import { redactSensitive } from "./observability.js";
 
-export type ExportScope = "profiles" | "proxies" | "accounts" | "runs" | "jobs" | "db" | "all";
+export type ExportScope = "profiles" | "proxies" | "accounts" | "runs" | "jobs" | "db" | "risk" | "all";
 
 function redactProxy(p: any) {
   if (!p) return p;
@@ -86,6 +86,30 @@ export function exportData(scope: ExportScope): { scope: string; exportedAt: num
   // R8 P1-9: job result/error are free-text (custom-js output, agent errors)
   // and may embed secrets — pass through the same redactor as the log path.
   if (want("jobs")) out.jobs = redactSensitive(listJobs({ limit: 500 }));
+  // R11 P2-4: risk/diagnostics scope — proxy health + env-risk history +
+  // webrtc summary per profile. Summaries are analyst-facing text (may embed
+  // host paths/IPs), so each branch goes through redactSensitive like jobs.
+  if (want("risk")) {
+    const health = cfg.proxyHealth || {};
+    out.proxyHealth = redactSensitive(Object.fromEntries(Object.entries(health).map(([n, h]: any) => [n, {
+      score: h.score ?? null, risk: h.risk ?? null, checks: h.checks ?? 0,
+      successes: h.successes ?? 0, consecutiveFailures: h.consecutiveFailures ?? 0,
+      lastCheckedAt: h.lastCheckedAt ?? null, suggestion: h.suggestion ?? null,
+    }])));
+    const envHist = cfg.envRiskDiagnostics || {};
+    out.envRisk = redactSensitive(Object.fromEntries(Object.entries(envHist).map(([dirId, entries]: any) => [
+      dirId, (Array.isArray(entries) ? entries : []).slice(-20).map((en: any) => ({
+        at: en.at, ok: en.ok, high: en.high, medium: en.medium, summary: en.summary,
+      })),
+    ])));
+    const wrtc = cfg.webrtcDiagnostics || {};
+    out.webrtc = redactSensitive(Object.fromEntries(Object.entries(wrtc).map(([dirId, entries]: any) => [
+      dirId, (Array.isArray(entries) ? entries : []).slice(-20).map((en: any) => ({
+        at: en.at, success: en.success, summary: en.summary,
+        hostIps: en.hostIps || [], mdnsHosts: en.mdnsHosts || [],
+      })),
+    ])));
+  }
   if (want("db")) {
     try {
       out.db = agentDbTables().map((t: any) => ({ name: t.name, rowCount: t.rowCount }));

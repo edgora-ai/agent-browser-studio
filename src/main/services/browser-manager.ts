@@ -680,6 +680,39 @@ export function assertProxyResolvable(meta: any, cfg: any, resolvedProxy: { mode
  * but-dead proxy used to launch a browser that could never load a page,
  * with the blame landing on engine/network instead of the proxy.
  */
+/**
+ * Shared pre-launch consistency gate (R11 P1-4 item 3): timezone / locale /
+ * WebRTC vs proxy warnings land in audit on both engines. Blocks only under
+ * the same opt-in flags as the Chromium path. Firefox previously skipped
+ * this entirely, so identity/proxy mismatches launched silently there.
+ */
+export function runConsistencyGate(
+  dirId: string,
+  cfg: any,
+  opts: {
+    passThrough: boolean;
+    timezone: any; locale: any; webrtcIp: any; platform: any;
+    proxyMode: any; proxyGeo: any;
+  },
+): void {
+  const consistency = opts.passThrough ? { ok: true, warnings: [], blockers: [] } : checkProfileConsistency({
+    timezone: opts.timezone, locale: opts.locale,
+    webrtcIp: opts.webrtcIp,
+    platform: opts.platform,
+    proxyMode: opts.proxyMode,
+    proxyGeo: opts.proxyGeo,
+  }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
+  for (const w of consistency.warnings) recordAudit({ category: "profile", action: "consistency-warning", target: dirId, detail: `${w.code}: ${w.message}` });
+  if (!consistency.ok) {
+    for (const b of consistency.blockers) recordAudit({ category: "profile", action: "consistency-blocker", target: dirId, detail: `${b.code}: ${b.message}` });
+    const proxyRiskBlocker = consistency.blockers.some((b) => b.code === "proxy-idc" || b.code === "proxy-anonymous");
+    const otherBlocker = consistency.blockers.some((b) => b.code !== "proxy-idc" && b.code !== "proxy-anonymous");
+    if ((cfg.blockOnProxyRisk && proxyRiskBlocker) || (cfg.blockOnConsistencyConflict && otherBlocker)) {
+      throw new Error(`Launch blocked by consistency check: ${consistency.blockers.map((b) => b.message).join("; ")}`);
+    }
+  }
+}
+
 export async function assertProxyLaunchable(
   dirId: string,
   resolvedProxy: { mode: string; name?: string | null; config: any },
@@ -850,22 +883,15 @@ export async function launchBrowser(
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy). Warns
   // by default; blocks only when config.blockOnConsistencyConflict is set.
-  const consistency = passThrough ? { ok: true, warnings: [], blockers: [] } : checkProfileConsistency({
+  // Shared with the Firefox path via runConsistencyGate (R11 P1-4, item 3).
+  runConsistencyGate(dirId, cfg, {
+    passThrough,
     timezone: meta.timezone, locale: meta.locale,
     webrtcIp: shouldResolveWebRtc ? meta.webrtcIp : null,
     platform: meta.platform,
     proxyMode: resolvedProxy.mode,
     proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
-  }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
-  for (const w of consistency.warnings) recordAudit({ category: "profile", action: "consistency-warning", target: dirId, detail: `${w.code}: ${w.message}` });
-  if (!consistency.ok) {
-    for (const b of consistency.blockers) recordAudit({ category: "profile", action: "consistency-blocker", target: dirId, detail: `${b.code}: ${b.message}` });
-    const proxyRiskBlocker = consistency.blockers.some((b) => b.code === "proxy-idc" || b.code === "proxy-anonymous");
-    const otherBlocker = consistency.blockers.some((b) => b.code !== "proxy-idc" && b.code !== "proxy-anonymous");
-    if ((cfg.blockOnProxyRisk && proxyRiskBlocker) || (cfg.blockOnConsistencyConflict && otherBlocker)) {
-      throw new Error(`Launch blocked by consistency check: ${consistency.blockers.map((b) => b.message).join("; ")}`);
-    }
-  }
+  });
 
   const requestedArgs = buildBrowserLaunchArgs({
     profileDir,
@@ -1345,6 +1371,15 @@ async function launchFirefoxProfile(
   assertProxyResolvable(meta, cfg, resolvedProxy);
   // R10: same liveness gate as Chromium (dead/unhealthy proxy refuses).
   await assertProxyLaunchable(dirId, resolvedProxy);
+  // R11 P1-4 item 3: same consistency warnings as Chromium (warn by default).
+  runConsistencyGate(dirId, cfg, {
+    passThrough: fingerprintMode === "off",
+    timezone: meta.timezone, locale: meta.locale,
+    webrtcIp: meta.webrtcIp,
+    platform: meta.platform,
+    proxyMode: resolvedProxy.mode,
+    proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
+  });
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
   writeFirefoxUserJs(profileDir, {

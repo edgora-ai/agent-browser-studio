@@ -77,19 +77,64 @@
     }
   }
 
+  // R11 P2-3: wizard checkpoint — persist completed step + created profile so
+  // a refresh/close mid-onboarding resumes instead of restarting from step 1.
+  var WIZARD_PROGRESS_KEY = 'agent-browser-studio-wizard-progress';
+  function saveWizardProgress(step) {
+    try {
+      localStorage.setItem(WIZARD_PROGRESS_KEY, JSON.stringify({
+        step: step,
+        dirId: state.wizardDirId || null,
+        profileName: state.wizardProfileName || null,
+      }));
+    } catch (e) { /* storage disabled */ }
+  }
+  function loadWizardProgress() {
+    try {
+      var raw = localStorage.getItem(WIZARD_PROGRESS_KEY);
+      if (!raw) return null;
+      var p = JSON.parse(raw);
+      if (!p || typeof p.step !== "number") return null;
+      return p;
+    } catch (e) { return null; }
+  }
+  function clearWizardProgress() {
+    try { localStorage.removeItem(WIZARD_PROGRESS_KEY); } catch (e) { /* ok */ }
+  }
+
   function showWizard() {
     var dlg = document.getElementById('dlg-wizard');
     if (!dlg) return;
+    // Resume from checkpoint when present (R11 P2-3).
+    var saved = loadWizardProgress();
+    if (saved && saved.step > 0) {
+      state.wizardDirId = saved.dirId || null;
+      state.wizardProfileName = saved.profileName || null;
+      var steps = dlg.querySelectorAll('.wizard-step');
+      for (var i = 0; i < steps.length; i++) {
+        var s = steps[i];
+        var num = Number(s.getAttribute("data-step")) || (i + 1);
+        var done = num <= saved.step;
+        s.style.opacity = done || num === saved.step + 1 ? '1' : '0.45';
+        var btns = s.querySelectorAll('button');
+        for (var j = 0; j < btns.length; j++) btns[j].disabled = !(done || num === saved.step + 1);
+      }
+      if (saved.profileName) {
+        try { document.getElementById('wizard-profile-name').value = saved.profileName; } catch (e) { /* ok */ }
+      }
+      dlg.showModal();
+      return;
+    }
     // Reset wizard state
     state.wizardDirId = null;
     state.wizardProfileName = null;
     // Reset steps
-    var steps = dlg.querySelectorAll('.wizard-step');
-    for (var i = 0; i < steps.length; i++) {
-      var s = steps[i];
-      s.style.opacity = i === 0 ? '1' : '0.45';
-      var btns = s.querySelectorAll('button');
-      for (var j = 0; j < btns.length; j++) btns[j].disabled = i > 0;
+    var steps0 = dlg.querySelectorAll('.wizard-step');
+    for (var k = 0; k < steps0.length; k++) {
+      var s0 = steps0[k];
+      s0.style.opacity = k === 0 ? '1' : '0.45';
+      var btns0 = s0.querySelectorAll('button');
+      for (var m = 0; m < btns0.length; m++) btns0[m].disabled = k > 0;
     }
     document.getElementById('wizard-step1-status').textContent = '';
     document.getElementById('wizard-profile-name').value = '';
@@ -217,6 +262,7 @@
   function advanceWizardStep(completedStep) {
     var dlg = document.getElementById('dlg-wizard');
     if (!dlg) return;
+    saveWizardProgress(completedStep);
     var nextStep = completedStep + 1;
     var thisStep = dlg.querySelector('.wizard-step[data-step="' + completedStep + '"]');
     var nextEl = dlg.querySelector('.wizard-step[data-step="' + nextStep + '"]');
@@ -236,6 +282,7 @@
 
   agentBrowser.wizardSkip = function() {
     document.getElementById('dlg-wizard').close();
+    clearWizardProgress();
     // "Skip for now" only hides the wizard for the current session — it does
     // NOT persist dismissal, so the wizard can reappear on the next app launch
     // if the first-run conditions (no binary / no profiles) still hold.
@@ -244,6 +291,7 @@
 
   agentBrowser.wizardNeverShow = function() {
     document.getElementById('dlg-wizard').close();
+    clearWizardProgress();
     try { localStorage.setItem('agent-browser-studio-wizard-dismissed', '1'); } catch (e) { /* ok */ }
     window.wizardDismissed = true;
   };
@@ -259,6 +307,7 @@
   // an LLM provider after their first profile is ready.
   agentBrowser.wizardConfigureAgent = function() {
     document.getElementById('dlg-wizard').close();
+    clearWizardProgress();
     window.wizardDismissed = true;
     try { agentBrowser.switchTab('agent'); } catch (e) { /* ignore */ }
     try { agentBrowser.switchAgentSub('config'); } catch (e) { /* ignore */ }
