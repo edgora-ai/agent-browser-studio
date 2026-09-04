@@ -1,0 +1,356 @@
+diff --git a/dom/media/webspeech/synth/SpeechSynthesis.cpp b/dom/media/webspeech/synth/SpeechSynthesis.cpp
+--- a/dom/media/webspeech/synth/SpeechSynthesis.cpp
++++ b/dom/media/webspeech/synth/SpeechSynthesis.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "SpeechSynthesis.h"
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "AutoplayPolicy.h"
+ #include "mozilla/Logging.h"
+ #include "mozilla/dom/Document.h"
+@@ -245,13 +246,51 @@
+     return;
+   }
+ 
++  nsISupports* voiceParent = NS_ISUPPORTS_CAST(nsIObserver*, this);
++  const auto* agentVoices =
++      agentbrowser::GetSpeechVoicesOverrides();
++  // Caller eligibility requires a live window: after inner-window-destroyed
++  // (or DisconnectFromOwner) GetOwnerWindow() is null and the stock path
++  // already tolerated that via the null-safe docShell RFP check above.
++  const bool applyAgentRoster =
++      agentVoices && window &&
++      agentbrowser::ShouldApplyContentOverrides(window->AsGlobal());
++
++  if (applyAgentRoster) {
++    // Persona roster: the config is the authoritative voice list for managed
++    // content. URIs are deterministic persona identifiers so repeated calls
++    // and cross-window enumeration stay coherent without consulting the
++    // physical macOS registry; localService mirrors the persona config.
++    for (uint32_t i = 0; i < agentVoices->mCount; i++) {
++      const auto& configured = agentVoices->mVoices[i];
++      nsAutoString uri;
++      uri.AppendLiteral("urn:moz-tts:persona:");
++      uri.AppendInt(i);
++
++      SpeechSynthesisVoice* voice = mVoiceCache.GetWeak(uri);
++      if (!voice) {
++        voice = new SpeechSynthesisVoice(voiceParent, uri);
++        voice->mIsAgentVoice = true;
++        voice->mAgentLocalService = configured.mLocalService;
++        voice->mAgentName = configured.mName;
++        voice->mAgentLang = configured.mLang;
++      }
++      aResult.AppendElement(voice);
++    }
++
++    mVoiceCache.Clear();
++    for (uint32_t i = 0; i < aResult.Length(); i++) {
++      SpeechSynthesisVoice* voice = aResult[i];
++      mVoiceCache.InsertOrUpdate(voice->mUri, RefPtr{voice});
++    }
++    return;
++  }
++
+   nsresult rv = nsSynthVoiceRegistry::GetInstance()->GetVoiceCount(&voiceCount);
+   if (NS_WARN_IF(NS_FAILED(rv))) {
+     return;
+   }
+ 
+-  nsISupports* voiceParent = NS_ISUPPORTS_CAST(nsIObserver*, this);
+-
+   for (uint32_t i = 0; i < voiceCount; i++) {
+     nsAutoString uri;
+     rv = nsSynthVoiceRegistry::GetInstance()->GetVoice(i, uri);
+diff --git a/dom/media/webspeech/synth/SpeechSynthesisVoice.cpp b/dom/media/webspeech/synth/SpeechSynthesisVoice.cpp
+--- a/dom/media/webspeech/synth/SpeechSynthesisVoice.cpp
++++ b/dom/media/webspeech/synth/SpeechSynthesisVoice.cpp
+@@ -34,6 +34,10 @@
+ }
+ 
+ void SpeechSynthesisVoice::GetName(nsString& aRetval) const {
++  if (mIsAgentVoice) {
++    aRetval = mAgentName;
++    return;
++  }
+   DebugOnly<nsresult> rv =
+       nsSynthVoiceRegistry::GetInstance()->GetVoiceName(mUri, aRetval);
+   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+@@ -41,6 +45,10 @@
+ }
+ 
+ void SpeechSynthesisVoice::GetLang(nsString& aRetval) const {
++  if (mIsAgentVoice) {
++    aRetval = mAgentLang;
++    return;
++  }
+   DebugOnly<nsresult> rv =
+       nsSynthVoiceRegistry::GetInstance()->GetVoiceLang(mUri, aRetval);
+   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+@@ -48,6 +56,9 @@
+ }
+ 
+ bool SpeechSynthesisVoice::LocalService() const {
++  if (mIsAgentVoice) {
++    return mAgentLocalService;
++  }
+   bool isLocal;
+   DebugOnly<nsresult> rv =
+       nsSynthVoiceRegistry::GetInstance()->IsLocalVoice(mUri, &isLocal);
+@@ -58,6 +69,13 @@
+ }
+ 
+ bool SpeechSynthesisVoice::Default() const {
++  if (mIsAgentVoice) {
++    // Persona rosters mirror the stock default semantics: no voice is the
++    // OS default unless a persona voice claims it, which the config never
++    // expresses. Stock Firefox 154 has no default voice observable in the
++    // persona path.
++    return false;
++  }
+   bool isDefault;
+   DebugOnly<nsresult> rv =
+       nsSynthVoiceRegistry::GetInstance()->IsDefaultVoice(mUri, &isDefault);
+diff --git a/dom/media/webspeech/synth/SpeechSynthesisVoice.h b/dom/media/webspeech/synth/SpeechSynthesisVoice.h
+--- a/dom/media/webspeech/synth/SpeechSynthesisVoice.h
++++ b/dom/media/webspeech/synth/SpeechSynthesisVoice.h
+@@ -46,6 +46,17 @@
+   nsCOMPtr<nsISupports> mParent;
+ 
+   nsString mUri;
++
++  // Immutable persona payload set by SpeechSynthesis::GetVoices for the
++  // agent-browser roster; mIsAgentVoice is false when the wrapper mirrors a
++  // real registry voice. Attribute getters prefer the persona payload so
++  // persona rosters stay consistent even when the physical registry changes
++  // underneath and never query the registry with a persona URI that is not
++  // registered there.
++  bool mIsAgentVoice = false;
++  bool mAgentLocalService = true;
++  nsString mAgentName;
++  nsString mAgentLang;
+ };
+ 
+ }  // namespace mozilla::dom
+diff --git a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
+--- a/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
++++ b/dom/media/webspeech/synth/nsSynthVoiceRegistry.cpp
+@@ -631,6 +631,17 @@
+ 
+   if (aUtterance.mVoice) {
+     aUtterance.mVoice->GetVoiceURI(uri);
++
++    if (StringBeginsWith(uri, u"urn:moz-tts:persona:"_ns)) {
++      // A persona voice is a configured identity, not a real speech backend.
++      // Speak with the persona's own language when the page did not pin one:
++      // the parent FindBestMatch then lands on a real macOS voice in the
++      // persona's language family and audio is still produced. A page-pinned
++      // language keeps winning over the document language, as in stock.
++      if (lang.IsEmpty()) {
++        aUtterance.mVoice->GetLang(lang);
++      }
++    }
+   }
+ 
+   // Get current audio volume to apply speech call
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -8,6 +8,7 @@
+ #include <cmath>
+ #include <stdio.h>
+ 
++#include "js/Array.h"
+ #include "js/JSON.h"
+ #include "js/PropertyAndElement.h"
+ #include "mozilla/Atomics.h"
+@@ -40,6 +41,7 @@
+            GeolocationOverrideConfig&& aGeolocation,
+            StorageOverrideConfig&& aStorage,
+            MediaDevicesOverrideConfig&& aMediaDevices,
++           SpeechVoicesOverrideConfig&& aSpeechVoices,
+            WebGLOverrideConfig&& aWebGL, WebGPUOverrideConfig&& aWebGPU)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+@@ -50,6 +52,7 @@
+         mGeolocation(std::move(aGeolocation)),
+         mStorage(std::move(aStorage)),
+         mMediaDevices(std::move(aMediaDevices)),
++        mSpeechVoices(std::move(aSpeechVoices)),
+         mWebGL(std::move(aWebGL)),
+         mWebGPU(std::move(aWebGPU)) {}
+ 
+@@ -62,6 +65,7 @@
+   const GeolocationOverrideConfig mGeolocation;
+   const StorageOverrideConfig mStorage;
+   const MediaDevicesOverrideConfig mMediaDevices;
++  const SpeechVoicesOverrideConfig mSpeechVoices;
+   const WebGLOverrideConfig mWebGL;
+   const WebGPUOverrideConfig mWebGPU;
+ };
+@@ -268,6 +272,7 @@
+                      GeolocationOverrideConfig& aGeolocation,
+                      StorageOverrideConfig& aStorage,
+                      MediaDevicesOverrideConfig& aMediaDevices,
++                     SpeechVoicesOverrideConfig& aSpeechVoices,
+                      WebGLOverrideConfig& aWebGL,
+                      WebGPUOverrideConfig& aWebGPU, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+@@ -549,6 +554,58 @@
+   aMediaDevices.mVideoInputs = static_cast<uint32_t>(videoInputs);
+   aMediaDevices.mAudioOutputs = static_cast<uint32_t>(audioOutputs);
+ 
++  JS::Rooted<JS::Value> speechSynthesisValue(cx);
++  if (!GetRequiredProperty(cx, object, "speechSynthesis", &speechSynthesisValue,
++                           aError) ||
++      !speechSynthesisValue.isObject()) {
++    SetInvalidField(aError, "speechSynthesis");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> speechSynthesis(cx, &speechSynthesisValue.toObject());
++  if (!GetRequiredBoolean(cx, speechSynthesis, "enabled",
++                          aSpeechVoices.mEnabled, aError)) {
++    SetInvalidField(aError, "speechSynthesis");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JS::Value> voicesValue(cx);
++  if (!GetRequiredProperty(cx, speechSynthesis, "voices", &voicesValue,
++                           aError) ||
++      !voicesValue.isObject()) {
++    SetInvalidField(aError, "speechSynthesis");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> voices(cx, &voicesValue.toObject());
++  bool isVoiceArray = false;
++  uint32_t voiceCount = 0;
++  if (!JS::IsArrayObject(cx, voices, &isVoiceArray) || !isVoiceArray ||
++      !JS::GetArrayLength(cx, voices, &voiceCount) || voiceCount == 0 ||
++      voiceCount > 64) {
++    SetInvalidField(aError, "speechSynthesis");
++    return NS_ERROR_INVALID_ARG;
++  }
++  for (uint32_t index = 0; index < voiceCount; index++) {
++    JS::Rooted<JS::Value> element(cx);
++    if (!JS_GetElement(cx, voices, index, &element) || !element.isObject()) {
++      SetInvalidField(aError, "speechSynthesis");
++      return NS_ERROR_INVALID_ARG;
++    }
++    JS::Rooted<JSObject*> voice(cx, &element.toObject());
++    SpeechVoiceOverride entry;
++    if (!GetRequiredString(cx, voice, "name", entry.mName, aError) ||
++        !GetRequiredString(cx, voice, "lang", entry.mLang, aError) ||
++        !GetRequiredBoolean(cx, voice, "localService", entry.mLocalService,
++                            aError)) {
++      SetInvalidField(aError, "speechSynthesis");
++      return NS_ERROR_INVALID_ARG;
++    }
++    if (entry.mName.Length() > 128 || entry.mLang.Length() > 64) {
++      SetInvalidField(aError, "speechSynthesis");
++      return NS_ERROR_INVALID_ARG;
++    }
++    aSpeechVoices.mVoices[index] = std::move(entry);
++  }
++  aSpeechVoices.mCount = voiceCount;
++
+   JS::Rooted<JS::Value> webglValue(cx);
+   if (!GetRequiredProperty(cx, object, "webgl", &webglValue, aError) ||
+       !webglValue.isObject()) {
+@@ -607,6 +664,7 @@
+                          GeolocationOverrideConfig&& aGeolocation,
+                          StorageOverrideConfig&& aStorage,
+                          MediaDevicesOverrideConfig&& aMediaDevices,
++                         SpeechVoicesOverrideConfig&& aSpeechVoices,
+                          WebGLOverrideConfig&& aWebGL,
+                          WebGPUOverrideConfig&& aWebGPU, nsACString& aError) {
+   if (sSnapshot) {
+@@ -621,7 +679,8 @@
+                            std::move(aNavigator), std::move(aScreen),
+                            std::move(aCanvas), std::move(aAudio),
+                            std::move(aGeolocation), std::move(aStorage),
+-                           std::move(aMediaDevices), std::move(aWebGL),
++                           std::move(aMediaDevices),
++                           std::move(aSpeechVoices), std::move(aWebGL),
+                            std::move(aWebGPU));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+@@ -641,10 +700,11 @@
+   GeolocationOverrideConfig geolocation;
+   StorageOverrideConfig storage;
+   MediaDevicesOverrideConfig mediaDevices;
++  SpeechVoicesOverrideConfig speechVoices;
+   WebGLOverrideConfig webgl;
+   WebGPUOverrideConfig webgpu;
+   rv = ParseConfig(decoded, navigator, screen, canvas, audio, geolocation,
+-                   storage, mediaDevices, webgl, webgpu, aError);
++                   storage, mediaDevices, speechVoices, webgl, webgpu, aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+@@ -652,8 +712,8 @@
+                          std::move(navigator), std::move(screen),
+                          std::move(canvas), std::move(audio),
+                          std::move(geolocation), std::move(storage),
+-                         std::move(mediaDevices), std::move(webgl),
+-                         std::move(webgpu), aError);
++                         std::move(mediaDevices), std::move(speechVoices),
++                         std::move(webgl), std::move(webgpu), aError);
+ }
+ 
+ }  // namespace
+@@ -668,7 +728,8 @@
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+       "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
+       "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\",\"audio-v1\","
+-      "\"geolocation-v1\",\"storage-quota-v1\",\"media-devices-v1\"]}\n",
++      "\"geolocation-v1\",\"storage-quota-v1\",\"media-devices-v1\","
++      "\"speech-voices-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -766,6 +827,14 @@
+   return &snapshot->mMediaDevices;
+ }
+ 
++const SpeechVoicesOverrideConfig* GetSpeechVoicesOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  if (!snapshot || !snapshot->mSpeechVoices.mEnabled) {
++    return nullptr;
++  }
++  return &snapshot->mSpeechVoices;
++}
++
+ const WebGLOverrideConfig* GetWebGLOverrides() {
+   Snapshot* snapshot = sPublishedSnapshot;
+   return snapshot ? &snapshot->mWebGL : nullptr;
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -78,6 +78,19 @@
+   uint32_t mAudioOutputs = 0;
+ };
+ 
++struct SpeechVoiceOverride final {
++  nsString mName;
++  nsString mLang;
++  bool mLocalService = true;
++};
++
++struct SpeechVoicesOverrideConfig final {
++  bool mEnabled = false;
++  uint32_t mCount = 0;
++  // The product persona voice roster; bounded to match the immutable config.
++  SpeechVoiceOverride mVoices[64];
++};
++
+ struct WebGLOverrideConfig final {
+   nsString mVendor;
+   nsString mRenderer;
+@@ -105,6 +118,7 @@
+ const GeolocationOverrideConfig* GetGeolocationOverrides();
+ const StorageOverrideConfig* GetStorageOverrides();
+ const MediaDevicesOverrideConfig* GetMediaDevicesOverrides();
++const SpeechVoicesOverrideConfig* GetSpeechVoicesOverrides();
+ const WebGLOverrideConfig* GetWebGLOverrides();
+ const WebGPUOverrideConfig* GetWebGPUOverrides();
+ bool IsManagedContentGlobal(nsIGlobalObject* aGlobal);

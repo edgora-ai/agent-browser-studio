@@ -30,6 +30,7 @@
     "verify:ping0": "npm run build && node dist/tools/verify-ping0.js",
     "compare:roxy": "npm run build && node dist/tools/compare-roxy-ping0.js",
     "install:chromium": "npm run build && node dist/tools/install-native-chromium.js",
+    "install:firefox": "npm run build && node dist/tools/install-native-firefox.js",
     "pretest": "npm run build",
     "postinstall": "electron-builder install-app-deps"
   },

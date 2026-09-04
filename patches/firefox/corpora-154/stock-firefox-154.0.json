@@ -1,0 +1,444 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "macos-arm64",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless",
+    "fingerprintConfig": null,
+    "preloadScript": false,
+    "toolchain": {
+      "clang": "21.1.8",
+      "lld": "21.1.8",
+      "rust": "1.94.1",
+      "cbindgen": "0.29.4"
+    }
+  },
+  "surfaces": {
+    "window": {
+      "navigator": {
+        "appCodeName": "Mozilla",
+        "appName": "Netscape",
+        "appVersion": "5.0 (Macintosh)",
+        "deviceMemory": null,
+        "hardwareConcurrency": 8,
+        "language": "en-US",
+        "languages": [
+          "en-US",
+          "en"
+        ],
+        "maxTouchPoints": 0,
+        "onLine": true,
+        "oscpu": "Intel Mac OS X 10.15",
+        "platform": "MacIntel",
+        "product": "Gecko",
+        "productSub": "20100101",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "userAgentData": false,
+        "vendor": "",
+        "vendorSub": "",
+        "webdriver": true,
+        "getters": {
+          "hardwareConcurrency": "function hardwareConcurrency() {\n    [native code]\n}",
+          "platform": "function platform() {\n    [native code]\n}",
+          "userAgent": "function userAgent() {\n    [native code]\n}",
+          "webdriver": "function webdriver() {\n    [native code]\n}"
+        }
+      },
+      "screen": {
+        "availHeight": 692,
+        "availWidth": 1366,
+        "colorDepth": 24,
+        "height": 768,
+        "orientationAngle": 0,
+        "orientationType": "landscape-primary",
+        "pixelDepth": 24,
+        "width": 1366,
+        "devicePixelRatio": 1,
+        "innerHeight": 683,
+        "innerWidth": 1366,
+        "outerHeight": 768,
+        "outerWidth": 1366
+      },
+      "intl": {
+        "locale": "en-US",
+        "calendar": "gregory",
+        "numberingSystem": "latn",
+        "timeZone": "Asia/Shanghai",
+        "januaryOffsetMinutes": -480,
+        "julyOffsetMinutes": -480
+      },
+      "canvas2d": {
+        "supported": true,
+        "hash": "80cc2cde",
+        "length": 12288
+      },
+      "offscreenCanvas2d": {
+        "supported": true,
+        "hash": "80cc2cde",
+        "length": 12288
+      },
+      "webgl": {
+        "supported": true,
+        "version": "WebGL 2.0",
+        "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+        "vendor": "Mozilla",
+        "renderer": "Apple M1, or similar",
+        "unmaskedVendor": "Apple",
+        "unmaskedRenderer": "Apple M1, or similar",
+        "extensions": [
+          "EXT_color_buffer_float",
+          "EXT_depth_clamp",
+          "EXT_float_blend",
+          "EXT_texture_compression_rgtc",
+          "EXT_texture_filter_anisotropic",
+          "OES_draw_buffers_indexed",
+          "OES_texture_float_linear",
+          "WEBGL_compressed_texture_s3tc",
+          "WEBGL_compressed_texture_s3tc_srgb",
+          "WEBGL_debug_renderer_info",
+          "WEBGL_debug_shaders",
+          "WEBGL_lose_context",
+          "WEBGL_provoking_vertex"
+        ]
+      },
+      "offscreenWebgl": {
+        "supported": true,
+        "version": "WebGL 2.0",
+        "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+        "vendor": "Mozilla",
+        "renderer": "Apple M1, or similar",
+        "unmaskedVendor": "Apple",
+        "unmaskedRenderer": "Apple M1, or similar",
+        "extensions": [
+          "EXT_color_buffer_float",
+          "EXT_depth_clamp",
+          "EXT_float_blend",
+          "EXT_texture_compression_rgtc",
+          "EXT_texture_filter_anisotropic",
+          "OES_draw_buffers_indexed",
+          "OES_texture_float_linear",
+          "WEBGL_compressed_texture_s3tc",
+          "WEBGL_compressed_texture_s3tc_srgb",
+          "WEBGL_debug_renderer_info",
+          "WEBGL_debug_shaders",
+          "WEBGL_lose_context",
+          "WEBGL_provoking_vertex"
+        ]
+      },
+      "webgpu": {
+        "supported": true
+      },
+      "plugins": [
+        "PDF Viewer",
+        "Chrome PDF Viewer",
+        "Chromium PDF Viewer",
+        "Microsoft Edge PDF Viewer",
+        "WebKit built-in PDF"
+      ],
+      "mimeTypes": [
+        "application/pdf",
+        "text/pdf"
+      ],
+      "fonts": [
+        [
+          "Arial",
+          true
+        ],
+        [
+          "Helvetica",
+          true
+        ],
+        [
+          "Times New Roman",
+          true
+        ],
+        [
+          "Courier New",
+          true
+        ],
+        [
+          "Menlo",
+          true
+        ]
+      ]
+    },
+    "iframe": {
+      "navigator": {
+        "appCodeName": "Mozilla",
+        "appName": "Netscape",
+        "appVersion": "5.0 (Macintosh)",
+        "deviceMemory": null,
+        "hardwareConcurrency": 8,
+        "language": "en-US",
+        "languages": [
+          "en-US",
+          "en"
+        ],
+        "maxTouchPoints": 0,
+        "onLine": true,
+        "oscpu": "Intel Mac OS X 10.15",
+        "platform": "MacIntel",
+        "product": "Gecko",
+        "productSub": "20100101",
+        "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+        "userAgentData": false,
+        "vendor": "",
+        "vendorSub": "",
+        "webdriver": true,
+        "getters": {
+          "hardwareConcurrency": "function hardwareConcurrency() {\n    [native code]\n}",
+          "platform": "function platform() {\n    [native code]\n}",
+          "userAgent": "function userAgent() {\n    [native code]\n}",
+          "webdriver": "function webdriver() {\n    [native code]\n}"
+        }
+      },
+      "screen": {
+        "availHeight": 692,
+        "availWidth": 1366,
+        "colorDepth": 24,
+        "height": 768,
+        "orientationAngle": 0,
+        "orientationType": "landscape-primary",
+        "pixelDepth": 24,
+        "width": 1366,
+        "devicePixelRatio": 1,
+        "innerHeight": 150,
+        "innerWidth": 300,
+        "outerHeight": 768,
+        "outerWidth": 1366
+      },
+      "intl": {
+        "locale": "en-US",
+        "calendar": "gregory",
+        "numberingSystem": "latn",
+        "timeZone": "Asia/Shanghai",
+        "januaryOffsetMinutes": -480,
+        "julyOffsetMinutes": -480
+      },
+      "canvas2d": {
+        "supported": true,
+        "hash": "80cc2cde",
+        "length": 12288
+      },
+      "offscreenCanvas2d": {
+        "supported": true,
+        "hash": "80cc2cde",
+        "length": 12288
+      },
+      "webgl": {
+        "supported": true,
+        "version": "WebGL 2.0",
+        "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+        "vendor": "Mozilla",
+        "renderer": "Apple M1, or similar",
+        "unmaskedVendor": "Apple",
+        "unmaskedRenderer": "Apple M1, or similar",
+        "extensions": [
+          "EXT_color_buffer_float",
+          "EXT_depth_clamp",
+          "EXT_float_blend",
+          "EXT_texture_compression_rgtc",
+          "EXT_texture_filter_anisotropic",
+          "OES_draw_buffers_indexed",
+          "OES_texture_float_linear",
+          "WEBGL_compressed_texture_s3tc",
+          "WEBGL_compressed_texture_s3tc_srgb",
+          "WEBGL_debug_renderer_info",
+          "WEBGL_debug_shaders",
+          "WEBGL_lose_context",
+          "WEBGL_provoking_vertex"
+        ]
+      },
+      "offscreenWebgl": {
+        "supported": true,
+        "version": "WebGL 2.0",
+        "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+        "vendor": "Mozilla",
+        "renderer": "Apple M1, or similar",
+        "unmaskedVendor": "Apple",
+        "unmaskedRenderer": "Apple M1, or similar",
+        "extensions": [
+          "EXT_color_buffer_float",
+          "EXT_depth_clamp",
+          "EXT_float_blend",
+          "EXT_texture_compression_rgtc",
+          "EXT_texture_filter_anisotropic",
+          "OES_draw_buffers_indexed",
+          "OES_texture_float_linear",
+          "WEBGL_compressed_texture_s3tc",
+          "WEBGL_compressed_texture_s3tc_srgb",
+          "WEBGL_debug_renderer_info",
+          "WEBGL_debug_shaders",
+          "WEBGL_lose_context",
+          "WEBGL_provoking_vertex"
+        ]
+      },
+      "webgpu": {
+        "supported": true
+      },
+      "plugins": [
+        "PDF Viewer",
+        "Chrome PDF Viewer",
+        "Chromium PDF Viewer",
+        "Microsoft Edge PDF Viewer",
+        "WebKit built-in PDF"
+      ],
+      "mimeTypes": [
+        "application/pdf",
+        "text/pdf"
+      ],
+      "fonts": [
+        [
+          "Arial",
+          true
+        ],
+        [
+          "Helvetica",
+          true
+        ],
+        [
+          "Times New Roman",
+          true
+        ],
+        [
+          "Courier New",
+          true
+        ],
+        [
+          "Menlo",
+          true
+        ]
+      ]
+    },
+    "dedicatedWorker": {
+      "supported": true,
+      "value": {
+        "navigator": {
+          "appName": "Netscape",
+          "appVersion": "5.0 (Macintosh)",
+          "hardwareConcurrency": 8,
+          "language": "en-US",
+          "languages": [
+            "en-US",
+            "en"
+          ],
+          "onLine": true,
+          "platform": "MacIntel",
+          "product": "Gecko",
+          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+          "webgpu": true,
+          "getters": {
+            "hardwareConcurrency": "function hardwareConcurrency() {\n    [native code]\n}",
+            "platform": "function platform() {\n    [native code]\n}",
+            "userAgent": "function userAgent() {\n    [native code]\n}"
+          }
+        },
+        "intl": {
+          "locale": "en-US",
+          "calendar": "gregory",
+          "numberingSystem": "latn",
+          "timeZone": "Asia/Shanghai",
+          "januaryOffsetMinutes": -480,
+          "julyOffsetMinutes": -480
+        },
+        "offscreenCanvas2d": {
+          "supported": true,
+          "hash": "80cc2cde",
+          "length": 12288
+        },
+        "offscreenWebgl": {
+          "supported": true,
+          "version": "WebGL 2.0",
+          "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+          "vendor": "Mozilla",
+          "renderer": "Apple M1, or similar",
+          "unmaskedVendor": "Apple",
+          "unmaskedRenderer": "Apple M1, or similar",
+          "extensions": [
+            "EXT_color_buffer_float",
+            "EXT_depth_clamp",
+            "EXT_float_blend",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "OES_draw_buffers_indexed",
+            "OES_texture_float_linear",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_lose_context",
+            "WEBGL_provoking_vertex"
+          ]
+        }
+      }
+    },
+    "sharedWorker": {
+      "supported": true,
+      "value": {
+        "navigator": {
+          "appName": "Netscape",
+          "appVersion": "5.0 (Macintosh)",
+          "hardwareConcurrency": 8,
+          "language": "en-US",
+          "languages": [
+            "en-US",
+            "en"
+          ],
+          "onLine": true,
+          "platform": "MacIntel",
+          "product": "Gecko",
+          "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+          "webgpu": true,
+          "getters": {
+            "hardwareConcurrency": "function hardwareConcurrency() {\n    [native code]\n}",
+            "platform": "function platform() {\n    [native code]\n}",
+            "userAgent": "function userAgent() {\n    [native code]\n}"
+          }
+        },
+        "intl": {
+          "locale": "en-US",
+          "calendar": "gregory",
+          "numberingSystem": "latn",
+          "timeZone": "Asia/Shanghai",
+          "januaryOffsetMinutes": -480,
+          "julyOffsetMinutes": -480
+        },
+        "offscreenCanvas2d": {
+          "supported": true,
+          "hash": "80cc2cde",
+          "length": 12288
+        },
+        "offscreenWebgl": {
+          "supported": true,
+          "version": "WebGL 2.0",
+          "shadingLanguageVersion": "WebGL GLSL ES 3.00",
+          "vendor": "Mozilla",
+          "renderer": "Apple M1, or similar",
+          "unmaskedVendor": "Apple",
+          "unmaskedRenderer": "Apple M1, or similar",
+          "extensions": [
+            "EXT_color_buffer_float",
+            "EXT_depth_clamp",
+            "EXT_float_blend",
+            "EXT_texture_compression_rgtc",
+            "EXT_texture_filter_anisotropic",
+            "OES_draw_buffers_indexed",
+            "OES_texture_float_linear",
+            "WEBGL_compressed_texture_s3tc",
+            "WEBGL_compressed_texture_s3tc_srgb",
+            "WEBGL_debug_renderer_info",
+            "WEBGL_debug_shaders",
+            "WEBGL_lose_context",
+            "WEBGL_provoking_vertex"
+          ]
+        }
+      }
+    }
+  }
+}

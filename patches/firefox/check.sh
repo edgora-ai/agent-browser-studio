@@ -12,7 +12,7 @@ if ! diff -u \
     cd "$PATCH_ROOT"
     {
       printf '%s\n' SOURCE.sha512 mozconfig.macos-arm64 PATCHED_SOURCE.sha256
-      for directory in files patches; do
+      for directory in files patches scripts corpora-154; do
         [[ -d "$directory" ]] && find "$directory" -type f
       done | LC_ALL=C sort
     } | LC_ALL=C sort

@@ -1167,7 +1167,11 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
-  if (meta.engine !== undefined) next.engine = sanitizeBrowserEngine(meta.engine);
+  if (meta.engine !== undefined) {
+    const currentEngine = sanitizeBrowserEngine(current.engine);
+    next.engine = sanitizeBrowserEngine(meta.engine);
+    if (meta.browserVersion === undefined && next.engine !== currentEngine) next.browserVersion = null;
+  }
   if (meta.fingerprintMode !== undefined) next.fingerprintMode = sanitizeFingerprintMode(meta.fingerprintMode);
   // Engine may change in the same patch: resolve against the merged engine.
   if (meta.browserVersion !== undefined) next.browserVersion = normalizeProfileBrowserVersion({ ...next, browserVersion: meta.browserVersion });

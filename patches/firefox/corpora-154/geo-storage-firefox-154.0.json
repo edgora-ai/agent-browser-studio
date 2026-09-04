@@ -1,0 +1,1295 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "macos-arm64",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless-native-geo-storage",
+    "fingerprintConfig": {
+      "schemaVersion": 1,
+      "seed": 154102,
+      "platform": "Win32",
+      "platformVersion": "10.0.0",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+      "appVersion": "5.0 (Windows)",
+      "vendor": "",
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "hardwareConcurrency": 12,
+      "deviceMemory": 16,
+      "maxTouchPoints": 0,
+      "hardwareProfile": {
+        "id": "win-nvidia-rtx3060-12c-16gb-1080p",
+        "source": "seeded",
+        "fontProfile": "windows-portable",
+        "audioProfile": "chromium-desktop"
+      },
+      "screen": {
+        "width": 1920,
+        "height": 1080,
+        "availLeft": 0,
+        "availTop": 0,
+        "availWidth": 1920,
+        "availHeight": 1032,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 1,
+        "windowX": 32,
+        "windowY": 32,
+        "outerWidth": 1280,
+        "outerHeight": 800,
+        "mobile": false
+      },
+      "storageQuotaBytes": 125829120000,
+      "canvas": {
+        "enabled": true,
+        "seed": "dbc492d80345a599"
+      },
+      "audio": {
+        "enabled": true,
+        "seed": "0d1bf59990f22075",
+        "amplitude": 1e-7
+      },
+      "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+      },
+      "webgpu": {
+        "mode": "webgl",
+        "vendor": "NVIDIA",
+        "architecture": "Ampere",
+        "device": "NVIDIA GeForce RTX 3060",
+        "description": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "subgroupMinSize": 32,
+        "subgroupMaxSize": 32
+      },
+      "webauthn": {
+        "enabled": true,
+        "conditionalGet": true,
+        "conditionalCreate": true,
+        "hybridTransport": true,
+        "passkeyPlatformAuthenticator": true,
+        "userVerifyingPlatformAuthenticator": true
+      },
+      "speechSynthesis": {
+        "enabled": true,
+        "voices": [
+          {
+            "name": "Microsoft David - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Mark - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Zira - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          }
+        ]
+      },
+      "webrtc": {
+        "mode": "real",
+        "publicIp": null
+      },
+      "timezone": "America/New_York",
+      "geolocation": {
+        "mode": "custom",
+        "latitude": 37.7749,
+        "longitude": -122.4194,
+        "accuracy": 17.5
+      },
+      "mediaDevices": {
+        "enabled": true,
+        "audioInputs": 1,
+        "videoInputs": 1,
+        "audioOutputs": 1
+      },
+      "secureDns": {
+        "enabled": false,
+        "templates": []
+      },
+      "fonts": [
+        "Arial",
+        "Arial Unicode MS",
+        "Comic Sans MS",
+        "Courier New",
+        "Georgia",
+        "Impact",
+        "Tahoma",
+        "Times New Roman",
+        "Trebuchet MS",
+        "Verdana"
+      ],
+      "doNotTrack": "1",
+      "pluginProfile": {
+        "pdfViewerEnabled": true,
+        "plugins": [
+          {
+            "name": "Internal PDF Plugin",
+            "filename": "pdfium.dll",
+            "description": "Portable Document Format",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf"
+              }
+            ]
+          },
+          {
+            "name": "Widevine Content Decryption Module",
+            "filename": "widevinecdm.dll",
+            "description": "Enables Widevine decryption for HTML audio/video content.",
+            "mimeTypes": []
+          }
+        ],
+        "mimeTypes": [
+          {
+            "type": "application/pdf",
+            "suffixes": "pdf"
+          }
+        ]
+      }
+    },
+    "preloadScript": false,
+    "nativeRequired": true
+  },
+  "capabilities": {
+    "product": "agent-browser-firefox",
+    "capabilitySchemaVersion": 1,
+    "browserVersion": "154.0",
+    "buildId": "20260902091224",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "capabilities": [
+      "config-v1",
+      "native-required-v1",
+      "snapshot-v1",
+      "navigator-v1",
+      "screen-v1",
+      "canvas-v1",
+      "webgl-v1",
+      "webgpu-v1",
+      "audio-v1",
+      "geolocation-v1",
+      "storage-quota-v1",
+      "media-devices-v1",
+      "speech-voices-v1"
+    ]
+  },
+  "evidence": {
+    "custom": {
+      "stress": {
+        "requested": 1510,
+        "callbacks": 1510,
+        "successes": 1510,
+        "callbackErrors": 0,
+        "syncFailures": 0
+      },
+      "window": {
+        "current": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "watch": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "watch": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    },
+    "denied": {
+      "stress": null,
+      "window": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    },
+    "disabled": {
+      "stress": null,
+      "window": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 1,
+            "message": "User denied geolocation prompt"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    },
+    "lowQuota": {
+      "stress": null,
+      "window": {
+        "current": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "watch": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 10737418240
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 10737418240
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "watch": {
+          "supported": true,
+          "success": true,
+          "coords": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "accuracy": 17.5,
+            "altitude": null,
+            "altitudeAccuracy": null,
+            "heading": null,
+            "speed": null
+          },
+          "timestampFinite": true
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 10737418240
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 10737418240
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 10737418240
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 10737418240
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 10737418240
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 10737418240
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    },
+    "real": {
+      "stress": null,
+      "window": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 3,
+            "message": "Position acquisition timed out"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 125829120000
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 125829120000
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 125829120000
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 125829120000
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    },
+    "stock": {
+      "stress": null,
+      "window": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 0,
+            "quota": 10737418240
+          },
+          "after": {
+            "usage": 114688,
+            "quota": 10737418240
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "iframe": {
+        "current": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 2,
+            "message": "Unknown error acquiring position"
+          }
+        },
+        "watch": {
+          "supported": true,
+          "success": false,
+          "error": {
+            "code": 3,
+            "message": "Position acquisition timed out"
+          }
+        },
+        "storage": {
+          "before": {
+            "usage": 114688,
+            "quota": 10737418240
+          },
+          "after": {
+            "usage": 180224,
+            "quota": 10737418240
+          },
+          "nativeMethod": {
+            "source": "function estimate() {\n    [native code]\n}",
+            "name": "estimate",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "StorageManager"
+          },
+          "written": 65536,
+          "readbackVerified": true
+        },
+        "geoNative": {
+          "current": {
+            "source": "function getCurrentPosition() {\n    [native code]\n}",
+            "name": "getCurrentPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          },
+          "watch": {
+            "source": "function watchPosition() {\n    [native code]\n}",
+            "name": "watchPosition",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "Geolocation"
+          }
+        }
+      },
+      "dedicatedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 180224,
+              "quota": 10737418240
+            },
+            "after": {
+              "usage": 245760,
+              "quota": 10737418240
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      },
+      "sharedWorker": {
+        "supported": true,
+        "value": {
+          "geolocation": "undefined",
+          "storage": {
+            "before": {
+              "usage": 245760,
+              "quota": 10737418240
+            },
+            "after": {
+              "usage": 311296,
+              "quota": 10737418240
+            },
+            "nativeMethod": {
+              "source": "function estimate() {\n    [native code]\n}",
+              "name": "estimate",
+              "length": 0,
+              "writable": true,
+              "enumerable": true,
+              "configurable": true,
+              "owner": "StorageManager"
+            },
+            "written": 65536,
+            "readbackVerified": true
+          }
+        }
+      }
+    }
+  }
+}

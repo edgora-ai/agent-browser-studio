@@ -46,6 +46,7 @@ import {
   updateProxy,
   renameProxy,
   setProfileMeta,
+  getProfileMeta,
   normalizeProfileExtensionMap,
   migrateSecrets,
   getWebRtcDiagnostics,
@@ -705,9 +706,21 @@ describe("Agent Run normalization", () => {
 
   it("normalizes and persists the browser engine (firefox)", () => {
     const dirId = "ab_engine_test";
-    setProfileMeta(dirId, { name: "Fx", engine: "firefox" as any });
+    setProfileMeta(dirId, {
+      name: "Fx",
+      engine: "firefox" as any,
+      browserVersion: "154.0",
+    });
     reloadConfig();
     expect(getConfig().browserProfiles![dirId].engine).toBe("firefox");
+    expect(getProfileMeta(dirId)?.browserVersion).toBe("154.0");
+
+    setProfileMeta(dirId, { engine: "firefox", tags: ["stable"] });
+    expect(getProfileMeta(dirId)?.browserVersion).toBe("154.0");
+
+    setProfileMeta(dirId, { engine: "chromium" });
+    expect(getProfileMeta(dirId)?.browserVersion).toBeNull();
+    expect(() => setProfileMeta(dirId, { engine: "firefox", browserVersion: "154.0.0.1" })).toThrow("Invalid Firefox version");
 
     // invalid/unknown engines normalize back to chromium
     const dirId2 = "ab_engine_test2";

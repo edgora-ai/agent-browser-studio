@@ -1,0 +1,605 @@
+diff --git a/dom/geolocation/Geolocation.cpp b/dom/geolocation/Geolocation.cpp
+index 51efcf9..d1e0c4b 100644
+--- a/dom/geolocation/Geolocation.cpp
++++ b/dom/geolocation/Geolocation.cpp
+@@ -4,8 +4,12 @@
+ 
+ #include "Geolocation.h"
+ 
++#include <limits>
++
+ #include "GeolocationIPCUtils.h"
++#include "GeolocationPosition.h"
+ #include "GeolocationSystem.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/ClearOnShutdown.h"
+ #include "mozilla/CycleCollectedJSContext.h"  // for nsAutoMicroTask
+ #include "mozilla/EventStateManager.h"
+@@ -68,6 +72,7 @@ class nsGeolocationRequest final : public ContentPermissionRequestBase,
+                        GeoPositionErrorCallback aErrorCallback,
+                        UniquePtr<PositionOptions>&& aOptions,
+                        nsIEventTarget* aMainThreadSerialEventTarget,
++                       bool aApplyAgentOverrides,
+                        bool aWatchPositionRequest = false,
+                        int32_t aWatchId = 0);
+ 
+@@ -84,7 +89,8 @@ class nsGeolocationRequest final : public ContentPermissionRequestBase,
+   MOZ_CAN_RUN_SCRIPT_BOUNDARY
+   void SendLocation(nsIDOMGeoPosition* aLocation);
+   bool WantsHighAccuracy() {
+-    return !mShutdown && mOptions && mOptions->mEnableHighAccuracy;
++    return !mShutdown && !mIsAgentCustomWatch && mOptions &&
++           mOptions->mEnableHighAccuracy;
+   }
+   void SetTimeoutTimer();
+   void StopTimeoutTimer();
+@@ -93,8 +99,13 @@ class nsGeolocationRequest final : public ContentPermissionRequestBase,
+   using ContentPermissionRequestBase::GetPrincipal;
+   nsIPrincipal* GetPrincipal();
+ 
+-  bool IsWatch() { return mIsWatchPositionRequest; }
+-  int32_t WatchId() { return mWatchId; }
++  bool IsWatch() const { return mIsWatchPositionRequest; }
++  int32_t WatchId() const { return mWatchId; }
++  bool IsAgentCustomWatch() const { return mIsAgentCustomWatch; }
++  void MarkAgentCustomWatch() {
++    MOZ_ASSERT(mIsWatchPositionRequest);
++    mIsAgentCustomWatch = true;
++  }
+ 
+   void SetPromptBehavior(
+       geolocation::SystemGeolocationPermissionBehavior aBehavior) {
+@@ -133,6 +144,8 @@ class nsGeolocationRequest final : public ContentPermissionRequestBase,
+   MOZ_CAN_RUN_SCRIPT_BOUNDARY void Notify();
+ 
+   bool mIsWatchPositionRequest;
++  bool mApplyAgentOverrides;
++  bool mIsAgentCustomWatch;
+ 
+   nsCOMPtr<nsITimer> mTimeoutTimer;
+   GeoPositionCallback mCallback;
+@@ -193,17 +206,30 @@ static nsPIDOMWindowInner* ConvertWeakReferenceToWindow(
+   return raw;
+ }
+ 
++static bool ShouldApplyAgentGeolocationOverrides(
++    Geolocation* aLocator, CallerType aCallerType) {
++  if (aCallerType == CallerType::System) {
++    return false;
++  }
++  nsCOMPtr<nsPIDOMWindowInner> window =
++      do_QueryReferent(aLocator->GetOwner());
++  return window &&
++         agentbrowser::ShouldApplyContentOverrides(window->AsGlobal());
++}
++
+ nsGeolocationRequest::nsGeolocationRequest(
+     Geolocation* aLocator, GeoPositionCallback aCallback,
+     GeoPositionErrorCallback aErrorCallback,
+     UniquePtr<PositionOptions>&& aOptions,
+-    nsIEventTarget* aMainThreadSerialEventTarget, bool aWatchPositionRequest,
+-    int32_t aWatchId)
++    nsIEventTarget* aMainThreadSerialEventTarget, bool aApplyAgentOverrides,
++    bool aWatchPositionRequest, int32_t aWatchId)
+     : ContentPermissionRequestBase(
+           aLocator->GetPrincipal(),
+           ConvertWeakReferenceToWindow(aLocator->GetOwner()), "geo"_ns,
+           "geolocation"_ns),
+       mIsWatchPositionRequest(aWatchPositionRequest),
++      mApplyAgentOverrides(aApplyAgentOverrides),
++      mIsAgentCustomWatch(false),
+       mCallback(std::move(aCallback)),
+       mErrorCallback(std::move(aErrorCallback)),
+       mOptions(std::move(aOptions)),
+@@ -417,6 +443,28 @@ nsGeolocationRequest::Allow(JS::Handle<JS::Value> aChoices) {
+     return NS_OK;
+   }
+ 
++  const auto* geolocation = agentbrowser::GetGeolocationOverrides();
++  if (geolocation && mApplyAgentOverrides) {
++    if (geolocation->mMode == agentbrowser::GeolocationMode::Disable) {
++      Shutdown();
++      NotifyError(GeolocationPositionError_Binding::PERMISSION_DENIED);
++      return NS_OK;
++    }
++    if (geolocation->mMode == agentbrowser::GeolocationMode::Custom) {
++      constexpr double kUnset = std::numeric_limits<double>::quiet_NaN();
++      RefPtr<nsGeoPosition> position = new nsGeoPosition(
++          geolocation->mLatitude, geolocation->mLongitude, kUnset,
++          geolocation->mAccuracy, kUnset, kUnset, kUnset,
++          EpochTimeStamp(PR_Now() / PR_USEC_PER_MSEC));
++      if (mIsWatchPositionRequest) {
++        MarkAgentCustomWatch();
++        mLocator->NotifyAllowedRequest(this);
++      }
++      Update(position);
++      return NS_OK;
++    }
++  }
++
+   RefPtr<GeolocationService> gs =
+       GeolocationService::GetGeolocationService(mLocator->GetBrowsingContext());
+   bool canUseCache = false;
+@@ -802,7 +850,15 @@ nsPIDOMWindowInner* Geolocation::GetParentObject() const {
+ }
+ 
+ bool Geolocation::HasActiveCallbacks() {
+-  return mPendingCallbacks.Length() || mWatchingCallbacks.Length();
++  if (!mPendingCallbacks.IsEmpty()) {
++    return true;
++  }
++  for (const auto& request : mWatchingCallbacks) {
++    if (!request->IsAgentCustomWatch()) {
++      return true;
++    }
++  }
++  return false;
+ }
+ 
+ bool Geolocation::HighAccuracyRequested() {
+@@ -863,9 +919,11 @@ Geolocation::Update(nsIDOMGeoPosition* aSomewhere) {
+     RemoveRequest(mPendingCallbacks[i - 1]);
+   }
+ 
+-  // notify everyone that is watching
++  // notify everyone that is watching through the real provider
+   for (uint32_t i = 0; i < mWatchingCallbacks.Length(); i++) {
+-    mWatchingCallbacks[i]->Update(aSomewhere);
++    if (!mWatchingCallbacks[i]->IsAgentCustomWatch()) {
++      mWatchingCallbacks[i]->Update(aSomewhere);
++    }
+   }
+ 
+   return NS_OK;
+@@ -886,10 +944,12 @@ Geolocation::NotifyError(uint16_t aErrorCode) {
+     // NotifyErrorAndShutdown() removes the request from the array
+   }
+ 
+-  // notify everyone that is watching
++  // notify everyone that is watching through the real provider
+   for (uint32_t i = 0; i < mWatchingCallbacks.Length(); i++) {
+     RefPtr<nsGeolocationRequest> request = mWatchingCallbacks[i];
+-    request->NotifyErrorAndShutdown(aErrorCode);
++    if (!request->IsAgentCustomWatch()) {
++      request->NotifyErrorAndShutdown(aErrorCode);
++    }
+   }
+ 
+   return NS_OK;
+@@ -984,7 +1044,7 @@ nsresult Geolocation::GetCurrentPosition(GeoPositionCallback callback,
+   nsIEventTarget* target = GetMainThreadSerialEventTarget();
+   RefPtr<nsGeolocationRequest> request = new nsGeolocationRequest(
+       this, std::move(callback), std::move(errorCallback), std::move(options),
+-      target);
++      target, ShouldApplyAgentGeolocationOverrides(this, aCallerType));
+ 
+   if (!StaticPrefs::geo_enabled() || ShouldBlockInsecureRequests() ||
+       !request->CheckPermissionDelegate()) {
+@@ -1057,7 +1117,8 @@ int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
+   nsIEventTarget* target = GetMainThreadSerialEventTarget();
+   RefPtr<nsGeolocationRequest> request = new nsGeolocationRequest(
+       this, std::move(aCallback), std::move(aErrorCallback),
+-      std::move(aOptions), target, true, watchId);
++      std::move(aOptions), target,
++      ShouldApplyAgentGeolocationOverrides(this, aCallerType), true, watchId);
+ 
+   if (!StaticPrefs::geo_enabled() || ShouldBlockInsecureRequests() ||
+       !request->CheckPermissionDelegate()) {
+diff --git a/dom/quota/StorageManager.cpp b/dom/quota/StorageManager.cpp
+index 918c493..830e2a2 100644
+--- a/dom/quota/StorageManager.cpp
++++ b/dom/quota/StorageManager.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "StorageManager.h"
+ 
++#include <algorithm>
+ #include <cstdint>
+ #include <cstdlib>
+ 
+@@ -12,6 +13,7 @@
+ #include "fs/FileSystemRequestHandler.h"
+ #include "js/CallArgs.h"
+ #include "js/TypeDecls.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Attributes.h"
+ #include "mozilla/ErrorResult.h"
+ #include "mozilla/Maybe.h"
+@@ -27,6 +29,7 @@
+ #include "mozilla/dom/WorkerPrivate.h"
+ #include "mozilla/dom/WorkerRunnable.h"
+ #include "mozilla/dom/WorkerStatus.h"
++#include "mozilla/dom/WorkerScope.h"
+ #include "mozilla/dom/quota/QuotaManagerService.h"
+ #include "nsContentPermissionHelper.h"
+ #include "nsContentUtils.h"
+@@ -77,20 +80,28 @@ class RequestResolver final : public nsIQuotaCallback {
+   nsresult mResultCode;
+   StorageEstimate mStorageEstimate;
+   const Type mType;
++  const bool mApplyAgentOverrides;
+   bool mPersisted;
+ 
+  public:
+-  RequestResolver(Type aType, Promise* aPromise)
++  RequestResolver(Type aType, Promise* aPromise,
++                  bool aApplyAgentOverrides = false)
+       : mPromise(aPromise),
+         mResultCode(NS_OK),
+         mType(aType),
++        mApplyAgentOverrides(aApplyAgentOverrides),
+         mPersisted(false) {
+     MOZ_ASSERT(NS_IsMainThread());
+     MOZ_ASSERT(aPromise);
+   }
+ 
+-  RequestResolver(Type aType, PromiseWorkerProxy* aProxy)
+-      : mProxy(aProxy), mResultCode(NS_OK), mType(aType), mPersisted(false) {
++  RequestResolver(Type aType, PromiseWorkerProxy* aProxy,
++                  bool aApplyAgentOverrides = false)
++      : mProxy(aProxy),
++        mResultCode(NS_OK),
++        mType(aType),
++        mApplyAgentOverrides(aApplyAgentOverrides),
++        mPersisted(false) {
+     MOZ_ASSERT(NS_IsMainThread());
+     MOZ_ASSERT(aProxy);
+   }
+@@ -130,13 +141,16 @@ class RequestResolver::FinishWorkerRunnable final
+ 
+ class EstimateWorkerMainThreadRunnable final : public WorkerMainThreadRunnable {
+   RefPtr<PromiseWorkerProxy> mProxy;
++  const bool mApplyAgentOverrides;
+ 
+  public:
+   EstimateWorkerMainThreadRunnable(WorkerPrivate* aWorkerPrivate,
+                                    PromiseWorkerProxy* aProxy)
+       : WorkerMainThreadRunnable(aWorkerPrivate,
+                                  "StorageManager :: Estimate"_ns),
+-        mProxy(aProxy) {
++        mProxy(aProxy),
++        mApplyAgentOverrides(agentbrowser::ShouldApplyContentOverrides(
++            aWorkerPrivate->GlobalScope())) {
+     MOZ_ASSERT(aWorkerPrivate);
+     aWorkerPrivate->AssertIsOnWorkerThread();
+     MOZ_ASSERT(aProxy);
+@@ -332,8 +346,9 @@ already_AddRefed<Promise> ExecuteOpOnMainOrWorkerThread(
+       }
+ 
+       case RequestResolver::Type::Estimate: {
+-        RefPtr<RequestResolver> resolver =
+-            new RequestResolver(RequestResolver::Type::Estimate, promise);
++        RefPtr<RequestResolver> resolver = new RequestResolver(
++            RequestResolver::Type::Estimate, promise,
++            agentbrowser::ShouldApplyContentOverrides(aGlobal));
+ 
+         RefPtr<nsIQuotaRequest> request;
+         aRv = Estimate(principal, resolver, getter_AddRefs(request));
+@@ -477,6 +492,15 @@ nsresult RequestResolver::GetStorageEstimate(nsIVariant* aResult) {
+   MOZ_ALWAYS_SUCCEEDS(
+       estimateResult->GetLimit(&mStorageEstimate.mQuota.Construct()));
+ 
++  if (mApplyAgentOverrides) {
++    if (const auto* config = agentbrowser::GetStorageOverrides()) {
++      const uint64_t usage = mStorageEstimate.mUsage.Value();
++      const uint64_t realQuota = mStorageEstimate.mQuota.Value();
++      mStorageEstimate.mQuota.Value() =
++          std::max({usage, realQuota, config->mQuotaBytes});
++    }
++  }
++
+   return NS_OK;
+ }
+ 
+@@ -609,8 +633,8 @@ bool EstimateWorkerMainThreadRunnable::MainThreadRun() {
+ 
+   MOZ_ASSERT(principal);
+ 
+-  RefPtr<RequestResolver> resolver =
+-      new RequestResolver(RequestResolver::Type::Estimate, mProxy);
++  RefPtr<RequestResolver> resolver = new RequestResolver(
++      RequestResolver::Type::Estimate, mProxy, mApplyAgentOverrides);
+ 
+   RefPtr<nsIQuotaRequest> request;
+   nsresult rv = Estimate(principal, resolver, getter_AddRefs(request));
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index 8b3f9d5..b6c3812 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -37,13 +37,17 @@ struct Snapshot final {
+   Snapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+            NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen,
+            CanvasOverrideConfig&& aCanvas, AudioOverrideConfig&& aAudio,
+-           WebGLOverrideConfig&& aWebGL, WebGPUOverrideConfig&& aWebGPU)
++           GeolocationOverrideConfig&& aGeolocation,
++           StorageOverrideConfig&& aStorage, WebGLOverrideConfig&& aWebGL,
++           WebGPUOverrideConfig&& aWebGPU)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+         mNavigator(std::move(aNavigator)),
+         mScreen(std::move(aScreen)),
+         mCanvas(std::move(aCanvas)),
+         mAudio(std::move(aAudio)),
++        mGeolocation(std::move(aGeolocation)),
++        mStorage(std::move(aStorage)),
+         mWebGL(std::move(aWebGL)),
+         mWebGPU(std::move(aWebGPU)) {}
+ 
+@@ -53,6 +57,8 @@ struct Snapshot final {
+   const ScreenOverrideConfig mScreen;
+   const CanvasOverrideConfig mCanvas;
+   const AudioOverrideConfig mAudio;
++  const GeolocationOverrideConfig mGeolocation;
++  const StorageOverrideConfig mStorage;
+   const WebGLOverrideConfig mWebGL;
+   const WebGPUOverrideConfig mWebGPU;
+ };
+@@ -110,6 +116,54 @@ bool GetRequiredDouble(JSContext* aCx, JS::Handle<JSObject*> aObject,
+   return true;
+ }
+ 
++bool GetRequiredNullableDouble(JSContext* aCx,
++                               JS::Handle<JSObject*> aObject,
++                               const char* aName, double aMinimum,
++                               double aMaximum, double& aResult, bool& aIsNull,
++                               nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError)) {
++    return false;
++  }
++  if (value.isNull()) {
++    aIsNull = true;
++    aResult = 0.0;
++    return true;
++  }
++  if (!value.isNumber()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult = value.toNumber();
++  aIsNull = false;
++  if (!std::isfinite(aResult) || aResult < aMinimum || aResult > aMaximum) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  return true;
++}
++
++bool GetRequiredUInt64(JSContext* aCx, JS::Handle<JSObject*> aObject,
++                       const char* aName, uint64_t aMinimum,
++                       uint64_t aMaximum, uint64_t& aResult,
++                       nsACString& aError) {
++  JS::Rooted<JS::Value> value(aCx);
++  if (!GetRequiredProperty(aCx, aObject, aName, &value, aError) ||
++      !value.isNumber()) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  const double number = value.toNumber();
++  if (!std::isfinite(number) || number != std::trunc(number) ||
++      number < static_cast<double>(aMinimum) ||
++      number > static_cast<double>(aMaximum)) {
++    SetInvalidField(aError, aName);
++    return false;
++  }
++  aResult = static_cast<uint64_t>(number);
++  return true;
++}
++
+ bool GetRequiredBoolean(JSContext* aCx, JS::Handle<JSObject*> aObject,
+                         const char* aName, bool& aResult, nsACString& aError) {
+   JS::Rooted<JS::Value> value(aCx);
+@@ -208,6 +262,8 @@ nsresult ParseConfig(const nsACString& aDecoded,
+                      ScreenOverrideConfig& aScreen,
+                      CanvasOverrideConfig& aCanvas,
+                      AudioOverrideConfig& aAudio,
++                     GeolocationOverrideConfig& aGeolocation,
++                     StorageOverrideConfig& aStorage,
+                      WebGLOverrideConfig& aWebGL,
+                      WebGPUOverrideConfig& aWebGPU, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+@@ -415,6 +471,54 @@ nsresult ParseConfig(const nsACString& aDecoded,
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
++  JS::Rooted<JS::Value> geolocationValue(cx);
++  if (!GetRequiredProperty(cx, object, "geolocation", &geolocationValue,
++                           aError) ||
++      !geolocationValue.isObject()) {
++    SetInvalidField(aError, "geolocation");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> geolocation(cx, &geolocationValue.toObject());
++  nsAutoString geolocationMode;
++  bool latitudeNull = false;
++  bool longitudeNull = false;
++  bool accuracyNull = false;
++  if (!GetRequiredString(cx, geolocation, "mode", geolocationMode, aError) ||
++      !GetRequiredNullableDouble(cx, geolocation, "latitude", -90.0, 90.0,
++                                 aGeolocation.mLatitude, latitudeNull, aError) ||
++      !GetRequiredNullableDouble(cx, geolocation, "longitude", -180.0, 180.0,
++                                 aGeolocation.mLongitude, longitudeNull,
++                                 aError) ||
++      !GetRequiredNullableDouble(cx, geolocation, "accuracy", 0.0, 100000.0,
++                                 aGeolocation.mAccuracy, accuracyNull, aError)) {
++    SetInvalidField(aError, "geolocation");
++    return NS_ERROR_INVALID_ARG;
++  }
++  if (geolocationMode.EqualsLiteral("real")) {
++    aGeolocation.mMode = GeolocationMode::Real;
++  } else if (geolocationMode.EqualsLiteral("custom")) {
++    aGeolocation.mMode = GeolocationMode::Custom;
++  } else if (geolocationMode.EqualsLiteral("disable")) {
++    aGeolocation.mMode = GeolocationMode::Disable;
++  } else {
++    SetInvalidField(aError, "geolocation");
++    return NS_ERROR_INVALID_ARG;
++  }
++  const bool custom = aGeolocation.mMode == GeolocationMode::Custom;
++  if ((custom &&
++       (latitudeNull || longitudeNull || accuracyNull ||
++        aGeolocation.mAccuracy <= 0.0)) ||
++      (!custom && (!latitudeNull || !longitudeNull || !accuracyNull))) {
++    aError.AssignLiteral("incoherent-geolocation");
++    return NS_ERROR_INVALID_ARG;
++  }
++
++  if (!GetRequiredUInt64(cx, object, "storageQuotaBytes", 1,
++                         9007199254740991ULL, aStorage.mQuotaBytes, aError)) {
++    SetInvalidField(aError, "storageQuotaBytes");
++    return NS_ERROR_INVALID_ARG;
++  }
++
+   JS::Rooted<JS::Value> webglValue(cx);
+   if (!GetRequiredProperty(cx, object, "webgl", &webglValue, aError) ||
+       !webglValue.isObject()) {
+@@ -470,6 +574,8 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                          ScreenOverrideConfig&& aScreen,
+                          CanvasOverrideConfig&& aCanvas,
+                          AudioOverrideConfig&& aAudio,
++                         GeolocationOverrideConfig&& aGeolocation,
++                         StorageOverrideConfig&& aStorage,
+                          WebGLOverrideConfig&& aWebGL,
+                          WebGPUOverrideConfig&& aWebGPU, nsACString& aError) {
+   if (sSnapshot) {
+@@ -483,6 +589,7 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+   sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded),
+                            std::move(aNavigator), std::move(aScreen),
+                            std::move(aCanvas), std::move(aAudio),
++                           std::move(aGeolocation), std::move(aStorage),
+                            std::move(aWebGL), std::move(aWebGPU));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+@@ -499,17 +606,20 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+   ScreenOverrideConfig screen;
+   CanvasOverrideConfig canvas;
+   AudioOverrideConfig audio;
++  GeolocationOverrideConfig geolocation;
++  StorageOverrideConfig storage;
+   WebGLOverrideConfig webgl;
+   WebGPUOverrideConfig webgpu;
+-  rv = ParseConfig(decoded, navigator, screen, canvas, audio, webgl, webgpu,
+-                   aError);
++  rv = ParseConfig(decoded, navigator, screen, canvas, audio, geolocation,
++                   storage, webgl, webgpu, aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+   return InstallSnapshot(std::move(aEncoded), std::move(decoded),
+                          std::move(navigator), std::move(screen),
+-                         std::move(canvas), std::move(audio), std::move(webgl),
+-                         std::move(webgpu), aError);
++                         std::move(canvas), std::move(audio),
++                         std::move(geolocation), std::move(storage),
++                         std::move(webgl), std::move(webgpu), aError);
+ }
+ 
+ }  // namespace
+@@ -523,7 +633,8 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"sourceStamp\":\"%s\","
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+       "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
+-      "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\",\"audio-v1\"]}\n",
++      "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\",\"audio-v1\","
++      "\"geolocation-v1\",\"storage-quota-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -603,6 +714,16 @@ const AudioOverrideConfig* GetAudioOverrides() {
+   return snapshot ? &snapshot->mAudio : nullptr;
+ }
+ 
++const GeolocationOverrideConfig* GetGeolocationOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mGeolocation : nullptr;
++}
++
++const StorageOverrideConfig* GetStorageOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mStorage : nullptr;
++}
++
+ const WebGLOverrideConfig* GetWebGLOverrides() {
+   Snapshot* snapshot = sPublishedSnapshot;
+   return snapshot ? &snapshot->mWebGL : nullptr;
+@@ -618,21 +739,29 @@ bool IsCanvasNoiseEnabled() {
+   return config && config->mEnabled;
+ }
+ 
+-bool ShouldApplyAudioNoise(nsIGlobalObject* aGlobal) {
+-  const AudioOverrideConfig* config = GetAudioOverrides();
+-  if (!config || !config->mEnabled || !aGlobal) {
+-    return false;
+-  }
+-  const auto isUnrestricted = [](nsIPrincipal* aPrincipal) {
+-    return !aPrincipal || aPrincipal->IsSystemPrincipal() ||
+-           aPrincipal->SchemeIs("chrome") ||
+-           aPrincipal->SchemeIs("resource") ||
+-           aPrincipal->GetIsAddonOrExpandedAddonPrincipal();
+-  };
+-  nsIPrincipal* owner = aGlobal->PrincipalOrNull();
++static bool IsUnrestrictedPrincipal(nsIPrincipal* aPrincipal) {
++  return !aPrincipal || aPrincipal->IsSystemPrincipal() ||
++         aPrincipal->SchemeIs("chrome") ||
++         aPrincipal->SchemeIs("resource") ||
++         aPrincipal->GetIsAddonOrExpandedAddonPrincipal();
++}
++
++bool IsManagedContentGlobal(nsIGlobalObject* aGlobal) {
++  return IsEnabled() && aGlobal &&
++         !IsUnrestrictedPrincipal(aGlobal->PrincipalOrNull());
++}
++
++bool ShouldApplyContentOverrides(nsIGlobalObject* aGlobal) {
+   nsIPrincipal* caller =
+       nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller();
+-  return !isUnrestricted(owner) && !isUnrestricted(caller);
++  return IsManagedContentGlobal(aGlobal) &&
++         !IsUnrestrictedPrincipal(caller);
++}
++
++bool ShouldApplyAudioNoise(nsIGlobalObject* aGlobal) {
++  const AudioOverrideConfig* config = GetAudioOverrides();
++  return config && config->mEnabled &&
++         ShouldApplyContentOverrides(aGlobal);
+ }
+ 
+ static uint64_t AudioNoiseState(const AudioOverrideConfig& aConfig,
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index b8ed15b..04d88bd 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -58,6 +58,19 @@ struct AudioOverrideConfig final {
+   double mAmplitude = 0.0;
+ };
+ 
++enum class GeolocationMode : uint8_t { Real, Custom, Disable };
++
++struct GeolocationOverrideConfig final {
++  GeolocationMode mMode = GeolocationMode::Real;
++  double mLatitude = 0.0;
++  double mLongitude = 0.0;
++  double mAccuracy = 0.0;
++};
++
++struct StorageOverrideConfig final {
++  uint64_t mQuotaBytes = 0;
++};
++
+ struct WebGLOverrideConfig final {
+   nsString mVendor;
+   nsString mRenderer;
+@@ -82,9 +95,13 @@ const NavigatorOverrideConfig* GetNavigatorOverrides();
+ const ScreenOverrideConfig* GetScreenOverrides();
+ const CanvasOverrideConfig* GetCanvasOverrides();
+ const AudioOverrideConfig* GetAudioOverrides();
++const GeolocationOverrideConfig* GetGeolocationOverrides();
++const StorageOverrideConfig* GetStorageOverrides();
+ const WebGLOverrideConfig* GetWebGLOverrides();
+ const WebGPUOverrideConfig* GetWebGPUOverrides();
++bool IsManagedContentGlobal(nsIGlobalObject* aGlobal);
+ bool IsCanvasNoiseEnabled();
++bool ShouldApplyContentOverrides(nsIGlobalObject* aGlobal);
+ bool ShouldApplyAudioNoise(nsIGlobalObject* aGlobal);
+ float AudioNoiseForSample(uint64_t aDomain, uint64_t aIndex,
+                           double aScale = 1.0);

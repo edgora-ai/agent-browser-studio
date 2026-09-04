@@ -1,0 +1,314 @@
+diff --git a/dom/canvas/CanvasUtils.cpp b/dom/canvas/CanvasUtils.cpp
+index f68c6df761d35755be7b880b268283dc4bd53134..82c3b5b8bc8bc7db2c3c60c00303cfb76afd02c7 100644
+--- a/dom/canvas/CanvasUtils.cpp
++++ b/dom/canvas/CanvasUtils.cpp
+@@ -9,6 +9,7 @@
+ #include "WebGL2Context.h"
+ #include "jsapi.h"
+ #include "mozIThirdPartyUtil.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/BasePrincipal.h"
+ #include "mozilla/Services.h"
+ #include "mozilla/StaticPrefs_gfx.h"
+@@ -373,6 +374,10 @@ bool IsImageExtractionAllowed(dom::Document* aDocument, JSContext* aCx,
+ ImageExtraction ImageExtractionResult(dom::HTMLCanvasElement* aCanvasElement,
+                                       JSContext* aCx,
+                                       nsIPrincipal* aPrincipal) {
++  if (agentbrowser::IsCanvasNoiseEnabled() && NS_IsMainThread() && aCx &&
++      IsUnrestrictedPrincipal(nsContentUtils::SubjectPrincipal(aCx))) {
++    return ImageExtraction::Unrestricted;
++  }
+   if (IsUnrestrictedPrincipal(aPrincipal)) {
+     return ImageExtraction::Unrestricted;
+   }
+@@ -382,6 +387,10 @@ ImageExtraction ImageExtractionResult(dom::HTMLCanvasElement* aCanvasElement,
+     return ImageExtraction::Placeholder;
+   }
+ 
++  if (agentbrowser::IsCanvasNoiseEnabled()) {
++    return ImageExtraction::Randomize;
++  }
++
+   if (ownerDoc->ShouldResistFingerprinting(
+           RFPTarget::EfficientCanvasRandomization) &&
+       GetCanvasExtractDataPermission(aPrincipal) !=
+@@ -538,6 +547,10 @@ bool IsImageExtractionAllowed(dom::OffscreenCanvas* aOffscreenCanvas,
+ ImageExtraction ImageExtractionResult(dom::OffscreenCanvas* aOffscreenCanvas,
+                                       JSContext* aCx,
+                                       nsIPrincipal* aPrincipal) {
++  if (agentbrowser::IsCanvasNoiseEnabled() && NS_IsMainThread() && aCx &&
++      IsUnrestrictedPrincipal(nsContentUtils::SubjectPrincipal(aCx))) {
++    return ImageExtraction::Unrestricted;
++  }
+   if (IsUnrestrictedPrincipal(aPrincipal)) {
+     return ImageExtraction::Unrestricted;
+   }
+@@ -546,6 +559,10 @@ ImageExtraction ImageExtractionResult(dom::OffscreenCanvas* aOffscreenCanvas,
+     return ImageExtraction::Placeholder;
+   }
+ 
++  if (agentbrowser::IsCanvasNoiseEnabled()) {
++    return ImageExtraction::Randomize;
++  }
++
+   if (GetCanvasExtractDataPermission(aPrincipal) ==
+       nsIPermissionManager::ALLOW_ACTION) {
+     return ImageExtraction::Unrestricted;
+diff --git a/toolkit/components/resistfingerprinting/nsRFPService.cpp b/toolkit/components/resistfingerprinting/nsRFPService.cpp
+index 1edd91b619f21f9637f2a1163e3761e9a754fd5f..afbe4653fc5f2ab5c7cfc7a48608d0cdbdddccbf 100644
+--- a/toolkit/components/resistfingerprinting/nsRFPService.cpp
++++ b/toolkit/components/resistfingerprinting/nsRFPService.cpp
+@@ -18,6 +18,7 @@
+ #include "MainThreadUtils.h"
+ #include "ScopedNSSTypes.h"
+ 
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/AntiTrackingUtils.h"
+ #include "mozilla/ArrayIterator.h"
+ #include "mozilla/Assertions.h"
+@@ -1670,19 +1671,23 @@ nsRFPService::TestGenerateRandomKey(nsIChannel* aChannel,
+ nsresult nsRFPService::GenerateCanvasKeyFromImageData(
+     nsICookieJarSettings* aCookieJarSettings, uint8_t* aImageData,
+     uint32_t aSize, nsTArray<uint8_t>& aCanvasKey) {
+-  NS_ENSURE_ARG_POINTER(aCookieJarSettings);
+   AUTO_PROFILER_MARKER_TEXT("nsRFPService", OTHER, {},
+                             "nsRFPService::GenerateCanvasKeyFromImageData"_ns);
+ 
+   nsTArray<uint8_t> randomKey;
+-  nsresult rv =
+-      aCookieJarSettings->GetFingerprintingRandomizationKey(randomKey);
+-
+-  // There is no random key for this cookieJarSettings. This means that the
+-  // randomization is disabled. So, we can bail out from here without doing
+-  // anything.
+-  if (NS_FAILED(rv)) {
+-    return NS_ERROR_FAILURE;
++  nsresult rv = NS_OK;
++  if (const auto* config = agentbrowser::GetCanvasOverrides();
++      config && config->mEnabled) {
++    randomKey.AppendElements(config->mKey.data(), config->mKey.size());
++  } else {
++    NS_ENSURE_ARG_POINTER(aCookieJarSettings);
++    rv = aCookieJarSettings->GetFingerprintingRandomizationKey(randomKey);
++    // There is no random key for this cookieJarSettings. This means that the
++    // randomization is disabled. So, we can bail out from here without doing
++    // anything.
++    if (NS_FAILED(rv)) {
++      return NS_ERROR_FAILURE;
++    }
+   }
+ 
+   if ((aSize < 2500 || !mozilla::supports_sha()) ||
+@@ -1873,7 +1878,8 @@ nsresult nsRFPService::RandomizeElements(
+   MOZ_ASSERT(aBytesPerElement >= 1);
+   MOZ_ASSERT(aElementOffset < aElementsPerGroup);
+ 
+-  if (!aCookieJarSettings) {
++  const bool agentCanvasNoise = agentbrowser::IsCanvasNoiseEnabled();
++  if (!aCookieJarSettings && !agentCanvasNoise) {
+     return NS_OK;
+   }
+ 
+@@ -1884,8 +1890,9 @@ nsresult nsRFPService::RandomizeElements(
+     return NS_OK;
+   }
+ 
+-  if (aPrincipal && CanvasUtils::GetCanvasExtractDataPermission(aPrincipal) ==
+-                        nsIPermissionManager::ALLOW_ACTION) {
++  if (!agentCanvasNoise && aPrincipal &&
++      CanvasUtils::GetCanvasExtractDataPermission(aPrincipal) ==
++          nsIPermissionManager::ALLOW_ACTION) {
+     return NS_OK;
+   }
+ 
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index 61b05418f9ec59b7db258bf8e108867548971915..a6601971d3d33d3639c664f93483a6aa15283a12 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -30,16 +30,19 @@ constexpr uint32_t kMaxEncodedConfigLength = 87382;
+ 
+ struct Snapshot final {
+   Snapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+-           NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen)
++           NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen,
++           CanvasOverrideConfig&& aCanvas)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+         mNavigator(std::move(aNavigator)),
+-        mScreen(std::move(aScreen)) {}
++        mScreen(std::move(aScreen)),
++        mCanvas(std::move(aCanvas)) {}
+ 
+   const nsCString mEncoded;
+   const nsCString mDecoded;
+   const NavigatorOverrideConfig mNavigator;
+   const ScreenOverrideConfig mScreen;
++  const CanvasOverrideConfig mCanvas;
+ };
+ 
+ StaticAutoPtr<Snapshot> sSnapshot;
+@@ -127,6 +130,39 @@ bool GetRequiredString(JSContext* aCx, JS::Handle<JSObject*> aObject,
+   return true;
+ }
+ 
++uint64_t MixSeed(uint64_t aValue) {
++  aValue ^= aValue >> 30;
++  aValue *= 0xbf58476d1ce4e5b9ULL;
++  aValue ^= aValue >> 27;
++  aValue *= 0x94d049bb133111ebULL;
++  return aValue ^ (aValue >> 31);
++}
++
++bool DeriveCanvasKey(const nsAString& aSeed, std::array<uint8_t, 32>& aKey) {
++  if (aSeed.Length() != 16) {
++    return false;
++  }
++
++  uint64_t hash = 1469598103934665603ULL;
++  for (size_t index = 0; index < aSeed.Length(); ++index) {
++    const char16_t character = aSeed.CharAt(index);
++    if (!((character >= '0' && character <= '9') ||
++          (character >= 'a' && character <= 'f'))) {
++      return false;
++    }
++    hash ^= static_cast<uint8_t>(character);
++    hash *= 1099511628211ULL;
++  }
++
++  for (size_t word = 0; word < 4; ++word) {
++    hash = MixSeed(hash + 0x9e3779b97f4a7c15ULL + word);
++    for (size_t byte = 0; byte < 8; ++byte) {
++      aKey[word * 8 + byte] = static_cast<uint8_t>((hash >> (byte * 8)) & 0xff);
++    }
++  }
++  return true;
++}
++
+ nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
+                       nsACString& aError) {
+   if (aEncoded.IsEmpty()) {
+@@ -157,7 +193,8 @@ nsresult DecodeConfig(const nsACString& aEncoded, nsCString& aDecoded,
+ 
+ nsresult ParseConfig(const nsACString& aDecoded,
+                      NavigatorOverrideConfig& aNavigator,
+-                     ScreenOverrideConfig& aScreen, nsACString& aError) {
++                     ScreenOverrideConfig& aScreen,
++                     CanvasOverrideConfig& aCanvas, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+   if (!jsapi.Init(xpc::PrivilegedJunkScope())) {
+     aError.AssignLiteral("js-context-unavailable");
+@@ -331,12 +368,28 @@ nsresult ParseConfig(const nsACString& aDecoded,
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
++  JS::Rooted<JS::Value> canvasValue(cx);
++  if (!GetRequiredProperty(cx, object, "canvas", &canvasValue, aError) ||
++      !canvasValue.isObject()) {
++    SetInvalidField(aError, "canvas");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> canvas(cx, &canvasValue.toObject());
++  nsAutoString canvasSeed;
++  if (!GetRequiredBoolean(cx, canvas, "enabled", aCanvas.mEnabled, aError) ||
++      !GetRequiredString(cx, canvas, "seed", canvasSeed, aError) ||
++      !DeriveCanvasKey(canvasSeed, aCanvas.mKey)) {
++    SetInvalidField(aError, "canvas");
++    return NS_ERROR_INVALID_ARG;
++  }
++
+   return NS_OK;
+ }
+ 
+ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                          NavigatorOverrideConfig&& aNavigator,
+-                         ScreenOverrideConfig&& aScreen, nsACString& aError) {
++                         ScreenOverrideConfig&& aScreen,
++                         CanvasOverrideConfig&& aCanvas, nsACString& aError) {
+   if (sSnapshot) {
+     if (sSnapshot->mEncoded.Equals(aEncoded)) {
+       return NS_OK;
+@@ -346,7 +399,8 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+   }
+ 
+   sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded),
+-                           std::move(aNavigator), std::move(aScreen));
++                           std::move(aNavigator), std::move(aScreen),
++                           std::move(aCanvas));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+ }
+@@ -360,12 +414,14 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+ 
+   NavigatorOverrideConfig navigator;
+   ScreenOverrideConfig screen;
+-  rv = ParseConfig(decoded, navigator, screen, aError);
++  CanvasOverrideConfig canvas;
++  rv = ParseConfig(decoded, navigator, screen, canvas, aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+   return InstallSnapshot(std::move(aEncoded), std::move(decoded),
+-                         std::move(navigator), std::move(screen), aError);
++                         std::move(navigator), std::move(screen),
++                         std::move(canvas), aError);
+ }
+ 
+ }  // namespace
+@@ -378,7 +434,8 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"buildId\":\"%s\","
+       "\"sourceStamp\":\"%s\","
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+-      "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\"]}\n",
++      "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
++      "\"canvas-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -448,4 +505,14 @@ const ScreenOverrideConfig* GetScreenOverrides() {
+   return snapshot ? &snapshot->mScreen : nullptr;
+ }
+ 
++const CanvasOverrideConfig* GetCanvasOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mCanvas : nullptr;
++}
++
++bool IsCanvasNoiseEnabled() {
++  const CanvasOverrideConfig* config = GetCanvasOverrides();
++  return config && config->mEnabled;
++}
++
+ }  // namespace mozilla::agentbrowser
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index 8daccf405dcca8b94f8d6644efc11fa258d19115..d1e0588187bad1428f71828b957f4e240f65cf31 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -5,6 +5,7 @@
+ #ifndef mozilla_AgentBrowserFingerprint_h
+ #define mozilla_AgentBrowserFingerprint_h
+ 
++#include <array>
+ #include <stdint.h>
+ 
+ #include "nsError.h"
+@@ -44,6 +45,11 @@ struct ScreenOverrideConfig final {
+   bool mMobile = false;
+ };
+ 
++struct CanvasOverrideConfig final {
++  bool mEnabled = false;
++  std::array<uint8_t, 32> mKey{};
++};
++
+ void DumpCapabilities(const char* aBuildID);
+ 
+ nsresult InitializeParent(bool aNativeRequired, nsACString& aError);
+@@ -54,6 +60,8 @@ const nsCString& EncodedConfig();
+ const nsCString& DecodedConfig();
+ const NavigatorOverrideConfig* GetNavigatorOverrides();
+ const ScreenOverrideConfig* GetScreenOverrides();
++const CanvasOverrideConfig* GetCanvasOverrides();
++bool IsCanvasNoiseEnabled();
+ 
+ }  // namespace mozilla::agentbrowser
+ 

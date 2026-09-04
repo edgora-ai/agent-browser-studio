@@ -1,0 +1,2849 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "macos-arm64",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless-native-media-devices",
+    "fingerprintConfig": {
+      "schemaVersion": 1,
+      "seed": 154102,
+      "platform": "Win32",
+      "platformVersion": "10.0.0",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+      "appVersion": "5.0 (Windows)",
+      "vendor": "",
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "hardwareConcurrency": 12,
+      "deviceMemory": 16,
+      "maxTouchPoints": 0,
+      "hardwareProfile": {
+        "id": "win-nvidia-rtx3060-12c-16gb-1080p",
+        "source": "seeded",
+        "fontProfile": "windows-portable",
+        "audioProfile": "chromium-desktop"
+      },
+      "screen": {
+        "width": 1920,
+        "height": 1080,
+        "availLeft": 0,
+        "availTop": 0,
+        "availWidth": 1920,
+        "availHeight": 1032,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 1,
+        "windowX": 32,
+        "windowY": 32,
+        "outerWidth": 1280,
+        "outerHeight": 800,
+        "mobile": false
+      },
+      "storageQuotaBytes": 125829120000,
+      "canvas": {
+        "enabled": true,
+        "seed": "dbc492d80345a599"
+      },
+      "audio": {
+        "enabled": true,
+        "seed": "0d1bf59990f22075",
+        "amplitude": 1e-7
+      },
+      "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+      },
+      "webgpu": {
+        "mode": "webgl",
+        "vendor": "NVIDIA",
+        "architecture": "Ampere",
+        "device": "NVIDIA GeForce RTX 3060",
+        "description": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "subgroupMinSize": 32,
+        "subgroupMaxSize": 32
+      },
+      "webauthn": {
+        "enabled": true,
+        "conditionalGet": true,
+        "conditionalCreate": true,
+        "hybridTransport": true,
+        "passkeyPlatformAuthenticator": true,
+        "userVerifyingPlatformAuthenticator": true
+      },
+      "speechSynthesis": {
+        "enabled": true,
+        "voices": [
+          {
+            "name": "Microsoft David - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Mark - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Zira - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          }
+        ]
+      },
+      "webrtc": {
+        "mode": "real",
+        "publicIp": null
+      },
+      "timezone": "America/New_York",
+      "geolocation": {
+        "mode": "real",
+        "latitude": null,
+        "longitude": null,
+        "accuracy": null
+      },
+      "mediaDevices": {
+        "enabled": true,
+        "audioInputs": 1,
+        "videoInputs": 1,
+        "audioOutputs": 1
+      },
+      "secureDns": {
+        "enabled": false,
+        "templates": []
+      },
+      "fonts": [
+        "Arial",
+        "Arial Unicode MS",
+        "Comic Sans MS",
+        "Courier New",
+        "Georgia",
+        "Impact",
+        "Tahoma",
+        "Times New Roman",
+        "Trebuchet MS",
+        "Verdana"
+      ],
+      "doNotTrack": "1",
+      "pluginProfile": {
+        "pdfViewerEnabled": true,
+        "plugins": [
+          {
+            "name": "Internal PDF Plugin",
+            "filename": "pdfium.dll",
+            "description": "Portable Document Format",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf"
+              }
+            ]
+          },
+          {
+            "name": "Widevine Content Decryption Module",
+            "filename": "widevinecdm.dll",
+            "description": "Enables Widevine decryption for HTML audio/video content.",
+            "mimeTypes": []
+          }
+        ],
+        "mimeTypes": [
+          {
+            "type": "application/pdf",
+            "suffixes": "pdf"
+          }
+        ]
+      }
+    },
+    "preloadScript": false,
+    "nativeRequired": true
+  },
+  "capabilities": {
+    "product": "agent-browser-firefox",
+    "capabilitySchemaVersion": 1,
+    "browserVersion": "154.0",
+    "buildId": "20260902091224",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "capabilities": [
+      "config-v1",
+      "native-required-v1",
+      "snapshot-v1",
+      "navigator-v1",
+      "screen-v1",
+      "canvas-v1",
+      "webgl-v1",
+      "webgpu-v1",
+      "audio-v1",
+      "geolocation-v1",
+      "storage-quota-v1",
+      "media-devices-v1",
+      "speech-voices-v1"
+    ]
+  },
+  "evidence": {
+    "managed": {
+      "pre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDenied": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "post": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "Default - 'default'",
+            "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "FaceTime HD Camera (Built-in)",
+            "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+            "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+            "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "Default - 'default'",
+            "deviceId": "a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=\",\"kind\":\"audiooutput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDeniedPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoCameraPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoSpeakerPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "dedicatedWorker": {
+        "mediaDevices": "undefined"
+      },
+      "sharedWorker": {
+        "mediaDevices": "undefined"
+      }
+    },
+    "denied": null,
+    "disabled": {
+      "pre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDenied": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "post": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "Default Audio Device",
+            "deviceId": "nnfQ7fO6mvPss8b/pzx9duWv6lNmt4jHpw6x+sy0j40=",
+            "groupId": "Op1UuS7sWrMc/l/UaY8FS+LW+c3tmcZ+3N9k7KBCBoE=",
+            "json": "{\"deviceId\":\"nnfQ7fO6mvPss8b/pzx9duWv6lNmt4jHpw6x+sy0j40=\",\"kind\":\"audioinput\",\"label\":\"Default Audio Device\",\"groupId\":\"Op1UuS7sWrMc/l/UaY8FS+LW+c3tmcZ+3N9k7KBCBoE=\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "Default Video Device",
+            "deviceId": "AX4rkFgz80ZmkWy/jw2KxkpGUQvhqBbxYB2M5j7UKhA=",
+            "groupId": "KnkZtiHnpH85k7zuNJ5XuhMLOxUI6tsJyipXzwZZFNY=",
+            "json": "{\"deviceId\":\"AX4rkFgz80ZmkWy/jw2KxkpGUQvhqBbxYB2M5j7UKhA=\",\"kind\":\"videoinput\",\"label\":\"Default Video Device\",\"groupId\":\"KnkZtiHnpH85k7zuNJ5XuhMLOxUI6tsJyipXzwZZFNY=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "MacBook Pro扬声器",
+            "deviceId": "NnPKkVbVdXcQvucNS3SH//FZI3T9qNm7XEvdiPbdO34=",
+            "groupId": "SwfUc11mxgcafBBMaT9XpB4vbMhlFRFUnBlu+9t+1mg=",
+            "json": "{\"deviceId\":\"NnPKkVbVdXcQvucNS3SH//FZI3T9qNm7XEvdiPbdO34=\",\"kind\":\"audiooutput\",\"label\":\"MacBook Pro扬声器\",\"groupId\":\"SwfUc11mxgcafBBMaT9XpB4vbMhlFRFUnBlu+9t+1mg=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "PHL 276E8V",
+            "deviceId": "vzHJwnXBIdF4zLmt6SK0RvRWwGXt0MJOftbcuXy03jE=",
+            "groupId": "pjuWhTTxFgXnhPMTDEmIBHJMWrEVBaC66TiVqHMCTl4=",
+            "json": "{\"deviceId\":\"vzHJwnXBIdF4zLmt6SK0RvRWwGXt0MJOftbcuXy03jE=\",\"kind\":\"audiooutput\",\"label\":\"PHL 276E8V\",\"groupId\":\"pjuWhTTxFgXnhPMTDEmIBHJMWrEVBaC66TiVqHMCTl4=\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDeniedPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoCameraPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoSpeakerPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "dedicatedWorker": {
+        "mediaDevices": "undefined"
+      },
+      "sharedWorker": {
+        "mediaDevices": "undefined"
+      }
+    },
+    "stock": {
+      "pre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDenied": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "post": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "Default Audio Device",
+            "deviceId": "+J1cQaBpBUERgRYLDKqS5RLE+Idv8LeSZqvmNJCIquc=",
+            "groupId": "xcE5NYHHu2ERAzMG5Qny5fvD4Gu2cNR6PVxvPXMuS1s=",
+            "json": "{\"deviceId\":\"+J1cQaBpBUERgRYLDKqS5RLE+Idv8LeSZqvmNJCIquc=\",\"kind\":\"audioinput\",\"label\":\"Default Audio Device\",\"groupId\":\"xcE5NYHHu2ERAzMG5Qny5fvD4Gu2cNR6PVxvPXMuS1s=\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "Default Video Device",
+            "deviceId": "SUVL5xXLpIzkJrlR38Ba7WP8oDk7Y5wvu5+2QLGSAT8=",
+            "groupId": "J0TA4Nf3iInX3BANT0Rlbwoi7pV6fmizRN3x8kZYVnA=",
+            "json": "{\"deviceId\":\"SUVL5xXLpIzkJrlR38Ba7WP8oDk7Y5wvu5+2QLGSAT8=\",\"kind\":\"videoinput\",\"label\":\"Default Video Device\",\"groupId\":\"J0TA4Nf3iInX3BANT0Rlbwoi7pV6fmizRN3x8kZYVnA=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "MacBook Pro扬声器",
+            "deviceId": "V7/8idD7tHCJuUqUg2hp5Sx9RJd513cBZoKOwauXck4=",
+            "groupId": "UBNMT/zdwnu+IGVedcf7WEhf7r3qDrkGCX7zlmHl4V8=",
+            "json": "{\"deviceId\":\"V7/8idD7tHCJuUqUg2hp5Sx9RJd513cBZoKOwauXck4=\",\"kind\":\"audiooutput\",\"label\":\"MacBook Pro扬声器\",\"groupId\":\"UBNMT/zdwnu+IGVedcf7WEhf7r3qDrkGCX7zlmHl4V8=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "PHL 276E8V",
+            "deviceId": "RRHSagsEd+pdQ5D8zoyZWwYZxkpHx61Pq6orm/vNuoE=",
+            "groupId": "x/IOIDge9jL44l6+kcHPEJ0oXQIFcmDiVjqChqONOv4=",
+            "json": "{\"deviceId\":\"RRHSagsEd+pdQ5D8zoyZWwYZxkpHx61Pq6orm/vNuoE=\",\"kind\":\"audiooutput\",\"label\":\"PHL 276E8V\",\"groupId\":\"x/IOIDge9jL44l6+kcHPEJ0oXQIFcmDiVjqChqONOv4=\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDeniedPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoCameraPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoSpeakerPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "dedicatedWorker": {
+        "mediaDevices": "undefined"
+      },
+      "sharedWorker": {
+        "mediaDevices": "undefined"
+      }
+    },
+    "multi": {
+      "pre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePre": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDenied": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "post": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "Default - 'default'",
+            "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          },
+          {
+            "kind": "audioinput",
+            "label": "Microphone (2)",
+            "deviceId": "iRUiky1MHTTgickKZWBLhrdnsyyu3tN3OWxUeGJSm0k=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"iRUiky1MHTTgickKZWBLhrdnsyyu3tN3OWxUeGJSm0k=\",\"kind\":\"audioinput\",\"label\":\"Microphone (2)\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "FaceTime HD Camera (Built-in)",
+            "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+            "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+            "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+          },
+          {
+            "kind": "videoinput",
+            "label": "Camera (2)",
+            "deviceId": "6ueB2WtTOkpF14FjcLBcSAIJ7xgWZF1osC1/R4sPBlA=",
+            "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+            "json": "{\"deviceId\":\"6ueB2WtTOkpF14FjcLBcSAIJ7xgWZF1osC1/R4sPBlA=\",\"kind\":\"videoinput\",\"label\":\"Camera (2)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "Default - 'default'",
+            "deviceId": "a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=\",\"kind\":\"audiooutput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          },
+          {
+            "kind": "audiooutput",
+            "label": "Speaker (2)",
+            "deviceId": "FGMiN80RvDzQT9c21iHqbktqNaXEexy2JoW7xAizOV8=",
+            "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+            "json": "{\"deviceId\":\"FGMiN80RvDzQT9c21iHqbktqNaXEexy2JoW7xAizOV8=\",\"kind\":\"audiooutput\",\"label\":\"Speaker (2)\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDeniedPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoCameraPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoSpeakerPost": {
+        "devices": [
+          {
+            "kind": "audioinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          },
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "dedicatedWorker": {
+        "mediaDevices": "undefined"
+      },
+      "sharedWorker": {
+        "mediaDevices": "undefined"
+      }
+    },
+    "zero": {
+      "pre": {
+        "devices": [
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": "",
+            "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePre": {
+        "devices": [
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDenied": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "post": {
+        "devices": [
+          {
+            "kind": "videoinput",
+            "label": "FaceTime HD Camera (Built-in)",
+            "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+            "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+            "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+          }
+        ],
+        "repeatIdentical": true,
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframePost": {
+        "devices": [
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeDeniedPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoCameraPost": {
+        "devices": [],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "iframeNoSpeakerPost": {
+        "devices": [
+          {
+            "kind": "videoinput",
+            "label": "",
+            "deviceId": "",
+            "groupId": ""
+          }
+        ],
+        "nativeEnumerate": {
+          "source": "function enumerateDevices() {\n    [native code]\n}",
+          "name": "enumerateDevices",
+          "length": 0,
+          "writable": true,
+          "enumerable": true,
+          "configurable": true,
+          "owner": "MediaDevices"
+        }
+      },
+      "dedicatedWorker": {
+        "mediaDevices": "undefined"
+      },
+      "sharedWorker": {
+        "mediaDevices": "undefined"
+      }
+    },
+    "legacy": {
+      "noGrant": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+              "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "w64qebdvgOzeHIafwf9vNWwkxoy42JCqXWJS+cF6XHI="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "6iLScgai9ocenwDPrPEN8Kadd3YXHAN2anXlfxdwD9Q="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "noGrantStock": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "7GQdrJqAOpcciDnD662CBk79iFvVIsw4TrgKwi/DZv0=",
+              "groupId": "RPX8HNw6a/4RTiLNB9wHBPJav1KIpGnfDhPmSn8vaCE=",
+              "json": "{\"deviceId\":\"7GQdrJqAOpcciDnD662CBk79iFvVIsw4TrgKwi/DZv0=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"RPX8HNw6a/4RTiLNB9wHBPJav1KIpGnfDhPmSn8vaCE=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "PIaJgVD28ly2gLmY7OHvTd25C4wm+EVajP/xQ8vSyZE=",
+              "groupId": "SIRzO14FvoVR5G33PN3CkMEbf4GlSXARMVeeRWloI30=",
+              "json": "{\"deviceId\":\"PIaJgVD28ly2gLmY7OHvTd25C4wm+EVajP/xQ8vSyZE=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"SIRzO14FvoVR5G33PN3CkMEbf4GlSXARMVeeRWloI30=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "7GQdrJqAOpcciDnD662CBk79iFvVIsw4TrgKwi/DZv0=",
+              "groupId": "FwP7WJ+/NVtPrL0hDKov/FYXPWuEoVw8dgLBCwx8ipY="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "PIaJgVD28ly2gLmY7OHvTd25C4wm+EVajP/xQ8vSyZE=",
+              "groupId": "FHr17T3xbtGy8oAnOHpYSgGeENkUSF1KgHrIqYQ5rWk="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "grant": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+              "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "w64qebdvgOzeHIafwf9vNWwkxoy42JCqXWJS+cF6XHI="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "6iLScgai9ocenwDPrPEN8Kadd3YXHAN2anXlfxdwD9Q="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+              "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "",
+              "deviceId": "a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=\",\"kind\":\"audiooutput\",\"label\":\"\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "1h1FoLIygIDt+YLfApE9jLIpLY0b7BXDqRAaii93gCQ="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "GCP/THxfJfQPI3ByNG0mxTW4u7kuN55QQDS0NDt8rgc="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "yokzZ6cUlaubtoCXQFyHOQc5JVF72oWeqzho/Ed8smw="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "v8FtG8CiJxeFi+skm89KzMjQ3yi8xONM/BF4VEimo7o="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "r81bL/Q2mGaft+WIuFbJlyAYUb1TSfnDXhNcdgvB1kc="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "grantStock": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "jDARY0WcbGJcAvERc4IjPF4P5u12I3/cNeNTqoy85Iw=",
+              "json": "{\"deviceId\":\"NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"jDARY0WcbGJcAvERc4IjPF4P5u12I3/cNeNTqoy85Iw=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=",
+              "groupId": "T0lTscvAsQRFRcDAHAHOYzNnVHgm/pX90IGmISHCZww=",
+              "json": "{\"deviceId\":\"iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"T0lTscvAsQRFRcDAHAHOYzNnVHgm/pX90IGmISHCZww=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "SL6XG9+vhZa+Fpr+HBGjAa69L7QJyM548sMyYrzdaGs="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=",
+              "groupId": "Q2XFx/wRmb7+JMwkR5+3bCOEpJDh87suOcSxZOe/Gi0="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "jDARY0WcbGJcAvERc4IjPF4P5u12I3/cNeNTqoy85Iw=",
+              "json": "{\"deviceId\":\"NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"jDARY0WcbGJcAvERc4IjPF4P5u12I3/cNeNTqoy85Iw=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=",
+              "groupId": "T0lTscvAsQRFRcDAHAHOYzNnVHgm/pX90IGmISHCZww=",
+              "json": "{\"deviceId\":\"iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"T0lTscvAsQRFRcDAHAHOYzNnVHgm/pX90IGmISHCZww=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "",
+              "deviceId": "dndpmkEHtI/x12bwnw5jM0+q1Soja5kTlORIai+Jygw=",
+              "groupId": "iBZcipi7KY2d0ggsIknPkRTPygHLcgSHbVbd2yy/FlM=",
+              "json": "{\"deviceId\":\"dndpmkEHtI/x12bwnw5jM0+q1Soja5kTlORIai+Jygw=\",\"kind\":\"audiooutput\",\"label\":\"\",\"groupId\":\"iBZcipi7KY2d0ggsIknPkRTPygHLcgSHbVbd2yy/FlM=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "",
+              "deviceId": "dxrgwCEQDvw7s9vuVKYeSIm7NA6cqlGNvBhlIxQM3XQ=",
+              "groupId": "JpLsSiuurcyHDjRLmRK0JMYL0Xy190EDpI2GscbVnxc=",
+              "json": "{\"deviceId\":\"dxrgwCEQDvw7s9vuVKYeSIm7NA6cqlGNvBhlIxQM3XQ=\",\"kind\":\"audiooutput\",\"label\":\"\",\"groupId\":\"JpLsSiuurcyHDjRLmRK0JMYL0Xy190EDpI2GscbVnxc=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "EGp9P79JpyMCjZAJR4mZzvuI2q42dqnt3ccVAWQW8fE="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=",
+              "groupId": "TRiTEPqe6n2s2PfHNeS9EXDcRAsERGfpPZmkzPDCbco="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "Xp7JsVthbYKT0nJSVEAr4/rIq1MDIin0NGTxQH9jupw="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "NTovQtNy7TnXp8zjr+rRyFCrgQLDT0YyRM/LZ0Kp8ig=",
+              "groupId": "aiPXbhXTTpwZ6AZj6F59YYGWYWyDpP1alU3Ns5pyp9c="
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "iDjIKu4QkT2ng8PRe+B5oCk9ZAK6nRKAPT7AeGNfbKY=",
+              "groupId": "eebEWxt7uKO3tzVre8JQYJkn+aORo7Kh1ViWBuRU28Q="
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      }
+    },
+    "noSinkid": {
+      "managed": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Default - 'default'",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "FaceTime HD Camera (Built-in)",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+              "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "stock": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Default Audio Device",
+              "deviceId": "QiZqWigR+aXlqo2QEZX6jdU/E53ER/6rvVWeP35EaWs=",
+              "groupId": "CFFoftAog0JcSVKi3xQAvAZDwFDD2ccMhRfSUbCUo/c=",
+              "json": "{\"deviceId\":\"QiZqWigR+aXlqo2QEZX6jdU/E53ER/6rvVWeP35EaWs=\",\"kind\":\"audioinput\",\"label\":\"Default Audio Device\",\"groupId\":\"CFFoftAog0JcSVKi3xQAvAZDwFDD2ccMhRfSUbCUo/c=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "Default Video Device",
+              "deviceId": "REesPhvW/VOwagklG9QEajhc4VpcDdrxESlXsKW6GlM=",
+              "groupId": "fCCs15Yn2G/QDNWt71LGGPKH692BsPFs7gJcFwuRtWM=",
+              "json": "{\"deviceId\":\"REesPhvW/VOwagklG9QEajhc4VpcDdrxESlXsKW6GlM=\",\"kind\":\"videoinput\",\"label\":\"Default Video Device\",\"groupId\":\"fCCs15Yn2G/QDNWt71LGGPKH692BsPFs7gJcFwuRtWM=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      }
+    },
+    "rfp": {
+      "managed": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Internal Microphone",
+              "deviceId": "xwAywQUUOl0BXIkhG2f0AsbPjKUag6DnB42yq1s9YHU=",
+              "groupId": "LR0O0b8prWHg0inYXVwo3/6jqMzW7X1M7daGjOywSvk=",
+              "json": "{\"deviceId\":\"xwAywQUUOl0BXIkhG2f0AsbPjKUag6DnB42yq1s9YHU=\",\"kind\":\"audioinput\",\"label\":\"Internal Microphone\",\"groupId\":\"LR0O0b8prWHg0inYXVwo3/6jqMzW7X1M7daGjOywSvk=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "Internal Camera",
+              "deviceId": "SX77Vd3NzyHb5hAB2v8isxWTflJYUgAheYWPYRrZujw=",
+              "groupId": "FaXVno/PNrrlFUD+wkhv2UhFKDWIpkLDFpTQaXHDp5w=",
+              "json": "{\"deviceId\":\"SX77Vd3NzyHb5hAB2v8isxWTflJYUgAheYWPYRrZujw=\",\"kind\":\"videoinput\",\"label\":\"Internal Camera\",\"groupId\":\"FaXVno/PNrrlFUD+wkhv2UhFKDWIpkLDFpTQaXHDp5w=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "Internal Speaker",
+              "deviceId": "lxmjTryqD93rBxRBMpf4kvtH1YrKOGla/0ak9d3Cj9k=",
+              "groupId": "LR0O0b8prWHg0inYXVwo3/6jqMzW7X1M7daGjOywSvk=",
+              "json": "{\"deviceId\":\"lxmjTryqD93rBxRBMpf4kvtH1YrKOGla/0ak9d3Cj9k=\",\"kind\":\"audiooutput\",\"label\":\"Internal Speaker\",\"groupId\":\"LR0O0b8prWHg0inYXVwo3/6jqMzW7X1M7daGjOywSvk=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "stock": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Internal Microphone",
+              "deviceId": "KVeTwRSK00y6PVWjInrwb85S20qZNJdtWC6oyuxrYPE=",
+              "groupId": "d5lxRUHubfJAdWKYEjuAcSjLHAOniSOzJmEuJNOcHzk=",
+              "json": "{\"deviceId\":\"KVeTwRSK00y6PVWjInrwb85S20qZNJdtWC6oyuxrYPE=\",\"kind\":\"audioinput\",\"label\":\"Internal Microphone\",\"groupId\":\"d5lxRUHubfJAdWKYEjuAcSjLHAOniSOzJmEuJNOcHzk=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "Internal Camera",
+              "deviceId": "0x23z3StcDDmz/KgQoV9ln2AVTJCg8rGzN8n4rKLyII=",
+              "groupId": "2QAaPLX8L2TBMoa/pWiUViB7bkRs9hOc+gBk84nxRcc=",
+              "json": "{\"deviceId\":\"0x23z3StcDDmz/KgQoV9ln2AVTJCg8rGzN8n4rKLyII=\",\"kind\":\"videoinput\",\"label\":\"Internal Camera\",\"groupId\":\"2QAaPLX8L2TBMoa/pWiUViB7bkRs9hOc+gBk84nxRcc=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "Internal Speaker",
+              "deviceId": "kUoUkzYnFTLn2nTjK1XN15EXgLUFZcb6rFYNjxqDh9o=",
+              "groupId": "d5lxRUHubfJAdWKYEjuAcSjLHAOniSOzJmEuJNOcHzk=",
+              "json": "{\"deviceId\":\"kUoUkzYnFTLn2nTjK1XN15EXgLUFZcb6rFYNjxqDh9o=\",\"kind\":\"audiooutput\",\"label\":\"Internal Speaker\",\"groupId\":\"d5lxRUHubfJAdWKYEjuAcSjLHAOniSOzJmEuJNOcHzk=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      }
+    },
+    "crossOrigin": {
+      "sameOriginRestart": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Default - 'default'",
+              "deviceId": "rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"rCn8/unYvVDeJAeG7UZeKf6JWLgPC61hFjae7467RsQ=\",\"kind\":\"audioinput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "FaceTime HD Camera (Built-in)",
+              "deviceId": "j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=",
+              "groupId": "v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=",
+              "json": "{\"deviceId\":\"j9buuLu3JeYRWDG56IyOYLQ51bKUBuxFA7H3Bci9hvI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"v1CwKNM5mg04vWSXUHXxIdJDRIA0Y5CvGs+e6y1s454=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "Default - 'default'",
+              "deviceId": "a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=",
+              "groupId": "FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=",
+              "json": "{\"deviceId\":\"a+RavsMObcLmYMP2PUtynFYjXFqmnWCqwR+1zhZNNHw=\",\"kind\":\"audiooutput\",\"label\":\"Default - 'default'\",\"groupId\":\"FWI95ROXUlV4187yHLgFXVZhGkL8nGzquW9OAKy2cic=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      },
+      "otherOrigin": {
+        "pre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"audioinput\",\"label\":\"\",\"groupId\":\"\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": "",
+              "json": "{\"deviceId\":\"\",\"kind\":\"videoinput\",\"label\":\"\",\"groupId\":\"\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePre": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDenied": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "post": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "Default - 'default'",
+              "deviceId": "9fZ5OrghhD/L/5i+F7ilNfpE7gaycmKxnhuJoi4aTds=",
+              "groupId": "2HhZ55D+f2TKWSzoPT7SVO0y44TNZn3THewBCLhSTGo=",
+              "json": "{\"deviceId\":\"9fZ5OrghhD/L/5i+F7ilNfpE7gaycmKxnhuJoi4aTds=\",\"kind\":\"audioinput\",\"label\":\"Default - 'default'\",\"groupId\":\"2HhZ55D+f2TKWSzoPT7SVO0y44TNZn3THewBCLhSTGo=\"}"
+            },
+            {
+              "kind": "videoinput",
+              "label": "FaceTime HD Camera (Built-in)",
+              "deviceId": "okJpic6/RZJILGWQ78uLTLBgAcyFXqYTDrc4YU2dhFI=",
+              "groupId": "A4UPFwdYJWYHtyTUvE2GvGddfQcZ39zu7iBBaKnjUFE=",
+              "json": "{\"deviceId\":\"okJpic6/RZJILGWQ78uLTLBgAcyFXqYTDrc4YU2dhFI=\",\"kind\":\"videoinput\",\"label\":\"FaceTime HD Camera (Built-in)\",\"groupId\":\"A4UPFwdYJWYHtyTUvE2GvGddfQcZ39zu7iBBaKnjUFE=\"}"
+            },
+            {
+              "kind": "audiooutput",
+              "label": "Default - 'default'",
+              "deviceId": "BkWpLVVKy2qSwWPmUfZSSaPSIOjRkz7FXxQbmWbCORU=",
+              "groupId": "2HhZ55D+f2TKWSzoPT7SVO0y44TNZn3THewBCLhSTGo=",
+              "json": "{\"deviceId\":\"BkWpLVVKy2qSwWPmUfZSSaPSIOjRkz7FXxQbmWbCORU=\",\"kind\":\"audiooutput\",\"label\":\"Default - 'default'\",\"groupId\":\"2HhZ55D+f2TKWSzoPT7SVO0y44TNZn3THewBCLhSTGo=\"}"
+            }
+          ],
+          "repeatIdentical": true,
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframePost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeDeniedPost": {
+          "devices": [],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoCameraPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "iframeNoSpeakerPost": {
+          "devices": [
+            {
+              "kind": "audioinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            },
+            {
+              "kind": "videoinput",
+              "label": "",
+              "deviceId": "",
+              "groupId": ""
+            }
+          ],
+          "nativeEnumerate": {
+            "source": "function enumerateDevices() {\n    [native code]\n}",
+            "name": "enumerateDevices",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "MediaDevices"
+          }
+        },
+        "dedicatedWorker": {
+          "mediaDevices": "undefined"
+        },
+        "sharedWorker": {
+          "mediaDevices": "undefined"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,688 @@
+diff --git a/dom/media/webaudio/AnalyserNode.cpp b/dom/media/webaudio/AnalyserNode.cpp
+index 3c80514..a7a1eb6 100644
+--- a/dom/media/webaudio/AnalyserNode.cpp
++++ b/dom/media/webaudio/AnalyserNode.cpp
+@@ -4,9 +4,14 @@
+ 
+ #include "mozilla/dom/AnalyserNode.h"
+ 
++#include <algorithm>
++#include <cmath>
++
++#include "AudioContext.h"
+ #include "AudioNodeEngine.h"
+ #include "AudioNodeTrack.h"
+ #include "Tracing.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/Mutex.h"
+ #include "mozilla/PodOperations.h"
+ #include "mozilla/dom/AnalyserNodeBinding.h"
+@@ -208,18 +213,35 @@ void AnalyserNode::SetSmoothingTimeConstant(double aValue, ErrorResult& aRv) {
+   mSmoothingTimeConstant = aValue;
+ }
+ 
++constexpr uint64_t kAgentBrowserFloatFrequencyDomain =
++    0x616e6c666c667271ULL;
++constexpr uint64_t kAgentBrowserByteFrequencyDomain =
++    0x616e6c6279667271ULL;
++constexpr uint64_t kAgentBrowserFloatTimeDomain = 0x616e6c666c74696dULL;
++constexpr uint64_t kAgentBrowserByteTimeDomain = 0x616e6c627974696dULL;
++
++bool AnalyserNode::ShouldApplyAgentBrowserNoise() const {
++  return Context() &&
++         agentbrowser::ShouldApplyAudioNoise(Context()->GetParentObject());
++}
++
+ void AnalyserNode::GetFloatFrequencyData(const Float32Array& aArray) {
+   if (!FFTAnalysis()) {
+     // Might fail to allocate memory
+     return;
+   }
+ 
++  const bool applyNoise = ShouldApplyAgentBrowserNoise();
+   aArray.ProcessData([&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(size_t(aData.Length()), mOutputBuffer.Length());
+ 
+     for (size_t i = 0; i < length; ++i) {
+       aData[i] = WebAudioUtils::ConvertLinearToDecibels(
+           mOutputBuffer[i], -std::numeric_limits<float>::infinity());
++      if (applyNoise && std::isfinite(aData[i])) {
++        aData[i] += agentbrowser::AudioNoiseForSample(
++            kAgentBrowserFloatFrequencyDomain, i, 100000.0);
++      }
+     }
+   });
+ }
+@@ -231,6 +253,7 @@ void AnalyserNode::GetByteFrequencyData(const Uint8Array& aArray) {
+   }
+ 
+   const double rangeScaleFactor = 1.0 / (mMaxDecibels - mMinDecibels);
++  const bool applyNoise = ShouldApplyAgentBrowserNoise();
+ 
+   aArray.ProcessData([&](const Span<uint8_t>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(size_t(aData.Length()), mOutputBuffer.Length());
+@@ -243,20 +266,34 @@ void AnalyserNode::GetByteFrequencyData(const Uint8Array& aArray) {
+           0.0,
+           std::min(double(UCHAR_MAX),
+                    UCHAR_MAX * (decibels - mMinDecibels) * rangeScaleFactor));
+-      aData[i] = static_cast<unsigned char>(scaled);
++      int32_t value = static_cast<unsigned char>(scaled);
++      if (applyNoise) {
++        value += agentbrowser::AudioNoiseForByte(
++            kAgentBrowserByteFrequencyDomain, i);
++      }
++      aData[i] = static_cast<unsigned char>(
++          std::clamp(value, 0, static_cast<int32_t>(UCHAR_MAX)));
+     }
+   });
+ }
+ 
+ void AnalyserNode::GetFloatTimeDomainData(const Float32Array& aArray) {
++  const bool applyNoise = ShouldApplyAgentBrowserNoise();
+   aArray.ProcessData([&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(aData.Length(), size_t(FftSize()));
+ 
+     GetTimeDomainData(aData.Elements(), length);
++    if (applyNoise) {
++      for (size_t index = 0; index < length; ++index) {
++        aData[index] += agentbrowser::AudioNoiseForSample(
++            kAgentBrowserFloatTimeDomain, index);
++      }
++    }
+   });
+ }
+ 
+ void AnalyserNode::GetByteTimeDomainData(const Uint8Array& aArray) {
++  const bool applyNoise = ShouldApplyAgentBrowserNoise();
+   aArray.ProcessData([&](const Span<uint8_t>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(aData.Length(), size_t(FftSize()));
+ 
+@@ -273,7 +310,12 @@ void AnalyserNode::GetByteTimeDomainData(const Uint8Array& aArray) {
+       // scale the value to the range of [0, UCHAR_MAX]
+       const float scaled =
+           std::max(0.0f, std::min(float(UCHAR_MAX), 128.0f * (value + 1.0f)));
+-      buffer[i] = static_cast<unsigned char>(scaled);
++      int32_t byte = static_cast<unsigned char>(scaled);
++      if (applyNoise) {
++        byte += agentbrowser::AudioNoiseForByte(kAgentBrowserByteTimeDomain, i);
++      }
++      buffer[i] = static_cast<unsigned char>(
++          std::clamp(byte, 0, static_cast<int32_t>(UCHAR_MAX)));
+     }
+   });
+ }
+diff --git a/dom/media/webaudio/AnalyserNode.h b/dom/media/webaudio/AnalyserNode.h
+index 93aef9b..d54e7a0 100644
+--- a/dom/media/webaudio/AnalyserNode.h
++++ b/dom/media/webaudio/AnalyserNode.h
+@@ -60,6 +60,7 @@ class AnalyserNode final : public AudioNode {
+   void AppendChunk(const AudioChunk& aChunk);
+   bool AllocateBuffer();
+   bool FFTAnalysis();
++  bool ShouldApplyAgentBrowserNoise() const;
+   void ApplyBlackmanWindow(float* aBuffer, uint32_t aSize);
+   void GetTimeDomainData(float* aData, size_t aLength);
+ 
+diff --git a/dom/media/webaudio/AudioBuffer.cpp b/dom/media/webaudio/AudioBuffer.cpp
+index 74fe4e6..dd9b05e 100644
+--- a/dom/media/webaudio/AudioBuffer.cpp
++++ b/dom/media/webaudio/AudioBuffer.cpp
+@@ -12,6 +12,7 @@
+ #include "js/ArrayBuffer.h"             // JS::StealArrayBufferContents
+ #include "js/experimental/TypedData.h"  // JS_NewFloat32Array, JS_GetFloat32ArrayData, JS_GetTypedArrayLength, JS_GetArrayBufferViewBuffer
+ #include "jsfriendapi.h"
++#include "mozilla/AgentBrowserFingerprint.h"
+ #include "mozilla/ErrorResult.h"
+ #include "mozilla/HoldDropJSObjects.h"
+ #include "mozilla/MemoryReporting.h"
+@@ -26,6 +27,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(AudioBuffer)
+ 
+ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(AudioBuffer)
+   NS_IMPL_CYCLE_COLLECTION_UNLINK(mJSChannels)
++  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAgentBrowserChannelViews)
+   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+   tmp->ClearJSChannels();
+ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+@@ -38,6 +40,10 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(AudioBuffer)
+   for (uint32_t i = 0; i < tmp->mJSChannels.Length(); ++i) {
+     NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mJSChannels[i])
+   }
++  for (uint32_t i = 0; i < tmp->mAgentBrowserChannelViews.Length(); ++i) {
++    NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(
++        mAgentBrowserChannelViews[i])
++  }
+ NS_IMPL_CYCLE_COLLECTION_TRACE_END
+ 
+ /**
+@@ -173,6 +179,7 @@ AudioBuffer::AudioBuffer(nsPIDOMWindowInner* aWindow,
+ 
+   mSharedChannels.mDuration = aLength;
+   mJSChannels.SetLength(aNumberOfChannels);
++  mAgentBrowserChannelViews.SetLength(aNumberOfChannels);
+   mozilla::HoldJSObjects(this);
+   AudioBufferMemoryTracker::RegisterAudioBuffer(this);
+ }
+@@ -199,7 +206,10 @@ already_AddRefed<AudioBuffer> AudioBuffer::Constructor(
+                 aOptions.mSampleRate, aRv);
+ }
+ 
+-void AudioBuffer::ClearJSChannels() { mJSChannels.Clear(); }
++void AudioBuffer::ClearJSChannels() {
++  mJSChannels.Clear();
++  mAgentBrowserChannelViews.Clear();
++}
+ 
+ void AudioBuffer::SetSharedChannels(
+     already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer) {
+@@ -270,6 +280,102 @@ static void CopyChannelDataToFloat(const AudioChunk& aChunk, uint32_t aChannel,
+   }
+ }
+ 
++constexpr uint64_t kAgentBrowserAudioBufferDomain = 0x617564696f627566ULL;
++
++static uint64_t AgentBrowserAudioBufferIndex(uint32_t aChannel,
++                                             uint32_t aSample) {
++  return (static_cast<uint64_t>(aChannel) << 32) | aSample;
++}
++
++bool AudioBuffer::ShouldApplyAgentBrowserNoise() const {
++  nsPIDOMWindowInner* window = GetParentObject();
++  return window &&
++         agentbrowser::ShouldApplyAudioNoise(window->AsGlobal());
++}
++
++bool AudioBuffer::EnsureAgentBrowserChannelView(JSContext* aJSContext,
++                                                uint32_t aChannel) {
++  if (mAgentBrowserChannelViews[aChannel]) {
++    return true;
++  }
++  nsPIDOMWindowInner* global = GetParentObject();
++  if (!global || !global->AsGlobal()->HasJSGlobal()) {
++    return false;
++  }
++  JSAutoRealm ar(aJSContext, global->AsGlobal()->GetGlobalJSObject());
++  JS::Rooted<JSObject*> view(aJSContext,
++                             JS_NewFloat32Array(aJSContext, Length()));
++  if (!view) {
++    return false;
++  }
++  JSObject* channelArray = mJSChannels[aChannel];
++  if (!channelArray || JS_GetTypedArrayLength(channelArray) != Length()) {
++    return false;
++  }
++  JS::AutoCheckCannotGC nogc;
++  bool channelShared = false;
++  bool viewShared = false;
++  const float* channelData =
++      JS_GetFloat32ArrayData(channelArray, &channelShared, nogc);
++  float* viewData = JS_GetFloat32ArrayData(view, &viewShared, nogc);
++  MOZ_ASSERT(!channelShared && !viewShared);
++  for (uint32_t index = 0; index < Length(); ++index) {
++    viewData[index] = channelData[index] + agentbrowser::AudioNoiseForSample(
++                                                kAgentBrowserAudioBufferDomain,
++                                                AgentBrowserAudioBufferIndex(
++                                                    aChannel, index));
++  }
++  mAgentBrowserChannelViews[aChannel] = view;
++  return true;
++}
++
++bool AudioBuffer::MergeAndDetachAgentBrowserChannelViews(
++    JSContext* aJSContext) {
++  for (uint32_t channel = 0; channel < mAgentBrowserChannelViews.Length();
++       ++channel) {
++    JS::Rooted<JSObject*> view(aJSContext,
++                               mAgentBrowserChannelViews[channel]);
++    if (!view) {
++      continue;
++    }
++    JSObject* channelArray = mJSChannels[channel];
++    if (!channelArray || JS_GetTypedArrayLength(view) != Length() ||
++        JS_GetTypedArrayLength(channelArray) != Length()) {
++      return false;
++    }
++    {
++      JS::AutoCheckCannotGC nogc;
++      bool channelShared = false;
++      bool viewShared = false;
++      float* channelData =
++          JS_GetFloat32ArrayData(channelArray, &channelShared, nogc);
++      const float* viewData =
++          JS_GetFloat32ArrayData(view, &viewShared, nogc);
++      MOZ_ASSERT(!channelShared && !viewShared);
++      for (uint32_t index = 0; index < Length(); ++index) {
++        const float expected =
++            channelData[index] + agentbrowser::AudioNoiseForSample(
++                                     kAgentBrowserAudioBufferDomain,
++                                     AgentBrowserAudioBufferIndex(channel, index));
++        if (viewData[index] != expected) {
++          // Only page-authored changes cross into the real backing channel.
++          channelData[index] = viewData[index];
++        }
++      }
++    }
++    bool isSharedMemory = false;
++    JS::Rooted<JSObject*> arrayBuffer(
++        aJSContext,
++        JS_GetArrayBufferViewBuffer(aJSContext, view, &isSharedMemory));
++    MOZ_ASSERT(!isSharedMemory);
++    if (!arrayBuffer || !JS::DetachArrayBuffer(aJSContext, arrayBuffer)) {
++      return false;
++    }
++    mAgentBrowserChannelViews[channel] = nullptr;
++  }
++  return true;
++}
++
+ bool AudioBuffer::RestoreJSChannelData(JSContext* aJSContext) {
+   nsPIDOMWindowInner* global = GetParentObject();
+   if (!global || !global->AsGlobal()->HasJSGlobal()) {
+@@ -326,23 +432,37 @@ void AudioBuffer::CopyFromChannel(const Float32Array& aDestination,
+   auto calculateCount = [=](uint32_t aLength) -> uint32_t {
+     return std::min(length - aBufferOffset, aLength);
+   };
++  const bool applyNoise = ShouldApplyAgentBrowserNoise();
++  JSObject* channelView =
++      applyNoise ? mAgentBrowserChannelViews[aChannelNumber].get() : nullptr;
++  JSObject* channelArray = channelView ? channelView : mJSChannels[aChannelNumber];
++  const bool sourceAlreadyNoised = channelView != nullptr;
++  auto applyReadbackNoise = [&](const Span<float>& aData, uint32_t aCount) {
++    if (!applyNoise || sourceAlreadyNoised) {
++      return;
++    }
++    for (uint32_t index = 0; index < aCount; ++index) {
++      aData[index] += agentbrowser::AudioNoiseForSample(
++          kAgentBrowserAudioBufferDomain,
++          AgentBrowserAudioBufferIndex(aChannelNumber,
++                                       aBufferOffset + index));
++    }
++  };
+ 
+-  JSObject* channelArray = mJSChannels[aChannelNumber];
+   if (channelArray) {
+     if (JS_GetTypedArrayLength(channelArray) != length) {
+-      // The array's buffer was detached.
++      // The page-visible array's buffer was detached.
+       return;
+     }
+     bool isShared = false;
+     const float* sourceData =
+         JS_GetFloat32ArrayData(channelArray, &isShared, nogc);
+-    // The sourceData arrays should all have originated in
+-    // RestoreJSChannelData, where they are created unshared.
+     MOZ_ASSERT(!isShared);
+     aDestination.ProcessData(
+         [&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+-          PodMove(aData.Elements(), sourceData + aBufferOffset,
+-                  calculateCount(aData.Length()));
++          const uint32_t count = calculateCount(aData.Length());
++          PodMove(aData.Elements(), sourceData + aBufferOffset, count);
++          applyReadbackNoise(aData, count);
+         });
+     return;
+   }
+@@ -350,15 +470,19 @@ void AudioBuffer::CopyFromChannel(const Float32Array& aDestination,
+   if (!mSharedChannels.IsNull()) {
+     aDestination.ProcessData([&](const Span<float>& aData,
+                                  JS::AutoCheckCannotGC&&) {
++      const uint32_t count = calculateCount(aData.Length());
+       CopyChannelDataToFloat(mSharedChannels, aChannelNumber, aBufferOffset,
+-                             aData.Elements(), calculateCount(aData.Length()));
++                             aData.Elements(), count);
++      applyReadbackNoise(aData, count);
+     });
+     return;
+   }
+ 
+   aDestination.ProcessData(
+       [&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+-        PodZero(aData.Elements(), calculateCount(aData.Length()));
++        const uint32_t count = calculateCount(aData.Length());
++        PodZero(aData.Elements(), count);
++        applyReadbackNoise(aData, count);
+       });
+ }
+ 
+@@ -379,6 +503,10 @@ void AudioBuffer::CopyToChannel(JSContext* aJSContext,
+ 
+   JS::AutoCheckCannotGC nogc;
+   JSObject* channelArray = mJSChannels[aChannelNumber];
++  JSObject* channelView = mAgentBrowserChannelViews[aChannelNumber];
++  if (channelView && JS_GetTypedArrayLength(channelView) != Length()) {
++    return;
++  }
+   // This may differ from Length() if the buffer has been detached.
+   uint32_t length = JS_GetTypedArrayLength(channelArray);
+   if (aBufferOffset >= length) {
+@@ -398,6 +526,20 @@ void AudioBuffer::CopyToChannel(JSContext* aJSContext,
+     // RestoreJSChannelData, where they are created unshared.
+     MOZ_ASSERT(!isShared);
+     PodMove(channelData + aBufferOffset, aData.Elements(), count);
++    if (channelView) {
++      bool viewShared = false;
++      float* viewData = JS_GetFloat32ArrayData(channelView, &viewShared, nogc);
++      MOZ_ASSERT(!viewShared);
++      for (size_t index = 0; index < count; ++index) {
++        const uint32_t sample =
++            aBufferOffset + static_cast<uint32_t>(index);
++        viewData[sample] =
++            aData[index] + agentbrowser::AudioNoiseForSample(
++                               kAgentBrowserAudioBufferDomain,
++                               AgentBrowserAudioBufferIndex(aChannelNumber,
++                                                            sample));
++      }
++    }
+   });
+ }
+ 
+@@ -415,6 +557,14 @@ void AudioBuffer::GetChannelData(JSContext* aJSContext, uint32_t aChannel,
+     return;
+   }
+ 
++  if (ShouldApplyAgentBrowserNoise()) {
++    if (!EnsureAgentBrowserChannelView(aJSContext, aChannel)) {
++      aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
++      return;
++    }
++    aRetval.set(mAgentBrowserChannelViews[aChannel]);
++    return;
++  }
+   aRetval.set(mJSChannels[aChannel]);
+ }
+ 
+@@ -427,6 +577,10 @@ AudioBuffer::StealJSArrayDataIntoSharedChannels(JSContext* aJSContext) {
+ 
+   JSAutoRealm ar(aJSContext, global->AsGlobal()->GetGlobalJSObject());
+ 
++  if (!MergeAndDetachAgentBrowserChannelViews(aJSContext)) {
++    return nullptr;
++  }
++
+   // "1. If any of the AudioBuffer's ArrayBuffer have been detached, abort
+   // these steps, and return a zero-length channel data buffers to the
+   // invoker."
+@@ -490,6 +644,8 @@ const AudioChunk& AudioBuffer::GetThreadSharedChannelsForRate(
+ size_t AudioBuffer::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
+   size_t amount = aMallocSizeOf(this);
+   amount += mJSChannels.ShallowSizeOfExcludingThis(aMallocSizeOf);
++  amount +=
++      mAgentBrowserChannelViews.ShallowSizeOfExcludingThis(aMallocSizeOf);
+   amount += mSharedChannels.SizeOfExcludingThis(aMallocSizeOf, false);
+   return amount;
+ }
+diff --git a/dom/media/webaudio/AudioBuffer.h b/dom/media/webaudio/AudioBuffer.h
+index ad03139..5e84566 100644
+--- a/dom/media/webaudio/AudioBuffer.h
++++ b/dom/media/webaudio/AudioBuffer.h
+@@ -111,14 +111,20 @@ class AudioBuffer final : public nsWrapperCache {
+       already_AddRefed<ThreadSharedFloatArrayBufferList> aBuffer);
+ 
+   bool RestoreJSChannelData(JSContext* aJSContext);
++  bool ShouldApplyAgentBrowserNoise() const;
++  bool EnsureAgentBrowserChannelView(JSContext* aJSContext, uint32_t aChannel);
++  bool MergeAndDetachAgentBrowserChannelViews(JSContext* aJSContext);
+ 
+   already_AddRefed<ThreadSharedFloatArrayBufferList>
+   StealJSArrayDataIntoSharedChannels(JSContext* aJSContext);
+ 
+   void ClearJSChannels();
+ 
+-  // Float32Arrays
++  // Float32Arrays backing the real AudioBuffer.
+   AutoTArray<JS::Heap<JSObject*>, 2> mJSChannels;
++  // Managed readback views. Noise lives only in these page-visible arrays; the
++  // backing channels remain clean unless the page explicitly writes a value.
++  AutoTArray<JS::Heap<JSObject*>, 2> mAgentBrowserChannelViews;
+   // mSharedChannels aggregates the data from mJSChannels. This is non-null
+   // if and only if the mJSChannels' buffers are detached, but its mDuration
+   // member keeps the buffer length regardless of whether the buffer is
+diff --git a/toolkit/xre/AgentBrowserFingerprint.cpp b/toolkit/xre/AgentBrowserFingerprint.cpp
+index 6faeb46..8b3f9d5 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.cpp
++++ b/toolkit/xre/AgentBrowserFingerprint.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include "mozilla/AgentBrowserFingerprint.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <stdio.h>
+ 
+@@ -11,10 +12,14 @@
+ #include "js/PropertyAndElement.h"
+ #include "mozilla/Atomics.h"
+ #include "mozilla/Base64.h"
++#include "mozilla/BasePrincipal.h"
+ #include "mozilla/CmdLineAndEnvUtils.h"
+ #include "mozilla/Preferences.h"
+ #include "mozilla/StaticPtr.h"
+ #include "mozilla/dom/ScriptSettings.h"
++#include "nsContentUtils.h"
++#include "nsIGlobalObject.h"
++#include "nsIPrincipal.h"
+ #include "nsJSUtils.h"
+ #include "nsTArray.h"
+ #include "prenv.h"
+@@ -31,13 +36,14 @@ constexpr uint32_t kMaxEncodedConfigLength = 87382;
+ struct Snapshot final {
+   Snapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+            NavigatorOverrideConfig&& aNavigator, ScreenOverrideConfig&& aScreen,
+-           CanvasOverrideConfig&& aCanvas, WebGLOverrideConfig&& aWebGL,
+-           WebGPUOverrideConfig&& aWebGPU)
++           CanvasOverrideConfig&& aCanvas, AudioOverrideConfig&& aAudio,
++           WebGLOverrideConfig&& aWebGL, WebGPUOverrideConfig&& aWebGPU)
+       : mEncoded(std::move(aEncoded)),
+         mDecoded(std::move(aDecoded)),
+         mNavigator(std::move(aNavigator)),
+         mScreen(std::move(aScreen)),
+         mCanvas(std::move(aCanvas)),
++        mAudio(std::move(aAudio)),
+         mWebGL(std::move(aWebGL)),
+         mWebGPU(std::move(aWebGPU)) {}
+ 
+@@ -46,6 +52,7 @@ struct Snapshot final {
+   const NavigatorOverrideConfig mNavigator;
+   const ScreenOverrideConfig mScreen;
+   const CanvasOverrideConfig mCanvas;
++  const AudioOverrideConfig mAudio;
+   const WebGLOverrideConfig mWebGL;
+   const WebGPUOverrideConfig mWebGPU;
+ };
+@@ -200,6 +207,7 @@ nsresult ParseConfig(const nsACString& aDecoded,
+                      NavigatorOverrideConfig& aNavigator,
+                      ScreenOverrideConfig& aScreen,
+                      CanvasOverrideConfig& aCanvas,
++                     AudioOverrideConfig& aAudio,
+                      WebGLOverrideConfig& aWebGL,
+                      WebGPUOverrideConfig& aWebGPU, nsACString& aError) {
+   dom::AutoJSAPI jsapi;
+@@ -390,6 +398,23 @@ nsresult ParseConfig(const nsACString& aDecoded,
+     return NS_ERROR_INVALID_ARG;
+   }
+ 
++  JS::Rooted<JS::Value> audioValue(cx);
++  if (!GetRequiredProperty(cx, object, "audio", &audioValue, aError) ||
++      !audioValue.isObject()) {
++    SetInvalidField(aError, "audio");
++    return NS_ERROR_INVALID_ARG;
++  }
++  JS::Rooted<JSObject*> audio(cx, &audioValue.toObject());
++  nsAutoString audioSeed;
++  if (!GetRequiredBoolean(cx, audio, "enabled", aAudio.mEnabled, aError) ||
++      !GetRequiredString(cx, audio, "seed", audioSeed, aError) ||
++      !GetRequiredDouble(cx, audio, "amplitude", 1.0e-12, 1.0e-3,
++                         aAudio.mAmplitude, aError) ||
++      !DeriveCanvasKey(audioSeed, aAudio.mKey)) {
++    SetInvalidField(aError, "audio");
++    return NS_ERROR_INVALID_ARG;
++  }
++
+   JS::Rooted<JS::Value> webglValue(cx);
+   if (!GetRequiredProperty(cx, object, "webgl", &webglValue, aError) ||
+       !webglValue.isObject()) {
+@@ -444,6 +469,7 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+                          NavigatorOverrideConfig&& aNavigator,
+                          ScreenOverrideConfig&& aScreen,
+                          CanvasOverrideConfig&& aCanvas,
++                         AudioOverrideConfig&& aAudio,
+                          WebGLOverrideConfig&& aWebGL,
+                          WebGPUOverrideConfig&& aWebGPU, nsACString& aError) {
+   if (sSnapshot) {
+@@ -456,8 +482,8 @@ nsresult InstallSnapshot(nsCString&& aEncoded, nsCString&& aDecoded,
+ 
+   sSnapshot = new Snapshot(std::move(aEncoded), std::move(aDecoded),
+                            std::move(aNavigator), std::move(aScreen),
+-                           std::move(aCanvas), std::move(aWebGL),
+-                           std::move(aWebGPU));
++                           std::move(aCanvas), std::move(aAudio),
++                           std::move(aWebGL), std::move(aWebGPU));
+   sPublishedSnapshot = sSnapshot.get();
+   return NS_OK;
+ }
+@@ -472,16 +498,18 @@ nsresult DecodeParseAndInstall(nsCString&& aEncoded, nsACString& aError) {
+   NavigatorOverrideConfig navigator;
+   ScreenOverrideConfig screen;
+   CanvasOverrideConfig canvas;
++  AudioOverrideConfig audio;
+   WebGLOverrideConfig webgl;
+   WebGPUOverrideConfig webgpu;
+-  rv = ParseConfig(decoded, navigator, screen, canvas, webgl, webgpu, aError);
++  rv = ParseConfig(decoded, navigator, screen, canvas, audio, webgl, webgpu,
++                   aError);
+   if (NS_FAILED(rv)) {
+     return rv;
+   }
+   return InstallSnapshot(std::move(aEncoded), std::move(decoded),
+                          std::move(navigator), std::move(screen),
+-                         std::move(canvas), std::move(webgl), std::move(webgpu),
+-                         aError);
++                         std::move(canvas), std::move(audio), std::move(webgl),
++                         std::move(webgpu), aError);
+ }
+ 
+ }  // namespace
+@@ -495,7 +523,7 @@ void DumpCapabilities(const char* aBuildID) {
+       "\"sourceStamp\":\"%s\","
+       "\"capabilities\":[\"config-v1\",\"native-required-v1\","
+       "\"snapshot-v1\",\"navigator-v1\",\"screen-v1\","
+-      "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\"]}\n",
++      "\"canvas-v1\",\"webgl-v1\",\"webgpu-v1\",\"audio-v1\"]}\n",
+       MOZ_APP_VERSION, aBuildID ? aBuildID : "", kSourceStamp);
+   fflush(stdout);
+ }
+@@ -570,6 +598,11 @@ const CanvasOverrideConfig* GetCanvasOverrides() {
+   return snapshot ? &snapshot->mCanvas : nullptr;
+ }
+ 
++const AudioOverrideConfig* GetAudioOverrides() {
++  Snapshot* snapshot = sPublishedSnapshot;
++  return snapshot ? &snapshot->mAudio : nullptr;
++}
++
+ const WebGLOverrideConfig* GetWebGLOverrides() {
+   Snapshot* snapshot = sPublishedSnapshot;
+   return snapshot ? &snapshot->mWebGL : nullptr;
+@@ -585,4 +618,62 @@ bool IsCanvasNoiseEnabled() {
+   return config && config->mEnabled;
+ }
+ 
++bool ShouldApplyAudioNoise(nsIGlobalObject* aGlobal) {
++  const AudioOverrideConfig* config = GetAudioOverrides();
++  if (!config || !config->mEnabled || !aGlobal) {
++    return false;
++  }
++  const auto isUnrestricted = [](nsIPrincipal* aPrincipal) {
++    return !aPrincipal || aPrincipal->IsSystemPrincipal() ||
++           aPrincipal->SchemeIs("chrome") ||
++           aPrincipal->SchemeIs("resource") ||
++           aPrincipal->GetIsAddonOrExpandedAddonPrincipal();
++  };
++  nsIPrincipal* owner = aGlobal->PrincipalOrNull();
++  nsIPrincipal* caller =
++      nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller();
++  return !isUnrestricted(owner) && !isUnrestricted(caller);
++}
++
++static uint64_t AudioNoiseState(const AudioOverrideConfig& aConfig,
++                                uint64_t aDomain, uint64_t aIndex) {
++  uint64_t state = 1469598103934665603ULL;
++  for (uint8_t byte : aConfig.mKey) {
++    state ^= byte;
++    state *= 1099511628211ULL;
++  }
++  state ^= MixSeed(aDomain + 0x9e3779b97f4a7c15ULL);
++  return MixSeed(state + aIndex * 0x9e3779b97f4a7c15ULL);
++}
++
++float AudioNoiseForSample(uint64_t aDomain, uint64_t aIndex, double aScale) {
++  const AudioOverrideConfig* config = GetAudioOverrides();
++  if (!config || !config->mEnabled || !std::isfinite(aScale) || aScale <= 0.0) {
++    return 0.0f;
++  }
++  const uint64_t state = AudioNoiseState(*config, aDomain, aIndex);
++  constexpr double kTwoToMinus53 = 1.0 / 9007199254740992.0;
++  const double unit = static_cast<double>(state >> 11) * kTwoToMinus53;
++  return static_cast<float>((unit * 2.0 - 1.0) * config->mAmplitude * aScale);
++}
++
++int8_t AudioNoiseForByte(uint64_t aDomain, uint64_t aIndex) {
++  const AudioOverrideConfig* config = GetAudioOverrides();
++  if (!config || !config->mEnabled) {
++    return 0;
++  }
++  const uint64_t state = AudioNoiseState(*config, aDomain, aIndex);
++  // Byte readbacks cannot represent sub-LSB amplitude. Preserve the configured
++  // amplitude by scaling the density of deterministic one-LSB changes around
++  // the product default (1e-7), rather than ignoring it.
++  const double density = std::min(1.0, config->mAmplitude / 2.0e-7);
++  constexpr uint64_t kDensityBuckets = 1000000;
++  const uint64_t threshold =
++      static_cast<uint64_t>(density * kDensityBuckets);
++  if (state % kDensityBuckets >= threshold) {
++    return 0;
++  }
++  return (state & (1ULL << 32)) ? 1 : -1;
++}
++
+ }  // namespace mozilla::agentbrowser
+diff --git a/toolkit/xre/AgentBrowserFingerprint.h b/toolkit/xre/AgentBrowserFingerprint.h
+index 396b5c7..b8ed15b 100644
+--- a/toolkit/xre/AgentBrowserFingerprint.h
++++ b/toolkit/xre/AgentBrowserFingerprint.h
+@@ -11,6 +11,8 @@
+ #include "nsError.h"
+ #include "nsString.h"
+ 
++class nsIGlobalObject;
++
+ namespace mozilla::agentbrowser {
+ 
+ inline constexpr const char kConfigPref[] = "agent.browser.fingerprint.config";
+@@ -50,6 +52,12 @@ struct CanvasOverrideConfig final {
+   std::array<uint8_t, 32> mKey{};
+ };
+ 
++struct AudioOverrideConfig final {
++  bool mEnabled = false;
++  std::array<uint8_t, 32> mKey{};
++  double mAmplitude = 0.0;
++};
++
+ struct WebGLOverrideConfig final {
+   nsString mVendor;
+   nsString mRenderer;
+@@ -73,9 +81,14 @@ const nsCString& DecodedConfig();
+ const NavigatorOverrideConfig* GetNavigatorOverrides();
+ const ScreenOverrideConfig* GetScreenOverrides();
+ const CanvasOverrideConfig* GetCanvasOverrides();
++const AudioOverrideConfig* GetAudioOverrides();
+ const WebGLOverrideConfig* GetWebGLOverrides();
+ const WebGPUOverrideConfig* GetWebGPUOverrides();
+ bool IsCanvasNoiseEnabled();
++bool ShouldApplyAudioNoise(nsIGlobalObject* aGlobal);
++float AudioNoiseForSample(uint64_t aDomain, uint64_t aIndex,
++                          double aScale = 1.0);
++int8_t AudioNoiseForByte(uint64_t aDomain, uint64_t aIndex);
+ 
+ }  // namespace mozilla::agentbrowser
+ 

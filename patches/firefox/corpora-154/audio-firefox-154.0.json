@@ -1,0 +1,486 @@
+{
+  "schemaVersion": 1,
+  "browser": {
+    "engine": "firefox",
+    "version": "154.0",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "versionOutput": "Mozilla Firefox 154.0",
+    "platform": "macos-arm64",
+    "branding": "unofficial"
+  },
+  "capture": {
+    "mode": "webdriver-bidi-headless-native-audio",
+    "fingerprintConfig": {
+      "schemaVersion": 1,
+      "seed": 154102,
+      "platform": "Win32",
+      "platformVersion": "10.0.0",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:154.0) Gecko/20100101 Firefox/154.0",
+      "appVersion": "5.0 (Windows)",
+      "vendor": "",
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "hardwareConcurrency": 12,
+      "deviceMemory": 16,
+      "maxTouchPoints": 0,
+      "hardwareProfile": {
+        "id": "win-nvidia-rtx3060-12c-16gb-1080p",
+        "source": "seeded",
+        "fontProfile": "windows-portable",
+        "audioProfile": "chromium-desktop"
+      },
+      "screen": {
+        "width": 1920,
+        "height": 1080,
+        "availLeft": 0,
+        "availTop": 0,
+        "availWidth": 1920,
+        "availHeight": 1032,
+        "colorDepth": 24,
+        "pixelDepth": 24,
+        "devicePixelRatio": 1,
+        "windowX": 32,
+        "windowY": 32,
+        "outerWidth": 1280,
+        "outerHeight": 800,
+        "mobile": false
+      },
+      "storageQuotaBytes": 125829120000,
+      "canvas": {
+        "enabled": true,
+        "seed": "dbc492d80345a599"
+      },
+      "audio": {
+        "enabled": true,
+        "seed": "0d1bf59990f22075",
+        "amplitude": 1e-7
+      },
+      "webgl": {
+        "vendor": "Google Inc. (NVIDIA)",
+        "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"
+      },
+      "webgpu": {
+        "mode": "webgl",
+        "vendor": "NVIDIA",
+        "architecture": "Ampere",
+        "device": "NVIDIA GeForce RTX 3060",
+        "description": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+        "subgroupMinSize": 32,
+        "subgroupMaxSize": 32
+      },
+      "webauthn": {
+        "enabled": true,
+        "conditionalGet": true,
+        "conditionalCreate": true,
+        "hybridTransport": true,
+        "passkeyPlatformAuthenticator": true,
+        "userVerifyingPlatformAuthenticator": true
+      },
+      "speechSynthesis": {
+        "enabled": true,
+        "voices": [
+          {
+            "name": "Microsoft David - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Mark - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          },
+          {
+            "name": "Microsoft Zira - English (United States)",
+            "lang": "en-US",
+            "localService": true
+          }
+        ]
+      },
+      "webrtc": {
+        "mode": "real",
+        "publicIp": null
+      },
+      "timezone": "America/New_York",
+      "geolocation": {
+        "mode": "real",
+        "latitude": null,
+        "longitude": null,
+        "accuracy": null
+      },
+      "mediaDevices": {
+        "enabled": true,
+        "audioInputs": 1,
+        "videoInputs": 1,
+        "audioOutputs": 1
+      },
+      "secureDns": {
+        "enabled": false,
+        "templates": []
+      },
+      "fonts": [
+        "Arial",
+        "Arial Unicode MS",
+        "Comic Sans MS",
+        "Courier New",
+        "Georgia",
+        "Impact",
+        "Tahoma",
+        "Times New Roman",
+        "Trebuchet MS",
+        "Verdana"
+      ],
+      "doNotTrack": "1",
+      "pluginProfile": {
+        "pdfViewerEnabled": true,
+        "plugins": [
+          {
+            "name": "Internal PDF Plugin",
+            "filename": "pdfium.dll",
+            "description": "Portable Document Format",
+            "mimeTypes": [
+              {
+                "type": "application/pdf",
+                "suffixes": "pdf"
+              }
+            ]
+          },
+          {
+            "name": "Widevine Content Decryption Module",
+            "filename": "widevinecdm.dll",
+            "description": "Enables Widevine decryption for HTML audio/video content.",
+            "mimeTypes": []
+          }
+        ],
+        "mimeTypes": [
+          {
+            "type": "application/pdf",
+            "suffixes": "pdf"
+          }
+        ]
+      }
+    },
+    "comparisonSeed": "0000000000000000",
+    "preloadScript": false,
+    "nativeRequired": true
+  },
+  "capabilities": {
+    "product": "agent-browser-firefox",
+    "capabilitySchemaVersion": 1,
+    "browserVersion": "154.0",
+    "buildId": "20260902091224",
+    "sourceStamp": "9ce1ee6baeb9a3c326dbd180bdece65d8fc2eadc",
+    "capabilities": [
+      "config-v1",
+      "native-required-v1",
+      "snapshot-v1",
+      "navigator-v1",
+      "screen-v1",
+      "canvas-v1",
+      "webgl-v1",
+      "webgpu-v1",
+      "audio-v1",
+      "geolocation-v1",
+      "storage-quota-v1",
+      "media-devices-v1",
+      "speech-voices-v1"
+    ]
+  },
+  "hashes": {
+    "managed": {
+      "window": {
+        "bufferView": "1ab7fbf3",
+        "bufferRendered": "1ab7fbf3",
+        "analyserRendered": "b908e492",
+        "floatFrequency": "e3ee5f63",
+        "byteFrequency": "8981e043",
+        "floatTime": "6745bc37",
+        "byteTime": "35b4755a"
+      },
+      "iframe": {
+        "bufferView": "1ab7fbf3",
+        "bufferRendered": "1ab7fbf3",
+        "analyserRendered": "b908e492",
+        "floatFrequency": "e3ee5f63",
+        "byteFrequency": "8981e043",
+        "floatTime": "6745bc37",
+        "byteTime": "35b4755a"
+      }
+    },
+    "differentSeed": {
+      "window": {
+        "bufferView": "fa7e3411",
+        "bufferRendered": "fa7e3411",
+        "analyserRendered": "6096fe2c",
+        "floatFrequency": "6e4e7a45",
+        "byteFrequency": "eff6c48b",
+        "floatTime": "3d0d19c6",
+        "byteTime": "624e52b9"
+      },
+      "iframe": {
+        "bufferView": "fa7e3411",
+        "bufferRendered": "fa7e3411",
+        "analyserRendered": "6096fe2c",
+        "floatFrequency": "6e4e7a45",
+        "byteFrequency": "eff6c48b",
+        "floatTime": "3d0d19c6",
+        "byteTime": "624e52b9"
+      }
+    },
+    "stock": {
+      "window": {
+        "bufferView": "3a2e1cb0",
+        "bufferRendered": "3a2e1cb0",
+        "analyserRendered": "cd2572e4",
+        "floatFrequency": "8d22d7fa",
+        "byteFrequency": "7adc5dc4",
+        "floatTime": "8728e86c",
+        "byteTime": "d2e5157e"
+      },
+      "iframe": {
+        "bufferView": "3a2e1cb0",
+        "bufferRendered": "3a2e1cb0",
+        "analyserRendered": "cd2572e4",
+        "floatFrequency": "8d22d7fa",
+        "byteFrequency": "7adc5dc4",
+        "floatTime": "8728e86c",
+        "byteTime": "d2e5157e"
+      }
+    }
+  },
+  "surfaces": {
+    "window": {
+      "buffer": {
+        "originalHash": "3a2e1cb0",
+        "viewHash": "1ab7fbf3",
+        "copyHash": "1ab7fbf3",
+        "renderedHash": "1ab7fbf3",
+        "sameViewObject": true,
+        "repeatedStable": true,
+        "renderedMatchesSource": true,
+        "detachedAfterGraphAcquire": true,
+        "changedSamples": 442,
+        "maxDelta": 1.1920928955078125e-7,
+        "pageWriteVisibleToCopy": true,
+        "pageWritePreservedByGraph": true,
+        "copyToUpdatesLiveView": true,
+        "copyToMatchesCopyFrom": true,
+        "nativeMethods": {
+          "getChannelData": {
+            "source": "function getChannelData() {\n    [native code]\n}",
+            "name": "getChannelData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "copyFromChannel": {
+            "source": "function copyFromChannel() {\n    [native code]\n}",
+            "name": "copyFromChannel",
+            "length": 2,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "copyToChannel": {
+            "source": "function copyToChannel() {\n    [native code]\n}",
+            "name": "copyToChannel",
+            "length": 2,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "startRendering": {
+            "source": "function startRendering() {\n    [native code]\n}",
+            "name": "startRendering",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "OfflineAudioContext"
+          }
+        }
+      },
+      "analyser": {
+        "renderedHash": "b908e492",
+        "floatFrequencyHash": "e3ee5f63",
+        "byteFrequencyHash": "8981e043",
+        "floatTimeHash": "6745bc37",
+        "byteTimeHash": "35b4755a",
+        "stable": {
+          "floatFrequency": true,
+          "byteFrequency": true,
+          "floatTime": true,
+          "byteTime": true
+        },
+        "nativeMethods": {
+          "getFloatFrequencyData": {
+            "source": "function getFloatFrequencyData() {\n    [native code]\n}",
+            "name": "getFloatFrequencyData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getByteFrequencyData": {
+            "source": "function getByteFrequencyData() {\n    [native code]\n}",
+            "name": "getByteFrequencyData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getFloatTimeDomainData": {
+            "source": "function getFloatTimeDomainData() {\n    [native code]\n}",
+            "name": "getFloatTimeDomainData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getByteTimeDomainData": {
+            "source": "function getByteTimeDomainData() {\n    [native code]\n}",
+            "name": "getByteTimeDomainData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          }
+        }
+      }
+    },
+    "iframe": {
+      "buffer": {
+        "originalHash": "3a2e1cb0",
+        "viewHash": "1ab7fbf3",
+        "copyHash": "1ab7fbf3",
+        "renderedHash": "1ab7fbf3",
+        "sameViewObject": true,
+        "repeatedStable": true,
+        "renderedMatchesSource": true,
+        "detachedAfterGraphAcquire": true,
+        "changedSamples": 442,
+        "maxDelta": 1.1920928955078125e-7,
+        "pageWriteVisibleToCopy": true,
+        "pageWritePreservedByGraph": true,
+        "copyToUpdatesLiveView": true,
+        "copyToMatchesCopyFrom": true,
+        "nativeMethods": {
+          "getChannelData": {
+            "source": "function getChannelData() {\n    [native code]\n}",
+            "name": "getChannelData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "copyFromChannel": {
+            "source": "function copyFromChannel() {\n    [native code]\n}",
+            "name": "copyFromChannel",
+            "length": 2,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "copyToChannel": {
+            "source": "function copyToChannel() {\n    [native code]\n}",
+            "name": "copyToChannel",
+            "length": 2,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AudioBuffer"
+          },
+          "startRendering": {
+            "source": "function startRendering() {\n    [native code]\n}",
+            "name": "startRendering",
+            "length": 0,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "OfflineAudioContext"
+          }
+        }
+      },
+      "analyser": {
+        "renderedHash": "b908e492",
+        "floatFrequencyHash": "e3ee5f63",
+        "byteFrequencyHash": "8981e043",
+        "floatTimeHash": "6745bc37",
+        "byteTimeHash": "35b4755a",
+        "stable": {
+          "floatFrequency": true,
+          "byteFrequency": true,
+          "floatTime": true,
+          "byteTime": true
+        },
+        "nativeMethods": {
+          "getFloatFrequencyData": {
+            "source": "function getFloatFrequencyData() {\n    [native code]\n}",
+            "name": "getFloatFrequencyData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getByteFrequencyData": {
+            "source": "function getByteFrequencyData() {\n    [native code]\n}",
+            "name": "getByteFrequencyData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getFloatTimeDomainData": {
+            "source": "function getFloatTimeDomainData() {\n    [native code]\n}",
+            "name": "getFloatTimeDomainData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          },
+          "getByteTimeDomainData": {
+            "source": "function getByteTimeDomainData() {\n    [native code]\n}",
+            "name": "getByteTimeDomainData",
+            "length": 1,
+            "writable": true,
+            "enumerable": true,
+            "configurable": true,
+            "owner": "AnalyserNode"
+          }
+        }
+      }
+    },
+    "dedicatedWorker": {
+      "supported": true,
+      "value": {
+        "audioContext": "undefined",
+        "offlineAudioContext": "undefined",
+        "audioBuffer": "undefined",
+        "analyserNode": "undefined"
+      }
+    },
+    "sharedWorker": {
+      "supported": true,
+      "value": {
+        "audioContext": "undefined",
+        "offlineAudioContext": "undefined",
+        "audioBuffer": "undefined",
+        "analyserNode": "undefined"
+      }
+    }
+  }
+}
