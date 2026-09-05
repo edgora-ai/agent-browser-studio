@@ -58,31 +58,31 @@ jobs:
       - name: Clone + sync pinned Chromium source
         run: |
           for i in 1 2 3; do
-            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if [ -d chromium/src/.git ]; then rm -rf chromium; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "chromium-src-152", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > .gclient && cd chromium-src-152 && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
+            if mkdir -p chromium/src && git -C chromium/src init -q && git -C chromium/src fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium/src checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > chromium/.gclient && cd chromium/src && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
-            rm -rf chromium-src-152
+            rm -rf chromium
             sleep 30
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
       - name: Install Linux build deps
         run: |
-          cd chromium-src-152
+          cd chromium/src
           sudo bash ./build/install-build-deps.sh --no-nacl --no-prompt
       - name: Build independent engine
-        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-152" x64
+        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium/src" x64
       - name: npm ci + build
         run: |
           npm ci
           npm run build
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome"
       - name: E2E suite (xvfb)
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome
         run: xvfb-run -a npm run test:e2e
       - name: Package AppImage + checksums
         run: |
@@ -122,31 +122,31 @@ jobs:
       - name: Clone + sync pinned Chromium source
         run: |
           for i in 1 2 3; do
-            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if [ -d chromium/src/.git ]; then rm -rf chromium; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "chromium-src-152", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > .gclient && cd chromium-src-152 && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
+            if mkdir -p chromium/src && git -C chromium/src init -q && git -C chromium/src fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium/src checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > chromium/.gclient && cd chromium/src && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
-            rm -rf chromium-src-152
+            rm -rf chromium
             sleep 30
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
       - name: Install Linux build deps
         run: |
-          cd chromium-src-152
+          cd chromium/src
           sudo bash ./build/install-build-deps.sh --no-nacl --no-prompt
       - name: Build independent engine
-        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-152" arm64
+        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium/src" arm64
       - name: npm ci + build
         run: |
           npm ci
           npm run build
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome"
       - name: E2E suite (xvfb)
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome
         run: xvfb-run -a npm run test:e2e
       - name: Package AppImage + checksums
         run: |
@@ -194,18 +194,18 @@ jobs:
       - name: Clone + sync pinned Chromium source
         run: |
           for i in 1 2 3; do
-            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if [ -d chromium/src/.git ]; then rm -rf chromium; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "chromium-src-152", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > .gclient && cd chromium-src-152 && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
+            if mkdir -p chromium/src && git -C chromium/src init -q && git -C chromium/src fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium/src checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > chromium/.gclient && cd chromium/src && (gclient sync -D --no-history 2>/dev/null || gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
-            rm -rf chromium-src-152
+            rm -rf chromium
             sleep 30
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
       - name: Build independent engine
-        run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium-src-152" x64
+        run: bash patches/chromium/build-windows.sh "${{ github.workspace }}/chromium/src" x64
       - name: npm ci + controller build (bash)
         run: |
           npm ci
@@ -218,10 +218,10 @@ jobs:
           cp resources/icon.icns dist/resources/
           node scripts/build-masque-bridge.mjs
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome.exe"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome.exe"
       - name: E2E suite
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome.exe
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/chrome.exe
         run: npm run test:e2e
       - name: Package NSIS + checksums
         run: |
@@ -264,9 +264,9 @@ jobs:
       - name: Clone + sync pinned Chromium source
         run: |
           for i in 1 2 3; do
-            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            if [ -d chromium/src/.git ]; then rm -rf chromium; fi
             # Shallow fetch (~4 GiB vs ~40 GiB) — also add disk cleanup happens above for macos
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "chromium-src-152", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > .gclient && cd chromium-src-152 && gclient sync -D); then
+            if mkdir -p chromium/src && git -C chromium/src init -q && git -C chromium/src fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium/src checkout FETCH_HEAD -q && (printf 'solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False}]\n' > chromium/.gclient && cd chromium/src && gclient sync -D); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -274,16 +274,16 @@ jobs:
             if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
           done
       - name: Build independent engine (arm64)
-        run: bash patches/chromium/build-macos.sh "${{ github.workspace }}/chromium-src-152" arm64
+        run: bash patches/chromium/build-macos.sh "${{ github.workspace }}/chromium/src" arm64
       - name: npm ci + build
         run: |
           npm ci
           npm run build
       - name: Strict native verifier (53 surfaces)
-        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium"
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium"
       - name: E2E suite (headed)
         env:
-          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium/src/out/AgentBrowserRelease/Chromium.app/Contents/MacOS/Chromium
         run: npm run test:e2e
       - name: Package DMG/zip + notarize (opt-in) + checksums
         env:
