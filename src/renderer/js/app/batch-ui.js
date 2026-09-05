@@ -15,8 +15,16 @@
   var esc = agentBrowser.helpers.esc;
   var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
 
-  // Matches the main-process cap in services/batch-queue.ts.
+  // P3 (#110): ask the main process for the cap instead of hardcoding —
+  // falls back to 4 when the channel is unavailable (older builds).
   var DEFAULT_CONCURRENCY = 4;
+  try {
+    if (api.browser.batchMaxConcurrency) {
+      api.browser.batchMaxConcurrency().then(function (r) {
+        if (r && Number.isFinite(Number(r.max))) DEFAULT_CONCURRENCY = Math.min(8, Math.max(1, Math.floor(Number(r.max))));
+      }).catch(function () { /* keep fallback */ });
+    }
+  } catch (e) { /* keep fallback */ }
 
   var activeJob = null;
   var lastResult = null;

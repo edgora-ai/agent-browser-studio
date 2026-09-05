@@ -113,6 +113,7 @@ export interface BrowserProfile {
   storageQuota: number | null;
   taskbarHeight: number | null;
   fontsDir: string | null;
+  windowTitlePrefix?: string | null; // null = prefix disabled, undefined = default
   appUrl: string | null;  // Web App (PWA app-mode) launch URL, or null
   proxyMode: "none" | "default" | "named";
   proxyName: string | null;  // resolved proxy reference name
@@ -619,6 +620,10 @@ export function listBrowserProfiles(): BrowserProfile[] {
       storageQuota: Number.isInteger(m.storageQuota) ? m.storageQuota : null,
       taskbarHeight: Number.isInteger(m.taskbarHeight) ? m.taskbarHeight : null,
       fontsDir: m.fontsDir || null,
+      // B2 (#107): the edit form reads windowTitlePrefix to decide the
+      // checkbox state — omitting it made the checkbox always-on and every
+      // save clobbered the stored prefix via setMeta.
+      windowTitlePrefix: m.windowTitlePrefix === null ? null : (m.windowTitlePrefix || undefined),
       appUrl: m.appUrl || null,
       proxyMode: resolvedProxy.mode,
       proxyName: resolvedProxy.name,

@@ -227,6 +227,11 @@
     })();
     statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step2.in-progress', 'Creating profile…') : 'Creating profile…') + '</span>';
     api.browser.create({ name: name }).then(function(r) {
+      // Round 3 follow-up: a trial-exhausted first run opens the paywall
+      // instead of a red ✗ the user cannot act on.
+      if (r && typeof agentBrowser.interceptLicenseGate === "function") {
+        try { if (agentBrowser.interceptLicenseGate(r)) return; } catch (gateErr) { /* fall through */ }
+      }
       if (r && r.dirId) {
         state.wizardDirId = r.dirId;
         state.wizardProfileName = name;

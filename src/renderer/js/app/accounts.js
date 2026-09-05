@@ -19,7 +19,16 @@
     _rolePromise = api.team.status().then(function(st) {
       _role = (st && st.local && st.local.role) || 'owner';
       return _role;
-    }).catch(function() { _role = 'owner'; return _role; });
+    }).catch(function() {
+      // S11 (#108): never fail open to owner. A failed role lookup falls
+      // back to viewer (read-only) with a one-shot toast — the main process
+      // still enforces RBAC, this only gates which buttons render.
+      _role = 'viewer';
+      try {
+        toast((window.i18n ? window.i18n.t("toast.team.role-unknown", "Team role unavailable — showing read-only view") : "Team role unavailable — showing read-only view"), "error");
+      } catch (e) { /* toast best-effort */ }
+      return _role;
+    });
     return _rolePromise;
   }
 
@@ -141,13 +150,21 @@
       document.getElementById('dlg-account').close();
       toast(index >= 0 ? 'Account updated' : 'Account added', 'success');
       agentBrowser.agentLoadAccounts();
+      // P2 (#109): the Accounts tab renders its own list — refresh it too.
+      if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 
+  // P2 (#109): stale indexes used to dead-end silently — surface it.
+  function staleAccountToast() {
+    toast((window.i18n ? window.i18n.t("toast.account.stale", "Account no longer exists — the list was refreshed") : "Account no longer exists — the list was refreshed"), "error");
+    agentBrowser.agentLoadAccounts();
+    if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+  }
   agentBrowser.agentEditAccount = function(index) {
     R.agent.accounts.list().then(function(accounts) {
       var a = accounts[index];
-      if (!a) return;
+      if (!a) { staleAccountToast(); return; }
       document.getElementById('dlg-account-title').textContent = 'Edit Account';
       document.getElementById('acct-edit-index').value = index;
       document.getElementById('acct-url').value = a.platformUrl || '';
@@ -162,7 +179,11 @@
   agentBrowser.agentDeleteAccount = function(index) {
     agentBrowser.confirm((window.i18n ? window.i18n.t("acct.delete-confirm", "Delete this account?") : "Delete this account?"), function() {
       R.agent.accounts.delete(index).then(function(r) {
-        if (r) { toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted")); agentBrowser.agentLoadAccounts(); }
+        if (r) {
+          toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted"));
+          agentBrowser.agentLoadAccounts();
+          if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+        }
       }).catch(function(e) { toast(e.message, 'error'); });
     });
   };
@@ -186,7 +207,7 @@
   agentBrowser.agentBindAccounts = function(index) {
     R.agent.accounts.list().then(function(accounts) {
       var a = accounts[index];
-      if (!a) return;
+      if (!a) { staleAccountToast(); return; }
       document.getElementById('acct-bind-index').value = index;
       return api.browser.list().catch(function() { return []; }).then(function(profiles) {
         var listEl = document.getElementById('acct-bind-list');
@@ -240,7 +261,15 @@
       if (r.skipped) msg += ', skipped ' + r.skipped;
       statusEl.innerHTML = '<span style="color:var(--success);">' + esc(msg) + '</span>';
       toast(msg, r.added ? 'success' : 'error');
-      if (r.added) { agentBrowser.agentLoadAccounts(); if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true); }
+      // P2 (#109): close the dialog on success (like saveAccount/bind) and
+      // refresh BOTH lists — the Accounts tab list went stale behind the toast.
+      if (r.added) {
+        agentBrowser.agentLoadAccounts();
+        if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+        if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true);
+        var imDlg = document.getElementById('dlg-account-import');
+        if (imDlg && imDlg.open) imDlg.close();
+      }
     }).catch(function(e) {
       statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(e.message) + '</span>';
     });

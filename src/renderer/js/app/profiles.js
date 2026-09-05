@@ -253,6 +253,9 @@
             storageQuota: p.storageQuota || '',
             taskbarHeight: p.taskbarHeight === 0 ? 0 : (p.taskbarHeight || ''),
             fontsDir: p.fontsDir || '',
+            // B2 (#107): carry the prefix through — undefined forced the
+            // window-title checkbox on and clobbered the value on save.
+            windowTitlePrefix: p.windowTitlePrefix === null ? null : (p.windowTitlePrefix || undefined),
             appUrl: p.appUrl || '',
             proxyMode: p.proxyMode || (p.proxyName ? "named" : "none"),
             proxyName: p.proxyName || null
@@ -501,6 +504,10 @@
   quickCreateProfile: function () {
         var base = (window.i18n ? window.i18n.t("profiles.quick-name", "Quick Profile") : "Quick Profile");
         wcall("browser.create", function () { return api.browser.create({ name: base }); }).then(function(r) {
+          // Round 3 follow-up: gate refusals open the paywall, not a toast.
+          if (r && typeof agentBrowser.interceptLicenseGate === "function") {
+            try { if (agentBrowser.interceptLicenseGate(r)) return; } catch (gateErr) { /* fall through */ }
+          }
           if (!r || !r.dirId) { toast((r && r.error) || "Quick create failed", "error"); return; }
           toast((window.i18n ? window.i18n.t("toast.profile.quick-created", "Profile created") : "Profile created") + ": " + base, "success");
           loadProfiles();
@@ -622,10 +629,16 @@
       }
       var specs = res.specs;
       var total = specs.length, done = 0, errors = 0;
+      // P3 (#110): per-row failures used to count silently — keep the first
+      // few messages so the user can fix the CSV instead of guessing.
+      var errorLines = [];
       statusEl.innerHTML = '<span style="color:var(--primary);">Importing ' + total + ' profiles...</span>';
       function processNext(idx) {
         if (idx >= specs.length) {
-          statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>';
+          var errHtml = errorLines.length ? '<div style="margin-top:6px;font-size:11px;color:var(--danger);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + (errorLines.length > 5 ? '<br>…+' + (errorLines.length - 5) : '') + '</div>' : '';
+          statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>' + errHtml;
+          // Keep the dialog open when rows failed so the messages stay visible.
+          if (errors) return;
           setTimeout(function() { document.getElementById("dlg-bulk-import").close(); agentBrowser.refresh(); }, 1000);
           return;
         }
@@ -648,11 +661,44 @@
           proxyMode: proxyMode,
           proxyName: proxyName,
           tags: s.tags || []
-        }); }).then(function() {
+        }); }).then(function(r) {
+          // P3 (#110): a gate refusal arrives as {success:false} (not a
+          // throw) — open the paywall and stop the batch instead of counting
+          // a phantom success.
+          if (r && typeof agentBrowser.interceptLicenseGate === "function") {
+            try {
+              // Review R3: don't abandon the recursion — record the stop as
+              // a row entry and render the terminal summary so the status
+              // element never sticks at "Importing n/total…".
+              if (agentBrowser.interceptLicenseGate(r)) {
+                errors++;
+                // Round 3 D2: name the unattempted remainder — "Imported 3/50
+                // (1 errors)" hides 46 never-tried rows.
+                var skipped = total - idx - 1;
+                var gateMsg = (r && r.code === "PROFILE_LIMIT")
+                  ? t("license.limit-hit", "Profile limit reached — activate a license for more. Your data is untouched.")
+                  : t("license.expired-hit", "Trial expired — activate a license to continue. Your data is untouched.");
+                errorLines.push((s.name || ("row " + (idx + 1))) + ": " + gateMsg);
+                statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + ' (' + errors + ' errors' + (skipped > 0 ? ', ' + skipped + ' not attempted' : '') + ')</span>' +
+                  '<div style="margin-top:6px;font-size:11px;color:var(--danger);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + '</div>';
+                return;
+              }
+            } catch (gateErr) { /* fall through to normal counting */ }
+          }
+          if (r && r.success === false) {
+            errors++;
+            errorLines.push((s.name || ("row " + (idx + 1))) + ": " + (r.error || "create failed"));
+            processNext(idx + 1);
+            return;
+          }
           done++;
           statusEl.innerHTML = '<span style="color:var(--primary);">' + done + '/' + total + ' imported...</span>';
           processNext(idx + 1);
-        }).catch(function() { errors++; processNext(idx + 1); });
+        }).catch(function(e) {
+          errors++;
+          errorLines.push((s.name || ("row " + (idx + 1))) + ": " + ((e && e.message) || String(e)));
+          processNext(idx + 1);
+        });
       }
       processNext(0);
     }).catch(function(e) { statusEl.innerHTML = '<span style="color:var(--danger);">' + esc((e && e.message) || e) + '</span>'; });
@@ -1425,6 +1471,12 @@
           allowThirdPartyCookies: cp.allowThirdPartyCookies === true,
           drm: cp.drm === true,
           tags: cp.tags || [],
+          // B1 (#107): service returns appUrl/lock (browser-manager
+          // listBrowserProfiles) and the card reads p.appUrl/p.lock — the
+          // map used to drop both, so the App button and lock badge never
+          // rendered.
+          appUrl: cp.appUrl || null,
+          lock: cp.lock || null,
         };
       });
 
@@ -1512,6 +1564,7 @@
           '<option value="">' + esc(t('profile.health.placeholder', '🩺 Health…')) + '</option>' +
           '<option value="drift">' + esc(t('profile.health.drift', '🧬 Fingerprint drift')) + '</option>' +
           '<option value="lock">' + esc(t('profile.health.lock', '🔒 Lock fingerprint baseline')) + '</option>' +
+          '<option value="consistency">' + esc(t('profile.health.consistency', '🧭 4-field alignment')) + '</option>' +
           '<option value="env">' + esc(t('profile.health.env', '🖥 Host environment')) + '</option>' +
           '<option value="webrtc">' + esc(t('profile.health.webrtc', '📡 WebRTC leak')) + '</option>' +
           '<option value="risk">' + esc(t('profile.health.external', '🔍 External site (ping0.cc)')) + '</option>' +
@@ -1801,6 +1854,7 @@
         var id = hcard.dataset.dirId;
         if (kind === "drift") agentBrowser.checkDrift(id);
         else if (kind === "lock") agentBrowser.lockBaseline(id);
+        else if (kind === "consistency") agentBrowser.runConsistencyCheck(id);
         else if (kind === "env") agentBrowser.openEnvRisk(id);
         else if (kind === "webrtc") agentBrowser.openWebRtcDiag(id);
         else if (kind === "risk") agentBrowser.openRiskCheck(id);
@@ -1832,6 +1886,39 @@
         scheduleProfilesRefresh();
       }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
     }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
+  };
+
+  // B3 (#107): browser:consistency-check existed in main + preload with
+  // zero renderer callers — the 4-field alignment check (IP/timezone/locale/
+  // ASN) the SOP tells every new environment to run had no entry point.
+  agentBrowser.runConsistencyCheck = function(dirId) {
+    if (!acquireDetectSlot(dirId)) return;
+    agentBrowser.ipc.call("browser.consistencyCheck", function () {
+      return api.browser.consistencyCheck(dirId);
+    }, { kind: "detect" }).then(function (r) {
+      releaseDetectSlot(dirId);
+      if (!r) { toast(t("toast.fp.consistency-failed", "Alignment check failed"), "error"); return; }
+      var blockers = r.blockers || [];
+      var warnings = r.warnings || [];
+      recordHealthResult(dirId, "consistency", {
+        verdict: blockers.length ? "risk" : warnings.length ? "warn" : "pass",
+        detail: blockers.concat(warnings).map(function (f) { return f.code || f.message; }).slice(0, 6).join(", "),
+      });
+      if (!blockers.length && !warnings.length) {
+        toast(t("toast.fp.consistency-pass", "4-field alignment looks good (IP · timezone · locale · ASN)"), "success");
+      } else {
+        var lines = blockers.concat(warnings).map(function (f) {
+          return (f.severity === "blocker" ? "⛔ " : "⚠️ ") + (f.message || f.code);
+        }).join("\n");
+        agentBrowser.confirm(lines, function () {}, {
+          title: t("toast.fp.consistency-title", "Alignment issues ({n})").replace("{n}", blockers.length + warnings.length),
+        });
+      }
+      scheduleProfilesRefresh();
+    }).catch(function (e) {
+      releaseDetectSlot(dirId);
+      toast(e.message || String(e), "error");
+    });
   };
 
   agentBrowser.checkDrift = function(dirId) {

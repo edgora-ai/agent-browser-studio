@@ -276,7 +276,8 @@
   };
 
   agentBrowser.automationShowJob = function(jobId) {
-    if (!jobId) return;
+    // P2 (#109): a row click with a missing id used to do nothing at all.
+    if (!jobId) { toast(t('auto.jobs.not-found', 'Job 不存在'), 'error'); return; }
     api.automation.jobGet(jobId).then(function(job) {
       if (!job) { toast(t('auto.jobs.not-found','Job 不存在'), 'error'); return; }
       document.getElementById('auto-job-title').textContent = job.id;
@@ -289,7 +290,7 @@
   };
 
   agentBrowser.automationCancelJob = function(jobId) {
-    if (!jobId) return;
+    if (!jobId) { toast(t('auto.jobs.not-found', 'Job 不存在'), 'error'); return; }
     agentBrowser.confirm(t('auto.jobs.confirm-cancel','取消此 job? 已经开始的外部副作用不会回滚。'), function() {
       api.automation.jobCancel(jobId).then(function(r) {
         toast(r && r.success ? t('auto.jobs.cancelled','已取消 job') : t('auto.jobs.cancel-failed','取消失败'), r && r.success ? 'success' : 'error');
@@ -450,7 +451,7 @@
   };
 
   agentBrowser.automationToggle = function(rule) {
-    if (!rule) return;
+    if (!rule) { toast(t('toast.failed', '操作失败'), 'error'); return; }
     api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function(r) {
       if (r && r.success === false) { toast(r.error || t('toast.failed','操作失败'), 'error'); return; }
       agentBrowser.loadAutomationTab();

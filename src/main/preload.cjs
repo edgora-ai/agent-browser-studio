@@ -165,6 +165,8 @@ const api = {
     batchLaunch: (dirIds, concurrency, jobId) => ipcRenderer.invoke("browser:batch-launch", { dirIds, concurrency, jobId }),
     batchStop: (dirIds, concurrency, jobId) => ipcRenderer.invoke("browser:batch-stop", { dirIds, concurrency, jobId }),
     batchCancel: (jobId) => ipcRenderer.invoke("browser:batch-cancel", jobId),
+    // P3 (#110): the max-concurrency handler existed with no renderer caller.
+    batchMaxConcurrency: () => ipcRenderer.invoke("browser:batch-max-concurrency"),
     // allowLaunch is opt-in: a "check" must not silently start a browser (PL-03).
     openRiskCheck: (dirId, opts) => ipcRenderer.invoke("browser:open-risk-check", { dirId, ...(opts || {}) }),
     openApp: (dirId, url) => ipcRenderer.invoke("browser:open-app", { dirId, url }),

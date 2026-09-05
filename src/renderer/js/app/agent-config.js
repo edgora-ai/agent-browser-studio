@@ -189,7 +189,8 @@
   agentBrowser.agentFsAddDir = function() {
     api.settings.pickDir().then(function(dir) {
       if (dir && fsAllowlist.indexOf(dir) < 0) { fsAllowlist.push(dir); renderFsAllowlist(); }
-    }).catch(function() {});
+      // P2 (#109): cancelled picker resolves empty — only toast real errors.
+    }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };
 
   agentBrowser.agentFsRemoveDir = function(idxStr) {

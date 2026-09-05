@@ -311,7 +311,10 @@
         document.getElementById('sync-enabled-text').textContent = config.enabled && config.endpoint && config.bucket ? 'enabled' : 'disabled';
         document.getElementById('sync-endpoint').textContent = config.endpoint || '--';
         document.getElementById('sync-bucket').textContent = config.bucket || '--';
+        // P2 (#109): team panel + custody state went stale behind the toast.
         agentBrowser.loadSyncPreview();
+        agentBrowser.loadSyncConfig();
+        if (typeof agentBrowser.loadTeamPanel === "function") agentBrowser.loadTeamPanel();
       } else {
         toast(r.error || t('sync.toast.save-failed-default','Save failed'), 'error');
       }
@@ -333,6 +336,11 @@
       if (!ak.value) ak.placeholder = status.accessKeyMasked || '';
       var sk = document.getElementById('sync-sk-input');
       if (!sk.value) sk.placeholder = status.configured ? 'saved' : '';
+      // S9 (#108): rehydrate the custody checkbox from the recorded consent
+      // — otherwise consented users are blocked by the save guard after a
+      // tab reload until they re-tick.
+      var cbox = document.getElementById('sync-custody-consent');
+      if (cbox) cbox.checked = !!(status && status.custodyConsentAt);
       renderCustodyState(status);
       agentBrowser.loadSyncPreview();
       agentBrowser.loadTeamPanel();

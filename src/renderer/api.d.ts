@@ -196,7 +196,9 @@ export interface AgentBrowserAPI {
   profile: {
     list: () => Promise<any[]>;
     get: (dirId: string) => Promise<any>;
-    create: (name: string, options?: any) => Promise<{ dirId: string }>;
+    // Round 3 D1: the live channel is browser:create (preload routes
+    // profile.create there); the gate refusal union must be visible.
+    create: (name: string, options?: any) => Promise<{ dirId: string } | { success: false; error: string; code?: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     // R9 P3-3: soft-delete channel the UI deletes through (7-day trash).
     trash: (dirId: string) => Promise<{ success: boolean; error?: string }>;
@@ -282,7 +284,7 @@ export interface AgentBrowserAPI {
     binary: () => Promise<ManagedChromiumStatus>;
     engineStatus: () => Promise<{ chromium: ManagedChromiumStatus; firefox: FirefoxStatus }>;
     verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
-    create: (opts: any) => Promise<{ dirId: string }>;
+    create: (opts: any) => Promise<{ dirId: string } | { success: false; error: string; code?: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     launch: (dirId: string, opts?: { forceDeadProxy?: boolean }) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string; code?: string }>;
     stop: (dirId: string) => Promise<{ success: boolean; error?: string }>;
@@ -293,6 +295,20 @@ export interface AgentBrowserAPI {
     envRisk: (dirId: string) => Promise<{ ok: boolean; result?: any; error?: string }>;
     envRiskHistory: (dirId: string) => Promise<{ ok: boolean; entries: EnvRiskDiagnosticsEntry[]; error?: string }>;
     envRiskClear: (dirId: string) => Promise<{ ok: boolean; error?: string }>;
+    // Audit R1 (#107): these existed in main + preload but were missing
+    // here, hiding wiring breaks from the type checker.
+    consistencyCheck: (dirId: string) => Promise<{ ok: boolean; warnings: any[]; blockers: any[] }>;
+    checkDrift: (dirId: string) => Promise<any>;
+    captureBaseline: (dirId: string) => Promise<{ ok: boolean; fields?: number; error?: string }>;
+    setLock: (dirId: string, locked: boolean) => Promise<{ success: boolean; error?: string }>;
+    openApp: (dirId: string, url?: string) => Promise<{ success: boolean; error?: string; code?: string; appUrl?: string }>;
+    logs: (dirId: string) => Promise<any>;
+    selectBinary: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>;
+    batchLaunch: (dirIds: string[], concurrency?: number, jobId?: string) => Promise<any>;
+    batchStop: (dirIds: string[], concurrency?: number, jobId?: string) => Promise<any>;
+    batchCancel: (jobId: string) => Promise<{ success: boolean; error?: string }>;
+    batchMaxConcurrency: () => Promise<{ max: number }>;
+    parseBulkCsv: (text: string) => Promise<{ ok: boolean; specs?: any[]; error?: string }>;
   };
   agent: {
     llmConfig: () => Promise<RedactedLlmConfig | null>;

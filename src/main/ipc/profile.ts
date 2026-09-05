@@ -16,6 +16,7 @@ import {
   purgeTrashedProfile,
 } from "../services/browser-manager.js";
 import { setProfileMeta } from "../services/config-manager.js";
+import { checkCreateAllowed } from "../services/license.js";
 import { validateDirId } from "../services/utils.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../services/profile-archive.js";
 import { assertSafeArchiveExportPath, assertSafeArchiveExportDir, assertSafeArchiveImportPath } from "../services/archive-path-guard.js";
@@ -68,7 +69,14 @@ export function registerProfileHandlers(): void {
     geolocationAccuracy?: number | null;
     proxyMode?: ProxyMode;
     proxyName?: string | null;
-  }): Promise<ProfileInfo> => {
+  }): Promise<ProfileInfo | { success: false; error: string; code?: string }> => {
+    // S5 (#108) + review R2: the legacy alias must carry the same license
+    // gate as browser:create AND the same {success:false,code} shape — a
+    // throw bypasses the renderer's interceptLicenseGate (paywall dialog).
+    const gate = checkCreateAllowed();
+    if (!gate.allowed) {
+      return { success: false as const, error: gate.error || "License gate refused", code: gate.code };
+    }
     const { dirId } = createBrowserProfile({
       name,
       fingerprintSeed,

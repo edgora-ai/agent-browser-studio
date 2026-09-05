@@ -126,19 +126,29 @@
         else if (cmd === 'switchAgentSub' && el.dataset.sub) { agentBrowser[cmd](el.dataset.sub); }
         else { agentBrowser[cmd](); }
         e.preventDefault();
+      } else {
+        // P2 (#109): a typo'd data-cmd used to dead-end with zero feedback.
+        try { console.warn("[cmd] unknown command: " + cmd); } catch (warnErr) { /* logging best-effort */ }
       }
     });
+    // P2 (#109): warn on unresolvable handlers so future typos surface in
+    // devtools instead of silently doing nothing.
+    function warnUnknown(kind, cmd) {
+      try { console.warn("[" + kind + "] unknown handler: " + cmd); } catch (warnErr) { /* logging best-effort */ }
+    }
     document.addEventListener('input', function(e) {
       var el = e.target.closest('[data-role="input"]');
       if (!el) return;
       var cmd = el.getAttribute('data-input-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
+      else if (cmd) warnUnknown('input', cmd);
     });
     document.addEventListener('change', function(e) {
       var el = e.target.closest('[data-role="change"]');
       if (!el) return;
       var cmd = el.getAttribute('data-change-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
+      else if (cmd) warnUnknown('change', cmd);
     });
     document.addEventListener('submit', function(e) {
       var el = e.target.closest('[data-role="submit"]');
@@ -146,6 +156,7 @@
       e.preventDefault();
       var cmd = el.getAttribute('data-submit-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
+      else if (cmd) warnUnknown('submit', cmd);
     });
     document.addEventListener('keydown', function(e) {
       var el = e.target.closest('[data-role="keydown"]');
