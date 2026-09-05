@@ -157,7 +157,28 @@ Treat the S3 bucket as sensitive storage: secrets are stripped from sync payload
 - Keep API keys and sync credentials private; exports are metadata-safe but still sensitive.
 - Review 📜 Activity when something looks off — every sensitive action is recorded.
 
-## 14. Troubleshooting
+## 14. 7-day account warm-up SOP (#94: warm up before real work)
+
+> Half of all "it doesn't work" reports are usage errors. Anti-detection is
+> NOT anti-ban: new account + new IP + aggressive actions = dead account.
+> Ramp up gradually — one account, one IP, one environment.
+
+| Day | Do | Don't |
+|---|---|---|
+| Day 1 | Create env → 4-field alignment check → run 🩺 check (target ≥90) → likes/saves/comments only | No posting, no friending, no profile edits |
+| Day 2–3 | 10–20 min browsing + interaction daily; ≥24h gap between new accounts on the same device | No bulk actions, no IP changes |
+| Day 4–5 | Light posting (1–2/day), reply to comments | No scripts, no 24h online |
+| Day 6–7 | Ramp up gradually; re-run 🧬 Drift + 🖥 Env to confirm no drift | Stop if IP/timezone/locale changes |
+
+### 4-field alignment checklist (every new environment)
+
+1. **IP**: proxy Detect passes, no 🏭 hosting/IDC warning (switch to residential first).
+2. **Timezone**: profile timezone = IP geolocation timezone (the 🩺 check flags mismatch in red).
+3. **Locale**: locale = geo language (e.g. en-US for a US IP).
+4. **ASN/geo**: IP-database geo matches the three above; keep a screenshot (support-dispute evidence).
+5. Click **🔒 Lock baseline**: after a successful warm-up, lock the fingerprint — later drift is blocked instead of silently killing the account.
+
+## 15. Troubleshooting
 
 Errors in the app are written in plain language with a suggested next step; the original technical text is always available in the developer console. Common cases:
 

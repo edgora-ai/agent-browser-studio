@@ -21,6 +21,7 @@ import { registerAuditHandlers } from "./ipc/audit.js";
 import { registerDataHandlers } from "./ipc/data.js";
 import { registerUpdateHandlers } from "./ipc/updates.js";
 import { registerObservabilityHandlers } from "./ipc/observability.js";
+import { registerLicenseHandlers } from "./ipc/license.js";
 import { configureObservability, logInfo, logWarn, logError } from "./services/observability.js";
 import { startScheduler } from "./services/automation.js";
 import { isHeadlessMode } from "./services/server-mode.js";
@@ -221,6 +222,7 @@ function registerAllHandlers(): void {
   registerDataHandlers();
   registerUpdateHandlers();
   registerObservabilityHandlers();
+  registerLicenseHandlers();
 }
 
 // ── App lifecycle ──

@@ -20,6 +20,12 @@ export interface BatchItemResult<T> {
   index: number;
   ok: boolean;
   error?: string;
+  /**
+   * Machine-readable failure code (sale-90/92: LICENSE_EXPIRED /
+   * PROFILE_LIMIT ride through so the batch UI can open the paywall dialog).
+   * Only allowlisted codes are propagated — anything else stays in error text.
+   */
+  code?: string;
   value?: unknown;
 }
 
@@ -122,7 +128,10 @@ export async function runBatch<T>(opts: BatchOptions<T>): Promise<BatchResult<T>
         const value = await withItemTimeout(Promise.resolve().then(() => opts.worker(item, index)), timeoutMs, index);
         results[index] = { item, index, ok: true, value };
       } catch (error: any) {
-        results[index] = { item, index, ok: false, error: error?.message || String(error) };
+        // Sale-90/92: propagate only the paywall codes — the worker may throw
+        // arbitrary errors (proxy, engine) whose shape must not leak further.
+        const code = error?.code === "LICENSE_EXPIRED" || error?.code === "PROFILE_LIMIT" ? error.code : undefined;
+        results[index] = { item, index, ok: false, error: error?.message || String(error), ...(code ? { code } : {}) };
       }
       done++;
       try {

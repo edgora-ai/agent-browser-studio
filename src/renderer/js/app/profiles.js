@@ -162,6 +162,13 @@
         var force = !!(opts && opts.forceDeadProxy);
         agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId, force ? { forceDeadProxy: true } : undefined); }, { kind: "launch", dedupe: !force })
           .then(function (r) {
+            // Sale-90/92: license gate first — an expired trial opens the
+            // paywall dialog instead of a dead-end toast (or worse, a proxy
+            // retry that can never succeed).
+            if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) {
+              setCardBusy(dirId, false);
+              return;
+            }
             // R12 P1-1: dead-proxy escape hatch — offer a second confirm that
             // spells out the real-IP exposure, then retry with force.
             if (!r.success && r.code === "PROXY_UNREACHABLE" && !force) {
@@ -569,6 +576,9 @@
           proxyName: proxySelection.name,
           businessPresetId: businessPresetId,
         }, geolocation, hardware)); }).then(function(r) {
+          // Sale-90/92: trial expiry / profile cap opens the paywall dialog
+          // instead of closing the form with a misleading success toast.
+          if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           // UI R3: after create, land on the new card (scroll + highlight)
@@ -1213,6 +1223,8 @@
         confirmLaunchForCheck(dirId);
         return;
       }
+      // Sale-90/92: gated launch inside open-risk-check opens the paywall.
+      if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
       toast((r && r.error) || t("toast.fp.nav-failed", "Failed to navigate to risk check"), "error");
     }).catch(function (e) {
       releaseDetectSlot(dirId);
@@ -1376,6 +1388,8 @@
       var proxies = results[1];
       // PL-07: surface the engine state on the page that needs it.
       renderEngineBanner(results[2]);
+      // Sale-90/92: trial/paywall banner refreshes with every profile load.
+      try { if (typeof agentBrowser.refreshLicense === "function") agentBrowser.refreshLicense(); } catch (e) { /* banner is best-effort */ }
       if (results[3] && results[3].firefox) lastFirefoxInfo = results[3].firefox;
 
       // Build a proxy lookup map for legacy renderer-side fallback.

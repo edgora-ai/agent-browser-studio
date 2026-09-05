@@ -81,8 +81,12 @@ let config: MgmtConfig | null = null;
 export function getConfig(): MgmtConfig {
   if (!config) {
     config = loadConfig();
-    ensureDeviceIdentity(config);
   }
+  // Sale-90: always ensure, not just on first load. The missing-file branch
+  // of loadConfig seeds the cache via saveConfig's afterTransact hook BEFORE
+  // identity is assigned, so a reloadConfig() over a deleted config.json used
+  // to leave deviceId empty forever (license device binding then failed).
+  ensureDeviceIdentity(config);
   return config;
 }
 
@@ -1247,9 +1251,17 @@ export function getSyncConfig() {
   return { ...getConfig().sync };
 }
 
-export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig>): void {
+export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean }): void {
   const cfg = getConfig();
   const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey"];
+  // Sale-93 custody consent: renderer passes custodyConsent: true from a
+  // SEPARATE checkbox; main stamps Date.now() itself so a compromised
+  // renderer cannot backdate consent. The raw timestamp field is never taken
+  // from the caller. Consent is append-only (disabling sync keeps the record
+  // for audit; re-enabling needs no re-consent).
+  if ((sync as any)?.custodyConsent === true) {
+    (cfg.sync as any).custodyConsentAt = Date.now();
+  }
   const next = { ...cfg.sync };
   for (const key of allowed) {
     const value = sync[key];
@@ -1507,6 +1519,11 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   // Each is validated permissively (load path must not throw on old files).
   if (typeof parsed.deviceId === "string" && parsed.deviceId) merged.deviceId = parsed.deviceId.slice(0, 64);
   if (typeof parsed.deviceName === "string" && parsed.deviceName) merged.deviceName = parsed.deviceName.slice(0, 40);
+  // Sale-90/92 trial dual-marker: the config-side first-launch timestamp must
+  // survive save round-trips (the strict whitelist below would drop it).
+  if (typeof (parsed as any).trialStartedAt === "number" && (parsed as any).trialStartedAt > 0) {
+    (merged as any).trialStartedAt = Math.floor((parsed as any).trialStartedAt);
+  }
   for (const flag of ["blockOnConsistencyConflict", "blockOnProxyRisk", "blockOnFingerprintDrift", "blockOnEnvironmentRisk", "blockOnInjectionProbe", "blockOnUnhealthyProxy"] as const) {
     if (typeof (parsed as any)[flag] === "boolean") (merged as any)[flag] = (parsed as any)[flag];
   }

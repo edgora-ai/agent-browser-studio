@@ -22,6 +22,8 @@ export interface SyncResult {
   success: boolean;
   message: string;
   transferredBytes?: number;
+  /** Machine-readable failure (sale-93: CUSTODY_CONSENT_REQUIRED). */
+  code?: string;
 }
 
 type SyncSafeConfig = Omit<MgmtConfig, "sync" | "proxies"> & {
@@ -120,6 +122,11 @@ export const syncService = {
     const sync = getSyncConfig();
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
       return { success: false, message: "Sync not enabled or configured" };
+    }
+    // Sale-93 data-custody consent: uploading cookies/sessions requires the
+    // separate in-app consent (timestamped by the main process). Fail closed.
+    if (typeof (sync as any)?.custodyConsentAt !== "number" || (sync as any).custodyConsentAt <= 0) {
+      return { success: false, message: "Sync data-custody consent required: tick the data-custody consent box and save first", code: "CUSTODY_CONSENT_REQUIRED" };
     }
 
     // Team workspace RBAC: viewers are read-only; force push needs admin+.
@@ -271,6 +278,11 @@ export const syncService = {
     const sync = getSyncConfig();
     if (!sync.endpoint || !sync.bucket) {
       return { success: false, message: "Endpoint and bucket required" };
+    }
+    // Sale-93: pulling writes remote cookies/sessions into local profiles —
+    // same custody consent as push.
+    if (typeof (sync as any)?.custodyConsentAt !== "number" || (sync as any).custodyConsentAt <= 0) {
+      return { success: false, message: "Sync data-custody consent required: tick the data-custody consent box and save first", code: "CUSTODY_CONSENT_REQUIRED" };
     }
 
     try {
@@ -510,6 +522,8 @@ export const syncService = {
       endpoint: sync.endpoint || "",
       bucket: sync.bucket || "",
       accessKeyMasked: maskKey(sync.accessKey || ""),
+      // Sale-93: the UI shows whether custody consent was recorded (and when).
+      custodyConsentAt: typeof (sync as any)?.custodyConsentAt === "number" ? (sync as any).custodyConsentAt : null,
     };
   },
 };

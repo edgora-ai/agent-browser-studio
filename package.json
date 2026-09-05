@@ -32,7 +32,8 @@
     "install:chromium": "npm run build && node dist/tools/install-native-chromium.js",
     "install:firefox": "npm run build && node dist/tools/install-native-firefox.js",
     "pretest": "npm run build",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "check:marketing": "node scripts/check-marketing-copy.mjs"
   },
   "engines": {
     "node": ">=22.16.0"

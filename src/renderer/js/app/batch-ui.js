@@ -137,6 +137,17 @@
 
   function showResult(result, kind) {
     lastResult = { result: result, kind: kind };
+    // Sale-90/92: when every failure is the license gate, skip the 50-row
+    // failure list — open the paywall dialog once instead.
+    if (kind === "launch" && result && result.failed > 0 && typeof agentBrowser.interceptLicenseGate === "function") {
+      var items = result.results || [];
+      var gated = items.filter(function (r) { return !r.ok && (r.code === "LICENSE_EXPIRED" || r.code === "PROFILE_LIMIT"); });
+      if (gated.length && gated.length === result.failed) {
+        var first = gated[0];
+        agentBrowser.interceptLicenseGate({ success: false, code: first.code, error: first.error });
+        return;
+      }
+    }
     var dlg = document.getElementById("dlg-batch-result");
     if (!dlg) {
       // No dialog in the DOM (e.g. unit test) — fall back to a toast.

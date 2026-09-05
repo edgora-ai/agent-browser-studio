@@ -327,6 +327,14 @@ export interface AgentBrowserAPI {
       forProfile: (dirId: string) => Promise<RedactedPlatformAccount[]>;
     };
   };
+  license: {
+    status: () => Promise<{
+      plan: string; trialStartedAt: number | null; trialDays: number;
+      licensedTo: string | null; expiresAt: number | null; maxProfiles: number | null;
+      deviceId: string; daysLeft: number; expired: boolean; canActivate: boolean;
+    }>;
+    activate: (code: string) => Promise<{ ok: boolean; state?: any; code?: string; error?: string }>;
+  };
   on: (channel: string, callback: (...args: any[]) => void) => void;
   removeListener: (channel: string, callback: (...args: any[]) => void) => void;
 }

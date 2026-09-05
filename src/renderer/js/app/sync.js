@@ -200,13 +200,13 @@
           return api.sync.push({ force: true });
         });
       }
-      toast(r.message, r.success ? 'success' : 'error');
+      toastSyncResult(r, t('sync.toast.push-failed', 'Push failed'));
       if (r.success) agentBrowser.loadSyncConfig();
       else agentBrowser.loadSyncPreview();
       return null;
     }).then(function(r2) {
       if (!r2) return;
-      toast(r2.message, r2.success ? 'success' : 'error');
+      toastSyncResult(r2, t('sync.toast.push-failed', 'Push failed'));
       if (r2.success) agentBrowser.loadSyncConfig();
       else agentBrowser.loadSyncPreview();
     }).catch(function(e) {
@@ -231,7 +231,7 @@
       var running = (preview && preview.runningProfiles) || [];
       var proceed = function() {
         api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
-          toast(r.message, r.success ? 'success' : 'error');
+          toastSyncResult(r, t('sync.toast.pull-failed', 'Pull failed'));
           if (!r.success) { agentBrowser.loadSyncPreview(); return; }
           return api.app.reloadConfig().then(function() {
             agentBrowser.loadSyncConfig();
@@ -260,6 +260,32 @@
     });
   };
 
+  // Sale-93: custody consent rides a SEPARATE checkbox. Enabling sync
+  // without consent is refused by the main process; the UI also warns first.
+  function custodyConsented() {
+    var box = document.getElementById('sync-custody-consent');
+    return !!(box && box.checked);
+  }
+  function renderCustodyState(status) {
+    var el = document.getElementById('sync-custody-state');
+    if (!el) return;
+    if (status && status.custodyConsentAt) {
+      el.textContent = t('sync.custody.on', 'Data-custody consent recorded {d}').replace('{d}', new Date(status.custodyConsentAt).toLocaleString());
+    } else {
+      el.textContent = t('sync.custody.off', 'No data-custody consent recorded — push/pull will refuse until you consent and save.');
+    }
+  }
+  function consentError(r) {
+    return !!(r && (r.code === 'CUSTODY_CONSENT_REQUIRED' || /custody consent/i.test(r.message || '')));
+  }
+  function toastSyncResult(r, okFallback) {
+    if (r && r.success) { toast(r.message, 'success'); return; }
+    if (consentError(r)) {
+      toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error');
+      return;
+    }
+    toast((r && r.message) || okFallback, r && r.success ? 'success' : 'error');
+  }
   agentBrowser.syncSave = function() {
     var config = {
       enabled: document.getElementById('sync-enabled').checked,
@@ -270,6 +296,15 @@
     var secretKey = document.getElementById('sync-sk-input').value.trim();
     if (accessKey) config.accessKey = accessKey;
     if (secretKey) config.secretKey = secretKey;
+    // Enabling sync without the separate custody consent is a user error —
+    // warn before the main process refuses (already-consented stays valid).
+    if (config.enabled && !custodyConsented()) {
+      toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error');
+      var box = document.getElementById('sync-custody-consent');
+      if (box) box.focus();
+      return;
+    }
+    if (custodyConsented()) config.custodyConsent = true;
     api.sync.configure(config).then(function(r) {
       if (r.success) {
         toast((window.i18n ? window.i18n.t("toast.sync.saved", "Sync config saved") : "Sync config saved"), "success");
@@ -298,6 +333,7 @@
       if (!ak.value) ak.placeholder = status.accessKeyMasked || '';
       var sk = document.getElementById('sync-sk-input');
       if (!sk.value) sk.placeholder = status.configured ? 'saved' : '';
+      renderCustodyState(status);
       agentBrowser.loadSyncPreview();
       agentBrowser.loadTeamPanel();
     }).catch(function(e) {

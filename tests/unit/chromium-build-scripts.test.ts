@@ -74,8 +74,16 @@ describe("Chromium macOS source and build scripts", () => {
 
   it("runs every engine job for scheduled and version-tag events", () => {
     const workflow = fs.readFileSync(ENGINE_VERIFY, "utf8");
-    expect(workflow.match(/github\.event_name != 'workflow_dispatch'/g)).toHaveLength(3);
+    // Sale-91: linux x64 + linux arm64 + windows x64 + macos arm64 = 4 artifacts.
+    expect(workflow.match(/github\.event_name != 'workflow_dispatch'/g)).toHaveLength(4);
     expect(workflow).not.toMatch(/^\s*if: \$\{\{ inputs\.platform/m);
+  });
+
+  it("ships a linux arm64 AppImage (sale-91: x64+arm64)", () => {
+    const workflow = fs.readFileSync(ENGINE_VERIFY, "utf8");
+    expect(workflow).toContain("runs-on: ubuntu-24.04-arm");
+    expect(workflow).toContain("name: agent-browser-linux-arm64");
+    expect(workflow).toContain('bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-152" arm64');
   });
 
   it("supports a provenance-checked archive seed when Git pack streams truncate", () => {

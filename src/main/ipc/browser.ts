@@ -53,9 +53,31 @@ import {
   type BatchResult,
 } from "../services/batch-queue.js";
 import { newTraceId, logInfo } from "../services/observability.js";
+import { checkCreateAllowed, checkLaunchAllowed } from "../services/license.js";
 import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
+
+/**
+ * Sale-90/92 license gate shared by every path that starts a profile:
+ * browser:launch, browser:batch-launch, browser:open-risk-check and
+ * browser:open-app. Refusals throw with a machine `code` (LICENSE_EXPIRED /
+ * PROFILE_LIMIT) so all four handlers surface the paywall through the same
+ * `{ success: false, code }` shape. Stopping, exporting and deleting are
+ * never gated — the lock is on features, never on data.
+ */
+async function gatedLaunch(
+  dirId: string,
+  opts?: { forceDeadProxy?: boolean },
+): Promise<Awaited<ReturnType<typeof launchBrowser>>> {
+  const gate = checkLaunchAllowed();
+  if (!gate.allowed) {
+    const err = new Error(gate.error) as Error & { code?: string };
+    err.code = gate.code;
+    throw err;
+  }
+  return launchBrowser(dirId, { forceDeadProxy: opts?.forceDeadProxy === true });
+}
 
 function handleBrowser(action: string, handler: BrowserIpcHandler): void {
   ipcMain.handle(`browser:${action}`, handler);
@@ -207,6 +229,14 @@ export function registerBrowserHandlers(): void {
       proxyName: opts.proxyName,
       tags: opts.tags,
     };
+    // Sale-90/92 license gate (IPC boundary, not the service layer): unit
+    // tests and automation call createBrowserProfile directly; rental/expired
+    // installs are refused here with a machine code the UI turns into the
+    // paywall dialog. Data is never touched — only new profiles are refused.
+    const createGate = checkCreateAllowed();
+    if (!createGate.allowed) {
+      return { success: false as const, error: createGate.error, code: createGate.code };
+    }
     // Business preset: the main process applies the preset authoritatively so a
     // preset profile can never be created with a partial/incoherent identity.
     // Explicit user fields always win over preset defaults.
@@ -236,10 +266,11 @@ export function registerBrowserHandlers(): void {
     forceDeadProxy?: boolean;
   }) => {
     try {
-      const r = await launchBrowser(params.dirId, { forceDeadProxy: params?.forceDeadProxy === true });
+      const r = await gatedLaunch(params.dirId, { forceDeadProxy: params?.forceDeadProxy === true });
       return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } };
     } catch (e: any) {
       // R12 P1-1: surface the machine code so the UI can offer the force-launch escape hatch.
+      // Sale-90/92: the paywall code rides the same field (UI opens the dialog).
       return { success: false, error: e.message, code: (e as any)?.code || undefined };
     }
   });
@@ -360,7 +391,11 @@ export function registerBrowserHandlers(): void {
         traceId: jobId,
         onProgress: (done, total) => emitProgress(event, { jobId, kind: "launch", done, total }),
         worker: async (dirId) => {
-          const r = await launchBrowser(dirId);
+          // Gated too: an expired trial fails every item with the paywall
+          // code instead of burning launch attempts. The thrown code lands
+          // in BatchItemResult.error via runBatch, and the UI opens the
+          // paywall dialog from the batch result.
+          const r = await gatedLaunch(dirId);
           return { dirId, name: profileName(dirId), pid: r.pid, cdpPort: r.cdpPort };
         },
       });
@@ -608,10 +643,15 @@ export function registerBrowserHandlers(): void {
         };
       }
       try {
-        const launchResult = await launchBrowser(dirId);
+        const launchResult = await gatedLaunch(dirId);
         cdpPort = launchResult.cdpPort || 0;
         status = statusBrowser(dirId);
       } catch (e: any) {
+        // Sale-90/92: the paywall code rides through (UI opens the dialog);
+        // anything else keeps the legacy bare message.
+        if ((e as any)?.code === "LICENSE_EXPIRED" || (e as any)?.code === "PROFILE_LIMIT") {
+          return { success: false, error: e.message, code: (e as any).code, autoLaunched: true };
+        }
         return { success: false, error: `Failed to launch: ${e.message || String(e)}`, autoLaunched: true };
       }
     }
@@ -658,10 +698,13 @@ export function registerBrowserHandlers(): void {
     let cdpPort = status.cdpPort || 0;
     if (!status.running) {
       try {
-        const launchResult = await launchBrowser(dirId);
+        const launchResult = await gatedLaunch(dirId);
         cdpPort = launchResult.cdpPort || 0;
         status = statusBrowser(dirId);
       } catch (e: any) {
+        if ((e as any)?.code === "LICENSE_EXPIRED" || (e as any)?.code === "PROFILE_LIMIT") {
+          return { success: false, error: e.message, code: (e as any).code, autoLaunched: true };
+        }
         return { success: false, error: `Failed to launch: ${e.message || String(e)}`, autoLaunched: true };
       }
     }

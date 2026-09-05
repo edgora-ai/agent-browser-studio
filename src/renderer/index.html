@@ -64,6 +64,8 @@
  </div>
  <!-- PL-07: missing-engine banner. Rendered by profiles.js on every load. -->
  <div id="engine-banner" class="engine-banner" style="display:none"></div>
+ <!-- sale-90/92: trial/paywall banner. Rendered by license.js on every load. -->
+ <div id="license-banner" class="engine-banner" style="display:none"></div>
  <!-- UE-06: legend for the three status tiers (lifecycle / governance / capability) -->
  <details id="status-legend" class="status-legend">
   <summary data-i18n="profiles.legend.toggle">Status legend</summary>
@@ -193,6 +195,12 @@
  <div class="form-row"><label for="sync-bucket-input" data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="agent-browser"></div>
  <div class="form-row"><label for="sync-ak-input" data-i18n="sync.field.access">Access Key</label><input id="sync-ak-input"></div>
  <div class="form-row"><label for="sync-sk-input" data-i18n="sync.field.secret">Secret Key</label><input id="sync-sk-input" type="password"></div>
+ <!-- sale-93: data-custody consent is SEPARATE from the enable checkbox. -->
+ <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
+  <input type="checkbox" id="sync-custody-consent" style="margin-top:2px;">
+  <span data-i18n="sync.custody">I agree that enabling sync uploads my profile data (cookies, sessions, localStorage, bookmarks) to my own bucket above, for as long as sync stays enabled. I can delete it by disabling sync and deleting the remote objects.</span>
+ </label>
+ <div id="sync-custody-state" style="font-size:11px;color:var(--text-muted);margin:2px 0 6px;"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
  </div>
  </div>
@@ -1245,6 +1253,53 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 
 <!-- ── First-run Wizard ── -->
+<!-- ══════ Terms acceptance (sale-93: must precede first use) ══════ -->
+<dialog id="dlg-terms" aria-labelledby="dlg-terms-title" style="min-width:440px;max-width:600px;">
+ <div>
+  <h3 style="margin:0 0 10px;" id="dlg-terms-title" data-i18n="terms.title">📜 Terms of Use</h3>
+  <div style="font-size:12px;line-height:1.7;max-height:46vh;overflow:auto;">
+   <p data-i18n="terms.intro">Agent Browser Studio is a general-purpose multi-account management tool. By continuing you agree to use it only lawfully.</p>
+   <ul style="margin:8px 0 0 18px;padding:0;">
+    <li data-i18n="terms.item1">Only accounts and sites you are authorized for; respect each site's Terms of Service.</li>
+    <li data-i18n="terms.item2">Never for fraud, gambling, money laundering, fake orders/reviews, credential stuffing, bulk fake registration, or evading real-name verification.</li>
+    <li data-i18n="terms.item3">Anti-detection is not anti-ban: platforms may still restrict accounts; no pass/block guarantee.</li>
+    <li data-i18n="terms.item4">Stored credentials are encrypted on this device; you are responsible for backups.</li>
+   </ul>
+  </div>
+  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin-top:10px;">
+   <input type="checkbox" id="terms-ack" style="margin-top:2px;">
+   <span data-i18n="terms.ack">I will use this software only for lawful purposes and accept that platform risk is my own responsibility.</span>
+  </label>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="termsDecline" data-i18n="terms.decline">Decline &amp; Quit</button>
+   <button type="button" class="btn btn-primary" id="terms-accept-btn" data-role="cmd" data-cmd="termsAccept" data-i18n="terms.accept">Accept &amp; Continue</button>
+  </div>
+ </div>
+</dialog>
+
+<!-- ══════ License activation (sale-90: one-machine-one-code) ══════ -->
+<dialog id="dlg-license" aria-labelledby="dlg-license-title" style="min-width:440px;max-width:560px;">
+ <div>
+  <h3 style="margin:0 0 10px;" id="dlg-license-title" data-i18n="license.title">🔑 License activation</h3>
+  <div style="font-size:12px;line-height:1.7;">
+   <div><span data-i18n="license.current">Current plan</span>: <b id="license-current-plan">—</b></div>
+   <p style="margin:8px 0 0;color:var(--text-muted);" data-i18n="license.help">Paste the activation code from your order. The code is bound to this device — send the device ID below to the seller if you switch machines.</p>
+   <div style="margin-top:6px;"><span data-i18n="license.device">Device ID</span>: <code id="license-device-id" style="user-select:all;">—</code></div>
+  </div>
+  <div class="form-row" style="margin-top:10px;"><label for="license-code-input" data-i18n="license.code">Activation code</label><input id="license-code-input" type="password" autocomplete="off" spellcheck="false" style="font-family:monospace;" data-i18n-placeholder="license.code-ph" placeholder="paste code here"></div>
+  <!-- sale-93: one-shot refund-policy acknowledgement, required per activation. -->
+  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin-top:10px;">
+   <input type="checkbox" id="license-refund-ack" style="margin-top:2px;">
+   <span data-i18n="license.refund">I understand: unactivated codes are refundable; once activated or downloaded, digital goods are non-refundable (no 7-day no-reason return). The plan, validity and one-device binding above apply.</span>
+  </label>
+  <div id="license-error" style="display:none;font-size:12px;color:var(--danger);margin-top:6px;"></div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-license" data-i18n="common.cancel">Cancel</button>
+   <button type="button" class="btn btn-primary" id="license-activate-btn" data-role="cmd" data-cmd="submitLicenseActivation" data-i18n="license.activate">Activate</button>
+  </div>
+ </div>
+</dialog>
+
 <dialog id="dlg-wizard" aria-labelledby="dlg-wizard-title" class="dialog-wide">
  <h3 data-i18n="wizard.title">👋 Welcome to Agent Browser Studio</h3>
  <p data-i18n="wizard.subtitle" style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Let's get your fingerprint browser ready in 3 quick steps.</p>
@@ -1340,6 +1395,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <script src="js/app/approval.js"></script>
 <script src="js/app/activity.js"></script>
 <script src="js/app/delegation.js"></script>
+<script src="js/app/license.js"></script>
 <script src="js/app/init.js"></script>
 </body>
 </html>

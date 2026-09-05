@@ -261,6 +261,14 @@ export interface SyncConfig {
   bucket: string;
   accessKey: string;
   secretKey: string;
+  /**
+   * Data-custody consent (sale-93): epoch ms when the user separately agreed
+   * that enabling sync uploads profile data (cookies/sessions/localStorage)
+   * to THEIR OWN bucket for the duration sync stays enabled, encrypted in
+   * transit, deletable by disabling + deleting remote objects. Null = never
+   * consented. push/pull refuse while unset (fail-closed).
+   */
+  custodyConsentAt?: number | null;
 }
 
 export type TeamRole = "owner" | "admin" | "member" | "viewer";
@@ -308,6 +316,8 @@ export interface MgmtConfig {
   /** Stable per-install device identity used for team profile locks. */
   deviceId?: string;
   deviceName?: string;
+  /** Trial first-launch marker (sale-90/92 dual-marker with license.json). */
+  trialStartedAt?: number;
   chromiumBin?: string;
   defaultProxy: string;
   proxies: Record<string, ProxyConfig>;
@@ -475,6 +485,8 @@ export interface SyncResult {
   success: boolean;
   message: string;
   transferredBytes?: number;
+  /** Machine-readable failure (sale-93: CUSTODY_CONSENT_REQUIRED). */
+  code?: string;
 }
 
 // ── Updates (version-aware release store with pin + rollback) ──

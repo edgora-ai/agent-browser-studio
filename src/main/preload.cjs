@@ -267,6 +267,10 @@ const api = {
     export: () => ipcRenderer.invoke("obs:export"),
     status: () => ipcRenderer.invoke("obs:status"),
   },
+  license: {
+    status: () => ipcRenderer.invoke("license:status"),
+    activate: (code) => ipcRenderer.invoke("license:activate", code),
+  },
   on: (channel, callback) => {
     const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress"];
     if (validChannels.includes(channel)) {

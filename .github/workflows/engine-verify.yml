@@ -99,6 +99,70 @@ jobs:
             release/BUILD.txt
           if-no-files-found: error
 
+  # Sale-91: linux arm64 AppImage (issue asks x64+arm64). Native ARM runner
+  # (ubuntu-24.04-arm) — no cross-compile, the engine build needs a real CPU.
+  linux-arm64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'linux' }}
+    name: Linux arm64 · build → verify → e2e → package
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Setup depot_tools
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
+      - name: Clone + sync pinned Chromium source
+        run: |
+          for i in 1 2 3; do
+            if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
+            # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
+              break
+            fi
+            echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
+            rm -rf chromium-src-152
+            sleep 30
+            if [ "$i" = "3" ]; then echo "All clone attempts failed" >&2; exit 1; fi
+          done
+      - name: Install Linux build deps
+        run: |
+          cd chromium-src-152
+          sudo bash ./build/install-build-deps.sh --no-nacl --no-prompt
+      - name: Build independent engine
+        run: bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-152" arm64
+      - name: npm ci + build
+        run: |
+          npm ci
+          npm run build
+      - name: Strict native verifier (53 surfaces)
+        run: node dist/tools/verify-native-chromium.js "${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome"
+      - name: E2E suite (xvfb)
+        env:
+          AGENT_BROWSER_CHROMIUM_BINARY_PATH: ${{ github.workspace }}/chromium-src-152/out/AgentBrowserRelease/chrome
+        run: xvfb-run -a npm run test:e2e
+      - name: Package AppImage + checksums
+        run: |
+          npm run dist
+          cd release
+          sha256sum *.AppImage > SHA256SUMS.txt
+          printf 'engine=chromium-152.0.7977.72\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-linux-arm64
+          path: |
+            release/*.AppImage
+            release/SHA256SUMS.txt
+            release/BUILD.txt
+          if-no-files-found: error
+
   windows-x64:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows' }}
     name: Windows x64 · build → verify → e2e → package

@@ -46,7 +46,47 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  // sale-93: terms gate — first launch shows the Terms dialog before
+  // anything else (wizard included). Acceptance persists in localStorage.
+  var TERMS_KEY = 'agent-browser-studio-terms-accepted-v1';
+  function termsAccepted() {
+    try { return localStorage.getItem(TERMS_KEY) === '1'; } catch (e) { return true; }
+  }
+  agentBrowser.termsAccepted = termsAccepted;
+  function maybeShowTerms() {
+    if (termsAccepted()) return false;
+    var dlg = document.getElementById('dlg-terms');
+    if (!dlg) return false;
+    try {
+      var box = document.getElementById('terms-ack');
+      if (box) box.checked = false;
+    } catch (e) { /* ok */ }
+    if (!dlg.open) {
+      dlg.showModal();
+      if (typeof agentBrowser.focusDialogPrimary === "function") agentBrowser.focusDialogPrimary(dlg);
+    }
+    return true;
+  }
+  agentBrowser.termsAccept = function() {
+    var box = document.getElementById('terms-ack');
+    if (!box || !box.checked) {
+      toast((window.i18n ? window.i18n.t("terms.ack-required", "Please tick the acknowledgement box first") : "Please tick the acknowledgement box first"), "error");
+      if (box) box.focus();
+      return;
+    }
+    try { localStorage.setItem(TERMS_KEY, '1'); } catch (e) { /* ok */ }
+    var dlg = document.getElementById('dlg-terms');
+    if (dlg && dlg.open) dlg.close();
+    maybeShowWizard();
+  };
+  agentBrowser.termsDecline = function() {
+    // No quit IPC exists — close the window; the app quits when its last
+    // window closes. Re-shown on next launch until accepted (sale-93).
+    try { window.close(); } catch (e) { /* ok */ }
+  };
   function maybeShowWizard() {
+    // Terms first (sale-93): no onboarding until accepted.
+    if (maybeShowTerms()) return;
     // Don't show if previously dismissed
     if (window.wizardDismissed) return;
     try {
