@@ -2,6 +2,24 @@
 
 > 用法：逐项在 RoxyBrowser 与本产品各走一遍，打 ✅ / ❌。指纹项已有自动化证据（`roxy-comparison.md`）；体验项需人工走查。
 > 判定口径：P0/P1 已清（R8–R13，见 issue-tracker）；本表只收“用户可感知的差异”，不收已修 bug。
+>
+> ## 〇、实现侧已验证（代码 + i18n + 单测存在性，2026-09-05）
+>
+> 以下 17 项的我方实现均已静态验证存在（27 处 `agentBrowser.confirm` 调用、
+> launch/stop 写路径 `dedupe: true`、代理/档案写路径 `kind: "write"` 超时包装、
+> 中英双语 key 齐全），全量单测 731 绿。**剩余工作是唯一需要人手的部分**：
+> 在 RoxyBrowser 里实际走一遍对应场景，把“Roxy 行为”栏填上并打分。
+>
+> | 走查项 | 我方实现指针 |
+> |---|---|
+> | A1 拨测拒启 | `assertProxyLaunchable` + `probeProxyPort`；`PROXY_UNREACHABLE` 码 |
+> | A2 unhealthy warn | `launch-with-unhealthy-proxy` audit；`blockOnUnhealthyProxy` opt-in |
+> | A3 强制启动 | `launch.force-proxy.*` 二次确认 + `forceDeadProxy` + 审计 |
+> | A4 健康/轮换 | 代理页健康徽章 + `recordProxyRotation` + 审计 |
+> | B1–B4 回收站 | `profile:trash` + Undo toast + `dlg-trash` + purge + 定时清扫 |
+> | C1–C4 检测 | env/webrtc 历史 + 回放 + risk scope 导出 + 外部同意网关 |
+> | D1–D3 批量 | 并发 4 + 互斥 + 取消 + 聚合面板 + busy 锁 |
+> | E1–E3 引导 | 分引擎早拒 + 向导断点 + 合规提示 |
 
 ## 一、反检测（已有自动化证据）
 
