@@ -43,7 +43,16 @@ cp "$PATCH_ROOT/args.gn.win" "$OUT_DIR/args.gn"
 printf 'target_cpu = "%s"
 ' "$TARGET_CPU" >> "$OUT_DIR/args.gn"
 
-gn gen "$OUT_DIR"
+# Prefer the gn synced with the tree (src/buildtools/win/gn.exe): the
+# depot_tools CIPD bootstrap is fragile on fresh runners ("Unable to find
+# gn"). Fall back to PATH gn when the tree copy is absent (e.g. partial
+# checkouts in dev).
+TREE_GN="$CHROMIUM_SRC/buildtools/win/gn.exe"
+if [ -x "$TREE_GN" ]; then
+  "$TREE_GN" gen "$OUT_DIR"
+else
+  gn gen "$OUT_DIR"
+fi
 autoninja -C "$OUT_DIR" chrome
 
 BINARY="$OUT_DIR/chrome.exe"
