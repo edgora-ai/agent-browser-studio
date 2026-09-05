@@ -307,50 +307,67 @@ function spawnCurlWithProxy(config: ProxyConfig, args: string[]) {
   return child;
 }
 
-function curlJsonAsync(config: ProxyConfig, url: string, timeoutSeconds: number): Promise<{ data: any | null; latencyMs: number; error: string | null }> {
+function curlJsonAsync(config: ProxyConfig, url: string, timeoutSeconds: number, signal?: AbortSignal): Promise<{ data: any | null; latencyMs: number; error: string | null }> {
   return new Promise((resolve) => {
     const startTime = Date.now();
+    let settled = false;
+    const done = (v: { data: any | null; latencyMs: number; error: string | null }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(v);
+    };
+    // R13 P3-2: abort kills the curl child promptly instead of waiting out
+    // the inner timer when the caller's withTimeout fires.
+    const onAbort = () => {
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      done({ data: null, latencyMs: Date.now() - startTime, error: "aborted" });
+    };
     const child = spawnCurlWithProxy(config, [
       "-sS", "--connect-timeout", "2", "--max-time", String(timeoutSeconds),
       url,
     ]);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
       try { child.kill(); } catch {}
-      resolve({ data: null, latencyMs: Date.now() - startTime, error: "timeout" });
+      done({ data: null, latencyMs: Date.now() - startTime, error: "timeout" });
     }, (timeoutSeconds + 1) * 1000);
 
     child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
       const latencyMs = Date.now() - startTime;
       if (code !== 0) {
-        resolve({ data: null, latencyMs, error: (stderr || stdout || `curl exited ${code}`).trim() });
+        done({ data: null, latencyMs, error: (stderr || stdout || `curl exited ${code}`).trim() });
         return;
       }
 
       const output = stdout.trim();
       if (!output) {
-        resolve({ data: null, latencyMs, error: "Empty Geo-IP response" });
+        done({ data: null, latencyMs, error: "Empty Geo-IP response" });
         return;
       }
 
       try {
-        resolve({ data: JSON.parse(output), latencyMs, error: null });
+        done({ data: JSON.parse(output), latencyMs, error: null });
       } catch {
         const ipMatch = output.match(/\d+\.\d+\.\d+\.\d+/);
-        if (ipMatch) resolve({ data: { ip: ipMatch[0] }, latencyMs, error: null });
-        else resolve({ data: null, latencyMs, error: `Unrecognized Geo-IP response: ${output.slice(0, 100)}` });
+        if (ipMatch) done({ data: { ip: ipMatch[0] }, latencyMs, error: null });
+        else done({ data: null, latencyMs, error: `Unrecognized Geo-IP response: ${output.slice(0, 100)}` });
       }
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ data: null, latencyMs: Date.now() - startTime, error: err.message || "Execution error" });
+      done({ data: null, latencyMs: Date.now() - startTime, error: err.message || "Execution error" });
     });
   });
 }
@@ -480,7 +497,10 @@ export function resetProxyDetectionCacheForTests(): void {
 }
 
 export const proxyDetector = {
-  async detect(config: ProxyConfig): Promise<ProxyDetectionResult> {
+  async detect(config: ProxyConfig, opts?: { signal?: AbortSignal }): Promise<ProxyDetectionResult> {
+    // R13 P3-2: honor the caller's abort signal — reject promptly instead of
+    // waiting out the inner provider timers when withTimeout fires.
+    if (opts?.signal?.aborted) return emptyResult(false, "aborted");
     const providers = [
       {
         url: "https://ipwho.is/",
@@ -513,8 +533,11 @@ export const proxyDetector = {
 
     // Fire all geo-IP queries concurrently and settle on the FIRST success
     // (Promise.any) instead of waiting for the slowest provider.
+    const signal = opts?.signal;
     const attempts = providers.map(async (provider) => {
-      const result = await curlJsonAsync(config, provider.url, provider.timeoutSeconds);
+      if (signal?.aborted) throw new Error("aborted");
+      const result = await curlJsonAsync(config, provider.url, provider.timeoutSeconds, signal);
+      if (signal?.aborted) throw new Error("aborted");
       if (result.error) throw new Error(`${provider.url}: ${result.error}`);
       const parsed = provider.parse(result.data, result.latencyMs);
       if (!parsed) throw new Error(`${provider.url}: missing IP/Geo data`);
@@ -538,45 +561,63 @@ export const proxyDetector = {
     }
   },
 
-  ping(config: ProxyConfig): Promise<{ success: boolean; latencyMs: number | null; error: string | null }> {
+  ping(config: ProxyConfig, opts?: { signal?: AbortSignal }): Promise<{ success: boolean; latencyMs: number | null; error: string | null }> {
     return new Promise((resolve) => {
       const startTime = Date.now();
+      let settled = false;
+      let child: ReturnType<typeof spawnCurlWithProxy> | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const done = (v: { success: boolean; latencyMs: number | null; error: string | null }) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        opts?.signal?.removeEventListener("abort", onAbort);
+        resolve(v);
+      };
+      // R13 P3-2: abort kills the curl child promptly.
+      const onAbort = () => {
+        try { child?.kill("SIGKILL"); } catch { /* already gone */ }
+        done({ success: false, latencyMs: null, error: "aborted" });
+      };
       try {
         buildProxyUrl(config);
-        const child = spawnCurlWithProxy(config, [
+        child = spawnCurlWithProxy(config, [
           "-s", "--max-time", "4",
           "https://www.google.com",
           "-o", "/dev/null", "-w", "%{http_code}",
         ]);
+        if (opts?.signal?.aborted) {
+          onAbort();
+          return;
+        }
+        opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-        const timer = setTimeout(() => {
-          try { child.kill(); } catch {}
-          resolve({ success: false, latencyMs: null, error: "timeout" });
+        timer = setTimeout(() => {
+          try { child?.kill(); } catch {}
+          done({ success: false, latencyMs: null, error: "timeout" });
         }, 5000);
 
         let stdout = "";
         child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
 
         child.on("close", (code) => {
-          clearTimeout(timer);
           if (code !== 0) {
-            resolve({ success: false, latencyMs: null, error: `curl exited ${code}` });
+            done({ success: false, latencyMs: null, error: `curl exited ${code}` });
             return;
           }
           const httpCode = stdout.trim();
           if (httpCode && httpCode !== "000") {
-            resolve({ success: true, latencyMs: Date.now() - startTime, error: null });
+            done({ success: true, latencyMs: Date.now() - startTime, error: null });
           } else {
-            resolve({ success: false, latencyMs: null, error: `HTTP ${httpCode || "no response"}` });
+            done({ success: false, latencyMs: null, error: `HTTP ${httpCode || "no response"}` });
           }
         });
 
         child.on("error", (err) => {
-          clearTimeout(timer);
-          resolve({ success: false, latencyMs: null, error: err.message || "Execution error" });
+          done({ success: false, latencyMs: null, error: err.message || "Execution error" });
         });
       } catch (e: any) {
-        resolve({ success: false, latencyMs: null, error: e.message || "Unknown error" });
+        done({ success: false, latencyMs: null, error: e.message || "Unknown error" });
       }
     });
   },

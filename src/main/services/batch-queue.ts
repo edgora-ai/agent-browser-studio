@@ -147,6 +147,20 @@ export async function runBatch<T>(opts: BatchOptions<T>): Promise<BatchResult<T>
   const failed = results.length - succeeded;
   const durationMs = Date.now() - startedAt;
 
+  // R13 P3-1: item-level failure correlation. The worker signature stays
+  // (item, index) — launchBrowser has no traceId slot — so failures are
+  // joined to the batch here, where the traceId lives.
+  for (const r of results) {
+    if (!r.ok) {
+      obsLog("warn", `batch.${label}.item-failed`, {
+        traceId,
+        index: r.index,
+        item: typeof r.item === "string" ? r.item.slice(0, 128) : String(r.item ?? "").slice(0, 128),
+        error: String(r.error ?? "").slice(0, 500),
+      });
+    }
+  }
+
   recordTiming(`batch.${label}`, durationMs);
   recordCounter(`batch.${label}.items`, results.length);
   recordCounter(`batch.${label}.succeeded`, succeeded);

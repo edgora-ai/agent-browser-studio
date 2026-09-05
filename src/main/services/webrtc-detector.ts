@@ -50,11 +50,16 @@ function execCurlAsync(args: string[], timeoutSeconds: number): Promise<string> 
 }
 
 export const webrtcDetector = {
-  async detect(config: ProxyConfig): Promise<WebRtcLeakResult> {
+  async detect(config: ProxyConfig, opts?: { signal?: AbortSignal }): Promise<WebRtcLeakResult> {
     const result: WebRtcLeakResult = {
       success: true, webRtcIps: [], stunIps: [], dnsLeakIps: [],
       hasLeak: false, summary: "", error: null,
     };
+
+    // R13 P3-2: abort short-circuits the whole fan-out.
+    if (opts?.signal?.aborted) {
+      return { ...result, success: false, error: "aborted" };
+    }
 
     try {
       const proxyUrl = buildProxyUrl(config);

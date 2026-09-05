@@ -50,13 +50,17 @@ function dedupeDetection<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 const DETECT_TIMEOUT_MS = 25_000;
 
+// R13 P3-2: honor the withTimeout contract — pass the abort signal into the
+// detectors so a timeout actually stops the work instead of relying on the
+// inner curl timers. Falls back gracefully: detectors that ignore the signal
+// keep their existing self-timeout behavior.
 export function registerDetectHandlers(): void {
   ipcMain.handle("detect:proxy", async (_event, config: ProxyConfig) => {
-    return withTimeout(() => proxyDetector.detect(config), DETECT_TIMEOUT_MS, "detect:proxy");
+    return withTimeout((signal) => proxyDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy");
   });
 
   ipcMain.handle("detect:proxy-ping", async (_event, config: ProxyConfig) => {
-    return withTimeout(() => proxyDetector.ping(config), DETECT_TIMEOUT_MS, "detect:proxy-ping");
+    return withTimeout((signal) => proxyDetector.ping(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy-ping");
   });
 
   ipcMain.handle("detect:proxy-by-name", async (_event, name: string) => {
@@ -64,7 +68,7 @@ export function registerDetectHandlers(): void {
     return dedupeDetection(key, async () => {
     const config = getProxySecret(name);
     if (!config) return { success: false, error: "Proxy not found" };
-    const result = await withTimeout(() => proxyDetector.detect(config), DETECT_TIMEOUT_MS, "detect:proxy-by-name");
+    const result = await withTimeout((signal) => proxyDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy-by-name");
     try {
       setProxyDetectionIfCurrent(name, config, cacheEntryFromDetection(result));
       recordProxyDetection(name, {
@@ -89,6 +93,6 @@ export function registerDetectHandlers(): void {
   });
 
   ipcMain.handle("detect:webrtc-leak", async (_event, config: ProxyConfig) => {
-    return withTimeout(() => webrtcDetector.detect(config), DETECT_TIMEOUT_MS, "detect:webrtc-leak");
+    return withTimeout((signal) => webrtcDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:webrtc-leak");
   });
 }
