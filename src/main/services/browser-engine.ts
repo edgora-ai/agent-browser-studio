@@ -356,6 +356,9 @@ export interface FirefoxUserJsOpts {
   /** DoH endpoint URI; when set, Firefox uses TRR as the DNS resolver. */
   dohUrl?: string | null;
   locale?: string | null;
+  /** Third-party cookie compatibility (R12 P1-2): true writes cookieBehavior=0
+   * (accept all, incl. third-party). Mirrors the Chromium Preferences patch. */
+  allowThirdPartyCookies?: boolean;
   /** Extra managed prefs (Slice 79 fingerprint parity: UA / concurrency / DNT). */
   extraPrefs?: Record<string, string | number | boolean> | null;
   /** Hardware acceleration enabled (Roxy maps this to layers/webrender prefs). */
@@ -423,6 +426,13 @@ export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
 
   // Content sandbox — Roxy: true = level 0 (enabled), false = -1 (disabled).
   lines.push(prefNumber("security.sandbox.content.level", opts.sandboxPermission ? 0 : -1));
+
+  // Third-party cookies (R12 P1-2): 0 = accept all incl. third-party.
+  // Default Firefox behavior (4/5 = partitioned/reject-tracker) is untouched
+  // unless the profile opts in — same opt-in shape as Chromium.
+  if (opts.allowThirdPartyCookies === true) {
+    lines.push(prefNumber("network.cookie.cookieBehavior", 0));
+  }
 
   // Color scheme + active theme (Roxy's `browserColorScheme` family).
   const scheme = opts.colorScheme ?? "system";

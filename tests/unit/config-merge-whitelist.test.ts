@@ -36,6 +36,7 @@ describe("mergeConfig whitelist (R8)", () => {
       blockOnFingerprintDrift: false,
       blockOnEnvironmentRisk: true,
       blockOnInjectionProbe: false,
+      blockOnUnhealthyProxy: true,
       maxConcurrentJobs: 7,
       managedSecureDnsUrl: "https://dns.example/dns-query",
       team: {
@@ -54,6 +55,7 @@ describe("mergeConfig whitelist (R8)", () => {
     expect(merged.blockOnFingerprintDrift).toBe(false);
     expect(merged.blockOnEnvironmentRisk).toBe(true);
     expect(merged.blockOnInjectionProbe).toBe(false);
+    expect(merged.blockOnUnhealthyProxy).toBe(true);
     expect(merged.maxConcurrentJobs).toBe(7);
     expect(merged.managedSecureDnsUrl).toBe("https://dns.example/dns-query");
     expect(merged.team.members[0].deviceId).toBe("dev-1");

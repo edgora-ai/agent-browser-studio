@@ -61,15 +61,33 @@ function sealLogFile(p: string): void {
 function capField(v: unknown, max: number): string | undefined {
   if (typeof v !== "string" || !v) return v as string | undefined;
   if (Buffer.byteLength(v, "utf8") <= max) return v;
-  return v.slice(0, max) + `…[truncated ${v.length} chars]`;
+  // R12 P3-3: truncate on code-point boundary so a surrogate pair / multibyte
+  // char is never split (String.slice cuts UTF-16 units).
+  const chars = Array.from(v);
+  let bytes = 0;
+  let cut = 0;
+  for (const ch of chars) {
+    const len = Buffer.byteLength(ch, "utf8");
+    if (bytes + len > max) break;
+    bytes += len;
+    cut++;
+  }
+  return chars.slice(0, cut).join("") + `…[truncated ${v.length} chars]`;
 }
 
 /** Scrub `password=...` / `token: ...` style pairs inside free text (SQL, error strings). */
 function scrubInlineSecrets(text: string): string {
-  return text.replace(
-    /(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|auth[_-]?token|bearer)\s*[:=]\s*['"]?[^'"\s,}]+['"]?/gi,
-    "$1=[redacted]",
-  );
+  return text
+    .replace(
+      /(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|auth[_-]?token|bearer)\s*[:=]\s*['"]?[^'"\s,}]+['"]?/gi,
+      "$1=[redacted]",
+    )
+    // R12 P3-3: space-separated auth headers ("Bearer abc123",
+    // "Authorization Bearer xyz") carry the token after a bare space.
+    .replace(
+      /\b(bearer|authorization)\s+([A-Za-z0-9\-._~+/]+=*)/gi,
+      "$1 [redacted]",
+    );
 }
 
 function safeField(v: unknown, max: number): string | undefined {

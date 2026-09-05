@@ -233,12 +233,14 @@ export function registerBrowserHandlers(): void {
 
   handleBrowser("launch", async (_event, params: {
     dirId: string;
+    forceDeadProxy?: boolean;
   }) => {
     try {
-      const r = await launchBrowser(params.dirId);
+      const r = await launchBrowser(params.dirId, { forceDeadProxy: params?.forceDeadProxy === true });
       return { success: true, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } };
     } catch (e: any) {
-      return { success: false, error: e.message };
+      // R12 P1-1: surface the machine code so the UI can offer the force-launch escape hatch.
+      return { success: false, error: e.message, code: (e as any)?.code || undefined };
     }
   });
 

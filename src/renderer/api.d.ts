@@ -284,7 +284,7 @@ export interface AgentBrowserAPI {
     verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
     create: (opts: any) => Promise<{ dirId: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
-    launch: (dirId: string) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string }>;
+    launch: (dirId: string, opts?: { forceDeadProxy?: boolean }) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string; code?: string }>;
     stop: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     status: (dirId: string) => Promise<any>;
     setSeed: (dirId: string, seed: number) => Promise<{ success: boolean }>;

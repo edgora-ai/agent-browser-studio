@@ -156,11 +156,23 @@
     }).catch(function () { cb(); }); // list failed — let the main process decide
   }
 
-  function launchInner(dirId) {
+  function launchInner(dirId, opts) {
         // PL-06: block edit/delete while the launch is in flight.
         setCardBusy(dirId, true);
-        agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId); }, { kind: "launch", dedupe: true })
+        var force = !!(opts && opts.forceDeadProxy);
+        agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId, force ? { forceDeadProxy: true } : undefined); }, { kind: "launch", dedupe: !force })
           .then(function (r) {
+            // R12 P1-1: dead-proxy escape hatch — offer a second confirm that
+            // spells out the real-IP exposure, then retry with force.
+            if (!r.success && r.code === "PROXY_UNREACHABLE" && !force) {
+              setCardBusy(dirId, false);
+              agentBrowser.confirm(
+                t("launch.force-proxy.msg", "The proxy is unreachable, so this profile may not load pages. Launch anyway? Without a working proxy the browser may fall back to a direct connection and expose your real IP."),
+                function () { launchInner(dirId, { forceDeadProxy: true }); },
+                { title: t("launch.force-proxy.title", "Launch without a working proxy?") },
+              );
+              return;
+            }
             if (r.success) {
               toast(t("toast.profile.started", "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
               if (r.envCheck && r.envCheck.high) {
@@ -715,7 +727,9 @@
     var sel = selectedProfileIds();
     if (!sel.length) return;
     if (assignInFlight) {
-      toast(t("batch.already-running", "A batch operation is already running — cancel it first"), "info");
+      // R12 UX P2-2: assign has no cancel button (unlike launch/stop), so
+      // "cancel it first" was a dead-end instruction. Say what is true.
+      toast(t("batch.assign-busy", "Proxy assignment is already running — please wait for it to finish"), "info");
       return;
     }
     var proxyEl = document.getElementById("batch-assign-proxy");
@@ -1792,7 +1806,16 @@
     var histEl = document.getElementById("env-risk-history");
     if (!histEl || !dirId) return;
     api.browser.envRiskHistory(dirId).then(function (h) {
-      var entries = (h && h.entries) || [];
+      // R12 UX P3-1: h.entries===null (IPC error shape) gets a retry
+      // affordance instead of a silent blank.
+      if (!h || h.entries === null || h.entries === undefined) {
+        histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color:var(--danger);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
+          '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
+        var retryBtn = histEl.querySelector("[data-env-hist-retry]");
+        if (retryBtn) retryBtn.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
+        return;
+      }
+      var entries = h.entries || [];
       envRiskHistoryCache = entries;
       if (!entries.length) {
         histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("env.risk.no-history", "No history yet")) + '</div>';
@@ -1825,7 +1848,13 @@
         row.addEventListener("click", toggle);
         row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
       });
-    }).catch(function () { histEl.innerHTML = ""; });
+    }).catch(function () {
+      // R12 UX P3-1: transport failure also gets the retry affordance.
+      histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color:var(--danger);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
+        '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
+      var retryBtn2 = histEl.querySelector("[data-env-hist-retry]");
+      if (retryBtn2) retryBtn2.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
+    });
   }
 
   agentBrowser.openEnvRisk = function(dirId) {
@@ -1848,15 +1877,22 @@
       .catch(function (e) { releaseDetectSlot(dirId); renderEnvRisk({ ok: false, error: e.message || String(e) }); });
   };
 
+  // R12 UX P1-1: destructive clears need a confirm like purge does.
   agentBrowser.envRiskClear = function() {
     if (!currentEnvRiskDirId) return;
     var dirId = currentEnvRiskDirId;
-    agentBrowser.ipc.call("browser.envRiskClear", function () { return api.browser.envRiskClear(dirId); }, { kind: "write" })
-      .then(function () {
-        toast(t("env.risk.cleared", "Environment risk history cleared"), "success");
-        renderEnvRiskHistory(dirId);
-      })
-      .catch(function (e) { toast(e.message || String(e), "error"); });
+    agentBrowser.confirm(
+      t("env.risk.clear-confirm", "Clear this profile's environment risk history? This cannot be undone."),
+      function () {
+        agentBrowser.ipc.call("browser.envRiskClear", function () { return api.browser.envRiskClear(dirId); }, { kind: "write" })
+          .then(function () {
+            toast(t("env.risk.cleared", "Environment risk history cleared"), "success");
+            renderEnvRiskHistory(dirId);
+          })
+          .catch(function (e) { toast(e.message || String(e), "error"); });
+      },
+      { title: t("env.risk.clear-title", "Clear history?") },
+    );
   };
 
 
@@ -1884,18 +1920,42 @@
     if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.stun-ip", "STUN public IP")) + ': </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
     if (res.error) rows.push('<div style="font-size:11px;color:var(--warning);margin-top:4px;">⚠ ' + esc(res.error) + '</div>');
     body.innerHTML = rows.join("");
+    // R12: history rows expand to replay the stored run (mirrors env-risk).
     var histEl = document.getElementById("webrtc-diag-history");
     if (histEl && dirId) {
       api.webrtc.diagHistory(dirId).then(function(h) {
         var entries = (h && h.entries) || [];
         if (!entries.length) { histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>'; return; }
         var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("webrtc.diag.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
-        entries.slice().reverse().forEach(function(en) {
+        entries.slice().reverse().forEach(function (en) {
+          var idx = entries.indexOf(en);
           var ts = en.at ? new Date(en.at).toLocaleString() : "?";
           var leak = (en.hostIps || []).length > 0;
-          html += '<div style="font-size:11px;margin-top:4px;">' + (leak ? "⚠" : "✅") + " " + esc(ts) + " — " + esc(en.summary || "") + '</div>';
+          html += '<div class="webrtc-hist-row" data-webrtc-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
+            (leak ? "⚠" : "✅") + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
+            '<div class="webrtc-hist-detail" data-webrtc-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;font-size:11px;color:var(--text-muted);"></div>';
         });
         histEl.innerHTML = html;
+        Array.prototype.forEach.call(histEl.querySelectorAll("[data-webrtc-hist]"), function (row) {
+          function toggle() {
+            var idx = Number(row.getAttribute("data-webrtc-hist"));
+            var detail = histEl.querySelector('[data-webrtc-hist-detail="' + idx + '"]');
+            if (!detail) return;
+            var open = detail.style.display !== "none";
+            if (open) { detail.style.display = "none"; return; }
+            var en = entries[idx] || {};
+            var parts = [];
+            parts.push('<div>' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(en.connectionState || "?") + (typeof en.rttMs === "number" ? " · RTT: " + en.rttMs + "ms" : "") + '</div>');
+            parts.push('<div>' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (en.candidates || []).length + '</div>');
+            if ((en.mdnsHosts || []).length) parts.push('<div>mDNS: ' + en.mdnsHosts.map(esc).join(", ") + '</div>');
+            if ((en.hostIps || []).length) parts.push('<div style="color:var(--danger);">⚠ ' + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': ' + en.hostIps.map(esc).join(", ") + '</div>');
+            if ((en.srflxIps || []).length) parts.push('<div>STUN: ' + en.srflxIps.map(esc).join(", ") + '</div>');
+            detail.innerHTML = parts.join("");
+            detail.style.display = "";
+          }
+          row.addEventListener("click", toggle);
+          row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+        });
       }).catch(function() { histEl.innerHTML = ""; });
     }
   }
@@ -1952,14 +2012,21 @@
     }).catch(function(e) { toast(e.message || String(e), "error"); });
   };
 
+  // R12 UX P1-1: same confirm gate as env-risk clear.
   agentBrowser.webRtcDiagClear = function() {
     var dirId = window.__webrtcDiagDirId;
     if (!dirId) { return; }
-    api.webrtc.diagClear(dirId).then(function(r) {
-      if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC diagnostic history cleared"), "success"); }
-      var histEl = document.getElementById("webrtc-diag-history");
-      if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>';
-    }).catch(function(e) { toast(e.message || String(e), "error"); });
+    agentBrowser.confirm(
+      t("webrtc.diag.clear-confirm", "Clear this profile's WebRTC diagnostic history? This cannot be undone."),
+      function () {
+        api.webrtc.diagClear(dirId).then(function(r) {
+          if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC diagnostic history cleared"), "success"); }
+          var histEl = document.getElementById("webrtc-diag-history");
+          if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>';
+        }).catch(function(e) { toast(e.message || String(e), "error"); });
+      },
+      { title: t("webrtc.diag.clear-title", "Clear history?") },
+    );
   };
 
   agentBrowser.openApp = function(dirId) {

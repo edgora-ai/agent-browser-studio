@@ -191,6 +191,15 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(noDoh).toContain('user_pref("network.trr.mode", 5)');
   });
 
+  it("buildFirefoxUserJs honors allowThirdPartyCookies opt-in (R12 P1-2)", () => {
+    const on = buildFirefoxUserJs({ allowThirdPartyCookies: true });
+    expect(on).toContain('user_pref("network.cookie.cookieBehavior", 0)');
+    const off = buildFirefoxUserJs({});
+    expect(off).not.toContain("network.cookie.cookieBehavior");
+    const explicitOff = buildFirefoxUserJs({ allowThirdPartyCookies: false });
+    expect(explicitOff).not.toContain("network.cookie.cookieBehavior");
+  });
+
   it("buildFirefoxUserJs writes Roxy's managed prefs family (automation base, GPU, sandbox, color scheme/theme)", () => {
     const prefs = buildFirefoxUserJs({ useGpu: false, sandboxPermission: false, colorScheme: "dark" });
     // automation-friendly base

@@ -204,9 +204,17 @@
   // R8 P2-5: this used to call api.browser.openRiskCheck directly, bypassing
   // both the external-site consent dialog and the launch confirmation. Route
   // through the shared gateway so the wizard obeys the same rules as cards.
+  // R12 P2-1: double-click guard — confirm() is a singleton, so a second
+  // click while the first dialog is undecided overwrote its callback.
+  // Time-window (not a latch): cancel paths have no callback, so a latch
+  // would wedge the button after a single Esc.
+  var lastWizardCheckAt = 0;
   agentBrowser.wizardLaunchAndCheck = function() {
     var dirId = state.wizardDirId;
     if (!dirId) { advanceWizardStep(3); return; }
+    var now = Date.now();
+    if (now - lastWizardCheckAt < 1500) return;
+    lastWizardCheckAt = now;
     if (typeof agentBrowser.ensureExternalRiskConsent === "function") {
       agentBrowser.ensureExternalRiskConsent(dirId, function () { wizardRiskCheckAfterConsent(dirId); });
       return;

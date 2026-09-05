@@ -126,7 +126,23 @@
 
 下批（R12）候选：Firefox cookie/drift-persona 语义对齐、webrtc 历史回放、trash-list 定时改推模式、PM-6/A4/A6 决策项。
 
-## 九、发布前置清单（PM-1 执行时逐项打勾）
+## 九、R12 第五轮修复批（2026-09-05，PR #83）
+
+| # | 问题 | 修复 | 状态 | 证据 |
+|---|---|---|---|---|
+| R12-UX | webrtc 历史只有摘要 | 行展开回放（conn/RTT/ICE/mDNS/泄漏/STUN，键盘可达） | ✅ | `profiles.js` renderWebRtcDiag；PR #83 |
+| R12-P1-1 | TCP 死代理门无逃生口 | forceDeadProxy（二次确认明示真实IP + 审计） | ✅ | `browser-manager.ts`/`ipc/browser.ts`/preload；PR #83 |
+| R12-P1-2 | unhealthy 历史一刀切拒启 | warn-by-default + blockOnUnhealthyProxy opt-in（types+白名单） | ✅ | `browser-manager.ts`；PR #83 |
+| R12-P1-2f | Firefox 第三方 Cookie 静默无效 | user.js cookieBehavior=0（opt-in） | ✅ | `browser-engine.test.ts` cookieBehavior 例 ✓；PR #83 |
+| R12-P2-1 | 向导 step3 双击覆盖 confirm 回调 | 1.5s 时间窗 guard | ✅ | `wizard.js`；PR #83 |
+| R12-P2-2 | Firefox drift 漏 persona 交叉 | launch 门复用组合逻辑（与只读一致） | ✅ | `browser-manager.ts`；PR #83 |
+| R12-P2-3 | runConsistencyGate 两引擎 webrtcIp 语义分叉 | Firefox 归一化后传值 | ✅ | `browser-manager.ts`；PR #83 |
+| R12-P3-3 | audit scrub 漏 Bearer 空格 + surrogate 截断 | 正则补空格格式 + 码点截断 | ✅ | `audit-log.ts`；既有 9 例绿；PR #83 |
+| R12-UX-P1-1 | 清除历史一点即删 | env/webrtc clear 双双加 confirm | ✅ | `profiles.js`；PR #83 |
+
+验证：unit 78 files / 728 passed，tsc clean，check-i18n clean；PR #83 CI 待定。
+
+## 十、发布前置清单（PM-1 执行时逐项打勾）
 
 - [ ] engine-verify.yml 在真实 runner 跑绿（linux-x64 / windows-x64 / macos-arm64）
 - [ ] 4 个安装包 + sha256 + BUILD.txt 上传 GitHub Releases

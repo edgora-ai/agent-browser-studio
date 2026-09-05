@@ -1507,7 +1507,7 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
   // Each is validated permissively (load path must not throw on old files).
   if (typeof parsed.deviceId === "string" && parsed.deviceId) merged.deviceId = parsed.deviceId.slice(0, 64);
   if (typeof parsed.deviceName === "string" && parsed.deviceName) merged.deviceName = parsed.deviceName.slice(0, 40);
-  for (const flag of ["blockOnConsistencyConflict", "blockOnProxyRisk", "blockOnFingerprintDrift", "blockOnEnvironmentRisk", "blockOnInjectionProbe"] as const) {
+  for (const flag of ["blockOnConsistencyConflict", "blockOnProxyRisk", "blockOnFingerprintDrift", "blockOnEnvironmentRisk", "blockOnInjectionProbe", "blockOnUnhealthyProxy"] as const) {
     if (typeof (parsed as any)[flag] === "boolean") (merged as any)[flag] = (parsed as any)[flag];
   }
   if (Number.isFinite((parsed as any).maxConcurrentJobs)) {

@@ -334,6 +334,8 @@ export interface MgmtConfig {
   blockOnFingerprintDrift?: boolean;
   /** When true, launch is refused when the host environment check finds high-risk findings (DNS leak / CN fonts / SOCKS5 DNS). Default false (warn only). */
   blockOnEnvironmentRisk?: boolean;
+  /** When true, launch is refused when the proxy has consecutive health failures. Default false (warn only, live TCP probe still refuses dead ports). */
+  blockOnUnhealthyProxy?: boolean;
   /** Widevine/DRM discovery settings (managed CDM path override). */
   drm?: DrmConfig;
   /** Team workspace RBAC (members, roles, enforcement). */

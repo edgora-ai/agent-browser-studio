@@ -716,21 +716,34 @@ export function runConsistencyGate(
 export async function assertProxyLaunchable(
   dirId: string,
   resolvedProxy: { mode: string; name?: string | null; config: any },
+  cfg?: any,
+  opts?: { forceDeadProxy?: boolean },
 ): Promise<void> {
+  // R12: unhealthy-history is warn-by-default like every other gate
+  // (consistency/env/drift all default to warn). A stale failure record must
+  // not permanently brick launches — the live TCP probe below is the hard
+  // signal. Opt in to hard blocking with blockOnUnhealthyProxy=true.
   if (resolvedProxy.name) {
     const health = getProxyHealthEntry(resolvedProxy.name);
     if (health && health.consecutiveFailures > 0) {
       const when = health.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+      const blocked = cfg?.blockOnUnhealthyProxy === true;
       recordAudit({
         category: "proxy",
-        action: "launch-blocked-unhealthy-proxy",
+        action: blocked ? "launch-blocked-unhealthy-proxy" : "launch-with-unhealthy-proxy",
         target: resolvedProxy.name,
         actor: "auto",
         detail: `profile ${dirId.slice(0, 8)}: ${health.consecutiveFailures} consecutive failure(s), risk=${health.risk}, last check ${when}`,
       });
-      throw new Error(
-        `Profile proxy "${resolvedProxy.name}" is unhealthy (${health.consecutiveFailures} consecutive failure(s), last health check: ${when}). ` +
-        `Refusing to launch a browser that cannot load pages — fix the proxy or assign a healthy one.`,
+      if (blocked) {
+        throw new Error(
+          `Profile proxy "${resolvedProxy.name}" is unhealthy (${health.consecutiveFailures} consecutive failure(s), last health check: ${when}). ` +
+          `Refusing to launch a browser that cannot load pages — fix the proxy or assign a healthy one.`,
+        );
+      }
+      console.warn(
+        `[agent-browser] profile ${dirId.slice(0, 8)} launching through unhealthy proxy "${resolvedProxy.name}" ` +
+        `(${health.consecutiveFailures} consecutive failure(s), last check ${when}); set blockOnUnhealthyProxy=true to refuse`,
       );
     }
   }
@@ -740,6 +753,18 @@ export async function assertProxyLaunchable(
       const label = resolvedProxy.name || `${resolvedProxy.config.host}:${resolvedProxy.config.port}`;
       const health = resolvedProxy.name ? getProxyHealthEntry(resolvedProxy.name) : null;
       const when = health?.lastCheckedAt ? new Date(health.lastCheckedAt).toISOString() : "never checked";
+      // R12 P1-1: explicit escape hatch — the UI asks for a second confirm
+      // ("I know the proxy is dead") and passes forceDeadProxy. Audited.
+      if (opts?.forceDeadProxy === true) {
+        recordAudit({
+          category: "proxy",
+          action: "launch-force-dead-proxy",
+          target: label,
+          actor: "user",
+          detail: `profile ${dirId.slice(0, 8)}: user forced launch despite failed TCP probe to ${resolvedProxy.config.host}:${resolvedProxy.config.port}`,
+        });
+        return;
+      }
       recordAudit({
         category: "proxy",
         action: "launch-blocked-dead-proxy",
@@ -747,10 +772,12 @@ export async function assertProxyLaunchable(
         actor: "auto",
         detail: `profile ${dirId.slice(0, 8)}: TCP probe to ${resolvedProxy.config.host}:${resolvedProxy.config.port} failed, last health check: ${when}`,
       });
-      throw new Error(
+      const err: any = new Error(
         `Profile proxy "${label}" is unreachable (${resolvedProxy.config.host}:${resolvedProxy.config.port} refused the connection). ` +
         `Refusing to launch — check the proxy process and port (last health check: ${when}).`,
       );
+      err.code = "PROXY_UNREACHABLE";
+      throw err;
     }
   }
 }
@@ -777,7 +804,7 @@ export interface LaunchCookieCheck {
 
 export async function launchBrowser(
   dirId: string,
-  opts?: { headless?: boolean },
+  opts?: { headless?: boolean; forceDeadProxy?: boolean },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
@@ -813,7 +840,7 @@ export async function launchBrowser(
 
   // Firefox engine path (Slice 77): stock Firefox with remote debugging.
   if (sanitizeBrowserEngine(meta.engine) === "firefox") {
-    return launchFirefoxProfile(dirId, meta, cfg, opts?.headless, releaseLaunchLock);
+    return launchFirefoxProfile(dirId, meta, cfg, opts?.headless, releaseLaunchLock, { forceDeadProxy: opts?.forceDeadProxy === true });
   }
 
   const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
@@ -858,7 +885,7 @@ export async function launchBrowser(
   // and name the proxy plus its last health check so the user can act.
   // Shared with the Firefox path via assertProxyResolvable (R2 #46).
   assertProxyResolvable(meta, cfg, resolvedProxy);
-  await assertProxyLaunchable(dirId, resolvedProxy);
+  await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts?.forceDeadProxy === true });
   // Health-based rotation: when the configured proxy was unhealthy and a
   // healthy fallback was selected, record it (health counters + audit) so the
   // rotation is visible and attributable.
@@ -1336,6 +1363,7 @@ async function launchFirefoxProfile(
   cfg: any,
   headless: boolean | undefined,
   releaseLaunchLock: (() => void) | null,
+  opts?: { forceDeadProxy?: boolean },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
   const bin = findFirefoxBinary();
   if (!bin) {
@@ -1369,13 +1397,17 @@ async function launchFirefoxProfile(
   // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
   // unresolvable proxy must refuse — never write a direct user.js.
   assertProxyResolvable(meta, cfg, resolvedProxy);
-  // R10: same liveness gate as Chromium (dead/unhealthy proxy refuses).
-  await assertProxyLaunchable(dirId, resolvedProxy);
+  // R10/R12: liveness gate — history warns by default (opt-in block via
+  // blockOnUnhealthyProxy), the TCP probe refuses dead ports.
+  await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts?.forceDeadProxy === true });
   // R11 P1-4 item 3: same consistency warnings as Chromium (warn by default).
+  // R12 P2-1: normalize like the Chromium path — real/disable modes carry no
+  // effective IP at runtime, so a stale meta.webrtcIp must not trigger
+  // webrtc-no-proxy on Firefox while Chromium stays silent.
   runConsistencyGate(dirId, cfg, {
     passThrough: fingerprintMode === "off",
     timezone: meta.timezone, locale: meta.locale,
-    webrtcIp: meta.webrtcIp,
+    webrtcIp: normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp) === "auto" || normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp) === "altered" ? meta.webrtcIp : null,
     platform: meta.platform,
     proxyMode: resolvedProxy.mode,
     proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
@@ -1386,6 +1418,8 @@ async function launchFirefoxProfile(
     proxy: resolvedProxy.config,
     dohUrl,
     locale: meta.locale || undefined,
+    // R12 P1-2: honor the same opt-in flag as Chromium (default off).
+    allowThirdPartyCookies: normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility", false),
     useGpu: true,
     sandboxPermission: true,
     colorScheme: "system",
@@ -1506,16 +1540,23 @@ async function launchFirefoxProfile(
       try {
         const current = await captureFingerprint(actualPort, "firefox");
         const drift = diffFingerprints(meta.fingerprintBaseline, current);
-        const risky = hasRiskyDrift(drift);
-        driftCheck = { checked: true, risky, drift };
-        if (drift.length) {
+        // R12 P2-2: same persona cross-check as the read-only drift check —
+        // platform/timezone vs live fingerprint mismatches are risky too.
+        const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
+          { platform: meta.platform || "windows", timezone: meta.timezone },
+          current,
+        ));
+        const combined = [...drift, ...personaDrift];
+        const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
+        driftCheck = { checked: true, risky, drift: combined };
+        if (combined.length) {
           recordAudit({
             category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
-            detail: drift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(drift),
+            detail: combined.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combined),
           });
         }
         if (risky && cfg.blockOnFingerprintDrift !== false) {
-          const reason = "Fingerprint drift blocked (" + summarizeDrift(drift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+          const reason = "Fingerprint drift blocked (" + summarizeDrift(combined) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
           recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
           const blockError: any = new Error(reason);
           blockError.driftBlocked = true;
