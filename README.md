@@ -200,8 +200,12 @@ everything you can do in the UI you can script.
   `CLOAK_API_PORT`); falls back to an ephemeral loopback port when busy.
 - **Auth**: every endpoint except `GET /health` and `GET /openapi.json`
   requires the bearer token from `AGENT_BROWSER_API_TOKEN` (or `CLOAK_API_TOKEN`).
-  When unset, a random token is generated and can be revealed from the app's
-  developer surface. Send it as `Authorization: Bearer <token>` or
+  When unset, a random token is generated per launch and can be revealed from
+  the app's developer surface. Token lifecycle (A6 decision: env-only, no
+  keychain): set the env var for a stable token across restarts (external
+  integrations must re-read it after each restart when unset); the token is
+  visible in the process environment (`ps e`) — loopback-only binding is the
+  mitigation. Send it as `Authorization: Bearer <token>` or
   `X-Agent-Browser-Token: <token>`.
 - **Discoverability**: `GET /openapi.json` serves an OpenAPI 3.0 document you
   can feed to Swagger UI, Postman, or an SDK generator.
