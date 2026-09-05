@@ -428,6 +428,50 @@
         }
       },
 
+  // sale-95: live four-way consistency preview on the create form —
+  // proxy/timezone/locale/platform changes re-check without saving.
+  // State lives on agentBrowser (this block is inside Object.assign, so no
+  // bare var/function declarations allowed here).
+  scheduleConsistencyPreview: function () {
+    if (agentBrowser._consistencyPreviewTimer) clearTimeout(agentBrowser._consistencyPreviewTimer);
+    agentBrowser._consistencyPreviewTimer = setTimeout(function () { agentBrowser.runConsistencyPreview(); }, 350);
+  },
+  runConsistencyPreview: function () {
+    var host = document.getElementById("new-profile-consistency");
+    if (!host) return;
+    var proxyEl = document.getElementById("new-profile-proxy");
+    var selection = { mode: "default", name: null };
+    try {
+      if (proxyEl && typeof parseProxySelection === "function") {
+        selection = parseProxySelection(proxyEl.value, "default");
+      }
+    } catch (e) { /* keep default */ }
+    var params = {
+      timezone: (document.getElementById("new-agent-browser-timezone") || {}).value || null,
+      locale: (document.getElementById("new-agent-browser-locale") || {}).value || null,
+      platform: (document.getElementById("new-agent-browser-platform") || {}).value || "windows",
+      proxyMode: selection.mode || "default",
+      proxyName: selection.name || null,
+    };
+    // Auto everywhere = nothing to warn about; skip the IPC round trip.
+    if (!params.timezone && !params.locale) { host.style.display = "none"; host.innerHTML = ""; return; }
+    api.browser.consistencyPreview(params).then(function (r) {
+      var items = [];
+      if (r) {
+        (r.warnings || []).forEach(function (w) { items.push({ level: "warn", text: w.message || w.code }); });
+        (r.blockers || []).forEach(function (b) { items.push({ level: "block", text: b.message || b.code }); });
+      }
+      if (!items.length) { host.style.display = "none"; host.innerHTML = ""; return; }
+      host.innerHTML = items.map(function (it) {
+        var color = it.level === "block" ? "var(--danger)" : "var(--warning)";
+        var bg = it.level === "block" ? "var(--danger-bg)" : "var(--warning-bg)";
+        return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:6px;padding:6px 8px;margin-top:4px;font-size:11px;">' +
+          (it.level === "block" ? "⛔ " : "⚠️ ") + esc(it.text) + '</div>';
+      }).join("");
+      host.style.display = "";
+    }).catch(function () { /* preview is best effort */ });
+  },
+
   newProfile: function () {
         agentBrowser.resetNewProfileForm("chromium");
         agentBrowser.loadBusinessPresets();
@@ -435,6 +479,15 @@
         agentBrowser.profileBrowserChanged();
         var adv = document.getElementById("new-profile-advanced");
         if (adv && adv.open) adv.open = false; // RoxyBrowser 4.0.3-style: basic fields first, advanced collapsed
+        var host = document.getElementById("new-profile-consistency");
+        if (host) { host.style.display = "none"; host.innerHTML = ""; }
+        ["new-profile-proxy", "new-agent-browser-timezone", "new-agent-browser-locale", "new-agent-browser-platform"].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el && !el.dataset.consistencyBound) {
+            el.dataset.consistencyBound = "1";
+            el.addEventListener("change", function () { agentBrowser.scheduleConsistencyPreview(); });
+          }
+        });
         document.getElementById("dlg-profile").showModal();
       },
 
@@ -1444,6 +1497,7 @@
           escAttr(t('profile.health.aria', 'Run a health check')) + '">' +
           '<option value="">' + esc(t('profile.health.placeholder', '🩺 Health…')) + '</option>' +
           '<option value="drift">' + esc(t('profile.health.drift', '🧬 Fingerprint drift')) + '</option>' +
+          '<option value="lock">' + esc(t('profile.health.lock', '🔒 Lock fingerprint baseline')) + '</option>' +
           '<option value="env">' + esc(t('profile.health.env', '🖥 Host environment')) + '</option>' +
           '<option value="webrtc">' + esc(t('profile.health.webrtc', '📡 WebRTC leak')) + '</option>' +
           '<option value="risk">' + esc(t('profile.health.external', '🔍 External site (ping0.cc)')) + '</option>' +
@@ -1732,6 +1786,7 @@
         if (!kind || !hcard || !hcard.dataset.dirId) return;
         var id = hcard.dataset.dirId;
         if (kind === "drift") agentBrowser.checkDrift(id);
+        else if (kind === "lock") agentBrowser.lockBaseline(id);
         else if (kind === "env") agentBrowser.openEnvRisk(id);
         else if (kind === "webrtc") agentBrowser.openWebRtcDiag(id);
         else if (kind === "risk") agentBrowser.openRiskCheck(id);
@@ -1739,6 +1794,31 @@
       }
     };
   }
+
+  // sale-96: one-click fingerprint lock — capture the live baseline now so
+  // later drift blocks the launch. Requires a running profile (CDP read).
+  agentBrowser.lockBaseline = function(dirId) {
+    if (!acquireDetectSlot(dirId)) return;
+    api.browser.status(dirId).then(function (s) {
+      if (!s || !s.running) {
+        releaseDetectSlot(dirId);
+        toast(t("toast.fp.lock-need-running", "Start the profile first, then lock — the baseline is read from the live browser"), "info");
+        return;
+      }
+      agentBrowser.ipc.call("browser.captureBaseline", function () {
+        return api.browser.captureBaseline(dirId);
+      }, { kind: "detect" }).then(function (r) {
+        releaseDetectSlot(dirId);
+        if (r && r.ok) {
+          recordHealthResult(dirId, "drift", { verdict: "pass", detail: t("toast.fp.locked", "baseline locked") });
+          toast(t("toast.fp.locked", "Fingerprint baseline locked ({n} fields) — future drift will block launch").replace("{n}", r.fields || "?"), "success");
+        } else {
+          toast((r && r.error) || t("toast.fp.lock-failed", "Failed to lock baseline"), "error");
+        }
+        scheduleProfilesRefresh();
+      }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
+    }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
+  };
 
   agentBrowser.checkDrift = function(dirId) {
     // TE-09: one check per profile at a time, max 2 globally.
@@ -1890,6 +1970,70 @@
         renderEnvRiskHistory(dirId);
       })
       .catch(function (e) { releaseDetectSlot(dirId); renderEnvRisk({ ok: false, error: e.message || String(e) }); });
+  };
+
+  // sale-97: one-click report export — the presale "ticket" (profile name +
+  // timestamp + app version + latest env/webrtc results, redacted server-side).
+  function downloadReportJson(filename, payload) {
+    try {
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      return true;
+    } catch (e) {
+      toast((e && e.message) || String(e), "error");
+      return false;
+    }
+  }
+  function profileNameForReport(dirId, fallback) {
+    var card = document.querySelector('#profile-list .profile-card[data-dir-id="' + String(dirId).replace(/"/g, "") + '"] .name');
+    return (card && card.textContent.trim()) || fallback || dirId.slice(0, 8);
+  }
+  agentBrowser.envRiskExport = function() {
+    if (!currentEnvRiskDirId) return;
+    var dirId = currentEnvRiskDirId;
+    Promise.all([
+      api.browser.envRisk(dirId).catch(function (e) { return { ok: false, error: e.message }; }),
+      api.browser.envRiskHistory(dirId).catch(function () { return { ok: true, entries: [] }; }),
+      api.app.version().catch(function () { return "?"; }),
+    ]).then(function (rs) {
+      var payload = {
+        kind: "env-risk-report",
+        profile: { dirId: dirId, name: profileNameForReport(dirId) },
+        exportedAt: new Date().toISOString(),
+        appVersion: rs[2],
+        latest: (rs[0] && rs[0].result) || null,
+        history: ((rs[1] && rs[1].entries) || []).slice(-20),
+      };
+      if (downloadReportJson("env-risk-" + dirId.slice(0, 8) + ".json", payload)) {
+        toast(t("report.exported", "Report exported"), "success");
+      }
+    }).catch(function (e) { toast(e.message || String(e), "error"); });
+  };
+  agentBrowser.webRtcDiagExport = function() {
+    var dirId = window.__webrtcDiagDirId;
+    if (!dirId) return;
+    Promise.all([
+      api.webrtc.diagHistory(dirId).catch(function () { return { entries: [] }; }),
+      api.app.version().catch(function () { return "?"; }),
+    ]).then(function (rs) {
+      var payload = {
+        kind: "webrtc-report",
+        profile: { dirId: dirId, name: profileNameForReport(dirId) },
+        exportedAt: new Date().toISOString(),
+        appVersion: rs[1],
+        history: ((rs[0] && rs[0].entries) || []).slice(-20),
+      };
+      if (downloadReportJson("webrtc-" + dirId.slice(0, 8) + ".json", payload)) {
+        toast(t("report.exported", "Report exported"), "success");
+      }
+    }).catch(function (e) { toast(e.message || String(e), "error"); });
   };
 
   // R12 UX P1-1: destructive clears need a confirm like purge does.

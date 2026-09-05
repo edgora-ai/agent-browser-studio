@@ -415,6 +415,26 @@ export function registerBrowserHandlers(): void {
     return statusBrowser(dirId);
   });
 
+  // sale-95: parameter-only preview for the create/edit form — the profile
+  // may not exist yet, so check raw values instead of stored meta.
+  handleBrowser("consistency-preview", async (_event, params: {
+    timezone?: string | null; locale?: string | null; platform?: string;
+    proxyMode?: string; proxyName?: string | null;
+  }) => {
+    try {
+      const cfg = getConfig() as any;
+      const p = params || {};
+      const proxyGeo = p.proxyName ? getProxyDetection(String(p.proxyName)) : null;
+      return checkProfileConsistency({
+        timezone: p.timezone || null, locale: p.locale || null, webrtcIp: null, platform: p.platform || "windows",
+        proxyMode: (p.proxyMode as any) || "none",
+        proxyGeo,
+      }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
+    } catch (e: any) {
+      return { ok: false, warnings: [], blockers: [], error: e?.message || String(e) };
+    }
+  });
+
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy) for the UI badge.
   handleBrowser("consistency-check", async (_event, dirId: string) => {
     validateDirId(dirId);
