@@ -60,7 +60,7 @@ jobs:
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient config --unmanaged --name=. "https://chromium.googlesource.com/chromium/src.git" >/dev/null && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -124,7 +124,7 @@ jobs:
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient config --unmanaged --name=. "https://chromium.googlesource.com/chromium/src.git" >/dev/null && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -189,7 +189,7 @@ jobs:
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
             # Shallow fetch (~4 GiB vs ~40 GiB full) — 10x less disk, 3x faster on GitHub runners
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient config --unmanaged --name=. "https://chromium.googlesource.com/chromium/src.git" >/dev/null && gclient sync -D --no-history 2>/dev/null || (cd chromium-src-152 && gclient sync -D)); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
@@ -259,7 +259,7 @@ jobs:
           for i in 1 2 3; do
             if [ -d chromium-src-152/.git ]; then rm -rf chromium-src-152; fi
             # Shallow fetch (~4 GiB vs ~40 GiB) — also add disk cleanup happens above for macos
-            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient sync -D); then
+            if mkdir -p chromium-src-152 && git -C chromium-src-152 init -q && git -C chromium-src-152 fetch --depth 1 https://github.com/chromium/chromium.git "$CHROMIUM_COMMIT" -q && git -C chromium-src-152 checkout FETCH_HEAD -q && (cd chromium-src-152 && gclient config --unmanaged --name=. "https://chromium.googlesource.com/chromium/src.git" >/dev/null && gclient sync -D); then
               break
             fi
             echo "Clone/sync attempt $i failed, retrying in 30s..." >&2
