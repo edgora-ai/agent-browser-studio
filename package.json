@@ -7,7 +7,7 @@
   "scripts": {
     "clean:build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "clean:release": "node -e \"require('fs').rmSync('release', { recursive: true, force: true })\"",
-    "build": "npm run clean:build && tsc && mkdir -p dist/renderer dist/resources && cp -r src/renderer/index.html src/renderer/storage-migrate.html src/renderer/css src/renderer/js dist/renderer/ && cp src/main/preload.cjs dist/main/ && cp resources/tray-icon-Template.png dist/resources/ && cp resources/icon.icns dist/resources/ && npm run build:native",
+    "build": "npm run clean:build && tsc && mkdir -p dist/renderer dist/resources && cp -r src/renderer/index.html src/renderer/storage-migrate.html src/renderer/css src/renderer/js dist/renderer/ && cp src/main/preload.cjs dist/main/ && cp resources/tray-icon-Template.png dist/resources/ && cp resources/icon.icns dist/resources/ && cp resources/icon.ico dist/resources/ && npm run build:native",
     "build:native": "node scripts/build-masque-bridge.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",

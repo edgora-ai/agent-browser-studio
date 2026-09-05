@@ -22,7 +22,9 @@ describe("bundled-native-browsers", () => {
 
   it("roots resolve per platform", () => {
     expect(bundledBrowsersRoot("darwin", root)).toBe(macRoot);
-    expect(bundledBrowsersRoot("win32", root)).toBe(path.join(macRoot, "win32"));
+    // Win-static-audit P0-1: Node "win32" maps to the staged "win" dir
+    // (sync-native-browsers.mjs + electron-builder extraResources).
+    expect(bundledBrowsersRoot("win32", root)).toBe(path.join(macRoot, "win"));
     expect(bundledBrowsersRoot("linux", root)).toBe(path.join(macRoot, "linux"));
     expect(bundledBrowsersRoot("darwin", undefined)).toBeNull();
   });
@@ -49,8 +51,8 @@ describe("bundled-native-browsers", () => {
   });
 
   it("resolves win/linux binary names when present", () => {
-    const winChrome = path.join(macRoot, "win32", "chromium", "chrome.exe");
-    const winFf = path.join(macRoot, "win32", "firefox", "firefox.exe");
+    const winChrome = path.join(macRoot, "win", "chromium", "chrome.exe");
+    const winFf = path.join(macRoot, "win", "firefox", "firefox.exe");
     const linuxChrome = path.join(macRoot, "linux", "chromium");
     const linuxFf = path.join(macRoot, "linux", "firefox", "firefox");
     [path.dirname(winChrome), path.dirname(winFf), path.dirname(linuxChrome), path.dirname(linuxFf)]

@@ -31,7 +31,12 @@ export function bundledBrowsersRoot(
 ): string | null {
   if (!resourcesPath) return null;
   const base = path.join(resourcesPath, "native-browsers");
-  return platform === "darwin" ? base : path.join(base, platform);
+  // Win-static-audit P0-1 (#113 follow-up): Node reports "win32" but the
+  // staged dir (sync-native-browsers.mjs) and electron-builder extraResources
+  // both use "win". Map it here so packaged Windows resolves.
+  if (platform === "darwin") return base;
+  if (platform === "win32") return path.join(base, "win");
+  return path.join(base, platform);
 }
 
 function effectiveResourcesPath(
