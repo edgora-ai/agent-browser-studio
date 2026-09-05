@@ -104,7 +104,17 @@
       rows += '<div class="info-row"><span>' + esc(t("browser.updates.channel", "Channel")) + '</span><span>' + esc(state.channel || 'stable') + '</span></div>';
       var installed = (state.installed || []).slice().sort(function (a, b) { return b.installedAt - a.installedAt; });
       if (installed.length) {
-        rows += '<div class="info-row"><span>' + esc(t("browser.updates.installed", "Installed releases")) + '</span><span>' + esc(installed.map(function (i) { return i.version + ' (' + i.status + ')'; }).join(', ')) + '</span></div>';
+        // R15 UX P1-8: staged (non-active) releases get an Activate button —
+        // the action existed in runUpdateAction but no UI ever rendered it.
+        rows += '<div class="info-row" style="align-items:flex-start;"><span>' + esc(t("browser.updates.installed", "Installed releases")) + '</span><span>';
+        installed.forEach(function (i) {
+          rows += '<div style="margin:2px 0;">' + esc(i.version + ' (' + i.status + ')');
+          if (i.status === "staged" && i.version !== state.activeVersion) {
+            rows += ' <button type="button" class="btn btn-primary btn-sm" data-upd-action="activate" data-upd-version="' + escAttr(i.version) + '">' + esc(t("browser.updates.activate", "Activate")) + '</button>';
+          }
+          rows += '</div>';
+        });
+        rows += '</span></div>';
       }
       if (lastAvailableUpdates && lastAvailableUpdates.length) {
         rows += '<div class="info-row" style="align-items:flex-start;"><span>' + esc(t("browser.updates.available", "Available updates")) + '</span><span>';

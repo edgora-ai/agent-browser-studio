@@ -237,6 +237,8 @@
       "agent.start-title": "开始新对话",
       "agent.start-hint": "在下方输入消息即可开始",
       "agent.load-failed": "对话加载失败",
+      "agent.conv-missing": "对话不存在 — 可能已被删除",
+      "agent.conv-load-failed": "对话加载失败",
       "agent.retry": "重试",
       "agent.create-failed": "创建对话失败：",
       "agent.config.title": "⚙️ API 配置",
@@ -335,6 +337,7 @@
       "runs.toast.cleared": "已清空 ",
       "runs.toast.cleared-unit": " 条",
       "runs.confirm.clear-all": "清空所有运行记录?",
+      "runs.confirm.delete-one": "删除这条运行记录?",
 
       // ── Automation ──
       "auto.trigger.cron": "定时 ",
@@ -1026,6 +1029,8 @@
       "agent.start-title": "Start a conversation",
       "agent.start-hint": "Type a message below to begin",
       "agent.load-failed": "Failed to load conversations",
+      "agent.conv-missing": "Conversation not found — it may have been deleted",
+      "agent.conv-load-failed": "Failed to load conversation",
       "agent.retry": "Retry",
       "agent.create-failed": "Failed to create conversation: ",
       "agent.config.title": "⚙️ API Configuration",
@@ -1124,6 +1129,7 @@
       "runs.toast.cleared": "Cleared ",
       "runs.toast.cleared-unit": " records",
       "runs.confirm.clear-all": "Clear all run records?",
+      "runs.confirm.delete-one": "Delete this run record?",
 
       // ── Automation ──
       "auto.trigger.cron": "Schedule ",

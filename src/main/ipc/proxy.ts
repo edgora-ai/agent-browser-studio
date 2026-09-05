@@ -14,6 +14,7 @@ import {
 import { getProxySecret } from "../services/config-manager.js";
 import { clearProxyHealth, listProxyHealth, proxyHealthSummary, recordProxyRotation } from "../services/proxy-health.js";
 import { recordAudit } from "../services/audit-log.js";
+import { requireAccountSecret } from "../services/team.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "../services/proxy-import.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
 import QRCode from "qrcode";
@@ -199,9 +200,14 @@ export function registerProxyHandlers(): void {
 
   // Export the current proxy store as a CSV document (passwords redacted
   // unless the caller explicitly opts into a migration export).
+  // R15 P0-6: plaintext export requires member+ (viewer must not pull secrets).
   ipcMain.handle("proxy:export-csv", async (_event, opts?: { includePasswords?: boolean }) => {
     try {
       const includePasswords = opts?.includePasswords === true;
+      if (includePasswords) {
+        const gate = requireAccountSecret();
+        if (!gate.ok) return { success: false, error: gate.error };
+      }
       const csv = exportProxiesCsv({ includePasswords });
       recordAudit({ category: "proxy", action: "export", target: "proxies", actor: "user", detail: includePasswords ? "exported CSV (passwords included — user-confirmed migration)" : "exported CSV (passwords redacted)" });
       return { success: true, csv };
@@ -211,8 +217,11 @@ export function registerProxyHandlers(): void {
   });
 
   // Export a single proxy as a scannable QR code (full config incl. credentials).
+  // R15 P0-6: same member+ gate as plaintext CSV export.
   ipcMain.handle("proxy:qrcode", async (_event, { name }: { name: string }) => {
     try {
+      const gate = requireAccountSecret();
+      if (!gate.ok) return { success: false, error: gate.error };
       const cfg = getProxySecret(name);
       if (!cfg) return { success: false, error: "Proxy not found" };
       const uri = proxyUri(cfg);

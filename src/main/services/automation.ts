@@ -122,22 +122,29 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         const okCount = outcomes.filter((x) => x.ok).length;
         const failed = outcomes.filter((x) => !x.ok);
         const runIds = outcomes.map((x) => x.runId).filter(Boolean).join(",");
+        // R15 P0-1: partial failure must fail the job (markFailed + retry
+        // accounting), not markDone. Same semantics as the single-profile
+        // path above which throws on !out.ok.
         if (failed.length > 0) {
-          return `agent batch: ${okCount} ok / ${failed.length} failed (runs ${runIds}; first error: ${failed[0].error})`;
+          throw new Error(`agent batch: ${okCount} ok / ${failed.length} failed (runs ${runIds}; first error: ${failed[0].error})`);
         }
         return `agent batch done: ${okCount} ok / 0 failed (runs ${runIds})`;
       }
+      // R15 P0-2: sync failure must fail the job, not markDone with a
+      // "push failed" message. Same throw semantics as agent-task.
       case "sync-push": {
         assertActionNotAborted(context.signal);
         const r = await syncService.push(context.signal);
         assertActionNotAborted(context.signal);
-        return r.success ? `pushed: ${r.message}` : `push failed: ${r.message}`;
+        if (!r.success) throw new Error(`push failed: ${r.message}`);
+        return `pushed: ${r.message}`;
       }
       case "sync-pull": {
         assertActionNotAborted(context.signal);
         const r = await syncService.pull(context.signal);
         assertActionNotAborted(context.signal);
-        return r.success ? `pulled: ${r.message}` : `pull failed: ${r.message}`;
+        if (!r.success) throw new Error(`pull failed: ${r.message}`);
+        return `pulled: ${r.message}`;
       }
       case "custom-js": {
         if (!a.jsCode) throw new Error("missing jsCode");

@@ -221,11 +221,20 @@
         });
       },
 
+  // R15 UX P1-5: revert the checkbox on failure instead of leaving it
+  // showing the opposite of the actual state.
   extToggle: function(extId, enabled) {
         api.settings.toggleExtension(agentBrowser._extDirId, extId, enabled).then(function(r) {
-          if (r.success) toast(enabled ? 'Enabled for profile' : 'Disabled for profile', 'success');
-          else toast(r.error || 'Toggle failed', 'error');
-        }).catch(function(e) { toast('Toggle error: ' + e.message, 'error'); });
+          if (r && r.success) {
+            toast(enabled ? 'Enabled for profile' : 'Disabled for profile', 'success');
+          } else {
+            toast((r && r.error) || 'Toggle failed', 'error');
+            agentBrowser._extRefreshList();
+          }
+        }).catch(function(e) {
+          toast('Toggle error: ' + e.message, 'error');
+          agentBrowser._extRefreshList();
+        });
       },
 
   showRepositoryAdd: function (initialValue) {

@@ -191,22 +191,11 @@ export function findBrowserByProfileSync(dirId: string, expectedProfileDir: stri
 }
 
 export function findCdpPortSync(dirId: string, profileDir: string): number | null {
-  void dirId;
-  const lines = collectLinesSync();
-  for (const line of lines) {
-    if (!line.includes(profileDir)) continue;
-    const mEq = line.match(/--remote-debugging-port=(\d+)/);
-    if (mEq) {
-      const p = parseInt(mEq[1], 10);
-      if (Number.isInteger(p) && p >= 1 && p <= 65535) return p;
-    }
-    const mSp = line.match(/--remote-debugging-port\s+(\d+)/);
-    if (mSp) {
-      const p = parseInt(mSp[1], 10);
-      if (Number.isInteger(p) && p >= 1 && p <= 65535) return p;
-    }
-  }
-  return null;
+  // R15 P1-15: exact directory match like parseBrowserProcessLine — the old
+  // substring includes() matched profiles/abc against profiles/abc-def and
+  // returned the wrong CDP port (cross-profile cookie confusion).
+  const info = findBrowserByProfileSync(dirId, profileDir);
+  return info ? info.cdpPort : null;
 }
 
 // Async variant for callers that previously used `exec("ps -eo pid,args", cb)`.

@@ -100,10 +100,20 @@ function saveTeam(team: TeamConfig): void {
   saveConfig(cfg);
 }
 
-/** Bootstrap the workspace with the local device as owner. */
+/**
+ * Bootstrap the workspace with the local device as owner.
+ * R15 P0-5: re-init of an existing workspace requires owner — otherwise any
+ * viewer can seize ownerDeviceId and take over the roster.
+ */
 export function initTeam(name: string): TeamConfig {
   const me = getLocalIdentity();
   const existing = getTeam();
+  if (existing && existing.members.length > 0) {
+    const role = localRole();
+    if (role !== "owner") {
+      throw new Error("A team workspace already exists — only its owner can re-initialize it");
+    }
+  }
   const members: TeamMember[] = existing && existing.members.length
     ? existing.members
     : [{ deviceId: me.deviceId, name: me.name, role: "owner", addedAt: Date.now() }];

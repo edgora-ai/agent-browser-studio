@@ -102,15 +102,23 @@
     }).catch(function(e) { toast(t('agent.create-failed', 'Failed to create conversation: ') + e.message, 'error'); });
   };
 
+  // R15 UX P1-3: failure toasts + clears stale messages instead of
+  // silently keeping the previous conversation on screen.
   agentBrowser.agentSelectConv = function(convId) {
     R.agent.conversations.get(convId).then(function(conv) {
-      if (!conv) return;
+      if (!conv) { toast(t('agent.conv-missing', 'Conversation not found — it may have been deleted'), 'error'); return; }
       state.agentActiveConvId = convId;
       state.agentMessages = conv.messages || [];
       document.getElementById('agent-chat-title').textContent = conv.title || t('agent.chat-title', 'New Chat');
       agentBrowser.agentRenderMessages();
       agentBrowser.agentLoadConversations();
-    }).catch(function(e) { console.error('Load conversation:', e); });
+    }).catch(function(e) {
+      console.error('Load conversation:', e);
+      toast((e && e.message) || t('agent.conv-load-failed', 'Failed to load conversation'), 'error');
+      state.agentActiveConvId = null;
+      state.agentMessages = [];
+      agentBrowser.agentRenderMessages();
+    });
   };
 
   agentBrowser.agentDeleteConv = function() {
@@ -126,16 +134,23 @@
   };
 
   // ── Chat ──
+  // R15 UX P1-4: disable input while creating the conversation (double-clicks
+  // created duplicate conversations) and keep the draft on failure.
   agentBrowser.agentSend = function() {
     var input = document.getElementById('agent-chat-input');
     var msg = input.value.trim();
     if (!msg) return;
+    if (input.disabled) return;
     if (!state.agentActiveConvId) {
       // Create conversation first
+      input.disabled = true;
       R.agent.conversations.create(msg.slice(0, 40)).then(function(c) {
         state.agentActiveConvId = c.id;
         agentBrowser.agentLoadConversations();
         agentBrowser._doAgentSend(msg);
+      }).catch(function(e) {
+        input.disabled = false;
+        toast((e && e.message) || t('agent.create-failed', 'Failed to create conversation: '), 'error');
       });
       return;
     }

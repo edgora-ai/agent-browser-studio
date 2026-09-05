@@ -174,6 +174,7 @@
     document.getElementById('auto-action-prompt').value = templatePrompt(tpl);
   }
 
+  // R15 UX P1-7: list failure gets an error state + retry, not a stuck Loading.
   agentBrowser.loadAutomationTab = function() {
     api.automation.list().then(function(rules) {
       currentRules = rules || [];
@@ -209,6 +210,15 @@
           else if (action === 'delete') agentBrowser.automationDelete(ruleId);
         };
       }
+    }).catch(function(e) {
+      var errEl = document.getElementById('automation-list');
+      var msg = (e && e.message) || String(e);
+      if (window.agentBrowser && window.agentBrowser.renderViewState) {
+        window.agentBrowser.renderViewState(errEl, { error: msg, retry: { cmd: 'loadAutomationTab' } });
+      } else if (errEl) {
+        errEl.innerHTML = '<div class="empty-state">Error: ' + esc(msg) + '</div>';
+      }
+      toast(msg, 'error');
     });
     agentBrowser.automationRefreshLogs();
     agentBrowser.automationRefreshJobs();
@@ -416,17 +426,33 @@
     if (actionType === 'custom-js') action.jsCode = document.getElementById('auto-action-js').value;
     var enabled = document.getElementById('auto-enabled').checked;
     var payload = { name: name, enabled: enabled, trigger: trigger, action: action };
-    document.getElementById('dlg-automation').close();
+    // R15 UX P1-9/P1-12: keep the dialog open until the save succeeds (a
+    // failure used to close first and lose the input), disable Save in
+    // flight, and honor the backend success flag on toggle/delete.
+    var saveBtn = document.querySelector('#dlg-automation button[type="submit"]');
+    if (saveBtn) saveBtn.setAttribute("disabled", "disabled");
     var p = id ? api.automation.update(Object.assign({ id: id }, payload)) : api.automation.create(payload);
     p.then(function(r) {
-      toast(r.success ? (id ? t('auto.saved','已更新') : t('auto.created','已创建')) : t('auto.save-failed','失败: ') + (r.error || ''), r.success ? 'success' : 'error');
+      if (saveBtn) saveBtn.removeAttribute("disabled");
+      if (r && r.success === false) {
+        toast(t('auto.save-failed','失败: ') + (r.error || ''), 'error');
+        return;
+      }
+      document.getElementById('dlg-automation').close();
+      toast(id ? t('auto.saved','已更新') : t('auto.created','已创建'), 'success');
       agentBrowser.loadAutomationTab();
-    }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
+    }).catch(function(e) {
+      if (saveBtn) saveBtn.removeAttribute("disabled");
+      toast((e && e.message) || String(e), 'error');
+    });
   };
 
   agentBrowser.automationToggle = function(rule) {
     if (!rule) return;
-    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function() { agentBrowser.loadAutomationTab(); }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
+    api.automation.update({ id: rule.id, enabled: !rule.enabled, name: rule.name, trigger: rule.trigger, action: rule.action }).then(function(r) {
+      if (r && r.success === false) { toast(r.error || t('toast.failed','操作失败'), 'error'); return; }
+      agentBrowser.loadAutomationTab();
+    }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };
   agentBrowser.automationTest = function(ruleId) {
     toast(t('auto.test-running','测试运行中...'), 'info');
@@ -439,7 +465,11 @@
   };
   agentBrowser.automationDelete = function(ruleId) {
     agentBrowser.confirm(t('auto.confirm-delete','删除此任务?'), function() {
-      api.automation.delete(ruleId).then(function() { toast(t('auto.deleted','已删除'), 'success'); agentBrowser.loadAutomationTab(); }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
+      api.automation.delete(ruleId).then(function(r) {
+        if (r && r.success === false) { toast(r.error || t('toast.failed','删除失败'), 'error'); return; }
+        toast(t('auto.deleted','已删除'), 'success');
+        agentBrowser.loadAutomationTab();
+      }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
     });
   };
 })();

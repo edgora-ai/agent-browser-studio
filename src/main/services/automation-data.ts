@@ -3,6 +3,7 @@
 // 这里只做 config 读写,调度由 automation.ts 管。
 import { getConfig, saveConfig } from "./config-manager.js";
 import { reloadSchedule } from "./automation.js";
+import { validateCron } from "./cron-validate.js";
 import type { AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType } from "../types.js";
 
 
@@ -24,7 +25,12 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
     const actionType = ACTION_TYPES.has(a.type) ? a.type as AutomationActionType : null;
     if (!actionType) return { success: false, error: "invalid action type" };
     const trigger: AutomationTrigger = { type: triggerType };
-    if (triggerType === "cron" && typeof t.cron === "string") trigger.cron = t.cron.slice(0, 100);
+    // R15 P1-2: validate cron at create time (the IPC path already does) —
+    // an invalid cron used to return success but never fire.
+    if (triggerType === "cron" && typeof t.cron === "string") {
+      validateCron(t.cron.slice(0, 100));
+      trigger.cron = t.cron.slice(0, 100);
+    }
     if (triggerType === "once" && typeof t.at === "number") trigger.at = t.at;
     if (triggerType === "event" && EVENTS.has(t.event)) {
       trigger.event = t.event as any;
@@ -69,15 +75,24 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
   }
 }
 
-export function deleteAutomationRule(ruleId: string): { success: boolean } {
+// R15 P1-5: deleting a nonexistent rule reports failure instead of success.
+export function deleteAutomationRule(ruleId: string): { success: boolean; error?: string } {
+  let deleted = false;
   try {
     const { transact } = require("./config/store.js");
-    transact((draft: any) => { draft.automation = (draft.automation || []).filter((r: AutomationRule) => r.id !== ruleId); });
+    transact((draft: any) => {
+      const before = (draft.automation || []).length;
+      draft.automation = (draft.automation || []).filter((r: AutomationRule) => r.id !== ruleId);
+      deleted = draft.automation.length !== before;
+    });
   } catch {
     const cfg = getConfig() as any;
+    const before = (cfg.automation || []).length;
     cfg.automation = (cfg.automation || []).filter((r: AutomationRule) => r.id !== ruleId);
+    deleted = cfg.automation.length !== before;
     saveConfig(cfg);
   }
+  if (!deleted) return { success: false, error: "rule not found" };
   reloadSchedule();
   return { success: true };
 }

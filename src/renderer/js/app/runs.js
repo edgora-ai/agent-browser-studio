@@ -240,19 +240,25 @@
     });
   };
 
+  // R15 UX P1-1/P1-13: single delete gets a confirm like clear does, and
+  // both paths check the result + catch transport errors.
   agentBrowser.runsDelete = function(runId) {
-    api.agentRuns.delete(runId).then(function() {
-      toast(t("runs.toast.deleted", "已删除"), "success");
-      agentBrowser.loadRunsTab();
+    agentBrowser.confirm(t("runs.confirm.delete-one", "删除这条运行记录?"), function() {
+      api.agentRuns.delete(runId).then(function(r) {
+        if (r && r.success === false) { toast(r.error || t("toast.failed", "Failed"), "error"); return; }
+        toast(t("runs.toast.deleted", "已删除"), "success");
+        agentBrowser.loadRunsTab();
+      }).catch(function(e) { toast(e.message || String(e), "error"); });
     });
   };
 
   agentBrowser.runsClear = function() {
     agentBrowser.confirm(t("runs.confirm.clear-all", "清空所有运行记录?"), function() {
       api.agentRuns.clear().then(function(r) {
-        toast(t("runs.toast.cleared", "已清空 ") + (r.deleted || 0) + t("runs.toast.cleared-unit", " 条"), "success");
+        if (r && r.success === false) { toast(r.error || t("toast.failed", "Failed"), "error"); return; }
+        toast(t("runs.toast.cleared", "已清空 ") + ((r && r.deleted) || 0) + t("runs.toast.cleared-unit", " 条"), "success");
         agentBrowser.loadRunsTab();
-      });
+      }).catch(function(e) { toast(e.message || String(e), "error"); });
     }, { ackLabel: t("confirm.ack.permanent","我了解此操作会永久删除数据且不可撤销。") });
   };
 

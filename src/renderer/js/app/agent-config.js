@@ -148,12 +148,15 @@
       apiUrl: document.getElementById('agent-llm-url').value.trim() || undefined,
     };
     if (!config.apiKey && !document.getElementById('agent-llm-apikey').placeholder.match(/^saved/)) { toast((window.i18n ? window.i18n.t("toast.llm.key-required", "API Key is required") : "API Key is required"), 'error'); return; }
+    // R15 UX P1-2: surface backend refusal instead of silent no-op.
     R.agent.saveLlmConfig(config).then(function(r) {
-      if (r.success) {
+      if (r && r.success) {
         var el = document.getElementById('agent-config-saved');
         el.style.display = 'inline';
         setTimeout(function(){ el.style.display = 'none'; }, 3000);
         toast((window.i18n ? window.i18n.t("toast.llm.saved", "LLM config saved! Go back to Chat to start.") : "LLM config saved! Go back to Chat to start."));
+      } else {
+        toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), 'error');
       }
     }).catch(function(e) { toast(e.message, 'error'); });
   };
@@ -197,13 +200,15 @@
   agentBrowser.agentSaveFs = function() {
     var mode = document.getElementById('agent-fs-mode').value;
     api.settings.agentFsSet(mode, fsAllowlist).then(function(r) {
-      if (r.success) {
+      if (r && r.success) {
         fsAllowlist = (r.agentFs && r.agentFs.allowlist) || [];
         renderFsAllowlist();
         var el = document.getElementById('agent-fs-saved');
         el.style.display = 'inline';
         setTimeout(function(){ el.style.display = 'none'; }, 3000);
         toast(t('agent-config.file-access-saved','文件访问设置已保存'), 'success');
+      } else {
+        toast((r && r.error) || t('toast.failed','保存失败'), 'error');
       }
     }).catch(function(e) { toast(e.message, 'error'); });
   };
