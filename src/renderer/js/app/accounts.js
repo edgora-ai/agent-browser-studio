@@ -35,7 +35,7 @@
     if (!profileIds || !profileIds.length) return '';
     return profileIds.map(function(id) {
       var name = nameById[id] || id;
-      return '<span style="background:#eafaf1;border:1px solid #b7e4c7;padding:1px 6px;border-radius:3px;font-size:10px;margin-right:4px;" title="' + escAttr(id) + '">🔗 ' + esc(name) + '</span>';
+      return '<span class="chip chip-link" style="margin-right:4px;" title="' + escAttr(id) + '">🔗 ' + esc(name) + '</span>';
     }).join('');
   }
 
@@ -58,7 +58,7 @@
       var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
       for (var i = 0; i < accounts.length; i++) {
         var a = accounts[i];
-        var tagsHtml = (a.tags || []).map(function(t) { return '<span style="background:#e8f4fd;padding:1px 6px;border-radius:3px;font-size:10px;">' + esc(t) + '</span>'; }).join(' ');
+        var tagsHtml = (a.tags || []).map(function(t) { return '<span class="chip chip-info">' + esc(t) + '</span>'; }).join(' ');
         var chips = boundChips(a.profileIds, nameById);
         var passBtn = (a.hasPassword && canManage)
           ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="Copy password">🔑</button> '

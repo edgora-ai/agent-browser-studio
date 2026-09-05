@@ -90,6 +90,16 @@
 
   agentBrowser.renderViewState = function(el, state) {
     if (!el) return;
+    // UI R2: skeleton option for list loading — 3 shimmer cards by default.
+    if (state.skeleton) {
+      var n = Math.max(1, Math.min(typeof state.skeleton === "number" ? state.skeleton : 3, 6));
+      var cards = "";
+      for (var i = 0; i < n; i++) {
+        cards += '<div class="skeleton-card" aria-hidden="true"><div class="skeleton-line" style="width:42%;"></div><div class="skeleton-line" style="width:88%;"></div><div class="skeleton-line" style="width:64%;"></div></div>';
+      }
+      el.innerHTML = '<div class="skeleton-list" role="status" aria-label="' + escAttr(state.loading || "Loading") + '">' + cards + '</div>';
+      return;
+    }
     if (state.loading) { el.innerHTML = '<div class="loading">' + esc(state.loading) + '</div>'; return; }
     if (state.error) {
       var friendly = agentBrowser.helpers && agentBrowser.helpers.friendlyError;

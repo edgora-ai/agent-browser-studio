@@ -797,12 +797,22 @@
       }
     }
     var dlg = document.getElementById("dlg-confirm");
-    if (dlg && !dlg.open) dlg.showModal();
+    if (dlg && !dlg.open) { dlg.showModal(); agentBrowser.focusDialogPrimary(dlg); }
   };
   // UNSAFE-CONTRACT: msgHtml/detailHtml are inserted as HTML without further
   // sanitization. Callers MUST pass only static markup or esc()-escaped
   // dynamic values — never raw profile/proxy/account names. (Covered by the
   // confirmHtml-contract unit test: all in-repo callers esc() first.)
+  // UI R2: focus the confirm button when a dialog opens so keyboard users
+  // land on the primary action instead of nowhere (native <dialog> keeps
+  // prior focus; Esc + focus trap are native).
+  agentBrowser.focusDialogPrimary = function (dlg) {
+    if (!dlg) return;
+    try {
+      var target = dlg.querySelector("input:not([disabled])") || dlg.querySelector(".btn-primary:not([disabled])") || dlg.querySelector("button:not([disabled])");
+      if (target && typeof target.focus === "function") target.focus();
+    } catch (e) { /* focus is best effort */ }
+  };
   agentBrowser.confirmHtmlUnsafe = function (msgHtml, onOk, opts) {
     _confirmCallback = typeof onOk === "function" ? onOk : null;
     var msgEl = document.getElementById("dlg-confirm-msg");
@@ -815,7 +825,7 @@
       else { detailEl.textContent = ""; detailEl.style.display = "none"; }
     }
     var dlg = document.getElementById("dlg-confirm");
-    if (dlg && !dlg.open) dlg.showModal();
+    if (dlg && !dlg.open) { dlg.showModal(); agentBrowser.focusDialogPrimary(dlg); }
   };
   // Back-compat alias (deprecated): prefer confirmHtmlUnsafe with esc()'d args,
   // or confirm() for plain-text messages.

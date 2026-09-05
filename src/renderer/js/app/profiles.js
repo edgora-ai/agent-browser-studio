@@ -1438,7 +1438,7 @@
         var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
         var drmBadge = p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">🎬 DRM</span>' : '';
         var appBadge = p.appUrl ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.app', 'Capability: Web App {url}').replace('{url}', p.appUrl)) + '">🖥 App</span>' : '';
-        var engineBadge = isFirefox ? '<span class="status-badge badge-capability" style="color:#ff7a18;" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">🦊 Firefox</span>' : '';
+        var engineBadge = isFirefox ? '<span class="status-badge badge-capability chip-firefox" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">🦊 Firefox</span>' : '';
         // ── Review item UE-06: sync moves into the governance tier so the
         // three status tiers are visually distinct (lifecycle / governance /
         // capability) instead of five equal-weight badges.

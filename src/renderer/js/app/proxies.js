@@ -415,7 +415,8 @@
 
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
-    agentBrowser.renderViewState(container, { loading: "Loading proxies..." });
+    // UI R2: skeleton instead of bare text so the list doesn't flash empty.
+    agentBrowser.renderViewState(container, { skeleton: 3, loading: "Loading proxies..." });
     api.proxy.healthGet().then(function (health) {
       window.__proxyHealth = health || { entries: [], summary: null };
     }).catch(function () {

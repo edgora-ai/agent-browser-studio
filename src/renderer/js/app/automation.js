@@ -229,7 +229,9 @@
     if (!el) return;
     var statusEl = document.getElementById('automation-job-status');
     var status = statusEl && statusEl.value;
-    el.innerHTML = '<div class="loading">' + esc(t('auto.loading', 'Loading...')) + '</div>';
+    // UI R2: skeleton instead of bare text.
+    if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el, { skeleton: 3, loading: t('auto.loading', 'Loading...') });
+    else el.innerHTML = '<div class="loading">' + esc(t('auto.loading', 'Loading...')) + '</div>';
     api.automation.jobs({ status: status || undefined, limit: 50 }).then(function(jobs) {
       if (!jobs || jobs.length === 0) {
         if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{empty:t('auto.jobs.empty','暂无 jobs')}); else el.innerHTML = '<div class="empty-state">' + t('auto.jobs.empty', '还没有 durable jobs。<br>点击「测试运行」后会在这里看到执行记录。') + '</div>';
