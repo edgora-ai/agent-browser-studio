@@ -197,7 +197,20 @@ if (platform === "mac") {
   console.log(`  ${t.chromiumZip} (${(fs.statSync(t.chromiumZip).size / 1048576).toFixed(0)} MiB)`);
   console.log(`  ${t.firefoxZip} (${(fs.statSync(t.firefoxZip).size / 1048576).toFixed(0)} MiB)`);
   console.log(`  chromium ${chromiumVersion}, firefox ${firefoxVersion} — manifests ${t.manifest}`);
+} else if (platform === "win") {
+  // Win-static-audit P0-2/P0-3: the reader expects directories
+  // chromium/chrome.exe + firefox/firefox.exe (bundled-native-browsers.ts),
+  // and binVersion must spawn the .exe (extensionless spawn fails on Windows).
+  copyTree(chromiumApp, path.join(t.chromium, "chrome.exe"));
+  copyTree(firefoxApp, path.join(t.firefox, "firefox.exe"));
+  const chromiumVersion = binVersion(path.join(t.chromium, "chrome.exe"));
+  const firefoxVersion = binVersion(path.join(t.firefox, "firefox.exe"));
+  fs.writeFileSync(t.manifest, JSON.stringify({ platform, chromiumVersion, firefoxVersion, syncedAt: new Date().toISOString() }, null, 2) + "\n");
+  if (!chromiumVersion || !firefoxVersion) fail("version detection failed for a bundled browser", JSON.stringify({ chromiumVersion, firefoxVersion }));
+  console.log(`  manifest: ${t.manifest}`);
+  console.log(`  chromium ${chromiumVersion}, firefox ${firefoxVersion}`);
 } else {
+  // Linux keeps the bare-file layout (reader expects a `chromium` file).
   copyTree(chromiumApp, t.chromium);
   copyTree(firefoxApp, t.firefox);
   const chromiumVersion = binVersion(t.chromium);

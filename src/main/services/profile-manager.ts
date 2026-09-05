@@ -232,7 +232,13 @@ function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {
       sameSite: r.samesite ?? -1,
     }));
   } catch (e: any) {
+    // Win-static-audit P2-6: stock Windows has no sqlite3.exe on PATH.
+    // Only a spawn ENOENT (binary itself missing) degrades to an empty
+    // stopped-profile listing — sqlite-level errors (corrupt db, bad SQL)
+    // still throw so callers and tests see them.
+    const missing = (e as any)?.code === "ENOENT";
     console.error("listCookies sqlite error:", e.message);
+    if (missing) return [];
     throw e;
   }
 }

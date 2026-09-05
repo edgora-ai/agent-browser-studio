@@ -186,9 +186,11 @@ jobs:
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
       # Chromium has paths >260 chars — Windows Git must allow long paths
       # or checkout fails with "Filename too long" (standard Chromium/Windows
-      # prerequisite; GitHub windows runners allow the system-level set).
+      # prerequisite). --global (not --system): runner-safe, no elevation
+      # needed, and it covers the later manual Chromium clone. Our own repo
+      # checkout needs no long paths.
       - name: Enable Windows long paths
-        run: git config --system core.longpaths true
+        run: git config --global core.longpaths true
       - name: Clone + sync pinned Chromium source
         run: |
           for i in 1 2 3; do
