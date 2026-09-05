@@ -168,6 +168,13 @@ jobs:
     name: Windows x64 · build → verify → e2e → package
     runs-on: windows-latest
     timeout-minutes: 360
+    # Use the runner's local VS2022 (C++ workload) instead of the hermetic
+    # Chrome-blessed toolchain download: gclient sync hooks run
+    # vs_toolchain.py update, which fails without Google auth. Same default
+    # as patches/chromium/build-windows.sh, lifted to job level so the
+    # clone/sync step inherits it too.
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
     defaults:
       run:
         shell: bash
