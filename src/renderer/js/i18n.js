@@ -723,6 +723,8 @@
       "wizard.default-name": "我的首个配置",
       // Toast — profile lifecycle
       "toast.profile.started": "🥷 托管 Chromium 已启动",
+      "toast.profile.started-next": "下一步：从卡片 🩺 菜单跑一次健康检查",
+      "toast.profile.check-now": "立即检查",
       "toast.profile.launch-failed": "托管 Chromium 启动失败",
       "toast.profile.stop-failed": "停止失败",
       "toast.profile.stopped": "浏览器已停止",
@@ -1506,6 +1508,8 @@
       "wizard.default-name": "My First Profile",
       // Toast — profile lifecycle
       "toast.profile.started": "🥷 Managed Chromium started",
+      "toast.profile.started-next": "Next: run a health check from the card's 🩺 menu",
+      "toast.profile.check-now": "Check now",
       "toast.profile.launch-failed": "Managed Chromium launch failed",
       "toast.profile.stop-failed": "Stop failed",
       "toast.profile.stopped": "Browser stopped",

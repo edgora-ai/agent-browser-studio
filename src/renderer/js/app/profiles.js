@@ -174,7 +174,12 @@
               return;
             }
             if (r.success) {
-              toast(t("toast.profile.started", "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success");
+              // UI R3: success toast carries the next step (health check) as
+              // an action instead of a bare port number.
+              toast(t("toast.profile.started", "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success", {
+                detail: t("toast.profile.started-next", "Next: run a health check from the card's 🩺 menu"),
+                action: { label: t("toast.profile.check-now", "Check now"), onClick: (function (id) { return function () { agentBrowser.openEnvRisk(id); }; })(dirId) },
+              });
               if (r.envCheck && r.envCheck.high) {
                 var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
                 toast(t("toast.env.high-risk", "⚠️ Environment risk: ") + (envCodes || t("toast.env.high-generic", "host environment risk")) + t("toast.env.high-hint", " — open 🖥 Env on the card for fixes"), "error");
@@ -513,8 +518,18 @@
         }, geolocation, hardware)); }).then(function(r) {
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
+          // UI R3: after create, land on the new card (scroll + highlight)
+          // instead of leaving the user to hunt for it in a long list.
+          var newId = r && r.dirId;
           loadProfiles();
           agentBrowser.switchTab("profiles");
+          if (newId) {
+            setTimeout(function () {
+              try {
+                if (agentBrowser.batch && typeof agentBrowser.batch.locateCard === "function") agentBrowser.batch.locateCard(newId);
+              } catch (e) { /* best effort */ }
+            }, 400);
+          }
         }).catch(function(e) { toast(e.message, "error"); });
       },
 
