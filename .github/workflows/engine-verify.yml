@@ -198,7 +198,9 @@ jobs:
       - name: Bootstrap depot_tools (gn/ninja via CIPD)
         run: |
           export PATH="${{ github.workspace }}/depot_tools:$PATH"
-          python3 depot_tools/update_depot_tools.py
+          # No .py suffix: the entry point is `update_depot_tools`
+          # (shebang python; .bat is for cmd.exe, unusable from bash).
+          python3 depot_tools/update_depot_tools
           gclient --version >/dev/null 2>&1 || true
           python3 depot_tools/gn.py --version
       # Chromium has paths >260 chars — Windows Git must allow long paths
