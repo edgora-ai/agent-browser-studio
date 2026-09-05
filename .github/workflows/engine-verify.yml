@@ -191,18 +191,10 @@ jobs:
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo "${{ github.workspace }}/depot_tools" >> "$GITHUB_PATH"
-      # depot_tools ships un-bootstrapped from a fresh git clone: gclient
-      # self-bootstraps CIPD (gn/ninja/vpython) on first use, but gn.py does
-      # not — `gn gen` later dies with "Unable to find gn". Run the bootstrap
-      # entry points first (fail fast here, not mid-build).
-      - name: Bootstrap depot_tools (gn/ninja via CIPD)
-        run: |
-          export PATH="${{ github.workspace }}/depot_tools:$PATH"
-          # No .py suffix: the entry point is `update_depot_tools`
-          # (shebang python; .bat is for cmd.exe, unusable from bash).
-          python3 depot_tools/update_depot_tools
-          gclient --version >/dev/null 2>&1 || true
-          python3 depot_tools/gn.py --version
+      # NOTE: no depot_tools CIPD bootstrap step — update_depot_tools is
+      # Python2-only (SyntaxError under py3) and gn.py does not self-bootstrap.
+      # Instead build-windows.sh prefers the gn synced with the tree
+      # (src/buildtools/win/gn.exe), which gclient sync always delivers.
       # Chromium has paths >260 chars — Windows Git must allow long paths
       # or checkout fails with "Filename too long" (standard Chromium/Windows
       # prerequisite). --global (not --system): runner-safe, no elevation
