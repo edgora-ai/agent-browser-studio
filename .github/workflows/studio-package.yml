@@ -56,6 +56,11 @@ jobs:
       - name: npm ci + controller build (bash)
         run: |
           npm ci
+          # electron-builder needs node_modules/electron/dist, but npm ci
+          # does not download the Electron binary (postinstall only runs
+          # install-app-deps). `electron --version` triggers the download
+          # (ELECTRON_MIRROR points at npmmirror, see job env).
+          npx --no-install electron --version
           rm -rf dist
           npx tsc
           mkdir -p dist/renderer dist/resources
