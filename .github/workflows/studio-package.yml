@@ -114,6 +114,9 @@ jobs:
       - name: npm ci + controller build
         run: |
           npm ci
+          # Same electronDist bootstrap as Windows: npm ci does not fetch
+          # the Electron binary (ELECTRON_MIRROR points at npmmirror).
+          npx --no-install electron --version
           npm run build
       - name: Stage stock browsers
         run: >
