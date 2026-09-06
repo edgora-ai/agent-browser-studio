@@ -22,8 +22,11 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+// fileURLToPath (not .pathname): on Windows, URL.pathname is "/D:/..."
+// and path.resolve treats it as relative, producing "D:\D:\..." roots.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(repoRoot, "native-browsers");
 
 function parseInto(raw, key) {
