@@ -49,18 +49,31 @@ jobs:
           choco install chromium firefox --no-progress -y
           ls "/c/Program Files/Chromium/Application/chrome.exe"
           ls "/c/Program Files/Mozilla Firefox/firefox.exe"
-      - name: npm ci + build
+      # NOTE: do NOT use `npm run build` / `npm run dist` here. npm on
+      # Windows shells out to cmd.exe, where the package.json scripts'
+      # nested quotes break ("The syntax of the command is incorrect").
+      # Same reason ci.yml builds Windows via explicit bash steps.
+      - name: npm ci + controller build (bash)
         run: |
           npm ci
-          npm run build
+          rm -rf dist
+          npx tsc
+          mkdir -p dist/renderer dist/resources
+          cp -r src/renderer/index.html src/renderer/storage-migrate.html src/renderer/css src/renderer/js dist/renderer/
+          cp src/main/preload.cjs dist/main/
+          cp resources/tray-icon-Template.png dist/resources/
+          cp resources/icon.icns dist/resources/
+          cp resources/icon.ico dist/resources/
+          node scripts/build-masque-bridge.mjs
       - name: Stage stock browsers
         run: >
           node scripts/sync-native-browsers.mjs --platform=win
           --chromium="/c/Program Files/Chromium/Application/chrome.exe"
           --firefox="/c/Program Files/Mozilla Firefox/firefox.exe"
-      - name: Package NSIS + checksums
+      - name: Package NSIS + checksums (bash)
         run: |
-          npm run dist
+          rm -rf release
+          npx electron-builder --win nsis --x64
           cd release
           sha256sum *.exe > SHA256SUMS.txt
           printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
@@ -91,7 +104,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q chromium-browser firefox
           which chromium-browser firefox
-      - name: npm ci + build
+      - name: npm ci + controller build
         run: |
           npm ci
           npm run build
@@ -102,7 +115,8 @@ jobs:
           --firefox="$(readlink -f $(which firefox))"
       - name: Package AppImage + checksums
         run: |
-          npm run dist
+          rm -rf release
+          npx electron-builder --linux AppImage --x64
           cd release
           sha256sum *.AppImage > SHA256SUMS.txt
           printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
