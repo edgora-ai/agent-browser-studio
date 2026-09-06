@@ -36,7 +36,10 @@ function parseInto(raw, key) {
 const args = process.argv.slice(2);
 const platform = parseInto(args, "--platform") || process.env.AGENT_BROWSER_BUILD_PLATFORM || "mac";
 function explicit(k) {
-  const v = parseInto(args, k) || process.env[`AGENT_BROWSER_${k.toUpperCase()}`];
+  // parseInto matches a key prefix verbatim: CLI flags carry the leading
+  // dashes (--chromium=...), so pass them through (bare "chromium=" never
+  // matches an argv entry and win/linux staging always failed).
+  const v = parseInto(args, `--${k}`) || process.env[`AGENT_BROWSER_${k.toUpperCase()}`];
   return v || null;
 }
 
