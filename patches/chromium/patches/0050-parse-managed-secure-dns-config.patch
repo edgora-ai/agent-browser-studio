@@ -1,0 +1,46 @@
+diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
+index a5e4218..de50518 100644
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -117,6 +117,10 @@ class RoxyFingerprintConfig {
+     return speech_voices_;
+   }
+   const std::string& timezone() const { return timezone_; }
++  bool secure_dns_enabled() const { return secure_dns_enabled_; }
++  const std::vector<std::string>& secure_dns_templates() const {
++    return secure_dns_templates_;
++  }
+   const std::vector<std::string>& fonts() const { return fonts_; }
+   const std::vector<RuntimeFont>& runtime_fonts() const {
+     return runtime_fonts_;
+@@ -472,6 +476,21 @@ class RoxyFingerprintConfig {
+     }
+     if (const std::string* timezone = root->FindString("timezone"))
+       timezone_ = *timezone;
++    if (const base::DictValue* secure_dns = root->FindDict("secureDns")) {
++      secure_dns_enabled_ =
++          secure_dns->FindBool("enabled").value_or(false);
++      if (const base::ListValue* templates =
++              secure_dns->FindList("templates")) {
++        for (const base::Value& value : *templates) {
++          if (!value.is_string() || value.GetString().empty() ||
++              value.GetString().size() > 2048 ||
++              secure_dns_templates_.size() >= 8) {
++            continue;
++          }
++          secure_dns_templates_.push_back(value.GetString());
++        }
++      }
++    }
+     if (const base::DictValue* geolocation =
+             root->FindDict("geolocation")) {
+       geolocation_mode_ = ReadString(*geolocation, "mode");
+@@ -595,6 +614,8 @@ class RoxyFingerprintConfig {
+   std::vector<SpeechVoice> speech_voices_;
+   std::vector<RuntimeSpeechMapping> runtime_speech_mappings_;
+   std::string timezone_;
++  bool secure_dns_enabled_ = false;
++  std::vector<std::string> secure_dns_templates_;
+   std::vector<std::string> fonts_;
+   std::vector<RuntimeFont> runtime_fonts_;
+   std::vector<RuntimeMediaMapping> runtime_media_mappings_;

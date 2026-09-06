@@ -67,10 +67,10 @@ npm install
 npm start
 ```
 
-### 使用独立 Chromium 150 指纹引擎
+### 使用独立 Chromium 152 指纹引擎
 
 使用 [`patches/chromium`](patches/chromium/README.md) 下独立维护的补丁集构建
-Chromium 150，完成验证后安装到本地 OSS 引擎缓存：
+Chromium 152，完成验证后安装到本地 OSS 引擎缓存：
 
 ```bash
 npm run verify:chromium -- /path/to/Chromium.app
@@ -101,27 +101,19 @@ Chromium 使用 mock Keychain 后端，避免每次重建后重复弹出钥匙�
 `CloakLite Safe Storage` 密文会一次性、原子地转换；不会删除旧钥匙串项，也不会
 把明文写回配置文件。
 
-当前 Apple Silicon 构建已在 Chromium `150.0.7871.114` 上完成验证：
-原生严格校验 53 项、现代/旧版 Storage 深层语料、61 项系统主题专项检查及
-Window/Worker/DOM/Local Font Access 字体深层语料全部通过，并覆盖 WebGL 1/2
-及 WebGPU adapter/device 深层能力语料、同一
-Profile 重启及 headed/headless 全能力面对照；安装版的
-版本/输入/Cookie/代理旅程全部通过，并保留 Chromium 149 用于回滚。
-`0041` 补丁集还验证了认证 SOCKS5 TCP/UDP、代理侧 DNS，以及通过
-Profile 自有 MASQUE bridge 建立的真实 HTTP/3。
-应用层输入门禁还验证了两层跨源 frame 中的 trusted 操作、布局变化后的
-重新定位、遮挡拒绝以及显式按键时长。
-`0042` 补丁新增公开的 `agent-browser-*` 运行时协议；旧 `roxy-*` 开关仅用于兼容
-保留的 Chromium 149 和早期 150 构建。`0043` 新增显式的托管运行时能力：仅隐藏
-Chromium 的“缺少 Google API Key”信息条，不注入伪造 Key，也不声称启用了不可用的
-Google 服务。`0044` 让托管 Profile 的 DoH（含探测）始终走出口代理、不再绕过
-或落到本机解析器，同时保留托管 ICU locale、字体映射与原生刷新率，使 DNS、字体
-与帧率始终与出口身份一致。RoxyChrome/CloakBrowser 只作为历史能力
-对照，不是运行时依赖：
-36 项引擎/网络/生命周期门禁中，35 项 verified、已无 partial、1 项 missing。
-唯一硬缺失是签名的多平台发行包；代理
-timing/cache/header 已通过受控 HTTP/HTTPS/WSS 语料，TLS/HTTP2/HTTP3
-直连深层指纹也与 Stock Chrome 150 完全一致并标记为 verified；详见
+当前 Apple Silicon 构建已在 Chromium `152.0.7977.72`
+（commit `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`）上完成验证。
+托管缓存中的实际 App 已通过 Stock-152 WebGL/WebGPU/字体/OPFS 门禁（8/8）、
+原生严格校验（`ok: true`、53 项）、61 项系统主题检查、同一 Profile 重启、
+headed/headless 以及宿主原生 pass-through 对照。显式绑定 152 二进制的完整应用
+E2E 通过 95 个文件 / 470 个测试（另有 4 个文件 / 12 个测试按条件跳过）；149/150
+继续保留用于精确 pin 和回滚。真实代理 Ping0 完整运行中浏览器身份失败数为 0，
+剩余告警均来自代理/站点网络边界。`0041`–`0050` 保留 SOCKS5 TCP/UDP、HTTP/3、
+公开 `agent-browser-*` 协议、Google Key 信息条抑制、代理内 secure DNS、原生
+locale/字体/刷新率、Widevine 注册及 Chromium 152 的 append-only 编译/续编修复。
+RoxyChrome/CloakBrowser 只作为历史能力对照，不是运行时依赖。受控
+HTTP/HTTPS/WSS 及 Stock-150 TLS/HTTP2/HTTP3 wire corpus 仍是最新网络参考；
+152 原生能力证据见 [`UPGRADE_152.md`](patches/chromium/UPGRADE_152.md) 和
 [`ALIGNMENT_MATRIX.md`](patches/chromium/ALIGNMENT_MATRIX.md)。
 
 ### 开发检查
@@ -146,7 +138,7 @@ npx vitest run -c vitest.config.e2e.ts tests/e2e/j50-nested-frame-humanization.t
 
 ## 首次使用流程
 
-1. 安装或配置独立构建的 Chromium 150 二进制文件（可保留 149 用于回滚）。
+1. 安装或配置独立构建的 Chromium 152 二进制文件（可保留 149/150 用于回滚）。
 2. 打开 **Profiles** 并创建 profile。
 3. 可选：打开 **Proxies**，添加代理并分配给 profile。
 4. 启动 profile，运行 **Check Risk** / consistency check。

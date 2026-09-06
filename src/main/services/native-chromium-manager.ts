@@ -37,7 +37,7 @@ export function listManagedChromiumBinaries(
   if (bundled) {
     const manifest = readBundledBrowsersManifest(platform);
     candidates.push({
-      version: manifest?.chromiumVersion || detectBinaryVersion(bundled) || "bundled",
+      version: detectBinaryVersion(bundled) || manifest?.chromiumVersion || "bundled",
       binaryPath: bundled,
       installDir: path.dirname(bundled),
     });

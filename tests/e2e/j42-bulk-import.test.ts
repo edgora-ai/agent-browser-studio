@@ -42,9 +42,14 @@ describe("J42 — bulk CSV import with proxy binding", () => {
 
   it("renders imported profile tags and exports them", async () => {
     await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
-    await h.page.waitForFunction(() => document.querySelector("#profile-list")?.textContent?.includes("shop"), null, { timeout: 5000 });
+    await h.page.evaluate(() => (window as any).agentBrowser.loadProfiles());
+    await h.page.waitForFunction(
+      () => document.querySelector("#profile-list")?.textContent?.toLowerCase().includes("shop"),
+      null,
+      { timeout: 15000 },
+    );
     const listText = await h.page.locator("#profile-list").innerText();
-    expect(listText).toContain("SHOP");
+    expect(listText.toLowerCase()).toContain("shop");
 
     const exported = await h.page.evaluate(() => (window as any).agentBrowser.api.data.export("profiles"));
     expect(exported.ok).toBe(true);

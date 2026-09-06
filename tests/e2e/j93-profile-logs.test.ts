@@ -6,6 +6,7 @@
  import * as path from 'node:path';
  import { setupTestApp, closeApp, TestAppHandle } from './helpers/app.js';
  import { filterKnownConsoleErrors } from './helpers/diag.js';
+ import { clickCardAction } from './helpers/find.js';
 
  const REPO = path.resolve(__dirname, '..', '..');
  const USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j93');
@@ -45,9 +46,9 @@
    it('opens the 📋 logs dialog from the profile card', async () => {
      await h.page.evaluate(() => (window as any).agentBrowser.switchTab("profiles"));
      await h.page.waitForTimeout(400);
-     const cardSel = `[data-dir-id="${dirId}"]`;
-     await h.page.waitForSelector(cardSel + ' [data-action="logs"]', { timeout: 8000 });
-     await h.page.locator(cardSel + ' [data-action="logs"]').click({ timeout: 5000 });
+     const card = h.page.locator(`#profile-list .profile-card[data-dir-id="${dirId}"]`);
+     await card.waitFor({ state: "visible", timeout: 8000 });
+     await clickCardAction(card, "logs");
      await h.page.waitForSelector("#dlg-profile-logs[open]", { timeout: 5000 });
      await h.page.waitForFunction(() => {
        const el = document.getElementById("profile-logs-activity");

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { setupTestApp, closeApp, TestAppHandle, userDataConfigPath } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import { clickCmd } from "./helpers/find.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j52");
@@ -16,7 +17,7 @@ describe("J52 — proxy health rotation", () => {
   afterAll(async () => { if (h) await closeApp(h); }, 90000);
 
   async function addProxyViaDialog(name: string, port: string, fallbacks: string) {
-    await h.page.locator('[data-cmd="newProxy"]').click({ timeout: 5000 });
+    await clickCmd(h.page, "newProxy");
     await h.page.waitForSelector("#dlg-proxy[open]", { timeout: 5000 });
     await h.page.locator("#dlg-proxy-name").fill(name);
     await h.page.locator("#dlg-proxy-type").selectOption("http");

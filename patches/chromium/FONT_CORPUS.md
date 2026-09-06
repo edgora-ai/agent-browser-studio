@@ -66,6 +66,17 @@ for generic metrics, `dd829194…` / `1a605e0f…` for named metrics,
 `28947fa4…` / `549d211e…` for raster and the identical `b6417942…` for
 Local Font Access.
 
+## Chromium 152 verification
+
+The installed independent Chromium `152.0.7977.72` repeats the complete corpus
+with the same case counts and all acceptance conditions below. The strict
+verifier reports full-corpus SHA-256 values
+`ebaf827d8d12ff97b91b2879fbeb42fab097f257e96e474ae348e56b381b1c31`
+for the declared Windows profile and
+`d6784ed1ce9d7b284995cd06ff73a082182776436387073b0791e885a5bcb7f7`
+for the declared macOS profile. The Stock-152 narrow gate also matches the full
+Window/Worker canvas corpus SHA exactly.
+
 ## Acceptance gate
 
 `verify-native-chromium.ts` now fails unless:
@@ -89,3 +100,5 @@ for host-font detection) and passes the generic flag explicitly so
 `ManagedGenericFontFamily` maps exactly the declared platform families without
 leaking emoji/fangsong/ui- host fonts, while the renderer keeps the managed ICU
 locale so font selection stays consistent with the declared language.
+Append-only patches `0048` and `0049` preserve that evolved payload across
+incremental build resumes and retain the generic-vs-quoted-family distinction.

@@ -71,21 +71,27 @@ import { waitForCdpPort, waitForPortClosed, connectPageCdp, waitForPageUrl } fro
 
    it('the app window is at the app URL with the managed identity', async () => {
     await waitForPageUrl(cdpPort, 'data:text/html', 15000);
-    const c = await connectPageCdp(cdpPort, (t) => (t.url || '').includes('data:text/html'));
-     try {
-       const r = await c.send<{ result: { value: any } }>('Runtime.evaluate', {
-         expression: '({ href: location.href, ua: navigator.userAgent, webdriver: navigator.webdriver === true, body: document.body.textContent })',
-         returnByValue: true,
-       });
-       const v = r.result.value;
-       expect(String(v.href)).toContain('webapp-marker');
-       expect(String(v.body)).toContain('webapp-marker');
-       expect(v.webdriver).toBe(false);
-       expect(String(v.ua)).toContain('Windows');
-       expect(String(v.ua)).not.toContain('HeadlessChrome');
-     } finally {
-       c.close();
-     }
+    const deadline = Date.now() + 15000;
+    let value: any = null;
+    while (Date.now() < deadline) {
+      const c = await connectPageCdp(cdpPort, (t) => (t.url || '').includes('data:text/html'));
+      try {
+        const r = await c.send<{ result: { value: any } }>('Runtime.evaluate', {
+          expression: '({ href: location.href, ua: navigator.userAgent, webdriver: navigator.webdriver === true, body: document.body.textContent })',
+          returnByValue: true,
+        });
+        value = r.result.value;
+        if (String(value.href).includes('webapp-marker') && String(value.body).includes('webapp-marker')) break;
+      } finally {
+        c.close();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(String(value?.href)).toContain('webapp-marker');
+    expect(String(value?.body)).toContain('webapp-marker');
+    expect(value?.webdriver).toBe(false);
+    expect(String(value?.ua)).toContain('Windows');
+    expect(String(value?.ua)).not.toContain('HeadlessChrome');
    }, 30000);
 
    it('open-app re-opens/navigates the profile to its Web App URL', async () => {

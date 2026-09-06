@@ -52,20 +52,53 @@ function bundledRoot(
   return bundledBrowsersRoot(platform, effectiveResourcesPath(process.env, resourcesPath));
 }
 
-function unpackCacheDir(platform: NodeJS.Platform, kind: "chromium" | "firefox"): string {
-  const home = os.homedir();
-  return path.join(home, ".agent-browser-studio", UNPACK_CACHE_DIR, `${kind}-${platform}`);
+function unpackCacheDir(
+  platform: NodeJS.Platform,
+  kind: "chromium" | "firefox",
+  cacheKey: string,
+): string {
+  const safeKey = cacheKey.replace(/[^0-9A-Za-z._-]/g, "_");
+  const override = process.env.AGENT_BROWSER_BUNDLED_CACHE_DIR;
+  const root = override
+    ? path.resolve(override)
+    : path.join(os.homedir(), ".agent-browser-studio", UNPACK_CACHE_DIR);
+  return path.join(root, `${kind}-${platform}-${safeKey}`);
+}
+
+function archiveCacheKey(zipPath: string, declaredVersion?: string | null): string {
+  const stat = fs.statSync(zipPath);
+  const archiveIdentity = `${stat.size}-${Math.trunc(stat.mtimeMs)}`;
+  return declaredVersion && /^[0-9A-Za-z._+-]+$/.test(declaredVersion)
+    ? `${declaredVersion}-${archiveIdentity}`
+    : archiveIdentity;
 }
 
 function unpackArchiveIfNeeded(
   zipPath: string,
   cacheDir: string,
+  expectedBinary: string,
 ): void {
   const marker = path.join(cacheDir, ".ready");
-  if (fs.existsSync(marker)) return;
+  if (fs.existsSync(marker) && fs.existsSync(expectedBinary)) return;
   fs.rmSync(cacheDir, { recursive: true, force: true });
   fs.mkdirSync(cacheDir, { recursive: true });
-  spawnSync("ditto", ["-x", "-k", zipPath, cacheDir], { encoding: "utf8", timeout: 300000 });
+  const unpack = spawnSync("ditto", ["-x", "-k", zipPath, cacheDir], {
+    encoding: "utf8",
+    timeout: 300000,
+  });
+  if (unpack.error || unpack.status !== 0 || !fs.existsSync(expectedBinary)) {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+    throw new Error(`Failed to unpack bundled browser ${zipPath}: ${String(unpack.stderr || unpack.error || "expected binary is missing")}`);
+  }
+  const appBundle = expectedBinary.slice(0, expectedBinary.indexOf(`${path.sep}Contents${path.sep}`));
+  const signature = spawnSync("codesign", ["--verify", "--deep", "--strict", appBundle], {
+    encoding: "utf8",
+    timeout: 30000,
+  });
+  if (signature.error || signature.status !== 0) {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+    throw new Error(`Bundled browser signature verification failed: ${String(signature.stderr || signature.error || appBundle)}`);
+  }
   fs.writeFileSync(marker, `${Date.now()}\n`);
 }
 
@@ -85,8 +118,10 @@ export function bundledChromiumBinaryPath(
     if (fs.existsSync(unpacked)) return unpacked;
     const zip = path.join(root, "Chromium.app.zip");
     if (fs.existsSync(zip)) {
-      const cacheDir = unpackCacheDir(platform, "chromium");
-      unpackArchiveIfNeeded(zip, cacheDir);
+      const manifest = readBundledBrowsersManifest(platform, resourcesPath);
+      const cacheDir = unpackCacheDir(platform, "chromium", archiveCacheKey(zip, manifest?.chromiumVersion));
+      const binary = path.join(cacheDir, "Chromium.app", "Contents", "MacOS", "Chromium");
+      unpackArchiveIfNeeded(zip, cacheDir, binary);
       return macBinaryInsideUnpacked("chromium", cacheDir);
     }
     return null;
@@ -106,8 +141,10 @@ export function bundledFirefoxBinaryPath(
     if (fs.existsSync(unpacked)) return unpacked;
     const zip = path.join(root, "Firefox.app.zip");
     if (fs.existsSync(zip)) {
-      const cacheDir = unpackCacheDir(platform, "firefox");
-      unpackArchiveIfNeeded(zip, cacheDir);
+      const manifest = readBundledBrowsersManifest(platform, resourcesPath);
+      const cacheDir = unpackCacheDir(platform, "firefox", archiveCacheKey(zip, manifest?.firefoxVersion));
+      const binary = path.join(cacheDir, "Firefox.app", "Contents", "MacOS", "firefox");
+      unpackArchiveIfNeeded(zip, cacheDir, binary);
       return macBinaryInsideUnpacked("firefox", cacheDir);
     }
     return null;
