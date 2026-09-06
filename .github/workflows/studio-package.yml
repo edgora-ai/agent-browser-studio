@@ -116,7 +116,9 @@ jobs:
           npm ci
           # Same electronDist bootstrap as Windows: npm ci does not fetch
           # the Electron binary (ELECTRON_MIRROR points at npmmirror).
-          npx --no-install electron --version
+          # ELECTRON_DISABLE_SANDBOX: --version must not hit the SUID
+          # sandbox helper (not configured on stock runners).
+          ELECTRON_DISABLE_SANDBOX=1 npx --no-install electron --version
           npm run build
       - name: Stage stock browsers
         run: >
