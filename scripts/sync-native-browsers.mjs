@@ -58,10 +58,23 @@ function binVersion(bin) {
     const r = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 15000 });
     const raw = String(r.stdout || r.stderr || "").trim();
     const m = raw.match(/(?:Chromium|Mozilla Firefox)\s*([0-9][\w.+-]*)/i);
-    return m ? m[1] : (raw || null);
+    if (m) return m[1];
+    if (raw) return raw;
   } catch {
-    return null;
+    /* fall through to the Windows PE fallback below */
   }
+  // Windows GUI binaries may not print --version in a headless session.
+  // Fall back to the PE product version (powershell is always present).
+  if (process.platform === "win32" && /\.exe$/i.test(bin)) {
+    try {
+      const q = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-Item '${bin.replace(/'/g, "''")}').VersionInfo.ProductVersion`], { encoding: "utf8", timeout: 15000 });
+      const v = String(q.stdout || "").trim().match(/[0-9][\w.+-]*/);
+      if (v) return v[0];
+    } catch {
+      /* fall through to null */
+    }
+  }
+  return null;
 }
 
 function chromiumCacheRoots() {
