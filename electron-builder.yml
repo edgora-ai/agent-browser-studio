@@ -2,6 +2,7 @@ appId: com.ahoo.agent-browser-studio
 productName: Agent Browser Studio
 copyright: Copyright © 2026
 afterPack: scripts/after-pack.mjs
+electronDist: node_modules/electron/dist
 
 icon: dist/resources/icon.icns
 
@@ -23,6 +24,8 @@ win:
     - target: nsis
       arch: [x64]
   artifactName: Agent-Browser-Studio-${version}-win-${arch}.${ext}
+  # Win-static-audit P1-4: NSIS needs .ico (global icon is mac .icns).
+  icon: dist/resources/icon.ico
   extraResources:
     - from: native-browsers/win
       to: native-browsers

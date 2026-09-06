@@ -31,7 +31,10 @@ export function bundledBrowsersRoot(
 ): string | null {
   if (!resourcesPath) return null;
   const base = path.join(resourcesPath, "native-browsers");
-  return platform === "darwin" ? base : path.join(base, platform);
+  // Node reports "win32" but staged dir + builder extraResources use "win".
+  if (platform === "darwin") return base;
+  if (platform === "win32") return path.join(base, "win");
+  return path.join(base, platform);
 }
 
 function effectiveResourcesPath(
