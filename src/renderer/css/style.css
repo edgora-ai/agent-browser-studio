@@ -14,7 +14,8 @@
   --bg-hover: #eef0f4;
   --text: #181a20;
   --text-secondary: #4a4e58;
-  --text-muted: #8b8f9a;
+  /* R1-5: #8b8f9a on white was ~3.3:1 — fails 4.5 for 10-12px meta text. */
+  --text-muted: #6b6f7a;
   --primary: #5b6cf0;
   --primary-hover: #4a5cd9;
   --primary-bg: rgba(91, 108, 240, 0.08);
@@ -31,12 +32,18 @@
   --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
   --shadow-lg: 0 2px 6px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.06);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
-  --mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  /* R7-35: ui-monospace first (current macOS), keep named fallbacks. */
+  --mono: ui-monospace, "SF Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
   --chat-bg: #fafbfc;
   --chat-user-bg: var(--primary);
   --chat-user-color: #ffffff;
   --chat-agent-bg: #f4f5f7;
   --chat-code-bg: #eef0f4;
+  --accent-firefox: #d96a00;
+  /* R4-17: badge text on tinted bg — mid hues fail contrast, use deep variants. */
+  --badge-warning-fg: #9a6200;
+  --badge-danger-fg: #c81e2e;
+  --badge-success-fg: #15803d;
   --accent-gradient: linear-gradient(135deg, #5b6cf0, #8b5cf6);
   --sidebar-accent: linear-gradient(180deg, #5b6cf0, #7c6ff0);
 }
@@ -53,7 +60,8 @@
   --bg-hover: #262a3a;
   --text: #e8eaf0;
   --text-secondary: #b0b4c0;
-  --text-muted: #7a7f8e;
+  /* R1-5: #7a7f8e on #1a1d28 failed 4.5 for 10-11px badge text. */
+  --text-muted: #9aa0ae;
   --primary: #7b8cff;
   --primary-hover: #6a7cf0;
   --primary-bg: rgba(123, 140, 255, 0.12);
@@ -72,6 +80,10 @@
   --chat-user-color: #ffffff;
   --chat-agent-bg: #1e2130;
   --chat-code-bg: #1a1d28;
+  --accent-firefox: #ff9a3d;
+  --badge-warning-fg: #f5b83d;
+  --badge-danger-fg: #ff7a88;
+  --badge-success-fg: #4ade80;
   --accent-gradient: linear-gradient(135deg, #7b8cff, #a78bfa);
   --sidebar-accent: linear-gradient(180deg, #7b8cff, #9b8cff);
 }
@@ -124,8 +136,9 @@ dialog,
   border-bottom: 1px solid var(--border-light);
 }
 
+/* R3-11: heading scale 14/16/20/24 — 21px and 17px converge. */
 .sidebar-header h1 {
-  font-size: 21px;
+  font-size: 20px;
   font-weight: 800;
   background: var(--accent-gradient);
   -webkit-background-clip: text;
@@ -169,6 +182,15 @@ dialog,
    mouse clicks stay clean. */
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: 3px; }
+/* R4-20: older engines without :focus-visible support lose the ring entirely
+   (global :focus kills outlines). Fallback: any focused button/input keeps
+   a ring where :focus-visible is unknown. */
+@supports not selector(:focus-visible) {
+  button:focus, input:focus, select:focus, textarea:focus, [tabindex]:focus {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+}
 .nav-item:focus { outline: none; }
 .nav-item:focus-visible {
   outline: 2px solid var(--primary);
@@ -215,6 +237,7 @@ dialog,
   flex-wrap: wrap;
 }
 
+/* R3-14: headers had min-width 0 but no truncate — long titles overflowed. */
 .tab-header h2 {
   font-size: 24px;
   font-weight: 750;
@@ -222,6 +245,9 @@ dialog,
   color: var(--text);
   flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -239,9 +265,10 @@ dialog,
   letter-spacing: 0.1px;
 }
 
+/* R5-21: consume --chat-user-color (white) instead of hardcoded #fff. */
 .btn-primary {
   background: var(--primary);
-  color: #fff;
+  color: var(--chat-user-color);
   box-shadow: 0 1px 2px rgba(91,108,240,0.25), 0 2px 8px rgba(91,108,240,0.15);
 }
 .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(91,108,240,0.3), 0 4px 16px rgba(91,108,240,0.2); }
@@ -263,7 +290,11 @@ dialog,
 
 .btn-sm { padding: 5px 12px; font-size: 11px; }
 /* UI R1: readable floor — xs buttons were 10px, below the 11px minimum. */
-.btn-xs { padding: 3px 8px; font-size: 11px; border-radius: 5px; }
+/* R2-9: 20px tall missed the 24px touch floor — pad to min-height. */
+.btn-xs { padding: 3px 8px; font-size: 11px; border-radius: 5px; min-height: 24px; }
+/* R3-15: quiet icon-button variant (replaces style="color:muted" overrides). */
+.btn-quiet { color: var(--text-muted); border-color: transparent; background: transparent; }
+.btn-quiet:hover { color: var(--text); border-color: var(--border); }
 
 /* ═══════ Cards ═══════ */
 .card {
@@ -283,6 +314,9 @@ dialog,
   font-weight: 650;
   margin-bottom: 10px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-grid {
@@ -324,17 +358,25 @@ dialog,
   margin-bottom: 12px;
 }
 
+/* R1-4: long names pushed badges via the flex header — truncate. */
 .profile-card .name {
   font-weight: 700;
   font-size: 15px;
   cursor: pointer;
   color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .profile-card .name:hover { color: var(--primary); }
 
+/* R1-3: 10px badges need line-height 1.5 — unitless 1.0 clipped CJK descenders. */
 .profile-card .status-badge {
   font-size: 10px;
+  line-height: 1.5;
   font-weight: 650;
   padding: 4px 10px;
   border-radius: 20px;
@@ -342,20 +384,22 @@ dialog,
   letter-spacing: 0.6px;
 }
 
-.status-running { background: var(--success-bg); color: var(--success); }
-.status-stopped { background: var(--surface2); color: var(--text-muted); }
+/* R4-17: badge fg uses deep variants for contrast on tinted bg. */
+.status-running { background: var(--success-bg); color: var(--badge-success-fg); }
+.status-stopped { background: var(--surface2); color: var(--text-secondary); }
 
 .proxy-health-badge {
   font-size: 10px;
+  line-height: 1.5;
   font-weight: 650;
   padding: 3px 9px;
   border-radius: 20px;
   letter-spacing: 0.4px;
   white-space: nowrap;
 }
-.health-good { background: var(--success-bg); color: var(--success); }
-.health-watch { background: var(--warning-bg); color: var(--warning); }
-.health-poor { background: var(--danger-bg); color: var(--danger); }
+.health-good { background: var(--success-bg); color: var(--badge-success-fg); }
+.health-watch { background: var(--warning-bg); color: var(--badge-warning-fg); }
+.health-poor { background: var(--danger-bg); color: var(--badge-danger-fg); }
 .health-none { background: var(--surface2); color: var(--text-muted); }
 .proxy-idc-badge {
   font-size: 10px;
@@ -368,18 +412,18 @@ dialog,
   color: var(--warning);
   margin-left: 6px;
 }
-.proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-secondary); }
+.proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
 .proxy-health-summary b { color: var(--text); }
 
-.proxy-bind-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 12.5px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.proxy-bind-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--border); }
 .proxy-bind-item:hover { background: var(--primary-bg); }
 .proxy-bind-item:last-child { border-bottom: none; }
-.proxy-bind-current { margin-left: auto; font-size: 10.5px; color: var(--text-muted); }
+.proxy-bind-current { margin-left: auto; font-size: 11px; color: var(--text-muted); }
 
 .profile-card .info-row {
   display: flex;
   justify-content: space-between;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-secondary);
   margin-bottom: 5px;
   padding: 2px 0;
@@ -387,9 +431,10 @@ dialog,
 
 .profile-card .info-row span:first-child { font-weight: 500; color: var(--text-muted); }
 
+/* R5-22: gap rhythm 4/8/12/16 — 5px converges to 4px. */
 .profile-card .card-actions {
   display: flex;
-  gap: 5px;
+  gap: 4px;
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border-light);
@@ -407,8 +452,8 @@ dialog,
   border-radius: 8px;
   flex-wrap: wrap;
 }
-.batch-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
-.batch-filter select, .batch-filter input { font-size: 11.5px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+.batch-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.batch-filter select, .batch-filter input { font-size: 12px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
 .batch-actions {
   display: flex;
   align-items: center;
@@ -418,11 +463,11 @@ dialog,
   background: var(--warning-bg);
   border: 1px solid var(--warning);
   border-radius: 8px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text);
   flex-wrap: wrap;
 }
-.batch-actions select { font-size: 11.5px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+.batch-actions select { font-size: 12px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
 .profile-select-checkbox { margin-right: 6px; transform: scale(1.15); }
 
 /* ═══════ Tabs ═══════ */
@@ -446,6 +491,8 @@ dialog,
 
 /* ── Dialog viewport guard (inline max-widths already use calc, keep backdrop scrollable) ── */
 dialog[open] { animation: fadeIn 0.15s ease; }
+/* R8-39: dialog body text gets readable line-height by default. */
+dialog { line-height: 1.6; }
 
 /* ═══════ Agent Chat ═══════ */
 #tab-agent {
@@ -502,7 +549,8 @@ dialog[open] { animation: fadeIn 0.15s ease; }
 }
 
 #agent-conv-list::-webkit-scrollbar { width: 4px; }
-#agent-conv-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+/* R7-34: superseded by the border-hover rule below — removed. */
+#agent-conv-list::-webkit-scrollbar { width: 5px; }
 
 #agent-chat-header {
   background: var(--surface);
@@ -524,7 +572,7 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   backdrop-filter: blur(6px);
 }
 #agent-chat-messages::-webkit-scrollbar { width: 5px; }
-#agent-chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+#agent-chat-messages::-webkit-scrollbar { width: 5px; }
 
 /* Chat input area */
 .agent-input-bar {
@@ -553,25 +601,17 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   outline: none;
   transition: border-color 0.15s;
 }
-#agent-chat-input:focus { border-color: var(--primary); }
-#agent-chat-input::placeholder { color: var(--text-muted); opacity: 0.5; }
+/* R4-19: 1px color shift alone is not a visible focus indicator — add ring. */
+#agent-chat-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+/* R4-19b: placeholder follows the R2-7 rule (no halved opacity). */
+#agent-chat-input::placeholder { color: var(--text-muted); opacity: 1; }
 
 /* ── Chat bubbles ── */
 .chat-msg { display: flex; margin-bottom: 8px; padding: 0 8px; }
 .chat-msg-user { justify-content: flex-end; }
 
-.chat-bubble {
-  max-width: 75%;
-  padding: 10px 15px;
-  font-size: 13px;
-  line-height: 1.4;
-  word-break: break-word;
-}
-.chat-bubble-user {
-  background: var(--primary);
-  color: #fff;
-  border-radius: 18px 18px 4px 18px;
-}
+/* R1-2: removed dead duplicate .chat-bubble block (13px/1.4 never won —
+   the later 12px/1.6 rule always applied). Single source below. */
 .chat-bubble-agent {
   background: var(--surface);
   color: var(--text);
@@ -587,9 +627,12 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   padding: 2px 5px;
   border-radius: 3px;
 }
+/* R8-38: code blocks get line-height + tabular numbers. */
 .chat-bubble pre {
   font-family: var(--mono);
   font-size: 11px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
   background: var(--chat-code-bg);
   padding: 8px 10px;
   border-radius: 5px;
@@ -647,7 +690,7 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   font-family: var(--mono);
 }
 .chat-tool-step {
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 4px;
   font-size: 11px; line-height: 1.4;
   color: var(--text-muted);
 }
@@ -720,9 +763,10 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   line-height: 1.6;
   font-size: 12px;
 }
+/* R4-18: consume the dead --chat-user-* tokens instead of hardcoded #fff. */
 .chat-bubble-user {
-  background: var(--primary);
-  color: #fff;
+  background: var(--chat-user-bg);
+  color: var(--chat-user-color);
   border-radius: 18px 18px 4px 18px;
 }
 .chat-bubble-agent {
@@ -746,10 +790,12 @@ dialog[open] { animation: fadeIn 0.15s ease; }
   font-size: 10px;
   margin: 2px 2px 0 0;
 }
+/* R6-30: 10px muted log text needs line-height. */
 .chat-tool-result {
   margin-bottom: 8px;
   margin-left: 20px;
   font-size: 10px;
+  line-height: 1.5;
   color: var(--text-muted);
   background: var(--surface2);
   padding: 4px 8px;
@@ -775,16 +821,22 @@ dialog[open] { animation: fadeIn 0.15s ease; }
 .agent-conv-item:hover { background: var(--surface2) !important; }
 
 /* ── Forms & Dialogs ── */
+/* R8-40: form rhythm 12px rows, 8px inside groups (was mixed 6/10/12). */
 .form-row {
   margin-bottom: 12px;
 }
+.form-row + .form-row.compact, .form-group .form-row {
+  margin-bottom: 8px;
+}
 
+/* R6-27: labels get line-height (11px/1.0 clipped CJK). */
 .form-row label {
   display: block;
   font-size: 11px;
+  line-height: 1.5;
   font-weight: 600;
   color: var(--text-muted);
-  margin-bottom: 5px;
+  margin-bottom: 4px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
 }
@@ -817,8 +869,9 @@ input[type="checkbox"] {
   accent-color: var(--primary);
 }
 
+/* R2-7: opacity 0.5 halved already-low muted contrast — use full color. */
 .form-row input::placeholder,
-.form-row textarea::placeholder { color: var(--text-muted); opacity: 0.5; }
+.form-row textarea::placeholder { color: var(--text-muted); opacity: 1; }
 
 .btn-row {
   display: flex;
@@ -849,7 +902,7 @@ dialog::backdrop {
 }
 
 dialog h3 {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   margin-bottom: 18px;
 }
@@ -872,7 +925,8 @@ dialog h3 {
 .agent-view { animation: fadeIn 0.2s ease; }
 
 /* ── Agent Run trace ── */
-.status-done { background: var(--success); color: #fff; }
+/* R6-29: white on #22b351 fails — use the darkened toast fill. */
+.status-done { background: #15803d; color: #fff; }
 .run-step {
   border-left: 3px solid var(--border);
   padding: 6px 10px;
@@ -908,6 +962,7 @@ dialog h3 {
   font-size: 11px;
   font-family: var(--mono);
 }
+/* R6-28: db-grid mono 11px needs line-height for CJK descenders. */
 .db-grid th, .db-grid td {
   border: 1px solid var(--border);
   padding: 4px 8px;
@@ -916,6 +971,7 @@ dialog h3 {
   max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.5;
 }
 .db-grid th { background: var(--surface); font-weight: 600; position: sticky; top: 0; }
 .db-grid tbody tr:nth-child(even) { background: var(--surface); }
@@ -948,7 +1004,7 @@ dialog h3 {
   pointer-events: auto;
   padding: 11px 34px 11px 14px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   color: #fff;
   animation: toastIn 0.25s ease;
@@ -960,12 +1016,13 @@ dialog h3 {
   line-height: 1.45;
 }
 
-.toast-success { background: var(--success); }
-.toast-error { background: var(--danger); }
+/* R2-6: white on #22b351/#f23d4c was ~2.8-3.5:1. Darken fills for 4.5. */
+.toast-success { background: #15803d; }
+.toast-error { background: #c81e2e; }
 .toast-warn { background: var(--warning); color: #1b1f26; }
-.toast-info { background: var(--primary); }
+.toast-info { background: #3f51c9; }
 .toast-detail {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   opacity: 0.92;
   word-break: break-word;
@@ -978,7 +1035,7 @@ dialog h3 {
   color: inherit;
   border-radius: 6px;
   padding: 3px 10px;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   min-height: 24px;
@@ -997,6 +1054,9 @@ dialog h3 {
   font-size: 15px;
   line-height: 1;
   padding: 3px 6px;
+  /* R2-10: 21px dismiss target — pad to the 24px touch floor. */
+  min-width: 24px;
+  min-height: 24px;
 }
 .toast-close:hover { opacity: 1; }
 
@@ -1053,7 +1113,7 @@ dialog h3 {
   padding: 9px 12px;
   margin: 0 0 10px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: 13px;
   border: 1px solid var(--warning);
   background: var(--warning-bg);
   color: var(--text);
@@ -1112,6 +1172,7 @@ dialog h3 {
 .card-menu-list button.danger { color: var(--danger); }
 
 /* Health check selector (UE-01): one control instead of four 9px buttons */
+/* R3-12: 22px select missed the 24px touch floor. */
 .health-select {
   font-size: 11px;
   padding: 2px 4px;
@@ -1120,13 +1181,14 @@ dialog h3 {
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
-  min-height: 22px;
+  min-height: 24px;
 }
 
 /* Status tiers (UE-06): lifecycle / governance / capability read differently */
 .badge-lifecycle { font-weight: 700; }
 .badge-governance { font-size: 11px; }
-.badge-capability { font-size: 11px; background: var(--surface2); color: var(--text-muted); }
+/* R4-17: muted-on-muted — lift to secondary. */
+.badge-capability { font-size: 11px; line-height: 1.45; background: var(--surface2); color: var(--text-secondary); }
 
 /* UI R1: shared chip + tag tokens. JS templates used to hard-code light-only
  * hex fills (#eafaf1/#e8f4fd) that break in dark theme — these tokens adapt. */
@@ -1141,7 +1203,8 @@ dialog h3 {
 }
 .chip-link { background: var(--success-bg); border-color: var(--success); color: var(--success); }
 .chip-info { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
-.chip-firefox { color: #ff7a18; }
+/* R2-8: hardcoded #ff7a18 broke dark theme — token with per-theme value. */
+.chip-firefox { color: var(--accent-firefox); }
 
 /* UI R1: readable floor — nothing interactive below 11px. The old 9px
  * extension meta rows are lifted here instead of inline overrides. */
@@ -1204,11 +1267,27 @@ dialog h3 {
 }
 
 /* ═══════ Misc ═══════ */
+/* R8-36: empty/loading gets line-height (13px/1.0 clipped wrapped CJK). */
 .loading, .empty-state {
   text-align: center;
   padding: 36px;
   color: var(--text-muted);
   font-size: 13px;
+  line-height: 1.6;
+}
+/* R8-37: kbd style for shortcut hints (no rule existed — hints fell back
+   to raw text). */
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 /* UI R2: skeleton shimmer for loading states — replaces bare "Loading..."
@@ -1238,7 +1317,7 @@ dialog h3 {
   display: flex;
   justify-content: space-between;
   padding: 8px 0;
-  font-size: 12.5px;
+  font-size: 13px;
   border-bottom: 1px solid var(--border-light);
 }
 .stat-row:last-child { border-bottom: none; }
@@ -1278,7 +1357,7 @@ dialog h3 {
 /* ── Code / monospace blocks ── */
 code {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 12px;
   background: var(--chat-code-bg);
   padding: 2px 6px;
   border-radius: 4px;
@@ -1299,10 +1378,14 @@ code {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary-ring), var(--shadow);
 }
+/* R4-16: truncate like card h3. */
 .skill-card h4 {
   font-size: 14px;
   font-weight: 650;
   margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .skill-card .skill-meta {
   font-size: 11px;
@@ -1330,6 +1413,8 @@ code {
   cursor: pointer;
   color: var(--text-muted);
   font-family: var(--font);
+  /* R2-10: 19px tall — pad to the 24px touch floor. */
+  min-height: 24px;
 }
 .name-row .btn-rename:hover { border-color: var(--primary); color: var(--primary); }
 
@@ -1339,6 +1424,7 @@ code {
   border-collapse: collapse;
   font-size: 11px;
 }
+/* R3-13: th gets the same truncate as td — long headers + 150px cells mismatched. */
 .cookie-table th {
   text-align: left;
   padding: 7px 8px;
@@ -1346,8 +1432,13 @@ code {
   font-weight: 600;
   color: var(--text-muted);
   font-size: 10px;
+  line-height: 1.5;
   text-transform: uppercase;
   letter-spacing: 0.6px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cookie-table td {
   padding: 5px 8px;
@@ -1376,14 +1467,48 @@ code {
 .sync-never  { color: var(--text-muted); font-size: 10px; }
 
 /* ── Proxy select on profile card ── */
+/* R5-23: the card select duplicated this rule inline (font/padding/bg/
+   border/radius/color) — single source here, 10px gets line-height. */
+/* R5-24: backup-hint flex layout lives here (was dead inline
+   align-items under display:none) + sync strategy sizing. */
+.backup-hint { align-items: flex-start; gap: 10px; }
+.sync-strategy { margin-left: 4px; font-size: 12px; min-height: 28px; }
+/* R6-26: hint-line utility — 35+ inline copies of muted 11px/12px explainer.
+   Migrate incrementally: new code uses the class, old inline stays valid. */
+.hint-line { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+.hint-line-lg { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+/* R7-32: tabular numbers for countdowns/timers/scores — proportional
+   figures jitter. Covers batch progress, health counts, token usage. */
+.batch-progress-label, .health-count, .token-count, .profile-selected-count,
+#batch-progress-label, #profile-selected-count {
+  font-variant-numeric: tabular-nums;
+}
+/* R7-33: visible text selection in brand tint (default blue clashes). */
+::selection { background: var(--primary-ring); }
+/* R7-34: thin scrollbar thumbs in --border vanish on light theme. */
+#agent-conv-list::-webkit-scrollbar-thumb,
+#agent-chat-messages::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+}
+/* R7-31: global small-text floor — every 10px/11px element gets CJK-safe
+   line-height unless the rule sets its own. Covers all remaining small
+   text (sidebar version, chat labels, table cells) in one place. */
+.sidebar-header .version, .sidebar-footer,
+.chat-msg-label, .chat-tool-step, .chat-tool-done, .chat-tool-num,
+.cookie-table th, .cookie-table td, .db-grid th, .db-grid td,
+.proxy-select, .import-name, .skill-meta {
+  line-height: 1.5;
+}
 .proxy-select {
   font-size: 10px;
+  line-height: 1.5;
   padding: 4px 8px;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
   width: 100%;
+  min-height: 24px;
 }
 
 /* ── Status dot animation ── */

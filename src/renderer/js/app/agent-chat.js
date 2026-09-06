@@ -78,7 +78,7 @@
         var isActive = c.id === state.agentActiveConvId;
         html += '<div data-role="cmd" data-cmd="agentSelectConv" data-cmd-arg="' + escAttr(c.id) + '" class="agent-conv-item" style="padding:10px 12px;cursor:pointer;' + (isActive ? 'background:var(--primary-bg);' : '') + '">';
         html += '<div style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.title || t('agent.chat-title', 'New Chat')) + '</div>';
-        html += '<div style="color:var(--text-muted);font-size:10px;margin-top:2px;">' + (c.messageCount || 0) + ' msgs</div>';
+        html += '<div class="hint-line" style="margin-top:2px;">' + (c.messageCount || 0) + ' msgs</div>';
         html += '</div>';
       }
       el.innerHTML = html;

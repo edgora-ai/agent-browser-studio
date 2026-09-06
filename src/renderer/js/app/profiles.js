@@ -1627,7 +1627,7 @@
             '</details>' +
           '</div>' +
           '<div style="margin-top:4px;">' +
-            '<select class="proxy-select" data-action="proxy" style="width:100%;font-size:10px;padding:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">' + proxyOptsHtml + '</select>' +
+            '<select class="proxy-select" data-action="proxy">' + proxyOptsHtml + '</select>' +
           '</div>' +
         '</div>';
       };
@@ -2327,7 +2327,7 @@
         var when = e.at ? new Date(e.at).toLocaleString() : "?";
         var icon = e.category === "profile" ? "📦" : "•";
         return '<div style="padding:4px 6px;border-bottom:1px solid var(--border);">' +
-          '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + esc(when) + '</span> ' +
+          '<span class="hint-line" style="white-space:nowrap;">' + esc(when) + '</span> ' +
           icon + ' <strong>' + esc(e.action || "?") + '</strong>' +
           (e.detail ? ' <span style="color:var(--text-muted);font-size:11px;">— ' + esc(String(e.detail).slice(0, 140)) + '</span>' : '') +
           '</div>';

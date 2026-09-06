@@ -22,8 +22,11 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
+// fileURLToPath (not .pathname): on Windows, URL.pathname is "/D:/..."
+// and path.resolve treats it as relative, producing "D:\D:\..." roots.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(repoRoot, "native-browsers");
 
 function parseInto(raw, key) {
@@ -36,7 +39,10 @@ function parseInto(raw, key) {
 const args = process.argv.slice(2);
 const platform = parseInto(args, "--platform") || process.env.AGENT_BROWSER_BUILD_PLATFORM || "mac";
 function explicit(k) {
-  const v = parseInto(args, k) || process.env[`AGENT_BROWSER_${k.toUpperCase()}`];
+  // parseInto matches a key prefix verbatim: CLI flags carry the leading
+  // dashes (--chromium=...), so pass them through (bare "chromium=" never
+  // matches an argv entry and win/linux staging always failed).
+  const v = parseInto(args, `--${k}`) || process.env[`AGENT_BROWSER_${k.toUpperCase()}`];
   return v || null;
 }
 
@@ -52,10 +58,23 @@ function binVersion(bin) {
     const r = spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 15000 });
     const raw = String(r.stdout || r.stderr || "").trim();
     const m = raw.match(/(?:Chromium|Mozilla Firefox)\s*([0-9][\w.+-]*)/i);
-    return m ? m[1] : (raw || null);
+    if (m) return m[1];
+    if (raw) return raw;
   } catch {
-    return null;
+    /* fall through to the Windows PE fallback below */
   }
+  // Windows GUI binaries may not print --version in a headless session.
+  // Fall back to the PE product version (powershell is always present).
+  if (process.platform === "win32" && /\.exe$/i.test(bin)) {
+    try {
+      const q = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-Item '${bin.replace(/'/g, "''")}').VersionInfo.ProductVersion`], { encoding: "utf8", timeout: 15000 });
+      const v = String(q.stdout || "").trim().match(/[0-9][\w.+-]*/);
+      if (v) return v[0];
+    } catch {
+      /* fall through to null */
+    }
+  }
+  return null;
 }
 
 function chromiumCacheRoots() {

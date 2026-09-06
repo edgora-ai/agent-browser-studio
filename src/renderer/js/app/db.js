@@ -20,7 +20,7 @@
       el.innerHTML = tables.map(function(tbl) {
         return '<div class="db-table-row" data-table="' + escAttr(tbl.name) + '" style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--border-light);">' +
           '<div style="font-weight:600;">📋 ' + esc(tbl.name) + '</div>' +
-          '<div style="font-size:10px;color:var(--text-muted);">' + tbl.rowCount + t("db.row-count"," 行") + '</div>' +
+          '<div class="hint-line">' + tbl.rowCount + t("db.row-count"," 行") + '</div>' +
         '</div>';
       }).join("");
       el.onclick = function(event) {

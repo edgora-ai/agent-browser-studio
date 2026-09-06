@@ -78,7 +78,7 @@
         html += '<div style="min-width:0;">';
         html += '<strong>' + esc(a.platformUserName || '?') + '</strong>';
         html += ' <span style="color:var(--text-muted);font-size:11px;">@ ' + esc(a.platformUrl || '') + '</span>';
-        html += a.hasPassword ? ' <span style="color:var(--success);font-size:10px;">password saved</span>' : '';
+        html += a.hasPassword ? ' <span class="hint-line" style="color:var(--success);">password saved</span>' : '';
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';

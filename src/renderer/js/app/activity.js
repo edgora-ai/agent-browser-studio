@@ -85,11 +85,11 @@
         var meta = CATEGORY_META[e.category] || { icon: "•", label: e.category || "?" };
         var target = renderTarget(e);
         var detail = e.detail ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' + esc(String(e.detail).slice(0, 200)) + "</div>" : "";
-        var actor = e.actor && e.actor !== "user" ? ' <span style="color:var(--text-muted);font-size:10px;">' + esc(t("activity.actor-by","by ")) + esc(e.actor) + "</span>" : "";
+        var actor = e.actor && e.actor !== "user" ? ' <span class="hint-line">' + esc(t("activity.actor-by","by ")) + esc(e.actor) + "</span>" : "";
         return '<div class="profile-card" style="padding:8px 10px;margin-bottom:6px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
             '<span>' + meta.icon + ' <strong>' + esc(e.action || "?") + "</strong>" + actor + target + "</span>" +
-            '<span style="color:var(--text-muted);font-size:10px;white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
+            '<span class="hint-line" style="white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
           "</div>" + detail + "</div>";
       }).join("");
       el.innerHTML = html;

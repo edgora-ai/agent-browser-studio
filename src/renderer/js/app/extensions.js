@@ -78,8 +78,8 @@
             html += '<div style="width:36px;height:36px;border-radius:8px;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-size:18px;">🧩</div>';
             html += '<div style="flex:1;min-width:0;">';
             html += '<div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(e.name || e.id) + '</div>';
-            html += '<div style="font-size:10px;color:var(--text-muted);">v' + esc(e.version || '?') + ' · ' + esc(e.id).slice(0,16) + '…</div>';
-            if (e.description) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;">' + esc(e.description).slice(0,100) + '</div>';
+            html += '<div class="hint-line">v' + esc(e.version || '?') + ' · ' + esc(e.id).slice(0,16) + '…</div>';
+            if (e.description) html += '<div class="hint-line" style="margin-top:2px;line-height:1.3;">' + esc(e.description).slice(0,100) + '</div>';
             if (tags) html += '<div class="meta-line">Tags: ' + tags + '</div>';
             if (e.manifestHash) html += '<div class="meta-line-ok" title="Manifest SHA-512">✓ Manifest: ' + esc(e.manifestHash).slice(0,12) + '…</div>';
             html += '</div>';

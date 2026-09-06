@@ -35,7 +35,7 @@
  <div class="toggle-track"><div class="toggle-thumb"></div></div>
  <span id="theme-label" data-i18n="theme.dark">Dark</span>
  </div>
- <button class="btn btn-xs" data-role="cmd" data-cmd="toggleLanguage" title="Switch language" style="padding:4px 8px;font-size:11px;">🌐 <span id="lang-label">EN</span></button>
+ <button class="btn btn-xs" data-role="cmd" data-cmd="toggleLanguage" title="Switch language">🌐 <span id="lang-label">EN</span></button>
  </div>
  </div>
 </nav>
@@ -95,7 +95,7 @@
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="batchExportSelected" data-i18n="profiles.batch.export">📦 Export selected</button>
   <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="batchDeleteSelected" data-i18n="profiles.batch.delete">🗑 Delete selected</button>
   </div>
- <div id="backup-hint" class="card" style="display:none;align-items:flex-start;gap:10px;">
+ <div id="backup-hint" class="card backup-hint" style="display:none;">
   <div style="flex:1;">
    <b data-i18n="backup.hint.title">🔐 Your data lives only on this machine</b>
    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles hold real account state (cookies, sessions). A disk failure means losing them. Use 📦 Export backup per profile, ☁️ Sync to S3, or rely on the 7-day trash for accidents.</div>
@@ -157,7 +157,7 @@
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncPush" data-i18n="sync.push">Push</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="syncPull" data-i18n="sync.pull">Pull</button>
- <select id="sync-merge-strategy" data-i18n-title="sync.strategy" title="Merge strategy on pull" style="margin-left:4px;font-size:12px;height:28px;">
+ <select id="sync-merge-strategy" class="sync-strategy" data-i18n-title="sync.strategy" title="Merge strategy on pull">
    <option value="local" data-i18n="sync.strategy.local">Local wins</option>
    <option value="remote" data-i18n="sync.strategy.remote">Remote wins</option>
    <option value="newest" data-i18n="sync.strategy.newest">Newest wins</option>
@@ -320,7 +320,7 @@
  <div id="agent-view-chat" class="agent-view" style="display:flex;">
  <div id="agent-chat-header" style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
  <span id="agent-chat-title" style="font-weight:600;font-size:14px;" data-i18n="agent.chat-title">New Chat</span>
- <button class="btn btn-xs" style="color:var(--text-muted);" data-role="cmd" data-cmd="agentDeleteConv">🗑</button>
+ <button class="btn btn-xs btn-quiet" data-role="cmd" data-cmd="agentDeleteConv">🗑</button>
  </div>
  <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
  <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" style="display:none;position:absolute;right:16px;bottom:72px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom">↓ Bottom <span id="agent-scroll-badge" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:10px;line-height:16px;">new</span></button>

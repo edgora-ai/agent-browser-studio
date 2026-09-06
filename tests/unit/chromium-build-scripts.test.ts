@@ -83,7 +83,8 @@ describe("Chromium macOS source and build scripts", () => {
     const workflow = fs.readFileSync(ENGINE_VERIFY, "utf8");
     expect(workflow).toContain("runs-on: ubuntu-24.04-arm");
     expect(workflow).toContain("name: agent-browser-linux-arm64");
-    expect(workflow).toContain('bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium-src-152" arm64');
+    // R10-46: standard gclient layout (chromium/src) — DEPS assumes solution named src.
+    expect(workflow).toContain('bash patches/chromium/build-linux.sh "${{ github.workspace }}/chromium/src" arm64');
   });
 
   it("supports a provenance-checked archive seed when Git pack streams truncate", () => {

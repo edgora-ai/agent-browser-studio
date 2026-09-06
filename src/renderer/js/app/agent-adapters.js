@@ -45,11 +45,11 @@
         html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
         html += '<span style="font-size:16px;">' + icon + '</span>';
         html += '<strong style="font-size:13px;">' + esc(a.name) + '</strong>';
-        html += '<span class="proxy-idc-badge" style="font-size:10px;">' + esc(label) + '</span>';
-        if (a.regions && a.regions.length) html += '<span style="font-size:10px;color:var(--text-muted);">' + esc(a.regions.join(" / ")) + '</span>';
-        html += '<span style="font-size:10px;color:var(--text-muted);margin-left:auto;">v' + esc(String(a.selectorVersion)) + ' · ' + esc(a.lastVerifiedAt) + '</span>';
+        html += '<span class="proxy-idc-badge">' + esc(label) + '</span>';
+        if (a.regions && a.regions.length) html += '<span class="hint-line">' + esc(a.regions.join(" / ")) + '</span>';
+        html += '<span class="hint-line" style="margin-left:auto;">v' + esc(String(a.selectorVersion)) + ' · ' + esc(a.lastVerifiedAt) + '</span>';
         html += '</div>';
-        html += '<p style="font-size:12px;color:var(--text-muted);margin:8px 0 6px;">' + esc(a.pitch || a.notes || "") + '</p>';
+        html += '<p class="hint-line-lg" style="margin:8px 0 6px;">' + esc(a.pitch || a.notes || "") + '</p>';
         if (a.capabilities && a.capabilities.length) html += '<div style="font-size:11px;color:var(--text-muted);">' + esc(formatCapabilities(a.capabilities)) + '</div>';
         html += '<p style="margin:8px 0 0;font-size:11px;">';
         html += '<code style="color:var(--primary);">' + esc(a.domains.join(", ") || "any") + '</code>';

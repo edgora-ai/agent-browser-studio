@@ -36,6 +36,17 @@
 - Sandbox acceptance: subscribe → webhook → mint → activate → launch works;
   cancel → expiry is honored at next status check (no phone-home).
 
+## Edition statement (#114: required until engine parity)
+
+| Platform | Package | Engine | Fingerprint strength |
+|---|---|---|---|
+| macOS arm64 | dmg/zip (v1.0.0-sale.2) | Independent Chromium 152 + Firefox 154 | Full (ping0 92) |
+| Windows x64 | NSIS exe (v1.0.0-sale.2-win) | Stock Chromium + Firefox (compat first release) | Basic (app-layer only, no native patches) |
+| Linux x64 | AppImage (v1.0.0-sale.2-linux) | Stock Chromium + Firefox (compat first release) | Basic (same) |
+
+- Win/Linux first releases are **compat editions**: profiles/isolation/proxy/alignment/trial all work; free upgrade when the independent engine lands.
+- Never promise detection scores for Win/Linux; record demos on Mac and label them.
+
 ## Landing checklist (website)
 
 - [ ] Pricing table + feature comparison + FAQ
