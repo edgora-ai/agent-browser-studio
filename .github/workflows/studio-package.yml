@@ -1,0 +1,116 @@
+name: Studio package (stock engine)
+
+# Lightweight Studio packager: does NOT build the independent engine.
+# Uses stock Chromium/Firefox binaries (official builds) via
+# sync-native-browsers.mjs, then electron-builder packages the Studio +
+# trial/paywall features. For saleable Windows/Linux packages while the
+# independent-engine build (engine-verify.yml) is being stabilized.
+#
+#   gh workflow run studio-package.yml --ref <branch> -f platform=windows
+#
+# Artifacts: installer + SHA256SUMS.txt + BUILD.txt (engine=stock).
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Target platform'
+        required: false
+        default: 'windows'
+        type: choice
+        options: [windows, linux, macos, all]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-package-${{ github.workflow }}-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    name: Windows x64 · stock engine → NSIS
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      ELECTRON_MIRROR: "https://npmmirror.com/mirrors/electron/"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - name: Install stock Chromium + Firefox
+        run: |
+          choco install chromium firefox --no-progress -y
+          ls "/c/Program Files/Chromium/Application/chrome.exe"
+          ls "/c/Program Files/Mozilla Firefox/firefox.exe"
+      - name: npm ci + build
+        run: |
+          npm ci
+          npm run build
+      - name: Stage stock browsers
+        run: >
+          node scripts/sync-native-browsers.mjs --platform=win
+          --chromium="/c/Program Files/Chromium/Application/chrome.exe"
+          --firefox="/c/Program Files/Mozilla Firefox/firefox.exe"
+      - name: Package NSIS + checksums
+        run: |
+          npm run dist
+          cd release
+          sha256sum *.exe > SHA256SUMS.txt
+          printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-studio-windows-x64
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
+            release/BUILD.txt
+          if-no-files-found: error
+
+  linux-x64:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    name: Linux x64 · stock engine → AppImage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ELECTRON_MIRROR: "https://npmmirror.com/mirrors/electron/"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - name: Install stock Chromium + Firefox
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q chromium-browser firefox
+          which chromium-browser firefox
+      - name: npm ci + build
+        run: |
+          npm ci
+          npm run build
+      - name: Stage stock browsers
+        run: >
+          node scripts/sync-native-browsers.mjs --platform=linux
+          --chromium="$(readlink -f $(which chromium-browser))"
+          --firefox="$(readlink -f $(which firefox))"
+      - name: Package AppImage + checksums
+        run: |
+          npm run dist
+          cd release
+          sha256sum *.AppImage > SHA256SUMS.txt
+          printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-browser-studio-linux-x64
+          path: |
+            release/*.AppImage
+            release/SHA256SUMS.txt
+            release/BUILD.txt
+          if-no-files-found: error
