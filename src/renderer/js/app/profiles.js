@@ -1548,7 +1548,8 @@
         var browserName = isFirefox ? "Firefox (stock)" : "Managed Chromium";
         var fingerprintLabel = (isFirefox || fp.mode === "off")
           ? (isFirefox ? "↪ Firefox pass-through" : "↪ Pass-through")
-          : platformIcon(platform) + " 🎲#" + (fp.seed || "?");
+          // R12: 🎲 rendered as tofu under CJK font fallback — plain # is stable.
+          : platformIcon(platform) + " #" + (fp.seed || "?");
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
         var identityStr = (isFirefox || fp.mode === "off")
@@ -1601,7 +1602,8 @@
           '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + ' ' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
+          '<div class="info-row info-row-health"><span>' + esc(t('profile.row.health', 'Health')) + '</span><span>' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.proxy', 'Proxy')) + '</span><span>' + esc(proxyStr) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
           '<div class="card-actions">' +
@@ -1749,6 +1751,16 @@
     Object.keys(existing).forEach(function (dirId) {
       if (existing[dirId].parentNode) existing[dirId].parentNode.removeChild(existing[dirId]);
     });
+    // R11-51: the initial <div class="loading"> placeholder has no dirId so
+    // the map above never removes it — it sat in the list forever next to
+    // real cards. Drop non-card children once cards render.
+    if (cards.length) {
+      Array.prototype.slice.call(container.children).forEach(function (el) {
+        if (!(el.dataset && el.dataset.dirId) && !el.classList.contains("profile-card")) {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }
+      });
+    }
     if (frag.childNodes.length || container.children.length === 0) container.appendChild(frag);
 
     if (scrollingEl && scrollTop) scrollingEl.scrollTop = scrollTop;

@@ -209,6 +209,15 @@ dialog,
   font-size: 10px;
   color: var(--text-muted);
 }
+/* R11-55: version + controls overlapped in the 200px sidebar — version
+   truncates, controls wrap instead of overflowing. */
+.sidebar-version {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-controls { flex-wrap: wrap; }
+.sidebar-controls .theme-toggle { min-width: 0; flex: 1 1 auto; }
 
 /* ═══════ Main Content ═══════ */
 #content {
@@ -351,11 +360,18 @@ dialog,
   background: linear-gradient(135deg, var(--surface), var(--success-bg));
 }
 
+/* R11-54: badges wrapped instead of overlapping — header wraps, name
+   takes row 1, badges flow to row 2 instead of colliding. */
 .profile-card .card-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   margin-bottom: 12px;
+}
+.profile-card .card-header .status-badge {
+  flex-shrink: 0;
 }
 
 /* R1-4: long names pushed badges via the flex header — truncate. */
@@ -420,16 +436,37 @@ dialog,
 .proxy-bind-item:last-child { border-bottom: none; }
 .proxy-bind-current { margin-left: auto; font-size: 11px; color: var(--text-muted); }
 
+/* R11-52: right-hand values truncate instead of overflowing the card
+   (seed-generated hardware, long identity strings). */
 .profile-card .info-row {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-secondary);
   margin-bottom: 5px;
   padding: 2px 0;
 }
 
-.profile-card .info-row span:first-child { font-weight: 500; color: var(--text-muted); }
+.profile-card .info-row span:first-child { font-weight: 500; color: var(--text-muted); flex-shrink: 0; }
+.profile-card .info-row span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+/* R11-53: the health row carries interactive controls — no truncation,
+   allow wrap so select + verdict never overlap. */
+.profile-card .info-row-health span:last-child {
+  overflow: visible;
+  white-space: normal;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+}
 
 /* R5-22: gap rhythm 4/8/12/16 — 5px converges to 4px. */
 .profile-card .card-actions {
@@ -1173,7 +1210,9 @@ dialog h3 {
 
 /* Health check selector (UE-01): one control instead of four 9px buttons */
 /* R3-12: 22px select missed the 24px touch floor. */
+/* R12: option label truncated to "🩺健康检查…" — give it room. */
 .health-select {
+  min-width: 130px;
   font-size: 11px;
   padding: 2px 4px;
   margin-left: 4px;
