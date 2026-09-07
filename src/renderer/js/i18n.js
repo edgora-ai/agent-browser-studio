@@ -480,6 +480,7 @@
       "approval.denied": "已拒绝",
 
       // ── Sync ──
+      "sync.preview.title": "同步预检",
       "sync.preview.unavailable": "Preview unavailable",
       "sync.preview.profiles.running": " 个运行中；Pull 会跳过 localStorage/preferences",
       "sync.preview.profiles.no-skip": "Pull 无运行中跳过项",
@@ -1317,6 +1318,7 @@
       "approval.denied": "Denied",
 
       // ── Sync ──
+      "sync.preview.title": "Pre-flight Preview",
       "sync.preview.unavailable": "Preview unavailable",
       "sync.preview.profiles.running": " profiles running; Pull skips localStorage/preferences",
       "sync.preview.profiles.no-skip": "No running profiles — nothing skipped on Pull",

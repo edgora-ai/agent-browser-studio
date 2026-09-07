@@ -51,7 +51,8 @@
     el.innerHTML = '<div class="loading">' + esc(window.i18n ? window.i18n.t("skills.loading", "Loading skills...") : "Loading skills...") + '</div>';
     R.agent.skills.list().then(function(skills) {
       if (!skills || skills.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No skills in your marketplace. Add or import a skill to get started.</div>';
+        /* R74: bare centered div joins .empty-state (card treatment). */
+        el.innerHTML = '<div class="empty-state">No skills in your marketplace. Add or import a skill to get started.</div>';
         return;
       }
       el.innerHTML = skills.map(function(s) { return renderSkillCard(s, false); }).join('');

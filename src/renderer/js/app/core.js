@@ -519,20 +519,21 @@
     if (skill.source !== 'built-in') actions += '<button class="btn btn-secondary btn-sm" data-action="skill-edit">Edit</button> ';
     actions += '<button class="btn btn-secondary btn-sm" data-action="skill-share">' + (shared ? 'Unshare' : 'Share') + '</button> ';
     actions += '<button class="btn btn-danger btn-sm" data-action="skill-remove">' + (skill.source === 'built-in' ? 'Disable' : 'Remove') + '</button>';
+    /* R75: skill card inline styles (5 sites) converge to classes. */
     return '<div class="skill-card" data-skill-id="' + escAttr(skill.id) + '">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">' +
-        '<div style="min-width:0;flex:1;">' +
+      '<div class="skill-layout">' +
+        '<div class="skill-main">' +
           '<h4>' + (skill.source === 'built-in' ? '📋 ' : '🧩 ') + esc(skill.title || skill.name || skill.id) + '</h4>' +
-          '<p style="font-size:11px;color:var(--text-muted);margin-bottom:4px;line-height:1.35;">' + esc(skill.description || '') + '</p>' +
+          '<p class="skill-desc">' + esc(skill.description || '') + '</p>' +
           '<div class="skill-meta">' +
             '<span>Source: ' + esc(source) + '</span>' +
             '<span>Status: ' + (enabled ? 'Enabled' : 'Disabled') + '</span>' +
             '<span>Share: ' + (shared ? 'Yes' : 'No') + '</span>' +
             '<span title="' + escAttr(tools) + '">Tools: ' + esc(tools ? tools.slice(0, 120) : 'none') + '</span>' +
           '</div>' +
-          (tags ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0 0;">' + tags + '</div>' : '') +
+          (tags ? '<div class="skill-tags">' + tags + '</div>' : '') +
         '</div>' +
-        '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;min-width:180px;">' + actions + '</div>' +
+        '<div class="skill-actions">' + actions + '</div>' +
       '</div>' +
     '</div>';
   }

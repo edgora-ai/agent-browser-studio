@@ -325,11 +325,12 @@
   function renderHealthSummary(health) {
     var summary = (health && health.summary) || null;
     if (!summary || !summary.total) return "";
+    /* R78: health summary colors converge to semantic classes. */
     return '<div class="proxy-health-summary">' +
       '<span>' + esc(t('proxy.health.summary', 'Proxy health')) + ' <b>' + summary.total + '</b></span>' +
-      '<span style="color:var(--success)">' + esc(t('proxy.health.good', 'Good')) + ' <b>' + summary.good + '</b></span>' +
-      '<span style="color:var(--warning)">' + esc(t('proxy.health.watch', 'Watch')) + ' <b>' + summary.watch + '</b></span>' +
-      '<span style="color:var(--danger)">' + esc(t('proxy.health.poor', 'Poor')) + ' <b>' + summary.poor + '</b></span>' +
+      '<span class="health-text-good">' + esc(t('proxy.health.good', 'Good')) + ' <b>' + summary.good + '</b></span>' +
+      '<span class="health-text-watch">' + esc(t('proxy.health.watch', 'Watch')) + ' <b>' + summary.watch + '</b></span>' +
+      '<span class="health-text-poor">' + esc(t('proxy.health.poor', 'Poor')) + ' <b>' + summary.poor + '</b></span>' +
       (summary.inCooldown ? '<span>⏸ ' + esc(t('proxy.health.cooldown', 'Cooldown')) + ' <b>' + summary.inCooldown + '</b></span>' : '') +
       '</div>';
   }
@@ -352,7 +353,8 @@
 
   function renderHistoryTimeline(entry) {
     if (!entry || !entry.history || !entry.history.length) {
-      return '<span style="color:var(--text-muted);">No detections recorded yet — run Detect to start tracking.</span>';
+      /* R79: bare muted span joins .hint-line. */
+      return '<span class="hint-line">No detections recorded yet — run Detect to start tracking.</span>';
     }
     var points = entry.history.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 8);
     var lines = points.map(function (h) {
@@ -367,11 +369,12 @@
         if (h.hosting === true) bits.push("🏭IDC");
         if (h.isProxy === true) bits.push("⚠" + t('proxy.health.proxy', 'Proxy'));
         if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
-        return '<div style="color:var(--success);">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
+        /* R79: detect lines converge to timeline classes. */
+        return '<div class="timeline-ok">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
       }
-      return '<div style="color:var(--danger);">❌ ' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
+      return '<div class="timeline-err">❌ ' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
     });
-    return '<div style="font-size:11px;line-height:1.7;">' + lines.join("") + '</div>';
+    return '<div class="timeline">' + lines.join("") + '</div>';
   }
 
   function renderHistoryIntoRow(entry, row, txt) {
@@ -380,7 +383,7 @@
       txt.innerHTML = renderHistoryTimeline(entry);
       row.style.display = '';
     } else {
-      txt.innerHTML = '<span style="color:var(--text-muted);">No detections recorded yet — run Detect to start tracking.</span>';
+      txt.innerHTML = '<span class="hint-line">No detections recorded yet — run Detect to start tracking.</span>';
       row.style.display = '';
     }
   }

@@ -1152,7 +1152,9 @@
   function lastHealthHtml(dirId) {
     var last = lastHealthFor(dirId);
     if (!last) {
-      return '<span style="font-size:11px;color:var(--text-muted);">' + esc(t("profile.health.never", "Not checked yet")) + "</span>";
+      /* R52: never-checked branch joins the nowrap verdict class (R9 only
+         covered the verdict branch — J205 dark shot caught this wrapping). */
+      return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);">' + esc(t("profile.health.never", "Not checked yet")) + "</span>";
     }
     var verdict = last.verdict === "risk"
       ? { key: "profile.health.verdict-risk", fb: "Risk", color: "var(--danger)" }

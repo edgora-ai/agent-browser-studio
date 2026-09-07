@@ -166,25 +166,25 @@
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;" data-i18n="team.workspace.title" title="Role-based access control (RBAC)">Team Workspace</h3>
+ <h3 data-i18n="team.workspace.title" title="Role-based access control (RBAC)">Team Workspace</h3>
  <span id="team-local-badge" class="status-badge" style="display:none;"></span>
  </div>
  <div id="team-panel"><div class="loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;">Pre-flight Preview</h3>
+ <h3 data-i18n="sync.preview.title">Pre-flight Preview</h3>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncPreview" data-i18n="sync.btn.refresh-preview">Refresh Preview</button>
  </div>
- <p id="sync-preview-message" style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">Loading...</p>
+ <p id="sync-preview-message" class="section-desc">Loading...</p>
  <div id="sync-preview" class="profile-grid"><div class="loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;" data-i18n="sync.diff.title">Team Diff preview (changes before push/pull)</h3>
+ <h3 data-i18n="sync.diff.title">Team Diff preview (changes before push/pull)</h3>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff" data-i18n="sync.diff.compare">Compare with remote</button>
  </div>
- <p id="sync-diff-message" style="font-size:12px;color:var(--text-muted);margin:0 0 8px;" data-i18n="sync.diff.desc">Shows the profiles, proxies, accounts and extensions that exist only locally or only remotely, and what a push would overwrite or remove. This also runs automatically before every push.</p>
+ <p id="sync-diff-message" class="section-desc" data-i18n="sync.diff.desc">Shows the profiles, proxies, accounts and extensions that exist only locally or only remotely, and what a push would overwrite or remove. This also runs automatically before every push.</p>
  <div id="sync-diff"><div class="empty-state" data-i18n="sync.diff.empty">Not compared yet — click "Compare with remote"</div></div>
  </div>
  <div class="card">
@@ -271,7 +271,7 @@
  </div>
  <div id="ext-install-status" style="margin:8px 0;font-size:11px;color:var(--text-muted);"></div>
  <div class="card">
- <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">This is the global private catalog of available Chrome extensions. Profiles only choose which catalog entries to enable.</p>
+ <p class="section-desc">This is the global private catalog of available Chrome extensions. Profiles only choose which catalog entries to enable.</p>
  <input id="extension-repo-search" placeholder="Search name, ID, description, or tag..." data-i18n-placeholder="ext.search" data-role="input" data-input-cmd="loadExtensionsTab">
  <div id="extension-repo-status" style="font-size:11px;color:var(--text-muted);margin-top:8px;"></div>
  </div>
@@ -424,12 +424,12 @@
  </div>
  </div>
  <div class="card">
- <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;" data-i18n="auto.section-desc">Cron schedules · one-time · event triggers (profile launch/exit). Actions: launch/stop profile, run Agent task, sync S3, custom JS.</p>
+ <p class="section-desc" data-i18n="auto.section-desc">Cron schedules · one-time · event triggers (profile launch/exit). Actions: launch/stop profile, run Agent task, sync S3, custom JS.</p>
  <div id="automation-list" class="profile-grid"><div class="loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
- <h3 style="margin:0;" data-i18n="auto.jobs-title">Durable Jobs</h3>
+ <h3 data-i18n="auto.jobs-title">Durable Jobs</h3>
  <div style="display:flex;gap:6px;align-items:center;">
  <select id="automation-job-status" data-role="change" data-change-cmd="automationRefreshJobs" style="font-size:11px;padding:4px 6px;">
  <option value="" data-i18n="auto.filter-all">All statuses</option>
@@ -447,7 +447,7 @@
  </div>
  <div class="card">
  <h3 data-i18n="auto.log-title">Execution Log</h3>
- <pre id="automation-log" style="font-size:11px;max-height:200px;overflow:auto;background:var(--surface);padding:8px;border-radius:4px;white-space:pre-wrap;font-family:var(--mono);" data-i18n="auto.log-empty">(empty)</pre>
+ <pre id="automation-log" data-i18n="auto.log-empty">(empty)</pre>
  </div>
  </section>
 
@@ -461,7 +461,7 @@
  </div>
  </div>
  <div class="card">
- <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;" data-i18n="runs.section-desc">Steps, variables, duration, and result of each Agent task (chat or scheduled). Click to view the full step timeline.</p>
+ <p class="section-desc" data-i18n="runs.section-desc">Steps, variables, duration, and result of each Agent task (chat or scheduled). Click to view the full step timeline.</p>
  <div id="agent-run-list" class="profile-grid"><div class="loading">Loading...</div></div>
  </div>
  </section>
@@ -476,17 +476,17 @@
  </div>
  <div style="display:flex;gap:16px;align-items:flex-start;">
  <div class="card" style="flex:0 0 260px;">
- <h4 style="margin:0 0 8px;" data-i18n="db.tables-heading">Tables</h4>
- <div id="db-tables" style="font-size:12px;"><div class="loading">Loading...</div></div>
+ <h4 data-i18n="db.tables-heading">Tables</h4>
+ <div id="db-tables" class="db-tables"><div class="loading">Loading...</div></div>
  </div>
  <div class="card" style="flex:1;min-width:0;">
- <h4 style="margin:0 0 8px;" data-i18n="db.sql-heading">SQL</h4>
- <textarea id="db-sql" rows="3" placeholder="SELECT * FROM customers LIMIT 10" style="width:100%;font-family:var(--mono);font-size:12px;box-sizing:border-box;"></textarea>
- <div class="btn-row" style="margin:6px 0;">
+ <h4 data-i18n="db.sql-heading">SQL</h4>
+ <textarea id="db-sql" rows="3" placeholder="SELECT * FROM customers LIMIT 10"></textarea>
+ <div class="btn-row tight">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="dbRunSql" data-i18n="db.btn.run">▶ Run</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dbRunSql" data-cmd-arg="exec" data-i18n="db.btn.exec">⚡ Execute (write/DDL)</button>
  </div>
- <div id="db-result" style="font-size:11px;overflow:auto;max-height:420px;"></div>
+ <div id="db-result" class="db-result"></div>
  </div>
  </div>
  </section>
@@ -495,7 +495,7 @@
  <div class="tab-header">
   <h2 data-i18n="activity.section-title">📜 Activity Audit</h2>
   <div class="header-btns">
-   <select id="activity-filter" data-role="change" data-change-cmd="activityFilter" style="font-size:12px;padding:4px 8px;">
+   <select id="activity-filter" data-role="change" data-change-cmd="activityFilter">
      <option value="" data-i18n="activity.filter-all">All</option>
      <option value="profile" data-i18n="activity.filter-profile">Profile</option>
      <option value="proxy" data-i18n="activity.filter-proxy">Proxy</option>
@@ -509,7 +509,7 @@
    <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="activityClear" data-i18n="activity.btn.clear">🗑 Clear</button>
   </div>
  </div>
- <div id="activity-list" style="padding:8px 12px;font-size:12px;max-height:70vh;overflow:auto;"></div>
+ <div id="activity-list" class="activity-list"></div>
  </section>
 
 <!-- Approval dialog (risky-operation authorization) -->
@@ -536,7 +536,7 @@
 <!-- ── Bulk Import Dialog ── -->
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
-  <h3 style="margin:0 0 10px;" id="dlg-env-risk-title" data-i18n="env.risk.title">🖥 Host environment risk check</h3>
+  <h3 id="dlg-env-risk-title" data-i18n="env.risk.title">🖥 Host environment risk check</h3>
   <div id="env-risk-body" style="max-height:52vh;overflow:auto;">Loading...</div>
   <div id="env-risk-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
@@ -550,7 +550,7 @@
 <!-- ── WebRTC Diagnostics Dialog ── -->
 <dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
-  <h3 style="margin:0 0 10px;" data-i18n="webrtc.diag.title">📡 浏览器内 WebRTC 诊断</h3>
+  <h3 data-i18n="webrtc.diag.title">📡 浏览器内 WebRTC 诊断</h3>
   <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;">Loading...</div>
   <div id="webrtc-diag-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
@@ -564,7 +564,7 @@
 <!-- ── Profile Logs Dialog (RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs) ── -->
 <dialog id="dlg-profile-logs" aria-labelledby="dlg-profile-logs-title" style="max-width:760px;width:96%;">
  <div>
-  <h3 style="margin:0 0 10px;">📋 Profile Operation Logs &amp; Browser Tail</h3>
+  <h3>📋 Profile Operation Logs &amp; Browser Tail</h3>
   <input type="hidden" id="profile-logs-dir-id">
   <h4 style="font-size:13px;margin:6px 0 4px;">Recent Activity</h4>
   <div id="profile-logs-activity" style="max-height:26vh;overflow:auto;font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;">Loading...</div>
@@ -829,9 +829,9 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ── Proxy Bind Profiles Dialog ── -->
 <dialog id="dlg-proxy-bind" aria-labelledby="dlg-proxy-bind-title" style="max-width:540px;width:92%;">
  <form method="dialog" data-role="submit" data-submit-cmd="doBindProxyToProfiles">
- <h3 style="margin:0 0 8px;">📎 <span data-i18n="proxy.bind.title">一键绑定 Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
- <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px;" data-i18n="proxy.bind.hint">勾选要绑定到此代理的 profile（已绑定的会切换为当前代理）。</p>
- <div id="dlg-proxy-bind-list" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;"></div>
+ <h3>📎 <span data-i18n="proxy.bind.title">一键绑定 Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
+ <p class="hint-line-lg" data-i18n="proxy.bind.hint">勾选要绑定到此代理的 profile（已绑定的会切换为当前代理）。</p>
+ <div id="dlg-proxy-bind-list" class="bind-list"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="proxy.bind.confirm">绑定</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -842,11 +842,11 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ── Proxy QR Export Dialog ── -->
 <dialog id="dlg-proxy-qr" aria-labelledby="dlg-proxy-qr-title" style="max-width:420px;width:92%;">
  <form method="dialog">
- <h3 id="dlg-proxy-qr-title" style="margin:0 0 8px;">📱 <span data-i18n="proxy.qr.title">代理二维码</span></h3>
- <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;" data-i18n="proxy.qr.hint">用微信/手机扫码获取完整代理配置（含账号密码）。</p>
- <div style="text-align:center;">
- <img id="dlg-proxy-qr-img" alt="QR" style="max-width:280px;width:100%;image-rendering:pixelated;">
- <div id="dlg-proxy-qr-uri" style="font-family:var(--mono);font-size:10px;word-break:break-all;color:var(--text-muted);margin-top:8px;"></div>
+ <h3 id="dlg-proxy-qr-title">📱 <span data-i18n="proxy.qr.title">代理二维码</span></h3>
+ <p class="hint-line-lg" data-i18n="proxy.qr.hint">用微信/手机扫码获取完整代理配置（含账号密码）。</p>
+ <div class="qr-center">
+ <img id="dlg-proxy-qr-img" alt="QR">
+ <div id="dlg-proxy-qr-uri"></div>
  </div>
  <div class="btn-row">
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
@@ -859,10 +859,10 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="doConfirm">
  <h3 id="dlg-confirm-title" data-default="Confirm" data-i18n="common.confirm">Confirm</h3>
  <p id="dlg-confirm-msg"></p>
- <div id="dlg-confirm-detail" style="display:none;font-size:11px;color:var(--text-muted);max-height:160px;overflow:auto;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:8px;"></div>
+ <div id="dlg-confirm-detail" class="confirm-detail" style="display:none;"></div>
  <!-- PL-09: acknowledgement checkbox for high-risk bulk actions -->
- <label id="dlg-confirm-ack-wrap" style="display:none;align-items:flex-start;gap:6px;font-size:12px;margin-top:10px;cursor:pointer;">
-  <input type="checkbox" id="dlg-confirm-ack" style="margin-top:3px;">
+ <label id="dlg-confirm-ack-wrap" class="confirm-ack" style="display:none;">
+  <input type="checkbox" id="dlg-confirm-ack">
   <span id="dlg-confirm-ack-label"></span>
  </label>
  <div class="btn-row">
@@ -876,7 +876,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-extensions" class="dialog-wide">
  <form method="dialog" style="display:flex;flex-direction:column;max-height:80vh;">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 style="margin:0;">🧩 <span id="ext-dlg-title">Extensions</span></h3>
+ <h3>🧩 <span id="ext-dlg-title">Extensions</span></h3>
  <div style="display:flex;gap:6px;">
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="switchTab" data-tab="extensions" data-i18n="ext.btn.manage-repo">Manage Extension Repo</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog">✕</button>
@@ -930,7 +930,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-account-bind">
  <h3>Bind Account to Profiles</h3>
  <input type="hidden" id="acct-bind-index" value="-1">
- <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">Select the profiles that should auto-fill with this account.</p>
+ <p class="section-desc">Select the profiles that should auto-fill with this account.</p>
  <div id="acct-bind-list" style="max-height:280px;overflow-y:auto;margin-bottom:10px;">
  <div class="loading">Loading profiles...</div>
  </div>
@@ -941,7 +941,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 </dialog>
 <dialog id="dlg-account-import" class="dialog-wide">
  <h3>📥 Bulk Import Accounts</h3>
- <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
+ <p class="section-desc">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
  <textarea id="acct-import-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;" placeholder="https://twitter.com, alice, s3cret, social"></textarea>
  <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0 4px;">
  <input type="checkbox" id="acct-import-create-profiles"> Also create a bound profile for each account
@@ -1027,7 +1027,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-automation" aria-labelledby="dlg-automation-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveAutomation">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 style="margin:0;">⏰ <span id="auto-dlg-title">New Task</span></h3>
+ <h3>⏰ <span id="auto-dlg-title">New Task</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-automation">✕</button>
  </div>
  <input type="hidden" id="auto-id">
@@ -1084,7 +1084,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- Automation job detail dialog -->
 <dialog id="dlg-auto-job" aria-labelledby="auto-job-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 style="margin:0;">🧾 <span id="auto-job-title">Job Detail</span></h3>
+ <h3>🧾 <span id="auto-job-title">Job Detail</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-auto-job">✕</button>
  </div>
  <div id="auto-job-actions" style="display:flex;gap:6px;justify-content:flex-end;margin-bottom:8px;"></div>
@@ -1094,7 +1094,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- Workflow editor dialog -->
 <dialog id="dlg-agent-run" aria-labelledby="agent-run-title" class="dialog-wide">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 style="margin:0;">🤖 <span id="agent-run-title">Run Detail</span></h3>
+ <h3>🤖 <span id="agent-run-title">Run Detail</span></h3>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-agent-run">✕</button>
  </div>
  <div id="agent-run-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
@@ -1256,7 +1256,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ══════ Terms acceptance (sale-93: must precede first use) ══════ -->
 <dialog id="dlg-terms" aria-labelledby="dlg-terms-title" style="min-width:440px;max-width:600px;">
  <div>
-  <h3 style="margin:0 0 10px;" id="dlg-terms-title" data-i18n="terms.title">📜 Terms of Use</h3>
+  <h3 id="dlg-terms-title" data-i18n="terms.title">📜 Terms of Use</h3>
   <div style="font-size:12px;line-height:1.7;max-height:46vh;overflow:auto;">
    <p data-i18n="terms.intro">Agent Browser Studio is a general-purpose multi-account management tool. By continuing you agree to use it only lawfully.</p>
    <ul style="margin:8px 0 0 18px;padding:0;">
@@ -1280,7 +1280,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ══════ License activation (sale-90: one-machine-one-code) ══════ -->
 <dialog id="dlg-license" aria-labelledby="dlg-license-title" style="min-width:440px;max-width:560px;">
  <div>
-  <h3 style="margin:0 0 10px;" id="dlg-license-title" data-i18n="license.title">🔑 License activation</h3>
+  <h3 id="dlg-license-title" data-i18n="license.title">🔑 License activation</h3>
   <div style="font-size:12px;line-height:1.7;">
    <div><span data-i18n="license.current">Current plan</span>: <b id="license-current-plan">—</b></div>
    <p style="margin:8px 0 0;color:var(--text-muted);" data-i18n="license.help">Paste the activation code from your order. The code is bound to this device — send the device ID below to the seller if you switch machines.</p>
