@@ -26,11 +26,11 @@
   --warning-bg: rgba(233, 157, 11, 0.08);
   --danger: #f23d4c;
   --danger-bg: rgba(242, 61, 76, 0.08);
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
-  --shadow-lg: 0 2px 6px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.06);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 1px 2px rgba(16,24,40,0.05);
+  --shadow: 0 1px 2px rgba(16,24,40,0.05), 0 8px 24px rgba(16,24,40,0.06);
+  --shadow-lg: 0 2px 6px rgba(16,24,40,0.06), 0 16px 40px rgba(16,24,40,0.08);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
   /* R7-35: ui-monospace first (current macOS), keep named fallbacks. */
   --mono: ui-monospace, "SF Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
@@ -46,6 +46,13 @@
   --badge-success-fg: #15803d;
   --accent-gradient: linear-gradient(135deg, #5b6cf0, #8b5cf6);
   --sidebar-accent: linear-gradient(180deg, #5b6cf0, #7c6ff0);
+  /* Premium-R1: capsule + input surface tokens (WorkBuddy: dark selected pill,
+     light unselected pill, borderless large-radius inputs). */
+  --pill-bg: #eef0f4;
+  --pill-text: #3a3e48;
+  --pill-active-bg: #2b2e36;
+  --pill-active-text: #ffffff;
+  --input-soft-bg: #f4f5f7;
 }
 
 /* ── Dark theme ── */
@@ -86,6 +93,12 @@
   --badge-success-fg: #4ade80;
   --accent-gradient: linear-gradient(135deg, #7b8cff, #a78bfa);
   --sidebar-accent: linear-gradient(180deg, #7b8cff, #9b8cff);
+  /* Premium-R1 dark: pills stay neutral, active pill stays near-black. */
+  --pill-bg: #262a3a;
+  --pill-text: #c6cad4;
+  --pill-active-bg: #e8eaf0;
+  --pill-active-text: #16181e;
+  --input-soft-bg: #222532;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -98,6 +111,10 @@ body {
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  /* Premium-R1: 14px body baseline (was UA 16px with components overriding
+     down to 11px) — inherited text now matches WorkBuddy body scale. */
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .sidebar-header,
@@ -120,11 +137,13 @@ dialog,
 }
 
 /* ═══════ Sidebar ═══════ */
+/* Premium-R5: WorkBuddy sidebar — no dividing line, same surface as main,
+   spacing + rounded selected states do the separating. */
 #sidebar {
-  width: 200px;
-  min-width: 200px;
+  width: 208px;
+  min-width: 208px;
   background: var(--sidebar-bg);
-  border-right: 1px solid var(--border);
+  border-right: none;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -132,8 +151,8 @@ dialog,
 }
 
 .sidebar-header {
-  padding: 24px 16px 16px;
-  border-bottom: 1px solid var(--border-light);
+  padding: 28px 18px 18px;
+  border-bottom: none;
 }
 
 /* R3-11: heading scale 14/16/20/24 — 21px and 17px converge. */
@@ -160,20 +179,23 @@ dialog,
   flex: 1;
 }
 
+/* Premium-R5: nav items go pill — 10px radius, WorkBuddy-like neutral
+   selected state via the pill tokens (light: soft fill; selected below). */
 .nav-item {
-  padding: 9px 12px;
+  padding: 9px 14px;
   margin: 2px 0;
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   font-size: 13px;
+  line-height: 1.5;
   font-weight: 500;
   cursor: pointer;
   color: var(--text-secondary);
-  transition: all 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
   user-select: none;
 }
 
 .nav-item:hover {
-  background: var(--surface2);
+  background: var(--pill-bg);
   color: var(--text);
 }
 
@@ -181,7 +203,9 @@ dialog,
    interactive element shows a clear ring when reached via keyboard, while
    mouse clicks stay clean. */
 :focus { outline: none; }
-:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: 3px; }
+/* Premium-R8: no forced border-radius — the ring follows each element's own
+   shape (pill buttons keep pill rings instead of 3px boxes). */
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 /* R4-20: older engines without :focus-visible support lose the ring entirely
    (global :focus kills outlines). Fallback: any focused button/input keeps
    a ring where :focus-visible is unknown. */
@@ -197,16 +221,19 @@ dialog,
   outline-offset: 2px;
 }
 
+/* Premium-R5: selected nav = solid pill (WorkBuddy: dark pill light mode,
+   light pill dark mode via tokens) — brand tint reserved for CTA only. */
 .nav-item.active {
-  background: var(--primary-bg);
-  color: var(--primary);
+  background: var(--pill-active-bg);
+  color: var(--pill-active-text);
   font-weight: 600;
 }
 
 .sidebar-footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-light);
+  padding: 12px 18px;
+  border-top: none;
   font-size: 10px;
+  line-height: 1.5;
   color: var(--text-muted);
 }
 /* R11-55: version + controls overlapped in the 200px sidebar — version
@@ -223,7 +250,7 @@ dialog,
 #content {
   flex: 1;
   overflow-y: auto;
-  padding: 28px 32px;
+  padding: 32px 36px;
   background: var(--bg);
   min-width: 0;
 }
@@ -241,16 +268,18 @@ dialog,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
-  gap: 12px;
+  margin-bottom: 28px;
+  gap: 12px 16px;
   flex-wrap: wrap;
 }
 
 /* R3-14: headers had min-width 0 but no truncate — long titles overflowed. */
+/* Premium-R1: page titles 24→28px, tighter tracking — WorkBuddy hero scale. */
 .tab-header h2 {
-  font-size: 24px;
-  font-weight: 750;
-  letter-spacing: -0.4px;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+  line-height: 1.25;
   color: var(--text);
   flex: 0 1 auto;
   min-width: 0;
@@ -262,15 +291,20 @@ dialog,
 .header-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ═══════ Buttons ═══════ */
+/* Premium-R2: 13px/32px button baseline — was 12px with implicit height,
+   felt cramped next to 14px body text. */
 .btn {
-  padding: 8px 16px;
+  padding: 7px 18px;
+  min-height: 32px;
   border: none;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.5;
   font-weight: 600;
   font-family: var(--font);
   cursor: pointer;
-  transition: all 0.12s ease;
+  /* Premium-R8: explicit props — `all` dragged transform/box-shadow along. */
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
   letter-spacing: 0.1px;
 }
 
@@ -283,12 +317,16 @@ dialog,
 .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(91,108,240,0.3), 0 4px 16px rgba(91,108,240,0.2); }
 .btn-primary:disabled { opacity: 0.5; transform: none; cursor: not-allowed; box-shadow: none; }
 
+/* Premium-R2: capsule buttons (WorkBuddy pill) + borderless secondary —
+   1px bordered chips felt cheap next to dark-pill selected states. */
+.btn, .btn-sm, .btn-xs { border-radius: 999px; }
 .btn-secondary {
-  background: var(--surface);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
+  background: var(--pill-bg);
+  color: var(--pill-text);
+  border: 1px solid transparent;
 }
-.btn-secondary:hover { background: var(--surface2); color: var(--text); border-color: var(--border-hover); }
+.btn-secondary:hover { background: var(--bg-hover); color: var(--text); border-color: transparent; }
+.btn-quiet:hover { border-color: transparent; background: var(--pill-bg); }
 
 .btn-danger {
   background: var(--danger-bg);
@@ -297,26 +335,28 @@ dialog,
 }
 .btn-danger:hover { background: var(--danger); color: #fff; }
 
-.btn-sm { padding: 5px 12px; font-size: 11px; }
+.btn-sm { padding: 5px 14px; font-size: 12px; line-height: 1.5; min-height: 28px; }
 /* UI R1: readable floor — xs buttons were 10px, below the 11px minimum. */
 /* R2-9: 20px tall missed the 24px touch floor — pad to min-height. */
-.btn-xs { padding: 3px 8px; font-size: 11px; border-radius: 5px; min-height: 24px; }
+.btn-xs { padding: 3px 10px; font-size: 11px; line-height: 1.5; border-radius: 999px; min-height: 24px; }
 /* R3-15: quiet icon-button variant (replaces style="color:muted" overrides). */
 .btn-quiet { color: var(--text-muted); border-color: transparent; background: transparent; }
 .btn-quiet:hover { color: var(--text); border-color: var(--border); }
 
 /* ═══════ Cards ═══════ */
+/* Premium-R3: cards breathe — 18→20px padding, hairline border-light,
+   soft layered shadow. Hover lifts instead of just recoloring. */
 .card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 18px;
-  margin-bottom: 12px;
+  padding: 20px;
+  margin-bottom: 14px;
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
-.card:hover { border-color: var(--border-hover); box-shadow: var(--shadow); }
+.card:hover { border-color: var(--border-hover); box-shadow: var(--shadow); transform: translateY(-1px); }
 
 .card h3 {
   font-size: 14px;
@@ -340,19 +380,22 @@ dialog,
 }
 
 /* ═══════ Profile Card ═══════ */
+/* Premium-R3: hairline border, lift-on-hover (translateY -2px) — flat
+   recolor hovers felt dead. */
 .profile-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 20px;
   box-shadow: var(--shadow-sm);
-  transition: all 0.15s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
   position: relative;
 }
 
 .profile-card:hover {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary-ring), var(--shadow);
+  transform: translateY(-2px);
 }
 
 .profile-card.running {
@@ -431,11 +474,33 @@ dialog,
 .proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
 .proxy-health-summary b { color: var(--text); }
 
-.proxy-bind-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 13px; cursor: pointer; border-bottom: 1px solid var(--border); }
-.proxy-bind-item:hover { background: var(--primary-bg); }
+/* Premium-R6: proxy bind rows — pill hover, hairline separators, air. */
+.proxy-bind-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; font-size: 13px; line-height: 1.5; cursor: pointer; border-bottom: 1px solid var(--border-light); border-radius: 8px; }
+.proxy-bind-item:hover { background: var(--pill-bg); }
 .proxy-bind-item:last-child { border-bottom: none; }
 .proxy-bind-current { margin-left: auto; font-size: 11px; color: var(--text-muted); }
 
+/* Premium-R9: generic .info-row — browser.js/proxies.js render .info-row
+   outside .profile-card (Widevine card, updates, proxy rows); without this
+   they fell back to unstyled block text (J205 browser shot). */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 5px;
+  padding: 2px 0;
+}
+.info-row span:first-child { font-weight: 500; color: var(--text-muted); flex-shrink: 0; }
+.info-row span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
 /* R11-52: right-hand values truncate instead of overflowing the card
    (seed-generated hardware, long identity strings). */
 .profile-card .info-row {
@@ -459,13 +524,19 @@ dialog,
 }
 /* R11-53: the health row carries interactive controls — no truncation,
    allow wrap so select + verdict never overlap. */
+/* Premium-R9: verdict never breaks mid-word ("尚未检/测") — nowrap + shrink. */
 .profile-card .info-row-health span:last-child {
   overflow: visible;
   white-space: normal;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.profile-card .info-row-health .health-verdict {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* R5-22: gap rhythm 4/8/12/16 — 5px converges to 4px. */
@@ -478,19 +549,21 @@ dialog,
   flex-wrap: wrap;
 }
 
+/* Premium-R4: banners soften — hairline, 12px radius, airier padding. */
 .batch-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
   background: var(--surface2);
   border: 1px solid var(--border-light);
-  border-radius: 8px;
+  border-radius: 12px;
   flex-wrap: wrap;
 }
 .batch-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-.batch-filter select, .batch-filter input { font-size: 12px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+/* Premium-R2: filter controls go borderless-pill like the rest. */
+.batch-filter select, .batch-filter input { font-size: 12px; line-height: 1.5; padding: 4px 12px; background: var(--surface); border: 1px solid transparent; border-radius: 999px; color: var(--text); min-height: 26px; }
 .batch-actions {
   display: flex;
   align-items: center;
@@ -504,7 +577,7 @@ dialog,
   color: var(--text);
   flex-wrap: wrap;
 }
-.batch-actions select { font-size: 12px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--text); }
+.batch-actions select { font-size: 12px; line-height: 1.5; padding: 4px 12px; background: var(--surface); border: 1px solid transparent; border-radius: 999px; color: var(--text); min-height: 26px; }
 .profile-select-checkbox { margin-right: 6px; transform: scale(1.15); }
 
 /* ═══════ Tabs ═══════ */
@@ -519,7 +592,8 @@ dialog,
   cursor: pointer;
   color: var(--text-muted);
   margin-bottom: -2px;
-  transition: all 0.15s ease;
+  /* Premium-R8: explicit props (see .btn note). */
+  transition: color 0.15s ease, border-color 0.15s ease;
   font-family: var(--font);
 }
 .fp-tab:hover { color: var(--text); }
@@ -626,12 +700,12 @@ dialog { line-height: 1.6; }
 
 #agent-chat-input {
   flex: 1;
-  font-size: 13px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  font-size: 14px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background: var(--input-soft-bg);
   resize: none;
-  background: var(--chat-bg);
   color: var(--text);
   font-family: var(--font);
   line-height: 1.5;
@@ -756,19 +830,23 @@ dialog { line-height: 1.6; }
 .chat-empty .chat-empty-hint { font-size: 12px; opacity: 0.7; line-height: 1.6; }
 
 /* ── Theme toggle ── */
+/* Premium-R6: theme row joins the pill family, no top rule. */
 .theme-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
+  padding: 8px 14px;
+  margin: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-muted);
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s;
+  transition: background 0.12s ease, color 0.12s ease;
+  min-height: 32px;
 }
-.theme-toggle:hover { color: var(--text); }
+.theme-toggle:hover { color: var(--text); background: var(--pill-bg); }
 .theme-toggle .toggle-track {
   width: 36px; height: 20px;
   background: var(--border);
@@ -848,14 +926,18 @@ dialog { line-height: 1.6; }
 .chrome-status-err { color: var(--danger); }
 .chrome-status-unknown { color: var(--text-muted); }
 
+/* Premium-R6: conv items join the pill-nav family — 10px radius, pill hover. */
 .agent-conv-item {
-  transition: all 0.1s ease;
-  border-radius: var(--radius-sm);
+  transition: background 0.12s ease, color 0.12s ease;
+  border-radius: 10px;
   margin-bottom: 2px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.5;
   cursor: pointer;
 }
 
-.agent-conv-item:hover { background: var(--surface2) !important; }
+.agent-conv-item:hover { background: var(--pill-bg) !important; }
 
 /* ── Forms & Dialogs ── */
 /* R8-40: form rhythm 12px rows, 8px inside groups (was mixed 6/10/12). */
@@ -867,29 +949,32 @@ dialog { line-height: 1.6; }
 }
 
 /* R6-27: labels get line-height (11px/1.0 clipped CJK). */
+/* Premium-R6: labels go sentence-case 12px secondary — ALL-CAPS micro-labels
+   read as cheap admin template, not premium product. */
 .form-row label {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
 }
 
+/* Premium-R2: borderless soft-fill inputs (WorkBuddy 16px+ radius, no
+   border) — bordered boxes read as admin-template, not premium product. */
 .form-row input,
 .form-row select,
 .form-row textarea {
   width: 100%;
-  padding: 9px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  background: var(--input-soft-bg);
+  border: 1px solid transparent;
+  border-radius: 12px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
   font-family: var(--font);
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
 .form-row input:focus,
@@ -910,22 +995,27 @@ input[type="checkbox"] {
 .form-row input::placeholder,
 .form-row textarea::placeholder { color: var(--text-muted); opacity: 1; }
 
+/* Premium-R4: dialog action rows breathe — 14→20px top, right-aligned. */
 .btn-row {
   display: flex;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 10px;
+  margin-top: 20px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .sync-form { display: grid; gap: 12px; }
 
 /* ── Dialogs ── */
+/* Premium-R4: dialogs breathe — 24→28px padding, deeper backdrop,
+   18px titles. Cheap dialogs feel cramped; premium ones have air. */
 dialog {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 24px;
+  padding: 28px;
   color: var(--text);
-  max-width: min(500px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
   width: 90%;
   box-shadow: var(--shadow-lg);
   margin: auto;
@@ -934,14 +1024,16 @@ dialog {
 }
 
 dialog::backdrop {
-  background: rgba(0,0,0,0.4);
-  backdrop-filter: blur(6px);
+  background: rgba(10,12,18,0.45);
+  backdrop-filter: blur(8px);
 }
 
 dialog h3 {
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 18px;
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.3px;
+  margin-bottom: 20px;
+  line-height: 1.4;
 }
 
 .dialog-wide { max-width: min(680px, calc(100vw - 32px)); }
@@ -966,10 +1058,11 @@ dialog h3 {
 .status-done { background: #15803d; color: #fff; }
 .run-step {
   border-left: 3px solid var(--border);
-  padding: 6px 10px;
-  margin-bottom: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
   background: var(--surface);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 10px 10px 0;
+  box-shadow: var(--shadow-sm);
 }
 .run-step.run-step-error { border-left-color: var(--danger); }
 .run-step-head { font-size: 12px; line-height: 1.5; }
@@ -993,10 +1086,11 @@ dialog h3 {
 }
 
 /* ── DB viewer grid ── */
+/* Premium-R6: db grid reads as product, not debug console — 12px. */
 .db-grid {
   border-collapse: collapse;
   width: 100%;
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--mono);
 }
 /* R6-28: db-grid mono 11px needs line-height for CJK descenders. */
@@ -1036,21 +1130,22 @@ dialog h3 {
   pointer-events: none;
 }
 
+/* Premium-R4: toasts go pill-soft — 8→14px radius, deeper shadow. */
 .toast {
   position: relative;
   pointer-events: auto;
-  padding: 11px 34px 11px 14px;
-  border-radius: var(--radius-sm);
+  padding: 12px 36px 12px 16px;
+  border-radius: 14px;
   font-size: 13px;
   font-weight: 600;
   color: #fff;
   animation: toastIn 0.25s ease;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.1);
   backdrop-filter: blur(8px);
   display: flex;
   flex-direction: column;
   gap: 4px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 /* R2-6: white on #22b351/#f23d4c was ~2.8-3.5:1. Darken fills for 4.5. */
@@ -1147,10 +1242,11 @@ dialog h3 {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
-  margin: 0 0 10px;
-  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  margin: 0 0 12px;
+  border-radius: 12px;
   font-size: 13px;
+  line-height: 1.5;
   border: 1px solid var(--warning);
   background: var(--warning-bg);
   color: var(--text);
@@ -1169,9 +1265,9 @@ dialog h3 {
   padding: 4px 11px;
   min-height: 24px;
   min-width: 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface2);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--pill-bg);
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
@@ -1179,17 +1275,20 @@ dialog h3 {
 }
 .card-menu > summary::-webkit-details-marker { display: none; }
 .card-menu[open] > summary { background: var(--primary-bg); }
+/* Premium-R4: menu floats — hairline border, deeper layered shadow,
+   roomier items with pill hover. */
 .card-menu-list {
   position: absolute;
   right: 0;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   z-index: 40;
-  min-width: 190px;
+  min-width: 200px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  padding: 4px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  /* Premium-R7: neutral black shadow reads in both themes (tinted 16,24,40 vanished on dark). */
+  box-shadow: 0 12px 32px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.08);
+  padding: 6px;
   display: flex;
   flex-direction: column;
 }
@@ -1198,14 +1297,15 @@ dialog h3 {
   background: transparent;
   border: 0;
   color: var(--text);
-  font-size: 12px;
-  padding: 6px 8px;
-  min-height: 26px;
-  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 7px 10px;
+  min-height: 28px;
+  border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
 }
-.card-menu-list button:hover { background: var(--surface2); }
+.card-menu-list button:hover { background: var(--pill-bg); }
 .card-menu-list button.danger { color: var(--danger); }
 
 /* Health check selector (UE-01): one control instead of four 9px buttons */
@@ -1213,14 +1313,15 @@ dialog h3 {
 /* R12: option label truncated to "🩺健康检查…" — give it room. */
 .health-select {
   min-width: 130px;
-  font-size: 11px;
-  padding: 2px 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 3px 12px;
   margin-left: 4px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  min-height: 24px;
+  background: var(--pill-bg);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--pill-text);
+  min-height: 26px;
 }
 
 /* Status tiers (UE-06): lifecycle / governance / capability read differently */
@@ -1231,14 +1332,16 @@ dialog h3 {
 
 /* UI R1: shared chip + tag tokens. JS templates used to hard-code light-only
  * hex fills (#eafaf1/#e8f4fd) that break in dark theme — these tokens adapt. */
+/* Premium-R2: chip 3px→pill, 10px→11px floor. */
 .chip {
   display: inline-block;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  font-size: 10px;
-  background: var(--surface2);
-  color: var(--text-secondary);
+  padding: 2px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--pill-bg);
+  color: var(--pill-text);
 }
 .chip-link { background: var(--success-bg); border-color: var(--success); color: var(--success); }
 .chip-info { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
@@ -1307,12 +1410,37 @@ dialog h3 {
 
 /* ═══════ Misc ═══════ */
 /* R8-36: empty/loading gets line-height (13px/1.0 clipped wrapped CJK). */
-.loading, .empty-state {
+/* Premium-R3: empty states become soft surface cards (was bare muted text
+   floating on bg) — 48px padding, hairline border, 14px radius. */
+.loading {
   text-align: center;
   padding: 36px;
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1.6;
+}
+.empty-state {
+  text-align: center;
+  padding: 48px 32px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+/* Premium-R9: empty-state nested inside a .card would double-card
+   (J205 runs/automation shots) — inner one goes flat. */
+.card .empty-state,
+.profile-grid .empty-state,
+#extension-repo-list .empty-state,
+#automation-list .empty-state,
+#automation-jobs .empty-state {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  padding: 36px 24px;
 }
 /* R8-37: kbd style for shortcut hints (no rule existed — hints fell back
    to raw text). */
@@ -1332,12 +1460,15 @@ kbd {
 /* UI R2: skeleton shimmer for loading states — replaces bare "Loading..."
  * text so lists don't flash empty. renderViewState({skeleton: N}) uses it.
  * Static poster under reduced-motion (global kill covers the keyframes). */
-.skeleton-list { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+/* Premium-R3: skeleton matches card radius/padding so loading→content
+   doesn't jump shape. */
+.skeleton-list { display: flex; flex-direction: column; gap: 12px; padding: 4px 0; }
 .skeleton-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 20px;
   background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .skeleton-line {
   height: 12px;
@@ -1352,11 +1483,15 @@ kbd {
   to { background-position: -200% 0; }
 }
 
+/* Premium-R6: stat rows breathe — 10px vertical, hairline stays. */
 .stat-row {
   display: flex;
   justify-content: space-between;
-  padding: 8px 0;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
   font-size: 13px;
+  line-height: 1.5;
   border-bottom: 1px solid var(--border-light);
 }
 .stat-row:last-child { border-bottom: none; }
@@ -1404,18 +1539,20 @@ code {
 }
 
 /* ── Skill marketplace cards ── */
+/* Premium-R3: skill/wizard cards join the hairline + lift family. */
 .skill-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 10px;
+  padding: 18px;
+  margin-bottom: 12px;
   box-shadow: var(--shadow-sm);
-  transition: all 0.15s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 .skill-card:hover {
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary-ring), var(--shadow);
+  transform: translateY(-1px);
 }
 /* R4-16: truncate like card h3. */
 .skill-card h4 {
@@ -1458,43 +1595,45 @@ code {
 .name-row .btn-rename:hover { border-color: var(--primary); color: var(--primary); }
 
 /* ── Cookie table ── */
+/* Premium-R6: tables breathe — 12px body, hairline header, pill hover. */
 .cookie-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 12px;
 }
 /* R3-13: th gets the same truncate as td — long headers + 150px cells mismatched. */
 .cookie-table th {
   text-align: left;
-  padding: 7px 8px;
-  border-bottom: 2px solid var(--border);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
   font-weight: 600;
-  color: var(--text-muted);
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.5;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .cookie-table td {
-  padding: 5px 8px;
+  padding: 8px 10px;
+  line-height: 1.5;
   border-bottom: 1px solid var(--border-light);
   max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cookie-table tr:hover { background: var(--surface2); }
+.cookie-table tbody tr:hover { background: var(--pill-bg); }
 
 /* ── Import input ── */
 .import-name {
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--input-soft-bg);
+  font-size: 13px;
+  line-height: 1.5;
   font-family: var(--font);
   background: var(--surface);
   color: var(--text);
@@ -1511,7 +1650,71 @@ code {
 /* R5-24: backup-hint flex layout lives here (was dead inline
    align-items under display:none) + sync strategy sizing. */
 .backup-hint { align-items: flex-start; gap: 10px; }
-.sync-strategy { margin-left: 4px; font-size: 12px; min-height: 28px; }
+/* Premium-R2: sync strategy select joins the pill family. */
+.sync-strategy { margin-left: 4px; font-size: 12px; line-height: 1.5; min-height: 28px; padding: 3px 12px; border: 1px solid transparent; border-radius: 999px; background: var(--pill-bg); color: var(--pill-text); }
+/* Premium-R9: standalone controls outside .form-row/.batch-filter —
+   J205 shots caught them as raw bordered boxes (extension search,
+   automation/activity filter selects, DB sql box, batch proxy assign). */
+#extension-repo-search {
+  width: 100%;
+  max-width: 420px;
+  padding: 9px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--input-soft-bg);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+#extension-repo-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+#extension-repo-search::placeholder { color: var(--text-muted); opacity: 1; }
+#automation-job-status, #activity-filter, #batch-assign-proxy {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 4px 12px;
+  background: var(--pill-bg);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--pill-text);
+  min-height: 28px;
+  font-family: var(--font);
+}
+#db-sql {
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: var(--mono);
+  color: var(--text);
+  background: var(--input-soft-bg);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+#db-sql:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+#automation-log {
+  font-size: 12px !important;
+  line-height: 1.6 !important;
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--border-light) !important;
+}
+/* Premium-R9: dialog textareas outside .form-row (bulk import, proxy import,
+   account import) get the soft treatment. .form-row rules still win inside
+   forms (higher specificity), so no conflict. */
+dialog textarea {
+  background: var(--input-soft-bg);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--text);
+  line-height: 1.6;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+dialog textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
 /* R6-26: hint-line utility — 35+ inline copies of muted 11px/12px explainer.
    Migrate incrementally: new code uses the class, old inline stays valid. */
 .hint-line { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
@@ -1539,15 +1742,15 @@ code {
   line-height: 1.5;
 }
 .proxy-select {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.5;
-  padding: 4px 8px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
+  padding: 4px 12px;
+  background: var(--pill-bg);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--pill-text);
   width: 100%;
-  min-height: 24px;
+  min-height: 26px;
 }
 
 /* ── Status dot animation ── */
@@ -1568,28 +1771,34 @@ code {
 .import-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 0;
+  gap: 10px;
+  padding: 10px 0;
+  font-size: 13px;
+  line-height: 1.5;
   border-bottom: 1px solid var(--border-light);
 }
 
 /* ── Detection result ── */
+/* Premium-R6: detect result + run steps get hairlines + radius. */
 .detect-result {
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--success-bg);
-  border-radius: 6px;
-  font-size: 12px;
-  margin-top: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 10px;
 }
 
 /* ── First-run wizard ── */
 .wizard-step {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 12px;
-  transition: all 0.25s ease;
+  padding: 20px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .wizard-step h4 {
   font-size: 14px;

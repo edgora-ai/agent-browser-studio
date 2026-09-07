@@ -1159,7 +1159,7 @@
       : last.verdict === "warn"
         ? { key: "profile.health.verdict-warn", fb: "Watch", color: "var(--warning)" }
         : { key: "profile.health.verdict-pass", fb: "Pass", color: "var(--success)" };
-    return '<span style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last.detail || "") + '">' +
+    return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last.detail || "") + '">' +
       esc(t("profile.health.last", "Last check: {when}").replace("{when}", relativeTime(last.at))) +
       ' · <b style="color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b></span>";
   }
