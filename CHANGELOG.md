@@ -26,6 +26,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 
 ### Fixed
 
+- Team roster role badges (**Owner / Admin / Member**) were painted with the
+  bright *fill* colours instead of the text-safe ones — 2.75:1, 4.33:1 and
+  2.26:1 against their own tint behind 11px text. All four roles now clear
+  WCAG AA in light and dark.
+- The Sync page printed a literal `undefined · Owner` device badge whenever the
+  sync status payload carried no device name.
+- Other labels using fill colours as text — automation “last run” and job error
+  lines, cron validation hints, environment-risk severity headers — moved to
+  the text-safe palette so they meet AA contrast.
 - Confirmation dialogs no longer lose their callback when a follow-up dialog
   opens quickly (sync push → lock block → force confirm).
 - REST/MCP bearer-token comparison is now constant-time; REST request bodies
@@ -41,6 +50,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 - User Guide rewritten for the full feature surface (batch console, trash,
   presets, locks, RBAC, DRM, adapter hub, updates) in English and Chinese,
   with a troubleshooting table that matches the new error copy.
+- Product screenshots refreshed (`docs/screenshots/`) from the real renderer in
+  the current theme.
 - Added this changelog.
 
 ## [1.0.0] - 2026-08-29

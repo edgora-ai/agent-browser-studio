@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -106,7 +107,7 @@
       var errText = typeof friendly === "function" ? friendly(state.error) : state.error;
       var msg = esc(errText);
       var retry = state.retry ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.retry.cmd) + '"' + (state.retry.arg ? ' data-cmd-arg="' + escAttr(state.retry.arg) + '"' : '') + ' style="margin-top:8px;">Retry</button>' : '';
-      el.innerHTML = '<div class="empty-state" style="color:var(--danger);">' + msg + '<br>' + retry + '</div>';
+      el.innerHTML = '<div class="empty-state" style="color: var(--danger-text);">' + msg + '<br>' + retry + '</div>';
       return;
     }
     if (state.empty) {
@@ -127,22 +128,24 @@
 
   agentBrowser.loadStorage = function () {
     var list = document.getElementById("storage-profile-list");
-    agentBrowser.renderViewState(list, { loading: "Loading storage..." });
+    agentBrowser.renderViewState(list, { loading: t("common.loading", "Loading...") });
     api.storage.info().then(function (info) {
       document.getElementById("stat-profile-total").textContent = fmt(info.totalProfileBytes || 0);
       document.getElementById("stat-disk-available").textContent = fmt(info.availableDiskBytes || 0);
       document.getElementById("stat-disk-usage").textContent = (info.diskUsagePercent || 0) + "%";
       var profiles = info.profiles || [];
       if (profiles.length === 0) {
-        agentBrowser.renderViewState(list, { empty: "No profile storage yet.", cta: { label: "Create profile", cmd: "newProfile" } });
+        agentBrowser.renderViewState(list, { empty: t("storage.empty", "No profile storage yet."), cta: { label: t("profiles.new", "Create profile"), cmd: "newProfile" } });
         return;
       }
       list.innerHTML = profiles.map(function (p) {
         return '<div class="profile-card" data-dir-id="' + escAttr(p.dirId) + '">' +
-          '<div class="card-header"><span class="name">' + esc(p.name) + '</span><span class="status-badge status-stopped">' + esc(p.browser) + '</span></div>' +
-          '<div class="info-row"><span>Size</span><span>' + fmt(p.sizeBytes || 0) + '</span></div>' +
-          '<div class="info-row"><span>Modified</span><span>' + (p.lastModified ? new Date(p.lastModified).toLocaleString() : '?') + '</span></div>' +
-          '<div class="card-actions"><button class="btn btn-secondary btn-sm" data-action="clear-cache">Clear Cache</button></div>' +
+          // R137: storage-monitor hardcodes browser:"chromium" — render it as a
+          // localized label instead of the raw main-process token.
+          '<div class="card-header"><span class="name">' + esc(p.name) + '</span><span class="status-badge status-stopped">' + esc(t("profile.card.chromium", "Managed Chromium")) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t("storage.col.size", "Size")) + '</span><span>' + fmt(p.sizeBytes || 0) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t("storage.col.modified", "Modified")) + '</span><span>' + (p.lastModified ? new Date(p.lastModified).toLocaleString() : '?') + '</span></div>' +
+          '<div class="card-actions"><button class="btn btn-secondary btn-sm" data-action="clear-cache">' + esc(t("storage.action.clear-cache", "Clear Cache")) + '</button></div>' +
         '</div>';
       }).join("");
       list.onclick = function (event) {

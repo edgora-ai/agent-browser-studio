@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
@@ -55,10 +56,14 @@
   }
   Object.assign(agentBrowser, {
   detectProxy: function (name) {
+        // Superseded by detectProxyIntoCard (the card now writes to
+        // `.proxy-detect-result`); kept because it is still exported on the
+        // global for the data-cmd dispatcher. No template renders a
+        // `#detect-<name>` node any more, so `el` is always null in practice.
         var el = document.getElementById("detect-" + name);
-        if (el) el.textContent = "⏳ Detecting...";
+        if (el) el.innerHTML = '<span class="icon-text">' + icon("loader", 13) + esc(t("proxy.detect.detecting", "Detecting…")) + '</span>';
         api.proxy.get(name).then(function (cfg) {
-          if (!cfg) { if (el) el.textContent = "❌ Not found"; return; }
+          if (!cfg) { if (el) el.textContent = t("proxy.detect.not-found", "Not found"); return; }
           return api.detect.proxyByName(name);
         }).then(function (r) {
           if (!r) return;
@@ -70,9 +75,9 @@
             if (r.latencyMs) parts.push(r.latencyMs + "ms");
             if (el) el.textContent = parts.join(" | ");
           } else {
-            if (el) el.textContent = "❌ " + (r.error || "Failed");
+            if (el) el.textContent = (r.error || t("proxy.detect.failed", "Failed"));
           }
-        }).catch(function (e) { if (el) el.textContent = "❌ " + e.message; });
+        }).catch(function (e) { if (el) el.textContent = e.message; });
       },
 
   setDefault: function (name) {
@@ -197,17 +202,17 @@
         if (!text) { toast((window.i18n ? window.i18n.t("proxy.import.need-text", "请输入代理列表") : "请输入代理列表"), "error"); return; }
         statusEl.innerHTML = (window.i18n ? window.i18n.t("proxy.import.progress", "导入中…") : "导入中…");
         wcall("proxy.importText", function () { return api.proxy.importText(text, replace); }).then(function (r) {
-          if (!r || r.success === false) { statusEl.innerHTML = "<span style='color:var(--danger)'>" + esc((r && r.error) || "Failed") + "</span>"; return; }
+          if (!r || r.success === false) { statusEl.innerHTML = "<span style='color: var(--danger-text)'>" + esc((r && r.error) || "Failed") + "</span>"; return; }
           var rep = r.report || {};
           var imported = (rep.imported || []).length;
           var skipped = (rep.skipped || []).length;
           var failed = (rep.failed || []).length;
-          var html = "<span style='color:var(--success)'>" + (window.i18n ? window.i18n.t("proxy.import.done", "已导入 {n} 个代理").replace("{n}", imported) : ("已导入 " + imported + " 个代理")) + "</span>";
-          if (skipped) html += "<br><span style='color:var(--warning)'>" + (window.i18n ? window.i18n.t("proxy.import.skipped", "跳过 {n}（重复或冲突）").replace("{n}", skipped) : ("跳过 " + skipped + "（重复或冲突）")) + "</span>";
-          if (failed) html += "<br><span style='color:var(--danger)'>" + (window.i18n ? window.i18n.t("proxy.import.failed", "失败 {n}").replace("{n}", failed) : ("失败 " + failed)) + "</span>";
+          var html = "<span style='color: var(--success-text)'>" + (window.i18n ? window.i18n.t("proxy.import.done", "已导入 {n} 个代理").replace("{n}", imported) : ("已导入 " + imported + " 个代理")) + "</span>";
+          if (skipped) html += "<br><span style='color: var(--warning-text)'>" + (window.i18n ? window.i18n.t("proxy.import.skipped", "跳过 {n}（重复或冲突）").replace("{n}", skipped) : ("跳过 " + skipped + "（重复或冲突）")) + "</span>";
+          if (failed) html += "<br><span style='color: var(--danger-text)'>" + (window.i18n ? window.i18n.t("proxy.import.failed", "失败 {n}").replace("{n}", failed) : ("失败 " + failed)) + "</span>";
           statusEl.innerHTML = html;
           if (imported) { setTimeout(function () { document.getElementById("dlg-proxy-import").close(); agentBrowser.refresh(); }, 1200); }
-        }).catch(function (e) { statusEl.innerHTML = "<span style='color:var(--danger)'>" + esc(e.message) + "</span>"; });
+        }).catch(function (e) { statusEl.innerHTML = "<span style='color: var(--danger-text)'>" + esc(e.message) + "</span>"; });
       },
 
   exportProxies: function () {
@@ -309,15 +314,15 @@
     if (!entry) return '<span class="proxy-health-badge health-none">' + esc(t('proxy.health.not-checked', 'Not checked')) + '</span>';
     var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
     var label = entry.risk === "good" ? t('proxy.health.good', 'Good') : entry.risk === "watch" ? t('proxy.health.watch', 'Watch') : t('proxy.health.poor', 'Poor');
-    var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " ⏸" + t('proxy.health.cooldown', 'Cooldown') : "";
+    var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " · " + t('proxy.health.cooldown', 'Cooldown') : "";
     var history = entry.history || [];
     var latest = history.length ? history[history.length - 1] : null;
     var riskBadges = "";
     if (latest && latest.success && latest.hosting === true) {
-      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.idc-title', 'Exit is a datacenter/IDC IP ({org})').replace('{org}', [latest.org, latest.as].filter(Boolean).join(" · ") || t('proxy.health.unknown-org', 'unknown owner'))) + '">🏭 IDC</span>';
+      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.idc-title', 'Exit is a datacenter/IDC IP ({org})').replace('{org}', [latest.org, latest.as].filter(Boolean).join(" · ") || t('proxy.health.unknown-org', 'unknown owner'))) + '">' + icon("settings", 11) + ' IDC</span>';
     }
     if (latest && latest.success && latest.isProxy === true) {
-      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.proxy-title', 'Exit is flagged as a public proxy/VPN')) + '">⚠ ' + esc(t('proxy.health.proxy', 'Proxy')) + '</span>';
+      riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.proxy-title', 'Exit is flagged as a public proxy/VPN')) + '">' + icon("alert", 11) + ' ' + esc(t('proxy.health.proxy', 'Proxy')) + '</span>';
     }
     return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + ' ' + t('proxy.health.points', 'pts') + cooldown + '</span>' + riskBadges;
   }
@@ -331,7 +336,7 @@
       '<span class="health-text-good">' + esc(t('proxy.health.good', 'Good')) + ' <b>' + summary.good + '</b></span>' +
       '<span class="health-text-watch">' + esc(t('proxy.health.watch', 'Watch')) + ' <b>' + summary.watch + '</b></span>' +
       '<span class="health-text-poor">' + esc(t('proxy.health.poor', 'Poor')) + ' <b>' + summary.poor + '</b></span>' +
-      (summary.inCooldown ? '<span>⏸ ' + esc(t('proxy.health.cooldown', 'Cooldown')) + ' <b>' + summary.inCooldown + '</b></span>' : '') +
+      (summary.inCooldown ? '<span>' + icon("clock", 12) + ' ' + esc(t('proxy.health.cooldown', 'Cooldown')) + ' <b>' + summary.inCooldown + '</b></span>' : '') +
       '</div>';
   }
 
@@ -366,13 +371,13 @@
         if (h.countryCode) bits.push(h.countryCode);
         if (h.timezone) bits.push(h.timezone);
         if (h.provider) bits.push(h.provider);
-        if (h.hosting === true) bits.push("🏭IDC");
-        if (h.isProxy === true) bits.push("⚠" + t('proxy.health.proxy', 'Proxy'));
+        if (h.hosting === true) bits.push("IDC");
+        if (h.isProxy === true) bits.push(t('proxy.health.proxy', 'Proxy'));
         if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
         /* R79: detect lines converge to timeline classes. */
-        return '<div class="timeline-ok">✅ ' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
+        return '<div class="timeline-ok">' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
       }
-      return '<div class="timeline-err">❌ ' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
+      return '<div class="timeline-err">' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
     });
     return '<div class="timeline">' + lines.join("") + '</div>';
   }
@@ -407,9 +412,9 @@
         var txt = card.querySelector('.proxy-rotation-text');
         if (!row || !txt || !r.info.active) return;
         if (r.info.to) {
-          txt.textContent = '⚠ ' + name + ' → ' + r.info.to + ' (' + (r.info.reason || t('proxy.rotate.reason-unhealthy', 'unhealthy')) + ')';
+          txt.textContent = name + ' → ' + r.info.to + ' (' + (r.info.reason || t('proxy.rotate.reason-unhealthy', 'unhealthy')) + ')';
         } else {
-          txt.textContent = '⚠ ' + name + ' ' + t('proxy.rotate.row-no-fallback', 'is unhealthy and has no available fallback');
+          txt.textContent = name + ' ' + t('proxy.rotate.row-no-fallback', 'is unhealthy and has no available fallback');
         }
         row.style.display = '';
       }).catch(function () {});
@@ -429,29 +434,51 @@
     }).then(function (proxies) {
       var health = window.__proxyHealth || { entries: [], summary: null };
       if (!proxies || proxies.length === 0) {
-        agentBrowser.renderViewState(container, { empty: "No proxies configured.", cta: { label: "Add Proxy", cmd: "newProxy" } });
+        agentBrowser.renderViewState(container, { empty: t("proxy.empty", "No proxies configured."), cta: { label: t("proxy.add", "Add Proxy"), cmd: "newProxy" } });
         return;
       }
+      /* R141: the action cluster used to be nine labelled buttons, which wrapped
+         onto three rows and ate 106px of a 350px card — it read as a wall of
+         text and buried the three actions a user actually comes for. Those keep
+         their labels (Detect / Default / Edit); the five utility actions become
+         icon buttons, the convention the delete button and .btn-icon already
+         establish, with the same i18n strings moved to title + aria-label so
+         nothing is lost to a screen reader. Two rows, 68px, same 9 actions. */
       container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
         var cfg = p.config || {};
         var label = cfg.type + '://' + cfg.host + ':' + cfg.port;
         var entry = findHealth(health.entries, p.name);
         return '<div class="profile-card" data-proxy-name="' + escAttr(p.name) + '">' +
-          '<div class="card-header"><span class="name">' + esc(p.name) + '</span><span class="status-badge ' + (p.isDefault ? 'status-running' : 'status-stopped') + '">' + (p.isDefault ? 'Default' : 'Proxy') + '</span></div>' +
-          '<div class="info-row"><span>Endpoint</span><span>' + esc(label) + '</span></div>' +
-          '<div class="info-row"><span>Detect</span><span class="proxy-detect-result">Not checked</span></div>' +
+          '<div class="card-header proxy-head"><span class="name">' + esc(p.name) + '</span><span class="status-badge ' + (p.isDefault ? 'status-running' : 'status-stopped') + '">' + esc(p.isDefault ? t('proxy.badge.default', 'Default') : t('proxy.badge.proxy', 'Proxy')) + '</span></div>' +
+          /* R143: one `.card-meta` grid around every info row, so the label
+             column is shared. Loose siblings each sized their own `max-content`
+             column, so the values started at x = 330 / 316 / 301 / 301. */
+          '<div class="card-meta">' +
+          '<div class="info-row"><span>' + esc(t('proxy.row.endpoint', 'Endpoint')) + '</span><span>' + esc(label) + '</span></div>' +
+          // `proxy.detect` is the same word the Detect button uses ("检测"),
+          // so the row label and the control that fills it stay in sync.
+          '<div class="info-row"><span>' + esc(t('proxy.detect', 'Detect')) + '</span><span class="proxy-detect-result">' + esc(t('proxy.not-checked', 'Not checked')) + '</span></div>' +
           healthRowsHtml(entry) +
           rotationRowsHtml(cfg) +
+          '</div>' +
           '<div class="card-actions">' +
-            '<button class="btn btn-secondary btn-sm" data-action="detect-proxy">🔍 Detect</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="default-proxy">★ Default</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">🧹 ' + esc(t('proxy.action.clear-health', 'Clear health')) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="rotate-proxy" title="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '">🔄 ' + esc(t('proxy.action.rotate', 'Rotate')) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="toggle-history" title="' + escAttr(t('proxy.action.history', 'History')) + '">📈 ' + esc(t('proxy.action.history', 'History')) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="bind-profiles" title="' + escAttr(t('proxy.action.bind', 'Bind')) + '">📎 ' + esc(t('proxy.action.bind', 'Bind')) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="qrcode-proxy" title="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '">📱 ' + esc(t('proxy.action.qrcode', 'QR code')) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">✎ Edit</button> ' +
-            '<button class="btn btn-danger btn-sm" data-action="delete-proxy">🗑</button>' +
+            '<button class="btn btn-secondary btn-sm" data-action="detect-proxy">' + icon("search", 14) + ' ' + esc(t('proxy.detect', 'Detect')) + '</button> ' +
+            // Already-default is a state, not an action: clicking used to re-set
+            // the same proxy and toast "Default set" — noise, not feedback.
+            // R143: a disabled button needs to say why, or it reads as broken.
+            '<button class="btn btn-secondary btn-sm" data-action="default-proxy"' + (p.isDefault ? ' disabled title="' + escAttr(t('proxy.already-default', 'Already the default proxy')) + '"' : '') + '>' + icon("star", 14) + ' ' + esc(t('proxy.set-default', 'Default')) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">' + icon("edit", 14) + ' ' + esc(t('proxy.edit', 'Edit')) + '</button> ' +
+            // R143: the utilities live in their own flex band (see the CSS note)
+            // so the wrap lands between "primary three" and "occasional six"
+            // rather than orphaning one icon onto the labelled row.
+            '<span class="proxy-util-actions">' +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '" aria-label="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">' + icon("trash", 14) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="rotate-proxy" title="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '" aria-label="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '">' + icon("refresh", 14) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="toggle-history" title="' + escAttr(t('proxy.action.history', 'History')) + '" aria-label="' + escAttr(t('proxy.action.history', 'History')) + '">' + icon("chart", 14) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="bind-profiles" title="' + escAttr(t('proxy.action.bind', 'Bind')) + '" aria-label="' + escAttr(t('proxy.action.bind', 'Bind')) + '">' + icon("link", 14) + '</button> ' +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="qrcode-proxy" title="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '" aria-label="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '">' + icon("qr", 14) + '</button> ' +
+            '<button class="btn btn-danger btn-sm btn-icon" data-action="delete-proxy" title="' + escAttr(t('proxy.delete', 'Delete')) + '" aria-label="' + escAttr(t('proxy.delete', 'Delete')) + '">' + icon("trash", 14) + '</button>' +
+            '</span>' +
           '</div>' +
         '</div>';
       }).join("");
@@ -516,9 +543,9 @@
 
   function detectProxyIntoCard(name, card) {
     var el = card.querySelector(".proxy-detect-result");
-    if (el) el.textContent = "⏳ Detecting...";
+    if (el) el.innerHTML = '<span class="icon-text">' + icon("loader", 13) + esc(t("proxy.detect.detecting", "Detecting…")) + '</span>';
     api.proxy.get(name).then(function (cfg) {
-      if (!cfg) { if (el) el.textContent = "❌ Not found"; return null; }
+      if (!cfg) { if (el) el.textContent = t("proxy.detect.not-found", "Not found"); return null; }
       return api.detect.proxyByName(name);
     }).then(function (r) {
       if (!r) return;
@@ -527,15 +554,15 @@
         if (r.exitIp) parts.push("IP:" + r.exitIp);
         if (r.country) parts.push(r.country);
         if (r.city) parts.push(r.city);
-        if (r.hosting === true) parts.push("🏭IDC");
-        if (r.isProxy === true) parts.push("⚠" + t('proxy.health.proxy', 'Proxy'));
+        if (r.hosting === true) parts.push("IDC");
+        if (r.isProxy === true) parts.push(t('proxy.health.proxy', 'Proxy'));
         if (r.latencyMs) parts.push(r.latencyMs + "ms");
-        if (el) el.textContent = parts.join(" | ") || "✅ OK";
+        if (el) el.textContent = parts.join(" | ") || "OK";
       } else if (el) {
-        el.textContent = "❌ " + (r.error || "Failed");
+        el.textContent = (r.error || t("proxy.detect.failed", "Failed"));
       }
       refreshHealthInCard(name, card);
-    }).catch(function (e) { if (el) el.textContent = "❌ " + e.message; });
+    }).catch(function (e) { if (el) el.textContent = e.message; });
   }
   agentBrowser.loadProxies = loadProxyTab;
   agentBrowser.detectProxyIntoCard = detectProxyIntoCard;

@@ -14,6 +14,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
@@ -183,13 +184,13 @@
             if (r.success) {
               // UI R3: success toast carries the next step (health check) as
               // an action instead of a bare port number.
-              toast(t("toast.profile.started", "🥷 Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success", {
-                detail: t("toast.profile.started-next", "Next: run a health check from the card's 🩺 menu"),
+              toast(t("toast.profile.started", "Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success", {
+                detail: t("toast.profile.started-next", "Next: run a health check from the card's health menu"),
                 action: { label: t("toast.profile.check-now", "Check now"), onClick: (function (id) { return function () { agentBrowser.openEnvRisk(id); }; })(dirId) },
               });
               if (r.envCheck && r.envCheck.high) {
                 var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
-                toast(t("toast.env.high-risk", "⚠️ Environment risk: ") + (envCodes || t("toast.env.high-generic", "host environment risk")) + t("toast.env.high-hint", " — open 🖥 Env on the card for fixes"), "error");
+                toast(t("toast.env.high-risk", "Environment risk: ") + (envCodes || t("toast.env.high-generic", "host environment risk")) + t("toast.env.high-hint", " — open Env on the card for fixes"), "error");
               }
               var seq = markProfileRuntime(dirId, true, r.pid);
               setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
@@ -476,7 +477,7 @@
         var color = it.level === "block" ? "var(--danger)" : "var(--warning)";
         var bg = it.level === "block" ? "var(--danger-bg)" : "var(--warning-bg)";
         return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:6px;padding:6px 8px;margin-top:4px;font-size:11px;">' +
-          (it.level === "block" ? "⛔ " : "⚠️ ") + esc(it.text) + '</div>';
+          (it.level === "block" ? icon("close", 12) : icon("alert", 12)) + " " + esc(it.text) + '</div>';
       }).join("");
       host.style.display = "";
     }).catch(function () { /* preview is best effort */ });
@@ -516,11 +517,13 @@
 
   profileBrowserChanged: function() {
         var browser = (document.getElementById("new-profile-browser") || {}).value || "chromium";
-        var chromeOpts = document.getElementById("new-profile-chrome-opts");
+        // R143: the "chrome options" panel was replaced by
+        // #new-profile-agent-browser-opts; the guarded lookup left behind here
+        // was a no-op that only made the function look like it still had two
+        // panels to toggle.
         var browserOptions = document.getElementById("new-profile-agent-browser-opts");
         var firefoxOpts = document.getElementById("new-profile-firefox-opts");
         var isFirefox = browser === "firefox";
-        if (chromeOpts) chromeOpts.style.display = "none";
         if (browserOptions) browserOptions.style.display = isFirefox ? "none" : "block";
         if (firefoxOpts) firefoxOpts.style.display = isFirefox ? "block" : "none";
         var browserRow = document.getElementById("new-profile-browser-row");
@@ -620,11 +623,11 @@
     var text = document.getElementById("bulk-import-text").value.trim();
     var fallbackProxy = parseProxySelection(document.getElementById("bulk-import-proxy").value, "default");
     var statusEl = document.getElementById("bulk-import-status");
-    if (!text) { statusEl.innerHTML = '<span style="color:var(--danger);">Enter profile definitions</span>'; return; }
+    if (!text) { statusEl.innerHTML = '<span style="color: var(--danger-text);">Enter profile definitions</span>'; return; }
     // Parse via the shared CSV parser (supports header + per-row proxy/tags).
     wcall("browser.parseBulkCsv", function () { return api.browser.parseBulkCsv(text); }).then(function(res) {
       if (!res || !res.ok || !res.specs || !res.specs.length) {
-        statusEl.innerHTML = '<span style="color:var(--danger);">No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)</span>';
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)</span>';
         return;
       }
       var specs = res.specs;
@@ -632,11 +635,11 @@
       // P3 (#110): per-row failures used to count silently — keep the first
       // few messages so the user can fix the CSV instead of guessing.
       var errorLines = [];
-      statusEl.innerHTML = '<span style="color:var(--primary);">Importing ' + total + ' profiles...</span>';
+      statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing ' + total + ' profiles...</span>';
       function processNext(idx) {
         if (idx >= specs.length) {
-          var errHtml = errorLines.length ? '<div style="margin-top:6px;font-size:11px;color:var(--danger);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + (errorLines.length > 5 ? '<br>…+' + (errorLines.length - 5) : '') + '</div>' : '';
-          statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>' + errHtml;
+          var errHtml = errorLines.length ? '<div style="margin-top:6px;font-size:11px;color: var(--danger-text);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + (errorLines.length > 5 ? '<br>…+' + (errorLines.length - 5) : '') + '</div>' : '';
+          statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>' + errHtml;
           // Keep the dialog open when rows failed so the messages stay visible.
           if (errors) return;
           setTimeout(function() { document.getElementById("dlg-bulk-import").close(); agentBrowser.refresh(); }, 1000);
@@ -679,8 +682,8 @@
                   ? t("license.limit-hit", "Profile limit reached — activate a license for more. Your data is untouched.")
                   : t("license.expired-hit", "Trial expired — activate a license to continue. Your data is untouched.");
                 errorLines.push((s.name || ("row " + (idx + 1))) + ": " + gateMsg);
-                statusEl.innerHTML = '<span style="color:var(--success);">Imported ' + done + '/' + total + ' (' + errors + ' errors' + (skipped > 0 ? ', ' + skipped + ' not attempted' : '') + ')</span>' +
-                  '<div style="margin-top:6px;font-size:11px;color:var(--danger);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + '</div>';
+                statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + done + '/' + total + ' (' + errors + ' errors' + (skipped > 0 ? ', ' + skipped + ' not attempted' : '') + ')</span>' +
+                  '<div style="margin-top:6px;font-size:11px;color: var(--danger-text);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + '</div>';
                 return;
               }
             } catch (gateErr) { /* fall through to normal counting */ }
@@ -692,7 +695,7 @@
             return;
           }
           done++;
-          statusEl.innerHTML = '<span style="color:var(--primary);">' + done + '/' + total + ' imported...</span>';
+          statusEl.innerHTML = '<span style="color: var(--primary-text);">' + done + '/' + total + ' imported...</span>';
           processNext(idx + 1);
         }).catch(function(e) {
           errors++;
@@ -701,7 +704,7 @@
         });
       }
       processNext(0);
-    }).catch(function(e) { statusEl.innerHTML = '<span style="color:var(--danger);">' + esc((e && e.message) || e) + '</span>'; });
+    }).catch(function(e) { statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((e && e.message) || e) + '</span>'; });
   };
 
   agentBrowser.exportProfileArchive = function(dirId) {
@@ -916,7 +919,7 @@
       var actions = '<button class="btn btn-danger btn-sm" data-trash-purge="' + id + '" data-trash-name="' + escAttr(en.name || en.dirId || "") + '">' + esc(t("trash.purge", "Delete forever")) + '</button>';
       var state = en.recoverable
         ? '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>' + actions
-        : '<span style="font-size:11px;color:var(--danger);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>' + actions;
+        : '<span style="font-size:11px;color: var(--danger-text);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>' + actions;
       return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
         '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + name + '</div>' +
         '<div style="font-size:11px;color:var(--text-muted);">' + esc(when) + '</div></div>' + state + '</div>';
@@ -1022,7 +1025,7 @@
     // happens: running profiles are refused by the backend and counted failed.
     var detail = '<div style="max-height:180px;overflow:auto;">' +
       names.map(function(n) { return "• " + esc(n); }).join("<br>") +
-      '</div><div style="margin-top:8px;color:var(--danger);">' +
+      '</div><div style="margin-top:8px;color: var(--danger-text);">' +
       esc(t("confirm.delete.warning", "Profiles move to the trash and stay recoverable for 7 days. Running profiles are skipped (stop them first).")) +
       "</div>";
     var opts = { title: t("confirm.delete.title", "Delete profiles"), detailHtml: detail };
@@ -1305,12 +1308,12 @@
     if (!el) return;
     if (info && info.installed) {
       el.className = "engine-banner ok";
-      el.innerHTML = "🥷 " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
+      el.innerHTML = icon("browser", 13) + " " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
       el.style.display = "";
       return;
     }
     el.className = "engine-banner";
-    el.innerHTML = '⚠️ <span style="flex:1;">' +
+    el.innerHTML = icon("alert", 13) + ' <span style="flex:1;">' +
       esc(t("engine.missing", "No managed Chromium installed — profiles cannot start until you point at a local build.")) +
       '</span>' +
       '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' +
@@ -1524,7 +1527,7 @@
         var cfg = p.config || {};
         var label = String(cfg.type || "") + '://' + String(cfg.host || "") + ':' + String(cfg.port || "");
         return '<option value="' + escAttr(p.name) + '">' +
-          esc(p.name) + ' (' + esc(label) + ')' + (p.isDefault ? ' ★' : '') + '</option>';
+          esc(p.name) + ' (' + esc(label) + ')' + (p.isDefault ? ' · ' + t('proxy.default-tag', 'default') : '') + '</option>';
       }).join("");
 
       var cardHtmlFn = function (p) {
@@ -1537,47 +1540,47 @@
         var proxyStr = proxyDisplayLabel(p);
 
         var syncIcon = "", syncTitle = "", syncCls = "";
-        if (p.syncStatus === "synced") { syncIcon = "☁️"; syncCls = "sync-synced"; syncTitle = "Synced: " + new Date(p.syncedAt).toLocaleString(); }
-        else if (p.syncStatus === "dirty") { syncIcon = "⚡"; syncCls = "sync-dirty"; syncTitle = "Unsaved changes"; }
-        else { syncIcon = "☁️"; syncCls = "sync-never"; syncTitle = "Never synced"; }
+        if (p.syncStatus === "synced") { syncIcon = icon("sync", 12); syncCls = "sync-synced"; syncTitle = t("profile.card.synced-at", "Synced: ") + new Date(p.syncedAt).toLocaleString(); }
+        else if (p.syncStatus === "dirty") { syncIcon = icon("zap", 12); syncCls = "sync-dirty"; syncTitle = t("profile.card.unsaved", "Unsaved changes"); }
+        else { syncIcon = icon("sync", 12); syncCls = "sync-never"; syncTitle = t("profile.card.never-synced", "Never synced"); }
 
         var fp = p.fingerprint || {};
         var platform = fp.platform || "windows";
         var osName = platform === "macos" ? "macOS" : "Windows";
 
         var isFirefox = fp.browser === "firefox" || p.engine === "firefox";
-        var browserIcon = isFirefox ? "🦊" : "🥷";
-        var browserName = isFirefox ? "Firefox (stock)" : "Managed Chromium";
+        var browserIcon = icon(isFirefox ? "firefox" : "browser", 12);
+        var browserName = isFirefox ? t("profile.card.firefox-stock", "Firefox (stock)") : t("profile.card.chromium", "Managed Chromium");
         var fingerprintLabel = (isFirefox || fp.mode === "off")
-          ? (isFirefox ? "↪ Firefox pass-through" : "↪ Pass-through")
+          ? (isFirefox ? t("profile.card.firefox-passthrough", "Firefox pass-through") : t("profile.card.passthrough", "Pass-through"))
           // R12: 🎲 rendered as tofu under CJK font fallback — plain # is stable.
           : platformIcon(platform) + " #" + (fp.seed || "?");
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
         var identityStr = (isFirefox || fp.mode === "off")
-          ? (isFirefox ? "Native Firefox host identity" : "Native host identity")
-          : (fp.timezone || "auto tz") + " · " + (fp.locale || "auto locale") + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
+          ? (isFirefox ? t("profile.card.firefox-host-identity", "Native Firefox host identity") : t("profile.card.host-identity", "Native host identity"))
+          : (fp.timezone || t("profile.card.auto-tz", "auto tz")) + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
         if (fp.mode !== "off" && !isFirefox && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
-        var fingerprintTitle = (fp.mode === "off" ? "Real machine pass-through (Firefox: stock identity)" : "Seed " + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || "auto locale") + " · " + (fp.timezone || "auto timezone") + " · " + hardwareSummary(hardware) + " · completeness " + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
+        var fingerprintTitle = (fp.mode === "off" ? t("profile.card.real-machine", "Real machine pass-through (Firefox: stock identity)") : t("profile.card.seed-title", "Seed ") + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · " + (fp.timezone || t("profile.card.auto-timezone", "auto timezone")) + " · " + hardwareSummary(hardware) + " · " + t("profile.card.completeness", "completeness ") + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
         // ── Review item UE-01: four 9px check buttons made the card
         // unreadable. They collapse into one labelled control; every check is
         // local except the last one, which is an explicit opt-in (TE-04).
         var healthSelect = '<select class="health-select" data-action="health" aria-label="' +
           escAttr(t('profile.health.aria', 'Run a health check')) + '">' +
-          '<option value="">' + esc(t('profile.health.placeholder', '🩺 Health…')) + '</option>' +
-          '<option value="drift">' + esc(t('profile.health.drift', '🧬 Fingerprint drift')) + '</option>' +
-          '<option value="lock">' + esc(t('profile.health.lock', '🔒 Lock fingerprint baseline')) + '</option>' +
-          '<option value="consistency">' + esc(t('profile.health.consistency', '🧭 4-field alignment')) + '</option>' +
-          '<option value="env">' + esc(t('profile.health.env', '🖥 Host environment')) + '</option>' +
-          '<option value="webrtc">' + esc(t('profile.health.webrtc', '📡 WebRTC leak')) + '</option>' +
-          '<option value="risk">' + esc(t('profile.health.external', '🔍 External site (ping0.cc)')) + '</option>' +
-          '<option value="history">' + esc(t('profile.health.history', '🕘 History')) + '</option>' +
+          '<option value="">' + esc(t('profile.health.placeholder', 'Health…')) + '</option>' +
+          '<option value="drift">' + esc(t('profile.health.drift', 'Fingerprint drift')) + '</option>' +
+          '<option value="lock">' + esc(t('profile.health.lock', 'Lock fingerprint baseline')) + '</option>' +
+          '<option value="consistency">' + esc(t('profile.health.consistency', '4-field alignment')) + '</option>' +
+          '<option value="env">' + esc(t('profile.health.env', 'Host environment')) + '</option>' +
+          '<option value="webrtc">' + esc(t('profile.health.webrtc', 'WebRTC leak')) + '</option>' +
+          '<option value="risk">' + esc(t('profile.health.external', 'External site (ping0.cc)')) + '</option>' +
+          '<option value="history">' + esc(t('profile.health.history', 'History')) + '</option>' +
           '</select>';
         var isLocked = !!(p.lock && p.lock.owner);
-        var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color:var(--warning);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">🔒 ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
-        var drmBadge = p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">🎬 DRM</span>' : '';
-        var appBadge = p.appUrl ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.app', 'Capability: Web App {url}').replace('{url}', p.appUrl)) + '">🖥 App</span>' : '';
-        var engineBadge = isFirefox ? '<span class="status-badge badge-capability chip-firefox" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">🦊 Firefox</span>' : '';
+        var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color: var(--warning-text);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">' + icon("lock", 11) + ' ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
+        var drmBadge = p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">' + icon("play", 11) + ' DRM</span>' : '';
+        var appBadge = p.appUrl ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.app', 'Capability: Web App {url}').replace('{url}', p.appUrl)) + '">' + icon("monitor", 11) + ' App</span>' : '';
+        var engineBadge = isFirefox ? '<span class="status-badge badge-capability chip-firefox" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">' + icon("firefox", 11) + ' Firefox</span>' : '';
         // ── Review item UE-06: sync moves into the governance tier so the
         // three status tiers are visually distinct (lifecycle / governance /
         // capability) instead of five equal-weight badges.
@@ -1593,45 +1596,66 @@
           '<div class="card-header">' +
             '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
             '<span class="name" title="' + escAttr(t('profile.name.title', 'Click to rename')) + '" data-action="rename">' + esc(p.name) + '</span>' +
-            '<span class="status-badge badge-lifecycle ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? t('profile.status.running', 'Running') : t('profile.status.stopped', 'Stopped')) + '</span>' +
-            lockBadge +
-            syncBadge +
-            engineBadge +
-            drmBadge +
-            appBadge +
+            // Premium-R11: badges live in their own row of the header grid.
+            // Sharing a flex row with the name made a long name and the badge
+            // cluster fight for width (and at 700px the badges overflowed the
+            // card by ~129px). Row 2 is theirs alone, so they wrap among
+            // themselves and the card never grows past its column.
+            '<span class="card-status">' +
+              '<span class="status-badge badge-lifecycle ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? t('profile.status.running', 'Running') : t('profile.status.stopped', 'Stopped')) + '</span>' +
+              lockBadge +
+              syncBadge +
+              engineBadge +
+              drmBadge +
+              appBadge +
+            '</span>' +
           '</div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.browser', 'Browser')) + '</span><span>' + browserIcon + ' ' + esc(browserName) + '</span></div>' +
+          /* R142: the browser value is icon + name, so the cell itself is the
+             flex row (`.icon-text`) and the name is the truncating label. As a
+             bare inline svg it sat 1.6px above the text baseline.
+             R143: the rows are wrapped in one `.card-meta` grid so the label
+             column is shared (see the CSS note) — as loose siblings each row
+             sized its own `max-content` label column and the value column
+             jumped 26px from row to row. */
+          '<div class="card-meta">' +
+          '<div class="info-row"><span>' + esc(t('profile.row.browser', 'Browser')) + '</span><span class="icon-text">' + browserIcon + '<span class="icon-text-label">' + esc(browserName) + '</span></span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span>' + date + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
           '<div class="info-row info-row-health"><span>' + esc(t('profile.row.health', 'Health')) + '</span><span>' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.proxy', 'Proxy')) + '</span><span>' + esc(proxyStr) + '</span></div>' +
-          ((p.tags || []).length ? '<div class="info-row"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
+          ((p.tags || []).length ? '<div class="info-row info-row-tags"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
+          '</div>' +
+          // Premium-R11: the proxy switcher is a control, so it belongs in the
+          // card's control band, not floating in its own bordered box below the
+          // buttons (which read as a card inside a card).
+          '<div class="card-footer">' +
+            // The dropdown only names the proxy; the resolved endpoint stays
+            // reachable as a tooltip so merging the old "Proxy" row into this
+            // control loses no information.
+            '<select class="proxy-select" data-action="proxy" title="' + escAttr(proxyStr) + '" aria-label="' + escAttr(t('profile.row.proxy', 'Proxy')) + '">' + proxyOptsHtml + '</select>' +
+          '</div>' +
           '<div class="card-actions">' +
             (isRunning
-              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>⏹ ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
-              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>▶ ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
-            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>✎ ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
-            (p.appUrl ? '<button class="btn btn-secondary btn-sm" data-action="open-app" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">🖥 ' + esc(t('profile.action.app', 'App')) + '</button> ' : '') +
+              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>' + icon('stop', 14) + ' ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
+              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>' + icon('play', 14) + ' ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
+            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>' + icon('edit', 14) + ' ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
+            (p.appUrl ? '<button class="btn btn-secondary btn-sm" data-action="open-app" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">' + icon('monitor', 14) + ' ' + esc(t('profile.action.app', 'App')) + '</button> ' : '') +
             // ── UE-08: every control has an accessible name ──
             '<details class="card-menu">' +
               '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +
               '<div class="card-menu-list">' +
-                '<button type="button" data-action="rename">' + esc(t('profile.menu.rename', '✏️ Rename')) + '</button>' +
-                '<button type="button" data-action="note">' + esc(t('profile.menu.note', '📝 Note')) + '</button>' +
-                '<button type="button" data-action="cookies">' + esc(t('profile.menu.cookies', '🍪 Cookies')) + '</button>' +
-                '<button type="button" data-action="extensions">' + esc(t('profile.menu.extensions', '🧩 Extensions')) + '</button>' +
-                '<button type="button" data-action="export-archive">' + esc(t('profile.menu.export', '📦 Export backup')) + '</button>' +
-                '<button type="button" data-action="lock">' + esc(isLocked ? t('profile.menu.unlock', '🔓 Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
-                '<button type="button" data-action="logs">' + esc(t('profile.menu.logs', '📋 Logs')) + '</button>' +
-                '<button type="button" data-action="webrtc-diag">' + esc(t('webrtc.diag.title', '📡 In-browser WebRTC Diagnostics')) + '</button>' +
-                '<button type="button" class="danger" data-action="delete"' + disAttr + '>' + esc(t('profile.menu.delete', '🗑 Delete')) + '</button>' +
+                '<button type="button" data-action="rename">' + icon('edit', 14) + esc(t('profile.menu.rename', 'Rename')) + '</button>' +
+                '<button type="button" data-action="note">' + icon('doc', 14) + esc(t('profile.menu.note', 'Note')) + '</button>' +
+                '<button type="button" data-action="cookies">' + icon('cookie', 14) + esc(t('profile.menu.cookies', 'Cookies')) + '</button>' +
+                '<button type="button" data-action="extensions">' + icon('extensions', 14) + esc(t('profile.menu.extensions', 'Extensions')) + '</button>' +
+                '<button type="button" data-action="export-archive">' + icon('box', 14) + esc(t('profile.menu.export', 'Export backup')) + '</button>' +
+                '<button type="button" data-action="lock">' + icon(isLocked ? 'unlock' : 'lock', 14) + esc(isLocked ? t('profile.menu.unlock', 'Release lock') : t('profile.menu.lock', '🔒 Lock to device')) + '</button>' +
+                '<button type="button" data-action="logs">' + icon('list', 14) + esc(t('profile.menu.logs', 'Logs')) + '</button>' +
+                '<button type="button" data-action="webrtc-diag">' + icon('globe', 14) + esc(t('webrtc.diag.title', 'In-browser WebRTC Diagnostics')) + '</button>' +
+                '<button type="button" class="danger" data-action="delete"' + disAttr + '>' + icon('trash', 14) + esc(t('profile.menu.delete', 'Delete')) + '</button>' +
               '</div>' +
             '</details>' +
-          '</div>' +
-          '<div style="margin-top:4px;">' +
-            '<select class="proxy-select" data-action="proxy">' + proxyOptsHtml + '</select>' +
           '</div>' +
         '</div>';
       };
@@ -1922,7 +1946,7 @@
         toast(t("toast.fp.consistency-pass", "4-field alignment looks good (IP · timezone · locale · ASN)"), "success");
       } else {
         var lines = blockers.concat(warnings).map(function (f) {
-          return (f.severity === "blocker" ? "⛔ " : "⚠️ ") + (f.message || f.code);
+          return (f.severity === "blocker" ? icon("close", 12) : icon("alert", 12)) + " " + (f.message || f.code);
         }).join("\n");
         agentBrowser.confirm(lines, function () {}, {
           title: t("toast.fp.consistency-title", "Alignment issues ({n})").replace("{n}", blockers.length + warnings.length),
@@ -1956,7 +1980,7 @@
       if (!r.risky) {
         toast(t("toast.fp.stable", "Fingerprint stable ({n} benign change(s))").replace("{n}", driftFields.length), "success");
       } else {
-        toast("⚠ " + t("toast.fp.drift", "Risky fingerprint drift") + ": " + driftFields.slice(0, 6).join(", ") + (driftFields.length > 6 ? " (+" + (driftFields.length - 6) + ")" : ""), "error");
+        toast(t("toast.fp.drift", "Risky fingerprint drift") + ": " + driftFields.slice(0, 6).join(", ") + (driftFields.length > 6 ? " (+" + (driftFields.length - 6) + ")" : ""), "error");
       }
       scheduleProfilesRefresh();
     }).catch(function(e) {
@@ -1974,7 +1998,7 @@
     }
     var res = r.result || {};
     var findings = res.findings || [];
-    var okBadge = res.ok ? '<span class="status-badge status-done">PASS</span>' : '<span class="status-badge" style="background:var(--danger-bg);color:var(--danger);">RISK</span>';
+    var okBadge = res.ok ? '<span class="status-badge status-done">PASS</span>' : '<span class="status-badge" style="background:var(--danger-bg);color: var(--danger-text);">RISK</span>';
     var rows = [];
     rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
@@ -1987,12 +2011,12 @@
     body.innerHTML = rows.join('') +
       '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">' +
       findings.map(function(f) {
-        var color = f.severity === 'high' ? 'var(--danger)' : (f.severity === 'medium' ? 'var(--warning)' : 'var(--text-muted)');
+        var color = f.severity === 'high' ? 'var(--danger-text)' : (f.severity === 'medium' ? 'var(--warning-text)' : 'var(--text-muted)');
         var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
         return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
           '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(f.severity.toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
           '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
-          '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">💡 ' + esc(f.fix) + '</div>' +
+          '<div class="icon-text" style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + icon("info", 11) + esc(f.fix) + '</div>' +
         '</div>';
       }).join('') +
       (!findings.length ? '<div class="empty-state">' + esc(t("env.no-risk", "No environment risk found")) + '</div>' : '') +
@@ -2004,12 +2028,12 @@
   var currentEnvRiskDirId = null;
   var envRiskHistoryCache = [];
   function findingCardHtml(f) {
-    var color = f.severity === 'high' ? 'var(--danger)' : (f.severity === 'medium' ? 'var(--warning)' : 'var(--text-muted)');
+    var color = f.severity === 'high' ? 'var(--danger-text)' : (f.severity === 'medium' ? 'var(--warning-text)' : 'var(--text-muted)');
     var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
     return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
       '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(String(f.severity || "").toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
       '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
-      '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">💡 ' + esc(f.fix) + '</div>' +
+      '<div class="icon-text" style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + icon("info", 11) + esc(f.fix) + '</div>' +
     '</div>';
   }
   function renderEnvRiskHistory(dirId) {
@@ -2019,7 +2043,7 @@
       // R12 UX P3-1: h.entries===null (IPC error shape) gets a retry
       // affordance instead of a silent blank.
       if (!h || h.entries === null || h.entries === undefined) {
-        histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color:var(--danger);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
+        histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color: var(--danger-text);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
           '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
         var retryBtn = histEl.querySelector("[data-env-hist-retry]");
         if (retryBtn) retryBtn.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
@@ -2035,7 +2059,7 @@
       entries.slice().reverse().forEach(function (en) {
         var idx = entries.indexOf(en);
         var ts = en.at ? new Date(en.at).toLocaleString() : "?";
-        var badge = en.ok ? "✅" : "⚠";
+        var badge = en.ok ? icon("check", 12) : icon("alert", 12);
         html += '<div class="env-hist-row" data-env-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
           badge + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
           '<div class="env-hist-detail" data-env-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;flex-direction:column;gap:6px;"></div>';
@@ -2060,7 +2084,7 @@
       });
     }).catch(function () {
       // R12 UX P3-1: transport failure also gets the retry affordance.
-      histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color:var(--danger);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
+      histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color: var(--danger-text);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
         '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
       var retryBtn2 = histEl.querySelector("[data-env-hist-retry]");
       if (retryBtn2) retryBtn2.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
@@ -2182,7 +2206,7 @@
     var badge = !res.rtcAvailable
       ? '<span class="status-badge" style="background:var(--surface2);color:var(--text-muted);">N/A</span>'
       : hasLeak
-        ? '<span class="status-badge" style="background:var(--danger-bg);color:var(--danger);">RISK</span>'
+        ? '<span class="status-badge" style="background:var(--danger-bg);color: var(--danger-text);">RISK</span>'
         : '<span class="status-badge status-done">PASS</span>';
     var when = res.at ? new Date(res.at).toLocaleString() : "";
     var rows = [];
@@ -2190,9 +2214,9 @@
     rows.push('<div style="font-size:12px;color:var(--text);margin-top:4px;">' + esc(res.summary || "") + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? t("webrtc.available", "available") : t("webrtc.unavailable", "unavailable")) + ' · ' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (res.candidates || []).length + ' · ' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(res.connectionState || "") + (typeof res.rttMs === "number" ? " · RTT: " + res.rttMs + "ms" : "") + '</div>');
     if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.mdns", "mDNS hostnames")) + ': </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
-    if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--danger);">⚠ ' + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': </span>' + res.hostIps.map(esc).join(", ") + '</div>');
+    if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span class="icon-text" style="color: var(--danger-text);">' + icon("alert", 11) + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': </span>' + res.hostIps.map(esc).join(", ") + '</div>');
     if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.stun-ip", "STUN public IP")) + ': </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
-    if (res.error) rows.push('<div style="font-size:11px;color:var(--warning);margin-top:4px;">⚠ ' + esc(res.error) + '</div>');
+    if (res.error) rows.push('<div class="icon-text" style="font-size:11px;color: var(--warning-text);margin-top:4px;">' + icon("alert", 11) + esc(res.error) + '</div>');
     body.innerHTML = rows.join("");
     // R12: history rows expand to replay the stored run (mirrors env-risk).
     var histEl = document.getElementById("webrtc-diag-history");
@@ -2206,7 +2230,7 @@
           var ts = en.at ? new Date(en.at).toLocaleString() : "?";
           var leak = (en.hostIps || []).length > 0;
           html += '<div class="webrtc-hist-row" data-webrtc-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
-            (leak ? "⚠" : "✅") + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
+            (leak ? icon("alert", 12) : icon("check", 12)) + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
             '<div class="webrtc-hist-detail" data-webrtc-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;font-size:11px;color:var(--text-muted);"></div>';
         });
         histEl.innerHTML = html;
@@ -2222,7 +2246,7 @@
             parts.push('<div>' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(en.connectionState || "?") + (typeof en.rttMs === "number" ? " · RTT: " + en.rttMs + "ms" : "") + '</div>');
             parts.push('<div>' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (en.candidates || []).length + '</div>');
             if ((en.mdnsHosts || []).length) parts.push('<div>mDNS: ' + en.mdnsHosts.map(esc).join(", ") + '</div>');
-            if ((en.hostIps || []).length) parts.push('<div style="color:var(--danger);">⚠ ' + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': ' + en.hostIps.map(esc).join(", ") + '</div>');
+            if ((en.hostIps || []).length) parts.push('<div class="icon-text" style="color: var(--danger-text);">' + icon("alert", 11) + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': ' + en.hostIps.map(esc).join(", ") + '</div>');
             if ((en.srflxIps || []).length) parts.push('<div>STUN: ' + en.srflxIps.map(esc).join(", ") + '</div>');
             detail.innerHTML = parts.join("");
             detail.style.display = "";
@@ -2339,7 +2363,7 @@
     } else {
       activityEl.innerHTML = entries.map(function(e) {
         var when = e.at ? new Date(e.at).toLocaleString() : "?";
-        var icon = e.category === "profile" ? "📦" : "•";
+        var catIcon = e.category === "profile" ? "box" : "info";
         return '<div style="padding:4px 6px;border-bottom:1px solid var(--border);">' +
           '<span class="hint-line" style="white-space:nowrap;">' + esc(when) + '</span> ' +
           icon + ' <strong>' + esc(e.action || "?") + '</strong>' +
@@ -2377,7 +2401,7 @@
     var apply = function() {
       wcall("browser.setLock", function () { return api.browser.setLock(dirId, !locked); }).then(function(r) {
         if (!r || !r.success) { toast((r && r.error) || 'Lock failed', 'error'); return; }
-        toast(locked ? t('profile.lock.unlocked', '🔓 Unlocked (remember to push)') : t('profile.lock.locked', '🔒 Locked to this device (remember to push)'), 'success');
+        toast(locked ? t('profile.lock.unlocked', 'Unlocked (remember to push)') : t('profile.lock.locked', 'Locked to this device (remember to push)'), 'success');
         agentBrowser.loadProfiles();
       }).catch(function(e) { toast(e.message || String(e), 'error'); });
     };

@@ -186,10 +186,10 @@
   // Wizard step 1: verify the independently installed browser engine.
   agentBrowser.wizardVerifyBinary = function() {
     var statusEl = document.getElementById('wizard-step1-status');
-    statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Verifying managed Chromium…') : 'Verifying managed Chromium…') + '</span>';
+    statusEl.innerHTML = '<span style="color: var(--primary-text);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Verifying managed Chromium…') : 'Verifying managed Chromium…') + '</span>';
     api.browser.verifyBinary().then(function(r) {
       if (r && r.success) {
-        statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
         advanceWizardStep(1);
       } else {
         wizardEngineMissing(statusEl, (r && r.error) || (window.i18n ? window.i18n.t('wizard.step1.failed', 'Install failed') : 'Install failed'));
@@ -204,7 +204,7 @@
   function wizardEngineMissing(statusEl, message) {
     var hint = (window.i18n ? window.i18n.t('wizard.step1.hint', 'No usable build found. Select a local Chromium build or open the install guide, then verify again.') : 'No usable build found. Select a local Chromium build or open the install guide, then verify again.');
     statusEl.innerHTML =
-      '<span style="color:var(--danger);">✗ ' + esc(message) + '</span>' +
+      '<span style="color: var(--danger-text);">' + esc(message) + '</span>' +
       '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">' + esc(hint) + '</div>' +
       '<div class="btn-row" style="margin-top:6px;">' +
       '<button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' + esc(window.i18n ? window.i18n.t('engine.select', 'Select local build…') : 'Select local build…') + '</button>' +
@@ -225,7 +225,7 @@
       nameInput.parentNode.appendChild(el);
       return el;
     })();
-    statusEl.innerHTML = '<span style="color:var(--primary);">' + (window.i18n ? window.i18n.t('wizard.step2.in-progress', 'Creating profile…') : 'Creating profile…') + '</span>';
+    statusEl.innerHTML = '<span style="color: var(--primary-text);">' + (window.i18n ? window.i18n.t('wizard.step2.in-progress', 'Creating profile…') : 'Creating profile…') + '</span>';
     api.browser.create({ name: name }).then(function(r) {
       // Round 3 follow-up: a trial-exhausted first run opens the paywall
       // instead of a red ✗ the user cannot act on.
@@ -235,13 +235,13 @@
       if (r && r.dirId) {
         state.wizardDirId = r.dirId;
         state.wizardProfileName = name;
-        statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step2.done', 'Profile created') : 'Profile created') + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t('wizard.step2.done', 'Profile created') : 'Profile created') + '</span>';
         advanceWizardStep(2);
       } else {
-        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step2.failed', 'Create failed') : 'Create failed')) + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step2.failed', 'Create failed') : 'Create failed')) + '</span>';
       }
     }).catch(function(e) {
-      statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || 'Create failed') + '</span>';
+      statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || 'Create failed') + '</span>';
     });
   };
 
@@ -297,17 +297,17 @@
         return el;
       })();
       if (r && r.success) {
-        statusEl.innerHTML = '<span style="color:var(--success);">✓ ' + (window.i18n ? window.i18n.t('wizard.step3.done', 'Launched & navigating to ping0.cc') : 'Launched & navigating to ping0.cc') + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t('wizard.step3.done', 'Launched & navigating to ping0.cc') : 'Launched & navigating to ping0.cc') + '</span>';
         scheduleProfilesRefresh();
         // Advance to the optional AI configuration step instead of auto-closing.
         advanceWizardStep(3);
       } else {
-        statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step3.failed', 'Launch failed') : 'Launch failed')) + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step3.failed', 'Launch failed') : 'Launch failed')) + '</span>';
         if (btn) btn.disabled = false;
       }
     }).catch(function(e) {
       var statusEl = document.getElementById('wizard-step3-status');
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || 'Error') + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || 'Error') + '</span>';
       if (btn) btn.disabled = false;
     });
   };

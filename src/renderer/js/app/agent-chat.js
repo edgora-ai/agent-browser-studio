@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var fmt = helpers.fmt;
   // i18n helper: returns the translated string, falling back to the given
   // English default when the runtime is unavailable.
@@ -63,22 +64,45 @@
     if (view === 'chat') agentBrowser.agentLoadConversations();
   };
 
+  // R128: the send button shows one icon at a time (arrow / loader). Replacing
+  // the whole innerHTML keeps the aria-label attribute on the button itself.
+  function setSendIcon(btn, name) {
+    if (!btn) return;
+    var markup = icon(name, 16);
+    if (markup) btn.innerHTML = markup;
+  }
+
   // ── Conversation List ──
+  //
+  // Empty-list autorescue is one-shot. agentLoadConversations() used to call
+  // agentNewConv() unconditionally whenever the list came back empty, and
+  // agentNewConv() re-enters agentLoadConversations() when it is done — so a
+  // store that accepts create() but keeps returning [] (read-only profile dir,
+  // failed write, IPC returning an empty page) spun forever on the microtask
+  // queue and froze the whole renderer: the tab never painted and no error was
+  // ever logged. The flag makes the renderer fall back to the "No chats yet"
+  // state instead of retrying indefinitely.
+  var _autoCreateConvTried = false;
+
   agentBrowser.agentLoadConversations = function() {
     R.agent.conversations.list().then(function(list) {
       var el = document.getElementById('agent-conv-list');
       if (!list || list.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);font-size:11px;text-align:center;padding:16px;">No chats yet</div>';
-        agentBrowser.agentNewConv();
+        el.innerHTML = '<div style="color:var(--text-muted);font-size:var(--fs-micro);text-align:center;padding:16px;">' + esc(t('agent.no-chats', 'No chats yet')) + '</div>';
+        if (!_autoCreateConvTried) {
+          _autoCreateConvTried = true;
+          agentBrowser.agentNewConv();
+        }
         return;
       }
+      _autoCreateConvTried = false;
       var html = '';
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
         var isActive = c.id === state.agentActiveConvId;
         html += '<div data-role="cmd" data-cmd="agentSelectConv" data-cmd-arg="' + escAttr(c.id) + '" class="agent-conv-item" style="padding:10px 12px;cursor:pointer;' + (isActive ? 'background:var(--primary-bg);' : '') + '">';
-        html += '<div style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.title || t('agent.chat-title', 'New Chat')) + '</div>';
-        html += '<div class="hint-line" style="margin-top:2px;">' + (c.messageCount || 0) + ' msgs</div>';
+        html += '<div style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(convTitle(c)) + '</div>';
+        html += '<div class="hint-line" style="margin-top:2px;">' + (c.messageCount || 0) + ' ' + esc(t('agent.msgs', 'msgs')) + '</div>';
         html += '</div>';
       }
       el.innerHTML = html;
@@ -87,16 +111,27 @@
       }
     }).catch(function(e) {
       console.error('Load conversations:', e);
-      document.getElementById('agent-conv-list').innerHTML = '<div style="color:var(--danger);font-size:11px;text-align:center;padding:16px;">' + esc(t('agent.load-failed', 'Failed to load conversations')) + '<br><button class="btn btn-xs btn-primary" data-role="cmd" data-cmd="agentLoadConversations" style="margin-top:8px;">' + esc(t('agent.retry', 'Retry')) + '</button></div>';
+      document.getElementById('agent-conv-list').innerHTML = '<div style="color: var(--danger-text);font-size:11px;text-align:center;padding:16px;">' + esc(t('agent.load-failed', 'Failed to load conversations')) + '<br><button class="btn btn-xs btn-primary" data-role="cmd" data-cmd="agentLoadConversations" style="margin-top:8px;">' + esc(t('agent.retry', 'Retry')) + '</button></div>';
     });
   };
+
+  // R131: the main process stores the literal "New Chat" as an untitled
+  // conversation's title (local-agent.ts auto-titles it on the first message),
+  // so `c.title || t(...)` never falls back — the English sentinel renders
+  // verbatim. Map the sentinel to the localized label for display only; the
+  // stored value stays untouched so auto-titling keeps working.
+  function convTitle(conv) {
+    var title = conv && conv.title;
+    if (!title || title === 'New Chat') return t('agent.chat-title', 'New Chat');
+    return title;
+  }
 
   agentBrowser.agentNewConv = function() {
     R.agent.conversations.create().then(function(c) {
       state.agentActiveConvId = c.id;
       state.agentMessages = [];
-      document.getElementById('agent-chat-title').textContent = c.title || t('agent.chat-title', 'New Chat');
-      document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">✨</div><div class="chat-empty-title">' + esc(t('agent.empty-title', 'New conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.empty-hint', 'Ask me anything!')) + '</div></div>';
+      document.getElementById('agent-chat-title').textContent = convTitle(c);
+      document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">' + icon("sparkle", 40) + '</div><div class="chat-empty-title">' + esc(t('agent.empty-title', 'New conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.empty-hint', 'Ask me anything!')) + '</div></div>';
       document.getElementById('agent-chat-status').textContent = '';
       agentBrowser.agentLoadConversations();
     }).catch(function(e) { toast(t('agent.create-failed', 'Failed to create conversation: ') + e.message, 'error'); });
@@ -109,7 +144,7 @@
       if (!conv) { toast(t('agent.conv-missing', 'Conversation not found — it may have been deleted'), 'error'); return; }
       state.agentActiveConvId = convId;
       state.agentMessages = conv.messages || [];
-      document.getElementById('agent-chat-title').textContent = conv.title || t('agent.chat-title', 'New Chat');
+      document.getElementById('agent-chat-title').textContent = convTitle(conv);
       agentBrowser.agentRenderMessages();
       agentBrowser.agentLoadConversations();
     }).catch(function(e) {
@@ -127,7 +162,7 @@
       R.agent.conversations.delete(state.agentActiveConvId).then(function() {
         state.agentActiveConvId = null;
         state.agentMessages = [];
-        document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">' + esc(t('agent.no-conv-title', 'No conversation selected')) + '</div><div class="chat-empty-hint">' + esc(t('agent.no-conv-hint', 'Select one from the sidebar or create a new one')) + '</div></div>';
+        document.getElementById('agent-chat-messages').innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">' + icon("chat", 40) + '</div><div class="chat-empty-title">' + esc(t('agent.no-conv-title', 'No conversation selected')) + '</div><div class="chat-empty-hint">' + esc(t('agent.no-conv-hint', 'Select one from the sidebar or create a new one')) + '</div></div>';
         agentBrowser.agentLoadConversations();
       });
     });
@@ -163,8 +198,10 @@
     input.disabled = true;
     var statusEl = document.getElementById('agent-chat-status');
     statusEl.textContent = t('agent.thinking', 'Thinking...');
+    // R128: the send button is icon-only — swap the glyph, not the text, or
+    // the arrow disappears for the rest of the session.
     var sendBtn = document.querySelector('#agent-view-chat .btn-primary');
-    if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+    if (sendBtn) { sendBtn.disabled = true; setSendIcon(sendBtn, 'loader'); }
 
     // Add user message locally for immediate display
     state.agentMessages.push({ role: 'user', content: msg, timestamp: Date.now() });
@@ -259,7 +296,7 @@
     };
     // Normalize an error payload to a human string. The main process sends
     // { error: "..." }; ipc may also wrap in Error or pass a bare object.
-    // Without this, '❌ ' + { error: '...' } renders as "❌ [object Object]".
+    // Without this, a bare object renders as "[object Object]".
     var explainError = function(err) {
       if (err == null) return '';
       if (typeof err === 'string') return err;
@@ -274,7 +311,7 @@
       if (gotDone || cleaned) return;
       var why = explainError(err) || t('agent.stream-error', 'Stream error');
       console.error('[agent] stream error:', err);
-      state.agentMessages[assistantIdx].content = finalReply || ('❌ ' + why);
+      state.agentMessages[assistantIdx].content = finalReply || why;
       agentBrowser.agentRenderMessages();
       cleanup();
     };
@@ -282,7 +319,7 @@
       if (cleaned) return;
       cleaned = true;
       statusEl.textContent = '';
-      if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '↑'; }
+      if (sendBtn) { sendBtn.disabled = false; setSendIcon(sendBtn, 'arrowUp'); }
       input.disabled = false;
       input.focus();
       // Always remove this request's listeners — done, error, and the promise
@@ -352,16 +389,19 @@
             var s = steps[j];
             var label = s.name || (s.toolCalls && s.toolCalls.name) || 'tool';
             var argInfo = s.args ? '<span class="chat-tool-args"> ' + esc(s.args) + '</span>' : '';
-            var spinner = s.done === false ? '<span class="chat-tool-spinner">●</span>' : '<span class="chat-tool-done">✓</span>';
+            var spinner = s.done === false ? '<span class="chat-tool-spinner">' + icon("clock", 12) + '</span>' : '<span class="chat-tool-done">' + icon("check", 12) + '</span>';
             html += '<div class="chat-tool-step"><span class="chat-tool-num">' + (j + 1) + '.</span> ' + spinner + ' <span class="chat-tool-chip">' + esc(label) + '</span>' + argInfo + '</div>';
           }
           html += '</div>';
         }
       } else if (m.role === 'tool') {
-        html += '<div style="padding:0 12px 4px;font-size:10px;color:var(--text-muted);">↳ ' + esc(m.content).slice(0, 160) + '</div>';
+        // R142: the trace line is icon + text, so it needs a flex row to centre
+        // the glyph (it used to sit 1.4px below the text baseline). The wrapper
+        // stays a plain block so a long trace still wraps inside the bubble.
+        html += '<div style="padding:0 12px 4px;font-size:10px;color:var(--text-muted);"><span class="icon-text">' + icon("arrowRight", 11) + ' ' + esc(String(m.content).slice(0, 160)) + '</span></div>';
       }
     }
-    el.innerHTML = html || '<div class="chat-empty"><div class="chat-empty-icon">💬</div><div class="chat-empty-title">' + esc(t('agent.start-title', 'Start a conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.start-hint', 'Type a message below to begin')) + '</div></div>';
+    el.innerHTML = html || '<div class="chat-empty"><div class="chat-empty-icon">' + icon("chat", 40) + '</div><div class="chat-empty-title">' + esc(t('agent.start-title', 'Start a conversation')) + '</div><div class="chat-empty-hint">' + esc(t('agent.start-hint', 'Type a message below to begin')) + '</div></div>';
     if (preserveScroll) el.scrollTop = prevTop;
     else el.scrollTop = el.scrollHeight;
     // Keep the affordance in sync even for non-stream renders.

@@ -76,8 +76,33 @@
       if (tab2) agentBrowser.switchTab(tab2);
     }
   });
-  function initEventDelegation() {
-    document.addEventListener('click', function(e) {
+  /**
+   * Give a dialog a visible way out.
+   *
+   * Esc and the Cancel buttons already closed dialogs, but there was no visible
+   * close affordance anywhere — ~30 dialogs are authored by hand in
+   * index.html, so adding one per dialog would drift immediately. Injecting it
+   * from the single place every dialog must pass through (showModal) keeps the
+   * affordance identical everywhere.
+   */
+  function ensureDialogClose(dlg) {
+    if (!dlg || dlg.querySelector(':scope > .dialog-close')) return;
+    // Dialogs that already ship their own header control (or ask for none)
+    // opt out with data-no-close.
+    if (dlg.hasAttribute('data-no-close')) return;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dialog-close';
+    var label = (window.i18n && window.i18n.t('common.close', 'Close')) || 'Close';
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('title', label);
+    btn.innerHTML = helpers.icon ? helpers.icon('close', 15) : '\u00d7';
+    btn.addEventListener('click', function() { dlg.close(); });
+    // Anchor to the dialog itself, ahead of any <form> wrapper.
+    dlg.insertBefore(btn, dlg.firstChild);
+  }
+
+  function initEventDelegation() {    document.addEventListener('click', function(e) {
       var el = e.target.closest('[data-role="cmd"]');
       if (!el) return;
       var cmd = el.getAttribute('data-cmd');
@@ -186,6 +211,7 @@
         if (!this._returnFocus && document.activeElement instanceof HTMLElement) {
           this._returnFocus = document.activeElement;
         }
+        ensureDialogClose(this);
         // Auto-focus first focusable input inside the dialog.
         var self = this;
         var ret = origShowModal.call(this);

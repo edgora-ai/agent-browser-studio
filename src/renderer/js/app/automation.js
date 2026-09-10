@@ -8,13 +8,14 @@
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
 
+  var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
   var currentRules = [];
   var taskTemplates = [];
 
   function describeTrigger(tr) {
-    if (!t) return '?';
+    if (!tr) return '?';
     if (tr.type === 'cron') {
       var hint = cronHint(tr.cron);
       return t('auto.trigger.cron', '定时 ') + '<code style="font-family:var(--mono)">' + esc(tr.cron || '') + '</code>' + (hint ? ' <span style="color:var(--text-muted)">(' + esc(hint) + ')</span>' : '');
@@ -25,7 +26,7 @@
   }
   function describeAction(a) {
     if (!a) return '?';
-    var map = { 'launch-profile': t('auto.action.launch','🚀 启动'), 'stop-profile': t('auto.action.stop','⏹ 停止'), 'agent-task': t('auto.action.agent','🤖 Agent'), 'sync-push': t('auto.action.push','☁️ Push'), 'sync-pull': t('auto.action.pull','☁️ Pull'), 'custom-js': t('auto.action.js','⚙️ JS') };
+    var map = { 'launch-profile': t('auto.action.launch','Launch'), 'stop-profile': t('auto.action.stop','Stop'), 'agent-task': t('auto.action.agent','Agent'), 'sync-push': t('auto.action.push','Push'), 'sync-pull': t('auto.action.pull','Pull'), 'custom-js': t('auto.action.js','JS') };
     var base = map[a.type] || a.type;
     if (a.profileDirId) base += ' ' + esc(a.profileDirId).slice(0,10);
     if (a.profileDirIds && a.profileDirIds.length > 1) base += ' ×' + a.profileDirIds.length + t('auto.action.batch-profiles', ' profiles');
@@ -188,7 +189,7 @@
               '<span class="status-badge ' + (r.enabled ? 'status-running' : 'status-stopped') + '">' + esc(r.enabled ? t('auto.enabled','启用') : t('auto.disabled','停用')) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.trigger','触发')) + '</span><span style="font-size:12px;">' + describeTrigger(r.trigger) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.action','动作')) + '</span><span style="font-size:12px;">' + describeAction(r.action) + '</span></div>' +
-            (r.lastRunAt ? '<div class="info-row"><span>' + esc(t('auto.row.last','上次')) + '</span><span style="font-size:11px;color:' + (r.lastResult && !r.lastResult.includes('error') && !r.lastResult.includes('failed') ? 'var(--success)' : 'var(--text-muted)') + ';">' + new Date(r.lastRunAt).toLocaleString() + '</span></div>' : '') +
+            (r.lastRunAt ? '<div class="info-row"><span>' + esc(t('auto.row.last','上次')) + '</span><span style="font-size:11px;color:' + (r.lastResult && !r.lastResult.includes('error') && !r.lastResult.includes('failed') ? 'var(--success-text)' : 'var(--text-muted)') + ';">' + new Date(r.lastRunAt).toLocaleString() + '</span></div>' : '') +
             '<div class="card-actions">' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="toggle">' + esc(r.enabled ? t('auto.disabled','停用') : t('auto.enabled','启用')) + '</button>' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="test">' + esc(t('auto.btn.test','测试运行')) + '</button>' +
@@ -252,7 +253,7 @@
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.created','创建')) + '</span><span>' + esc(fmtJobTime(job.createdAt)) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.duration','耗时')) + '</span><span>' + esc(jobDuration(job)) + '</span></div>' +
           (job.runId ? '<div class="info-row"><span>' + esc(t('auto.jobs.row.run','Run')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.runId) + '</span></div>' : '') +
-          '<div style="font-size:11px;color:' + (job.error ? 'var(--danger)' : 'var(--text-muted)') + ';margin:6px 0;line-height:1.35;">' + esc(summary) + '</div>' +
+          '<div style="font-size:11px;color:' + (job.error ? 'var(--danger-text)' : 'var(--text-muted)') + ';margin:6px 0;line-height:1.35;">' + esc(summary) + '</div>' +
           '<div class="card-actions">' +
             '<button class="btn btn-secondary btn-sm" data-job-action="detail">' + esc(t('auto.jobs.row.summary','详情')) + '</button>' +
             runLink + cancel +
@@ -308,7 +309,7 @@
       logEl.innerHTML = logs.slice(0, 50).map(function(l, i) {
         return '<div data-log-idx="' + i + '" style="padding:2px 0;cursor:pointer;border-bottom:1px solid var(--border-light);">' +
           '<span style="color:var(--text-muted);">' + new Date(l.at).toLocaleString() + '</span> ' +
-          (l.ok ? '✅' : '❌') + ' <strong>' + esc(l.ruleName) + '</strong>: ' + esc(l.result).slice(0, 80) +
+          (l.ok ? '<span class="health-text-good">' + icon("check", 12) + '</span>' : '<span class="health-text-poor">' + icon("close", 12) + '</span>') + ' <strong>' + esc(l.ruleName) + '</strong>: ' + esc(l.result).slice(0, 80) +
         '</div>';
       }).join('');
       logEl.onclick = function(event) {
@@ -323,7 +324,7 @@
     if (!log) return;
     var detail = t('auto.log.task','任务: ') + log.ruleName + ' (' + log.ruleId + ')\n' +
       t('auto.log.time','时间: ') + new Date(log.at).toLocaleString() + '\n' +
-      t('auto.log.result','结果: ') + (log.ok ? t('auto.log.success','✅ 成功') : t('auto.log.failure','❌ 失败')) + '\n' +
+      t('auto.log.result','结果: ') + (log.ok ? t('auto.log.success','Success') : t('auto.log.failure','Failed')) + '\n' +
       t('auto.log.detail','详情:\n') + log.result;
     document.getElementById('auto-log-detail').textContent = detail;
     document.getElementById('dlg-auto-log').showModal();
@@ -370,8 +371,11 @@
       var hintEl = document.getElementById('auto-cron-hint');
       if (!c) { hintEl.textContent = ''; return; }
       api.automation.validateCron(c).then(function(v) {
-        hintEl.textContent = v.valid ? (cronHint(c) || t('auto.cron.valid','✓ 有效')) : (t('auto.cron.invalid','✗ ') + v.error);
-        hintEl.style.color = v.valid ? 'var(--success)' : 'var(--danger)';
+        // R127: the hint's own color already says valid/invalid — the ✓/✗
+        // glyph was redundant, and an empty i18n value would have left a
+        // stray space before the error text.
+        hintEl.textContent = v.valid ? (cronHint(c) || t('auto.cron.valid', 'valid')) : v.error;
+        hintEl.style.color = v.valid ? 'var(--success-text)' : 'var(--danger-text)';
       });
     };
     document.getElementById('dlg-automation').showModal();
@@ -462,7 +466,9 @@
     api.automation.testRun(ruleId).then(function(r) {
       var ok = !!(r && r.ok);
       var text = String((r && (r.result != null ? r.result : r.error)) || 'unknown error').slice(0, 60);
-      toast((ok ? t('auto.test-ok','✅ ') : t('auto.test-fail','❌ ')) + text, ok ? 'success' : 'error');
+      // R127: the toast type (success/error) already carries the status, so the
+      // label only needs the result text.
+      toast(text, ok ? 'success' : 'error');
       setTimeout(function(){ agentBrowser.loadAutomationTab(); }, 500);
     }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
   };

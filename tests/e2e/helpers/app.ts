@@ -146,8 +146,18 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
     launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
   }
 
+  // Sandboxed dev shells (and some CI containers) cannot give Chromium its
+  // setuid/seatbelt sandbox: the GPU helper aborts with "sandbox initialization
+  // failed: Operation not permitted" and Electron dies before a window appears.
+  // Opt-in only — CI keeps the real sandbox unless the runner sets this flag.
+  const unsandboxed = process.env.AGENT_BROWSER_E2E_UNSANDBOXED === "1";
   const app = await electron.launch({
-    args: [REPO, `--user-data-dir=${opts.userDataDir}`, ...(opts.args ?? [])],
+    args: [
+      REPO,
+      `--user-data-dir=${opts.userDataDir}`,
+      ...(unsandboxed ? ["--no-sandbox", "--disable-gpu-sandbox"] : []),
+      ...(opts.args ?? []),
+    ],
     executablePath: ELECTRON_BIN,
     env: launchEnv,
     timeout: opts.timeoutMs ?? 30000,

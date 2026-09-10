@@ -10,6 +10,8 @@
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
 
+  var icon = helpers.icon;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var _role = null;
   var _rolePromise = null;
 
@@ -44,7 +46,7 @@
     if (!profileIds || !profileIds.length) return '';
     return profileIds.map(function(id) {
       var name = nameById[id] || id;
-      return '<span class="chip chip-link" style="margin-right:4px;" title="' + escAttr(id) + '">🔗 ' + esc(name) + '</span>';
+      return '<span class="chip chip-link" style="margin-right:4px;" title="' + escAttr(id) + '">' + icon("link", 12) + ' ' + esc(name) + '</span>';
     }).join('');
   }
 
@@ -61,7 +63,7 @@
       var nameById = res[1] || {};
       var role = res[2];
       var canManage = role !== 'viewer';
-      if (!accounts || accounts.length === 0) { if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{empty:'No accounts saved yet.', cta:{label:'Add Account',cmd:'agentAddAccount'}}); } else el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">No accounts saved yet.</div>';
+      if (!accounts || accounts.length === 0) { if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{empty:t('acct.empty','No accounts saved yet.'), cta:{label:t('acct.add','Add Account'),cmd:'agentAddAccount'}}); } else el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">' + esc(t('acct.empty','No accounts saved yet.')) + '</div>';
         return;
       }
       var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
@@ -70,19 +72,19 @@
         var tagsHtml = (a.tags || []).map(function(t) { return '<span class="chip chip-info">' + esc(t) + '</span>'; }).join(' ');
         var chips = boundChips(a.profileIds, nameById);
         var passBtn = (a.hasPassword && canManage)
-          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="Copy password">🔑</button> '
+          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="Copy password" aria-label="Copy password">' + icon("key", 12) + '</button> '
           : '';
-        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="Bind to profiles">🔗</button> ' : '';
+        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="Bind to profiles" aria-label="Bind to profiles">' + icon("link", 12) + '</button> ' : '';
         html += '<div class="card" style="padding:10px;">';
         html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">';
         html += '<div style="min-width:0;">';
         html += '<strong>' + esc(a.platformUserName || '?') + '</strong>';
         html += ' <span style="color:var(--text-muted);font-size:11px;">@ ' + esc(a.platformUrl || '') + '</span>';
-        html += a.hasPassword ? ' <span class="hint-line" style="color:var(--success);">password saved</span>' : '';
+        html += a.hasPassword ? ' <span class="hint-line" style="color: var(--success-text);">password saved</span>' : '';
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';
-        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="Copy username">👤</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="Copy username" aria-label="Copy username">' + icon("accounts", 12) + '</button> ';
         html += passBtn;
         html += bindBtn;
         html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">' + esc(window.i18n ? window.i18n.t("accounts.edit", "Edit") : "Edit") + '</button>';
@@ -120,7 +122,7 @@
 
 
   agentBrowser.agentAddAccount = function() {
-    document.getElementById('dlg-account-title').textContent = 'Add Account';
+    document.getElementById('dlg-account-title').textContent = t('acct.dlg.add', 'Add Account');
     document.getElementById('acct-edit-index').value = '-1';
     document.getElementById('acct-url').value = '';
     document.getElementById('acct-username').value = '';
@@ -259,7 +261,7 @@
       var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
       if (createProfiles && r.created) msg += ', created ' + r.created + ' profile' + (r.created === 1 ? '' : 's');
       if (r.skipped) msg += ', skipped ' + r.skipped;
-      statusEl.innerHTML = '<span style="color:var(--success);">' + esc(msg) + '</span>';
+      statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(msg) + '</span>';
       toast(msg, r.added ? 'success' : 'error');
       // P2 (#109): close the dialog on success (like saveAccount/bind) and
       // refresh BOTH lists — the Accounts tab list went stale behind the toast.
@@ -271,7 +273,7 @@
         if (imDlg && imDlg.open) imDlg.close();
       }
     }).catch(function(e) {
-      statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(e.message) + '</span>';
+      statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
     });
   };
 

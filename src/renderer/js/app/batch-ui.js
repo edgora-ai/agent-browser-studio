@@ -188,11 +188,11 @@
     var parts = [];
     parts.push('<div style="font-size:13px;">' + esc(summaryText(result, kind)) + "</div>");
     if (result.failed > 0) {
-      parts.push('<div style="font-size:12px;color:var(--danger);margin-top:4px;">' +
+      parts.push('<div style="font-size:12px;color: var(--danger-text);margin-top:4px;">' +
         esc(t("batch.failed-count", "{n} failed").replace("{n}", result.failed)) + "</div>");
     }
     if (result.cancelled) {
-      parts.push('<div style="font-size:12px;color:var(--warning);margin-top:4px;">' + esc(t("batch.cancelled", "Cancelled")) + "</div>");
+      parts.push('<div style="font-size:12px;color: var(--warning-text);margin-top:4px;">' + esc(t("batch.cancelled", "Cancelled")) + "</div>");
     }
     parts.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' +
       esc(t("batch.duration", "Took {ms}ms · concurrency {c}").replace("{ms}", result.durationMs).replace("{c}", result.concurrency)) + "</div>");
@@ -208,7 +208,7 @@
       return '<div style="display:flex;align-items:flex-start;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="font-size:12.5px;font-weight:600;">' + esc(name) + "</div>" +
-          '<div style="font-size:11.5px;color:var(--danger);word-break:break-word;">' + esc(reason) + "</div>" +
+          '<div style="font-size:11.5px;color: var(--danger-text);word-break:break-word;">' + esc(reason) + "</div>" +
         "</div>" +
         '<button class="btn btn-secondary btn-sm" data-batch-locate="' + esc(String(r.item)) + '">' +
           esc(t("batch.locate", "Locate")) + "</button>" +

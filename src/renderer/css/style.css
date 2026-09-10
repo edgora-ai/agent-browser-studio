@@ -15,7 +15,9 @@
   --text: #181a20;
   --text-secondary: #4a4e58;
   /* R1-5: #8b8f9a on white was ~3.3:1 — fails 4.5 for 10-12px meta text. */
-  --text-muted: #6b6f7a;
+  /* R136: #6b6f7a cleared white (5.02) but only 4.40 on the selected pill —
+     J210 caught muted 11px copy in the agent conversation list. */
+  --text-muted: #63676f;
   --primary: #5b6cf0;
   --primary-hover: #4a5cd9;
   --primary-bg: rgba(91, 108, 240, 0.08);
@@ -35,15 +37,39 @@
   /* R7-35: ui-monospace first (current macOS), keep named fallbacks. */
   --mono: ui-monospace, "SF Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
   --chat-bg: #fafbfc;
-  --chat-user-bg: var(--primary);
-  --chat-user-color: #ffffff;
+  /* R137: the user bubble carried --primary, where white text measures 4.33:1.
+     Filled surfaces use the fill token (5.49:1) — the same split already
+     applied to buttons. */
+  --chat-user-bg: var(--primary-fill);
+  /* R137: one name for "text/ink sitting on a filled accent surface". It was
+     spelled --chat-user-color in three unrelated places (user bubble, toggle
+     knob, done-chip) where a chat-named token made no sense. */
+  --on-accent: #ffffff;
+  --chat-user-color: var(--on-accent);
   --chat-agent-bg: #f4f5f7;
   --chat-code-bg: #eef0f4;
   --accent-firefox: #d96a00;
+  /* R137: --accent-firefox is a FILL hue — as 11px text on surface2 it measured
+     3.32:1 (J211). Text uses this darker step (5.03:1 on surface2, 4.64:1 on
+     the pill), the same fill/text split the accent tokens already use. */
+  --accent-firefox-text: #a85500;
   /* R4-17: badge text on tinted bg — mid hues fail contrast, use deep variants. */
   --badge-warning-fg: #9a6200;
   --badge-danger-fg: #c81e2e;
   --badge-success-fg: #15803d;
+  /* R136: text-safe accent tokens. --primary/--success/--warning/--danger are
+     FILL colors — picked for white-on-fill and for tinted backgrounds. Used as
+     TEXT they measured 2.26:1–4.33:1 (J210 audit) and failed WCAG AA. These are
+     the same hues darkened until each clears 4.5:1 on surface, surface2 and
+     pill alike. Use --X-text for color:, --X for background/border. */
+  --primary-text: #4655cc;
+  --success-text: #116b37;
+  --warning-text: #8a5600;
+  --danger-text: #c01a29;
+  /* R136: white on --primary (#5b6cf0) measures 4.33:1 — a filled button needs
+     its own fill that clears AA with white text. */
+  --primary-fill: #4a5cd9;
+  --primary-fill-hover: #3f4fc4;
   --accent-gradient: linear-gradient(135deg, #5b6cf0, #8b5cf6);
   /* R49: --sidebar-accent removed (unreferenced; sidebar went solid in R44). */
   /* Premium-R1: capsule + input surface tokens (WorkBuddy: dark selected pill,
@@ -53,9 +79,45 @@
   --pill-active-bg: #2b2e36;
   --pill-active-text: #ffffff;
   --input-soft-bg: #f4f5f7;
+  /* R138: a field owns a surface and an edge. The borderless soft-fill input
+     was invisible wherever it sat on --surface (#f4f5f7 on #ffffff is a 1%
+     step) — the create-profile dialog read as a mostly empty page. Borderless
+     stays for inline pills; real form fields go outlined. */
+  --input-bg: #ffffff;
+  --input-border: #dfe2e8;
   /* R41: sidebar hover step — sidebar-bg #fafbfc vs pill-bg #eef0f4 was
      nearly invisible; nav hover gets its own half-step token. */
   --sidebar-hover: #eceef2;
+
+  /* ── R128: type scale ──
+     13 ad-hoc sizes (10/11/12/13/14/15/16/17/18/20/24/28/40) collapsed to a
+     9-step scale. Every value below is on it; nothing lands between steps.
+       micro 11 → badges, chips, meta, tool-chain copy (readable floor)
+       xs    12 → labels, table cells, secondary rows, pills
+       sm    13 → controls: buttons, nav, inputs, banners
+       body  14 → body copy, card titles, form values, dialog paragraphs
+       md    16 → card names, chat h3, empty-state titles
+       lg    18 → dialog titles, chat h2
+       xl    20 → sidebar brand
+       2xl   24 → page titles (narrow viewports)
+       3xl   28 → page titles (hero)                                        */
+  --fs-micro: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-body: 14px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 28px;
+
+  /* R128: weight scale — 400 was missing entirely, so every "normal" run fell
+     back to the UA default while everything else was 500+. */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-heavy: 800;
 }
 
 /* ── Dark theme ── */
@@ -90,14 +152,27 @@
   --shadow: 0 2px 8px rgba(0,0,0,0.2);
   --shadow-lg: 0 4px 24px rgba(0,0,0,0.35);
   --chat-bg: #161822;
-  --chat-user-bg: var(--primary);
-  --chat-user-color: #ffffff;
+  /* R137: matches the light theme — filled bubble uses the fill token. */
+  --chat-user-bg: var(--primary-fill);
+  --chat-user-color: var(--on-accent);
   --chat-agent-bg: #1e2130;
   --chat-code-bg: #1a1d28;
   --accent-firefox: #ff9a3d;
+  /* R137 dark: the fill hue already clears AA as text here (7.21:1). */
+  --accent-firefox-text: #ff9a3d;
   --badge-warning-fg: #f5b83d;
   --badge-danger-fg: #ff7a88;
   --badge-success-fg: #4ade80;
+  /* R136: dark-theme text-safe accents. The dark palette already separates
+     text from fill for success/warning/danger (all ≥4.75:1); only --primary
+     needed the split — #7b8cff is fine as text (4.77:1 on pill) but white on
+     it is 2.98:1, so filled buttons take a deeper fill instead. */
+  --primary-text: #8b9aff;
+  --success-text: #3fc75e;
+  --warning-text: #f0b020;
+  --danger-text: #ff7a88;
+  --primary-fill: #4a5cd9;
+  --primary-fill-hover: #5063e8;
   --accent-gradient: linear-gradient(135deg, #7b8cff, #a78bfa);
   /* R49: --sidebar-accent removed (unreferenced; sidebar went solid in R44). */
   /* Premium-R1 dark: pills stay neutral, active pill stays near-black. */
@@ -106,6 +181,10 @@
   --pill-active-bg: #e8eaf0;
   --pill-active-text: #16181e;
   --input-soft-bg: #222532;
+  /* R138 dark: --surface2 on --surface would be a 1-step fill again; the dark
+     field is lifted above the dialog surface and edged. */
+  --input-bg: #262a38;
+  --input-border: #3a4053;
   /* R41 dark: sidebar #12141c vs pill #262a3a already separates, hover
      sits between. */
   --sidebar-hover: #1c202e;
@@ -176,7 +255,7 @@ dialog,
 }
 
 .sidebar-header .version {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   color: var(--text-muted);
   font-weight: 500;
   margin-top: 2px;
@@ -202,6 +281,46 @@ dialog,
   color: var(--text-secondary);
   transition: background 0.12s ease, color 0.12s ease;
   user-select: none;
+}
+
+/* R141: an <svg> is an inline-level box, so unless its host is a flex container
+   the glyph sits on the text baseline. Every [data-icon] host in this sheet is
+   flex, but an icon emitted inline by a template (`icon("chip", 12) + " " + …`
+   or `icon("loader", 13) + " " + …`) is not — the sidebar version, the profile
+   engine row, chat trace lines, activity rows. Those landed 1-2px high: not
+   broken enough to report, exactly wrong enough to read as "the icons are off".
+   `middle` centres the glyph box on the baseline plus half the x-height, which
+   is the optical centre of lowercase text. Flex containers ignore it, so the
+   components that already centre their icons are untouched. */
+svg { vertical-align: middle; }
+
+/* R142: `vertical-align: middle` is a *near* miss, not a fix. It centres the
+   glyph box on the baseline plus half the x-height; the optical centre of the
+   line box is half (ascent − descent) above the baseline. At 11-13px the two
+   differ by 1.3-1.6px, which is still an icon that reads as sunk — measured by
+   `visual-shot.mjs --only icons`, which treats any inline icon whose host is
+   not a flex container as a defect by construction.
+   So the hosts themselves have to become flex rows. `.icon-text` is that row:
+   icon + label, centred on the flex line. Use it whenever a template emits
+   `icon(...) + " " + text` into a block. */
+.icon-text { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+/* A truncating label inside a flex row has to be a real element — `text-overflow`
+   does not apply to anonymous flex items, so the text needs a box of its own to
+   shrink into. Pair it with the `overflow: hidden` on the host. */
+.icon-text-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* R127: nav rows are icon + label. The icon is a real <svg> in currentColor,
+   so it inherits the row's idle/hover/selected color and the active pill's
+   inverted text color without a single extra rule. */
+.nav-item[data-icon] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nav-item > svg {
+  flex: 0 0 auto;
+  /* Optical alignment: line icons sit on the text baseline, not the cap. */
+  margin-top: -1px;
 }
 
 .nav-item:hover {
@@ -242,15 +361,24 @@ dialog,
 .sidebar-footer {
   padding: 12px 18px;
   border-top: none;
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   color: var(--text-muted);
 }
 /* R11-55: version + controls overlapped in the 200px sidebar — version
-   truncates, controls wrap instead of overflowing. */
+   truncates, controls wrap instead of overflowing.
+   R142: the row is now `.icon-text` (see the icon-alignment block near the top)
+   so the status glyph centres on the version label instead of sitting 1.6px low.
+   Truncation moved from this span to `.icon-text-label`, because `text-overflow`
+   has no effect on a flex container's anonymous text item. The inline
+   `display: block` in index.html had to go with it: it beat this rule. */
 .sidebar-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .sidebar-controls { flex-wrap: wrap; }
@@ -299,6 +427,19 @@ dialog,
   white-space: nowrap;
 }
 
+/* R127: page titles that carry an icon become a flex row — the icon sits on
+   the cap-height, optically centered against the 28px hero type. */
+.tab-header h2[data-icon] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tab-header h2[data-icon] > svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  margin-top: -2px;
+}
+
 .header-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ═══════ Buttons ═══════ */
@@ -321,15 +462,22 @@ dialog,
 
 /* R5-21: consume --chat-user-color (white) instead of hardcoded #fff. */
 .btn-primary {
-  background: var(--primary);
+  /* R136: --primary-fill, not --primary — white on #5b6cf0 is 4.33:1 (AA needs
+     4.5 for 12–13px labels). --primary stays the brand hue for tint/border. */
+  background: var(--primary-fill);
   color: var(--chat-user-color);
   box-shadow: 0 1px 2px rgba(91,108,240,0.25), 0 2px 8px rgba(91,108,240,0.15);
 }
-.btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(91,108,240,0.3), 0 4px 16px rgba(91,108,240,0.2); }
+.btn-primary:hover { background: var(--primary-fill-hover); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(91,108,240,0.3), 0 4px 16px rgba(91,108,240,0.2); }
 /* R32: press feedback — buttons felt dead on click (hover-only motion). */
 .btn-primary:active { transform: translateY(0) scale(0.98); }
 .btn-secondary:active, .btn-danger:active { transform: scale(0.98); }
 .btn-primary:disabled { opacity: 0.5; transform: none; cursor: not-allowed; box-shadow: none; }
+/* R141: only the primary variant had a disabled style, so a disabled secondary
+   button (the proxy card's Default action, which is a state rather than an
+   action) still looked and hovered like a live control. */
+.btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.btn:disabled:hover { background: var(--surface2); border-color: var(--border); color: var(--text-muted); }
 
 /* Premium-R2: capsule buttons (WorkBuddy pill) + borderless secondary —
    1px bordered chips felt cheap next to dark-pill selected states. */
@@ -345,11 +493,36 @@ dialog,
 
 .btn-danger {
   background: var(--danger-bg);
-  color: var(--danger);
+  color: var(--danger-text);
   border: 1px solid transparent;
 }
 /* R33: danger hover consumes the white token (was hardcoded #fff). */
 .btn-danger:hover { background: var(--danger); color: var(--chat-user-color); }
+
+/* R127: buttons carrying an inline icon become flex rows so the glyph is
+   optically centered against the label instead of riding the baseline. */
+.btn:has(> svg) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.btn > svg { flex: 0 0 auto; }
+/* R128: icon-only buttons (send, close, overflow, sub-nav) drop the label, so
+   the horizontal padding must collapse too or the glyph floats in a wide pill.
+   Marked explicitly rather than via :has() — a bare text node is invisible to
+   :has(), so an icon+label button would otherwise square up and clip. */
+.btn-icon { padding-left: 0; padding-right: 0; aspect-ratio: 1; }
+/* R141: the padding collapse above is declared *before* the .btn-sm / .btn-xs
+   size variants, so at equal specificity their `padding` shorthand won and
+   every icon-only small button kept 14px of side padding — a 14px glyph
+   floating in a 44x44 pill instead of a 28x28 square, which is what the
+   comment above says the collapse exists to prevent. Raise the specificity so
+   the intent actually holds. */
+.btn.btn-icon { padding-left: 0; padding-right: 0; }
+.btn-icon { min-width: 32px; }
+.btn-icon.btn-sm { min-width: 28px; }
+.btn-icon.btn-xs { min-width: 24px; }
 
 .btn-sm { padding: 5px 14px; font-size: 12px; line-height: 1.5; min-height: 28px; }
 /* UI R1: readable floor — xs buttons were 10px, below the 11px minimum. */
@@ -385,6 +558,37 @@ dialog,
   white-space: nowrap;
 }
 
+/* R127: section headers carry a muted line icon. The icon is a step down in
+   contrast from the label so the heading still reads first. */
+.card h3[data-icon],
+.card h4[data-icon],
+dialog h3[data-icon],
+dialog h4[data-icon] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card h3[data-icon] > svg,
+.card h4[data-icon] > svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+/* R138: a dialog title is the anchor of the whole surface, so its icon gets a
+   tinted plate instead of floating as a bare glyph. The plate is 30px and the
+   glyph keeps its own colour, so the icon reads as a mark rather than a
+   bullet — and the title baseline stops depending on the glyph's own metrics. */
+dialog h3[data-icon] > svg,
+dialog h4[data-icon] > svg {
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 7px;
+  border-radius: 9px;
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+
 /* R22: grid gap 14→16px — 4pt grid parity with card padding rhythm. */
 .profile-grid {
   display: grid;
@@ -394,52 +598,116 @@ dialog,
 @media (max-width: 900px) {
   .profile-grid { grid-template-columns: 1fr; }
   #content { padding: 16px; }
-  .tab-header h2 { font-size: 20px; }
+  /* R122: narrow titles 20→24px — 20px broke the 28px hero scale. */
+  .tab-header h2 { font-size: 24px; }
+  /* R126: narrow health rows stack — J207 w700 shot showed the select +
+     verdict squeezed side-by-side in single-column cards. */
+  /* R138: the row is a grid now (Premium-R11), so stacking is expressed with
+     grid-template-columns — the old flex-direction/flex-wrap overrides had
+     become dead code on a grid container. */
+  .profile-card .info-row-health { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .profile-card .info-row-health > span:last-child { justify-content: flex-start; flex-wrap: wrap; }
 }
 
 /* ═══════ Profile Card ═══════ */
 /* Premium-R3: hairline border, lift-on-hover (translateY -2px) — flat
    recolor hovers felt dead. */
+/* Premium-R11: flex column + grid row stretch so every card in a row ends on
+   the same baseline; the footer owns the bottom edge. */
 .profile-card {
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 18px;
   box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
+/* Premium-R11: the brand-ringed border on hover shouted across a full grid of
+   cards — twelve simultaneous blue outlines. A one-step border darkening plus
+   the lift reads as "interactive" without competing with the primary button. */
 .profile-card:hover {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 1px var(--primary-ring), var(--shadow);
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow);
   transform: translateY(-2px);
 }
-
+/* Premium-R11: a running card is a live browser, not a differently-tinted
+   card. An accent bar on the leading edge plus a quiet pulse on the lifecycle
+   badge says "live" in one glance and survives dark theme, where the old
+   green->surface gradient turned the whole card muddy. */
 .profile-card.running {
-  border-color: rgba(34,179,81,0.25);
-  background: linear-gradient(135deg, var(--surface), var(--success-bg));
+  border-color: rgba(34, 179, 81, 0.35);
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--success-text), var(--shadow-sm);
+}
+.profile-card.running .status-running::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+  animation: card-live 2s ease-in-out infinite;
+}
+@keyframes card-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 /* R11-54: badges wrapped instead of overlapping — header wraps, name
    takes row 1, badges flow to row 2 instead of colliding. */
 /* R30: header gap 4/6→8px, margin 12→14px (4pt grid, matches R21). */
+/* Premium-R11: the header is a 2x2 grid — checkbox | name on row 1, badges on
+   row 2. As one wrapping flex row the badges competed with the name for width:
+   a long name wrapped the badges onto a line the name still sat on, and at
+   700px the badge row punched ~129px past the card edge. Row 2 belongs to the
+   badges alone, so they wrap among themselves and the card never widens. */
 .profile-card .card-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "select name"
+    "badges badges";
+  align-items: center;
+  column-gap: 0;
+  row-gap: 8px;
+  margin-bottom: 12px;
+}
+.profile-card .card-header .profile-select { grid-area: select; }
+.profile-card .card-header .name { grid-area: name; }
+.profile-card .card-header .card-status {
+  grid-area: badges;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 14px;
+  min-width: 0;
 }
 .profile-card .card-header .status-badge {
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
 /* R1-4: long names pushed badges via the flex header — truncate. */
+/* R141b: proxy cards have no selection checkbox, so the profile header grid
+   does not describe them. Auto-placement dropped the first unplaced child into
+   the `select` slot, which rendered the Default/Proxy badge where the checkbox
+   belongs — left of the name, with column-gap 0 so the two boxes touched
+   (measured: badge at x 602, name at x 677, 0px apart). A proxy header is just
+   name + status, so lay it out as a row and push the badge to the end. */
+.profile-card .card-header.proxy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.profile-card .card-header.proxy-head .status-badge { flex: 0 0 auto; }
+
 .profile-card .name {
   font-weight: 700;
-  font-size: 15px;
+  font-size: var(--fs-md);
   cursor: pointer;
   color: var(--text);
   min-width: 0;
@@ -449,11 +717,11 @@ dialog,
   flex: 1;
 }
 
-.profile-card .name:hover { color: var(--primary); }
+.profile-card .name:hover { color: var(--primary-text); }
 
 /* R1-3: 10px badges need line-height 1.5 — unitless 1.0 clipped CJK descenders. */
 .profile-card .status-badge {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   font-weight: 700;
   padding: 4px 10px;
@@ -463,11 +731,27 @@ dialog,
 }
 
 /* R4-17: badge fg uses deep variants for contrast on tinted bg. */
-.status-running { background: var(--success-bg); color: var(--badge-success-fg); }
+/* R137: the running badge takes the text-safe green — --badge-success-fg
+   (#15803d) measured 4.27:1 on the tinted fill, under the 4.5 floor for 11px. */
+.status-running { background: var(--success-bg); color: var(--success-text); }
 .status-stopped { background: var(--surface2); color: var(--text-secondary); }
 
+/* Team roster role chips (sync.js roleBadge). Previously inline-styled with the
+   *fill* tokens as text: owner 2.75:1, member 2.26:1, admin 4.33:1 — all under
+   the 4.5 floor for 11px. Pair tinted fill with the matching --*-text token. */
+.role-owner { background: var(--success-bg); color: var(--success-text); }
+.role-admin { background: var(--primary-bg); color: var(--primary-text); }
+.role-member { background: var(--warning-bg); color: var(--warning-text); }
+.role-viewer { background: var(--surface2); color: var(--text-muted); }
+
+/* R127: badges that carry a line icon align glyph and label on one baseline.
+   The icon inherits the badge's own foreground, so a tinted badge tints its
+   icon for free (governance amber, capability neutral, firefox orange). */
+.status-badge { display: inline-flex; align-items: center; gap: 4px; }
+.status-badge > svg { flex: 0 0 auto; }
+
 .proxy-health-badge {
-  font-size: 10px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   font-weight: 700;
   padding: 3px 9px;
@@ -481,7 +765,12 @@ dialog,
 .health-none { background: var(--surface2); color: var(--text-muted); }
 /* R19: idc badge keeps 10px (decorative) but gains line-height (CJK). */
 .proxy-idc-badge {
-  font-size: 10px;
+  /* R141: this is `icon + IDC`, so it needs a centred flex row — as an inline
+     box the glyph sat on the baseline. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-micro);
   line-height: 1.5;
   font-weight: 700;
   padding: 3px 9px;
@@ -489,10 +778,23 @@ dialog,
   letter-spacing: 0.4px;
   white-space: nowrap;
   background: var(--warning-bg);
-  color: var(--warning);
+  color: var(--warning-text);
   margin-left: 6px;
 }
-.proxy-health-summary { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+/* R141: the health summary is a banner, not a tile. Rendered inside
+   .profile-grid it became a grid item, and a grid item stretches to its row
+   height — so it painted as a 338px-tall empty box with the counters pinned to
+   the top (measured: children 338px tall, counters at cy 111 in a box centred
+   at 270). Claim the whole row and size to content instead. */
+.profile-grid > .proxy-health-summary {
+  grid-column: 1 / -1;
+  align-self: start;
+  margin-bottom: 0;
+}
+.proxy-health-summary { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+/* R141: each counter is `icon + label + number`, so it is a centred flex row as
+   well — the cooldown counter's clock sat on the baseline. */
+.proxy-health-summary > span { display: inline-flex; align-items: center; gap: 4px; }
 .proxy-health-summary b { color: var(--text); }
 
 /* Premium-R6: proxy bind rows — pill hover, hairline separators, air. */
@@ -504,6 +806,12 @@ dialog,
 /* Premium-R9: generic .info-row — browser.js/proxies.js render .info-row
    outside .profile-card (Widevine card, updates, proxy rows); without this
    they fell back to unstyled block text (J205 browser shot). */
+/* R137: the label/value selectors go through `>` on purpose. Written as
+   `.info-row span:first-child` they also matched any span nested inside the
+   value — including the first tag chip in a tag list, which then painted its
+   text with the muted label colour on top of the chip's dark-green fill
+   (measured 1.13:1, i.e. invisible). Direct-child combinators keep the rule
+   about the row's own two cells. */
 .info-row {
   display: flex;
   justify-content: space-between;
@@ -514,8 +822,8 @@ dialog,
   margin-bottom: 5px;
   padding: 2px 0;
 }
-.info-row span:first-child { font-weight: 500; color: var(--text-muted); flex-shrink: 0; }
-.info-row span:last-child {
+.info-row > span:first-child { font-weight: 500; color: var(--text-muted); flex-shrink: 0; }
+.info-row > span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -526,52 +834,146 @@ dialog,
    (seed-generated hardware, long identity strings). */
 /* R14: card rows 12→13px — J205 shots showed identity/hardware rows reading
    smaller than surrounding 13px card copy. */
+/* Premium-R11: the card's meta block is a two-column grid, not a stack of
+   flex rows. The label column sizes to the longest label in the card, so every
+   value starts on the same x — the ragged left edge of the flex version was
+   the single biggest "unfinished" tell in the grid. Values are right-aligned
+   with tabular figures so numbers line up between cards. */
 .profile-card .info-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 12px;
   font-size: 13px;
   line-height: 1.55;
   color: var(--text-secondary);
-  margin-bottom: 5px;
-  padding: 2px 0;
+  margin: 0;
+  padding: 5px 0;
 }
 
-.profile-card .info-row span:first-child { font-weight: 500; color: var(--text-muted); flex-shrink: 0; }
-.profile-card .info-row span:last-child {
+.profile-card .info-row > span:first-child { font-weight: 500; color: var(--text-muted); }
+/* R142: a value cell that is a flex row (Browser: icon + name) cannot take the
+   row's `align-items: baseline`. A flex container synthesises its baseline from
+   its first item's bottom edge — the icon — so the whole cell would ride up
+   ~4px and drag the label with it. Centre it instead; on a single-line row of
+   equal font-size and line-height, centring lands on the same baseline. */
+.profile-card .info-row > .icon-text:last-child { align-self: center; }
+.profile-card .info-row > span:last-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* R143: the meta block shares ONE grid, so the label column is the width of the
+   card's widest label and every value starts on the same x. Until now each
+   `.info-row` was its own `max-content` grid, so the column was per-row: in a
+   single profile card the values started at x = 314 / 327 / 301 / 301 / 301 /
+   327, and in a proxy card at 330 / 316 / 301 / 301 — a 26px jitter, i.e. the
+   exact "ragged value column" the Premium-R11 note claims to have removed but
+   the CSS never did. `.card-meta` is the shared grid; a row is
+   `grid-column: 1 / -1` + `subgrid`, which keeps its own box — and so its
+   padding, its own `align-items`, and the `> span:last-child` truncation —
+   while taking the columns from the parent. `subgrid` resolves to `none` when
+   the parent is not a grid container, so cards that are not wrapped in
+   `.card-meta` keep their old behaviour untouched. */
+.profile-card > .card-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: baseline;
+}
+.profile-card > .card-meta > .info-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+}
+/* The 900px stack for the health row has to out-rank the subgrid rule above
+   (same specificity, later in the file). */
+@media (max-width: 900px) {
+  .profile-card > .card-meta > .info-row-health {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+  }
 }
 /* R11-53: the health row carries interactive controls — no truncation,
    allow wrap so select + verdict never overlap. */
 /* Premium-R9: verdict never breaks mid-word ("尚未检/测") — nowrap + shrink. */
 /* R28: health row gap 6→8px (4pt grid, matches R21/R23). */
-.profile-card .info-row-health span:last-child {
+/* Premium-R11: the control cell never wraps to a second line — the row keeps
+   its 28px height so the meta block keeps one rhythm across all cards. */
+.profile-card .info-row-health {
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  padding: 3px 0;
+}
+.profile-card .info-row-health > span:last-child {
   overflow: visible;
-  white-space: normal;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 8px;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 .profile-card .info-row-health .health-verdict {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.profile-card .info-row-health .health-select { flex: 0 1 auto; min-width: 0; }
+
+/* Premium-R11: tag chips wrap inside the value cell instead of being clipped
+   by the single-line value rule. */
+.profile-card .info-row-tags { align-items: start; }
+.profile-card .info-row-tags > span:last-child {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
 
 /* R5-22: gap rhythm 4/8/12/16 — 5px converges to 4px. */
 /* R21: card actions 4→8px — J205 shots showed Launch/Edit/… buttons touching. */
+/* Premium-R11: the card is a flex column so the control footer sits on the
+   same baseline in every card — the grid rows stopped being ragged, which was
+   the last thing keeping the profile grid from reading as a system. */
 .profile-card .card-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-light);
+  margin-top: 10px;
   flex-wrap: wrap;
+}
+/* The overflow menu always hugs the right edge, so it lines up across cards
+   regardless of how many buttons precede it. */
+.profile-card .card-actions .card-menu { margin-left: auto; }
+/* R143: the proxy card's six utility actions get a band of their own. Wrapping
+   used to break wherever the 28px icons ran out of room, and on a 323px card
+   that put ONE icon beside the labelled trio — so "clear health" read as a
+   fourth primary action — with the other five on the second row.
+   `flex-basis: 100%` moves the break to the semantic boundary: the three
+   actions you came for, then the six you occasionally need. */
+.profile-card .card-actions > .proxy-util-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1 0 100%;
+}
+
+/* Premium-R11: proxy switcher moves out of an inline-styled wrapper div into a
+   real footer band. Before this it rendered as a bordered box inside an
+   already-bordered card ("card in a card"), and because the wrapper was
+   inline-styled it could not be themed. */
+.profile-card .card-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
 }
 
 /* Premium-R4: banners soften — hairline, 12px radius, airier padding. */
@@ -624,7 +1026,7 @@ dialog,
   font-family: var(--font);
 }
 .fp-tab:hover { color: var(--text); }
-.fp-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.fp-tab.active { color: var(--primary-text); border-bottom-color: var(--primary-text); }
 .fp-tab-content { padding: 12px 0; }
 
 /* ── Dialog viewport guard (inline max-widths already use calc, keep backdrop scrollable) ── */
@@ -713,10 +1115,26 @@ dialog { line-height: 1.6; }
 #agent-chat-messages::-webkit-scrollbar { width: 5px; }
 
 /* Chat input area */
+/* R139: the composer is one control. The field and the send button used to be
+   laid out with flex-end against a 38px textarea with no shared edge, so the
+   button floated below the field's centre line. The bar now owns the layout
+   (the inline style moved here) and the button is a 38px square matched to the
+   field's resting height. */
 .agent-input-bar {
   flex: 0 0 auto;
   background: var(--surface);
   border-top: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.agent-input-bar .btn-icon {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 12px;
 }
 
 #agent-chat-status {
@@ -728,20 +1146,23 @@ dialog { line-height: 1.6; }
 #agent-chat-input {
   flex: 1;
   font-size: 14px;
-  padding: 12px 18px;
-  border-radius: 16px;
-  border: 1px solid transparent;
-  background: var(--input-soft-bg);
+  padding: 9px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
   resize: none;
   color: var(--text);
   font-family: var(--font);
   line-height: 1.5;
+  min-height: 38px;
+  max-height: 120px;
   outline: none;
   /* R81: 0.15→0.12s — interaction tier. */
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
+#agent-chat-input:hover { border-color: var(--border-hover); }
 /* R4-19: 1px color shift alone is not a visible focus indicator — add ring. */
-#agent-chat-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+#agent-chat-input:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
 /* R4-19b: placeholder follows the R2-7 rule (no halved opacity). */
 #agent-chat-input::placeholder { color: var(--text-muted); opacity: 1; }
 
@@ -786,9 +1207,9 @@ dialog { line-height: 1.6; }
   margin: 8px 0 2px; line-height: 1.25; font-weight: 600;
 }
 /* R12: bubble headings rescale to the 14px body (were tuned for 12px). */
-.chat-bubble h1 { font-size: 17px; }
+.chat-bubble h1 { font-size: var(--fs-lg); }
 .chat-bubble h2 { font-size: 16px; }
-.chat-bubble h3 { font-size: 15px; }
+.chat-bubble h3 { font-size: var(--fs-md); }
 .chat-bubble h4, .chat-bubble h5, .chat-bubble h6 { font-size: 14px; }
 .chat-bubble ul, .chat-bubble ol { margin: 3px 0; padding-left: 20px; }
 .chat-bubble li { margin: 1px 0; }
@@ -798,7 +1219,7 @@ dialog { line-height: 1.6; }
   border-left: 3px solid var(--border); color: var(--text-muted);
 }
 .chat-bubble blockquote p { margin: 0; }
-.chat-bubble a { color: var(--primary); text-decoration: none; }
+.chat-bubble a { color: var(--primary-text); text-decoration: none; }
 .chat-bubble a:hover { text-decoration: underline; }
 .chat-bubble hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
 .chat-bubble img { max-width: 100%; border-radius: 4px; }
@@ -830,7 +1251,7 @@ dialog { line-height: 1.6; }
   font-size: 11px;
   line-height: 1.5;
   background: var(--primary-bg);
-  color: var(--primary);
+  color: var(--primary-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: var(--mono);
@@ -846,11 +1267,15 @@ dialog { line-height: 1.6; }
   max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* R86: spinner 1→1.6s — 1s blink felt anxious next to 2s status dots. */
-.chat-tool-spinner { color: var(--primary); animation: chat-pulse 1.6s ease-in-out infinite; }
-.chat-tool-done { color: var(--success); font-size: 11px; line-height: 1.5; }
+.chat-tool-spinner { color: var(--primary-text); animation: chat-pulse 1.6s ease-in-out infinite; }
+.chat-tool-done { color: var(--success-text); font-size: 11px; line-height: 1.5; }
 @keyframes chat-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* ── Chat empty state ── */
+/* R139: an empty conversation is the agent tab's default state, not an error,
+   so it gets a composed panel instead of a ghosted icon. The old rules leaned
+   on `opacity` for both the glyph (0.35) and the hint (0.7), which lowered an
+   already-muted colour below AA and made the state look disabled. */
 .chat-empty {
   display: flex;
   flex-direction: column;
@@ -861,9 +1286,32 @@ dialog { line-height: 1.6; }
   text-align: center;
   padding: 32px;
 }
-.chat-empty .chat-empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.35; }
-.chat-empty .chat-empty-title { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
-.chat-empty .chat-empty-hint { font-size: 12px; opacity: 0.7; line-height: 1.6; }
+.chat-empty .chat-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 14px;
+  border-radius: 16px;
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+/* The renderer passes a 40px glyph; inside the plate it reads as a mark, not a
+   headline, so it is scaled down to sit optically centred. */
+.chat-empty .chat-empty-icon > svg { width: 26px; height: 26px; }
+.chat-empty .chat-empty-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.chat-empty .chat-empty-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 36ch;
+}
 
 /* ── Theme toggle ── */
 /* Premium-R6: theme row joins the pill family, no top rule. */
@@ -884,6 +1332,9 @@ dialog { line-height: 1.6; }
 }
 /* R43: theme row hover follows the sidebar step. */
 .theme-toggle:hover { color: var(--text); background: var(--sidebar-hover); }
+/* R129: the label is a single word in both locales ("浅色"/"Light", "深色"/"Dark")
+   but flex-shrink at the 850px breakpoint broke it across two lines. */
+.theme-toggle > span { white-space: nowrap; }
 /* R85: toggle transitions gain easing (were bare 0.2s without curve). */
 .theme-toggle .toggle-track {
   width: 36px; height: 20px;
@@ -896,7 +1347,7 @@ dialog { line-height: 1.6; }
 /* R39: toggle thumb consumes the white token (was hardcoded #fff). */
 .theme-toggle .toggle-thumb {
   width: 16px; height: 16px;
-  background: var(--chat-user-color);
+  background: var(--on-accent);
   border-radius: 50%;
   position: absolute;
   top: 2px; left: 2px;
@@ -932,7 +1383,7 @@ dialog { line-height: 1.6; }
 }
 /* R18: agent label 10→11px floor. */
 .chat-agent-label {
-  color: var(--primary);
+  color: var(--primary-text);
   font-weight: 600;
   font-size: 11px;
   line-height: 1.5;
@@ -943,7 +1394,7 @@ dialog { line-height: 1.6; }
 .chat-tool-chip {
   display: inline-block;
   background: var(--surface2);
-  color: var(--primary);
+  color: var(--primary-text);
   padding: 3px 8px;
   border-radius: 3px;
   font-size: 11px;
@@ -961,14 +1412,14 @@ dialog { line-height: 1.6; }
   padding: 4px 8px;
   border-radius: 3px;
 }
-.chat-empty {
-  color: var(--text-muted);
-  text-align: center;
-}
+/* R139: a second, later `.chat-empty { color; text-align }` block used to sit
+   here — it duplicated the composed rules above with an identical colour, so it
+   could only ever drift out of sync. Removed. */
 
 /* ── Chrome status ── */
-.chrome-status-ok { color: var(--success); }
-.chrome-status-err { color: var(--danger); }
+/* R136: sidebar footer text — text-safe accents (J210: 2.65/2.75:1 before). */
+.chrome-status-ok { color: var(--success-text); }
+.chrome-status-err { color: var(--danger-text); }
 .chrome-status-unknown { color: var(--text-muted); }
 
 /* Premium-R6: conv items join the pill-nav family — 10px radius, pill hover. */
@@ -1008,14 +1459,18 @@ dialog { line-height: 1.6; }
 
 /* Premium-R2: borderless soft-fill inputs (WorkBuddy 16px+ radius, no
    border) — bordered boxes read as admin-template, not premium product. */
+/* R138: revised. Borderless soft-fill collapsed on any surface that was not
+   --surface2: on a white dialog the field edge disappeared and the form read
+   as empty space. Fields now carry --input-bg + a hairline in both themes;
+   the soft-fill look stays where it belongs, on inline pills/selects. */
 .form-row input,
 .form-row select,
 .form-row textarea {
   width: 100%;
-  padding: 10px 14px;
-  background: var(--input-soft-bg);
-  border: 1px solid transparent;
-  border-radius: 12px;
+  padding: 9px 12px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
@@ -1023,11 +1478,15 @@ dialog { line-height: 1.6; }
   transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 }
 
+.form-row input:hover,
+.form-row select:hover,
+.form-row textarea:hover { border-color: var(--border-hover); }
+
 .form-row input:focus,
 .form-row select:focus,
 .form-row textarea:focus {
   outline: none;
-  border-color: var(--primary);
+  border-color: var(--primary-text);
   box-shadow: 0 0 0 3px var(--primary-ring);
 }
 
@@ -1036,7 +1495,7 @@ input[type="checkbox"] {
   width: 16px;
   height: 16px;
   margin-right: 8px;
-  accent-color: var(--primary);
+  accent-color: var(--primary-text);
   vertical-align: -3px;
   cursor: pointer;
 }
@@ -1053,6 +1512,15 @@ input[type="checkbox"] {
   margin-top: 20px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+
+/* R138: inside a dialog the action row is a footer band — it owns the bottom
+   of the surface. Outside a dialog (.btn-row also renders inline in the sync /
+   browser tabs) it stays a plain right-aligned row. */
+dialog .btn-row {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
 }
 
 .sync-form { display: grid; gap: 12px; }
@@ -1080,13 +1548,41 @@ dialog::backdrop {
 }
 
 /* R20: dialog titles join the 700 tier (750 was off-scale). */
+/* R138: 700 at 18px read heavier than the dialog's own primary button, which
+   inverted the hierarchy (the title shouted, the action whispered). 600 keeps
+   the title first without competing with the accent. Title row also reserves
+   room for the close affordance on its right. */
 dialog h3 {
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.3px;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
   line-height: 1.4;
+  padding-right: 34px;
 }
+/* R138: mouse/keyboard close for every dialog. The markup is authored per
+   dialog in index.html, so the button is injected once by delegation.js when
+   the dialog opens — one implementation instead of ~30 hand-written ones.
+   Esc already worked; there was simply no visible way out. */
+.dialog-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.dialog-close:hover { background: var(--pill-bg); color: var(--text); }
+.dialog-close:active { transform: scale(0.94); }
 /* R68: titles inside flex card headers must not carry the 10px block
    margin — the header row owns spacing. Covers team/preview/jobs cards. */
 .card div[style*="justify-content:space-between"] h3,
@@ -1112,9 +1608,10 @@ dialog p {
 .timeline-ok { color: var(--badge-success-fg); }
 .timeline-err { color: var(--badge-danger-fg); }
 /* R78: health summary semantic text (were 3 inline color styles). */
-.health-text-good { color: var(--success); }
-.health-text-watch { color: var(--warning); }
-.health-text-poor { color: var(--danger); }
+/* R136: text-safe accents — these render 11–12px copy on card surfaces. */
+.health-text-good { color: var(--success-text); }
+.health-text-watch { color: var(--warning-text); }
+.health-text-poor { color: var(--danger-text); }
 /* R75: skill card layout — 5 inline styles converged. */
 .skill-layout { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .skill-main { min-width: 0; flex: 1; }
@@ -1144,7 +1641,7 @@ dialog p {
 .adapter-pitch { margin: 10px 0 6px; }
 .adapter-caps { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .adapter-domains { margin: 8px 0 0; font-size: 11px; line-height: 1.5; }
-.adapter-domains code { color: var(--primary); }
+.adapter-domains code { color: var(--primary-text); }
 .adapter-block { margin-top: 8px; }
 .adapter-toggle { margin-top: 10px; }
 .adapter-detail {
@@ -1229,7 +1726,7 @@ dialog p {
 /* ── Agent Run trace ── */
 /* R6-29: white on #22b351 fails — use the darkened toast fill. */
 /* R40: status-done consumes the white token (last hardcoded #fff). */
-.status-done { background: #15803d; color: var(--chat-user-color); }
+.status-done { background: #15803d; color: var(--on-accent); }
 .run-step {
   border-left: 3px solid var(--border);
   padding: 8px 12px;
@@ -1238,7 +1735,7 @@ dialog p {
   border-radius: 0 10px 10px 0;
   box-shadow: var(--shadow-sm);
 }
-.run-step.run-step-error { border-left-color: var(--danger); }
+.run-step.run-step-error { border-left-color: var(--danger-text); }
 .run-step-head { font-size: 12px; line-height: 1.5; }
 .run-step-num { color: var(--text-muted); margin-right: 4px; }
 .run-step-tool { font-family: var(--mono); font-weight: 600; }
@@ -1365,7 +1862,7 @@ dialog p {
   color: inherit;
   opacity: 0.7;
   cursor: pointer;
-  font-size: 15px;
+  font-size: var(--fs-md);
   line-height: 1;
   padding: 3px 6px;
   /* R2-10: 21px dismiss target — pad to the 24px touch floor. */
@@ -1489,9 +1986,17 @@ dialog p {
   border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  /* R127: icon + label rows. The muted icon keeps the menu from reading as a
+     wall of ink; the label stays the only high-contrast element. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+.card-menu-list button > svg { flex: 0 0 auto; color: var(--text-muted); }
+.card-menu-list button:hover > svg { color: var(--text); }
+.card-menu-list button.danger > svg { color: var(--danger-text); }
 .card-menu-list button:hover { background: var(--pill-bg); }
-.card-menu-list button.danger { color: var(--danger); }
+.card-menu-list button.danger { color: var(--danger-text); }
 
 /* Health check selector (UE-01): one control instead of four 9px buttons */
 /* R3-12: 22px select missed the 24px touch floor. */
@@ -1521,7 +2026,11 @@ dialog p {
  * hex fills (#eafaf1/#e8f4fd) that break in dark theme — these tokens adapt. */
 /* Premium-R2: chip 3px→pill, 10px→11px floor. */
 .chip {
-  display: inline-block;
+  /* R141: a chip is `icon + label`; as inline-block the icon fell back to the
+     baseline. Same centred flex row as .status-badge. */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 2px 10px;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -1530,15 +2039,15 @@ dialog p {
   background: var(--pill-bg);
   color: var(--pill-text);
 }
-.chip-link { background: var(--success-bg); border-color: var(--success); color: var(--success); }
-.chip-info { background: var(--primary-bg); border-color: var(--primary); color: var(--primary); }
+.chip-link { background: var(--success-bg); border-color: var(--success-text); color: var(--success-text); }
+.chip-info { background: var(--primary-bg); border-color: var(--primary-text); color: var(--primary-text); }
 /* R2-8: hardcoded #ff7a18 broke dark theme — token with per-theme value. */
-.chip-firefox { color: var(--accent-firefox); }
+.chip-firefox { color: var(--accent-firefox-text); }
 
 /* UI R1: readable floor — nothing interactive below 11px. The old 9px
  * extension meta rows are lifted here instead of inline overrides. */
 .meta-line { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.meta-line-ok { font-size: 11px; color: var(--success); }
+.meta-line-ok { font-size: 11px; color: var(--success-text); }
 
 /* UI R1: respect reduced-motion — toasts/cards go static for users who ask. */
 @media (prefers-reduced-motion: reduce) {
@@ -1586,14 +2095,21 @@ dialog p {
 }
 
 /* ── Responsive: keep content breathable on narrow windows ── */
+/* R121: breakpoints track the 208px premium sidebar (were tuned for 200px). */
 @media (max-width: 1100px) {
-  #sidebar { width: 180px; min-width: 180px; }
+  #sidebar { width: 188px; min-width: 188px; }
 }
 @media (max-width: 850px) {
-  #sidebar { width: 160px; min-width: 160px; }
+  #sidebar { width: 168px; min-width: 168px; }
   #sidebar .sidebar-header { padding: 12px 10px 10px; }
-  #sidebar .sidebar-header h1 { font-size: 15px; letter-spacing: -0.3px; }
+  /* R123: narrow brand 15→16px — 15px was off the type scale. */
+  #sidebar .sidebar-header h1 { font-size: 16px; letter-spacing: -0.3px; }
   .nav-item { padding: 7px 10px; font-size: 12px; }
+  /* R125: narrow footer stacks cleanly — J207 w700 shot showed the chrome
+     version wrapping mid-string and the theme/lang controls overflowing. */
+  .sidebar-footer { padding: 10px 12px; }
+  .sidebar-controls { row-gap: 6px; }
+  .sidebar-controls .theme-toggle { flex: 1 1 100%; margin: 0; }
 }
 
 /* ═══════ Misc ═══════ */
@@ -1747,7 +2263,7 @@ code {
   transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 .skill-card:hover {
-  border-color: var(--primary);
+  border-color: var(--primary-text);
   box-shadow: 0 0 0 1px var(--primary-ring), var(--shadow);
   transform: translateY(-1px);
 }
@@ -1791,7 +2307,7 @@ code {
   /* R2-10: 19px tall — pad to the 24px touch floor. */
   min-height: 24px;
 }
-.name-row .btn-rename:hover { border-color: var(--primary); color: var(--primary); }
+.name-row .btn-rename:hover { border-color: var(--primary-text); color: var(--primary-text); }
 
 /* ── Cookie table ── */
 /* Premium-R6: tables breathe — 12px body, hairline header, pill hover. */
@@ -1840,8 +2356,8 @@ code {
 
 /* ── Sync badge ── */
 /* R16: sync status 10→11px readable floor (same rule as R15). */
-.sync-synced { color: var(--success); font-size: 11px; line-height: 1.5; }
-.sync-dirty  { color: var(--warning); font-size: 11px; line-height: 1.5; }
+.sync-synced { color: var(--success-text); font-size: 11px; line-height: 1.5; }
+.sync-dirty  { color: var(--warning-text); font-size: 11px; line-height: 1.5; }
 .sync-never  { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 
 /* ── Proxy select on profile card ── */
@@ -1869,7 +2385,25 @@ code {
   outline: none;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
-#extension-repo-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+#extension-repo-search:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
+/* R108: adapter hub search joins the soft-input family (was 11px inline). */
+/* R119: explicit 32px floor (was implicit from padding). */
+.hub-search {
+  width: 200px;
+  padding: 9px 14px;
+  min-height: 32px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--input-soft-bg);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.hub-search:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
+.hub-search::placeholder { color: var(--text-muted); opacity: 1; }
 #extension-repo-search::placeholder { color: var(--text-muted); opacity: 1; }
 #automation-job-status, #activity-filter, #batch-assign-proxy {
   font-size: 12px;
@@ -1928,7 +2462,7 @@ code {
   overflow: auto;
 }
 .btn-row.tight { margin: 6px 0; }
-#db-sql:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+#db-sql:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
 /* R64: log block owns its style (was 140-char inline + !important war). */
 #automation-log {
   font-size: 12px;
@@ -1958,11 +2492,33 @@ dialog textarea {
   outline: none;
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
-dialog textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-ring); }
+dialog textarea:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
 /* R6-26: hint-line utility — 35+ inline copies of muted 11px/12px explainer.
    Migrate incrementally: new code uses the class, old inline stays valid. */
 .hint-line { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .hint-line-lg { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+/* R101: semantic note utilities — converge 60+ font-size/color/margin inlines. */
+.field-note { font-size: 11px; line-height: 1.55; color: var(--text-muted); margin: 6px 0 0; }
+.field-note-tight { font-size: var(--fs-micro); line-height: 1.5; color: var(--text-muted); margin: 4px 0 0; }
+/* R107: compliance + seed hints keep their 8px/6px rhythm. */
+.compliance-note { margin: 8px 0 0; }
+.seed-note { margin: 6px 0; }
+/* R110: agent config + approval + marketplace notes converge. */
+.config-note { margin: 4px 0 14px; }
+.fs-note { margin: 4px 0 10px; }
+.approval-detail-box { margin-bottom: 14px; }
+.market-note { margin-bottom: 12px; }
+.config-note, .fs-note, .approval-detail-box, .market-note {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.status-note { font-size: 11px; line-height: 1.5; color: var(--text-muted); margin-top: 6px; }
+.status-note.compact { margin-top: 4px; }
+.status-note:empty { display: none; }
+/* R103: dialog format notes — 4 identical 11px/muted/mb8 inlines converged. */
+.dialog-note { font-size: 11px; line-height: 1.6; color: var(--text-muted); margin: 0 0 10px; }
+.dialog-note code { font-size: 11px; }
 /* R7-32: tabular numbers for countdowns/timers/scores — proportional
    figures jitter. Covers batch progress, health counts, token usage. */
 .batch-progress-label, .health-count, .token-count, .profile-selected-count,

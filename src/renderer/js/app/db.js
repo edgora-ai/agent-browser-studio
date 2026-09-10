@@ -8,6 +8,7 @@
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
 
+  var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
   agentBrowser.loadDbTab = function() {
@@ -19,7 +20,9 @@
       }
       el.innerHTML = tables.map(function(tbl) {
         return '<div class="db-table-row" data-table="' + escAttr(tbl.name) + '" style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--border-light);">' +
-          '<div style="font-weight:600;">📋 ' + esc(tbl.name) + '</div>' +
+          // R142: `.icon-text` so the table glyph centres on the table name
+          // instead of riding the text baseline 1.3px low.
+          '<div class="icon-text" style="font-weight:600;">' + icon("table", 12) + esc(tbl.name) + '</div>' +
           '<div class="hint-line">' + tbl.rowCount + t("db.row-count"," 行") + '</div>' +
         '</div>';
       }).join("");
@@ -35,11 +38,11 @@
     api.agentDb.tableData(table, 100, 0).then(function(data) {
       var el = document.getElementById("db-result");
       if (!data || !data.rows || data.rows.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t("db.table-empty","表 <code>") + esc(table) + t("db.table-empty-mid","</code> 为空(共 ") + (data ? data.total : 0) + t("db.table-empty-end"," 行)。") + '</div>';
+        el.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t("db.table-empty","表 <code>") + esc(table) + t("db.table-empty-mid","</code> 为空（共 ") + (data ? data.total : 0) + t("db.table-empty-end"," 行）。") + '</div>';
         return;
       }
       var cols = data.columns && data.columns.length ? data.columns : Object.keys(data.rows[0]);
-      var html = '<div style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">📋 ' + esc(table) + t("db.table-head"," · ") + data.rows.length + t("db.row-count-slash","/") + data.total + t("db.row-count"," 行") + '</div>';
+      var html = '<div class="icon-text" style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + icon("table", 12) + esc(table) + t("db.table-head"," · ") + data.rows.length + t("db.row-count-slash","/") + data.total + t("db.row-count"," 行") + '</div>';
       html += '<table class="db-grid"><thead><tr>';
       cols.forEach(function(c) { html += "<th>" + esc(c) + "</th>"; });
       html += "</tr></thead><tbody>";
@@ -63,21 +66,21 @@
     if (!sql) { toast(t("db.toast.no-sql","请输入 SQL"), "error"); return; }
     var el = document.getElementById("db-result");
     var isExec = mode === "exec";
-    el.innerHTML = '<span style="color:var(--primary);">' + t("db.running","运行中...") + '</span>';
+    el.innerHTML = '<span style="color: var(--primary-text);">' + t("db.running","运行中...") + '</span>';
     if (isExec) {
       api.agentDb.exec(sql).then(function(r) {
         if (r.ok) {
-          el.innerHTML = '<div style="color:var(--success);">' + t("db.exec-done","✅ 执行完成。") + '</div>';
+          el.innerHTML = '<div style="color: var(--success-text);">' + t("db.exec-done","Executed.") + '</div>';
           agentBrowser.loadDbTab();
         } else {
-          el.innerHTML = '<div style="color:var(--danger);">' + t("db.exec-failed","❌ ") + esc(r.error || t("db.exec-failed-default","失败")) + "</div>";
+          el.innerHTML = '<div style="color: var(--danger-text);">' + esc(r.error || t("db.exec-failed-default","Failed")) + "</div>";
         }
-      }).catch(function(e) { el.innerHTML = '<div style="color:var(--danger);">' + esc(e.message || e) + "</div>"; });
+      }).catch(function(e) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>"; });
     } else {
       api.agentDb.query(sql).then(function(r) {
-        if (!r.ok) { el.innerHTML = '<div style="color:var(--danger);">' + t("db.exec-failed","❌ ") + esc(r.error || t("db.exec-failed-default","失败")) + "</div>"; return; }
+        if (!r.ok) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(r.error || t("db.exec-failed-default","Failed")) + "</div>"; return; }
         var rows = r.rows || [];
-        if (rows.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);">' + t("db.no-result","(无结果,") + r.count + t("db.no-result-end"," 行)") + "</div>"; return; }
+        if (rows.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);">' + t("db.no-result","（无结果，") + r.count + t("db.no-result-end"," 行）") + "</div>"; return; }
         var cols = Object.keys(rows[0]);
         var html = '<div style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + rows.length + (r.truncated ? t("db.truncated","+ (截断)") : "") + t("db.row-count"," 行") + '</div>';
         html += '<table class="db-grid"><thead><tr>';
@@ -94,7 +97,7 @@
         });
         html += "</tbody></table>";
         el.innerHTML = html;
-      }).catch(function(e) { el.innerHTML = '<div style="color:var(--danger);">' + esc(e.message || e) + "</div>"; });
+      }).catch(function(e) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>"; });
     }
   };
 })();

@@ -17,6 +17,7 @@
   var api = agentBrowser.api;
   var toast = agentBrowser.helpers.toast;
   var esc = agentBrowser.helpers.esc;
+  var icon = agentBrowser.helpers.icon;
   var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
 
   var lastStatus = null;
@@ -50,7 +51,7 @@
     if (st.plan !== "trial") {
       el.className = "engine-banner ok";
       var exp = st.expiresAt ? " · " + t("license.expires", "expires {d}").replace("{d}", new Date(st.expiresAt).toLocaleDateString()) : "";
-      el.innerHTML = "🔑 " + esc(planLabel(st) + (st.licensedTo ? " · " + st.licensedTo : "") + exp);
+      el.innerHTML = icon("key", 13) + " " + esc(planLabel(st) + (st.licensedTo ? " · " + st.licensedTo : "") + exp);
       el.style.display = "";
       return;
     }
@@ -61,7 +62,7 @@
       ? t("license.trial.expired", "Trial expired — your profiles and data are untouched. Activate a license to keep creating and launching.")
       : t("license.trial.left", "Trial: {d} days left · {u}/{m} profiles used").replace("{d}", days).replace("{u}", "?").replace("{m}", st.maxProfiles == null ? "∞" : st.maxProfiles);
     el.innerHTML =
-      '<span style="flex:1;">🔑 ' + esc(msg) + "</span>" +
+      '<span class="icon-text" style="flex:1;">' + icon("key", 13) + esc(msg) + "</span>" +
       '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="showLicenseDialog">' +
         esc(t("license.activate", "Activate")) + "</button>";
     el.style.display = "";
@@ -71,7 +72,7 @@
         var used = Array.isArray(profiles) ? profiles.length : 0;
         var body = el.querySelector("span");
         if (body && !st.expired && days !== null) {
-          body.textContent = "🔑 " + t("license.trial.left", "Trial: {d} days left · {u}/{m} profiles used")
+          body.innerHTML = icon("key", 13) + t("license.trial.left", "Trial: {d} days left · {u}/{m} profiles used")
             .replace("{d}", days).replace("{u}", used).replace("{m}", st.maxProfiles == null ? "∞" : st.maxProfiles);
         }
       }).catch(function () { /* usage is best-effort */ });

@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var fmt = helpers.fmt;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var shortPath = helpers.shortPath;
@@ -174,7 +175,7 @@
     el.innerHTML = fsAllowlist.map(function(d, i) {
       return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">' +
         '<span style="flex:1;font-family:var(--mono);font-size:11px;word-break:break-all;">' + esc(d) + '</span>' +
-        '<button class="btn btn-danger btn-xs" data-role="cmd" data-cmd="agentFsRemoveDir" data-cmd-arg="' + escAttr(String(i)) + '">✕</button>' +
+        '<button class="btn btn-danger btn-xs" data-role="cmd" data-cmd="agentFsRemoveDir" data-cmd-arg="' + escAttr(String(i)) + '" aria-label="Remove">' + icon("close", 12) + '</button>' +
         '</div>';
     }).join('');
   }

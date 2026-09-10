@@ -7,10 +7,11 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var t = function(key, fallback) {
     return (window.i18n && window.i18n.t) ? window.i18n.t(key, fallback) : fallback;
   };
-  var CATEGORY_ICON = { ecommerce: "🛒", social: "📣", ads: "📈", crypto: "🪙", productivity: "🧰", utility: "🔧", generic: "🌐" };
+  var CATEGORY_ICON = { ecommerce: "box", social: "users", ads: "chart", crypto: "key", productivity: "grid", utility: "settings", generic: "globe" };
   var CATEGORY_LABEL = {
     ecommerce: t("adapters.category.ecommerce", "E-commerce"),
     social: t("adapters.category.social", "Social"),
@@ -39,7 +40,7 @@
       var html = "";
       for (var i = 0; i < items.length; i++) {
         var a = items[i];
-        var icon = CATEGORY_ICON[a.category] || "🌐";
+        var catIcon = CATEGORY_ICON[a.category] || "globe";
         var label = CATEGORY_LABEL[a.category] || a.category;
         /* R71: adapter card inline styles (12 sites) converged to classes. */
         html += '<div class="card adapter-card" data-adapter-id="' + escAttr(a.id) + '">';
@@ -61,10 +62,10 @@
         var recipeText = (a.recipes || []).map(function(r) { return esc(r.name) + ": " + esc(r.goal) + " (" + esc((r.steps || []).join(" → ")) + ")"; }).join("<br>");
         html += '<div class="adapter-block"><strong>Recipes:</strong><br>' + recipeText + '</div>';
         html += '<div class="adapter-block"><strong>Notes:</strong> ' + esc(a.notes) + '</div>';
-        html += '<div class="adapter-block"><button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="adapterShowDetail" data-cmd-arg="' + escAttr(a.id) + '">🔎 Load full recipe (loginCheck + selectors)</button></div>';
+        html += '<div class="adapter-block"><button class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="adapterShowDetail" data-cmd-arg="' + escAttr(a.id) + '">' + icon("search", 14) + '<span>' + esc(t("agent.adapters.load-full", "Load full recipe (loginCheck + selectors)")) + '</span></button></div>';
         html += '<div class="adapter-full-detail adapter-block" style="display:none;"></div>';
         html += '</div>';
-        html += '<button class="btn btn-secondary btn-xs adapter-toggle" data-role="cmd" data-cmd="adapterToggle" data-cmd-arg="' + escAttr(a.id) + '">▸ Overview</button>';
+        html += '<button class="btn btn-secondary btn-xs adapter-toggle" data-role="cmd" data-cmd="adapterToggle" data-cmd-arg="' + escAttr(a.id) + '">' + icon("arrowRight", 14) + '<span>' + esc(t("agent.adapters.overview", "Overview")) + '</span></button>';
         html += '</div>';
       }
       el.innerHTML = html;
@@ -91,7 +92,7 @@
     var btn = card.querySelector('button[data-cmd="adapterToggle"]');
     var isOpen = detail.style.display !== "none";
     detail.style.display = isOpen ? "none" : "block";
-    if (btn) btn.textContent = isOpen ? "▸ Overview" : "▾ Overview";
+    if (btn) btn.innerHTML = icon(isOpen ? "arrowRight" : "arrowDown", 14) + '<span>' + esc(t("agent.adapters.overview", "Overview")) + "</span>";
   };
 
   agentBrowser.adapterShowDetail = function(id) {

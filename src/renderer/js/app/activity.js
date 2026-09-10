@@ -8,18 +8,19 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
 
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
   var CATEGORY_META = {
-    profile:  { icon: "📦", label: function(){ return t("activity.cat.profile", "Profile"); } },
-    proxy:    { icon: "🔌", label: function(){ return t("activity.cat.proxy", "代理"); } },
-    account:  { icon: "🔑", label: function(){ return t("activity.cat.account", "账号"); } },
-    llm:      { icon: "🤖", label: function(){ return t("activity.cat.llm", "LLM"); } },
-    sync:     { icon: "☁️", label: function(){ return t("activity.cat.sync", "同步"); } },
-    automation:{ icon: "⏰", label: function(){ return t("activity.cat.automation", "自动化"); } },
-    agent:    { icon: "🧠", label: function(){ return t("activity.cat.agent", "Agent"); } },
-    settings: { icon: "⚙️", label: function(){ return t("activity.cat.settings", "设置"); } },
+    profile:  { icon: "box", label: function(){ return t("activity.cat.profile", "Profile"); } },
+    proxy:    { icon: "proxy", label: function(){ return t("activity.cat.proxy", "代理"); } },
+    account:  { icon: "key", label: function(){ return t("activity.cat.account", "账号"); } },
+    llm:      { icon: "agent", label: function(){ return t("activity.cat.llm", "LLM"); } },
+    sync:     { icon: "sync", label: function(){ return t("activity.cat.sync", "同步"); } },
+    automation:{ icon: "clock", label: function(){ return t("activity.cat.automation", "自动化"); } },
+    agent:    { icon: "sparkle", label: function(){ return t("activity.cat.agent", "Agent"); } },
+    settings: { icon: "settings", label: function(){ return t("activity.cat.settings", "设置"); } },
   };
 
   function fmtTime(ms) {
@@ -82,13 +83,16 @@
         return;
       }
       var html = entries.map(function(e) {
-        var meta = CATEGORY_META[e.category] || { icon: "•", label: e.category || "?" };
+        var meta = CATEGORY_META[e.category] || { icon: "info", label: e.category || "?" };
         var target = renderTarget(e);
         var detail = e.detail ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' + esc(String(e.detail).slice(0, 200)) + "</div>" : "";
         var actor = e.actor && e.actor !== "user" ? ' <span class="hint-line">' + esc(t("activity.actor-by","by ")) + esc(e.actor) + "</span>" : "";
         return '<div class="profile-card" style="padding:8px 10px;margin-bottom:6px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
-            '<span>' + meta.icon + ' <strong>' + esc(e.action || "?") + "</strong>" + actor + target + "</span>" +
+            /* R142: icon + action name are one `.icon-text` row — as a bare
+               inline svg the category glyph sat 1.3px off the label baseline.
+               actor/target stay outside it so they keep wrapping with the row. */
+            '<span><span class="icon-text">' + icon(meta.icon, 13) + '<strong>' + esc(e.action || "?") + '</strong></span>' + actor + target + '</span>' +
             '<span class="hint-line" style="white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
           "</div>" + detail + "</div>";
       }).join("");

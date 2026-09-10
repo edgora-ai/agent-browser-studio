@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -71,7 +72,7 @@
                 '<td title="' + escAttr(c.name) + '">' + esc(c.name.substring(0, 20)) + '</td>' +
                 '<td title="' + escAttr(c.value || "") + '">' + esc(val) + '</td>' +
                 '<td>' + exp + '</td>' +
-                '<td><button class="btn btn-danger btn-sm" data-cookie-index="' + idx + '">✕</button></td>' +
+                '<td><button class="btn btn-danger btn-sm" data-cookie-index="' + idx + '" aria-label="Delete">' + icon("close", 12) + '</button></td>' +
               '</tr>';
             }).join("") +
           '</tbody></table>';

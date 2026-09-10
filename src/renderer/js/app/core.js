@@ -36,7 +36,7 @@
   }
 
   function getBrowserDisplay(browser, dirId) {
-    return { icon: "🥷", name: "Managed Chromium" };
+    return { icon: "browser", name: "Managed Chromium" };
   }
 
   function chromeOsFromPlatform(platform) {
@@ -115,7 +115,6 @@
 
   function renderProxyOptions(proxies, selectedValue, includeEndpoint) {
     selectedValue = selectedValue || "none";
-    function pi18n(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
     var hasDefaultProxy = (proxies || []).some(function (px) { return px && px.isDefault; });
     var options = [
       // "default" mode follows the workspace default proxy; when none is
@@ -128,7 +127,7 @@
       var label = px.name;
       if (includeEndpoint) {
         var endpoint = String(cfg.type || "") + "://" + String(cfg.host || "") + ":" + String(cfg.port || "");
-        label += " (" + endpoint + ")" + (px.isDefault ? " ★" : "");
+        label += " (" + endpoint + ")" + (px.isDefault ? " · " + pi18n("proxy.default-tag", "default") : "");
       }
       options.push({ value: proxySelectionValue("named", px.name), label: label });
     });
@@ -137,10 +136,14 @@
     }).join("");
   }
 
+  // Module-scope i18n shim: resolves the active locale, falling back to the
+  // English literal when i18n.js has not loaded (or in unit tests).
+  function pi18n(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
+
   function proxyDisplayLabel(profile) {
-    if (profile.proxyMode === "default") return profile.proxy ? "default: " + profile.proxy.type + "://" + profile.proxy.host + ":" + profile.proxy.port : "default proxy (missing)";
-    if (profile.proxyMode === "named") return profile.proxy ? profile.proxy.type + "://" + profile.proxy.host + ":" + profile.proxy.port : "proxy missing: " + (profile.proxyName || "unknown");
-    return "no proxy";
+    if (profile.proxyMode === "default") return profile.proxy ? pi18n("proxy.display.default", "default") + ": " + profile.proxy.type + "://" + profile.proxy.host + ":" + profile.proxy.port : pi18n("proxy.display.default-missing", "default proxy (missing)");
+    if (profile.proxyMode === "named") return profile.proxy ? profile.proxy.type + "://" + profile.proxy.host + ":" + profile.proxy.port : pi18n("proxy.display.missing", "proxy missing") + ": " + (profile.proxyName || pi18n("common.unknown", "unknown"));
+    return pi18n("proxy.display.none", "no proxy");
   }
 
   var HARDWARE_FIELDS = [
@@ -218,7 +221,7 @@
       el.style.borderColor = "var(--danger)";
       var msg = document.createElement("div");
       msg.setAttribute("data-field-error", err.id);
-      msg.style.cssText = "font-size:11px;color:var(--danger);margin-top:2px;";
+      msg.style.cssText = "font-size:11px;color: var(--danger-text);margin-top:2px;";
       msg.textContent = err.message;
       if (el.parentNode) el.parentNode.insertBefore(msg, el.nextSibling);
     });
@@ -309,9 +312,9 @@
   }
 
   function platformIcon(platform) {
-    if (platform === "macos") return "🍎";
-    if (platform === "linux") return "🐧";
-    return "🪟";
+    if (platform === "macos") return "macOS";
+    if (platform === "linux") return "Linux";
+    return "Windows";
   }
   /**
    * Toast (review item UE-03).
@@ -511,7 +514,7 @@
     var actions = '';
     if (marketplace) {
       actions += enabled
-        ? '<button class="btn btn-secondary btn-sm" data-action="skill-disable">✓ Enabled</button> '
+        ? '<button class="btn btn-secondary btn-sm" data-action="skill-disable">' + icon("check", 12) + ' Enabled</button> '
         : '<button class="btn btn-primary btn-sm" data-action="skill-install">Install / Enable</button> ';
     } else {
       actions += '<button class="btn btn-secondary btn-sm" data-action="skill-toggle">' + (enabled ? 'Disable' : 'Enable') + '</button> ';
@@ -523,7 +526,7 @@
     return '<div class="skill-card" data-skill-id="' + escAttr(skill.id) + '">' +
       '<div class="skill-layout">' +
         '<div class="skill-main">' +
-          '<h4>' + (skill.source === 'built-in' ? '📋 ' : '🧩 ') + esc(skill.title || skill.name || skill.id) + '</h4>' +
+          '<h4>' + esc(skill.title || skill.name || skill.id) + '</h4>' +
           '<p class="skill-desc">' + esc(skill.description || '') + '</p>' +
           '<div class="skill-meta">' +
             '<span>Source: ' + esc(source) + '</span>' +
@@ -691,31 +694,37 @@
   function updateBrowserStatus() {
     api.browser.binary().then(function (info) {
       var el = document.getElementById("sidebar-chrome-status");
+      /* R125: preserve the sidebar-version class — className assignment
+         wiped the truncate rules, causing mid-string wraps in narrow windows.
+         R142: the glyph is a direct child of the flex host and the version text
+         is an `.icon-text-label`, so the icon centres on the label's line box
+         (it used to be wrapped in a span of its own and sat 1.6px low) and the
+         ellipsis still has a real box to truncate. */
       if (info && info.installed) {
-        el.innerHTML = '🟢 Chromium ' + (info.version || "?");
-        el.className = 'chrome-status-ok';
+        el.innerHTML = icon("check", 11) + '<span class="icon-text-label">Chromium ' + esc(info.version || "?") + '</span>';
+        el.className = 'sidebar-version chrome-status-ok';
       } else {
-        el.innerHTML = '🔴 No managed Chromium';
-        el.className = 'chrome-status-err';
+        el.innerHTML = icon("alert", 11) + '<span class="icon-text-label">No managed Chromium</span>';
+        el.className = 'sidebar-version chrome-status-err';
       }
     }).catch(function () {
       var el = document.getElementById("sidebar-chrome-status");
-      el.innerHTML = '⚪ Chromium unknown';
-      el.className = 'chrome-status-unknown';
+      el.innerHTML = icon("info", 11) + '<span class="icon-text-label">Chromium unknown</span>';
+      el.className = 'sidebar-version chrome-status-unknown';
     });
   }
   function renderBrowserBinaryCard(info) {
     info = info || {};
-    var status = info.installed ? "Installed" : "Not installed";
+    var status = info.installed ? pi18n("browser.status.installed", "Installed") : pi18n("browser.status.not-installed", "Not installed");
     var cls = info.installed ? "status-running" : "status-stopped";
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">Agent Browser Studio Managed Chromium</span><span class="status-badge ' + cls + '">' + status + '</span></div>' +
-      '<div class="info-row"><span>Version</span><span>' + esc(info.version || "--") + '</span></div>' +
-      '<div class="info-row"><span>Source</span><span>' + esc(info.source || "--") + '</span></div>' +
-      '<div class="info-row"><span>Platform</span><span>' + esc(info.platform || "--") + '</span></div>' +
-      '<div class="info-row"><span>Installed builds</span><span>' + esc(((info.installedVersions || []).map(function(item) { return item.version; }).join(", ")) || "--") + '</span></div>' +
-      '<div class="info-row"><span>Binary</span><span title="' + escAttr(info.path || "") + '">' + esc(shortPath(info.path || "--")) + '</span></div>' +
-      '<div class="info-row"><span>Cache</span><span title="' + escAttr(info.cacheDir || "") + '">' + esc(shortPath(info.cacheDir || "--")) + '</span></div>' +
+      '<div class="card-header"><span class="name">Agent Browser Studio Managed Chromium</span><span class="status-badge ' + cls + '">' + esc(status) + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.version", "Version")) + '</span><span>' + esc(info.version || "--") + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.source", "Source")) + '</span><span>' + esc(info.source || "--") + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.platform", "Platform")) + '</span><span>' + esc(info.platform || "--") + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.builds", "Installed builds")) + '</span><span>' + esc(((info.installedVersions || []).map(function(item) { return item.version; }).join(", ")) || "--") + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.binary", "Binary")) + '</span><span title="' + escAttr(info.path || "") + '">' + esc(shortPath(info.path || "--")) + '</span></div>' +
+      '<div class="info-row"><span>' + esc(pi18n("browser.col.cache", "Cache")) + '</span><span title="' + escAttr(info.cacheDir || "") + '">' + esc(shortPath(info.cacheDir || "--")) + '</span></div>' +
       '</div>';
   }
 
@@ -888,10 +897,19 @@
     });
   };
 
+  // R127: inline icon for JS-rendered markup. Returns "" when icons.js is
+  // absent so a missing script degrades to a text-only label, never a
+  // half-rendered one. Kept on helpers because every render module uses it.
+  function icon(name, size) {
+    if (!window.icons || typeof window.icons.svg !== "function") return "";
+    return window.icons.svg(name, size ? { size: size } : undefined);
+  }
+
   Object.assign(agentBrowser.helpers, {
     toast: toast,
     esc: esc,
     escAttr: escAttr,
+    icon: icon,
     renderInlineMarkdown: renderInlineMarkdown,
     renderChatMarkdown: renderChatMarkdown,
     sanitizeMdHtml: sanitizeMdHtml,

@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
@@ -75,13 +76,13 @@
             var enabled = e.enabled === true;
             var tags = (e.tags || []).map(function (tag) { return esc(tag); }).join(', ');
             html += '<div class="extension-row" data-ext-index="' + i + '" style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border-light);">';
-            html += '<div style="width:36px;height:36px;border-radius:8px;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-size:18px;">🧩</div>';
+            html += '<div style="width:36px;height:36px;border-radius:8px;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-size:18px;">' + icon("extensions", 18) + '</div>';
             html += '<div style="flex:1;min-width:0;">';
             html += '<div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(e.name || e.id) + '</div>';
             html += '<div class="hint-line">v' + esc(e.version || '?') + ' · ' + esc(e.id).slice(0,16) + '…</div>';
             if (e.description) html += '<div class="hint-line" style="margin-top:2px;line-height:1.3;">' + esc(e.description).slice(0,100) + '</div>';
             if (tags) html += '<div class="meta-line">Tags: ' + tags + '</div>';
-            if (e.manifestHash) html += '<div class="meta-line-ok" title="Manifest SHA-512">✓ Manifest: ' + esc(e.manifestHash).slice(0,12) + '…</div>';
+            if (e.manifestHash) html += '<div class="meta-line-ok icon-text" title="Manifest SHA-512">' + icon("check", 12) + ' Manifest: ' + esc(e.manifestHash).slice(0,12) + '…</div>';
             html += '</div>';
             html += '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">';
             html += '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);">';
@@ -112,45 +113,33 @@
         }).catch(function(e) { toast('Failed: ' + e.message, 'error'); });
       },
 
-  extShowInstall: function() {
-        document.getElementById('dlg-extensions').close();
-        agentBrowser.switchTab('extensions');
-      },
-
-  extInstallTab: function() {
-        agentBrowser.extShowInstall();
-      },
-
-  extInstallFromStore: function() {
-        var input = document.getElementById('ext-store-input');
-        var raw = input.value.trim();
-        var extId = extractChromeExtensionId(raw);
-        if (!extId) {
-          toast('Invalid extension ID. Paste a Chrome Web Store URL or 32 lowercase letters (a-p).', 'error');
-          return;
-        }
-        document.getElementById('dlg-extensions').close();
-        agentBrowser.showRepositoryAdd(extId);
-      },
+  /* R143: three commands removed here — extShowInstall, extInstallTab and
+     extInstallFromStore. Nothing called them: no `data-cmd` carried their
+     names, no test referenced them, and #dlg-extensions renders no
+     `#ext-store-input`, so extInstallFromStore would have thrown
+     "Cannot read properties of null" on the first paste-box click. The live
+     path is #tab-extensions → showRepositoryAdd. Found by the selector pass in
+     scripts/visual-shot.mjs, which reports a querySelector/getElementById whose
+     target no template ever produces. */
 
   extInstallFromFile: function() {
         api.settings.pickExtensionFile().then(function(filePath) {
           if (!filePath) return;
           var statusEl = document.getElementById('ext-install-status');
           var name = filePath.split('/').pop();
-          statusEl.innerHTML = '<span style="color:var(--primary);">Installing ' + esc(name) + '...</span>';
+          statusEl.innerHTML = '<span style="color: var(--primary-text);">Installing ' + esc(name) + '...</span>';
           api.settings.installLocalExtension(filePath).then(function(r) {
             if (r.success) {
-              statusEl.innerHTML = '<span style="color:var(--success);">✓ Installed ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
+              statusEl.innerHTML = '<span style="color: var(--success-text);">Installed ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
               toast('Local extension installed', 'success');
               loadExtensionsTab();
               if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
-              statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Install failed') + '</span>';
+              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Install failed') + '</span>';
               toast(r.error || 'Install failed', 'error');
             }
           }).catch(function(e) {
-            statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message) + '</span>';
+            statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
             toast(e.message, 'error');
           });
         }).catch(function(e) {
@@ -163,19 +152,19 @@
           if (!dirPath) return;
           var statusEl = document.getElementById('ext-install-status');
           var name = dirPath.split('/').pop();
-          statusEl.innerHTML = '<span style="color:var(--primary);">Importing directory ' + esc(name) + '...</span>';
+          statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing directory ' + esc(name) + '...</span>';
           api.settings.installLocalExtension(dirPath).then(function(r) {
             if (r.success) {
-              statusEl.innerHTML = '<span style="color:var(--success);">✓ Imported ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
+              statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
               toast('Directory extension imported', 'success');
               loadExtensionsTab();
               if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
-              statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Import failed') + '</span>';
+              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Import failed') + '</span>';
               toast(r.error || 'Import failed', 'error');
             }
           }).catch(function(e) {
-            statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message) + '</span>';
+            statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
             toast(e.message, 'error');
           });
         }).catch(function(e) {
@@ -187,15 +176,15 @@
         var msg = t('ext.confirm-delete','删除扩展 ') + esc(extId) + t('ext.confirm-delete-mid','?\n会从所有 profile 移除,磁盘文件也删除。');
         agentBrowser.confirm(msg, function() {
         var statusEl = document.getElementById('ext-install-status');
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Deleting ' + esc(extId) + '...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Deleting ' + esc(extId) + '...</span>';
         api.settings.deleteRepositoryExtension(extId).then(function(r) {
           if (r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">✓ Deleted</span>';
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Deleted</span>';
             toast('Extension deleted', 'success');
             loadExtensionsTab();
             if (agentBrowser._extDirId) agentBrowser._extRefreshList();
           } else {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Delete failed') + '</span>';
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Delete failed') + '</span>';
             toast(r.error || 'Delete failed', 'error');
           }
         }).catch(function(e) { toast(e.message || String(e), 'error'); });
@@ -204,19 +193,19 @@
 
   extCheckUpdate: function(extId) {
         var statusEl = document.getElementById('ext-dlg-status') || document.getElementById('ext-install-status');
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Updating repository copy of ' + esc(extId) + '...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Updating repository copy of ' + esc(extId) + '...</span>';
         api.settings.updateRepositoryExtension(extId).then(function(r) {
           if (r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">✓ Repository updated to v' + esc((r.entry && r.entry.version) || '?') + '</span>';
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Repository updated to v' + esc((r.entry && r.entry.version) || '?') + '</span>';
             toast('Repository extension updated', 'success');
             agentBrowser._extRefreshList();
             loadExtensionsTab();
           } else {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Update failed') + '</span>';
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Update failed') + '</span>';
             toast(r.error || 'Update failed', 'error');
           }
         }).catch(function(e) {
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message) + '</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
           toast(e.message, 'error');
         });
       },
@@ -257,20 +246,20 @@
         var extId = extractChromeExtensionId(input ? input.value.trim() : '');
         if (!extId) { toast('Invalid Chrome extension URL or ID', 'error'); return; }
         var tags = parseTagInput(tagsInput ? tagsInput.value : '');
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Downloading and validating extension...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Downloading and validating extension...</span>';
         api.settings.addRepositoryExtension(extId, { shared: !!(sharedInput && sharedInput.checked), tags: tags }).then(function (r) {
           if (!r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(r.error || 'Add failed') + '</span>';
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Add failed') + '</span>';
             toast(r.error || 'Add failed', 'error');
             return;
           }
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">✓ Added v' + esc((r.entry && r.entry.version) || '?') + '</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Added v' + esc((r.entry && r.entry.version) || '?') + '</span>';
           document.getElementById('dlg-extension-repo').close();
           toast((window.i18n ? window.i18n.t("toast.ext.added", "Extension added to private repository") : "Extension added to private repository"), 'success');
           loadExtensionsTab();
           if (agentBrowser._extDirId) agentBrowser._extRefreshList();
         }).catch(function (e) {
-          if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message) + '</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
           toast(e.message, 'error');
         });
       },
@@ -309,11 +298,12 @@
     if (!container) return;
     var searchEl = document.getElementById("extension-repo-search");
     var filter = searchEl ? searchEl.value.trim() : "";
-    container.innerHTML = '<div class="loading">Loading extension repository...</div>';
+    container.innerHTML = '<div class="loading">' + esc(t('ext.loading', 'Loading extension repository...')) + '</div>';
     api.settings.extensionRepository(filter).then(function (entries) {
-      if (statusEl) statusEl.textContent = (entries || []).length + ' extension(s) in private repository';
+      if (statusEl) statusEl.textContent = (entries || []).length + t('ext.col.count', ' extension(s) in private repository');
       if (!entries || entries.length === 0) {
-        if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{empty:'No extensions in the private repository.'}); } else container.innerHTML = '<div class="empty-state">No extensions in the private repository.<br>Click "+ Add Chrome Extension" to cache one from Chrome Web Store.</div>';
+        var emptyMsg = t('ext.empty', 'No extensions in the private repository. Click "Add Chrome Extension" to cache one from Chrome Web Store.');
+        if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{empty:emptyMsg}); } else container.innerHTML = '<div class="empty-state">' + esc(emptyMsg) + '</div>';
         return;
       }
       container.innerHTML = entries.map(function (e) {

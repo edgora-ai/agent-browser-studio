@@ -8,6 +8,7 @@
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
 
+  var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
   var STATUS_CLS = { running: "status-running", done: "status-done", error: "status-stopped" };
@@ -21,11 +22,11 @@
   function sourceLabel(src) {
     if (!src) return "?";
     if (src.type === "automation") {
-      var label = t("runs.source.schedule", "⏰ 定时 ") + esc(src.ruleName || src.ruleId || "");
+      var label = t("runs.source.schedule", "Scheduled ") + esc(src.ruleName || src.ruleId || "");
       if (src.jobId) label += ' <span style="font-family:var(--mono);color:var(--text-muted);">' + esc(src.jobId) + '</span>';
       return label;
     }
-    return t("runs.source.chat", "💬 对话");
+    return t("runs.source.chat", "Chat");
   }
 
   function fmtDuration(ms) {
@@ -162,7 +163,7 @@
     var rows = runs.map(function(run) {
       var durRow = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
       var err = run.error
-        ? '<div style="color:var(--danger);font-size:11px;word-break:break-word;margin-top:4px;">' + esc(run.error).slice(0, 160) + "</div>"
+        ? '<div style="color: var(--danger-text);font-size:11px;word-break:break-word;margin-top:4px;">' + esc(run.error).slice(0, 160) + "</div>"
         : "";
       return '<div class="run-group-row" data-run-id="' + escAttr(run.id) + '" style="border-top:1px solid var(--border);padding:8px 0;">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
@@ -268,7 +269,7 @@
     var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + dur;
     if (run.dirId) meta += ' · <span style="font-family:var(--mono);">' + esc(run.dirId) + "</span>";
     if (run.startedAt) meta += " · " + new Date(run.startedAt).toLocaleString();
-    if (run.error) meta += '<br><span style="color:var(--danger);">' + esc(run.error) + "</span>";
+    if (run.error) meta += '<br><span style="color: var(--danger-text);">' + esc(run.error) + "</span>";
     document.getElementById("agent-run-meta").innerHTML = meta;
 
     // Variables
@@ -289,13 +290,13 @@
       return;
     }
     stepsEl.innerHTML = run.steps.map(function(s, i) {
-      var icon = s.ok ? "✅" : "❌";
+      var okIcon = s.ok ? icon("check", 12) : icon("close", 12);
       var head = '<div class="run-step' + (s.ok ? "" : " run-step-error") + '">' +
         '<div class="run-step-head">' +
           '<span class="run-step-num">' + (i + 1) + "</span> " + icon +
           ' <span class="run-step-tool">' + esc(s.tool) + "</span>" +
           ' <span class="run-step-dur">(' + fmtDuration(s.durationMs) + ")</span>" +
-          (s.error ? ' <span style="color:var(--danger);">' + esc(s.error).slice(0, 120) + "</span>" : "") +
+          (s.error ? ' <span style="color: var(--danger-text);">' + esc(s.error).slice(0, 120) + "</span>" : "") +
         "</div>";
       // args + result as collapsible <details> with <pre> (textContent is safe)
       var args = '<details><summary>' + esc(t("runs.step.args", "入参")) + '</summary><pre class="run-json" data-raw="' + escAttr(jsonPreview(s.args, 4000)) + '"></pre></details>';

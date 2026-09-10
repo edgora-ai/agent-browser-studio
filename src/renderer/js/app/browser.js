@@ -6,6 +6,9 @@
   var R = agentBrowser.R;
   var state = agentBrowser.state;
   var helpers = agentBrowser.helpers;
+  // Module-scope i18n shim — other functions in this file declare a local `t`;
+  // the DRM/binary card renderers need one at file scope.
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
@@ -185,14 +188,14 @@
       if (!status) return;
       var cdm = status.cdm || null;
       var availHtml = cdm
-        ? '<span style="color:var(--success);">✅ Widevine CDM available</span>'
-        : '<span style="color:var(--warning);">⚠ No Widevine CDM found (install Chrome or set a path)</span>';
-      var versionHtml = cdm ? '<div class="info-row"><span>Version</span><span>' + esc(cdm.version) + '</span></div>' : '';
-      var sourceHtml = cdm ? '<div class="info-row"><span>Source</span><span>' + esc(cdm.source) + '</span></div>' : '';
-      var pathHtml = cdm ? '<div class="info-row"><span>Path</span><span title="' + escAttr(cdm.path) + '">' + esc(shortPath(cdm.path)) + '</span></div>' : '';
+        ? '<span style="color: var(--success-text);">' + esc(t('browser.drm.available', 'Widevine CDM available')) + '</span>'
+        : '<span style="color: var(--warning-text);">' + esc(t('browser.drm.missing', 'No Widevine CDM found (install Chrome or set a path)')) + '</span>';
+      var versionHtml = cdm ? '<div class="info-row"><span>' + esc(t('browser.col.version', 'Version')) + '</span><span>' + esc(cdm.version) + '</span></div>' : '';
+      var sourceHtml = cdm ? '<div class="info-row"><span>' + esc(t('browser.col.source', 'Source')) + '</span><span>' + esc(cdm.source) + '</span></div>' : '';
+      var pathHtml = cdm ? '<div class="info-row"><span>' + esc(t('browser.col.path', 'Path')) + '</span><span title="' + escAttr(cdm.path) + '">' + esc(shortPath(cdm.path)) + '</span></div>' : '';
       var profilesHtml = (status.profilesWithDrm && status.profilesWithDrm.length)
-        ? '<div class="info-row"><span>DRM profiles</span><span>' + esc(status.profilesWithDrm.length + '') + '</span></div>' : '';
-      card.innerHTML = '<div class="info-row"><span>Status</span><span>' + availHtml + '</span></div>' + versionHtml + sourceHtml + pathHtml + profilesHtml;
+        ? '<div class="info-row"><span>' + esc(t('browser.drm.profiles', 'DRM profiles')) + '</span><span>' + esc(status.profilesWithDrm.length + '') + '</span></div>' : '';
+      card.innerHTML = '<div class="info-row"><span>' + esc(t('common.status', 'Status')) + '</span><span>' + availHtml + '</span></div>' + versionHtml + sourceHtml + pathHtml + profilesHtml;
       var input = document.getElementById("drm-cdm-path-input");
       if (input && input.value === "") input.value = status.configuredPath || "";
       if (statusEl) statusEl.textContent = "";
@@ -232,9 +235,9 @@
       var statusEl = gateEl("gate-status");
       if (!statusEl) return;
       if (r && r.success === false) {
-        statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(r.error || "save failed") + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || "save failed") + '</span>';
       } else {
-        statusEl.innerHTML = '<span style="color:var(--success);">' + (window.i18n ? window.i18n.t("browser.gate.saved", "saved") : "saved") + '</span>';
+        statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t("browser.gate.saved", "saved") : "saved") + '</span>';
         setTimeout(function () { statusEl.textContent = ""; }, 2500);
       }
     }).catch(function () { /* ignore */ });
@@ -251,21 +254,21 @@
 
   function runBrowserBinaryAction(loadingText, action, doneText) {
     var statusEl = document.getElementById("agent-browser-binary-action-status");
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">' + esc(loadingText) + '</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(loadingText) + '</span>';
     action().then(function (r) {
       var msg = typeof doneText === "function" ? doneText(r) : doneText;
       if (r && r.success === false) {
         msg = r.error || "Action failed";
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(msg) + '</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(msg) + '</span>';
         toast(msg, "error");
       } else {
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--success);">' + esc(msg) + '</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(msg) + '</span>';
         toast(msg, "success");
       }
       loadBrowserTab();
     }).catch(function (e) {
       var msg = e.message || String(e);
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(msg) + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(msg) + '</span>';
       toast(msg, "error");
     });
   }

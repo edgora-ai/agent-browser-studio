@@ -98,7 +98,7 @@
     var statusEl = document.getElementById('skill-save-status');
     if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(id)) { toast(window.i18n ? window.i18n.t("toast.skill.invalid-id", "Invalid skill ID. Use lowercase letters, numbers, dot, underscore, or dash.") : "Invalid skill ID. Use lowercase letters, numbers, dot, underscore, or dash.", 'error'); return; }
     if (!title || !prompt) { toast((window.i18n ? window.i18n.t("toast.skill.fields-required", "Title and prompt are required") : "Title and prompt are required"), 'error'); return; }
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">' + esc(window.i18n ? window.i18n.t("skills.saving", "Saving skill...") : "Saving skill...") + '</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(window.i18n ? window.i18n.t("skills.saving", "Saving skill...") : "Saving skill...") + '</span>';
     var skill = {
       id: id,
       name: id,
@@ -115,7 +115,7 @@
     };
     R.agent.skills.add(skill).then(function(r) {
       if (!r || !r.success) {
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || 'Save failed') + '</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || 'Save failed') + '</span>';
         toast((r && r.error) || 'Save failed', 'error');
         return;
       }
@@ -124,7 +124,7 @@
       agentBrowser.agentLoadSkills();
       if (document.getElementById('dlg-skill-market').open) agentBrowser.refreshSkillMarket();
     }).catch(function(e) {
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || String(e)) + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || String(e)) + '</span>';
       toast(e.message || String(e), 'error');
     });
   };
@@ -214,10 +214,10 @@
     var entries;
     try { entries = JSON.parse(document.getElementById('skill-import-json').value); }
     catch (e) { toast('Invalid JSON catalog', 'error'); return; }
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--primary);">Importing catalog...</span>';
+    if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing catalog...</span>';
     R.agent.skills.importShared(entries).then(function(r) {
       if (!r || !r.success) {
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc((r && r.error) || 'Import failed') + '</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || 'Import failed') + '</span>';
         toast((r && r.error) || 'Import failed', 'error');
         return;
       }
@@ -226,7 +226,7 @@
       toast('Imported skills: +' + result.added + ', updated ' + result.updated + ', skipped ' + result.skipped, 'success');
       refreshSkillViews();
     }).catch(function(e) {
-      if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger);">✗ ' + esc(e.message || String(e)) + '</span>';
+      if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || String(e)) + '</span>';
       toast(e.message || String(e), 'error');
     });
   };

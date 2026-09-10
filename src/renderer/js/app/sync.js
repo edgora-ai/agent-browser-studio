@@ -36,14 +36,22 @@
     if (!messageEl || !listEl) return;
     preview = preview || {};
     var running = preview.runningProfiles || [];
-    messageEl.innerHTML = (preview.configured ? '✅ ' : '⚠️ ') + esc(preview.message || t('sync.preview.unavailable', 'Preview unavailable'));
+    // R132: the main process composes `preview.message` in its own hardcoded
+    // Chinese, so it cannot follow the renderer's locale. When sync is not
+    // configured the message is a fixed string, so build it here instead;
+    // the configured case still carries live counts from the main process.
+    var message = preview.configured
+      ? preview.message
+      : t('sync.preview.unconfigured', 'Sync is not configured — set endpoint, bucket, and enable it');
+    // R127: the message color carries configured/not — no glyph prefix needed.
+    messageEl.innerHTML = '<span class="' + (preview.configured ? 'health-text-good' : 'health-text-watch') + '">' + esc(message || t('sync.preview.unavailable', 'Preview unavailable')) + '</span>';
     listEl.innerHTML = [
-      previewCountCard('Profiles', preview.profiles || 0, running.length ? running.length + t('sync.preview.profiles.running', ' 个运行中；Pull 会跳过 localStorage/preferences') : t('sync.preview.profiles.no-skip', 'Pull 无运行中跳过项')),
-      previewCountCard('Proxies', preview.proxies || 0, t('sync.preview.proxies', '将随配置快照同步（敏感字段脱敏）')),
-      previewCountCard('Accounts', preview.accounts || 0, t('sync.preview.accounts', '平台账号元数据；密码不展示')),
-      previewCountCard('Extensions', preview.extensions || 0, t('sync.preview.extensions', '私有扩展仓库条目')),
-    ].join('') + (running.length ? '<div class="profile-card" style="border-color:var(--warning);">' +
-      '<div class="card-header"><span class="name">' + esc(t('sync.preview.running-title','运行中 Profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Pull skip')) + '</span></div>' +
+      previewCountCard(t('sync.preview.title.profiles','Profiles'), preview.profiles || 0, running.length ? running.length + t('sync.preview.profiles.running', ' running — Pull skips localStorage/preferences') : t('sync.preview.profiles.no-skip', 'Pull has no running-profile skips')),
+      previewCountCard(t('sync.preview.title.proxies','Proxies'), preview.proxies || 0, t('sync.preview.proxies', 'Synced with the config snapshot (secrets redacted)')),
+      previewCountCard(t('sync.preview.title.accounts','Accounts'), preview.accounts || 0, t('sync.preview.accounts', 'Platform account metadata; passwords not shown')),
+      previewCountCard(t('sync.preview.title.extensions','Extensions'), preview.extensions || 0, t('sync.preview.extensions', 'Private extension repository entries')),
+    ].join('') + (running.length ? '<div class="profile-card" style="border-color: var(--warning-text);">' +
+      '<div class="card-header"><span class="name">' + esc(t('sync.preview.running-title','Running Profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Pull skip')) + '</span></div>' +
       '<div style="font-family:var(--mono);font-size:11px;color:var(--text-muted);word-break:break-all;">' + running.map(esc).join('<br>') + '</div>' +
     '</div>' : '');
   }
@@ -58,8 +66,9 @@
   agentBrowser.loadSyncPreview = function() {
     var listEl = document.getElementById('sync-preview');
     var messageEl = document.getElementById('sync-preview-message');
-    if (listEl && window.agentBrowser&&window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(listEl,{loading:'Loading...'}); else if (listEl) listEl.innerHTML = '<div class="loading">Loading...</div>';
-    if (messageEl) messageEl.textContent = 'Loading...';
+    var loading = t('common.loading', 'Loading...');
+    if (listEl && window.agentBrowser&&window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(listEl,{loading:loading}); else if (listEl) listEl.innerHTML = '<div class="loading">' + esc(loading) + '</div>';
+    if (messageEl) messageEl.textContent = loading;
     return fetchPreview().catch(function(e) {
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(t('sync.preview.load-failed-prefix','Preview 加载失败: ')) + esc(e.message || e) + '</div>';
       if (messageEl) messageEl.textContent = t('sync.preview.load-failed','Preview 加载失败');
@@ -82,12 +91,12 @@
     var lines = [];
     if (section.localOnly.length) chips.push('<span class="status-badge status-done">' + esc(t('sync.local', 'Local')) + ' +' + section.localOnly.length + '</span>');
     if (section.remoteOnly.length) chips.push('<span class="status-badge status-running">' + esc(t('sync.remote', 'Remote')) + ' +' + section.remoteOnly.length + '</span>');
-    if (section.changed.length) chips.push('<span class="status-badge" style="background:var(--warning-bg);color:var(--warning);">' + esc(t('sync.conflict', 'Conflict')) + ' ' + section.changed.length + '</span>');
+    if (section.changed.length) chips.push('<span class="status-badge" style="background:var(--warning-bg);color: var(--warning-text);">' + esc(t('sync.conflict', 'Conflict')) + ' ' + section.changed.length + '</span>');
     if (section.localOnly.length) {
       lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">' + esc(t('sync.local-only', 'Local only')) + ': ' + esc(section.localOnly.slice(0, 12).join(', ')) + (section.localOnly.length > 12 ? ' (+' + (section.localOnly.length - 12) + ')' : '') + '</div>');
     }
     if (section.remoteOnly.length) {
-      lines.push('<div style="font-size:11px;color:var(--warning);word-break:break-all;">' + esc(t('sync.remote-only', 'Remote only')) + ': ' + esc(section.remoteOnly.slice(0, 12).join(', ')) + (section.remoteOnly.length > 12 ? ' (+' + (section.remoteOnly.length - 12) + ')' : '') + '</div>');
+      lines.push('<div style="font-size:11px;color: var(--warning-text);word-break:break-all;">' + esc(t('sync.remote-only', 'Remote only')) + ': ' + esc(section.remoteOnly.slice(0, 12).join(', ')) + (section.remoteOnly.length > 12 ? ' (+' + (section.remoteOnly.length - 12) + ')' : '') + '</div>');
     }
     if (section.changed.length && conflictSelectable && sectionName) {
       lines.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t('sync.per-item', 'Per-item conflict decisions (they default to the global strategy and apply to Pull only)')) + ':</div>');
@@ -121,22 +130,22 @@
     if (!messageEl || !listEl) return;
     diff = diff || {};
     if (!diff.ok) {
-      messageEl.innerHTML = '⚠️ ' + esc(diff.message || t('sync.compare-failed', 'Comparison failed'));
+      messageEl.innerHTML = '<span class="health-text-watch">' + esc(diff.message || t('sync.compare-failed', 'Comparison failed')) + '</span>';
       listEl.innerHTML = '<div class="empty-state">' + esc(diff.message || t('sync.compare-failed', 'Comparison failed')) + '</div>';
       return;
     }
     var timeHtml = diff.firstPush ? '  ·  ' + esc(t('sync.no-remote-yet', 'No remote data yet (first push)')) : (diff.remoteTimestamp ? '  ·  ' + esc(t('sync.remote-last-sync', 'Remote last synced')) + ': <strong>' + esc(escTime(diff.remoteTimestamp)) + '</strong>' : '');
-    messageEl.innerHTML = '✅ ' + esc(t('sync.compare-done', 'Comparison complete')) + timeHtml;
+    messageEl.innerHTML = '<span class="health-text-good">' + esc(t('sync.compare-done', 'Comparison complete')) + '</span>' + timeHtml;
     var cards = [];
     if ((diff.pushWarnings || []).length) {
-      cards.push('<div class="profile-card" style="border-color:var(--danger);">' +
-        '<div class="card-header"><span class="name" style="color:var(--danger);">⚠️ ' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
-        (diff.pushWarnings || []).map(function(w) { return '<div style="font-size:11px;color:var(--danger);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
+      cards.push('<div class="profile-card" style="border-color: var(--danger-text);">' +
+        '<div class="card-header"><span class="name" style="color: var(--danger-text);">' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
+        (diff.pushWarnings || []).map(function(w) { return '<div style="font-size:11px;color: var(--danger-text);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
     if ((diff.pullNotes || []).length) {
       cards.push('<div class="profile-card">' +
-        '<div class="card-header"><span class="name">ℹ️ ' + esc(t('sync.pull-will-change', 'Pull will change local data')) + '</span></div>' +
+        '<div class="card-header"><span class="name">' + esc(t('sync.pull-will-change', 'Pull will change local data')) + '</span></div>' +
         (diff.pullNotes || []).map(function(w) { return '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
@@ -145,10 +154,10 @@
       '<div class="card-header"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.remote-cookies', 'Remote cookies')) + ': ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
-    cards.push(diffSectionCard('Profiles', diff.profiles, 'profiles', globalStrategy, true));
-    cards.push(diffSectionCard('Proxies', diff.proxies, 'proxies', globalStrategy, true));
-    cards.push(diffSectionCard('Accounts', diff.accounts, 'accounts', globalStrategy, true));
-    cards.push(diffSectionCard('Extensions', diff.extensions, 'extensions', globalStrategy, false));
+    cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', globalStrategy, true));
+    cards.push(diffSectionCard(t('sync.preview.title.proxies','Proxies'), diff.proxies, 'proxies', globalStrategy, true));
+    cards.push(diffSectionCard(t('sync.preview.title.accounts','Accounts'), diff.accounts, 'accounts', globalStrategy, true));
+    cards.push(diffSectionCard(t('sync.preview.title.extensions','Extensions'), diff.extensions, 'extensions', globalStrategy, false));
     listEl.innerHTML = cards.join('');
   }
 
@@ -184,7 +193,7 @@
       });
     }).then(function(diff) {
       if (diff && (diff.pushWarnings || []).length) {
-        var removeMsg = '⚠️ ' + t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
+        var removeMsg = t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
         return agentBrowser.confirmAsync(removeMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(ok) {
           if (!ok) { if (reset) reset(); return null; }
           return api.sync.push();
@@ -308,7 +317,7 @@
     api.sync.configure(config).then(function(r) {
       if (r.success) {
         toast((window.i18n ? window.i18n.t("toast.sync.saved", "Sync config saved") : "Sync config saved"), "success");
-        document.getElementById('sync-enabled-text').textContent = config.enabled && config.endpoint && config.bucket ? 'enabled' : 'disabled';
+        document.getElementById('sync-enabled-text').textContent = (config.enabled && config.endpoint && config.bucket) ? t('sync.status.enabled', 'enabled') : t('sync.status.disabled', 'disabled');
         document.getElementById('sync-endpoint').textContent = config.endpoint || '--';
         document.getElementById('sync-bucket').textContent = config.bucket || '--';
         // P2 (#109): team panel + custody state went stale behind the toast.
@@ -326,7 +335,7 @@
   function loadSyncConfig() {
     api.sync.status().then(function(status) {
       status = status || {};
-      document.getElementById('sync-enabled-text').textContent = status.enabled ? 'enabled' : 'disabled';
+      document.getElementById('sync-enabled-text').textContent = status.enabled ? t('sync.status.enabled', 'enabled') : t('sync.status.disabled', 'disabled');
       document.getElementById('sync-endpoint').textContent = status.endpoint || '--';
       document.getElementById('sync-bucket').textContent = status.bucket || '--';
       document.getElementById('sync-enabled').checked = !!status.enabled;
@@ -354,10 +363,15 @@
   // ══════ Team Workspace (RBAC) ══════
   var ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
   var ROLE_ORDER_LIST = ['viewer', 'member', 'admin', 'owner'];
+  var ROLE_CLASS = { owner: 'role-owner', admin: 'role-admin', member: 'role-member', viewer: 'role-viewer' };
 
+  // Colours live in style.css, not inline: the old version interpolated the
+  // *fill* tokens (--success / --warning / --primary) as foreground text, which
+  // measured 2.75:1, 2.26:1 and 4.33:1 against their own tinted plate. Those
+  // tokens are tuned for fills; --*-text are the ones meant to sit on them.
   function roleBadge(role) {
-    var color = role === 'owner' ? 'var(--success)' : role === 'admin' ? 'var(--primary)' : role === 'member' ? 'var(--warning)' : 'var(--text-muted)';
-    return '<span class="status-badge" style="color:' + color + ';border:1px solid ' + color + ';">' + (ROLE_LABEL[role] || role) + '</span>';
+    var cls = ROLE_CLASS[role] || 'role-viewer';
+    return '<span class="status-badge ' + cls + '">' + esc(ROLE_LABEL[role] || role) + '</span>';
   }
 
   function shortId(id) {
@@ -378,14 +392,17 @@
 
     if (badge) {
       badge.style.display = 'inline-block';
-      badge.textContent = local.name + ' · ' + (ROLE_LABEL[me] || me);
+      // Never interpolate a raw field: a payload without `name` (older build,
+      // REST peer, hand-edited config) would paint "undefined · Owner".
+      var localLabel = local.name || shortId(local.deviceId) || t('team.this-device', 'This device');
+      badge.textContent = localLabel + ' · ' + (ROLE_LABEL[me] || me);
     }
 
     if (!team) {
       panel.innerHTML =
-        '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">No workspace initialized. Initialize one to manage member roles (owner / admin / member / viewer) and enforce read-only viewers on sync push and profile changes.</p>' +
-        '<div class="form-row"><label>Workspace name</label><input id="team-workspace-name" placeholder="My Workspace"></div>' +
-        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamInit" data-i18n="team.init">Initialize Workspace</button></div>';
+        '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">' + esc(t("team.empty.desc", "No workspace initialized. Initialize one to manage member roles (owner / admin / member / viewer) and enforce read-only viewers on sync push and profile changes.")) + '</p>' +
+        '<div class="form-row"><label>' + esc(t("team.workspace.name", "Workspace name")) + '</label><input id="team-workspace-name" placeholder="' + escAttr(t("team.workspace.name-placeholder", "My Workspace")) + '"></div>' +
+        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamInit">' + esc(t("team.init", "Initialize Workspace")) + '</button></div>';
       return;
     }
 
@@ -403,10 +420,10 @@
         actions = '<select class="team-role-select" data-device-id="' + escAttr(m.deviceId) + '" style="font-size:11px;height:24px;">' + roleOptions + '</select> ' +
           '<button class="btn btn-xs btn-danger" data-action="team-remove" data-device-id="' + escAttr(m.deviceId) + '">' + (window.i18n && window.i18n.t ? window.i18n.t('team.remove', 'Remove') : 'Remove') + '</button>';
       }
-      var ownerMark = m.deviceId === team.ownerDeviceId ? ' 👑' : '';
+      var ownerMark = m.deviceId === team.ownerDeviceId ? ' · ' + t('sync.owner', 'owner') : '';
       return '<div class="profile-card" style="padding:8px;margin:6px 0;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
-        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color:var(--primary);">(this device)</em>' : '') + ownerMark + '</span>' +
+        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color: var(--primary-text);">(this device)</em>' : '') + ownerMark + '</span>' +
         '<div style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">' + esc(shortId(m.deviceId)) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:6px;">' + roleBadge(m.role) + actions + '</div>' +
         '</div>' +
@@ -424,11 +441,11 @@
             return '<option value="' + r + '"' + disabled + '>' + ROLE_LABEL[r] + '</option>';
           }).join('') +
         '</select></div>' +
-        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamAddMember" data-i18n="team.add-member">Add Member</button></div>';
+        '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamAddMember">' + esc(t("team.add-member", "Add Member")) + '</button></div>';
     }
 
     var renameControl = isOwner
-      ? '<div class="form-row"><label>Rename workspace</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename" data-i18n="team.rename">Rename</button></div>'
+      ? '<div class="form-row"><label>' + esc(t("team.rename-workspace", "Rename workspace")) + '</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename">' + esc(t("team.rename", "Rename")) + '</button></div>'
       : '';
     var enableControl = canManage
       ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="team-enabled"' + (team.enabled !== false ? ' checked' : '') + '> Enforce team RBAC (viewers read-only, member+ push/delete, admin+ force push)</label>'
