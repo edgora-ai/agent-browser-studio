@@ -1,0 +1,102 @@
+Agent Browser Studio — renderer visual audit
+============================================
+Generated: 2026-09-10  (branch style/premium, worktree fix+round1-bug-sweep)
+
+Reproduce:
+    node scripts/visual-shot.mjs --audit                 # exits 1 on failure
+    node scripts/visual-shot.mjs --only icons            # one section, fast
+    node scripts/visual-shot.mjs --dump proxy --dump-depth 4
+    node scripts/visual-shot.mjs                         # 24 screenshots, light+dark
+    node scripts/visual-shot.mjs --tabs sync --team-empty # first-run team workspace
+
+What this measures
+------------------
+The renderer (src/renderer/index.html) loaded into Playwright's Chromium over
+file://, with window.agentBrowserAPI stubbed by scripts/visual-mock.js — no
+Electron shell, so it runs where the Electron sandbox does not.
+
+  1. runtime exceptions   CDP Debugger.setPauseOnExceptions:all — catches the
+                          errors the renderer swallows in .catch(e => innerHTML)
+  2. overflow             real box model at 700px
+  3. contrast             computed foreground composited over the layered
+                          background, WCAG AA at 1440px
+  4. icon/text alignment  every inline <svg> that sits next to text: is its host
+                          a flex row, and is the glyph centred on the label's
+                          line box? Reports by cause (baseline vs offset)
+  5. dead selectors       static: every `querySelector(".x")` / `getElementById`
+                          literal vs the class/id names any template emits
+  6. rendered-text sanity literal undefined / NaN / [object Object] on screen
+  7. mock coverage        every API path the renderer called, classified
+                          against the real preload surface
+  8. content census       what each tab actually drew
+
+Latest result  (all eight sections)
+-----------------------------------
+=== runtime exceptions ===
+clean
+
+=== overflow @700px ===
+clean
+
+=== contrast (WCAG AA) ===
+clean
+
+=== icon / text vertical alignment ===
+clean
+
+=== selector references with no producer ===
+clean — every .class / #id a handler looks up is emitted somewhere
+
+=== mock coverage (206 real API paths) ===
+clean — every API the renderer called has a fixture
+
+=== content census (per tab: text / cards / empty-state) ===
+  profiles     2068 chars   5 cards   0 empty
+  proxy         410 chars   3 cards   0 empty
+  storage       380 chars   4 cards   0 empty
+  sync          991 chars   8 cards   1 empty
+  browser       557 chars   1 cards   0 empty
+  extensions    450 chars   2 cards   0 empty
+  accounts      396 chars   0 cards   0 empty
+  agent         324 chars   0 cards   0 empty
+  automation   1120 chars   6 cards   0 empty
+  runs          516 chars   4 cards   0 empty
+  activity      531 chars   6 cards   0 empty
+  db             84 chars   0 cards   0 empty
+
+=== rendered-text sanity (undefined / NaN / [object Object]) ===
+clean
+
+PASS: 0 exceptions, 0 overflow, 0 contrast, 0 icon misalignments,
+      0 dead selectors, 0 dead call sites, 0 garbage text, 0 unstubbed, 0 thin
+
+Why audits 4-8 exist
+--------------------
+Audits 1-3 reported "clean" while the Sync page was rendering the literal text
+`undefined · Owner`. Cause: the mock's Proxy fallback answered unstubbed API
+paths with `[]` — the wrong type where the caller expected an object — so the
+tab rendered, nothing threw, and the element that would have shown the problem
+was never built. A pass is only meaningful if the tab drew something; hence the
+census, the coverage classification, and the direct rendered-text scan.
+
+Audit 4 (icon alignment) exists because the first three *cannot* see a 1.5px
+vertical offset: it is not an exception, not an overflow, and both colours are
+compliant. It is also structural, not just measured — an inline `<svg>` whose
+host is not a flex container is wrong by construction, and at 11-13px with
+line-height 1.5 the resulting offset can land inside any numeric threshold by
+coincidence. `svg { vertical-align: middle }` was tried first and only reduced
+the offset to 1.3-1.6px, because `middle` centres on half the *x-height* while
+the optical centre of the line box is half (ascent − descent). The fix is that
+the host becomes the flex row — the `.icon-text` utility.
+
+Audit 5 (dead selectors) exists because every other pass runs the renderer, so
+each is bounded by what the fixture happens to render. A handler that looks up
+`.foo`, where no template ever emits `.foo`, is invisible to all of them: the
+lookup returns null and the handler either no-ops or throws on the next property
+access — and nothing in the sweep clicks it. This pass is static on purpose. It
+found two real defects (`#ext-store-input` and `#new-profile-chrome-opts`); both
+were removed. Falsification-tested by planting `.this-class-does-not-exist`,
+confirming it fails, then restoring.
+
+Each new pass was falsification-tested (deliberately fed a defect to confirm it
+fails) before being trusted.

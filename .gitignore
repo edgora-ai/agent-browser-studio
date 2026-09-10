@@ -1,6 +1,10 @@
 node_modules/
 dist/
 release/
+# Local `electron-builder --dir` output used for install-into-/Applications
+# checks; a throwaway sibling of release/ so the packaged app can be written
+# without cleaning a previous target.
+release-preview/
 native-browsers/
 *.log
 .DS_Store
