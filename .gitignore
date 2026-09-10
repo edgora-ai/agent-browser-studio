@@ -3,8 +3,11 @@ dist/
 release/
 # Local `electron-builder --dir` output used for install-into-/Applications
 # checks; a throwaway sibling of release/ so the packaged app can be written
-# without cleaning a previous target.
+# without cleaning a previous target. Use a fresh suffixed directory per
+# install — electron-builder empties the target, and a bulk delete trips the
+# sandbox's safe-delete guard.
 release-preview/
+release-preview-*/
 native-browsers/
 *.log
 .DS_Store

@@ -51,6 +51,48 @@ if (fs.existsSync(HTML)) {
   });
 }
 
+// ── 1b. HTML: English text without a data-i18n key on the same element ─────
+// The mirror image of check 1. Check 1 only caught hard-coded Chinese leaking
+// into the English UI; nothing caught hard-coded English leaking into the
+// Chinese UI, which is how ~50 static labels (Loading..., Close, Import
+// Existing Profiles, the whole skill editor, …) stayed English in zh-CN until
+// R144. This pass matches per element rather than per line, so a line that
+// happens to carry a data-i18n somewhere else no longer hides its siblings.
+const LATIN_TEXT = /[A-Za-z]{2,}/;
+// Identifiers and code samples that are legitimately the same in every locale.
+const LATIN_SKIP_TAG = /^(option|code|script|style|title|pre|svg|path)$/i;
+const LATIN_ALLOW_TEXT = new Set(["Agent Browser Studio"]);
+const LATIN_ALLOW_RE = [
+  /^v\d+(\.\d+)+$/,       // version strings: v1.0.0
+  /^(EN|ZH|EN-US|ZH-CN)$/i, // the language toggle shows the *other* language
+  /^--/,                  // CLI flags: --fingerprint=<seed>
+];
+if (fs.existsSync(HTML)) {
+  const lines = fs.readFileSync(HTML, "utf-8").split("\n");
+  lines.forEach((raw, index) => {
+    if (!LATIN_TEXT.test(raw)) return;
+    if (CJK.test(raw)) return; // inline bilingual, serves both locales
+    const tagRe = /<([a-zA-Z][\w-]*)((?:[^<>"']|"[^"]*"|'[^']*')*?)>([^<]*)<\/\1\s*>/g;
+    let m;
+    while ((m = tagRe.exec(raw))) {
+      const tag = m[1];
+      const attrs = m[2] || "";
+      const text = (m[3] || "").trim();
+      if (!text || !LATIN_TEXT.test(text)) continue;
+      if (LATIN_SKIP_TAG.test(tag)) continue;
+      if (attrs.includes("data-i18n")) continue;
+      if (LATIN_ALLOW_TEXT.has(text)) continue;
+      if (LATIN_ALLOW_RE.some((re) => re.test(text))) continue;
+      problems.push({
+        file: "src/renderer/index.html",
+        line: index + 1,
+        kind: "html-missing-i18n-key-latin",
+        text: "<" + tag + "> " + text.slice(0, 100),
+      });
+    }
+  });
+}
+
 // ── 2. JS: CJK string literals outside the translation table ───────────────
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -126,7 +168,7 @@ if (fs.existsSync(I18N)) {
 
 // ── Report ─────────────────────────────────────────────────────────────────
 if (problems.length) {
-  console.log(`\n✗ ${problems.length} hard-coded CJK string(s) found:\n`);
+  console.log(`\n✗ ${problems.length} untranslated hard-coded string(s) found:\n`);
   for (const p of problems) {
     console.log(`  ${p.file}:${p.line}  [${p.kind}]  ${p.text}`);
   }

@@ -26,6 +26,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 
 ### Fixed
 
+- **The Chinese UI no longer leaks English**: ~50 static labels in the renderer
+  had no `data-i18n` key, so they stayed English when the interface was
+  switched to 中文 — every `Loading…` placeholder, dialog **Close** buttons,
+  *Import Existing Profiles*, *Recent Activity*, *Batch result*, the whole
+  Agent skill editor, the LLM provider row and the shared-catalog import
+  dialog. All of them now have keys in both locales.
+- `scripts/check-i18n.mjs` guards this direction as well: it fails the build
+  when an element's English text carries no `data-i18n`, matched **per
+  element** rather than per line (previously only hard-coded Chinese was
+  caught, which is why this class of leak went unnoticed).
+- Inline icons sat 1.3–1.6px above their label's optical centre at 11–13px —
+  `vertical-align: middle` aligns the x-height half, not the ascent/descent
+  midpoint. Icon + text pairs now sit in a flex `.icon-text` host, which also
+  lets a long label ellipsis instead of pushing the icon off.
+- Proxy cards had a ragged value column: each meta row sized itself
+  independently, so “Endpoint”, “Latency” and “Last checked” started at three
+  different x positions. The meta block is now one shared grid.
 - Team roster role badges (**Owner / Admin / Member**) were painted with the
   bright *fill* colours instead of the text-safe ones — 2.75:1, 4.33:1 and
   2.26:1 against their own tint behind 11px text. All four roles now clear

@@ -103,11 +103,11 @@
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dismissBackupHint" data-i18n="backup.hint.dismiss">Don't remind me again</button>
  </div>
  <div id="import-section" class="card" style="display:none">
- <h3>Import Existing Profiles</h3>
+ <h3 data-i18n="profiles.import-existing">Import Existing Profiles</h3>
  <div id="import-list"></div>
  </div>
  <div id="profile-list" class="profile-grid">
- <div class="loading">Loading profiles...</div>
+ <div class="loading" data-i18n="profiles.loading">Loading profiles...</div>
  </div>
  </section>
 
@@ -122,7 +122,7 @@
  </div>
  </div>
  <div id="proxy-list" class="profile-grid">
- <div class="loading">Loading proxies...</div>
+ <div class="loading" data-i18n="proxies.loading">Loading proxies...</div>
  </div>
  </section>
 
@@ -141,7 +141,7 @@
  </div>
  </div>
  <div id="storage-profile-list" class="profile-grid">
- <div class="loading">Loading...</div>
+ <div class="loading" data-i18n="common.loading">Loading...</div>
  </div>
  </section>
 
@@ -151,7 +151,7 @@
  <div class="card">
  <h3 data-i18n="sync.status">Status</h3>
  <div id="sync-status">
- <p><span data-i18n="sync.status.label">Sync is</span> <strong id="sync-enabled-text">disabled</strong></p>
+ <p><span data-i18n="sync.status.label">Sync is</span> <strong id="sync-enabled-text" data-i18n="sync.status.disabled">disabled</strong></p>
  <p><span data-i18n="sync.endpoint">Endpoint</span>: <span id="sync-endpoint">--</span></p>
  <p><span data-i18n="sync.bucket">Bucket</span>: <span id="sync-bucket">--</span></p>
  <p class="hint-line" data-i18n="sync.synced-scope">Synced: config · cookies (CDP) · localStorage · bookmarks · preferences</p>
@@ -171,15 +171,15 @@
  <h3 data-i18n="team.workspace.title" title="Role-based access control (RBAC)">Team Workspace</h3>
  <span id="team-local-badge" class="status-badge" style="display:none;"></span>
  </div>
- <div id="team-panel"><div class="loading">Loading...</div></div>
+ <div id="team-panel"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
  <h3 data-i18n="sync.preview.title">Pre-flight Preview</h3>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncPreview" data-i18n="sync.btn.refresh-preview" data-icon="refresh">Refresh Preview</button>
  </div>
- <p id="sync-preview-message" class="section-desc">Loading...</p>
- <div id="sync-preview" class="profile-grid"><div class="loading">Loading...</div></div>
+ <p id="sync-preview-message" class="section-desc" data-i18n="common.loading">Loading...</p>
+ <div id="sync-preview" class="profile-grid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
@@ -192,7 +192,7 @@
  <div class="card">
  <h3 data-i18n="sync.config">Configuration</h3>
  <div class="sync-form">
- <div class="form-row"><label><input type="checkbox" id="sync-enabled"> Enable</label></div>
+ <div class="form-row"><label><input type="checkbox" id="sync-enabled"><span data-i18n="sync.field.enable">Enable</span></label></div>
  <div class="form-row"><label for="sync-endpoint-input" data-i18n="sync.field.endpoint">Endpoint</label><input id="sync-endpoint-input" placeholder="https://oss.example.com"></div>
  <div class="form-row"><label for="sync-bucket-input" data-i18n="sync.field.bucket">Bucket</label><input id="sync-bucket-input" placeholder="agent-browser"></div>
  <div class="form-row"><label for="sync-ak-input" data-i18n="sync.field.access">Access Key</label><input id="sync-ak-input"></div>
@@ -221,7 +221,7 @@
  <div class="card">
  <h3 data-i18n="browser.install-upgrade">Independent Browser Engine</h3>
  <div id="agent-browser-binary-card">
- <div class="loading">Loading binary status...</div>
+ <div class="loading" data-i18n="browser.loading-binary">Loading binary status...</div>
  </div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="verifyManagedChromium" data-i18n="browser.action.verify" data-icon="check">Verify</button>
@@ -252,7 +252,7 @@
  <div class="card">
  <h3 data-icon="refresh"><span data-i18n="browser.updates">App Updates</span></h3>
  <p class="section-desc" data-i18n="browser.updates.hint">Version-aware release store: check the update manifest, stage a newer payload, activate it for the next launch, or roll back to the previous known-good release.</p>
- <div id="app-updates-card"><div class="loading">Loading update status...</div></div>
+ <div id="app-updates-card"><div class="loading" data-i18n="browser.loading-updates">Loading update status...</div></div>
  <div class="btn-row">
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshUpdatesStatus" data-i18n="browser.updates.check" data-icon="refresh">Check for updates</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshUpdates" data-i18n="browser.updates.refresh" data-icon="refresh">Refresh</button>
@@ -280,7 +280,7 @@
  <div id="extension-repo-status" class="status-note"></div>
  </div>
  <div id="extension-repo-list" class="profile-grid">
- <div class="loading">Loading extension repository...</div>
+ <div class="loading" data-i18n="ext.loading-repo">Loading extension repository...</div>
  </div>
  </section>
 
@@ -309,7 +309,7 @@
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentNewConv" style="width:100%;" data-icon="plus"><span data-i18n="agent.new-chat">New Chat</span></button>
  </div>
  <div id="agent-conv-list" style="flex:1;overflow-y:auto;padding:6px;">
- <div style="color:var(--text-muted);font-size:11px;text-align:center;padding:16px;">Loading...</div>
+ <div style="color:var(--text-muted);font-size:11px;text-align:center;padding:16px;" data-i18n="common.loading">Loading...</div>
  </div>
  <div style="padding:6px 8px;border-top:1px solid var(--border);display:flex;gap:4px;">
  <button class="btn-icon btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="config" style="flex:1;" data-icon="settings" title="API Config" aria-label="API Config"></button>
@@ -329,7 +329,7 @@
  <button class="btn-icon btn btn-xs btn-quiet" data-role="cmd" data-cmd="agentDeleteConv" data-icon="trash" data-i18n-title="agent.chat.delete" data-i18n-aria-label="agent.chat.delete" title="Delete current conversation" aria-label="Delete current conversation"></button>
  </div>
  <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
- <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:72px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
+ <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:72px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
  <div class="agent-input-bar">
  <textarea id="agent-chat-input" rows="1" placeholder="Ask the agent..." data-i18n-placeholder="agent.placeholder"
  data-role="keydown" data-keydown-cmd="agentSend"></textarea>
@@ -341,10 +341,10 @@
  <!-- Config -->
  <div id="agent-view-config" class="agent-view agent-view-scroll" style="display:none;">
  <h4 data-icon="settings"><span data-i18n="agent.config.title">API Configuration</span></h4>
- <p class="hint-line config-note">Auto-detected from local Claude settings.</p>
- <div class="form-row"><label for="agent-llm-provider">Provider</label><select id="agent-llm-provider" data-role="change" data-change-cmd="agentProviderChanged"><option value="openai">OpenAI / Compatible</option><option value="claude">Claude</option></select></div>
- <div class="form-row"><label for="agent-llm-apikey">API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..."></div>
- <div class="form-row"><label for="agent-llm-model">Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high"></div>
+ <p class="hint-line config-note" data-i18n="agent.llm.auto-detected">Auto-detected from local Claude settings.</p>
+ <div class="form-row"><label for="agent-llm-provider" data-i18n="agent.llm.provider">Provider</label><select id="agent-llm-provider" data-role="change" data-change-cmd="agentProviderChanged"><option value="openai" data-i18n="agent.llm.provider.openai">OpenAI / Compatible</option><option value="claude" data-i18n="agent.llm.provider.claude">Claude</option></select></div>
+ <div class="form-row"><label for="agent-llm-apikey" data-i18n="agent.config.apikey">API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..."></div>
+ <div class="form-row"><label for="agent-llm-model" data-i18n="agent.config.model">Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high"></div>
  <div class="form-row"><label data-i18n="sync.field.endpoint">Endpoint</label><input id="agent-llm-url" placeholder="https://api.openai.com/v1/chat/completions"></div>
  <div style="display:flex;gap:8px;align-items:center;">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveConfig" data-i18n="common.save">Save</button>
@@ -394,10 +394,10 @@
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="skillMarket" data-icon="grid"><span data-i18n="agent.skills.market">Marketplace</span></button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showSkillEditor" data-icon="plus"><span data-i18n="agent.skills.add">Add Skill</span></button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="exportSharedSkills" data-i18n="ext.export-shared">Export Shared</button>
- <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showSkillImport">Import</button>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showSkillImport" data-i18n="skills.import">Import</button>
  </div>
  </div>
- <p class="dialog-note">Skills are Agent automation prompt/tool recipes. They are separate from Chrome extensions and are persisted in your local private skill marketplace.</p>
+ <p class="dialog-note" data-i18n="skills.note">Skills are Agent automation prompt/tool recipes. They are separate from Chrome extensions and are persisted in your local private skill marketplace.</p>
  <div id="agent-skills-list"></div>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="chat" data-icon="arrowLeft" style="margin-top:16px;"><span data-i18n="agent.back">Back</span></button>
  </div>
@@ -411,7 +411,7 @@
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentLoadAdapters" data-icon="refresh"><span data-i18n="agent.adapters.refresh">Refresh</span></button>
  </div>
  </div>
- <p class="dialog-note">Platform adapter catalog for the AI Skills Hub — versioned selector recipes the Agent uses to inspect login state and collect metrics on each platform. Pick the recipes for the page you're working on, or read them into your own automation.</p>
+ <p class="dialog-note" data-i18n="adapters.catalog.note">Platform adapter catalog for the AI Skills Hub — versioned selector recipes the Agent uses to inspect login state and collect metrics on each platform. Pick the recipes for the page you're working on, or read them into your own automation.</p>
  <div id="agent-adapters-list"></div>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="chat" data-icon="arrowLeft" style="margin-top:16px;"><span data-i18n="agent.back">Back</span></button>
  </div>
@@ -430,7 +430,7 @@
  </div>
  <div class="card">
  <p class="section-desc" data-i18n="auto.section-desc">Cron schedules · one-time · event triggers (profile launch/exit). Actions: launch/stop profile, run Agent task, sync S3, custom JS.</p>
- <div id="automation-list" class="profile-grid"><div class="loading">Loading...</div></div>
+ <div id="automation-list" class="profile-grid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
@@ -448,7 +448,7 @@
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="automationRefreshJobs" data-i18n="auto.jobs-refresh" data-icon="refresh">Refresh Jobs</button>
  </div>
  </div>
- <div id="automation-jobs" class="profile-grid"><div class="loading">Loading...</div></div>
+ <div id="automation-jobs" class="profile-grid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  <div class="card">
  <h3 data-i18n="auto.log-title">Execution Log</h3>
@@ -467,7 +467,7 @@
  </div>
  <div class="card">
  <p class="section-desc" data-i18n="runs.section-desc">Steps, variables, duration, and result of each Agent task (chat or scheduled). Click to view the full step timeline.</p>
- <div id="agent-run-list" class="profile-grid"><div class="loading">Loading...</div></div>
+ <div id="agent-run-list" class="profile-grid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  </section>
 
@@ -482,7 +482,7 @@
  <div style="display:flex;gap:16px;align-items:flex-start;">
  <div class="card" style="flex:0 0 260px;">
  <h4 data-i18n="db.tables-heading">Tables</h4>
- <div id="db-tables" class="db-tables"><div class="loading">Loading...</div></div>
+ <div id="db-tables" class="db-tables"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
  <div class="card" style="flex:1;min-width:0;">
  <h4 data-i18n="db.sql-heading">SQL</h4>
@@ -542,12 +542,12 @@
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
   <h3 id="dlg-env-risk-title" data-icon="monitor"><span data-i18n="env.risk.title">Host environment risk check</span></h3>
-  <div id="env-risk-body" style="max-height:52vh;overflow:auto;">Loading...</div>
+  <div id="env-risk-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
   <div id="env-risk-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskExport" data-icon="download"><span data-i18n="env.risk.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskClear" data-icon="trash"><span data-i18n="env.risk.clear">Clear history</span></button>
-   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
   </div>
  </div>
 </dialog>
@@ -556,12 +556,12 @@
 <dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
   <h3 data-icon="globe"><span data-i18n="webrtc.diag.title">浏览器内 WebRTC 诊断</span></h3>
-  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;">Loading...</div>
+  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
   <div id="webrtc-diag-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagExport" data-icon="download"><span data-i18n="webrtc.diag.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear" data-icon="trash"><span data-i18n="webrtc.diag.clear">Clear history</span></button>
-   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
   </div>
  </div>
 </dialog>
@@ -571,13 +571,13 @@
  <div>
   <h3 data-icon="list"><span data-i18n="logs.title">Profile Operation Logs &amp; Browser Tail</span></h3>
   <input type="hidden" id="profile-logs-dir-id">
-  <h4 style="font-size:13px;margin:6px 0 4px;">Recent Activity</h4>
-  <div id="profile-logs-activity" style="max-height:26vh;overflow:auto;font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;">Loading...</div>
-  <h4 style="font-size:13px;margin:10px 0 4px;">Browser Launch Log (tail)</h4>
-  <pre id="profile-logs-tail" style="max-height:30vh;overflow:auto;font-size:11px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-all;">Loading...</pre>
+  <h4 style="font-size:13px;margin:6px 0 4px;" data-i18n="logs.recent-activity">Recent Activity</h4>
+  <div id="profile-logs-activity" style="max-height:26vh;overflow:auto;font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;" data-i18n="common.loading">Loading...</div>
+  <h4 style="font-size:13px;margin:10px 0 4px;" data-i18n="logs.launch-tail">Browser Launch Log (tail)</h4>
+  <pre id="profile-logs-tail" style="max-height:30vh;overflow:auto;font-size:11px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-all;" data-i18n="common.loading">Loading...</pre>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="refreshProfileLogs" data-icon="refresh"><span data-i18n="common.refresh">Refresh</span></button>
-   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog">Close</button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
   </div>
  </div>
 </dialog>
@@ -586,15 +586,15 @@
  <form method="dialog" data-role="submit" data-submit-cmd="doBulkImport">
  <h3 id="dlg-bulk-import-title" data-icon="download"><span data-i18n="bulk.title">Bulk Import Profiles</span></h3>
  <p class="dialog-note">
- One Browser profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code><br>
- Example: <code>Work, windows, en-US, America/Chicago, 54321, </code>
+ <span data-i18n="bulk.import.note.format">One Browser profile per line. Format:</span> <code>name, platform, locale, timezone, seed, webrtcIp</code><br>
+ <span data-i18n="bulk.import.note.example">Example:</span> <code>Work, windows, en-US, America/Chicago, 54321, </code>
  </p>
  <textarea id="bulk-import-text" rows="8" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="Work, windows, en-US, America/Chicago, 54321,
 Personal, macos, en-GB, Europe/London, 67890,"></textarea>
- <div class="form-row"><label>Proxy</label><select id="bulk-import-proxy"><option value="">(default)</option></select></div>
+ <div class="form-row"><label data-i18n="profile.row.proxy">Proxy</label><select id="bulk-import-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
  <div id="bulk-import-status" style="margin-top:4px;font-size:11px;"></div>
  <div class="btn-row">
- <button type="submit" class="btn btn-primary">Import</button>
+ <button type="submit" class="btn btn-primary" data-i18n="profiles.import.submit">Import</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
  </form>
@@ -881,7 +881,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-extensions" class="dialog-wide">
  <form method="dialog" style="display:flex;flex-direction:column;max-height:80vh;">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 data-icon="extensions"><span id="ext-dlg-title">Extensions</span></h3>
+ <h3 data-icon="extensions"><span id="ext-dlg-title" data-i18n="ext.dlg.title">Extensions</span></h3>
  <div style="display:flex;gap:6px;">
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="switchTab" data-tab="extensions" data-i18n="ext.btn.manage-repo">Manage Extension Repo</button>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
@@ -978,25 +978,25 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 <dialog id="dlg-skill-editor" aria-labelledby="dlg-skill-editor-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveSkill">
- <h3 id="skill-editor-title">Add Agent Skill</h3>
+ <h3 id="skill-editor-title" data-i18n="skills.editor.add-title">Add Agent Skill</h3>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label for="skill-id">Skill ID *</label><input id="skill-id" placeholder="amazon-scraper" required></div>
- <div class="form-row"><label for="skill-version">Version</label><input id="skill-version" placeholder="1.0.0"></div>
+ <div class="form-row"><label for="skill-id" data-i18n="skills.field.id">Skill ID *</label><input id="skill-id" placeholder="amazon-scraper" required></div>
+ <div class="form-row"><label for="skill-version" data-i18n="skills.field.version">Version</label><input id="skill-version" placeholder="1.0.0"></div>
  </div>
- <div class="form-row"><label for="skill-title">Title *</label><input id="skill-title" placeholder="Amazon Product Scraper" required></div>
- <div class="form-row"><label for="skill-description">Description</label><input id="skill-description" placeholder="What this skill helps the Agent do"></div>
- <div class="form-row"><label for="skill-tools">Tools (comma-separated)</label><input id="skill-tools" placeholder="browser_navigate, browser_snapshot, browser_click"></div>
- <div class="form-row"><label for="skill-tags">Tags (comma-separated)</label><input id="skill-tags" placeholder="scraping, ecommerce"></div>
- <div class="form-row"><label for="skill-author">Author</label><input id="skill-author" placeholder="me / team / community"></div>
- <div class="form-row"><label for="skill-homepage">Homepage (HTTPS)</label><input id="skill-homepage" placeholder="https://example.com/skill-docs"></div>
- <div class="form-row"><label for="skill-prompt">Prompt *</label><textarea id="skill-prompt" rows="8" placeholder="Describe exactly how the Agent should behave when this skill is enabled..." required></textarea></div>
+ <div class="form-row"><label for="skill-title" data-i18n="skills.field.title">Title *</label><input id="skill-title" placeholder="Amazon Product Scraper" required></div>
+ <div class="form-row"><label for="skill-description" data-i18n="skills.field.description">Description</label><input id="skill-description" placeholder="What this skill helps the Agent do"></div>
+ <div class="form-row"><label for="skill-tools" data-i18n="skills.field.tools">Tools (comma-separated)</label><input id="skill-tools" placeholder="browser_navigate, browser_snapshot, browser_click"></div>
+ <div class="form-row"><label for="skill-tags" data-i18n="skills.field.tags">Tags (comma-separated)</label><input id="skill-tags" placeholder="scraping, ecommerce"></div>
+ <div class="form-row"><label for="skill-author" data-i18n="skills.field.author">Author</label><input id="skill-author" placeholder="me / team / community"></div>
+ <div class="form-row"><label for="skill-homepage" data-i18n="skills.field.homepage">Homepage (HTTPS)</label><input id="skill-homepage" placeholder="https://example.com/skill-docs"></div>
+ <div class="form-row"><label for="skill-prompt" data-i18n="skills.field.prompt">Prompt *</label><textarea id="skill-prompt" rows="8" placeholder="Describe exactly how the Agent should behave when this skill is enabled..." required></textarea></div>
  <div style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0;font-size:12px;">
- <label><input type="checkbox" id="skill-enabled" checked> Enabled</label>
- <label><input type="checkbox" id="skill-shared"> Mark as shareable in exported catalog</label>
+ <label><input type="checkbox" id="skill-enabled" checked><span data-i18n="skills.field.enabled">Enabled</span></label>
+ <label><input type="checkbox" id="skill-shared"><span data-i18n="skills.field.shared">Mark as shareable in exported catalog</span></label>
  </div>
  <div id="skill-save-status" class="status-note compact"></div>
  <div class="btn-row">
- <button type="submit" class="btn btn-primary">Save Skill</button>
+ <button type="submit" class="btn btn-primary" data-i18n="skills.save">Save Skill</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
  </form>
@@ -1004,12 +1004,12 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 <dialog id="dlg-skill-import" aria-labelledby="dlg-skill-import-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="importSharedSkills">
- <h3 id="dlg-skill-import-title">Import Shared Skill Catalog</h3>
- <p class="dialog-note">Paste exported skill catalog JSON. Imported skills are stored disabled by default until you enable them.</p>
- <div class="form-row"><label for="skill-import-json">Catalog JSON</label><textarea id="skill-import-json" rows="10" placeholder='[{"id":"example-skill","prompt":"..."}]' required></textarea></div>
+ <h3 id="dlg-skill-import-title" data-i18n="skills.import-catalog.title">Import Shared Skill Catalog</h3>
+ <p class="dialog-note" data-i18n="skills.import-catalog.note">Paste exported skill catalog JSON. Imported skills are stored disabled by default until you enable them.</p>
+ <div class="form-row"><label for="skill-import-json" data-i18n="skills.import-catalog.json">Catalog JSON</label><textarea id="skill-import-json" rows="10" placeholder='[{"id":"example-skill","prompt":"..."}]' required></textarea></div>
  <div id="skill-import-status" class="status-note compact"></div>
  <div class="btn-row">
- <button type="submit" class="btn btn-primary">Import</button>
+ <button type="submit" class="btn btn-primary" data-i18n="skills.import">Import</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
  </form>
@@ -1020,7 +1020,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="saveNote">
  <h3 id="dlg-note-title" data-icon="edit"><span data-i18n="note.title">Profile Note</span></h3>
  <input type="hidden" id="note-dir-id">
- <div class="form-row"><label for="note-text">Note</label><textarea id="note-text" rows="3" placeholder="Add a note for this profile..."></textarea></div>
+ <div class="form-row"><label for="note-text" data-i18n="note.field">Note</label><textarea id="note-text" rows="3" placeholder="Add a note for this profile..." data-i18n-placeholder="note.placeholder"></textarea></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -1032,7 +1032,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-automation" aria-labelledby="dlg-automation-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveAutomation">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
- <h3 data-icon="clock"><span id="auto-dlg-title">New Task</span></h3>
+ <h3 data-icon="clock"><span id="auto-dlg-title" data-i18n="automation.new-task">New Task</span></h3>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-automation" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
  </div>
  <input type="hidden" id="auto-id">
@@ -1064,11 +1064,11 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  </div>
  <div id="auto-action-profile-row" class="form-row"><label data-i18n="auto-editor.profile-label">Profile</label><select id="auto-action-profile"><option value="" data-i18n="auto-editor.profile-select">(select)</option></select></div>
  <div id="auto-action-batch-row" class="form-row" style="display:none;"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="auto-action-batch"> <span data-i18n="auto-editor.batch-label">Batch (multiple profiles)</span></label><div class="field-note-tight" data-i18n="auto-editor.batch-hint">Run the same prompt on every selected profile — one run each, scoped to that profile</div></div>
- <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div class="field-note-tight">Ctrl/Cmd+click to select multiple</div></div>
+ <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div class="field-note-tight" data-i18n="auto-editor.profiles-hint">Ctrl/Cmd+click to select multiple</div></div>
  <div id="auto-action-concurrency-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.concurrency-label">Concurrency</label><input id="auto-action-concurrency" type="number" min="1" max="16" value="1" style="width:80px;"><div class="field-note-tight" data-i18n="auto-editor.concurrency-hint">Profiles launched in parallel (default 1 = sequential)</div></div>
  <div id="auto-action-template-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.template-label">Task Template</label><select id="auto-action-template"><option value="" data-i18n="auto.no-template">(no template)</option></select><div id="auto-template-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-top:4px;"></div></div>
- <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label>Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
- <div id="auto-action-js-row" class="form-row" style="display:none;"><label>JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>
+ <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.prompt-label">Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
+ <div id="auto-action-js-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.js-label">JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>
  <div class="form-row"><label><input type="checkbox" id="auto-enabled" checked> <span data-i18n="auto-editor.enabled-label">Enabled</span></label></div>
  <div class="btn-row" style="margin-top:12px;">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="auto.btn.save">Save</button>
@@ -1358,7 +1358,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <!-- ══════ Trash (R9 P1-3: 7-day recoverable delete needs a UI) ══════ -->
 <dialog id="dlg-trash" aria-labelledby="dlg-trash-title" style="min-width:420px;max-width:600px;">
  <h3 id="dlg-trash-title" style="margin:0 0 10px;" data-icon="trash"><span data-i18n="trash.title">Trash — deleted profiles (7 days)</span></h3>
- <div id="trash-list" style="max-height:50vh;overflow:auto;">Loading...</div>
+ <div id="trash-list" style="max-height:50vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
  <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
  </div>
@@ -1366,12 +1366,12 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 
 <!-- ══════ Batch operation result (PL-01: honest success/failure tally) ══════ -->
 <dialog id="dlg-batch-result" style="min-width:420px;max-width:660px;">
- <h3 id="batch-result-title" style="margin:0 0 10px;">Batch result</h3>
+ <h3 id="batch-result-title" style="margin:0 0 10px;" data-i18n="batch.result">Batch result</h3>
  <div id="batch-result-summary"></div>
  <div id="batch-result-list"></div>
  <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
-  <button class="btn btn-primary btn-sm" id="batch-result-retry" data-batch-cmd="retry" style="display:none;">Retry failed</button>
-  <button class="btn btn-secondary btn-sm" data-batch-cmd="close">Close</button>
+  <button class="btn btn-primary btn-sm" id="batch-result-retry" data-batch-cmd="retry" style="display:none;" data-i18n="batch.retry-failed">Retry failed</button>
+  <button class="btn btn-secondary btn-sm" data-batch-cmd="close" data-i18n="common.close">Close</button>
  </div>
 </dialog>
 
