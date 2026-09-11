@@ -495,6 +495,12 @@
       "activity.confirm.clear-all": "清空所有审计记录？此操作不可撤销。",
       "activity.toast.cleared": "已清空",
       "activity.actor-by": "由",
+      // R146: actor is a stored enum (user/auto/api/system); these name it for
+      // display. "由" takes no trailing space in zh, so the call site joins with
+      // an explicit separator rather than relying on the dictionary value.
+      "activity.actor.auto": "自动",
+      "activity.actor.api": "API",
+      "activity.actor.system": "系统",
 
       // ── DB ──
       "db.empty-tables": "还没有表。让 Agent 建一个，或在 SQL 框跑 <code>CREATE TABLE ...</code>。",
@@ -1420,6 +1426,9 @@
       "activity.confirm.clear-all": "Clear all audit records? This cannot be undone.",
       "activity.toast.cleared": "Cleared",
       "activity.actor-by": "by",
+      "activity.actor.auto": "auto",
+      "activity.actor.api": "API",
+      "activity.actor.system": "system",
 
       // ── DB ──
       "db.empty-tables": "No tables yet. Ask the Agent to create one, or run <code>CREATE TABLE ...</code> in the SQL box.",
@@ -2642,6 +2651,17 @@
       "ext.btn.share": "共享",
       "ext.btn.unshare": "取消共享",
       "ext.col.hash": "哈希",
+      // R146: stored enums that were interpolated raw into the zh UI.
+      // webrtcMode ∈ {auto, altered, real, disable}; event ∈ {started, stopped,
+      // exit}. Fallback in the call site is the raw value, so an enum added by a
+      // newer backend renders the identifier rather than going blank.
+      "profile.webrtc.auto": "自动",
+      "profile.webrtc.altered": "已改写",
+      "profile.webrtc.real": "真实",
+      "profile.webrtc.disable": "已禁用",
+      "auto.event.started": "启动",
+      "auto.event.stopped": "停止",
+      "auto.event.exit": "退出",
       "ext.status.installing": "正在安装",
       "ext.status.installed": "已安装",
       "ext.status.importing-dir": "正在导入文件夹",
@@ -2757,6 +2777,13 @@
       "ext.btn.share": "Share",
       "ext.btn.unshare": "Unshare",
       "ext.col.hash": "Hash",
+      "profile.webrtc.auto": "auto",
+      "profile.webrtc.altered": "altered",
+      "profile.webrtc.real": "real",
+      "profile.webrtc.disable": "disabled",
+      "auto.event.started": "started",
+      "auto.event.stopped": "stopped",
+      "auto.event.exit": "exit",
       "ext.status.installing": "Installing",
       "ext.status.installed": "Installed",
       "ext.status.importing-dir": "Importing folder",

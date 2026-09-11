@@ -16,12 +16,24 @@
 
   function describeTrigger(tr) {
     if (!tr) return '?';
+    // R146: same class as the event branch below — the zh dictionary values
+    // ("定时", "单次") carry no trailing space while the English fallbacks do, so
+    // the separator is now explicit. A translator should not have to encode
+    // layout in whitespace for the string to read correctly.
     if (tr.type === 'cron') {
       var hint = cronHint(tr.cron);
-      return t('auto.trigger.cron', '定时 ') + '<code style="font-family:var(--mono)">' + esc(tr.cron || '') + '</code>' + (hint ? ' <span style="color:var(--text-muted)">(' + esc(hint) + ')</span>' : '');
+      return esc(t('auto.trigger.cron', '定时')) + ' ' + '<code style="font-family:var(--mono)">' + esc(tr.cron || '') + '</code>' + (hint ? ' <span style="color:var(--text-muted)">(' + esc(hint) + ')</span>' : '');
     }
-    if (tr.type === 'once') return t('auto.trigger.once', '单次 ') + (tr.at ? new Date(tr.at).toLocaleString() : '?');
-    if (tr.type === 'event') return t('auto.trigger.event', '事件 ') + esc(tr.event || '').replace('profile:','') + (tr.profileFilter ? ' (' + esc(tr.profileFilter).slice(0,8) + ')' : t('auto.trigger.event.all', ' (所有)'));
+    if (tr.type === 'once') return esc(t('auto.trigger.once', '单次')) + ' ' + (tr.at ? new Date(tr.at).toLocaleString() : '?');
+    // R146: this was `t('auto.trigger.event', '事件 ')` + the raw event value.
+    // The separator lived in the English fallback string ("事件 " in zh has no
+    // trailing space once translated), and the value is a stored enum
+    // (profile:started / profile:stopped), so the card read "事件stopped".
+    // Name the event and join explicitly.
+    if (tr.type === 'event') {
+      var eventName = String(tr.event || '').replace('profile:', '');
+      return esc(t('auto.trigger.event', '事件')) + ' ' + esc(t('auto.event.' + eventName, eventName)) + (tr.profileFilter ? ' (' + esc(tr.profileFilter).slice(0,8) + ')' : t('auto.trigger.event.all', ' (所有)'));
+    }
     return '?';
   }
   function describeAction(a) {

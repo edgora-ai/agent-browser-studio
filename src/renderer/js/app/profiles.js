@@ -1548,6 +1548,14 @@
         var platform = fp.platform || "windows";
         var osName = platform === "macos" ? "macOS" : "Windows";
 
+        // R146: webrtcMode / event filters are stored enums, not copy. They used
+        // to be interpolated raw, which leaked the identifier into the zh UI
+        // ("RTC auto", "事件stopped"). Falls back to the raw value so an unknown
+        // enum (a newer backend) still renders something rather than blank.
+        function webrtcModeLabel(mode) {
+          return t("profile.webrtc." + mode, mode);
+        }
+
         var isFirefox = fp.browser === "firefox" || p.engine === "firefox";
         var browserIcon = icon(isFirefox ? "firefox" : "browser", 12);
         var browserName = isFirefox ? t("profile.card.firefox-stock", "Firefox (stock)") : t("profile.card.chromium", "Managed Chromium");
@@ -1559,7 +1567,9 @@
         var fpCompleteness = fingerprintCompleteness(p);
         var identityStr = (isFirefox || fp.mode === "off")
           ? (isFirefox ? t("profile.card.firefox-host-identity", "Native Firefox host identity") : t("profile.card.host-identity", "Native host identity"))
-          : (fp.timezone || t("profile.card.auto-tz", "auto tz")) + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · RTC " + esc(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
+          // R146: webrtcMode is a stored enum (auto/altered/real/disable) and was
+          // interpolated raw, so the zh card read "RTC auto". Name each value.
+          : (fp.timezone || t("profile.card.auto-tz", "auto tz")) + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · RTC " + esc(webrtcModeLabel(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto")));
         if (fp.mode !== "off" && !isFirefox && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
         var fingerprintTitle = (fp.mode === "off" ? t("profile.card.real-machine", "Real machine pass-through (Firefox: stock identity)") : t("profile.card.seed-title", "Seed ") + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · " + (fp.timezone || t("profile.card.auto-timezone", "auto timezone")) + " · " + hardwareSummary(hardware) + " · " + t("profile.card.completeness", "completeness ") + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
         // ── Review item UE-01: four 9px check buttons made the card

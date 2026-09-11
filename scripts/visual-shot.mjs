@@ -566,8 +566,12 @@ async function censusAndCoverage(browser) {
 // test is per-token: a text node qualifies as translated-looking when it
 // contains CJK; otherwise it is flagged only if it reads as prose (two or more
 // Latin words) and none of those words is a known-legitimate term.
+// Single source of truth for "this Latin word is not English copy": product
+// and vendor names, protocol/format vocabulary, and units. Two copies of this
+// list previously drifted apart inside the probe and at module scope, which is
+// how the mixed-script check below ended up referencing a name that only
+// existed in one of them.
 const EN_KEEP = [
-  // product / vendor / protocol vocabulary that stays English in any locale
   "chromium", "chrome", "firefox", "webkit", "gecko", "safari", "edge",
   "amazon", "google", "netflix", "disney", "stun", "webrtc", "drm", "widevine",
   "cdm", "gpu", "cpu", "ram", "macos", "windows", "linux", "ubuntu", "android",
@@ -578,6 +582,7 @@ const EN_KEEP = [
   "crx", "zip", "app", "s3", "aws", "gcp", "azure", "oss", "saas", "os", "vm",
   "vps",
 ];
+const KEEP_WORDS = new Set(EN_KEEP);
 
 // ── Audit: untranslated copy in a non-English UI ────────────────────────────
 // check-i18n.mjs guards the *source* (CJK text with no key, CJK literals in
@@ -662,18 +667,9 @@ async function auditEnglishLeak(browser) {
     const perTab = {};
     for (const tab of TABS) {
       await goTab(page, tab);
-      perTab[tab] = await page.evaluate(({ minWords }) => {
+      perTab[tab] = await page.evaluate(({ minWords, keep }) => {
         const CJK = /[㐀-䶿一-鿿豈-﫿　-〿＀-￯]/;
-        const KEEP = new Set([
-          "chromium", "chrome", "firefox", "webkit", "gecko", "safari", "edge",
-          "amazon", "google", "netflix", "disney", "stun", "webrtc", "drm",
-          "widevine", "cdm", "gpu", "cpu", "ram", "macos", "windows", "linux",
-          "sql", "csv", "json", "html", "http", "https", "api", "llm", "mcp",
-          "cli", "ui", "ux", "id", "url", "uri", "hash", "dns", "socks",
-          "socks5", "tls", "ssl", "cidr", "px", "ms", "kb", "mb", "gb", "tb",
-          "ipv4", "ipv6", "nat", "rtc", "cdn", "jwt", "otp", "totp", "dpi",
-          "unpacked", "crx", "zip", "app", "s3", "aws", "gcp", "azure", "oss",
-        ]);
+        const KEEP = new Set(keep);
         const HOSTISH = /^[\w.-]+\.(com|net|org|io|dev|cn|co|local|example|internal)\b/i;
         const PATHISH = /^(~?\/|[A-Za-z]:\\|\.\/|\.\.\/)/;
         const HEXISH = /^[0-9a-f]{6,}$/i;
@@ -725,7 +721,7 @@ async function auditEnglishLeak(browser) {
           });
         }
         return out;
-      }, { minWords: EN_PROSE_MIN_WORDS }).catch(() => []);
+      }, { minWords: EN_PROSE_MIN_WORDS, keep: EN_KEEP }).catch(() => []);
     }
     await ctx.close();
     return perTab;
@@ -739,8 +735,39 @@ async function auditEnglishLeak(browser) {
     for (const z of zh[tab] || []) {
       // Different in en => it went through the dictionary (translated).
       if (!enTexts.has(z.text)) continue;
-      // Already Chinese => not a leak.
-      if (z.hasCJK) continue;
+      // Already Chinese => normally not a leak. But a CJK string with a Latin
+      // word stuck to it is the signature of a *partial* translation: zh chrome
+      // concatenated with either a raw stored enum or copy the template hardcoded
+      // in English. That shipped as "由system" and was invisible to the whole-
+      // string test above, because the CJK bail-out skipped the node entirely.
+      // Allow a space or an interpunct between the two, since those are the
+      // separator conventions this UI already uses.
+      if (z.hasCJK) {
+        // The discriminator is *separation*, not adjacency. A Chinese sentence
+        // may legitimately borrow an English technical term and space it out
+        // ("push/pull 前变更对比", "Team Diff 预览") — that is a translator's
+        // choice. A leak is different: untranslated copy or a raw enum butted
+        // straight against CJK with no delimiter, because the join assumed a
+        // separator the dictionary value did not have. That shipped as
+        // "由system" and "事件stopped". So require zero separation.
+        const GLUED = /[一-鿿][A-Za-z]{3,}|[A-Za-z]{3,}[一-鿿]/;
+        if (!GLUED.test(z.text)) continue;
+        // Deliberately NOT consulted here: the fixture corpus. It exists for
+        // the whole-string gate, where a fixture value is painted verbatim as
+        // data. In this branch the CJK proves the string came *through* the
+        // dictionary, so a Latin run glued to it cannot be "just fixture data" —
+        // `actor: "system"` is in the corpus as an enum the UI is supposed to
+        // name, and exempting it here is precisely what let "由system" through
+        // when this check was first written.
+        const latinWords = (z.text.match(/[A-Za-z][A-Za-z'’-]{2,}/g) || []);
+        const unexplainedMixed = latinWords.filter((w) => {
+          const low = w.toLowerCase();
+          return !ROLE_WORDS.has(low) && !KEEP_WORDS.has(low) && !isIntentionallyEnglish(low);
+        });
+        if (!unexplainedMixed.length) continue;
+        rows.push({ tab, sel: z.sel, text: z.text, words: unexplainedMixed, identicalIn: "zh+en (glued)" });
+        continue;
+      }
       // Second gate: fixture values (profile names, job results, team member
       // names) are identical across locales too, but they are data the user
       // supplies, not copy we author. Matching the corpus verbatim settles it.

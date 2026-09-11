@@ -86,7 +86,17 @@
         var meta = CATEGORY_META[e.category] || { icon: "info", label: e.category || "?" };
         var target = renderTarget(e);
         var detail = e.detail ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' + esc(String(e.detail).slice(0, 200)) + "</div>" : "";
-        var actor = e.actor && e.actor !== "user" ? ' <span class="hint-line">' + esc(t("activity.actor-by","by ")) + esc(e.actor) + "</span>" : "";
+        // R146: two defects in one line. The join relied on a trailing space in
+        // the zh value ("由" has none), so it rendered "由system"; and `actor`
+        // is a stored enum (api/auto/system), so it shipped raw identifiers
+        // into the UI. Both are fixed by naming the actor and joining explicitly.
+        var actorLabel = e.actor === "auto" ? t("activity.actor.auto", "auto")
+          : e.actor === "api" ? t("activity.actor.api", "API")
+          : e.actor === "system" ? t("activity.actor.system", "system")
+          : e.actor;
+        var actor = e.actor && e.actor !== "user"
+          ? ' <span class="hint-line">' + esc(t("activity.actor-by", "by") + ' ' + actorLabel) + "</span>"
+          : "";
         return '<div class="profile-card" style="padding:8px 10px;margin-bottom:6px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
             /* R142: icon + action name are one `.icon-text` row — as a bare
