@@ -2655,6 +2655,9 @@
       // webrtcMode ∈ {auto, altered, real, disable}; event ∈ {started, stopped,
       // exit}. Fallback in the call site is the raw value, so an enum added by a
       // newer backend renders the identifier rather than going blank.
+      "profile.meta.flag-desc": "会确定性地生成 GPU、屏幕、硬件、Canvas、音频与字体。",
+      "profile.meta.flag-rule": "相同 seed + 平台 + 时区 + 语言 = 100% 相同的指纹。",
+      "ext.dlg.footer-note": "从私有仓库启用扩展；改动会在下次启动托管 Chromium 时生效。",
       "profile.webrtc.auto": "自动",
       "profile.webrtc.altered": "已改写",
       "profile.webrtc.real": "真实",
@@ -2777,6 +2780,9 @@
       "ext.btn.share": "Share",
       "ext.btn.unshare": "Unshare",
       "ext.col.hash": "Hash",
+      "profile.meta.flag-desc": "deterministically generates GPU, screen, hardware, canvas, audio and fonts.",
+      "profile.meta.flag-rule": "Same seed + platform + timezone + locale = 100% identical fingerprint.",
+      "ext.dlg.footer-note": "Enable extensions from the private repository; changes apply on the next managed Chromium launch.",
       "profile.webrtc.auto": "auto",
       "profile.webrtc.altered": "altered",
       "profile.webrtc.real": "real",

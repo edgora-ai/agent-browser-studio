@@ -893,7 +893,7 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <!-- Extension list -->
  <div id="ext-list" style="flex:1;overflow-y:auto;max-height:400px;"></div>
 
- <div style="margin-top:12px;font-size:var(--fs-micro);color:var(--text-muted);text-align:center;">
+ <div style="margin-top:12px;font-size:var(--fs-micro);color:var(--text-muted);text-align:center;" data-i18n="ext.dlg.footer-note">
  Enable extensions from the private repository; changes apply on the next managed Chromium launch.
  </div>
  </form>
@@ -1130,9 +1130,12 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
 <dialog id="dlg-agent-browser-seed">
  <form method="dialog" data-role="submit" data-submit-cmd="saveBrowserMeta">
  <h3 data-icon="browser"><span data-i18n="profile.meta.title">Managed Chromium Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <!-- R146: --fingerprint=<seed> is a literal CLI flag, so it stays English; only
+      the prose around it is translated. Split so the code span keeps its
+      formatting instead of being folded into one data-i18n blob. -->
  <p class="dialog-note">
- <strong>--fingerprint=&lt;seed&gt;</strong> deterministically generates GPU, screen, hardware, canvas, audio, fonts.<br>
- Same seed + platform + timezone + locale = 100% identical fingerprint.
+ <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">deterministically generates GPU, screen, hardware, canvas, audio and fonts.</span><br>
+ <span data-i18n="profile.meta.flag-rule">Same seed + platform + timezone + locale = 100% identical fingerprint.</span>
  </p>
  <input type="hidden" id="agent-browser-meta-dir-id">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">

@@ -67,30 +67,35 @@ const LATIN_ALLOW_RE = [
   /^(EN|ZH|EN-US|ZH-CN)$/i, // the language toggle shows the *other* language
   /^--/,                  // CLI flags: --fingerprint=<seed>
 ];
+// R146: this pass used to run line-by-line, which made it blind to exactly the
+// strings it exists to find — copy that a formatter wrapped across lines. An
+// element whose text spans two lines never matched the single-line tag regex,
+// so the extensions dialog footer and the fingerprint dialog note stayed
+// English in zh-CN while the check reported success. It now walks the whole
+// document; the reported line number is derived from the match offset.
 if (fs.existsSync(HTML)) {
-  const lines = fs.readFileSync(HTML, "utf-8").split("\n");
-  lines.forEach((raw, index) => {
-    if (!LATIN_TEXT.test(raw)) return;
-    if (CJK.test(raw)) return; // inline bilingual, serves both locales
-    const tagRe = /<([a-zA-Z][\w-]*)((?:[^<>"']|"[^"]*"|'[^']*')*?)>([^<]*)<\/\1\s*>/g;
-    let m;
-    while ((m = tagRe.exec(raw))) {
-      const tag = m[1];
-      const attrs = m[2] || "";
-      const text = (m[3] || "").trim();
-      if (!text || !LATIN_TEXT.test(text)) continue;
-      if (LATIN_SKIP_TAG.test(tag)) continue;
-      if (attrs.includes("data-i18n")) continue;
-      if (LATIN_ALLOW_TEXT.has(text)) continue;
-      if (LATIN_ALLOW_RE.some((re) => re.test(text))) continue;
-      problems.push({
-        file: "src/renderer/index.html",
-        line: index + 1,
-        kind: "html-missing-i18n-key-latin",
-        text: "<" + tag + "> " + text.slice(0, 100),
-      });
-    }
-  });
+  const html = fs.readFileSync(HTML, "utf-8");
+  const lineOf = (offset) => html.slice(0, offset).split("\n").length;
+  const tagRe = /<([a-zA-Z][\w-]*)((?:[^<>"']|"[^"]*"|'[^']*')*?)>([^<]*)<\/\1\s*>/g;
+  let m;
+  while ((m = tagRe.exec(html))) {
+    const tag = m[1];
+    const attrs = m[2] || "";
+    const text = (m[3] || "").replace(/\s+/g, " ").trim();
+    if (!text || !LATIN_TEXT.test(text)) continue;
+    if (CJK.test(text)) continue; // inline bilingual, serves both locales
+    if (LATIN_SKIP_TAG.test(tag)) continue;
+    if (attrs.includes("data-i18n")) continue;
+    if (attrs.includes("data-i18n-en-ok")) continue;
+    if (LATIN_ALLOW_TEXT.has(text)) continue;
+    if (LATIN_ALLOW_RE.some((re) => re.test(text))) continue;
+    problems.push({
+      file: "src/renderer/index.html",
+      line: lineOf(m.index),
+      kind: "html-missing-i18n-key-latin",
+      text: "<" + tag + "> " + text.slice(0, 100),
+    });
+  }
 }
 
 // ── 2. JS: CJK string literals outside the translation table ───────────────
