@@ -72,7 +72,10 @@ const HEIGHT = Number(flag("height", 860));
 const DSF = Number(flag("dsf", 2));
 const THEMES = flag("theme", "light,dark").split(",").map((s) => s.trim()).filter(Boolean);
 const TABS = flag("tabs", ALL_TABS.join(",")).split(",").map((s) => s.trim()).filter(Boolean);
-const LANG = flag("lang", "zh");
+// Accept the shorthand people actually type (--lang zh) but store the locale
+// code the renderer's dictionary is keyed by. The value must match a dict key
+// exactly or i18n.js falls back to navigator.language.
+const LANG = { zh: "zh-CN", en: "en-US", "zh-cn": "zh-CN", "en-us": "en-US" }[String(flag("lang", "zh")).toLowerCase()] || "zh-CN";
 const DIALOG = flag("dialog", "");
 const TEAM_EMPTY = has("team-empty");
 const AUDIT = has("audit");
@@ -168,12 +171,25 @@ async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpt
       localStorage.setItem('agent-browser-studio-wizard-dismissed', '1');
       localStorage.setItem('agent-browser-studio-terms-accepted-v1', '1');
       localStorage.setItem('abs-backup-hint-dismissed', '1');
-      localStorage.setItem('agent-browser-studio-lang', ${JSON.stringify(lang)});
-      localStorage.setItem('cloak-lang', ${JSON.stringify(lang)});
+      // R146: was 'agent-browser-studio-lang' holding 'zh'/'en'. The renderer
+      // reads 'agent-browser-studio-language' (i18n.js STORAGE_KEY) and matches
+      // the value against its dictionary keys, which are 'zh-CN'/'en-US'. Both
+      // halves were wrong, so the key was ignored and the language fell through
+      // to navigator.language — meaning --lang never did anything and every
+      // "en" capture was really zh. Any audit that compares two locales was
+      // silently comparing one against itself.
+      localStorage.setItem('agent-browser-studio-language', ${JSON.stringify(lang)});
+      localStorage.setItem('cloak-lite-language', ${JSON.stringify(lang)});
     } catch (e) {}
   `);
   await page.goto(PAGE_URL);
   await page.waitForFunction(() => !!(window.agentBrowser && window.agentBrowser.api), { timeout: 15000 });
+  // Fail loudly rather than silently rendering the wrong locale: a verify step
+  // that cannot distinguish its two inputs must not report a clean diff.
+  const actual = await page.evaluate(() => (window.i18n && window.i18n.getLanguage) ? window.i18n.getLanguage() : null);
+  if (actual && actual !== lang) {
+    throw new Error(`harness requested lang=${lang} but renderer resolved ${actual} — check STORAGE_KEY in i18n.js`);
+  }
   await page.waitForTimeout(700);
   return { ctx, page };
 }
@@ -727,8 +743,8 @@ async function auditEnglishLeak(browser) {
     return perTab;
   };
 
-  const zh = await collect("zh");
-  const en = await collect("en");
+  const zh = await collect("zh-CN");
+  const en = await collect("en-US");
   const rows = [];
   for (const tab of TABS) {
     const enTexts = new Set((en[tab] || []).map((e) => e.text));
@@ -796,7 +812,7 @@ async function auditEnglishLeak(browser) {
 
 function printEnglishLeak(rows) {
   console.log(`\n=== untranslated copy (same text in zh and en) ===`);
-  if (LANG === "en") { console.log("skipped (lang=en)"); return []; }
+  if (LANG === "en-US") { console.log("skipped (lang=en)"); return []; }
   if (!rows.length) { console.log("clean — every visible string changes with the language"); return rows; }
   for (const r of rows) console.log(`  [${r.tab}] ${r.sel} — "${r.text}" (words: ${r.words})`);
   return rows;
@@ -1023,7 +1039,7 @@ try {
       overflow: async () => { const r = await auditOverflow(browser, Number(flag("width", 700))); printOverflow(r); return r.length; },
       errors: async () => { const r = await auditErrors(browser); printErrors(r); return r.length; },
       selectors: async () => { const r = auditSelectors(); printSelectors(r); return r.length; },
-      english: async () => { const r = await auditEnglishLeak(browser); printEnglishLeak(r); return LANG === "en" ? 0 : r.length; },
+      english: async () => { const r = await auditEnglishLeak(browser); printEnglishLeak(r); return LANG === "en-US" ? 0 : r.length; },
     };
     const run = runners[ONLY];
     if (!run) {
@@ -1053,7 +1069,7 @@ try {
     // Dead call sites, leaked `undefined`, and untranslated copy are real
     // defects; thin tabs and unstubbed paths are harness debt that silently
     // undermines the rest.
-    const enFails = LANG === "en" ? 0 : english.length;
+    const enFails = LANG === "en-US" ? 0 : english.length;
     const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + enFails;
     console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just

@@ -52,7 +52,11 @@ await page.addInitScript(`
     localStorage.setItem('agent-browser-studio-wizard-dismissed', '1');
     localStorage.setItem('agent-browser-studio-terms-accepted-v1', '1');
     localStorage.setItem('abs-backup-hint-dismissed', '1');
-    localStorage.setItem('agent-browser-studio-lang', 'zh');
+    // R146: the renderer's STORAGE_KEY is 'agent-browser-studio-language' and
+    // its values are dictionary keys ('zh-CN'/'en-US'); this wrote a key and a
+    // value it does not read, so the UI fell through to navigator.language.
+    localStorage.setItem('agent-browser-studio-language', 'zh-CN');
+    localStorage.setItem('cloak-lite-language', 'zh-CN');
     localStorage.setItem('cloak-lang', 'zh');
   } catch (e) {}
   // Record which picker the renderer asks for.
