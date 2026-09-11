@@ -145,6 +145,77 @@ function findUndefinedKeys() {
   return found;
 }
 
+// ── 1d. JS: separators that live in the English fallback only ──────────────
+// A call like `x + t('k', ' 行')` puts the joining whitespace in the *fallback*
+// string. The dictionary value for that key has no such edge space, so the
+// moment a locale supplies a real translation the parts collide: EN rendered
+// "JS ×3profiles" and "128rows", and the zh entry had to compensate with its
+// own leading space. This is a layout decision smuggled into a string literal.
+//
+// A value that already ends in punctuation (：。？！、）) or already carries the
+// space separates itself, so those are not reported — otherwise every
+// `t('k', 'Failed: ')` in the codebase would be noise.
+const SELF_SEPARATING_END = /[：:。！？，、；（）()\]]$/;
+const SELF_SEPARATING_START = /^[：:。！？，、；（）()\[]/;
+
+function collectI18nValues() {
+  if (!fs.existsSync(I18N)) return new Map();
+  const src = fs.readFileSync(I18N, "utf-8");
+  const byKey = new Map();
+  const re = /"([A-Za-z0-9_.\-]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(src))) {
+    if (!byKey.has(m[1])) byKey.set(m[1], new Set());
+    byKey.get(m[1]).add(m[2]);
+  }
+  return byKey;
+}
+const I18N_VALUES = collectI18nValues();
+
+function findSeparatorLeaks() {
+  const found = [];
+  for (const dir of JS_DIRS) {
+    for (const file of walk(dir)) {
+      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      lines.forEach((line, index) => {
+        const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+        if (!code.includes("t(")) return;
+        // Quote handling: a fallback may contain the *other* quote char (and
+        // often does, e.g. 'Delete proxy "{name}"?'). Match the literal as the
+        // same quote style that opened it, so the capture does not stop at an
+        // embedded quote and report a truncated fragment.
+        const re = /\bt\(\s*(['"])([A-Za-z0-9_.\-]+)\1\s*,\s*(['"])((?:\\.|(?!\3)[^\\])*)\3/g;
+        let m;
+        while ((m = re.exec(code))) {
+          const key = m[2];
+          const fb = m[4];
+          const trailing = /\s$/.test(fb);
+          const leading = /^\s/.test(fb);
+          if (!trailing && !leading) continue;
+          const values = I18N_VALUES.get(key);
+          if (!values) continue; // undefined keys are 1c's job
+          // A fallback carrying {placeholders} is already a whole-sentence
+          // template; the edge space is padding inside the sentence, and the
+          // call site substitutes before rendering.
+          if (/\{[a-zA-Z]/.test(fb)) continue;
+          const separated = [...values].every((v) =>
+            trailing
+              ? (/\s$/.test(v) || SELF_SEPARATING_END.test(v))
+              : (/\s/.test(v[0] || "") || SELF_SEPARATING_START.test(v)));
+          if (separated) continue;
+          found.push({
+            file: path.relative(ROOT, file),
+            line: index + 1,
+            kind: "i18n-separator-in-fallback",
+            text: `${key} — fallback ${JSON.stringify(fb)} pads with whitespace the dictionary value lacks; use a whole-sentence template`,
+          });
+        }
+      });
+    }
+  }
+  return found;
+}
+
 // ── 2. JS: CJK string literals outside the translation table ───────────────
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -250,6 +321,7 @@ if (fs.existsSync(MAIN_I18N)) {
 
 // ── Report ─────────────────────────────────────────────────────────────────
 problems.push(...findUndefinedKeys());
+problems.push(...findSeparatorLeaks());
 
 if (problems.length) {
   console.log(`\n✗ ${problems.length} i18n problem(s) found:\n`);

@@ -190,7 +190,7 @@
               });
               if (r.envCheck && r.envCheck.high) {
                 var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
-                toast(t("toast.env.high-risk", "Environment risk: ") + (envCodes || t("toast.env.high-generic", "host environment risk")) + t("toast.env.high-hint", " — open Env on the card for fixes"), "error");
+                toast(t("toast.env.high-risk", "Environment risk: {codes} — open Env on the card for fixes").replace("{codes}", envCodes || t("toast.env.high-generic", "host environment risk")), "error");
               }
               var seq = markProfileRuntime(dirId, true, r.pid);
               setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);

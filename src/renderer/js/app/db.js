@@ -23,7 +23,7 @@
           // R142: `.icon-text` so the table glyph centres on the table name
           // instead of riding the text baseline 1.3px low.
           '<div class="icon-text" style="font-weight:600;">' + icon("table", 12) + esc(tbl.name) + '</div>' +
-          '<div class="hint-line">' + tbl.rowCount + t("db.row-count"," 行") + '</div>' +
+          '<div class="hint-line">' + esc(t("db.row-count-n", "{n} rows").replace("{n}", String(tbl.rowCount))) + '</div>' +
         '</div>';
       }).join("");
       el.onclick = function(event) {
@@ -38,11 +38,17 @@
     api.agentDb.tableData(table, 100, 0).then(function(data) {
       var el = document.getElementById("db-result");
       if (!data || !data.rows || data.rows.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t("db.table-empty","表 <code>") + esc(table) + t("db.table-empty-mid","</code> 为空（共 ") + (data ? data.total : 0) + t("db.table-empty-end"," 行）。") + '</div>';
+        el.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + esc(t("db.table-empty", "Table {table} is empty ({n} rows).").replace("{table}", table).replace("{n}", String(data ? data.total : 0))) + '</div>';
         return;
       }
       var cols = data.columns && data.columns.length ? data.columns : Object.keys(data.rows[0]);
-      var html = '<div class="icon-text" style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + icon("table", 12) + esc(table) + t("db.table-head"," · ") + data.rows.length + t("db.row-count-slash","/") + data.total + t("db.row-count"," 行") + '</div>';
+      // R146: these were five fragments concatenated around the numbers, with
+      // the separators baked into the *fallback* strings (" · ", " 行"). The
+      // dictionary values have no such spacing, so EN rendered "128rows" and the
+      // zh dictionary had to compensate with its own leading space. One template
+      // per sentence instead: the translator controls the whole line.
+      var html = '<div class="icon-text" style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + icon("table", 12) +
+        esc(t("db.table-head", "{table} · {shown}/{total} rows").replace("{table}", table).replace("{shown}", String(data.rows.length)).replace("{total}", String(data.total))) + '</div>';
       html += '<table class="db-grid"><thead><tr>';
       cols.forEach(function(c) { html += "<th>" + esc(c) + "</th>"; });
       html += "</tr></thead><tbody>";
@@ -80,9 +86,9 @@
       api.agentDb.query(sql).then(function(r) {
         if (!r.ok) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(r.error || t("db.exec-failed-default","Failed")) + "</div>"; return; }
         var rows = r.rows || [];
-        if (rows.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);">' + t("db.no-result","（无结果，") + r.count + t("db.no-result-end"," 行）") + "</div>"; return; }
+        if (rows.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);">' + esc(t("db.no-result", "No result ({n} rows)").replace("{n}", String(r.count))) + "</div>"; return; }
         var cols = Object.keys(rows[0]);
-        var html = '<div style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + rows.length + (r.truncated ? t("db.truncated","+ (截断)") : "") + t("db.row-count"," 行") + '</div>';
+        var html = '<div style="margin-bottom:6px;font-size:11px;color:var(--text-muted);">' + esc(t("db.row-count-n", "{n} rows").replace("{n}", String(rows.length))) + (r.truncated ? " " + esc(t("db.truncated", "(truncated)")) : "") + '</div>';
         html += '<table class="db-grid"><thead><tr>';
         cols.forEach(function(c) { html += "<th>" + esc(c) + "</th>"; });
         html += "</tr></thead><tbody>";

@@ -135,7 +135,7 @@
       '<div class="card-header"><span class="name">' + name + "</span>" + statusBadge(run) + "</div>" +
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
       (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
-      '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + run.stepCount + t("runs.row.steps-unit", " 步") + "</span></div>" +
+      '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + "</span></div>" +
       '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span><span>' + esc(dur) + "</span></div>" +
       (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
       '<div class="card-actions">' +
@@ -175,7 +175,7 @@
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<span style="font-family:var(--mono);font-size:11px;word-break:break-all;">' + esc(run.dirId || "—") + "</span>" +
           statusBadge(run) +
-          '<span style="color:var(--text-muted);font-size:11px;">' + run.stepCount + t("runs.row.steps-unit", " 步") + " · " + esc(durRow) + "</span>" +
+          '<span style="color:var(--text-muted);font-size:11px;">' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + " · " + esc(durRow) + "</span>" +
           '<span style="margin-left:auto;display:inline-flex;gap:6px;">' +
             '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
             retryButton(run) +
@@ -194,7 +194,7 @@
       (first.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(first.startedAt).toLocaleString() + "</span></div>" : "") +
       '<details class="run-group-detail" open>' +
         '<summary style="cursor:pointer;font-size:12px;color:var(--text-muted);padding:6px 0;">' +
-          t("runs.group.expand", "展开/收起 " + runs.length + " 个 profile 结果") + "</summary>" +
+          esc(t("runs.group.expand-n", "展开/收起 {n} 个 profile 结果").replace("{n}", String(runs.length))) + "</summary>" +
         '<div class="run-group-rows">' + rows + "</div>" +
       "</details>" +
     "</div>";
@@ -263,7 +263,7 @@
     agentBrowser.confirm(t("runs.confirm.clear-all", "清空所有运行记录?"), function() {
       api.agentRuns.clear().then(function(r) {
         if (r && r.success === false) { toast(r.error || t("toast.failed", "Failed"), "error"); return; }
-        toast(t("runs.toast.cleared", "已清空 ") + ((r && r.deleted) || 0) + t("runs.toast.cleared-unit", " 条"), "success");
+        toast(t("runs.toast.cleared-n", "Cleared {n} record(s)").replace("{n}", String((r && r.deleted) || 0)), "success");
         agentBrowser.loadRunsTab();
       }).catch(function(e) { toast(e.message || String(e), "error"); });
     }, { ackLabel: t("confirm.ack.permanent","我了解此操作会永久删除数据且不可撤销。") });

@@ -46,7 +46,7 @@
     // R127: the message color carries configured/not — no glyph prefix needed.
     messageEl.innerHTML = '<span class="' + (preview.configured ? 'health-text-good' : 'health-text-watch') + '">' + esc(message || t('sync.preview.unavailable', 'Preview unavailable')) + '</span>';
     listEl.innerHTML = [
-      previewCountCard(t('sync.preview.title.profiles','Profiles'), preview.profiles || 0, running.length ? running.length + t('sync.preview.profiles.running', ' running — Pull skips localStorage/preferences') : t('sync.preview.profiles.no-skip', 'Pull has no running-profile skips')),
+      previewCountCard(t('sync.preview.title.profiles','Profiles'), preview.profiles || 0, running.length ? t('sync.preview.profiles.running', '{n} running — Pull skips localStorage/preferences').replace('{n}', String(running.length)) : t('sync.preview.profiles.no-skip', 'Pull has no running-profile skips')),
       previewCountCard(t('sync.preview.title.proxies','Proxies'), preview.proxies || 0, t('sync.preview.proxies', 'Synced with the config snapshot (secrets redacted)')),
       previewCountCard(t('sync.preview.title.accounts','Accounts'), preview.accounts || 0, t('sync.preview.accounts', 'Platform account metadata; passwords not shown')),
       previewCountCard(t('sync.preview.title.extensions','Extensions'), preview.extensions || 0, t('sync.preview.extensions', 'Private extension repository entries')),
@@ -219,7 +219,7 @@
       if (r2.success) agentBrowser.loadSyncConfig();
       else agentBrowser.loadSyncPreview();
     }).catch(function(e) {
-      toast(t('sync.toast.push-failed','Push failed: ') + (e.message || String(e)), 'error');
+      toast(t('sync.toast.push-failed','Push failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
     }).finally(function() {
       if (reset) reset();
     });
@@ -249,13 +249,13 @@
             agentBrowser.loadSyncConfig();
           });
         }).catch(function(e) {
-          toast(t('sync.toast.pull-failed','Pull failed: ') + (e.message || String(e)), 'error');
+          toast(t('sync.toast.pull-failed','Pull failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
         }).finally(function() {
           if (reset) reset();
         });
       };
       if (running.length) {
-        var runMsg = t('sync.confirm.pull-running','检测到 ') + running.length + t('sync.confirm.pull-running-mid',' 个运行中 profile。Pull 会跳过这些 profile 的 localStorage/preferences，继续?');
+        var runMsg = t('sync.confirm.pull-running','Detected {n} running profile(s). Pull will skip localStorage/preferences for them. Continue?').replace('{n}', String(running.length));
         agentBrowser.confirmAsync(runMsg).then(function(ok) {
           if (!ok) { if (reset) reset(); return; }
           proceed();

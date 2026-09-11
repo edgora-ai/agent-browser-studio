@@ -41,7 +41,10 @@
     var map = { 'launch-profile': t('auto.action.launch','Launch'), 'stop-profile': t('auto.action.stop','Stop'), 'agent-task': t('auto.action.agent','Agent'), 'sync-push': t('auto.action.push','Push'), 'sync-pull': t('auto.action.pull','Pull'), 'custom-js': t('auto.action.js','JS') };
     var base = map[a.type] || a.type;
     if (a.profileDirId) base += ' ' + esc(a.profileDirId).slice(0,10);
-    if (a.profileDirIds && a.profileDirIds.length > 1) base += ' ×' + a.profileDirIds.length + t('auto.action.batch-profiles', ' profiles');
+    // R146: was `+ t('auto.action.batch-profiles', ' profiles')` — the separator
+    // lived in the English fallback string while the dictionary value is
+    // "profiles" with no leading space, so EN rendered "JS ×3profiles".
+    if (a.profileDirIds && a.profileDirIds.length > 1) base += ' ×' + a.profileDirIds.length + ' ' + esc(t('auto.action.batch-profiles', 'profiles'));
     if (a.type === 'agent-task' && a.agentPrompt) base += ' <em style="color:var(--text-muted)">"' + esc(a.agentPrompt).slice(0,30) + '..."</em>';
     return base;
   }
@@ -49,9 +52,18 @@
     if (!c) return '';
     var p = c.trim().split(/\s+/);
     if (p.length !== 5) return '';
-    if (p[0]==='0' && p[1] && p[2]==='*' && p[3]==='*' && p[4]==='*') return t('auto.cron.daily','每天 ')+p[1]+':00';
-    if (/^\*\//.test(p[0]) && p[1]==='*' && p[2]==='*' && p[3]==='*' && p[4]==='*') return t('auto.cron.every-min','每 ')+p[0].slice(2)+t('auto.cron.every-min-unit',' 分钟');
-    if (p[1]==='*' && p[2]==='*' && p[3]==='*' && p[4]==='*') return t('auto.cron.every-hour','每小时 ')+p[0]+t('auto.cron.every-hour-unit',' 分');
+    // R146: these assembled a sentence from fragments whose spacing lived in the
+    // *fallback* strings ("每天 ", " 分"). The dictionary values carry no such
+    // spacing, so the parts collided. Whole-sentence templates with {n} instead.
+    if (p[0]==='0' && p[1] && p[2]==='*' && p[3]==='*' && p[4]==='*') {
+      return t('auto.cron.daily','每天 {t}:00').replace('{t}', p[1]);
+    }
+    if (/^\*\//.test(p[0]) && p[1]==='*' && p[2]==='*' && p[3]==='*' && p[4]==='*') {
+      return t('auto.cron.every-min','每 {n} 分钟').replace('{n}', p[0].slice(2));
+    }
+    if (p[1]==='*' && p[2]==='*' && p[3]==='*' && p[4]==='*') {
+      return t('auto.cron.every-hour','每小时 {n} 分').replace('{n}', p[0]);
+    }
     return '';
   }
 
@@ -162,7 +174,7 @@
   function templatePrompt(tpl) {
     if (!tpl) return '';
     var lines = [
-      t('auto.template-using', '使用模板 ') + tpl.id + t('auto.template-sep', ' — ') + tpl.title,
+      t('auto.template-using', 'Using template {id} — {title}').replace('{id}', tpl.id).replace('{title}', tpl.title),
       '',
       tpl.prompt || tpl.examplePrompt || tpl.description || '',
     ];
@@ -188,7 +200,10 @@
     var tpl = taskTemplates.find(function(t) { return t.id === id; });
     var hint = document.getElementById('auto-template-hint');
     if (!tpl) { hint.textContent = ''; return; }
-    hint.textContent = t('auto.hint-risk', 'risk=') + tpl.riskLevel + t('auto.hint-tools', ' · tools=') + (tpl.tools || []).join(', ') + t('auto.hint-success', ' · success=') + (tpl.successCriteria || []).slice(0, 2).join('; ');
+    hint.textContent = t('auto.hint', 'risk={risk} · tools={tools} · success={success}')
+      .replace('{risk}', String(tpl.riskLevel))
+      .replace('{tools}', (tpl.tools || []).join(', '))
+      .replace('{success}', (tpl.successCriteria || []).slice(0, 2).join('; '));
     document.getElementById('auto-action-prompt').value = templatePrompt(tpl);
   }
 

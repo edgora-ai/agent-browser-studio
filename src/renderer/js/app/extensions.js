@@ -183,7 +183,7 @@
       },
 
   extDelete: function(extId) {
-        var msg = t('ext.confirm-delete','删除扩展 ') + esc(extId) + t('ext.confirm-delete-mid','?\n会从所有 profile 移除,磁盘文件也删除。');
+        var msg = esc(t('ext.confirm-delete', 'Delete extension {id}?\nIt will be removed from every profile and the cached files deleted.').replace('{id}', extId));
         agentBrowser.confirm(msg, function() {
         var statusEl = document.getElementById('ext-install-status');
         if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Deleting ' + esc(extId) + '...</span>';
