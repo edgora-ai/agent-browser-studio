@@ -472,7 +472,12 @@
             // so the wrap lands between "primary three" and "occasional six"
             // rather than orphaning one icon onto the labelled row.
             '<span class="proxy-util-actions">' +
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '" aria-label="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">' + icon("trash", 14) + '</button> ' +
+            // R146: this was icon("trash") — the same glyph as delete-proxy two
+            // slots to its right, one of which irreversibly destroys the proxy.
+            // Two identical trash cans in one row is an unreadable affordance.
+            // Clearing the *check history* is a health-domain action, and an X
+            // would read as "remove this proxy", so it takes the lab glyph.
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '" aria-label="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">' + icon("beaker", 14) + '</button> ' +
             '<button class="btn btn-secondary btn-sm btn-icon" data-action="rotate-proxy" title="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '" aria-label="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '">' + icon("refresh", 14) + '</button> ' +
             '<button class="btn btn-secondary btn-sm btn-icon" data-action="toggle-history" title="' + escAttr(t('proxy.action.history', 'History')) + '" aria-label="' + escAttr(t('proxy.action.history', 'History')) + '">' + icon("chart", 14) + '</button> ' +
             '<button class="btn btn-secondary btn-sm btn-icon" data-action="bind-profiles" title="' + escAttr(t('proxy.action.bind', 'Bind')) + '" aria-label="' + escAttr(t('proxy.action.bind', 'Bind')) + '">' + icon("link", 14) + '</button> ' +

@@ -22,7 +22,13 @@
   function sourceLabel(src) {
     if (!src) return "?";
     if (src.type === "automation") {
-      var label = t("runs.source.schedule", "Scheduled ") + esc(src.ruleName || src.ruleId || "");
+      // R146: the separator used to live inside the fallback string
+      // ("Scheduled "). The zh entry is "定时" with no trailing space, so
+      // switching language silently glued the label to the rule name
+      // ("定时Nightly price sweep"). Join explicitly instead — a translator
+      // cannot be expected to encode layout in a trailing space.
+      var head = t("runs.source.schedule", "Scheduled");
+      var label = esc(head) + ' · ' + esc(src.ruleName || src.ruleId || "");
       if (src.jobId) label += ' <span style="font-family:var(--mono);color:var(--text-muted);">' + esc(src.jobId) + '</span>';
       return label;
     }

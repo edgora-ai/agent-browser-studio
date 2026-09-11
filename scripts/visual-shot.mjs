@@ -153,7 +153,7 @@ const MOCK = readFileSync(path.join(ROOT, "scripts", "visual-mock.js"), "utf-8")
 const PAGE_URL = "file://" + path.join(ROOT, "src", "renderer", "index.html");
 
 // ── Page bootstrap ──────────────────────────────────────────────────────────
-async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpty = TEAM_EMPTY) {
+async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpty = TEAM_EMPTY, lang = LANG) {
   const ctx = await browser.newContext({
     viewport: { width, height },
     deviceScaleFactor: DSF,
@@ -168,8 +168,8 @@ async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpt
       localStorage.setItem('agent-browser-studio-wizard-dismissed', '1');
       localStorage.setItem('agent-browser-studio-terms-accepted-v1', '1');
       localStorage.setItem('abs-backup-hint-dismissed', '1');
-      localStorage.setItem('agent-browser-studio-lang', ${JSON.stringify(LANG)});
-      localStorage.setItem('cloak-lang', ${JSON.stringify(LANG)});
+      localStorage.setItem('agent-browser-studio-lang', ${JSON.stringify(lang)});
+      localStorage.setItem('cloak-lang', ${JSON.stringify(lang)});
     } catch (e) {}
   `);
   await page.goto(PAGE_URL);
@@ -549,6 +549,232 @@ async function censusAndCoverage(browser) {
   return { rows, dead, unstubbed };
 }
 
+// ── Audit: untranslated English in a non-English UI ─────────────────────────
+// check-i18n.mjs guards the *source* (CJK text with no key, CJK literals in
+// JS). It structurally cannot see the opposite leak: an English string baked
+// into a JS render path ships verbatim into the zh UI, and the source contains
+// no CJK for the gate to notice. That is exactly the shape of the defects this
+// probe found (sync.js "Device ID", accounts.js "password saved", the
+// extensions SHARED/PRIVATE badges), so the check has to run against rendered
+// text, not source.
+//
+// Only meaningful when the UI language is not English; --lang en skips it.
+// Everything below is about *tagged UI copy*, so the allowlist matters more
+// than the detector: product names, hostnames, file paths, hex hashes, IDs,
+// cron expressions, locale codes and units are English by nature and are not
+// leaks. A bare allowlist of whole strings would miss "Save changes", so the
+// test is per-token: a text node qualifies as translated-looking when it
+// contains CJK; otherwise it is flagged only if it reads as prose (two or more
+// Latin words) and none of those words is a known-legitimate term.
+const EN_KEEP = [
+  // product / vendor / protocol vocabulary that stays English in any locale
+  "chromium", "chrome", "firefox", "webkit", "gecko", "safari", "edge",
+  "amazon", "google", "netflix", "disney", "stun", "webrtc", "drm", "widevine",
+  "cdm", "gpu", "cpu", "ram", "macos", "windows", "linux", "ubuntu", "android",
+  "ios", "mac", "iphone", "ipad", "sql", "csv", "json", "html", "http", "https",
+  "api", "llm", "mcp", "cli", "ui", "ux", "id", "url", "uri", "hash", "dns",
+  "socks", "socks5", "tls", "ssl", "cidr", "px", "ms", "kb", "mb", "gb", "tb",
+  "ipv4", "ipv6", "nat", "rtc", "cdn", "jwt", "otp", "totp", "dpi", "unpacked",
+  "crx", "zip", "app", "s3", "aws", "gcp", "azure", "oss", "saas", "os", "vm",
+  "vps",
+];
+
+// ── Audit: untranslated copy in a non-English UI ────────────────────────────
+// check-i18n.mjs guards the *source* (CJK text with no key, CJK literals in
+// JS). It structurally cannot see the opposite leak: an English string baked
+// into a JS render path ships verbatim into the zh UI, and the source contains
+// no CJK for the gate to notice. That is the shape of every defect this probe
+// found (sync.js "Device ID", accounts.js "password saved", the extensions
+// SHARED/PRIVATE badges).
+//
+// The oracle is differential rather than heuristic. The same tab is rendered
+// with the UI in zh and in en; any text node whose value is *identical* in both
+// was never passed through the translation table, whatever it happens to say.
+// Earlier versions of this audit guessed from word shape against allowlists and
+// a fixture corpus, which is why they mis-filed datum names as leaks and missed
+// one-word buttons like "Update". Comparing the two renders removes the guess:
+//
+//   - translated copy differs between locales  -> ignored
+//   - fixture data (profile names, job errors) is identical in both too, so a
+//     second gate requires the string to read as English prose. Identifiers,
+//     hashes, paths, hosts, locale codes and units are filtered per word.
+//
+// Known limit: a fixture value that is itself an English sentence (a job error
+// like "step 9 failed") is indistinguishable from copy by this method and does
+// get reported. Treat those hits as "confirm against the fixture" rather than
+// automatic defects — this audit produces a reviewer's shortlist, not a verdict.
+//
+// Only meaningful when the UI language is not English; --lang en skips it.
+const EN_PROSE_MIN_WORDS = 2;
+
+// Strings that are correct as English in every locale. Each entry is a claim
+// that translating it would be wrong, not a claim that it is untranslatable:
+//   - the product name, which is a brand and never localised
+//   - "Chrome Web Store", a proper noun for a third-party service
+//   - the running engine's display name, which identifies the binary
+// The value is the reason, so a future reader can tell a decision from a dodge.
+const EN_INTENTIONALLY_ENGLISH = new Map([
+  ["agent browser studio managed chromium", "engine display name"],
+  ["chrome web store", "third-party proper noun"],
+]);
+
+// Role names are the one piece of real UI copy that stays English by design:
+// they name stored API values (viewer/member/admin/owner) that also appear in
+// config files and docs, so localising them would break that mapping. They live
+// in the dictionary as identical zh/en entries, which is why the differential
+// test sees them as "untranslated" — this set is that intent, expressed once.
+const ROLE_WORDS = new Set(["owner", "admin", "member", "viewer"]);
+
+function isIntentionallyEnglish(text) {
+  const norm = text.replace(/\s+/g, " ").trim().toLowerCase();
+  for (const [keep] of EN_INTENTIONALLY_ENGLISH) {
+    if (norm === keep || norm.includes(keep)) return true;
+  }
+  return false;
+}
+
+// Every string literal the mock can hand to the renderer, as whole values and
+// as individual words. Read from the source rather than hand-listed so adding a
+// fixture cannot silently widen a manual allowlist — the corpus tracks the data
+// automatically. The word set exists because the UI *composes* data with
+// chrome: the local-device badge renders `<device name> · <role>`, which is not
+// a fixture literal but is entirely data plus a deliberately-untranslated role.
+function mockFixtureStrings() {
+  const src = readFileSync(path.join(ROOT, "scripts", "visual-mock.js"), "utf-8");
+  const whole = new Set();
+  const words = new Set();
+  for (const m of src.matchAll(/'([^'\\\n]{2,})'|"([^"\\\n]{2,})"/g)) {
+    const lit = (m[1] ?? m[2]).replace(/\s+/g, " ").trim().toLowerCase();
+    if (lit) whole.add(lit);
+    for (const w of lit.split(/[\s·|,;:()[\]{}<>/\\→]+/)) {
+      const bare = w.replace(/[.,;:!?()"'’]+$/g, "");
+      if (bare.length >= 2) words.add(bare);
+    }
+  }
+  return { whole, words };
+}
+
+async function auditEnglishLeak(browser) {
+  const theme = THEMES[0];               // a copy defect is not theme-specific
+  const fixtures = mockFixtureStrings();
+  const collect = async (lang) => {
+    const { ctx, page } = await openPage(browser, theme, WIDTH, HEIGHT, TEAM_EMPTY, lang);
+    const perTab = {};
+    for (const tab of TABS) {
+      await goTab(page, tab);
+      perTab[tab] = await page.evaluate(({ minWords }) => {
+        const CJK = /[㐀-䶿一-鿿豈-﫿　-〿＀-￯]/;
+        const KEEP = new Set([
+          "chromium", "chrome", "firefox", "webkit", "gecko", "safari", "edge",
+          "amazon", "google", "netflix", "disney", "stun", "webrtc", "drm",
+          "widevine", "cdm", "gpu", "cpu", "ram", "macos", "windows", "linux",
+          "sql", "csv", "json", "html", "http", "https", "api", "llm", "mcp",
+          "cli", "ui", "ux", "id", "url", "uri", "hash", "dns", "socks",
+          "socks5", "tls", "ssl", "cidr", "px", "ms", "kb", "mb", "gb", "tb",
+          "ipv4", "ipv6", "nat", "rtc", "cdn", "jwt", "otp", "totp", "dpi",
+          "unpacked", "crx", "zip", "app", "s3", "aws", "gcp", "azure", "oss",
+        ]);
+        const HOSTISH = /^[\w.-]+\.(com|net|org|io|dev|cn|co|local|example|internal)\b/i;
+        const PATHISH = /^(~?\/|[A-Za-z]:\\|\.\/|\.\.\/)/;
+        const HEXISH = /^[0-9a-f]{6,}$/i;
+        const IDENT = /^[\w-]+(_[\w-]+)+$/;
+        const TZ = /^(UTC|GMT|[A-Za-z]+\/[A-Za-z_]+)$/;
+        const LOCALE = /^[a-z]{2}(-[A-Za-z]{2,4})?$/;
+        const VERSION = /^v?\d+(\.\d+)*$/;
+        const out = [];
+        const seen = new Set();
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const raw = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+          if (raw.length < 3) continue;
+          const el = node.parentElement;
+          if (!el) continue;
+          // Machine-readable regions: code, paths, raw data.
+          if (el.closest("pre, code, script, style, textarea, input, .mono")) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) < 0.15) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width < 2 || r.height < 2) continue;
+          // Only the visible pane: other tabs stay mounted but hidden.
+          if (el.closest(".tab-content:not(.active)")) continue;
+          if (el.closest("#sidebar")) continue;   // nav copy is checked by check-i18n
+          if (el.closest("[data-i18n-en-ok]")) continue;
+          const words = raw.split(/[\s·|,;:()\[\]{}<>\/\\]+/).filter(Boolean);
+          const prose = words.filter((w) => {
+            const bare = w.replace(/[.,;:!?()"'’]+$/g, "");
+            if (bare.length < 2) return false;
+            if (KEEP.has(bare.toLowerCase())) return false;
+            if (HOSTISH.test(bare) || PATHISH.test(bare) || HEXISH.test(bare)) return false;
+            if (IDENT.test(bare) || TZ.test(bare) || LOCALE.test(bare) || VERSION.test(bare)) return false;
+            if (/^\d/.test(bare) || /^[A-Z]$/.test(bare)) return false;
+            return /^[A-Za-z][A-Za-z'’-]*$/.test(bare);
+          });
+          const key = raw.slice(0, 80);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({
+            text: raw.slice(0, 120),
+            sel: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") +
+              (typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""),
+            hasCJK: CJK.test(raw),
+            proseCount: prose.length,
+            prose,                       // array: filtered again after the diff
+            proseList: prose.slice(0, 6).join(", "),
+            minWords,
+          });
+        }
+        return out;
+      }, { minWords: EN_PROSE_MIN_WORDS }).catch(() => []);
+    }
+    await ctx.close();
+    return perTab;
+  };
+
+  const zh = await collect("zh");
+  const en = await collect("en");
+  const rows = [];
+  for (const tab of TABS) {
+    const enTexts = new Set((en[tab] || []).map((e) => e.text));
+    for (const z of zh[tab] || []) {
+      // Different in en => it went through the dictionary (translated).
+      if (!enTexts.has(z.text)) continue;
+      // Already Chinese => not a leak.
+      if (z.hasCJK) continue;
+      // Second gate: fixture values (profile names, job results, team member
+      // names) are identical across locales too, but they are data the user
+      // supplies, not copy we author. Matching the corpus verbatim settles it.
+      if (fixtures.whole.has(z.text.toLowerCase())) continue;
+      // Third gate: copy that is deliberately English (brand, proper noun).
+      if (isIntentionallyEnglish(z.text)) continue;
+      // Third gate, composed form: the UI mixes data into chrome (the local
+      // badge renders "<device name> · <role>"). Such a string is not copy if
+      // every English word in it is either a fixture token or a role name, so
+      // score the words the way gate one scores the whole value.
+      const unexplained = z.prose.filter((w) => {
+        const bare = w.replace(/[.,;:!?()"'’]+$/g, "").toLowerCase();
+        return !fixtures.words.has(bare) && !isIntentionallyEnglish(bare) &&
+          !ROLE_WORDS.has(bare) && !/^[一-鿿]+$/.test(bare);
+      });
+      // Identical in both languages AND still reading as English prose once the
+      // data and role terms are accounted for => the string bypassed i18n. A
+      // single unexplained word is more likely an identifier that survived the
+      // per-word filters, so require prose.
+      if (unexplained.length < EN_PROSE_MIN_WORDS) continue;
+      rows.push({ tab, sel: z.sel, text: z.text, words: unexplained, identicalIn: "zh+en" });
+    }
+  }
+  return rows;
+}
+
+function printEnglishLeak(rows) {
+  console.log(`\n=== untranslated copy (same text in zh and en) ===`);
+  if (LANG === "en") { console.log("skipped (lang=en)"); return []; }
+  if (!rows.length) { console.log("clean — every visible string changes with the language"); return rows; }
+  for (const r of rows) console.log(`  [${r.tab}] ${r.sel} — "${r.text}" (words: ${r.words})`);
+  return rows;
+}
+
 // ── Geometry dump ───────────────────────────────────────────────────────────
 // Prints the *laid out* box of a subtree. Every row carries the box's vertical
 // centre (cy), so a misaligned row is readable as two siblings with different
@@ -770,6 +996,7 @@ try {
       overflow: async () => { const r = await auditOverflow(browser, Number(flag("width", 700))); printOverflow(r); return r.length; },
       errors: async () => { const r = await auditErrors(browser); printErrors(r); return r.length; },
       selectors: async () => { const r = auditSelectors(); printSelectors(r); return r.length; },
+      english: async () => { const r = await auditEnglishLeak(browser); printEnglishLeak(r); return LANG === "en" ? 0 : r.length; },
     };
     const run = runners[ONLY];
     if (!run) {
@@ -786,6 +1013,7 @@ try {
     const icons = await auditIconAlign(browser);
     const { rows: counts, dead, unstubbed } = await censusAndCoverage(browser);
     const selectors = auditSelectors();
+    const english = await auditEnglishLeak(browser);
     printErrors(errors);
     printOverflow(overflow);
     printContrast(contrast);
@@ -794,10 +1022,13 @@ try {
     printCoverage(dead, unstubbed);
     const thin = printCensus(counts);
     const garbage = printGarbage(counts);
-    // Dead call sites and leaked `undefined` are real defects; thin tabs and
-    // unstubbed paths are harness debt that silently undermines the rest.
-    const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length;
-    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${unstubbed.length} unstubbed, ${thin.length} thin`);
+    printEnglishLeak(english);
+    // Dead call sites, leaked `undefined`, and untranslated copy are real
+    // defects; thin tabs and unstubbed paths are harness debt that silently
+    // undermines the rest.
+    const enFails = LANG === "en" ? 0 : english.length;
+    const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + enFails;
+    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just
     // as something a human reads.
     if (failures > 0) process.exitCode = 1;

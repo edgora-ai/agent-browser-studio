@@ -55,13 +55,18 @@
     return value ? new Date(value).toLocaleString() : '-';
   }
 
+  // R146: this stopped at minutes, so a job with a stale start (a crash, or a
+  // clock skew) rendered as "535913m" — 372 days in a unit nobody reads. Past a
+  // day the minutes figure is noise anyway, so the scale rolls up.
   function jobDuration(job) {
     if (!job || !job.startedAt) return '-';
     var end = job.finishedAt || Date.now();
     var ms = Math.max(0, end - job.startedAt);
     if (ms < 1000) return ms + 'ms';
     if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
-    return Math.round(ms / 60000) + 'm';
+    if (ms < 3600000) return Math.round(ms / 60000) + 'm';
+    if (ms < 86400000) return (ms / 3600000).toFixed(1) + 'h';
+    return (ms / 86400000).toFixed(1) + 'd';
   }
 
   function jobSummary(job) {
@@ -249,7 +254,7 @@
         return '<div class="profile-card" data-job-id="' + escAttr(job.id) + '">' +
           '<div class="card-header"><span class="name">' + esc(job.ruleName || job.ruleId || job.id) + '</span>' + jobStatusBadge(job) + '</div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.job','Job')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.id) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t('auto.jobs.row.source','来源')) + '</span><span>' + esc(job.source || '-') + ' · attempt ' + esc(job.attempt) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('auto.jobs.row.source','来源')) + '</span><span>' + esc(job.source || '-') + ' · ' + esc(t('auto.jobs.attempt', 'attempt {n}').replace('{n}', String(job.attempt == null ? '-' : job.attempt))) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.created','创建')) + '</span><span>' + esc(fmtJobTime(job.createdAt)) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.duration','耗时')) + '</span><span>' + esc(jobDuration(job)) + '</span></div>' +
           (job.runId ? '<div class="info-row"><span>' + esc(t('auto.jobs.row.run','Run')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.runId) + '</span></div>' : '') +

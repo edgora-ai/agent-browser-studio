@@ -907,6 +907,23 @@ Personal, macos, en-GB, Europe/London, 67890,"></textarea>
  <div class="form-row"><label data-i18n="ext.dlg.field.url">Chrome Extension URL / ID *</label><input id="repo-ext-input" placeholder="https://chromewebstore.google.com/detail/..." required></div>
  <div class="form-row"><label data-i18n="ext.dlg.field.tags">Tags</label><input id="repo-ext-tags" placeholder="wallet, captcha, work"></div>
  <div class="form-row"><label><input type="checkbox" id="repo-ext-shared"> <span data-i18n="ext.dlg.field.shared">Mark as shareable in exported catalog</span></label></div>
+ <!-- R145: this dialog used to be store-only, so "Add Chrome Extension" was a
+      dead end for anything on disk. Both local paths now live here too; the
+      handlers close this dialog before opening the native picker so the
+      progress line on the tab behind it is actually visible. -->
+ <!-- R146: was a .form-row with a left-aligned label and a right-aligned
+      .btn-row, so "Or import from this computer" floated in a left column with
+      its buttons stranded on the opposite edge — and it broke the
+      label-above-field rhythm every other row in this dialog follows. It is
+      not a field, it is an alternative path, so it gets a divider and its own
+      left-aligned action row. -->
+ <div class="dialog-alt-path">
+ <span class="dialog-alt-path-label" data-i18n="ext.dlg.local">Or import from this computer</span>
+ <div class="btn-row start">
+ <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="extInstallFromDir" data-icon="folder"><span data-i18n="ext.btn.import-dir">Import from Folder</span></button>
+ <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="extInstallFromFile" data-icon="folder"><span data-i18n="ext.btn.import-crx">Import CRX/ZIP</span></button>
+ </div>
+ </div>
  <div id="repo-ext-save-status" class="status-note compact"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="ext.dlg.submit">Add / Update</button>

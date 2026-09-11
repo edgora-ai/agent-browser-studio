@@ -1,5 +1,6 @@
 import type { ProxyHealthEntry, ProxyHealthHistoryPoint, ProxyRiskLevel } from "../types.js";
 import { getConfig, getProxyHealthEntry, saveConfig, setProxyHealth } from "./config-manager.js";
+import { tMain } from "./main-i18n.js";
 
 
 export interface ProxyHealthObservation {
@@ -181,30 +182,38 @@ export function riskFromScore(score: number): ProxyRiskLevel {
   return "poor";
 }
 
+// R146: these were hardcoded Chinese, so the EN UI rendered Chinese on every
+// proxy card — the mirror image of the renderer's English leak. Text now comes
+// from tMain so it follows the UI language; the renderer pushes the user's
+// choice over IPC ("app:set-language"), so this stays in sync without the
+// main process knowing about the renderer's dictionary.
 export function suggestionFor(entry: ProxyHealthEntry): string | null {
   const now = Date.now();
   if (entry.cooldownUntil && now < entry.cooldownUntil) {
-    return "连续失败 ≥3 次，已进入 30 分钟冷却，建议先检查代理凭据或更换节点";
+    return tMain("proxy.sug.cooldown", "Repeated failures — in cooldown, check credentials or switch nodes");
   }
   if (entry.consecutiveFailures >= COOLDOWN_AFTER_FAILURES) {
-    return "连续失败，建议更换节点或检查代理配置";
+    return tMain("proxy.sug.consecutive", "Failing repeatedly — switch nodes or check the proxy configuration");
   }
   if ((entry.geoDriftCount || 0) >= 2) {
-    return "出口国家/地区频繁漂移，建议固定到单一节点";
+    return tMain("proxy.sug.geo-drift", "Exit country/region keeps drifting — pin this proxy to a single node");
   }
   if ((entry.ipDriftCount || 0) >= 2) {
-    return "出口 IP 频繁漂移，可能触发账号风控，建议使用固定 IP";
+    return tMain("proxy.sug.ip-drift", "Exit IP keeps drifting — use a fixed IP");
   }
   const latest = entry.history && entry.history.length ? entry.history[entry.history.length - 1] : null;
   if (latest?.success && latest.hosting === true) {
     const who = [latest.org, latest.as].filter(Boolean).join(" · ");
-    return `出口是机房/IDC IP${who ? `（${who}）` : ""}，云机房出口会被 ping0/平台风控标记（net.isidc），建议换住宅/非 IDC 出口`;
+    return tMain(
+      "proxy.sug.idc",
+      "Exit is a datacenter/IDC IP{who} — prefer a residential, non-IDC exit",
+    ).replace("{who}", who ? tMain("proxy.sug.idc-org", " ({who})").replace("{who}", who) : "");
   }
   if (typeof entry.avgLatencyMs === "number" && entry.avgLatencyMs > 800) {
-    return "延迟偏高，建议换更近的节点";
+    return tMain("proxy.sug.latency", "Latency is high — switch to a closer node");
   }
-  if (!entry.checks) return "尚未检测";
-  if (entry.risk === "good") return "状态良好";
+  if (!entry.checks) return tMain("proxy.sug.unchecked", "Not checked yet");
+  if (entry.risk === "good") return tMain("proxy.sug.good", "Healthy");
   return null;
 }
 
@@ -229,7 +238,15 @@ export function listProxyHealth(): ProxyHealthEntry[] {
   const entries: ProxyHealthEntry[] = [];
   for (const name of Object.keys(cfg.proxies || {})) {
     const entry = getProxyHealthEntry(name);
-    if (entry) entries.push(entry);
+    if (!entry) continue;
+    // R146: `suggestion` is *derived* copy, not a measurement, but it is
+    // persisted inside the health entry — so the string written when the check
+    // ran would keep its old language after the user switches locale. Recompute
+    // on read so the card always matches the active language. Nothing has to be
+    // written back: the stored copy is refreshed on the next detection.
+    const localized = suggestionFor(entry);
+    if (localized !== entry.suggestion) entry.suggestion = localized;
+    entries.push(entry);
   }
   return entries.sort((a, b) => b.lastCheckedAt - a.lastCheckedAt);
 }

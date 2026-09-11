@@ -361,9 +361,14 @@
   agentBrowser.loadSyncConfig = loadSyncConfig;
 
   // ══════ Team Workspace (RBAC) ══════
+  // R146: this was a plain English map that fed four render sites (role badges,
+  // the local-device badge, and two <option> lists), so the zh UI showed
+  // "Owner / Admin / Member / Viewer" in the default view. Kept as the English
+  // source of truth for the `t()` fallback; roleLabel() is how it is displayed.
   var ROLE_LABEL = { owner: 'Owner', admin: 'Admin', member: 'Member', viewer: 'Viewer' };
   var ROLE_ORDER_LIST = ['viewer', 'member', 'admin', 'owner'];
   var ROLE_CLASS = { owner: 'role-owner', admin: 'role-admin', member: 'role-member', viewer: 'role-viewer' };
+  function roleLabel(role) { return t('team.role.' + role, ROLE_LABEL[role] || role); }
 
   // Colours live in style.css, not inline: the old version interpolated the
   // *fill* tokens (--success / --warning / --primary) as foreground text, which
@@ -371,7 +376,7 @@
   // tokens are tuned for fills; --*-text are the ones meant to sit on them.
   function roleBadge(role) {
     var cls = ROLE_CLASS[role] || 'role-viewer';
-    return '<span class="status-badge ' + cls + '">' + esc(ROLE_LABEL[role] || role) + '</span>';
+    return '<span class="status-badge ' + cls + '">' + esc(roleLabel(role)) + '</span>';
   }
 
   function shortId(id) {
@@ -395,7 +400,7 @@
       // Never interpolate a raw field: a payload without `name` (older build,
       // REST peer, hand-edited config) would paint "undefined · Owner".
       var localLabel = local.name || shortId(local.deviceId) || t('team.this-device', 'This device');
-      badge.textContent = localLabel + ' · ' + (ROLE_LABEL[me] || me);
+      badge.textContent = localLabel + ' · ' + roleLabel(me);
     }
 
     if (!team) {
@@ -413,7 +418,7 @@
         if (me !== 'owner' && (r === 'owner' || r === 'admin')) disabled = ' disabled';
         if (me !== 'owner' && (m.role === 'owner' || m.role === 'admin')) disabled = ' disabled';
         if (m.deviceId === team.ownerDeviceId) disabled = ' disabled';
-        return '<option value="' + r + '"' + (m.role === r ? ' selected' : '') + disabled + '>' + ROLE_LABEL[r] + '</option>';
+        return '<option value="' + r + '"' + (m.role === r ? ' selected' : '') + disabled + '>' + esc(roleLabel(r)) + '</option>';
       }).join('');
       var actions = '';
       if (canManage && m.deviceId !== team.ownerDeviceId && !isMe) {
@@ -423,7 +428,7 @@
       var ownerMark = m.deviceId === team.ownerDeviceId ? ' · ' + t('sync.owner', 'owner') : '';
       return '<div class="profile-card" style="padding:8px;margin:6px 0;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
-        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color: var(--primary-text);">(this device)</em>' : '') + ownerMark + '</span>' +
+        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color: var(--primary-text);">' + esc(t('team.this-device', '(this device)')) + '</em>' : '') + ownerMark + '</span>' +
         '<div style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">' + esc(shortId(m.deviceId)) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:6px;">' + roleBadge(m.role) + actions + '</div>' +
         '</div>' +
@@ -433,12 +438,12 @@
     var addForm = '';
     if (canManage) {
       addForm =
-        '<div class="form-row"><label>Device ID</label><input id="team-add-device-id" placeholder="device-id-from-another-install"></div>' +
-        '<div class="form-row"><label>Name</label><input id="team-add-name" placeholder="Optional display name"></div>' +
-        '<div class="form-row"><label>Role</label><select id="team-add-role">' +
+        '<div class="form-row"><label>' + esc(t('team.add.device-id', 'Device ID')) + '</label><input id="team-add-device-id" placeholder="' + escAttr(t('team.add.device-id-ph', 'device-id-from-another-install')) + '"></div>' +
+        '<div class="form-row"><label>' + esc(t('team.add.name', 'Name')) + '</label><input id="team-add-name" placeholder="' + escAttr(t('team.add.name-ph', 'Optional display name')) + '"></div>' +
+        '<div class="form-row"><label>' + esc(t('team.add.role', 'Role')) + '</label><select id="team-add-role">' +
           ROLE_ORDER_LIST.map(function(r) {
             var disabled = (!isOwner && (r === 'owner' || r === 'admin')) ? ' disabled' : '';
-            return '<option value="' + r + '"' + disabled + '>' + ROLE_LABEL[r] + '</option>';
+            return '<option value="' + r + '"' + disabled + '>' + esc(roleLabel(r)) + '</option>';
           }).join('') +
         '</select></div>' +
         '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamAddMember">' + esc(t("team.add-member", "Add Member")) + '</button></div>';
@@ -448,11 +453,16 @@
       ? '<div class="form-row"><label>' + esc(t("team.rename-workspace", "Rename workspace")) + '</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename">' + esc(t("team.rename", "Rename")) + '</button></div>'
       : '';
     var enableControl = canManage
-      ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="team-enabled"' + (team.enabled !== false ? ' checked' : '') + '> Enforce team RBAC (viewers read-only, member+ push/delete, admin+ force push)</label>'
+      ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="team-enabled"' + (team.enabled !== false ? ' checked' : '') + '> ' + esc(t('team.enforce', 'Enforce team RBAC (viewers read-only, member+ push/delete, admin+ force push)')) + '</label>'
       : '';
 
     panel.innerHTML =
-      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Workspace <strong>' + esc(team.name) + '</strong> · ' + (team.members || []).length + ' member(s) · enforcement ' + (team.enabled !== false ? 'on' : 'off') + '</div>' +
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">' +
+        esc(t('team.summary.workspace', 'Workspace')) + ' <strong>' + esc(team.name) + '</strong> · ' +
+        esc(t('team.summary.members', '{n} member(s)').replace('{n}', (team.members || []).length)) + ' · ' +
+        esc(t('team.summary.enforcement', 'enforcement')) + ' ' +
+        esc(t(team.enabled !== false ? 'team.summary.on' : 'team.summary.off', team.enabled !== false ? 'on' : 'off')) +
+      '</div>' +
       renameControl +
       '<div style="margin:8px 0;">' + rows + '</div>' +
       addForm +

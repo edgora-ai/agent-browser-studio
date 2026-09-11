@@ -122,53 +122,63 @@
      scripts/visual-shot.mjs, which reports a querySelector/getElementById whose
      target no template ever produces. */
 
+  /* R145: the "Add Chrome Extension" dialog only accepted a Web Store URL, so
+     the primary entry point was a dead end for anything local — the folder
+     picker existed but sat behind a jargon-labelled secondary button. The
+     dialog now offers both local paths, so these handlers can be reached from
+     there too: close it first, otherwise the picker opens on top of a modal
+     and the progress line (#ext-install-status, on the tab behind the dialog)
+     is never seen. */
+
   extInstallFromFile: function() {
+        closeDialogIfOpen('dlg-extension-repo');
         api.settings.pickExtensionFile().then(function(filePath) {
           if (!filePath) return;
           var statusEl = document.getElementById('ext-install-status');
           var name = filePath.split('/').pop();
-          statusEl.innerHTML = '<span style="color: var(--primary-text);">Installing ' + esc(name) + '...</span>';
+          statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('ext.status.installing', 'Installing') + ' ' + name + '...') + '</span>';
           api.settings.installLocalExtension(filePath).then(function(r) {
             if (r.success) {
-              statusEl.innerHTML = '<span style="color: var(--success-text);">Installed ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
-              toast('Local extension installed', 'success');
+              statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t('ext.status.installed', 'Installed') + ' ' + ((r.entry && r.entry.name) || name) + ' v' + ((r.entry && r.entry.version) || '?')) + '</span>';
+              toast(t('toast.ext.local-installed', 'Local extension installed'), 'success');
               loadExtensionsTab();
               if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
-              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Install failed') + '</span>';
-              toast(r.error || 'Install failed', 'error');
+              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || t('toast.ext.local-failed', 'Install failed')) + '</span>';
+              toast(r.error || t('toast.ext.local-failed', 'Install failed'), 'error');
             }
           }).catch(function(e) {
             statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
             toast(e.message, 'error');
           });
         }).catch(function(e) {
-          toast('File picker failed: ' + e.message, 'error');
+          toast(t('ext.picker.file-failed', 'File picker failed: ') + e.message, 'error');
         });
       },
 
   extInstallFromDir: function() {
+        closeDialogIfOpen('dlg-extension-repo');
         api.settings.pickExtensionDir().then(function(dirPath) {
           if (!dirPath) return;
           var statusEl = document.getElementById('ext-install-status');
           var name = dirPath.split('/').pop();
-          statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing directory ' + esc(name) + '...</span>';
+          statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('ext.status.importing-dir', 'Importing folder') + ' ' + name + '...') + '</span>';
           api.settings.installLocalExtension(dirPath).then(function(r) {
             if (r.success) {
-              statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + esc((r.entry && r.entry.name) || name) + ' v' + esc((r.entry && r.entry.version) || '?') + '</span>';
-              toast('Directory extension imported', 'success');
+              statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t('ext.status.imported', 'Imported') + ' ' + ((r.entry && r.entry.name) || name) + ' v' + ((r.entry && r.entry.version) || '?')) + '</span>';
+              toast(t('toast.ext.dir-imported', 'Extension folder imported'), 'success');
               loadExtensionsTab();
               if (agentBrowser._extDirId) agentBrowser._extRefreshList();
             } else {
-              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Import failed') + '</span>';
-              toast(r.error || 'Import failed', 'error');
+              statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || t('toast.ext.dir-failed', 'Import failed')) + '</span>';
+              toast(r.error || t('toast.ext.dir-failed', 'Import failed'), 'error');
             }
           }).catch(function(e) {
             statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
             toast(e.message, 'error');
           });
         }).catch(function(e) {
-          toast('Directory picker failed: ' + e.message, 'error');
+          toast(t('ext.picker.dir-failed', 'Folder picker failed: ') + e.message, 'error');
         });
       },
 
@@ -302,26 +312,29 @@
     api.settings.extensionRepository(filter).then(function (entries) {
       if (statusEl) statusEl.textContent = (entries || []).length + t('ext.col.count', ' extension(s) in private repository');
       if (!entries || entries.length === 0) {
-        var emptyMsg = t('ext.empty', 'No extensions in the private repository. Click "Add Chrome Extension" to cache one from Chrome Web Store.');
+        // R145: used to point only at the Web Store, which hid the two local
+        // import paths on the header right next to it.
+        var emptyMsg = t('ext.empty', 'No extensions in the private repository. Add one from the Chrome Web Store, or import a local CRX/ZIP package or an unpacked extension folder from this computer.');
         if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{empty:emptyMsg}); } else container.innerHTML = '<div class="empty-state">' + esc(emptyMsg) + '</div>';
         return;
       }
       container.innerHTML = entries.map(function (e) {
         var tags = (e.tags || []).map(function (tag) { return '<span style="background:var(--surface2);border:1px solid var(--border);padding:1px 6px;border-radius:4px;font-size:10px;">' + esc(tag) + '</span>'; }).join(' ');
         return '<div class="profile-card" data-ext-id="' + escAttr(e.id) + '">' +
-          '<div class="card-header"><span class="name">' + esc(e.name || e.id) + '</span><span class="status-badge ' + (e.shared ? 'status-running' : 'status-stopped') + '">' + (e.shared ? 'Shared' : 'Private') + '</span></div>' +
-          '<div class="info-row"><span>Version</span><span>v' + esc(e.version || '?') + '</span></div>' +
-          '<div class="info-row"><span>ID</span><span title="' + escAttr(e.id) + '">' + esc(e.id.slice(0, 16)) + '…</span></div>' +
-          '<div class="info-row"><span>Source</span><span>' + (e.source === 'local' ? 'Local' : 'Chrome Web Store') + '</span></div>' +
-          '<div class="info-row"><span>Hash</span><span title="' + escAttr(e.packageHash || '') + '">' + esc((e.packageHash || '').slice(0, 12)) + '…</span></div>' +
+          '<div class="card-header"><span class="name">' + esc(e.name || e.id) + '</span><span class="status-badge ' + (e.shared ? 'status-running' : 'status-stopped') + '">' + esc(t(e.shared ? 'ext.badge.shared' : 'ext.badge.private', e.shared ? 'Shared' : 'Private')) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('ext.col.version', 'Version')) + '</span><span>v' + esc(e.version || '?') + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('ext.col.id', 'ID')) + '</span><span title="' + escAttr(e.id) + '">' + esc(e.id.slice(0, 16)) + '…</span></div>' +
+          // "Chrome Web Store" stays English: it is a proper noun, not copy.
+          '<div class="info-row"><span>' + esc(t('ext.col.source', 'Source')) + '</span><span>' + esc(e.source === 'local' ? t('ext.source.local', 'Local') : 'Chrome Web Store') + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('ext.col.hash', 'Hash')) + '</span><span title="' + escAttr(e.packageHash || '') + '">' + esc((e.packageHash || '').slice(0, 12)) + '…</span></div>' +
           (e.description ? '<div style="font-size:11px;color:var(--text-muted);line-height:1.35;margin:8px 0;">' + esc(e.description).slice(0, 160) + '</div>' : '') +
           (tags ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:6px 0;">' + tags + '</div>' : '') +
           '<div class="card-actions">' +
             (e.source === 'local'
-              ? '<button class="btn btn-secondary btn-sm" disabled title="' + escAttr(t('ext.local-no-update-title','本地扩展无法自动更新,请重新导入')) + '">Update</button> '
-              : '<button class="btn btn-secondary btn-sm" data-action="repo-update">Update</button> ') +
-            '<button class="btn btn-secondary btn-sm" data-action="repo-share">' + (e.shared ? 'Unshare' : 'Share') + '</button> ' +
-            '<button class="btn btn-danger btn-sm" data-action="repo-delete">Delete</button>' +
+              ? '<button class="btn btn-secondary btn-sm" disabled title="' + escAttr(t('ext.local-no-update-title','本地扩展无法自动更新,请重新导入')) + '">' + esc(t('ext.btn.update', 'Update')) + '</button> '
+              : '<button class="btn btn-secondary btn-sm" data-action="repo-update">' + esc(t('ext.btn.update', 'Update')) + '</button> ') +
+            '<button class="btn btn-secondary btn-sm" data-action="repo-share">' + esc(t(e.shared ? 'ext.btn.unshare' : 'ext.btn.share', e.shared ? 'Unshare' : 'Share')) + '</button> ' +
+            '<button class="btn btn-danger btn-sm" data-action="repo-delete">' + esc(t('common.delete', 'Delete')) + '</button>' +
           '</div>' +
         '</div>';
       }).join("");

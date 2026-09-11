@@ -2462,6 +2462,26 @@ code {
   overflow: auto;
 }
 .btn-row.tight { margin: 6px 0; }
+/* R146: left-aligned variant. .btn-row right-aligns because it is normally a
+   dialog footer; an alternative-path row reads as part of the form, so it
+   starts at the label edge like the fields above it. */
+.btn-row.start { justify-content: flex-start; margin-top: 8px; }
+
+/* R146: secondary path in a dialog (e.g. "Or import from this computer").
+   Carved off with a hairline so it reads as an alternative to the primary
+   form rather than as one more field in it. */
+.dialog-alt-path {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.dialog-alt-path-label {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
 #db-sql:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
 /* R64: log block owns its style (was 140-char inline + !important war). */
 #automation-log {

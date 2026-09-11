@@ -279,7 +279,10 @@
     data = data || {};
     var parts = [];
     if (data.screenWidth && data.screenHeight) parts.push(data.screenWidth + "x" + data.screenHeight);
-    if (data.hardwareConcurrency) parts.push(data.hardwareConcurrency + " cores");
+    if (data.hardwareConcurrency) {
+      // R146: was a bare "... cores", which stayed English in the zh UI.
+      parts.push(pi18n("fp.hw.cores", "{n} cores").replace("{n}", String(data.hardwareConcurrency)));
+    }
     if (data.deviceMemory) parts.push(data.deviceMemory + "GB");
     if (data.gpuRenderer) parts.push(shortenGpu(data.gpuRenderer));
     var auto = window.i18n ? window.i18n.t("fp.hw.auto", "seed-generated hardware") : "seed-generated hardware";

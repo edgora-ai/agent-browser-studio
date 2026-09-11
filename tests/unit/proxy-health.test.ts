@@ -21,6 +21,11 @@ vi.mock("electron", () => {
 });
 
 import { addProxy, reloadConfig, saveConfig, getConfig } from "../../src/main/services/config-manager.js";
+// R146: suggestionFor() is localized, so the assertions below are written in
+// Chinese. Pin the language rather than relying on the ambient default — the
+// main process starts in en-US, and a test that depends on that would flip
+// meaning the moment the default changed.
+import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 import {
   recordProxyDetection,
   computeScore,
@@ -49,6 +54,7 @@ describe("proxy health", () => {
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     fs.mkdirSync(TEST_USER_DATA, { recursive: true });
     reloadConfig();
+    setMainLanguage("zh-CN");
     addProxy("p1", { type: "http", host: "127.0.0.1", port: 7890 });
     addProxy("p2", { type: "http", host: "127.0.0.1", port: 7891 });
   });
@@ -165,5 +171,23 @@ describe("proxy health", () => {
     expect(p1!.history[0].isProxy).toBe(true);
     expect(p1!.history[0].hosting).toBe(false);
     expect(p1!.suggestion).not.toContain("机房/IDC");
+  });
+
+  // R146: the suggestion used to be hardcoded Chinese, so the English UI showed
+  // Chinese on every proxy card. It now follows tMain, and this pins that the
+  // English render carries no Chinese at all.
+  it("localizes the suggestion to the active language (R146)", () => {
+    recordProxyDetection("p1", { ...BASE, hosting: true, isProxy: false, org: "Oracle Corporation", as: "AS31898" });
+
+    setMainLanguage("en-US");
+    const en = listProxyHealth().find((e) => e.proxyName === "p1")!.suggestion!;
+    expect(en).toContain("datacenter");
+    expect(en).toContain("Oracle Corporation");
+    expect(en).not.toMatch(/[一-鿿]/);
+
+    setMainLanguage("zh-CN");
+    const zh = listProxyHealth().find((e) => e.proxyName === "p1")!.suggestion!;
+    expect(zh).toContain("机房/IDC");
+    expect(zh).toContain("Oracle Corporation");
   });
 });
