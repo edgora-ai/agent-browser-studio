@@ -2651,6 +2651,15 @@
       "ext.btn.share": "共享",
       "ext.btn.unshare": "取消共享",
       "ext.col.hash": "哈希",
+      // R146: keys referenced by t() but defined in neither locale. Each one
+      // silently rendered its fallback in both languages — and two had *Chinese*
+      // fallbacks, so they leaked Chinese into the English UI. Found by scanning
+      // call sites against the dictionary rather than by reading the UI.
+      "proxy.detect.not-found": "未找到",
+      "proxy.detect.failed": "检测失败",
+      "activity.toast.clear-failed": "清空失败：",
+      "approval.failed": "授权失败",
+      "proxy.default-tag": "默认",
       // R146: stored enums that were interpolated raw into the zh UI.
       // webrtcMode ∈ {auto, altered, real, disable}; event ∈ {started, stopped,
       // exit}. Fallback in the call site is the raw value, so an enum added by a
@@ -2780,6 +2789,11 @@
       "ext.btn.share": "Share",
       "ext.btn.unshare": "Unshare",
       "ext.col.hash": "Hash",
+      "proxy.detect.not-found": "Not found",
+      "proxy.detect.failed": "Detection failed",
+      "activity.toast.clear-failed": "Clear failed: ",
+      "approval.failed": "Authorization failed",
+      "proxy.default-tag": "default",
       "profile.meta.flag-desc": "deterministically generates GPU, screen, hardware, canvas, audio and fonts.",
       "profile.meta.flag-rule": "Same seed + platform + timezone + locale = 100% identical fingerprint.",
       "ext.dlg.footer-note": "Enable extensions from the private repository; changes apply on the next managed Chromium launch.",

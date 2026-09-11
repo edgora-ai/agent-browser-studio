@@ -100,6 +100,51 @@ if (fs.existsSync(HTML)) {
   }
 }
 
+// ── 1c. JS: t('key', …) call sites whose key exists in no locale ───────────
+// Such a call always renders its fallback, in *both* languages, so the string
+// silently ignores i18n. Two had Chinese fallbacks and therefore leaked Chinese
+// into the English UI ("清空失败: "). Nothing caught this before: the CJK pass
+// skips fallbacks (they are the translation) and the latin pass only reads HTML.
+// Scanned after the dictionary is parsed so it can be checked against it.
+function collectDefinedKeys() {
+  if (!fs.existsSync(I18N)) return null;
+  const src = fs.readFileSync(I18N, "utf-8");
+  const keys = new Set();
+  const re = /^\s{6}"([A-Za-z0-9_.\-]+)"\s*:/gm;
+  let m;
+  while ((m = re.exec(src))) keys.add(m[1]);
+  return keys;
+}
+const DEFINED_KEYS = collectDefinedKeys();
+
+function findUndefinedKeys() {
+  if (!DEFINED_KEYS) return [];
+  const found = [];
+  for (const dir of JS_DIRS) {
+    for (const file of walk(dir)) {
+      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      lines.forEach((line, index) => {
+        // Strip comments first: a comment that *names* a key (as the fix for one
+        // of these writes does) is documentation, not a call site.
+        const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+        if (!code.includes("t(")) return;
+        const re = /\bt\(\s*["']([A-Za-z0-9_.\-]+)["']\s*,/g;
+        let m;
+        while ((m = re.exec(code))) {
+          if (DEFINED_KEYS.has(m[1])) continue;
+          found.push({
+            file: path.relative(ROOT, file),
+            line: index + 1,
+            kind: "i18n-key-not-defined",
+            text: m[1] + "  — always falls back, in both locales",
+          });
+        }
+      });
+    }
+  }
+  return found;
+}
+
 // ── 2. JS: CJK string literals outside the translation table ───────────────
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -204,8 +249,10 @@ if (fs.existsSync(MAIN_I18N)) {
 }
 
 // ── Report ─────────────────────────────────────────────────────────────────
+problems.push(...findUndefinedKeys());
+
 if (problems.length) {
-  console.log(`\n✗ ${problems.length} untranslated hard-coded string(s) found:\n`);
+  console.log(`\n✗ ${problems.length} i18n problem(s) found:\n`);
   for (const p of problems) {
     console.log(`  ${p.file}:${p.line}  [${p.kind}]  ${p.text}`);
   }

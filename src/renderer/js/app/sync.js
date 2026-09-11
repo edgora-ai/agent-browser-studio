@@ -425,10 +425,14 @@
         actions = '<select class="team-role-select" data-device-id="' + escAttr(m.deviceId) + '" style="font-size:11px;height:24px;">' + roleOptions + '</select> ' +
           '<button class="btn btn-xs btn-danger" data-action="team-remove" data-device-id="' + escAttr(m.deviceId) + '">' + (window.i18n && window.i18n.t ? window.i18n.t('team.remove', 'Remove') : 'Remove') + '</button>';
       }
-      var ownerMark = m.deviceId === team.ownerDeviceId ? ' · ' + t('sync.owner', 'owner') : '';
+      // R146: this rendered `t('sync.owner', 'owner')` — a key that exists in
+      // neither locale, so it always fell back to the English literal, in both
+      // languages. It was also redundant: roleBadge() on the right already shows
+      // the role prominently, so each row said "owner" twice, once lowercase.
+      // The owner's identity is still unambiguous — the badge carries it.
       return '<div class="profile-card" style="padding:8px;margin:6px 0;">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">' +
-        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color: var(--primary-text);">' + esc(t('team.this-device', '(this device)')) + '</em>' : '') + ownerMark + '</span>' +
+        '<div><span class="name">' + esc(m.name || m.deviceId) + (isMe ? ' <em style="font-size:10px;color: var(--primary-text);">' + esc(t('team.this-device', '(this device)')) + '</em>' : '') + '</span>' +
         '<div style="font-family:var(--mono);font-size:10px;color:var(--text-muted);">' + esc(shortId(m.deviceId)) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:6px;">' + roleBadge(m.role) + actions + '</div>' +
         '</div>' +
