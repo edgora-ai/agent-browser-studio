@@ -32,6 +32,10 @@ import {
   getProxyRotationInfo,
 } from "../../src/main/services/config-manager.js";
 import { recordProxyDetection, recordProxyRotation } from "../../src/main/services/proxy-health.js";
+// R146: rotationReason is localized via tMain, so these assertions are written
+// in Chinese. Pin the language instead of depending on the ambient default,
+// which is en-US — otherwise the test would change meaning if the default moved.
+import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 
 function bindProfile(dirId: string, proxyName: string): void {
   const cfg = getConfig();
@@ -60,6 +64,7 @@ function makeUnhealthy(name: string): void {
 
 describe("proxy rotation", () => {
   beforeEach(() => {
+    setMainLanguage("zh-CN");
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     fs.mkdirSync(TEST_USER_DATA, { recursive: true });
     reloadConfig();

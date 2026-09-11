@@ -16,6 +16,7 @@ import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush } from "./te
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { listExtensionRepository, getExtensionRepoEntryDir, restoreSyncedExtensionPackage } from "./extension-repository.js";
+import { tMain } from "./main-i18n.js";
 import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig } from "../types.js";
 
 export interface SyncResult {
@@ -1604,31 +1605,68 @@ function buildSyncDiff(local: any, remote: any, payload: any, myDeviceId?: strin
   }
   remoteLocks.sort((a, b) => a.id.localeCompare(b.id));
 
+  // R146: these notes are rendered verbatim in the sync diff panel, so they were
+  // the last large block of Chinese copy reaching the English UI. They go
+  // through tMain with {n} / {ids} placeholders rather than string
+  // concatenation, because the clause order differs between the two languages
+  // and a translator cannot fix that by editing fragments.
   const pushWarnings: string[] = [];
   const pullNotes: string[] = [];
+  const idsOf = (list: string[]) =>
+    list.slice(0, 8).join(", ") + (list.length > 8 ? " (+" + (list.length - 8) + ")" : "");
   if (remoteLocks.length) {
-    pushWarnings.push("远端 " + remoteLocks.length + " 个 profile 被其他设备锁定，Push 会被拒绝（除非强制）: " + remoteLocks.map((l) => l.id).slice(0, 8).join(", ") + "（" + remoteLocks.map((l) => l.ownerName).filter((v, i, a) => a.indexOf(v) === i).slice(0, 3).join(", ") + "）");
+    const owners = remoteLocks.map((l) => l.ownerName).filter((v, i, a) => a.indexOf(v) === i).slice(0, 3).join(", ");
+    pushWarnings.push(
+      tMain("sync.warn.remote-locks", "{n} profile(s) are locked by another device; push will be rejected unless forced: {ids} ({owners})")
+        .replace("{n}", String(remoteLocks.length))
+        .replace("{ids}", remoteLocks.map((l) => l.id).slice(0, 8).join(", "))
+        .replace("{owners}", owners),
+    );
   }
   if (profiles.remoteOnly.length) {
-    pushWarnings.push("Push 会把 " + profiles.remoteOnly.length + " 个远端独有的 profile 从远端移除（本地不存在）: " + profiles.remoteOnly.slice(0, 8).join(", ") + (profiles.remoteOnly.length > 8 ? " (+" + (profiles.remoteOnly.length - 8) + ")" : ""));
+    pushWarnings.push(
+      tMain("sync.warn.push-removes-profiles", "Push will remove {n} remote-only profile(s) from the remote: {ids}")
+        .replace("{n}", String(profiles.remoteOnly.length))
+        .replace("{ids}", idsOf(profiles.remoteOnly)),
+    );
   }
   if (proxies.remoteOnly.length) {
-    pushWarnings.push("Push 会把 " + proxies.remoteOnly.length + " 个远端独有的代理从远端移除: " + proxies.remoteOnly.slice(0, 8).join(", ") + (proxies.remoteOnly.length > 8 ? " (+" + (proxies.remoteOnly.length - 8) + ")" : ""));
+    pushWarnings.push(
+      tMain("sync.warn.push-removes-proxies", "Push will remove {n} remote-only proxy/proxies from the remote: {ids}")
+        .replace("{n}", String(proxies.remoteOnly.length))
+        .replace("{ids}", idsOf(proxies.remoteOnly)),
+    );
   }
   if (extensions.remoteOnly.length) {
-    pushWarnings.push("Push 会把 " + extensions.remoteOnly.length + " 个远端独有的扩展从远端移除");
+    pushWarnings.push(
+      tMain("sync.warn.push-removes-extensions", "Push will remove {n} remote-only extension(s) from the remote")
+        .replace("{n}", String(extensions.remoteOnly.length)),
+    );
   }
   if (accounts.remoteOnly.length) {
-    pushWarnings.push("Push 会把 " + accounts.remoteOnly.length + " 个远端独有的账号从远端移除");
+    pushWarnings.push(
+      tMain("sync.warn.push-removes-accounts", "Push will remove {n} remote-only account(s) from the remote")
+        .replace("{n}", String(accounts.remoteOnly.length)),
+    );
   }
   if (profiles.remoteOnly.length) {
-    pullNotes.push("Pull 会把 " + profiles.remoteOnly.length + " 个远端独有的 profile 导入本地: " + profiles.remoteOnly.slice(0, 8).join(", ") + (profiles.remoteOnly.length > 8 ? " (+" + (profiles.remoteOnly.length - 8) + ")" : ""));
+    pullNotes.push(
+      tMain("sync.note.pull-imports-profiles", "Pull will import {n} remote-only profile(s): {ids}")
+        .replace("{n}", String(profiles.remoteOnly.length))
+        .replace("{ids}", idsOf(profiles.remoteOnly)),
+    );
   }
   if (proxies.remoteOnly.length) {
-    pullNotes.push("Pull 会把 " + proxies.remoteOnly.length + " 个远端独有的代理导入本地");
+    pullNotes.push(
+      tMain("sync.note.pull-imports-proxies", "Pull will import {n} remote-only proxy/proxies")
+        .replace("{n}", String(proxies.remoteOnly.length)),
+    );
   }
   if (profiles.changed.length) {
-    pullNotes.push("Pull 会用远端版本覆盖 " + profiles.changed.length + " 个两边都有的 profile 冲突字段（本地优先不覆盖整档）");
+    pullNotes.push(
+      tMain("sync.note.pull-overwrites-conflicts", "Pull will overwrite conflicting fields on {n} profile(s) present on both sides (local-first does not replace the whole profile)")
+        .replace("{n}", String(profiles.changed.length)),
+    );
   }
 
   return {

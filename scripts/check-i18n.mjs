@@ -20,6 +20,8 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const HTML = path.join(ROOT, "src/renderer/index.html");
 const I18N = path.join(ROOT, "src/renderer/js/i18n.js");
 const JS_DIRS = [path.join(ROOT, "src/renderer/js/app")];
+const MAIN_I18N = path.join(ROOT, "src/main/services/main-i18n.ts");
+let mainKeyReport = null;
 
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/;
 // `zh ? "一致性" : "Consistency"` — inline bilingual, already serves both locales.
@@ -171,6 +173,36 @@ if (fs.existsSync(I18N)) {
   }
 }
 
+// ── 3b. Main-process table: zh/en key parity ───────────────────────────────
+// The main process owns a second, separate dictionary (tray, proxy
+// suggestions, WebRTC summaries, sync warnings). Nothing checked it, so a key
+// added only to one locale would silently fall back to the hardcoded English
+// default in tMain — the same shape of bug as the renderer leak this script
+// already guards, one layer down.
+if (fs.existsSync(MAIN_I18N)) {
+  const src = fs.readFileSync(MAIN_I18N, "utf-8");
+  const grab = (from) => {
+    const body = src.slice(from);
+    const keys = new Set();
+    const re = /^\s{4}"([\w.\-]+)"\s*:/gm;
+    let k;
+    while ((k = re.exec(body))) keys.add(k[1]);
+    return keys;
+  };
+  const zhAt = src.indexOf('"zh-CN": {');
+  const enAt = src.indexOf('"en-US": {');
+  if (zhAt >= 0 && enAt >= 0 && enAt > zhAt) {
+    const zh = grab(zhAt);
+    const en = grab(enAt);
+    mainKeyReport = {
+      zh: zh.size,
+      en: en.size,
+      missingInEn: [...zh].filter((k) => !en.has(k)),
+      missingInZh: [...en].filter((k) => !zh.has(k)),
+    };
+  }
+}
+
 // ── Report ─────────────────────────────────────────────────────────────────
 if (problems.length) {
   console.log(`\n✗ ${problems.length} untranslated hard-coded string(s) found:\n`);
@@ -185,9 +217,17 @@ if (keyReport) {
   if (keyReport.missingInZh.length) console.log(`  missing in zh: ${keyReport.missingInZh.slice(0, 20).join(", ")}`);
 }
 
+if (mainKeyReport) {
+  console.log(`\nmain-process key parity: zh=${mainKeyReport.zh} en=${mainKeyReport.en}`);
+  if (mainKeyReport.missingInEn.length) console.log(`  missing in en: ${mainKeyReport.missingInEn.slice(0, 20).join(", ")}`);
+  if (mainKeyReport.missingInZh.length) console.log(`  missing in zh: ${mainKeyReport.missingInZh.slice(0, 20).join(", ")}`);
+}
+
 const keyMismatch = keyReport && (keyReport.missingInEn.length > 0 || keyReport.missingInZh.length > 0);
-if (problems.length || keyMismatch) {
-  console.log(`\n${problems.length} string problem(s), key parity ${keyMismatch ? "FAILED" : "ok"}\n`);
-  process.exit(strict || problems.length ? 1 : 0);
+const mainKeyMismatch = mainKeyReport && (mainKeyReport.missingInEn.length > 0 || mainKeyReport.missingInZh.length > 0);
+if (problems.length || keyMismatch || mainKeyMismatch) {
+  const parity = keyMismatch || mainKeyMismatch ? "FAILED" : "ok";
+  console.log(`\n${problems.length} string problem(s), key parity ${parity}\n`);
+  process.exit(strict || problems.length || mainKeyMismatch ? 1 : 0);
 }
 console.log("\n✓ i18n check passed\n");

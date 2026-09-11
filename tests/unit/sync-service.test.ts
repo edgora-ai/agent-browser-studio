@@ -18,6 +18,7 @@ vi.mock("electron", () => {
 
 import { __syncTestHooks, signV2, signS3Request } from "../../src/main/services/sync-service.js";
 import { getProfilesDir, getConfig } from "../../src/main/services/config-manager.js";
+import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 
 const TEST_HOME = path.join(os.tmpdir(), "agent-browser-sync-test-home");
 
@@ -164,6 +165,7 @@ describe("AWS Signature V4 (signS3Request)", () => {
 
 describe("Sync service hardening", () => {
   beforeEach(() => {
+    setMainLanguage("zh-CN");
     fs.rmSync(TEST_HOME, { recursive: true, force: true });
   });
 

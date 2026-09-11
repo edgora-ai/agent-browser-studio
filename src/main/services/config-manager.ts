@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
+import { tMain } from "./main-i18n.js";
 import { transact as storeTransact, readSnapshot, setAfterTransactHook, setConfigBaseProvider, setNormalizer } from "./config/store.js";
 import {
   clearLegacySecretMigrationCache,
@@ -390,8 +391,14 @@ function rotationReasonFor(name: string): string | null {
   const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
   if (!health) return null;
   const now = Date.now();
-  if (health.cooldownUntil && health.cooldownUntil > now) return "冷却中（连续失败）";
-  if (health.risk === "poor") return "健康评分较差";
+  // R146: rendered in the proxy card's rotation row, so it follows the UI
+  // language rather than the main process's source language.
+  if (health.cooldownUntil && health.cooldownUntil > now) {
+    return tMain("proxy.rotate.reason-cooldown", "in cooldown (repeated failures)");
+  }
+  if (health.risk === "poor") {
+    return tMain("proxy.rotate.reason-poor", "health score is poor");
+  }
   return null;
 }
 

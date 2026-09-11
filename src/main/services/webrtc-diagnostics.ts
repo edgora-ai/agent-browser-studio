@@ -10,6 +10,7 @@ import { statusBrowser, launchBrowser } from "./browser-manager.js";
 import { getWebRtcDiagnostics, setWebRtcDiagnostics } from "./config-manager.js";
 import { clearWebRtcDiagnostics as clearStoredWebRtcDiagnostics } from "./config-manager.js";
 import { recordAudit } from "./audit-log.js";
+import { tMain } from "./main-i18n.js";
 import { evaluateInPage, navigateInPage, getProfileEngineByDirId } from "./page-eval.js";
 import type { WebRtcDiagnosticsEntry } from "../types.js";
 
@@ -87,15 +88,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// R146: this summary is rendered verbatim in the WebRTC diagnostics panel, so
+// hardcoded Chinese showed up in the English UI. It goes through tMain now,
+// like the proxy suggestions. The ⚠️/✅ prefixes are dropped: the panel already
+// paints a RISK/PASS badge and tints the leak row red, so the glyphs restated
+// the same verdict and the emoji set was retired from this UI in R127.
 function summarizeRaw(res: any): string {
-  if (!res) return "探测无结果";
-  if (res.rtcAvailable === false) return "WebRTC 不可用（被指纹策略禁用或移除）";
-  if (res.error) return "⚠️ 探测异常: " + String(res.error);
+  if (!res) return tMain("webrtc.sum.no-result", "No result from the probe");
+  if (res.rtcAvailable === false) {
+    return tMain("webrtc.sum.unavailable", "WebRTC unavailable (disabled or removed by fingerprint policy)");
+  }
+  if (res.error) {
+    return tMain("webrtc.sum.error", "Probe error: ") + String(res.error);
+  }
   const hostIps: string[] = Array.isArray(res.hostIps) ? res.hostIps : [];
   const mdns: string[] = Array.isArray(res.mdnsHosts) ? res.mdnsHosts : [];
-  if (hostIps.length) return "⚠️ 暴露本地 IP: " + hostIps.join(", ");
-  if (mdns.length) return "✅ 仅暴露 mDNS 主机名，无本地 IP 泄漏";
-  return "✅ 未检测到本地 IP 泄漏";
+  if (hostIps.length) return tMain("webrtc.sum.host-ip", "Local IP exposed: ") + hostIps.join(", ");
+  if (mdns.length) return tMain("webrtc.sum.mdns-only", "Only mDNS hostnames exposed — no local IP leak");
+  return tMain("webrtc.sum.clean", "No local IP leak detected");
 }
 
 export interface WebRtcDiagRunResult {
