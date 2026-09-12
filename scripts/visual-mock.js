@@ -197,13 +197,19 @@
 
   // `target` must match targetKind(): job_* / run_* / (ab_|cb_)* — that prefix
   // is what gates the "open job/run/profile" buttons.
+  // R152: these fixtures used to invent audit shapes the backend never writes
+  // (action "proxy.health-check", "automation.job.finished", " · "-separated
+  // detail prose), which made the activity page render log lines no user will
+  // ever see. Every entry below mirrors a real recordAudit() call site —
+  // browser-manager.ts launch, local-agent.ts llm save, launch-guards.ts drift,
+  // idle-tracker.ts auto-stop — same action names, same key=value detail format.
   var auditEntries = [
-    { category: "profile", action: "profile.launch", target: "cb_amazon", actor: "user", at: NOW - 90000, detail: "Chromium 152.0.7977.72 · proxy hk01" },
-    { category: "proxy", action: "proxy.health-check", target: "us-residential", actor: "system", at: NOW - HOUR, detail: "score 38 · exit flagged as datacenter" },
-    { category: "automation", action: "automation.job.finished", target: "job_7c4a", actor: "system", at: NOW - HOUR * 2, detail: "attempt 2 · failed at step 9" },
-    { category: "agent", action: "agent.run.completed", target: "run_9f0b", actor: "user", at: NOW - 90000, detail: "检查 hk01 代理的指纹漂移" },
-    { category: "llm", action: "llm.config.saved", target: null, actor: "user", at: NOW - DAY, detail: "provider openai · model gpt-5.5-high" },
-    { category: "settings", action: "settings.agentFs.saved", target: null, actor: "user", at: NOW - DAY * 3, detail: "mode allowlist · 2 entries" },
+    { category: "profile", action: "launch", target: "cb_amazon", actor: "user", at: NOW - 90000, detail: "pid=4127 cdpPort=9222 fingerprint=managed browser=Chromium 152.0.7977.72" },
+    { category: "profile", action: "fingerprint-drift", target: "cb_amazon", actor: "auto", at: NOW - HOUR, detail: "3 field(s) changed (risky): userAgent, platform, hardwareConcurrency" },
+    { category: "automation", action: "job-cancel", target: "job_7c4a", actor: "api", at: NOW - HOUR * 2, detail: "job cancelled via API" },
+    { category: "agent", action: "bind", target: "https://example.com/login", actor: "user", at: NOW - 90000, detail: "profiles=2" },
+    { category: "llm", action: "save", target: null, actor: "user", at: NOW - DAY, detail: "provider=openai model=gpt-5.5-high" },
+    { category: "profile", action: "stop", target: "cb_amazon", actor: "auto", at: NOW - DAY * 3, detail: "idle timeout" },
   ];
 
   var automationRules = [

@@ -23,6 +23,75 @@
     settings: { icon: "settings", label: function(){ return t("activity.cat.settings", "设置"); } },
   };
 
+  // R152: e.action is a stored enum (browser-manager writes "launch",
+  // "fingerprint-drift"; proxy writes "export"; ...) and used to render raw —
+  // the same class of defect R146 fixed for the `actor` enum on this same
+  // line. Map the enums the backend actually writes (surveyed from all
+  // recordAudit() call sites) to locale labels; anything unmapped falls
+  // through to the raw enum so a new backend action degrades to today's
+  // behaviour instead of "?"
+  var ACTION_LABEL_KEYS = {
+    "launch": "activity.act.launch",
+    "stop": "activity.act.stop",
+    "delete": "activity.act.delete",
+    "create": "activity.act.create",
+    "add": "activity.act.add",
+    "update": "activity.act.update",
+    "save": "activity.act.save",
+    "export": "activity.act.export",
+    "export-batch": "activity.act.export-batch",
+    "import": "activity.act.import",
+    "rotate": "activity.act.rotate",
+    "qrcode-export": "activity.act.qrcode-export",
+    "reveal-password": "activity.act.reveal-password",
+    "copy-username": "activity.act.copy-username",
+    "copy-password": "activity.act.copy-password",
+    "bind": "activity.act.bind",
+    "bulk-add": "activity.act.bulk-add",
+    "bulk-create-profiles": "activity.act.bulk-create-profiles",
+    "fingerprint-drift": "activity.act.fingerprint-drift",
+    "fingerprint-drift-block": "activity.act.fingerprint-drift-block",
+    "fingerprint-drift-error": "activity.act.fingerprint-drift-error",
+    "injection-probe-block": "activity.act.injection-probe-block",
+    "env-risk-high": "activity.act.env-risk-high",
+    "env-risk-block": "activity.act.env-risk-block",
+    "env-risk-error": "activity.act.env-risk-error",
+    "consistency-warning": "activity.act.consistency-warning",
+    "consistency-blocker": "activity.act.consistency-blocker",
+    "dns-route": "activity.act.dns-route",
+    "drm-enable": "activity.act.drm-enable",
+    "drm-disable": "activity.act.drm-disable",
+    "drm-probe": "activity.act.drm-probe",
+    "webrtc-diagnostic": "activity.act.webrtc-diagnostic",
+    "purge": "activity.act.purge",
+    "restore": "activity.act.restore",
+    "job-cancel": "activity.act.job-cancel",
+    "conversation-create": "activity.act.conversation-create",
+    "conversation-rename": "activity.act.conversation-rename",
+    "conversation-delete": "activity.act.conversation-delete",
+    "run-delete": "activity.act.run-delete",
+    "runs-clear": "activity.act.runs-clear",
+    "exec": "activity.act.exec",
+    "install": "activity.act.install",
+    "set-meta": "activity.act.set-meta",
+    "team-init": "activity.act.team-init",
+    "team-rename": "activity.act.team-rename",
+    "team-enabled": "activity.act.team-enabled",
+    "member-add": "activity.act.member-add",
+    "member-remove": "activity.act.member-remove",
+    "member-role": "activity.act.member-role",
+    "resolve": "activity.act.resolve",
+    "activate": "activity.act.activate",
+    "rollback": "activity.act.rollback",
+    "auto-rollback": "activity.act.auto-rollback",
+    "install-request": "activity.act.install-request",
+    "activate-request": "activity.act.activate-request",
+  };
+  function actionLabel(action) {
+    var key = ACTION_LABEL_KEYS[String(action || "")];
+    return key ? t(key, String(action)) : String(action || "?");
+  }
+
   function fmtTime(ms) {
     try { return new Date(ms).toLocaleString(); } catch (e) { return String(ms); }
   }
@@ -39,8 +108,15 @@
     var target = entry && entry.target;
     if (!target) return "";
     var value = String(target);
-    var short = value.slice(0, 24);
-    var code = ' <code style="font-family:var(--mono);font-size:11px;">' + esc(short) + '</code>';
+    // R152: was slice(0, 24) — a character cut that clipped
+    // "https://example.com/login" to "https://example.com/logi": mid-word,
+    // with no "…" to even signal the loss. The full value goes into the DOM
+    // (title keeps the whole string on hover) and CSS caps the chip width;
+    // a <code> element is inline, and text-overflow only applies to a block
+    // box's own line, so inline-block is what makes the ellipsis real. The
+    // full string also survives for the open-job/run/profile buttons, whose
+    // data-target-id always carried it.
+    var code = ' <code class="activity-target" title="' + escAttr(value) + '">' + esc(value) + "</code>";
     var kind = targetKind(value);
     var category = entry.category || "";
     if (category === "automation" && kind === "job") return code + ' <button class="btn btn-secondary btn-sm" data-activity-action="open-job" data-target-id="' + escAttr(value) + '">' + esc(t('activity.btn.open-job','查看 Job')) + '</button>';
@@ -102,7 +178,7 @@
             /* R142: icon + action name are one `.icon-text` row — as a bare
                inline svg the category glyph sat 1.3px off the label baseline.
                actor/target stay outside it so they keep wrapping with the row. */
-            '<span><span class="icon-text">' + icon(meta.icon, 13) + '<strong>' + esc(e.action || "?") + '</strong></span>' + actor + target + '</span>' +
+            '<span><span class="icon-text">' + icon(meta.icon, 13) + '<strong>' + esc(actionLabel(e.action)) + '</strong></span>' + actor + target + '</span>' +
             '<span class="hint-line" style="white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
           "</div>" + detail + "</div>";
       }).join("");

@@ -2598,6 +2598,22 @@ dialog textarea:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px
    Migrate incrementally: new code uses the class, old inline stays valid. */
 .hint-line { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .hint-line-lg { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+/* R152: audit target chip. The value used to be cut in JS at 24 chars, which
+   clipped "https://example.com/login" to "…/logi" mid-word with no ellipsis.
+   Now the full value renders and the chip caps itself. text-overflow applies
+   to a block box's own line only, so a bare <code> (inline) ignores it —
+   inline-block is what turns the cap into a real "…". The full string stays
+   reachable via the title tooltip. */
+.activity-target {
+  display: inline-block;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: var(--mono);
+  font-size: 11px;
+}
 /* R101: semantic note utilities — converge 60+ font-size/color/margin inlines. */
 .field-note { font-size: 11px; line-height: 1.55; color: var(--text-muted); margin: 6px 0 0; }
 .field-note-tight { font-size: var(--fs-micro); line-height: 1.5; color: var(--text-muted); margin: 4px 0 0; }
