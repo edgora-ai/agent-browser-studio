@@ -592,7 +592,7 @@
       "runs.group.expand-n": "展开/收起 {n} 个 profile 结果",
 
       // ── Approval ──
-      "approval.signature": "签名：",
+      "approval.signature": "签名",
       "approval.allowed": "已允许",
       "approval.allowed-always": "已允许（永久）",
       "approval.denied": "已拒绝",
@@ -1626,7 +1626,7 @@
       "runs.group.expand-n": "Expand/collapse {n} profile result(s)",
 
       // ── Approval ──
-      "approval.signature": "Signature:",
+      "approval.signature": "Signature",
       "approval.allowed": "Allowed",
       "approval.allowed-always": "Allowed (permanent)",
       "approval.denied": "Denied",

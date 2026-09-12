@@ -268,7 +268,28 @@
   // instead of a bare `x()`, and so the root proxy below never has to guess.
   function def(name, spec) { mock[name] = ns(spec, name); return mock[name]; }
 
-  mock.on = function () {};
+  // R175: was a no-op, which made every event-driven surface untestable —
+  // dlg-approval (agent:approval-request), the batch progress bar
+  // (batch:progress), live run updates (agent:run-*) and the profile/browser
+  // state refreshes. Recording listeners lets a probe fire the same events the
+  // main process would. Mirrors preload.cjs `on(channel, cb)` with its
+  // channel allowlist, so a typo'd channel is silently ignored there too.
+  var EVENT_CHANNELS = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call",
+    "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error",
+    "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress"];
+  var eventListeners = {};
+  mock.on = function (channel, cb) {
+    if (typeof cb !== "function") return;
+    if (EVENT_CHANNELS.indexOf(channel) === -1) return;
+    (eventListeners[channel] = eventListeners[channel] || []).push(cb);
+  };
+  mock.emit = function (channel) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    (eventListeners[channel] || []).forEach(function (cb) {
+      try { cb.apply(null, args); } catch (e) { /* a listener throwing must not stop the others */ }
+    });
+  };
+  mock.listenerCount = function (channel) { return (eventListeners[channel] || []).length; };
   def("agent", {
       conversations: ns({
         list: function () {

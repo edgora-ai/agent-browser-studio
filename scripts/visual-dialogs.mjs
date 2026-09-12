@@ -109,7 +109,14 @@ const DIALOGS = [
       { ok: true, item: "prof_qa", value: { name: "QA Local" } },
       { ok: false, item: "prof_cjk", value: { name: "短名字测试中文截断效果看看会不会溢出" }, error: "CDP port 9222 already in use by another profile" },
     ] }, arg2: "launch" },
-  { id: "dlg-approval", cmd: null, skip: "opens on a main-process approval request" },
+  // Event-driven: the mock records api.on listeners (R175), so firing the same
+  // channel the main process uses opens it. Payload mirrors ApprovalRequest
+  // (approval-gate.ts:7).
+  { id: "dlg-approval", emit: "agent:approval-request", emitArg: {
+      id: "apr_5f21", runId: "run_9f0b", category: "db-write", tool: "db_exec",
+      description: "Run UPDATE on the profiles table (3 rows)", detail: "UPDATE profiles SET note = ? WHERE dirId = ?",
+      createdAt: 1757000000000,
+    } },
   { id: "dlg-license", cmd: null, skip: "opens from the license surface" },
   { id: "dlg-terms", cmd: null, skip: "first-run only; accepted in setup" },
   { id: "dlg-confirm", cmd: null, skip: "covered separately (see probeConfirm)" },
@@ -142,18 +149,25 @@ async function boot(browser, lang) {
 
 // Open one dialog and return what the user would see.
 async function inspect(page, d) {
-  return page.evaluate(async ({ id, cmd, arg, arg2 }) => {
+  return page.evaluate(async ({ id, cmd, arg, arg2, emit, emitArg }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
-    // cmd may be dotted (e.g. "batch.showResult") — resolve through the path
-    // so nested exports are reachable, not just top-level ones.
-    const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
-    if (typeof fn !== "function") return { skipped: `no command ${cmd}` };
-    try {
-      if (arg2 !== undefined) await fn(arg, arg2);
-      else if (arg !== undefined) await fn(arg);
-      else await fn();
-    } catch (e) {
-      return { threw: String((e && e.message) || e) };
+    if (emit) {
+      // Fire the same IPC channel the main process broadcasts on.
+      if (typeof window.agentBrowserAPI.emit !== "function") return { skipped: "mock has no emit" };
+      if (window.agentBrowserAPI.listenerCount(emit) === 0) return { skipped: `no listener for ${emit}` };
+      window.agentBrowserAPI.emit(emit, emitArg);
+    } else {
+      // cmd may be dotted (e.g. "batch.showResult") — resolve through the path
+      // so nested exports are reachable, not just top-level ones.
+      const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
+      if (typeof fn !== "function") return { skipped: `no command ${cmd}` };
+      try {
+        if (arg2 !== undefined) await fn(arg, arg2);
+        else if (arg !== undefined) await fn(arg);
+        else await fn();
+      } catch (e) {
+        return { threw: String((e && e.message) || e) };
+      }
     }
     await new Promise((r) => setTimeout(r, 450));
     const dlg = document.getElementById(id);
@@ -196,7 +210,7 @@ async function run(lang) {
   const out = {};
   for (const d of DIALOGS) {
     if (ONLY && d.id !== ONLY) continue;
-    if (d.cmd === null) { out[d.id] = { skipped: d.skip }; continue; }
+    if (!d.cmd && !d.emit) { out[d.id] = { skipped: d.skip }; continue; }
     out[d.id] = await inspect(page, d);
     if (WANT_SHOTS && out[d.id].open) {
       fs.mkdirSync(OUT, { recursive: true });

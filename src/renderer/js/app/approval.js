@@ -15,7 +15,13 @@
   function show(req) {
     currentRequest = req;
     document.getElementById("approval-desc").textContent = req.description || "";
-    document.getElementById("approval-detail").textContent = req.detail ? t("approval.signature","签名: ") + req.detail : "";
+    // R175: the separator lived in the dict value ("签名：" / "Signature:"), so
+    // the two locales disagreed — zh's full-width colon supplies its own gap,
+    // en's half-width one does not, rendering "Signature:UPDATE …". Join
+    // explicitly instead; a translator should not have to encode layout in
+    // punctuation. (Same class as runs.source.schedule, fixed in R146.)
+    document.getElementById("approval-detail").textContent =
+      req.detail ? t("approval.signature", "签名") + ": " + req.detail : "";
     var dlg = document.getElementById("dlg-approval");
     if (!dlg.open) dlg.showModal();
   }
