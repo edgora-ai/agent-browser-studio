@@ -1829,8 +1829,18 @@ dialog p {
   text-overflow: ellipsis;
   line-height: 1.5;
 }
-.db-grid th { background: var(--surface); font-weight: 600; position: sticky; top: 0; }
-.db-grid tbody tr:nth-child(even) { background: var(--surface); }
+/* R148: this row pair was inverted. The table sits on a `--surface` card, and
+   both rules painted `--surface` — so the header band and the zebra stripe were
+   the *same colour as the card behind them*, i.e. invisible. The visible
+   result was the opposite of the intent: odd rows looked shaded (plain card)
+   and the header looked like a body row, so the grid read as one flat block
+   with no column labels. Measured: th and even-row bg both rgb(255,255,255) on
+   a white card, rgb(26,29,40) on the dark one.
+   `--surface2` is the token for "one step off the card", already used for
+   nested surfaces elsewhere. The header takes it and the stripe is dropped —
+   a tinted header plus a stripe is two competing devices for one job, and at
+   12px mono the stripe was doing more harm than the header. */
+.db-grid th { background: var(--surface2); font-weight: 600; position: sticky; top: 0; }
 /* R47: db row hover joins pill-bg (same value, one name). */
 .db-table-row:hover { background: var(--pill-bg); }
 

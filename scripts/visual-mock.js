@@ -153,6 +153,37 @@
     { name: "proxy_health", rowCount: 942 },
     { name: "agent_messages", rowCount: 5013 },
   ];
+  // Rows for the table drill-down. The values deliberately include the three
+  // cases the grid has to survive: NULL (renders the (null) placeholder), a
+  // value past the 80-char truncation, and CJK — all of which a tidy fixture
+  // would hide.
+  var dbTableRows = {
+    profiles: [
+      { id: 1, name: "Amazon US Shop", platform: "windows", proxy_mode: "named", seed: 54321, last_used: "2025-09-02 23:33:20" },
+      { id: 2, name: "QA Local", platform: "macos", proxy_mode: "default", seed: 10042, last_used: "2025-09-04 18:33:20" },
+      { id: 3, name: "Firefox Pass-through", platform: "macos", proxy_mode: null, seed: 7781, last_used: null },
+      { id: 4, name: "短名字测试中文截断效果看看会不会溢出", platform: "windows", proxy_mode: "none", seed: 20250904, last_used: "2025-09-04 14:33:20" },
+      { id: 5, name: "A Very Long Profile Name That Should Definitely Be Truncated By Ellipsis Rules", platform: "windows", proxy_mode: "named", seed: 908172, last_used: "2025-08-05 23:33:20" },
+    ],
+    proxy_health: [
+      { id: 1, proxy_name: "hk01", score: 92, risk: "good", hosting: 0, is_proxy: 0, org: "HKT Limited", checked_at: "2025-09-04 22:33:20" },
+      { id: 2, proxy_name: "us-residential", score: 38, risk: "poor", hosting: 1, is_proxy: 1, org: "DigitalOcean", checked_at: "2025-09-04 22:33:20" },
+      { id: 3, proxy_name: "de-datacenter", score: 61, risk: "watch", hosting: 1, is_proxy: 0, org: null, checked_at: "2025-09-03 11:02:05" },
+    ],
+    agent_messages: [
+      { id: 1, run_id: "run_9f0b", role: "user", content: "帮我看下 hk01 这个代理的指纹有没有漂移", created_at: "2025-09-04 23:31:20" },
+      { id: 2, run_id: "run_9f0b", role: "assistant", content: "先跑了指纹基线对比，再查 WebRTC。结论：指纹一致，但 WebRTC 暴露了本机内网地址。", created_at: "2025-09-04 23:31:50" },
+      { id: 3, run_id: "run_9f1e", role: "tool", content: "step 9 failed: selector .price not found", created_at: "2025-09-04 21:33:20" },
+    ],
+  };
+  // Used when a table is empty, so the grid still knows its columns (the real
+  // handler reads them from PRAGMA table_info, which returns them regardless of
+  // row count).
+  var dbTableColumns = {
+    profiles: ["id", "name", "platform", "proxy_mode", "seed", "last_used"],
+    proxy_health: ["id", "proxy_name", "score", "risk", "hosting", "is_proxy", "org", "checked_at"],
+    agent_messages: ["id", "run_id", "role", "content", "created_at"],
+  };
 
   var runs = [
     // Two runs sharing source.jobId → renders one grouped card (groupRuns).
@@ -309,7 +340,23 @@
         return Promise.resolve(clone(list));
       },
   });
-  def("agentDb", { tables: function () { return Promise.resolve(clone(dbTables)); } });
+  def("agentDb", {
+    tables: function () { return Promise.resolve(clone(dbTables)); },
+    // Shape follows agentDbTableData in src/main/services/agent-db.ts, which
+    // always returns { rows, total, columns } — `total` is a COUNT(*) of the
+    // whole table, not rows.length. Without this the SQL result view was never
+    // exercised at all: the db tab's 87-char census was a pure empty state, so
+    // every "clean" verdict for it was vacuous, and a real render bug hid there
+    // (db.table-empty had been truncated mid-markup into "表 <code>").
+    tableData: function (table, limit, offset) {
+      var all = dbTableRows[table] || [];
+      var off = Math.max(0, offset || 0);
+      var lim = Math.max(1, limit || 100);
+      var page = all.slice(off, off + lim);
+      var columns = page.length ? Object.keys(page[0]) : (dbTableColumns[table] || []);
+      return Promise.resolve({ rows: clone(page), total: all.length, columns: columns.slice() });
+    },
+  });
   def("agentRuns", { list: function () { return Promise.resolve(clone(runs)); } });
   def("audit", {
       list: function (opts) {

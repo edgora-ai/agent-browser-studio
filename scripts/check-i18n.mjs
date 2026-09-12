@@ -253,6 +253,86 @@ function findSeparatorLeaks() {
   return found;
 }
 
+// ── 1e. Dictionary values that drop a placeholder the fallback supplies ────
+// Every `t(key, fallback)` is called as `t(key, fb).replace("{x}", …)`. When a
+// refactor rewrites a multi-fragment sentence into one template — which is what
+// the R146 pass did across the codebase — the *call site* keeps its placeholders
+// but the dictionary entry can be left holding the old fragment. The call then
+// renders that fragment verbatim and the interpolated values vanish.
+//
+// Two shipped this way: `db.table-head` had become a bare "·" (the whole
+// "{table} · {shown}/{total} rows" sentence was gone, so the SQL result grid
+// printed a lone separator instead of a caption) and `db.no-result` had become
+// "(no result," — an unclosed bracket and no count. Both are invisible to every
+// other gate: the key exists in both locales, the string is non-empty, and it
+// renders without throwing. The comparison has to be made *against the call
+// site*, which is the only place that knows the sentence needs those values.
+//
+// A fallback with no placeholders cannot disagree, so only calls whose fallback
+// has at least one `{x}` are compared.
+//
+// Each locale is merged *separately* across the three dictionaries, in source
+// order, because that is what i18n.js does (`Object.assign(dict[locale], …)`).
+// Reading one flat map and letting the last write win silently resolves every
+// key to its en-US value, which makes the check blind in exactly the direction
+// that matters — a zh entry losing its placeholder would be compared against
+// the intact English one and pass. That is not hypothetical: it is how the
+// first version of this check reported green on a planted zh defect.
+const placeholders = (s) => new Set([...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]));
+
+function collectValuesByLocale() {
+  const byLocale = new Map();                 // locale -> Map(key -> value)
+  if (!fs.existsSync(I18N)) return byLocale;
+  const lines = fs.readFileSync(I18N, "utf-8").split("\n");
+  const localeRe = /^\s*"(zh-CN|en-US)"\s*:\s*\{/;
+  const entryRe = /^\s*"([A-Za-z0-9_.\-]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+  let locale = null;
+  for (const line of lines) {
+    const l = line.match(localeRe);
+    if (l) { locale = l[1]; continue; }
+    if (!locale) continue;
+    const e = line.match(entryRe);
+    if (!e) continue;
+    if (!byLocale.has(locale)) byLocale.set(locale, new Map());
+    byLocale.get(locale).set(e[1], e[2]);     // last write wins within a locale
+  }
+  return byLocale;
+}
+const VALUES_BY_LOCALE = collectValuesByLocale();
+
+function findDroppedPlaceholders() {
+  const found = [];
+  for (const dir of JS_DIRS) {
+    for (const file of walk(dir)) {
+      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      lines.forEach((line, index) => {
+        const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+        if (!code.includes("t(")) return;
+        const re = /\bt\(\s*(['"])([A-Za-z0-9_.\-]+)\1\s*,\s*(['"])((?:\\.|(?!\3)[^\\])*)\3/g;
+        let m;
+        while ((m = re.exec(code))) {
+          const key = m[2];
+          const wanted = placeholders(m[4]);
+          if (wanted.size === 0) continue;
+          for (const [locale, values] of VALUES_BY_LOCALE) {
+            const value = values.get(key);
+            if (value === undefined) continue;  // missing key is check 1c's job
+            const lost = [...wanted].filter((p) => !placeholders(value).has(p));
+            if (lost.length === 0) continue;
+            found.push({
+              file: path.relative(ROOT, file),
+              line: index + 1,
+              kind: "i18n-value-drops-placeholder",
+              text: `${key} [${locale}] — value ${JSON.stringify(value)} drops ${lost.map((p) => "{" + p + "}").join(", ")} that the fallback supplies`,
+            });
+          }
+        }
+      });
+    }
+  }
+  return found;
+}
+
 // ── 2. JS: CJK string literals outside the translation table ───────────────
 function walk(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -359,6 +439,7 @@ if (fs.existsSync(MAIN_I18N)) {
 // ── Report ─────────────────────────────────────────────────────────────────
 problems.push(...findUndefinedKeys());
 problems.push(...findSeparatorLeaks());
+problems.push(...findDroppedPlaceholders());
 
 if (problems.length) {
   console.log(`\n✗ ${problems.length} i18n problem(s) found:\n`);
