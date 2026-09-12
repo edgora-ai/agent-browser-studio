@@ -66,6 +66,14 @@
   --success-text: #116b37;
   --warning-text: #8a5600;
   --danger-text: #c01a29;
+  /* R147: a *filled* success chip (on-accent ink on solid green). --success-text
+     is tuned to be read *as* text on a tint, so in dark theme it is a light
+     green (#3fc75e) that white ink sits on at 2.20:1 — unusable as a fill.
+     --success-fill is the solid-surface counterpart: dark enough for white ink
+     in both themes (5.02:1 light, 5.34:1 dark) while staying distinct from the
+     surface it sits on (6.60:1 light, 3.15:1 dark). Same fill/text split as
+     --primary vs --primary-text. */
+  --success-fill: #15803d;
   /* R136: white on --primary (#5b6cf0) measures 4.33:1 — a filled button needs
      its own fill that clears AA with white text. */
   --primary-fill: #4a5cd9;
@@ -171,6 +179,10 @@
   --success-text: #3fc75e;
   --warning-text: #f0b020;
   --danger-text: #ff7a88;
+  /* R147 dark: see the light-theme note — a solid chip keeps the darker fill so
+     on-accent ink still clears AA rather than following --success-text up into
+     a light green. */
+  --success-fill: #217a45;
   --primary-fill: #4a5cd9;
   --primary-fill-hover: #5063e8;
   --accent-gradient: linear-gradient(135deg, #7b8cff, #a78bfa);
@@ -704,6 +716,38 @@ dialog h4[data-icon] > svg {
   gap: 8px;
 }
 .profile-card .card-header.proxy-head .status-badge { flex: 0 0 auto; }
+
+/* R147: R141b described a general defect and fixed one instance of it. The grid
+   above is a *two-slot* template (select|name, then badges) and only holds
+   together when the caller also emits a `.card-status` wrapper for its badges.
+   Every caller that inlines a bare `<span class="status-badge">` instead leaves
+   that badge with no grid-area, so auto-placement files it into the still-empty
+   `select` slot — the badge renders *before* the name, hard against the card
+   edge, and the name inherits whatever column is left. Measured before the fix:
+   automation/runs/extensions/browser/storage/sync all put the badge at the
+   card's left edge (x=284) with the name pushed to x=327, and the runs group
+   header squeezed its name to 51px.
+
+   The fix is one line: give a bare child the area it was always meant to have.
+   The `select` column then has no items and collapses to 0, so `name` takes the
+   full `minmax(0, 1fr)` track. That also un-crushes the runs group header — its
+   trailing block (a retry button *and* a badge, 220px) moves to the badges row,
+   leaving the name the whole first row instead of 43px of it.
+
+   Deliberately NOT a switch to flex, which is what `.proxy-head` does and what
+   the first attempt here did: a wrapping flex container's min-content is the
+   largest item's contribution, and a `white-space: nowrap` name contributes its
+   full text width however small `min-width` is. That raised the card's
+   min-content floor and pushed 6 storage cards 146px past the content edge at
+   700px — the grid's `minmax(0, 1fr)` is what keeps this layout solvable. */
+.profile-card .card-header > *:not(.profile-select):not(.name):not(.card-status) {
+  grid-area: badges;
+  /* Grid items stretch by default, which ran a lone badge the full card width
+     (measured 285px for a 55px pill). A badge is sized by its label and sits at
+     the trailing edge, matching the inline-flex `.card-status` row above it. */
+  justify-self: end;
+  align-self: center;
+}
 
 .profile-card .name {
   font-weight: 700;
@@ -1726,7 +1770,13 @@ dialog p {
 /* ── Agent Run trace ── */
 /* R6-29: white on #22b351 fails — use the darkened toast fill. */
 /* R40: status-done consumes the white token (last hardcoded #fff). */
-.status-done { background: #15803d; color: var(--on-accent); }
+/* R147: R40 replaced the *foreground* literal and left the background one, so
+   this badge was the only status chip that could not follow the theme — dark
+   mode rendered light-theme green #15803d against #1a1d28. It also hardcoded a
+   colour the palette already names: #15803d was --badge-success-fg verbatim.
+   A filled chip takes the solid-surface token (see --success-fill), which is
+   the mirror of how .status-running pairs a tinted fill with --success-text. */
+.status-done { background: var(--success-fill); color: var(--on-accent); }
 .run-step {
   border-left: 3px solid var(--border);
   padding: 8px 12px;

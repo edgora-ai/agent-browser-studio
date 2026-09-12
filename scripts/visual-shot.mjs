@@ -473,6 +473,100 @@ const ICON_ALIGN_PROBE = () => {
   return out;
 };
 
+// ── Audit: card-header reading order ────────────────────────────────────────
+// A card header is meant to read "name, then status" — that is what every
+// screenshot of every page shows and what the eye scans. `.card-header` is a
+// grid whose first track is reserved for the selection checkbox, and the badge
+// only lands in the second row when the caller wraps it in `.card-status`. A
+// caller that inlines a bare badge leaves it unplaced, so auto-placement files
+// it into the *checkbox* track: the badge renders first, hard against the card
+// edge, and the name is pushed right. Six pages shipped that way (R147) and no
+// existing audit could see it — nothing overflowed, no contrast failed, no icon
+// was misaligned. It was only visible by looking.
+//
+// So this measures reading order directly: for each header, every badge must
+// start to the right of the name's box and share its horizontal band. It is a
+// comparison against a sibling, not an absolute position, so it survives
+// re-layout and does not care how the header is implemented (grid or flex).
+const CARD_HEADER_ORDER_PROBE = () => {
+  const describe = (el) => {
+    const id = el.id ? `#${el.id}` : "";
+    const cls = typeof el.className === "string" && el.className.trim()
+      ? "." + el.className.trim().split(/\s+/).slice(0, 3).join(".")
+      : "";
+    return el.tagName.toLowerCase() + id + cls;
+  };
+  const out = [];
+  for (const header of document.querySelectorAll(".profile-card .card-header")) {
+    const name = header.querySelector(".name");
+    if (!name) continue;
+    const nr = name.getBoundingClientRect();
+    if (nr.width < 1) continue;
+    for (const badge of header.querySelectorAll(".status-badge")) {
+      // Only a badge that is a *direct child* of the header is placed by the
+      // header's own layout, which is what this audit is about. A badge nested
+      // inside the name (runs.js tags a retried run by appending one to the
+      // name) is deliberately part of the name's own text flow — it is left of
+      // the name's right edge by construction and is not a placement bug.
+      if (badge.parentElement !== header) continue;
+      const br = badge.getBoundingClientRect();
+      if (br.width < 1 || br.height < 1) continue;
+      const cs = getComputedStyle(badge);
+      if (cs.display === "none" || cs.visibility === "hidden") continue;
+      // Same band: the badge's vertical centre inside the name's box (with a
+      // line of tolerance for a wrapped second row, which is legitimate).
+      const sameBand = br.top < nr.bottom + 2 && br.bottom > nr.top - 2;
+      if (!sameBand) continue;              // own row — not a reading-order bug
+      if (br.left >= nr.right - 1) continue; // correctly after the name
+      out.push({
+        header: describe(header),
+        name: describe(name),
+        nameText: (name.textContent || "").trim().replace(/\s+/g, " ").slice(0, 24),
+        badge: describe(badge),
+        badgeText: (badge.textContent || "").trim().replace(/\s+/g, " ").slice(0, 18),
+        nameX: Math.round(nr.left),
+        nameRight: Math.round(nr.right),
+        badgeX: Math.round(br.left),
+        overlap: Math.round(nr.right - br.left),
+        card: header.closest(".profile-card")?.className || "(none)",
+      });
+    }
+  }
+  return out;
+};
+
+function printHeaderOrder(rows) {
+  console.log("\n=== card-header reading order (badge before name) ===");
+  if (!rows.length) {
+    console.log("clean — every header badge follows the name it belongs to");
+    return rows;
+  }
+  for (const r of rows) {
+    console.log(`  BADGE BEFORE NAME  ${r.header} in ${r.card}`);
+    console.log(`      name "${r.nameText}" at x=${r.nameX}..${r.nameRight}, badge "${r.badgeText}" at x=${r.badgeX} → ${r.overlap}px overlap`);
+  }
+  return rows;
+}
+
+async function auditHeaderOrder(browser) {
+  const rows = [];
+  const seen = new Set();
+  // Reading order is geometry, not colour — one theme pass is enough.
+  const { ctx, page } = await openPage(browser, THEMES[0]);
+  for (const tab of TABS) {
+    await goTab(page, tab);
+    const found = await page.evaluate(CARD_HEADER_ORDER_PROBE);
+    for (const f of found) {
+      const key = `${f.header}|${f.badge}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({ tab, ...f });
+    }
+  }
+  await ctx.close();
+  return rows;
+}
+
 async function auditIconAlign(browser) {
   const rows = [];
   const seen = new Set();
@@ -1039,6 +1133,7 @@ try {
       overflow: async () => { const r = await auditOverflow(browser, Number(flag("width", 700))); printOverflow(r); return r.length; },
       errors: async () => { const r = await auditErrors(browser); printErrors(r); return r.length; },
       selectors: async () => { const r = auditSelectors(); printSelectors(r); return r.length; },
+      headerorder: async () => { const r = await auditHeaderOrder(browser); printHeaderOrder(r); return r.length; },
       english: async () => { const r = await auditEnglishLeak(browser); printEnglishLeak(r); return LANG === "en-US" ? 0 : r.length; },
     };
     const run = runners[ONLY];
@@ -1057,10 +1152,12 @@ try {
     const { rows: counts, dead, unstubbed } = await censusAndCoverage(browser);
     const selectors = auditSelectors();
     const english = await auditEnglishLeak(browser);
+    const headerOrder = await auditHeaderOrder(browser);
     printErrors(errors);
     printOverflow(overflow);
     printContrast(contrast);
     printIcons(icons);
+    printHeaderOrder(headerOrder);
     printSelectors(selectors);
     printCoverage(dead, unstubbed);
     const thin = printCensus(counts);
@@ -1070,8 +1167,8 @@ try {
     // defects; thin tabs and unstubbed paths are harness debt that silently
     // undermines the rest.
     const enFails = LANG === "en-US" ? 0 : english.length;
-    const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + enFails;
-    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
+    const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails;
+    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${headerOrder.length} header order, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just
     // as something a human reads.
     if (failures > 0) process.exitCode = 1;

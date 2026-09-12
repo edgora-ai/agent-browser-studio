@@ -151,7 +151,10 @@
     var failed = runs.filter(function(r) { return r.status === "error"; }).length;
     var running = runs.filter(function(r) { return r.status === "running"; }).length;
     var parts = [];
-    if (ok > 0) parts.push(ok + " ok");
+    // R147: "ok" was a bare English literal while its two siblings went through
+    // t(), so the zh UI rendered "1 ok / 1 失败" — half-translated inside one
+    // badge. All three counts now come from the same table.
+    if (ok > 0) parts.push(ok + " " + t("runs.group.ok", "ok"));
     if (failed > 0) parts.push(failed + " " + t("runs.group.failed", "failed"));
     if (running > 0) parts.push(running + " " + t("runs.group.running", "running"));
     return parts.join(" / ") || "—";
