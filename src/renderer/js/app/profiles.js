@@ -1309,10 +1309,24 @@
   // R8 P2-3: the banner state is also cached so launch()/bulkStart can refuse
   // early with guidance instead of firing a doomed IPC and toasting afterwards.
   var lastEngineInfo = null;
-  function renderEngineBanner(info) {
+  function renderEngineBanner(info, probeFailed) {
     lastEngineInfo = info || null;
     var el = document.getElementById("engine-banner");
     if (!el) return;
+    // R169: a FAILED probe (binary() rejected, caught into null) rendered the
+    // same banner as a genuinely missing engine — "No managed Chromium
+    // installed" plus an install guide, pushing users to reinstall an engine
+    // they already have. Distinguish "we could not tell" from "it is missing".
+    if (probeFailed) {
+      el.className = "engine-banner";
+      el.innerHTML = icon("alert", 13) + ' <span style="flex:1;">' +
+        esc(t("engine.unknown", "Could not determine the managed Chromium status — check the log or retry.")) +
+        '</span>' +
+        '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="loadProfiles">' +
+          esc(t("common.retry", "Retry")) + "</button>";
+      el.style.display = "";
+      return;
+    }
     if (info && info.installed) {
       el.className = "engine-banner ok";
       el.innerHTML = icon("browser", 13) + " " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
@@ -1441,10 +1455,11 @@
     // (proxy.list() stays bare — it is load-bearing, and its rejection
     // reaches the outer catch below).
     var listError = null;
+    var binaryProbeFailed = false;
     Promise.all([
       api.browser.list().catch(function (e) { listError = e; return []; }),
       api.proxy.list(),
-      api.browser.binary().catch(function () { return null; }),
+      api.browser.binary().catch(function () { binaryProbeFailed = true; return null; }),
       // R10 P1-3: cache the Firefox engine state too, so the launch gate
       // can tell "Chromium missing" from "Firefox missing".
       (api.browser.engineStatus ? api.browser.engineStatus().catch(function () { return null; }) : Promise.resolve(null)),
@@ -1456,7 +1471,7 @@
       var browserProfiles = results[0] || [];
       var proxies = results[1];
       // PL-07: surface the engine state on the page that needs it.
-      renderEngineBanner(results[2]);
+      renderEngineBanner(results[2], binaryProbeFailed);
       // Sale-90/92: trial/paywall banner refreshes with every profile load.
       try { if (typeof agentBrowser.refreshLicense === "function") agentBrowser.refreshLicense(); } catch (e) { /* banner is best-effort */ }
       if (results[3] && results[3].firefox) lastFirefoxInfo = results[3].firefox;
