@@ -45,7 +45,16 @@
     // lived in the English fallback string while the dictionary value is
     // "profiles" with no leading space, so EN rendered "JS ×3profiles".
     if (a.profileDirIds && a.profileDirIds.length > 1) base += ' ×' + a.profileDirIds.length + ' ' + esc(t('auto.action.batch-profiles', 'profiles'));
-    if (a.type === 'agent-task' && a.agentPrompt) base += ' <em style="color:var(--text-muted)">"' + esc(a.agentPrompt).slice(0,30) + '..."</em>';
+    // R150: this used to slice the *prompt* to 30 chars and append a literal
+    // "..." — but slice() runs after esc(), so an escaped entity could be cut in
+    // half, and the "..." was already implied by the slice. The real defect was
+    // the box: the value cell is `white-space: nowrap`, and an inline <em> is
+    // not clipped by text-overflow (that only ellipsises a block's own line),
+    // so the quotation overflowed its cell by 57-112px and painted outside the
+    // card. The prompt is a preview, so give the em its own ellipsis box and let
+    // CSS decide the cut instead of a character count that cannot know the
+    // font metrics.
+    if (a.type === 'agent-task' && a.agentPrompt) base += ' <em class="action-prompt">"' + esc(a.agentPrompt) + '"</em>';
     return base;
   }
   function cronHint(c) {

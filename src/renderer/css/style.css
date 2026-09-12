@@ -910,6 +910,27 @@ dialog h4[data-icon] > svg {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+/* R150: the same cell once it contains an inline child that must truncate on
+   its own. text-overflow only ellipsises a *block's own* line box, so an inline
+   <em> inside this nowrap cell was never clipped — it painted straight out of
+   the card (measured 57-112px past the cell edge at 1280/1440/1600). Making the
+   cell a flex row lets the em be a flex item, which *is* clipped: `min-width:0`
+   lifts its automatic minimum, and it takes the remaining width with its own
+   ellipsis. Only rows whose value holds an `.action-prompt` opt in, so no other
+   info-row changes behaviour. */
+.profile-card .info-row > span:last-child:has(.action-prompt) {
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 4px;
+}
+.action-prompt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
 /* R143: the meta block shares ONE grid, so the label column is the width of the
    card's widest label and every value starts on the same x. Until now each
    `.info-row` was its own `max-content` grid, so the column was per-row: in a
