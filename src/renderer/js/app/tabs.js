@@ -98,7 +98,7 @@
       for (var i = 0; i < n; i++) {
         cards += '<div class="skeleton-card" aria-hidden="true"><div class="skeleton-line" style="width:42%;"></div><div class="skeleton-line" style="width:88%;"></div><div class="skeleton-line" style="width:64%;"></div></div>';
       }
-      el.innerHTML = '<div class="skeleton-list" role="status" aria-label="' + escAttr(state.loading || "Loading") + '">' + cards + '</div>';
+      el.innerHTML = '<div class="skeleton-list" role="status" aria-label="' + escAttr(state.loading || t("common.loading", "Loading…")) + '">' + cards + '</div>';
       return;
     }
     if (state.loading) { el.innerHTML = '<div class="loading">' + esc(state.loading) + '</div>'; return; }
@@ -106,7 +106,7 @@
       var friendly = agentBrowser.helpers && agentBrowser.helpers.friendlyError;
       var errText = typeof friendly === "function" ? friendly(state.error) : state.error;
       var msg = esc(errText);
-      var retry = state.retry ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.retry.cmd) + '"' + (state.retry.arg ? ' data-cmd-arg="' + escAttr(state.retry.arg) + '"' : '') + ' style="margin-top:8px;">Retry</button>' : '';
+      var retry = state.retry ? '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="' + escAttr(state.retry.cmd) + '"' + (state.retry.arg ? ' data-cmd-arg="' + escAttr(state.retry.arg) + '"' : '') + ' style="margin-top:8px;">' + esc(t("common.retry", "Retry")) + '</button>' : '';
       el.innerHTML = '<div class="empty-state" style="color: var(--danger-text);">' + msg + '<br>' + retry + '</div>';
       return;
     }
