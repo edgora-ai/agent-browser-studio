@@ -14,6 +14,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var icon = helpers.icon;
   var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
   var fmt = helpers.fmt;
@@ -624,11 +625,11 @@
     var text = document.getElementById("bulk-import-text").value.trim();
     var fallbackProxy = parseProxySelection(document.getElementById("bulk-import-proxy").value, "default");
     var statusEl = document.getElementById("bulk-import-status");
-    if (!text) { statusEl.innerHTML = '<span style="color: var(--danger-text);">Enter profile definitions</span>'; return; }
+    if (!text) { statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(t("bulk.import.no-input", "Enter profile definitions")) + '</span>'; return; }
     // Parse via the shared CSV parser (supports header + per-row proxy/tags).
     wcall("browser.parseBulkCsv", function () { return api.browser.parseBulkCsv(text); }).then(function(res) {
       if (!res || !res.ok || !res.specs || !res.specs.length) {
-        statusEl.innerHTML = '<span style="color: var(--danger-text);">No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)</span>';
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(t("bulk.import.no-rows", "No valid rows (use a header: name,platform,locale,timezone,seed,proxy,webrtc,tags)")) + '</span>';
         return;
       }
       var specs = res.specs;
@@ -636,11 +637,13 @@
       // P3 (#110): per-row failures used to count silently — keep the first
       // few messages so the user can fix the CSV instead of guessing.
       var errorLines = [];
-      statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing ' + total + ' profiles...</span>';
+      statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t("bulk.import.importing", "Importing {n} profiles...").replace("{n}", String(total))) + '</span>';
       function processNext(idx) {
         if (idx >= specs.length) {
           var errHtml = errorLines.length ? '<div style="margin-top:6px;font-size:11px;color: var(--danger-text);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + (errorLines.length > 5 ? '<br>…+' + (errorLines.length - 5) : '') + '</div>' : '';
-          statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + done + '/' + total + (errors ? ' (' + errors + ' errors)' : '') + '</span>' + errHtml;
+          var doneMsg = t("bulk.import.done", "Imported {done}/{total}").replace("{done}", String(done)).replace("{total}", String(total));
+          if (errors) doneMsg += " " + t("bulk.import.errors", "({n} errors)").replace("{n}", String(errors));
+          statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(doneMsg) + '</span>' + errHtml;
           // Keep the dialog open when rows failed so the messages stay visible.
           if (errors) return;
           setTimeout(function() { document.getElementById("dlg-bulk-import").close(); agentBrowser.refresh(); }, 1000);

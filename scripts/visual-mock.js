@@ -290,7 +290,56 @@
           return Promise.resolve({ ok: true });
         },
       }, "agent.conversations"),
-      accounts: ns({ list: function () { return Promise.resolve(clone(accountList)); } }, "agent.accounts"),
+      // R165: only list() was stubbed, so copy/bind/delete fell through to the
+      // miss proxy ([] — no `.ok`), and every copy action toasted the failure
+      // branch. Shapes mirror ipc/agent.ts: copy* → {ok, error?}; add/update/
+      // bind → the account (hasPassword) or null; delete → boolean; bulk → a
+      // {added, created?, skipped} counts object.
+      accounts: ns({
+        list: function () { return Promise.resolve(clone(accountList)); },
+        add: function (account) {
+          var rec = Object.assign({}, account, { hasPassword: Boolean(account && account.platformPassword) });
+          accountList.push({ platformUserName: rec.platformUserName, platformUrl: rec.platformUrl, hasPassword: rec.hasPassword, tags: rec.tags || [], profileIds: [] });
+          delete rec.platformPassword;
+          return Promise.resolve(rec);
+        },
+        update: function (index, account) {
+          if (index < 0 || index >= accountList.length) return Promise.resolve(null);
+          var cur = accountList[index];
+          if (account.platformUserName !== undefined) cur.platformUserName = account.platformUserName;
+          if (account.platformUrl !== undefined) cur.platformUrl = account.platformUrl;
+          if (account.tags !== undefined) cur.tags = account.tags;
+          if (account.platformPassword) cur.hasPassword = true;
+          return Promise.resolve(clone(cur));
+        },
+        delete: function (index) {
+          if (index < 0 || index >= accountList.length) return Promise.resolve(false);
+          accountList.splice(index, 1);
+          return Promise.resolve(true);
+        },
+        copyUsername: function (index) {
+          if (index < 0 || index >= accountList.length) return Promise.resolve({ ok: false, error: "account not found" });
+          var u = accountList[index].platformUserName || "";
+          return Promise.resolve(u ? { ok: true } : { ok: false, error: "account has no username" });
+        },
+        copyPassword: function (index) {
+          if (index < 0 || index >= accountList.length) return Promise.resolve({ ok: false, error: "account not found" });
+          return Promise.resolve(accountList[index].hasPassword ? { ok: true } : { ok: false, error: "account has no password" });
+        },
+        bind: function (index, profileIds) {
+          if (index < 0 || index >= accountList.length) return Promise.resolve(null);
+          accountList[index].profileIds = (profileIds || []).slice();
+          return Promise.resolve(clone(accountList[index]));
+        },
+        bulkAdd: function (text) {
+          var n = String(text || "").split("\n").filter(function (l) { return l.trim(); }).length;
+          return Promise.resolve({ added: n, skipped: 0 });
+        },
+        bulkCreate: function (text, options) {
+          var n = String(text || "").split("\n").filter(function (l) { return l.trim(); }).length;
+          return Promise.resolve({ added: n, created: n, skipped: 0 });
+        },
+      }, "agent.accounts"),
       skills: ns({ list: function () { return Promise.resolve([]); }, marketplace: function () { return Promise.resolve([]); } }, "agent.skills"),
       platformAdapters: ns({ list: function () { return Promise.resolve([]); } }, "agent.platformAdapters"),
       llmConfig: function () { return Promise.resolve({ provider: "openai", model: "gpt-5.5-high", apiUrl: "https://api.openai.com/v1/chat/completions", hasApiKey: true }); },

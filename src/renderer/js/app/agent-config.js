@@ -125,7 +125,7 @@
       } else {
         toast((window.i18n ? window.i18n.t("toast.llm.not-found", "No local LLM config found. Please enter your API key.") : "No local LLM config found. Please enter your API key."), 'error');
       }
-    }).catch(function(e) { toast('Auto-detect failed: ' + e.message, 'error'); });
+    }).catch(function(e) { toast(t('toast.agent.auto-detect-failed', 'Auto-detect failed: ') + e.message, 'error'); });
   };
 
   agentBrowser.agentProviderChanged = function() {

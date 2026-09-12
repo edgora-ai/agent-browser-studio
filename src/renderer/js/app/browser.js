@@ -151,13 +151,15 @@
       if (forceCheck) {
         api.updates.check().then(function (cr) {
           if (cr && cr.success === false) {
-            if (statusEl) statusEl.textContent = 'Check failed: ' + esc(cr.error || 'unknown');
+            if (statusEl) statusEl.textContent = t("toast.browser.check-failed", "Check failed: ") + esc(cr.error || t("common.unknown", "unknown"));
           } else if (cr) {
             lastAvailableUpdates = cr.available || [];
-            if (statusEl) statusEl.textContent = lastAvailableUpdates.length ? 'Found ' + lastAvailableUpdates.length + ' update(s).' : t("browser.updates.none", "You are up to date.");
+            if (statusEl) statusEl.textContent = lastAvailableUpdates.length
+              ? t("browser.updates.found", "Found {n} update(s).").replace("{n}", String(lastAvailableUpdates.length))
+              : t("browser.updates.none", "You are up to date.");
           }
           doRender(state);
-        }).catch(function (e) { if (statusEl) statusEl.textContent = 'Check failed: ' + e.message; doRender(state); });
+        }).catch(function (e) { if (statusEl) statusEl.textContent = t("toast.browser.check-failed", "Check failed: ") + e.message; doRender(state); });
       } else {
         doRender(state);
       }
@@ -169,15 +171,15 @@
   function runUpdateAction(action, version, statusEl) {
     var t = function (key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; };
     var done = function (r) {
-      if (r && r.success === false) { if (statusEl) statusEl.textContent = 'Failed: ' + esc(r.error || 'unknown'); return; }
+      if (r && r.success === false) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + esc(r.error || t("common.unknown", "unknown")); return; }
       if (action === "install") { if (statusEl) statusEl.textContent = t("browser.updates.installed-ok", "Staged — ready to activate."); }
       else if (action === "activate") { if (statusEl) statusEl.textContent = t("browser.updates.activated", "Activated — takes effect on next launch."); }
       else if (action === "rollback") { if (statusEl) statusEl.textContent = t("browser.updates.rolled-back", "Rolled back to the previous version."); }
       loadUpdates(false);
     };
-    if (action === "install") api.updates.install(version).then(done).catch(function (e) { if (statusEl) statusEl.textContent = 'Failed: ' + e.message; });
-    else if (action === "activate") api.updates.activate(version).then(done).catch(function (e) { if (statusEl) statusEl.textContent = 'Failed: ' + e.message; });
-    else if (action === "rollback") api.updates.rollback().then(done).catch(function (e) { if (statusEl) statusEl.textContent = 'Failed: ' + e.message; });
+    if (action === "install") api.updates.install(version).then(done).catch(function (e) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + e.message; });
+    else if (action === "activate") api.updates.activate(version).then(done).catch(function (e) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + e.message; });
+    else if (action === "rollback") api.updates.rollback().then(done).catch(function (e) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + e.message; });
   }
 
   function loadDrmStatus(forceRescan) {

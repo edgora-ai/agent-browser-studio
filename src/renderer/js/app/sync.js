@@ -481,7 +481,7 @@
       agentBrowser.confirm(t('team.remove-confirm', 'Remove this member from the workspace?'), function() {
         api.team.removeMember(deviceId).then(function(r) {
           if (!r || !r.success) { toast((r && r.error) || 'Remove failed', 'error'); return; }
-          toast('Member removed', 'success');
+          toast(t('toast.sync.member-removed', 'Member removed'), 'success');
           loadTeamPanel();
         }).catch(function(e) { toast(e.message, 'error'); });
       });
@@ -491,7 +491,7 @@
       if (!sel || !panel.contains(sel)) return;
       api.team.setRole(sel.dataset.deviceId, sel.value).then(function(r) {
         if (!r || !r.success) { toast((r && r.error) || 'Role update failed', 'error'); loadTeamPanel(); return; }
-        toast('Role updated', 'success');
+        toast(t('toast.sync.role-updated', 'Role updated'), 'success');
         loadTeamPanel();
       }).catch(function(e) { toast(e.message, 'error'); });
     };
@@ -520,7 +520,7 @@
     var name = (document.getElementById('team-workspace-name') || {}).value || '';
     api.team.init(name).then(function(r) {
       if (!r || !r.success) { toast((r && r.error) || 'Init failed', 'error'); return; }
-      toast('Workspace initialized', 'success');
+      toast(t('toast.sync.workspace-inited', 'Workspace initialized'), 'success');
       loadTeamPanel();
     }).catch(function(e) { toast(e.message, 'error'); });
   };
@@ -529,10 +529,10 @@
     var deviceId = (document.getElementById('team-add-device-id') || {}).value || '';
     var name = (document.getElementById('team-add-name') || {}).value || '';
     var role = (document.getElementById('team-add-role') || {}).value || 'member';
-    if (!deviceId) { toast('Device ID is required', 'error'); return; }
+    if (!deviceId) { toast(t('toast.sync.device-id-required', 'Device ID is required'), 'error'); return; }
     api.team.addMember(deviceId, name, role).then(function(r) {
       if (!r || !r.success) { toast((r && r.error) || 'Add failed', 'error'); return; }
-      toast('Member added', 'success');
+      toast(t('toast.sync.member-added', 'Member added'), 'success');
       loadTeamPanel();
     }).catch(function(e) { toast(e.message, 'error'); });
   };
@@ -541,7 +541,7 @@
     var name = (document.getElementById('team-workspace-rename') || {}).value || '';
     api.team.rename(name).then(function(r) {
       if (!r || !r.success) { toast((r && r.error) || 'Rename failed', 'error'); return; }
-      toast('Workspace renamed', 'success');
+      toast(t('toast.sync.workspace-renamed', 'Workspace renamed'), 'success');
       loadTeamPanel();
     }).catch(function(e) { toast(e.message, 'error'); });
   };

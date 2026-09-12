@@ -110,7 +110,7 @@
             if (target.dataset.extAction === "update") agentBrowser.extCheckUpdate(ext.id);
             else if (target.dataset.extAction === "disable") agentBrowser.extToggle(ext.id, false);
           };
-        }).catch(function(e) { toast('Failed: ' + e.message, 'error'); });
+        }).catch(function(e) { toast(t('toast.browser.action-failed', 'Failed: ') + e.message, 'error'); });
       },
 
   /* R143: three commands removed here — extShowInstall, extInstallTab and
@@ -186,11 +186,11 @@
         var msg = esc(t('ext.confirm-delete', 'Delete extension {id}?\nIt will be removed from every profile and the cached files deleted.').replace('{id}', extId));
         agentBrowser.confirm(msg, function() {
         var statusEl = document.getElementById('ext-install-status');
-        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Deleting ' + esc(extId) + '...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('ext.deleting', 'Deleting ')) + esc(extId) + '...</span>';
         api.settings.deleteRepositoryExtension(extId).then(function(r) {
           if (r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Deleted</span>';
-            toast('Extension deleted', 'success');
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t('ext.deleted', 'Deleted')) + '</span>';
+            toast(t('toast.ext.deleted', 'Extension deleted'), 'success');
             loadExtensionsTab();
             if (agentBrowser._extDirId) agentBrowser._extRefreshList();
           } else {
@@ -203,11 +203,11 @@
 
   extCheckUpdate: function(extId) {
         var statusEl = document.getElementById('ext-dlg-status') || document.getElementById('ext-install-status');
-        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Updating repository copy of ' + esc(extId) + '...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('ext.updating-copy', 'Updating repository copy of ')) + esc(extId) + '...</span>';
         api.settings.updateRepositoryExtension(extId).then(function(r) {
           if (r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Repository updated to v' + esc((r.entry && r.entry.version) || '?') + '</span>';
-            toast('Repository extension updated', 'success');
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t('ext.updated-to', 'Repository updated to v')) + esc((r.entry && r.entry.version) || '?') + '</span>';
+            toast(t('toast.ext.repo-ext-updated', 'Repository extension updated'), 'success');
             agentBrowser._extRefreshList();
             loadExtensionsTab();
           } else {
@@ -227,11 +227,11 @@
           if (r && r.success) {
             toast(enabled ? 'Enabled for profile' : 'Disabled for profile', 'success');
           } else {
-            toast((r && r.error) || 'Toggle failed', 'error');
+            toast((r && r.error) || t('toast.ext.toggle-failed', 'Toggle failed'), 'error');
             agentBrowser._extRefreshList();
           }
         }).catch(function(e) {
-          toast('Toggle error: ' + e.message, 'error');
+          toast(t('toast.ext.toggle-failed', 'Toggle failed') + ': ' + e.message, 'error');
           agentBrowser._extRefreshList();
         });
       },
@@ -254,16 +254,16 @@
         var sharedInput = document.getElementById('repo-ext-shared');
         var statusEl = document.getElementById('repo-ext-save-status');
         var extId = extractChromeExtensionId(input ? input.value.trim() : '');
-        if (!extId) { toast('Invalid Chrome extension URL or ID', 'error'); return; }
+        if (!extId) { toast(t('toast.ext.invalid-id', 'Invalid Chrome extension URL or ID'), 'error'); return; }
         var tags = parseTagInput(tagsInput ? tagsInput.value : '');
-        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Downloading and validating extension...</span>';
+        if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('ext.downloading', 'Downloading and validating extension...')) + '</span>';
         api.settings.addRepositoryExtension(extId, { shared: !!(sharedInput && sharedInput.checked), tags: tags }).then(function (r) {
           if (!r.success) {
-            if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || 'Add failed') + '</span>';
-            toast(r.error || 'Add failed', 'error');
+            if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || t('ext.add-failed', 'Add failed')) + '</span>';
+            toast(r.error || t('ext.add-failed', 'Add failed'), 'error');
             return;
           }
-          if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">Added v' + esc((r.entry && r.entry.version) || '?') + '</span>';
+          if (statusEl) statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t('ext.added-v', 'Added v')) + esc((r.entry && r.entry.version) || '?') + '</span>';
           document.getElementById('dlg-extension-repo').close();
           toast((window.i18n ? window.i18n.t("toast.ext.added", "Extension added to private repository") : "Extension added to private repository"), 'success');
           loadExtensionsTab();
@@ -275,7 +275,7 @@
       },
 
   updateRepositoryExtension: function (extId) {
-        toast('Updating extension repository...', 'info');
+        toast(t('toast.ext.updating-repo', 'Updating extension repository...'), 'info');
         api.settings.updateRepositoryExtension(extId).then(function (r) {
           if (r.success) { toast((window.i18n ? window.i18n.t("toast.ext.repo-updated", "Repository updated") : "Repository updated"), 'success'); loadExtensionsTab(); if (agentBrowser._extDirId) agentBrowser._extRefreshList(); }
           else toast(r.error || 'Update failed', 'error');
@@ -293,7 +293,7 @@
         api.settings.exportSharedExtensionRepository().then(function (entries) {
           var json = JSON.stringify(entries || [], null, 2);
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(json).then(function () { toast('Shared catalog copied to clipboard', 'success'); });
+            navigator.clipboard.writeText(json).then(function () { toast(t('toast.ext.catalog-copied', 'Shared catalog copied to clipboard'), 'success'); });
           } else {
             window.prompt('Shared extension catalog JSON:', json);
           }

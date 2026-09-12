@@ -9,6 +9,7 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -192,7 +193,7 @@
       var fallback = function() { window.prompt('Shared skill catalog JSON:', json); };
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(json).then(function() {
-          toast('Shared skill catalog copied to clipboard', 'success');
+          toast(t('toast.skill.catalog-copied', 'Shared skill catalog copied to clipboard'), 'success');
         }).catch(function() {
           fallback();
         });
@@ -213,8 +214,8 @@
     var statusEl = document.getElementById('skill-import-status');
     var entries;
     try { entries = JSON.parse(document.getElementById('skill-import-json').value); }
-    catch (e) { toast('Invalid JSON catalog', 'error'); return; }
-    if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">Importing catalog...</span>';
+    catch (e) { toast(t('toast.skill.invalid-json', 'Invalid JSON catalog'), 'error'); return; }
+    if (statusEl) statusEl.innerHTML = '<span style="color: var(--primary-text);">' + esc(t('skill.importing-catalog', 'Importing catalog...')) + '</span>';
     R.agent.skills.importShared(entries).then(function(r) {
       if (!r || !r.success) {
         if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || 'Import failed') + '</span>';
@@ -223,7 +224,8 @@
       }
       document.getElementById('dlg-skill-import').close();
       var result = r.result || { added: 0, updated: 0, skipped: 0 };
-      toast('Imported skills: +' + result.added + ', updated ' + result.updated + ', skipped ' + result.skipped, 'success');
+      toast(t('toast.skill.imported', 'Imported: +{added}, updated {updated}, skipped {skipped}')
+        .replace('{added}', String(result.added)).replace('{updated}', String(result.updated)).replace('{skipped}', String(result.skipped)), 'success');
       refreshSkillViews();
     }).catch(function(e) {
       if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || String(e)) + '</span>';

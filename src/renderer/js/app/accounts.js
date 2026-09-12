@@ -203,15 +203,15 @@
   // ── Quick copy (main process writes the clipboard; secrets never cross) ──
   agentBrowser.agentCopyAccountUsername = function(index) {
     R.agent.accounts.copyUsername(index).then(function(r) {
-      if (r && r.ok) toast('Username copied to clipboard', 'success');
-      else toast((r && r.error) || 'Copy failed', 'error');
+      if (r && r.ok) toast(t('toast.account.username-copied', 'Username copied to clipboard'), 'success');
+      else toast((r && r.error) || t('toast.account.copy-failed', 'Copy failed'), 'error');
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 
   agentBrowser.agentCopyAccountPassword = function(index) {
     R.agent.accounts.copyPassword(index).then(function(r) {
-      if (r && r.ok) toast('Password copied to clipboard', 'success');
-      else toast((r && r.error) || 'Copy failed', 'error');
+      if (r && r.ok) toast(t('toast.account.password-copied', 'Password copied to clipboard'), 'success');
+      else toast((r && r.error) || t('toast.account.copy-failed', 'Copy failed'), 'error');
     }).catch(function(e) { toast(e.message, 'error'); });
   };
 
@@ -244,7 +244,7 @@
     cbs.forEach(function(cb) { profileIds.push(cb.value); });
     R.agent.accounts.bind(index, profileIds).then(function(r) {
       document.getElementById('dlg-account-bind').close();
-      toast('Account profiles updated', 'success');
+      toast(t('toast.account.profiles-updated', 'Account profiles updated'), 'success');
       agentBrowser.agentLoadAccounts();
     }).catch(function(e) { toast(e.message, 'error'); });
   };
@@ -263,7 +263,7 @@
     var statusEl = document.getElementById('acct-import-status');
     var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
     var platform = document.getElementById('acct-import-platform') ? document.getElementById('acct-import-platform').value : 'windows';
-    statusEl.innerHTML = '<span style="color:var(--text-muted);">Importing...</span>';
+    statusEl.innerHTML = '<span style="color:var(--text-muted);">' + esc(t('acct.importing', 'Importing...')) + '</span>';
     var p = createProfiles
       ? R.agent.accounts.bulkCreate(text, { platform: platform })
       : R.agent.accounts.bulkAdd(text);
