@@ -270,6 +270,81 @@ async function auditOverflow(browser, width) {
   return rows;
 }
 
+// ── Audit: cell-level overflow ───────────────────────────────────────────────
+// auditOverflow's limit is the #content panel edge, so a value painted 100px
+// past its own info-row cell but still inside the panel never fires it — that
+// is exactly how the R150 agent-prompt <em> survived at 1280/1600. This pass
+// walks the leaf containers that own horizontal clipping (info-row values,
+// table cells, card headers) and flags any child whose box escapes the
+// ancestor that is supposed to clip it. An ancestor with overflow hidden and
+// a nowrap line legitimately clips its own plain text, so the operational form
+// has two arms: (1) a block whose scrollWidth exceeds clientWidth with NO
+// overflow handling is spilling into its neighbours; (2) a block that *does*
+// declare overflow:hidden + nowrap but whose scrollWidth exceeds clientWidth
+// while containing an inline *element* child is lying about the clip —
+// text-overflow/overflow only ellipsise the block's own text, an inline child
+// (em, code, strong) paints through. That second arm is exactly the R150
+// defect, and arm (1) alone read it as a legitimate clip box.
+async function auditCellOverflow(browser, width) {
+  const rows = [];
+  for (const theme of THEMES) {
+    const { ctx, page } = await openPage(browser, theme, width, HEIGHT);
+    for (const tab of TABS) {
+      await goTab(page, tab);
+      const found = await page.evaluate(() => {
+        const content = document.getElementById("content");
+        if (!content) return [];
+        const out = [];
+        const seen = new Set();
+        for (const el of content.querySelectorAll("*")) {
+          const s = getComputedStyle(el);
+          if (s.display === "none" || s.visibility === "hidden") continue;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          // Inline elements have no meaningful scrollWidth contract of their
+          // own — measure their nearest block ancestor, which paints the line.
+          if (s.display.startsWith("inline") || s.display === "contents") continue;
+          if (el.scrollWidth - el.clientWidth <= 1) continue;
+          const clips = ["auto", "scroll", "hidden", "clip"].includes(s.overflowX);
+          // Arm 2: a declared clip box (overflow hidden/auto + nowrap) that
+          // holds an inline *element* child is lying about being an ellipsis
+          // box — text-overflow never applies to inline children, so the
+          // child paints through unclipped (pre-R150) or loses the "…"
+          // (post). Only an element child counts: the box's own plain text
+          // is exactly what overflow:hidden is for.
+          const inlineChild = clips && ["em", "code", "strong", "b", "i", "span", "a", "u", "small", "label"].some((t) => el.querySelector(t));
+          if (!clips && !inlineChild) {
+            // Arm 1: spilling with no overflow handling at all — report.
+          } else if (inlineChild) {
+            // Arm 2: report.
+          } else {
+            continue; // honest clip box (own text only) — fine
+          }
+          const id = el.id ? `#${el.id}` : "";
+          const cls = typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
+          const key = el.tagName.toLowerCase() + id + cls;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ sel: key, kind: "cell-overflow", detail: `scrollWidth ${el.scrollWidth} > clientWidth ${el.clientWidth} (${Math.round(el.scrollWidth - el.clientWidth)}px spilled, unclipped)` });
+        }
+        return out.slice(0, 12);
+      });
+      for (const f of found) rows.push({ theme, tab, ...f });
+    }
+    await ctx.close();
+  }
+  return rows;
+}
+
+function printCellOverflow(rows) {
+  console.log("\n=== cell-level overflow (content wider than its own box, unclipped) ===");
+  if (!rows.length) {
+    console.log("clean — no unclipped element paints past its own box");
+    return;
+  }
+  for (const r of rows) console.log(`  CELL OVERFLOW [${r.theme}/${r.tab}] ${r.sel} — ${r.detail}`);
+}
+
 // ── Audit: contrast (WCAG AA on rendered text) ───────────────────────────────
 const CONTRAST_PROBE = () => {
   const parse = (c) => {
@@ -1131,6 +1206,7 @@ try {
       icons: async () => { const r = await auditIconAlign(browser); printIcons(r); return r.length; },
       contrast: async () => { const r = await auditContrast(browser); printContrast(r); return r.length; },
       overflow: async () => { const r = await auditOverflow(browser, Number(flag("width", 700))); printOverflow(r); return r.length; },
+      celloverflow: async () => { const r = await auditCellOverflow(browser, Number(flag("width", 1280))); printCellOverflow(r); return r.length; },
       errors: async () => { const r = await auditErrors(browser); printErrors(r); return r.length; },
       selectors: async () => { const r = auditSelectors(); printSelectors(r); return r.length; },
       headerorder: async () => { const r = await auditHeaderOrder(browser); printHeaderOrder(r); return r.length; },
@@ -1147,6 +1223,7 @@ try {
   } else if (AUDIT) {
     const errors = await auditErrors(browser);
     const overflow = await auditOverflow(browser, Number(flag("width", 700)));
+    const cellOverflow = await auditCellOverflow(browser, Number(flag("width", 1280)));
     const contrast = await auditContrast(browser);
     const icons = await auditIconAlign(browser);
     const { rows: counts, dead, unstubbed } = await censusAndCoverage(browser);
@@ -1155,6 +1232,7 @@ try {
     const headerOrder = await auditHeaderOrder(browser);
     printErrors(errors);
     printOverflow(overflow);
+    printCellOverflow(cellOverflow);
     printContrast(contrast);
     printIcons(icons);
     printHeaderOrder(headerOrder);
@@ -1167,8 +1245,8 @@ try {
     // defects; thin tabs and unstubbed paths are harness debt that silently
     // undermines the rest.
     const enFails = LANG === "en-US" ? 0 : english.length;
-    const failures = overflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails;
-    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${headerOrder.length} header order, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
+    const failures = overflow.length + cellOverflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails;
+    console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${cellOverflow.length} cell overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${headerOrder.length} header order, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just
     // as something a human reads.
     if (failures > 0) process.exitCode = 1;
