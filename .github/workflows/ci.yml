@@ -36,6 +36,35 @@ jobs:
         run: npx vitest run tests/unit tests/smoke
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
+      - name: i18n + file size checks
+        run: npm run check:i18n && npm run check:size
+
+  # Source-level checks are cheap and run above; these two need a browser, so
+  # they get their own job instead of eating the Linux job's 20-minute budget.
+  # Both gate on exit 1; visual-dialogs exits 2 when no chromium is present and
+  # treats that as a skip, so a missing download cannot fail the build.
+  ui-audit:
+    name: UI audit (tabs + dialogs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+          cache: npm
+      - run: npm ci
+      - name: Cache Playwright chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+      - name: Tab audit (12 categories, zh + en)
+        run: node scripts/visual-shot.mjs --audit
+      - name: Dialog sweep (all dialogs, zh + en)
+        run: node scripts/visual-dialogs.mjs
 
   checks-windows:
     name: Build + unit/smoke (Windows)

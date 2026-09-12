@@ -34,17 +34,26 @@ const ONLY = arg("only", "");
 const WANT_SHOTS = has("shots");
 const OUT = path.resolve(arg("out", "/tmp/abs-dialogs"));
 
+// Same three-platform resolution visual-shot.mjs uses; this sweep has to run
+// on the Linux CI runner, not just on a Mac.
 function findChromium() {
+  const explicit = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.CHROME_PATH;
+  if (explicit && fs.existsSync(explicit)) return explicit;
   const bases = [
     path.join(os.homedir(), "Library", "Caches", "ms-playwright"),
     path.join(os.homedir(), ".cache", "ms-playwright"),
+    path.join(os.homedir(), "AppData", "Local", "ms-playwright"),
   ];
-  const rel = ["chrome-mac-arm64", "chrome-mac-x64"].map((v) => [
-    v, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing",
-  ]);
+  const rel = process.platform === "darwin"
+    ? ["chrome-mac-arm64", "chrome-mac-x64"].map((v) => [
+        v, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing",
+      ])
+    : process.platform === "win32"
+      ? [["chrome-win", "chrome.exe"]]
+      : [["chrome-linux", "chrome"]];
   for (const base of bases) {
     if (!fs.existsSync(base)) continue;
-    for (const d of fs.readdirSync(base).filter((x) => x.startsWith("chromium-")).sort().reverse()) {
+    for (const d of fs.readdirSync(base).filter((x) => /^chromium-\d+$/.test(x)).sort().reverse()) {
       for (const parts of rel) {
         const p = path.join(base, d, ...parts);
         if (fs.existsSync(p)) return p;

@@ -156,11 +156,11 @@
       },
 
   showImport: function () {
-        toast("Disk import is disabled in the Browser-only build. Use Bulk Import to create Browser profiles.", "error");
+        toast(t("proxy.import.disabled-hint", "Disk import is disabled in the Browser-only build. Use Bulk Import to create Browser profiles."), "error");
       },
 
   doImport: function () {
-        toast("Disk import is disabled in the Browser-only build.", "error");
+        toast(t("proxy.import.disabled", "Disk import is disabled in the Browser-only build."), "error");
       },
 
   newProxy: function () {
@@ -277,7 +277,7 @@
   doBindProxyToProfiles: function () {
         var nameEl = document.getElementById("dlg-proxy-bind-proxy");
         var proxyName = nameEl ? nameEl.textContent : "";
-        if (!proxyName) { toast("Proxy name missing", "error"); return; }
+        if (!proxyName) { toast(t("proxy.name-missing", "Proxy name missing"), "error"); return; }
         var boxes = document.querySelectorAll("#dlg-proxy-bind-list input[type=checkbox]:checked");
         var ids = [];
         Array.prototype.forEach.call(boxes, function (b) { ids.push(b.getAttribute("data-dir-id")); });

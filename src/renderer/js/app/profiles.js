@@ -2430,8 +2430,9 @@
     if (!dirId) return;
     var activityEl = document.getElementById("profile-logs-activity");
     var tailEl = document.getElementById("profile-logs-tail");
-    if (activityEl) activityEl.innerHTML = '<div class="loading">Loading...</div>';
-    if (tailEl) tailEl.textContent = "Loading...";
+    // R172: both were hardcoded EN in the zh UI.
+    if (activityEl) activityEl.innerHTML = '<div class="loading">' + esc(t("common.loading", "Loading…")) + '</div>';
+    if (tailEl) tailEl.textContent = t("common.loading", "Loading…");
     api.browser.logs(dirId).then(function(r) {
       renderProfileLogs(r || { success: false, error: "unknown" });
     }).catch(function(e) {
