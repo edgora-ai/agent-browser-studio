@@ -117,7 +117,9 @@
       // breaks work but no other markup can execute.
       var sanitize = agentBrowser.helpers && agentBrowser.helpers.sanitizeMdHtml;
       var emptyHtml = typeof sanitize === "function" ? sanitize(String(state.empty)) : esc(state.empty);
-      el.innerHTML = '<div class="empty-state">' + emptyHtml + '<br>' + cta + '</div>';
+      // R163: the <br> was unconditional, so a CTA-less empty state ended on
+      // a dangling line break (visible as extra bottom padding).
+      el.innerHTML = '<div class="empty-state">' + emptyHtml + (cta ? '<br>' + cta : '') + '</div>';
       return;
     }
   };
