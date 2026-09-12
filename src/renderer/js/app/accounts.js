@@ -221,16 +221,32 @@
       var a = accounts[index];
       if (!a) { staleAccountToast(); return; }
       document.getElementById('acct-bind-index').value = index;
-      return api.browser.list().catch(function() { return []; }).then(function(profiles) {
+      // R168: was `.catch(function () { return []; })` — a failed profile
+      // lookup rendered "No profiles yet. Create a profile first.", telling
+      // the user to create profiles they may well already have (the same
+      // lie-to-the-user bug as profiles.js in R164), and that copy was
+      // hardcoded English in the zh UI. Show the loading state the dict
+      // already defines, then the list or a real error.
+      var listEl0 = document.getElementById('acct-bind-list');
+      if (listEl0) listEl0.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.loading', 'Loading profiles...')) + '</div>';
+      return api.browser.list().then(function(profiles) {
         var listEl = document.getElementById('acct-bind-list');
         var bound = a.profileIds || [];
         if (!profiles || profiles.length === 0) {
-          listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No profiles yet. Create a profile first.</div>';
+          listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.no-profiles', 'No profiles yet. Create a profile first.')) + '</div>';
         } else {
           listEl.innerHTML = profiles.map(function(p) {
             var checked = bound.indexOf(p.dirId) >= 0 ? ' checked' : '';
             return '<label style="display:block;padding:4px 0;font-size:13px;"><input type="checkbox" class="acct-bind-cb" value="' + escAttr(p.dirId) + '"' + checked + '> ' + esc(p.name || p.dirId) + '</label>';
           }).join('');
+        }
+        document.getElementById('dlg-account-bind').showModal();
+      }).catch(function(e) {
+        var listEl = document.getElementById('acct-bind-list');
+        if (window.agentBrowser && window.agentBrowser.renderViewState && listEl) {
+          window.agentBrowser.renderViewState(listEl, { error: e.message || String(e), retry: { cmd: 'agentBindAccounts', arg: String(index) } });
+        } else if (listEl) {
+          listEl.innerHTML = '<div class="empty-state" style="color:var(--danger-text);">' + esc(e.message || String(e)) + '</div>';
         }
         document.getElementById('dlg-account-bind').showModal();
       });
