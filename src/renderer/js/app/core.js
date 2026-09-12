@@ -798,7 +798,10 @@
     var titleEl = document.getElementById("dlg-confirm-title");
     renderConfirmAck(opts);
     if (opts && opts.title && titleEl) titleEl.textContent = String(opts.title);
-    else if (titleEl) titleEl.textContent = titleEl.getAttribute("data-default") || titleEl.textContent;
+    // R162: the no-title path wrote the static data-default ("Confirm") over
+    // the localized text — zh dialogs opened titled "Confirm". data-default
+    // is only the EN authoring fallback; the dict key is the live value.
+    else if (titleEl) titleEl.textContent = pi18n("common.confirm", titleEl.getAttribute("data-default") || "Confirm");
     if (msgEl) {
       // Support HTML detail list when opts.detailHtml is provided.
       if (opts && opts.detailHtml) {
@@ -831,7 +834,13 @@
     var msgEl = document.getElementById("dlg-confirm-msg");
     var detailEl = document.getElementById("dlg-confirm-detail");
     var titleEl = document.getElementById("dlg-confirm-title");
-    if (opts && opts.title && titleEl) titleEl.textContent = String(opts.title);
+    // R162: this path used to skip the reset entirely, so a second confirm
+    // opened after a titled one kept the first dialog's title.
+    if (titleEl) titleEl.textContent = (opts && opts.title) ? String(opts.title) : pi18n("common.confirm", "Confirm");
+    // ...and it never reset the acknowledgement box either, so a confirm()
+    // with ackLabel followed by any confirmHtml() left a stale tick box
+    // visible — and doConfirm() blocks the action until it is ticked.
+    renderConfirmAck(opts);
     if (msgEl) msgEl.innerHTML = String(msgHtml || "");
     if (detailEl) {
       if (opts && opts.detailHtml) { detailEl.innerHTML = String(opts.detailHtml); detailEl.style.display = "block"; }
