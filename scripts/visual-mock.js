@@ -429,7 +429,25 @@
         });
       },
   });
-  def("profile", { list: function () { return Promise.resolve(clone(profiles)); } });
+  // R159: profile.cookies was missing → dialogs hit the miss proxy and always
+  // rendered the empty state, hiding the cookie table from visual review.
+  // Shape mirrors CookieInfo (types.ts): domain/name/value/path/expires
+  // (epoch seconds | null = session)/secure/httpOnly/sameSite.
+  var cookieInfos = [
+    { domain: ".amazon.com", name: "session-id", value: "142-8339216-7412536", path: "/", expires: NOW / 1000 + DAY / 1000 * 30, secure: true, httpOnly: true, sameSite: 1 },
+    { domain: ".amazon.com", name: "ubid-main", value: "133-7124731-8836204", path: "/", expires: NOW / 1000 + DAY / 1000 * 369, secure: true, httpOnly: false, sameSite: 1 },
+    { domain: "sellercentral.amazon.com", name: "csrf", value: "gseed:9f21e0", path: "/", expires: null, secure: true, httpOnly: true, sameSite: 0 },
+  ];
+  def("profile", {
+      list: function () { return Promise.resolve(clone(profiles)); },
+      cookies: function (dirId, filter) {
+        var f = (filter || "").toLowerCase();
+        var rows = cookieInfos.filter(function (c) {
+          return !f || c.domain.toLowerCase().indexOf(f) >= 0 || c.name.toLowerCase().indexOf(f) >= 0;
+        });
+        return Promise.resolve(clone(rows));
+      },
+  });
   def("license", { status: function () { return Promise.resolve({ plan: "yearly", licensedTo: "Northwind Trading Co.", expiresAt: NOW + DAY * 120 }); } });
 
   window.agentBrowserAPI = new Proxy({}, {

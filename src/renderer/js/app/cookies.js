@@ -10,6 +10,7 @@
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
   var icon = helpers.icon;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -50,7 +51,7 @@
   Object.assign(agentBrowser, {
   showCookies: function (dirId) {
         document.getElementById("cookie-dir-id").value = dirId;
-        document.getElementById("cookie-list").innerHTML = '<div class="loading">Loading cookies...</div>';
+        document.getElementById("cookie-list").innerHTML = '<div class="loading">' + esc(t("cookies.loading", "Loading...")) + '</div>';
         document.getElementById("cookie-search").value = "";
         document.getElementById("dlg-cookies").showModal();
         agentBrowser.loadCookies(dirId, "");
@@ -63,10 +64,10 @@
             list.innerHTML = '<div class="empty-state">' + esc(window.i18n ? window.i18n.t("cookies.empty", "No cookies found.") : "No cookies found.") + '</div>';
             return;
           }
-          list.innerHTML = '<table class="cookie-table"><thead><tr><th>Domain</th><th>Name</th><th>Value</th><th>Expires</th><th></th></tr></thead><tbody>' +
+          list.innerHTML = '<table class="cookie-table"><thead><tr><th>' + esc(t("cookies.col.domain", "Domain")) + '</th><th>' + esc(t("cookies.col.name", "Name")) + '</th><th>' + esc(t("cookies.col.value", "Value")) + '</th><th>' + esc(t("cookies.col.expires", "Expires")) + '</th><th></th></tr></thead><tbody>' +
             cookies.map(function (c, idx) {
               var val = (c.value || "").substring(0, 60);
-              var exp = c.expires ? new Date(c.expires * 1000).toLocaleDateString() : "Session";
+              var exp = c.expires ? new Date(c.expires * 1000).toLocaleDateString() : t("cookies.session", "Session");
               return '<tr>' +
                 '<td title="' + escAttr(c.domain) + '">' + esc(c.domain.substring(0, 25)) + '</td>' +
                 '<td title="' + escAttr(c.name) + '">' + esc(c.name.substring(0, 20)) + '</td>' +
