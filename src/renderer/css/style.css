@@ -2122,6 +2122,23 @@ dialog p {
 }
 .chip-link { background: var(--success-bg); border-color: var(--success-text); color: var(--success-text); }
 .chip-info { background: var(--primary-bg); border-color: var(--primary-text); color: var(--primary-text); }
+/* R153: a bound-profile chip carries the profile *name*, which is free user
+   input — a long name pushed its card wide (mock fixture literally named
+   "A Very Long Profile Name That Should Definitely Be Truncated By Ellipsis
+   Rules" rendered at full width). The label is a bare text node in the flex
+   chip, which no selector can cap — accounts.js now wraps it in .chip-label;
+   inline-block + min-width 0 makes that span the ellipsis box. The full name
+   stays on the chip's title tooltip. */
+.chip-link { min-width: 0; max-width: 100%; }
+.chip-link .chip-label {
+  display: inline-block;
+  min-width: 0;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
 /* R2-8: hardcoded #ff7a18 broke dark theme — token with per-theme value. */
 .chip-firefox { color: var(--accent-firefox-text); }
 

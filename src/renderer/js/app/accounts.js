@@ -46,7 +46,7 @@
     if (!profileIds || !profileIds.length) return '';
     return profileIds.map(function(id) {
       var name = nameById[id] || id;
-      return '<span class="chip chip-link" style="margin-right:4px;" title="' + escAttr(id) + '">' + icon("link", 12) + ' ' + esc(name) + '</span>';
+      return '<span class="chip chip-link" style="margin-right:4px;" title="' + escAttr(name) + '">' + icon("link", 12) + ' <span class="chip-label">' + esc(name) + '</span></span>';
     }).join('');
   }
 
