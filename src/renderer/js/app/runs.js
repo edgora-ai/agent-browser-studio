@@ -47,10 +47,50 @@
   // R158: the duration slot used to print "运行中…" for live runs — the same
   // word the status badge right next to it already shows. Show elapsed time
   // instead; finished runs keep the total duration.
+  //
+  // R176: the elapsed value was computed once at render time and then froze —
+  // refreshes only arrive on agent:run-step, so a run sitting in a long LLM
+  // call showed a stale "已运行 1m 32s" for minutes while its wording promised
+  // a live reading. Live entries now carry data-live-since and a low-frequency
+  // tick (below) rewrites just those nodes, so the list is not re-rendered
+  // under the user's cursor.
   function durationText(run) {
     if (run.finishedAt) return fmtDuration(run.finishedAt - run.startedAt);
     if (run.startedAt) return t("runs.elapsed-prefix", "已运行 ") + fmtDuration(Date.now() - run.startedAt);
     return t("runs.running-hint", "运行中…");
+  }
+
+  // Wraps a duration string in a span the ticker can find, but only while the
+  // run is still live; finished runs get a plain span.
+  function durationHtml(run) {
+    var text = durationText(run);
+    if (!run.finishedAt && run.startedAt) {
+      return '<span data-live-since="' + escAttr(String(run.startedAt)) + '">' + esc(text) + "</span>";
+    }
+    return "<span>" + esc(text) + "</span>";
+  }
+
+  // 1s is the resolution fmtDuration prints below 60s; above that most ticks
+  // are no-ops, so throttle to a coarser cadence once the span is minutes.
+  var liveTickTimer = null;
+  function tickLiveDurations() {
+    var nodes = document.querySelectorAll("[data-live-since]");
+    if (!nodes.length) return;
+    var now = Date.now();
+    nodes.forEach(function (el) {
+      var since = Number(el.getAttribute("data-live-since"));
+      if (!since) return;
+      var next = t("runs.elapsed-prefix", "已运行 ") + fmtDuration(now - since);
+      if (el.textContent !== next) el.textContent = next;
+    });
+  }
+  function ensureLiveTicker() {
+    if (liveTickTimer) return;
+    liveTickTimer = setInterval(function () {
+      if (document.hidden) return;              // no point while backgrounded
+      if (!document.querySelector("[data-live-since]")) return;
+      tickLiveDurations();
+    }, 1000);
   }
 
   // JSON for <pre>, safely (we escape on insert via textContent in detail rendering)
@@ -72,6 +112,7 @@
       el.innerHTML = groupRuns(list).map(function(item) {
         return item.group ? renderGroupCard(item.group) : renderRunCard(item.single);
       }).join("");
+      ensureLiveTicker();
       el.onclick = function(event) {
         var btn = event.target.closest("[data-run-action], [data-group-action]");
         if (!btn || !el.contains(btn)) return;
@@ -138,7 +179,6 @@
   }
 
   function renderRunCard(run) {
-    var dur = durationText(run);
     var name = esc(run.name);
     if (run.source && run.source.retryOf) {
       name += ' <span class="status-badge status-warn">' + esc(t("runs.retry-tag", "重试")) + '</span>';
@@ -148,7 +188,7 @@
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
       (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
       '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + "</span></div>" +
-      '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span><span>' + esc(dur) + "</span></div>" +
+      '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span>' + durationHtml(run) + "</div>" +
       (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
       '<div class="card-actions">' +
         '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
@@ -182,7 +222,7 @@
   function renderGroupCard(runs) {
     var first = runs[0];
     var rows = runs.map(function(run) {
-      var durRow = durationText(run);
+      var durRowHtml = durationHtml(run);
       var err = run.error
         ? '<div style="color: var(--danger-text);font-size:11px;word-break:break-word;margin-top:4px;">' + esc(run.error).slice(0, 160) + "</div>"
         : "";
@@ -190,7 +230,7 @@
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<span style="font-family:var(--mono);font-size:11px;word-break:break-all;">' + esc(run.dirId || "—") + "</span>" +
           statusBadge(run) +
-          '<span style="color:var(--text-muted);font-size:11px;">' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + " · " + esc(durRow) + "</span>" +
+          '<span style="color:var(--text-muted);font-size:11px;">' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + " · " + durRowHtml + "</span>" +
           '<span style="margin-left:auto;display:inline-flex;gap:6px;">' +
             '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
             retryButton(run) +
@@ -259,6 +299,7 @@
       if (!run) { toast(t("runs.toast.not-found", "记录不存在"), "error"); return; }
       renderDetail(run);
       document.getElementById("dlg-agent-run").showModal();
+      ensureLiveTicker();
     });
   };
 
@@ -292,8 +333,7 @@
     titleEl.textContent = run.name || "";
     var sep = document.getElementById("agent-run-title-sep");
     if (sep) sep.style.display = run.name ? "" : "none";
-    var dur = durationText(run);
-    var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + dur;
+    var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + durationHtml(run);
     if (run.dirId) meta += ' · <span style="font-family:var(--mono);">' + esc(run.dirId) + "</span>";
     if (run.startedAt) meta += " · " + new Date(run.startedAt).toLocaleString();
     if (run.error) meta += '<br><span style="color: var(--danger-text);">' + esc(run.error) + "</span>";
