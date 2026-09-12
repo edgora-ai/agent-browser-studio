@@ -447,7 +447,8 @@
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
     // UI R2: skeleton instead of bare text so the list doesn't flash empty.
-    agentBrowser.renderViewState(container, { skeleton: 3, loading: "Loading proxies..." });
+    // R170: the aria-label on the loading skeleton was a bare EN string.
+    agentBrowser.renderViewState(container, { skeleton: 3, loading: t("proxy.loading", "Loading proxies...") });
     api.proxy.healthGet().then(function (health) {
       window.__proxyHealth = health || { entries: [], summary: null };
     }).catch(function () {
