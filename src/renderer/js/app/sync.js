@@ -219,7 +219,7 @@
       if (r2.success) agentBrowser.loadSyncConfig();
       else agentBrowser.loadSyncPreview();
     }).catch(function(e) {
-      toast(t('sync.toast.push-failed','Push failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
+      toast(t('sync.toast.push-error','Push failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
     }).finally(function() {
       if (reset) reset();
     });
@@ -249,7 +249,7 @@
             agentBrowser.loadSyncConfig();
           });
         }).catch(function(e) {
-          toast(t('sync.toast.pull-failed','Pull failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
+          toast(t('sync.toast.pull-error','Pull failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
         }).finally(function() {
           if (reset) reset();
         });

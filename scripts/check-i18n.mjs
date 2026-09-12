@@ -300,6 +300,83 @@ function collectValuesByLocale() {
 }
 const VALUES_BY_LOCALE = collectValuesByLocale();
 
+// ── 1f. dict shadowing that leaks raw placeholders ─────────────────────────
+// The dict is built from several merged object literals, so a key can be
+// defined more than once *within a locale* — the last definition wins.
+// Duplicate keys across locales (zh + en) are normal and must NOT be counted.
+// When the winner carries a {placeholder} and a call site references the key
+// without substituting it, the user sees a literal "{msg}".
+const BILINGUAL_VALUES = collectI18nValues();
+
+function winnerPerLocale() {
+  if (!fs.existsSync(I18N)) return new Map();
+  const src = fs.readFileSync(I18N, "utf-8");
+  const lines = src.split("\n");
+  // Locale blocks are the object literals assigned under each language key.
+  // Track the block by the language marker each literal belongs to.
+  const byLocale = new Map();  // locale -> Map(key -> [values in order])
+  let locale = null;
+  const marker = /^\s*"?((?:zh|en)-[A-Z]{2})"?\s*:\s*\{\s*$/;
+  for (const line of lines) {
+    const mk = line.match(marker);
+    if (mk) { locale = mk[1]; continue; }
+    if (/^\s*\},?\s*$/.test(line)) { locale = null; continue; }
+    if (!locale) continue;
+    const km = line.match(/^\s{6}"([A-Za-z0-9_.\-]+)"\s*:\s*"((?:[^"\\]|\\.)*)",?\s*$/);
+    if (!km) continue;
+    if (!byLocale.has(locale)) byLocale.set(locale, new Map());
+    const m = byLocale.get(locale);
+    if (!m.has(km[1])) m.set(km[1], []);
+    m.get(km[1]).push(km[2]);
+  }
+  const winners = new Map();  // key -> Set of winning values (one per locale)
+  for (const [, m] of byLocale) {
+    for (const [key, values] of m) {
+      if (values.length < 2) continue;
+      if (!winners.has(key)) winners.set(key, new Set());
+      winners.get(key).add(values[values.length - 1]);
+    }
+  }
+  return winners;
+}
+const SHADOWED_WINNERS = winnerPerLocale();
+
+function findShadowedPlaceholderLeaks() {
+  if (!SHADOWED_WINNERS.size) return [];
+  const found = [];
+  for (const dir of JS_DIRS) {
+    for (const file of walk(dir)) {
+      const src = fs.readFileSync(file, "utf-8");
+      const lines = src.split("\n");
+      lines.forEach((line, index) => {
+        const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+        if (!code.includes("t(")) return;
+        const re = /\bt\(\s*(["'])([A-Za-z0-9_.\-]+)\1\s*(?:\)|,)/g;
+        let m;
+        while ((m = re.exec(code))) {
+          const key = m[2];
+          const winners = SHADOWED_WINNERS.get(key);
+          if (!winners) continue;
+          const need = new Set();
+          for (const w of winners) for (const ph of w.matchAll(/\{([a-z][a-z0-9_]*)\}/g)) need.add(ph[1]);
+          if (need.size === 0) continue;
+          // Substitution may be chained over a wrapped call, so widen the net
+          // to the whole statement before deciding the call cannot fill it.
+          const window = lines.slice(index, index + 4).join("\n");
+          if (window.includes(".replace")) continue;
+          found.push({
+            file: path.relative(ROOT, file),
+            line: index + 1,
+            kind: "i18n-shadowed-placeholder-leak",
+            text: `${key} — dict defines this key more than once and the winning value keeps ${[...need].map((x) => "{" + x + "}").join(", ")}, but this call never substitutes it`,
+          });
+        }
+      });
+    }
+  }
+  return found;
+}
+
 function findDroppedPlaceholders() {
   const found = [];
   for (const dir of JS_DIRS) {
@@ -440,6 +517,7 @@ if (fs.existsSync(MAIN_I18N)) {
 problems.push(...findUndefinedKeys());
 problems.push(...findSeparatorLeaks());
 problems.push(...findDroppedPlaceholders());
+problems.push(...findShadowedPlaceholderLeaks());
 
 if (problems.length) {
   console.log(`\n✗ ${problems.length} i18n problem(s) found:\n`);
