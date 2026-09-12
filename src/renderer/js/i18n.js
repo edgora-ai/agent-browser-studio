@@ -13,6 +13,9 @@
     "zh-CN": {
       // ── Sidebar / Tabs ──
       "tab.profiles": "配置",
+      "nav.group.env": "环境",
+      "nav.group.ai": "智能",
+      "nav.group.browser": "浏览器与集成",
       "tab.proxy": "代理",
       "tab.storage": "存储",
       "tab.sync": "同步",
@@ -1067,6 +1070,9 @@
 
     "en-US": {
       "tab.profiles": "Profiles",
+      "nav.group.env": "Environments",
+      "nav.group.ai": "Intelligence",
+      "nav.group.browser": "Browser & Accounts",
       "tab.proxy": "Proxies",
       "tab.storage": "Storage",
       "tab.sync": "Sync",

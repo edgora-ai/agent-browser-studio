@@ -274,10 +274,68 @@ dialog,
   display: block;
 }
 
+/* R177: brand mark + grouped nav. Ported from the feat/sidebar-svg-icons WIP,
+   which had the marking but drew each nav icon as its own inline <svg>; that
+   approach was superseded by the data-icon/icons.js set (R127), so only the
+   two pieces premium lacked came across. */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* R177: the brand mark eats 42px of a 208px sidebar, which pushed the 20px
+   product name from 2 lines to 3 and grew the header. The mark is fixed-size
+   decoration, so the type yields: min-width:0 lets the text block truncate
+   instead of forcing the flex container wider. */
+.brand-text {
+  min-width: 0;
+}
+
+.brand-text h1 {
+  font-size: 17px;
+  line-height: 1.25;
+  letter-spacing: -0.4px;
+}
+
+.brand-mark {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 9px;
+  background: var(--accent-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(91, 108, 240, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.brand-mark > svg {
+  width: 18px;
+  height: 18px;
+}
+
 .nav-menu {
   list-style: none;
   padding: 8px;
   flex: 1;
+}
+
+/* Section label inside the nav list. Not a tab: no role, no id, not
+   focusable — it is a heading, and reads as one to a screen reader only via
+   the surrounding list structure. */
+.nav-group {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--text-muted);
+  padding: 16px 10px 5px;
+  user-select: none;
+}
+
+.nav-menu > .nav-group:first-child {
+  padding-top: 4px;
 }
 
 /* Premium-R5: nav items go pill — 10px radius, WorkBuddy-like neutral

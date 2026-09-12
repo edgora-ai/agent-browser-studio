@@ -11,18 +11,24 @@
 
 <nav id="sidebar">
  <div class="sidebar-header">
+ <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13.2 2 5 13.2h4.6L10.8 22 19 10.8h-4.6L13.2 2z" fill="#fff" stroke="none"/></svg></div>
+ <div class="brand-text">
  <h1>Agent Browser Studio</h1>
  <span class="version">v1.0.0</span>
  </div>
+ </div>
  <ul class="nav-menu" role="tablist" aria-label="Main navigation">
- <li class="nav-item active" id="nav-profiles" role="tab" tabindex="0" aria-selected="true" data-tab="profiles" data-icon="profiles" data-role="cmd" data-cmd="switchTab" aria-controls="tab-profiles"><span data-i18n="tab.profiles">Profiles</span></li>
+  <li class="nav-group" data-i18n="nav.group.env">Environments</li>
+<li class="nav-item active" id="nav-profiles" role="tab" tabindex="0" aria-selected="true" data-tab="profiles" data-icon="profiles" data-role="cmd" data-cmd="switchTab" aria-controls="tab-profiles"><span data-i18n="tab.profiles">Profiles</span></li>
  <li class="nav-item" id="nav-proxy" role="tab" tabindex="-1" aria-selected="false" data-tab="proxy" data-icon="proxy" data-role="cmd" data-cmd="switchTab" aria-controls="tab-proxy"><span data-i18n="tab.proxy">Proxies</span></li>
  <li class="nav-item" id="nav-storage" role="tab" tabindex="-1" aria-selected="false" data-tab="storage" data-icon="storage" data-role="cmd" data-cmd="switchTab" aria-controls="tab-storage"><span data-i18n="tab.storage">Storage</span></li>
  <li class="nav-item" id="nav-sync" role="tab" tabindex="-1" aria-selected="false" data-tab="sync" data-icon="sync" data-role="cmd" data-cmd="switchTab" aria-controls="tab-sync"><span data-i18n="tab.sync">Sync</span></li>
- <li class="nav-item" id="nav-browser" role="tab" tabindex="-1" aria-selected="false" data-tab="browser" data-icon="browser" data-role="cmd" data-cmd="switchTab" aria-controls="tab-browser"><span data-i18n="tab.browser">Browser Engine</span></li>
+  <li class="nav-group" data-i18n="nav.group.browser">Browser & Accounts</li>
+<li class="nav-item" id="nav-browser" role="tab" tabindex="-1" aria-selected="false" data-tab="browser" data-icon="browser" data-role="cmd" data-cmd="switchTab" aria-controls="tab-browser"><span data-i18n="tab.browser">Browser Engine</span></li>
  <li class="nav-item" id="nav-extensions" role="tab" tabindex="-1" aria-selected="false" data-tab="extensions" data-icon="extensions" data-role="cmd" data-cmd="switchTab" aria-controls="tab-extensions"><span data-i18n="tab.extensions">Extensions</span></li>
  <li class="nav-item" id="nav-accounts" role="tab" tabindex="-1" aria-selected="false" data-tab="accounts" data-icon="accounts" data-role="cmd" data-cmd="switchTab" aria-controls="tab-accounts"><span data-i18n="tab.accounts">Accounts</span></li>
- <li class="nav-item" id="nav-agent" role="tab" tabindex="-1" aria-selected="false" data-tab="agent" data-icon="agent" data-role="cmd" data-cmd="switchTab" aria-controls="tab-agent"><span data-i18n="tab.agent">Agent</span></li>
+  <li class="nav-group" data-i18n="nav.group.ai">Intelligence</li>
+<li class="nav-item" id="nav-agent" role="tab" tabindex="-1" aria-selected="false" data-tab="agent" data-icon="agent" data-role="cmd" data-cmd="switchTab" aria-controls="tab-agent"><span data-i18n="tab.agent">Agent</span></li>
  <li class="nav-item" id="nav-automation" role="tab" tabindex="-1" aria-selected="false" data-tab="automation" data-icon="automation" data-role="cmd" data-cmd="switchTab" aria-controls="tab-automation"><span data-i18n="tab.automation">Automation</span></li>
  <li class="nav-item" id="nav-runs" role="tab" tabindex="-1" aria-selected="false" data-tab="runs" data-icon="runs" data-role="cmd" data-cmd="switchTab" aria-controls="tab-runs"><span data-i18n="tab.runs">Runs</span></li>
  <li class="nav-item" id="nav-activity" role="tab" tabindex="-1" aria-selected="false" data-tab="activity" data-icon="activity" data-role="cmd" data-cmd="switchTab" aria-controls="tab-activity"><span data-i18n="tab.activity">Activity</span></li>
