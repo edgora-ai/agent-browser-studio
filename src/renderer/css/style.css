@@ -1528,9 +1528,15 @@ dialog { line-height: 1.6; }
    --surface2: on a white dialog the field edge disappeared and the form read
    as empty space. Fields now carry --input-bg + a hairline in both themes;
    the soft-fill look stays where it belongs, on inline pills/selects. */
+/* R155: fields are block, not inline-block — `width: 100%` on an inline-block
+   still leaves an inline formatting context on the row, so a trailing inline
+   sibling (the cron hint span and its 8px margin-left) could not wrap to the
+   next line and widened the form's scrollWidth by exactly its margin
+   (measured: form scrollWidth 630 vs clientWidth 622 in #dlg-automation). */
 .form-row input,
 .form-row select,
 .form-row textarea {
+  display: block;
   width: 100%;
   padding: 9px 12px;
   background: var(--input-bg);
