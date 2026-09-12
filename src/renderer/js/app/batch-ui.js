@@ -15,6 +15,21 @@
   var esc = agentBrowser.helpers.esc;
   var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
 
+  // R174: this module loads before runs.js, so it owns the shared duration
+  // formatter. The batch dialog rendered a raw "Took 41200ms" — 41 seconds as
+  // a five-digit millisecond count — while runs.js had a humanizing version
+  // that could not be reused because it was module-private.
+  function fmtDuration(ms) {
+    if (!ms || ms < 0) return "-";
+    if (ms < 1000) return ms + "ms";
+    var s = ms / 1000;
+    if (s < 60) return s.toFixed(1) + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
+    var h = Math.floor(s / 3600);
+    return h + "h " + Math.round((s - h * 3600) / 60) + "m";
+  }
+  agentBrowser.helpers.fmtDuration = fmtDuration;
+
   // P3 (#110): ask the main process for the cap instead of hardcoding —
   // falls back to 4 when the channel is unavailable (older builds).
   var DEFAULT_CONCURRENCY = 4;
@@ -195,7 +210,7 @@
       parts.push('<div style="font-size:12px;color: var(--warning-text);margin-top:4px;">' + esc(t("batch.cancelled", "Cancelled")) + "</div>");
     }
     parts.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' +
-      esc(t("batch.duration", "Took {ms}ms · concurrency {c}").replace("{ms}", result.durationMs).replace("{c}", result.concurrency)) + "</div>");
+      esc(t("batch.duration", "Took {ms} · concurrency {c}").replace("{ms}", fmtDuration(result.durationMs)).replace("{c}", result.concurrency)) + "</div>");
     return parts.join("");
   }
 

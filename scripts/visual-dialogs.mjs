@@ -97,7 +97,18 @@ const DIALOGS = [
   { id: "dlg-rename", cmd: "renameProfile", arg: "prof_amazon", arg2: "Amazon US Shop" },
   { id: "dlg-auto-job", cmd: "automationShowJob", arg: "job_4a83" },
   { id: "dlg-auto-log", cmd: "automationShowLogDetail", arg: { at: 1757000000000, ok: false, ruleId: "rule_nightly", ruleName: "Nightly price sweep", result: "step 9 failed: selector .price not found" } },
-  { id: "dlg-batch-result", cmd: null, skip: "only opens from a real batch run" },
+  // batch.showResult is exported (agentBrowser.batch.showResult), so the
+  // dialog is reachable with a synthetic result — no live batch run needed.
+  // Fixture mirrors the real contract (batch-queue.ts:187):
+  // {total, succeeded, failed, cancelled, durationMs, concurrency, traceId,
+  //  results:[{ok, value:{name}, item, error}]}. An earlier version invented
+  // `ok` at the top level and omitted durationMs, which rendered a literal
+  // "undefined" — a fixture bug that looked like a product bug.
+  { id: "dlg-batch-result", cmd: "batch.showResult", arg: { total: 3, succeeded: 2, failed: 1, cancelled: false, durationMs: 41200, concurrency: 2, traceId: "tr_8c31", results: [
+      { ok: true, item: "prof_amazon", value: { name: "Amazon US Shop" } },
+      { ok: true, item: "prof_qa", value: { name: "QA Local" } },
+      { ok: false, item: "prof_cjk", value: { name: "短名字测试中文截断效果看看会不会溢出" }, error: "CDP port 9222 already in use by another profile" },
+    ] }, arg2: "launch" },
   { id: "dlg-approval", cmd: null, skip: "opens on a main-process approval request" },
   { id: "dlg-license", cmd: null, skip: "opens from the license surface" },
   { id: "dlg-terms", cmd: null, skip: "first-run only; accepted in setup" },
@@ -133,7 +144,9 @@ async function boot(browser, lang) {
 async function inspect(page, d) {
   return page.evaluate(async ({ id, cmd, arg, arg2 }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
-    const fn = window.agentBrowser && window.agentBrowser[cmd];
+    // cmd may be dotted (e.g. "batch.showResult") — resolve through the path
+    // so nested exports are reachable, not just top-level ones.
+    const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
     if (typeof fn !== "function") return { skipped: `no command ${cmd}` };
     try {
       if (arg2 !== undefined) await fn(arg, arg2);

@@ -40,16 +40,9 @@
     return t("runs.source.chat", "Chat");
   }
 
-  function fmtDuration(ms) {
-    if (!ms || ms < 0) return "-";
-    if (ms < 1000) return ms + "ms";
-    var s = ms / 1000;
-    // R158: long spans used to render as raw "32217160.3s". Humanize.
-    if (s < 60) return s.toFixed(1) + "s";
-    if (s < 3600) return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
-    var h = Math.floor(s / 3600);
-    return h + "h " + Math.round((s - h * 3600) / 60) + "m";
-  }
+  // R174: was a private copy; batch-ui.js now owns the shared version so the
+  // batch dialog and the run timeline cannot drift apart.
+  var fmtDuration = helpers.fmtDuration;
 
   // R158: the duration slot used to print "运行中…" for live runs — the same
   // word the status badge right next to it already shows. Show elapsed time
