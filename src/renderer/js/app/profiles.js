@@ -1428,14 +1428,25 @@
     var container = document.getElementById("profile-list");
     if (!soft) container.innerHTML = '<div class="loading">Loading...</div>';
 
+    // R164: browser.list() failure used to be swallowed into [] — the page
+    // then painted the *empty* state ("还没有配置。点击「新建配置」…"), reporting
+    // a load failure as "you have no profiles". Record it and render the
+    // error state instead; the other optional calls keep their soft fallbacks
+    // (proxy.list() stays bare — it is load-bearing, and its rejection
+    // reaches the outer catch below).
+    var listError = null;
     Promise.all([
-      api.browser.list().catch(function () { return []; }),
+      api.browser.list().catch(function (e) { listError = e; return []; }),
       api.proxy.list(),
       api.browser.binary().catch(function () { return null; }),
       // R10 P1-3: cache the Firefox engine state too, so the launch gate
       // can tell "Chromium missing" from "Firefox missing".
       (api.browser.engineStatus ? api.browser.engineStatus().catch(function () { return null; }) : Promise.resolve(null)),
     ]).then(function (results) {
+      if (listError) {
+        agentBrowser.renderViewState(container, { error: listError.message || String(listError), retry: { cmd: "loadProfiles" } });
+        return;
+      }
       var browserProfiles = results[0] || [];
       var proxies = results[1];
       // PL-07: surface the engine state on the page that needs it.
