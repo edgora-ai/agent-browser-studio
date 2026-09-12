@@ -94,12 +94,13 @@
     return api.browser.binary().then(function(info) {
       var versions = (info && info.installedVersions) || [];
       select.innerHTML = "";
-      select.appendChild(new Option("Auto (newest installed)", ""));
+      // R160: was hardcoded EN — key existed in both dicts.
+      select.appendChild(new Option(t("profile.new.field.version.auto", "Auto (newest installed)"), ""));
       versions.forEach(function(item) {
         select.appendChild(new Option(item.version, item.version));
       });
       if (selected && !versions.some(function(item) { return item.version === selected; })) {
-        select.appendChild(new Option(selected + " (not installed)", selected));
+        select.appendChild(new Option(selected + " " + t("profile.new.field.version.not-installed", "(not installed)"), selected));
       }
       select.value = selected;
     }).catch(function() {

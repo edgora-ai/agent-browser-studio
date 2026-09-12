@@ -802,6 +802,7 @@
       "profile.new.mode.help": "直通会关闭种子、平台、区域、时区、WebRTC、几何与原生指纹覆盖，便于对照真实机器。",
       "profile.new.mode.help.edit": "直通会关闭全部托管身份注入；已保存的指纹字段仍保留，切回托管即恢复。",
       "profile.new.field.version.auto": "自动（最新已安装）",
+      "profile.new.field.version.not-installed": "（未安装）",
       "profile.new.opt.third-party-cookies": "允许第三方 Cookie，兼容内嵌登录 / 支付 / 验证",
       "profile.new.opt.third-party-cookies.edit": "允许第三方 Cookie，兼容内嵌组件",
       "profile.new.opt.drm": "启用 Widevine / DRM（流媒体站点）— 使用检测到的 Widevine CDM",
@@ -1788,6 +1789,7 @@
       "profile.new.mode.help": "Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.",
       "profile.new.mode.help.edit": "Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.",
       "profile.new.field.version.auto": "Auto (newest installed)",
+      "profile.new.field.version.not-installed": "(not installed)",
       "profile.new.opt.third-party-cookies": "Allow third-party cookies for embedded auth/payment/challenge compatibility",
       "profile.new.opt.third-party-cookies.edit": "Allow third-party cookies for embedded compatibility",
       "profile.new.opt.drm": "Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM",
@@ -3053,6 +3055,14 @@
       var et = elTitles[m];
       var kt = et.getAttribute("data-i18n-title");
       if (kt) et.setAttribute("title", t(kt));
+    }
+    // R160: <option> entries inside static <select> markup — their text is
+    // the visible label, so it needs the same treatment as data-i18n.
+    var elOptions = document.querySelectorAll("[data-i18n-option]");
+    for (var q = 0; q < elOptions.length; q++) {
+      var eo = elOptions[q];
+      var ko = eo.getAttribute("data-i18n-option");
+      if (ko) eo.textContent = t(ko);
     }
     // R128: icon-only buttons (close, send, overflow) carry no text node, so
     // their accessible name comes from aria-label — which must localize too.
