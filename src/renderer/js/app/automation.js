@@ -322,7 +322,12 @@
     if (!jobId) { toast(t('auto.jobs.not-found', 'Job 不存在'), 'error'); return; }
     api.automation.jobGet(jobId).then(function(job) {
       if (!job) { toast(t('auto.jobs.not-found','Job 不存在'), 'error'); return; }
-      document.getElementById('auto-job-title').textContent = job.id;
+      // R173: the title was the bare job id ("Job Detail — job_4a83"), which
+      // is also printed in the JSON body right below — so the heading repeated
+      // an opaque internal string and never said what the job *was*. Lead with
+      // the rule name and the status; the id stays in the detail block.
+      document.getElementById('auto-job-title').textContent =
+        (job.ruleName || job.ruleId || job.id) + ' · ' + t('auto.status.' + (job.status || ''), job.status || '?');
       document.getElementById('auto-job-detail').textContent = jobDetailText(job);
       var actions = document.getElementById('auto-job-actions');
       actions.innerHTML = (job.runId ? '<button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="runsOpen" data-cmd-arg="' + escAttr(job.runId) + '">' + esc(t('auto.jobs.open-run','打开关联 Run')) + '</button>' : '') +

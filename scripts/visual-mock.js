@@ -457,6 +457,13 @@
         return Promise.resolve(clone(list));
       },
       logs: function () { return Promise.resolve(clone(automationLogs)); },
+      // R173: jobGet was missing (the ns() miss proxy answered []), so the
+      // job-detail dialog could not be opened by the sweep at all. The real
+      // handler returns one job object or null (automation:job-get).
+      jobGet: function (id) {
+        var found = automationJobs.filter(function (j) { return j.id === id; })[0];
+        return Promise.resolve(found ? clone(found) : null);
+      },
       validateCron: function (cron) {
         var parts = String(cron || "").trim().split(/\s+/);
         return Promise.resolve(parts.length === 5 ? { valid: true } : { valid: false, error: "expected 5 fields" });

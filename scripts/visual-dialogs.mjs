@@ -92,14 +92,16 @@ const DIALOGS = [
   { id: "dlg-proxy-bind", cmd: "bindProxyToProfiles", arg: "hk01" },
   { id: "dlg-proxy-qr", cmd: "qrcodeProxy", arg: "hk01" },
   { id: "dlg-automation", cmd: "automationNew" },
+  // R173: these three were listed as "no programmatic opener" — wrong. Each
+  // does have one; the sweep just had to pass the right argument.
+  { id: "dlg-rename", cmd: "renameProfile", arg: "prof_amazon", arg2: "Amazon US Shop" },
+  { id: "dlg-auto-job", cmd: "automationShowJob", arg: "job_4a83" },
+  { id: "dlg-auto-log", cmd: "automationShowLogDetail", arg: { at: 1757000000000, ok: false, ruleId: "rule_nightly", ruleName: "Nightly price sweep", result: "step 9 failed: selector .price not found" } },
   { id: "dlg-batch-result", cmd: null, skip: "only opens from a real batch run" },
   { id: "dlg-approval", cmd: null, skip: "opens on a main-process approval request" },
   { id: "dlg-license", cmd: null, skip: "opens from the license surface" },
   { id: "dlg-terms", cmd: null, skip: "first-run only; accepted in setup" },
   { id: "dlg-confirm", cmd: null, skip: "covered separately (see probeConfirm)" },
-  { id: "dlg-rename", cmd: null, skip: "context-menu only" },
-  { id: "dlg-auto-job", cmd: null, skip: "needs a persisted job" },
-  { id: "dlg-auto-log", cmd: null, skip: "needs a persisted job log" },
   { id: "dlg-profile", cmd: null, skip: "new-profile wizard entry" },
 ];
 
@@ -129,12 +131,13 @@ async function boot(browser, lang) {
 
 // Open one dialog and return what the user would see.
 async function inspect(page, d) {
-  return page.evaluate(async ({ id, cmd, arg }) => {
+  return page.evaluate(async ({ id, cmd, arg, arg2 }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
     const fn = window.agentBrowser && window.agentBrowser[cmd];
     if (typeof fn !== "function") return { skipped: `no command ${cmd}` };
     try {
-      if (arg !== undefined) await fn(arg);
+      if (arg2 !== undefined) await fn(arg, arg2);
+      else if (arg !== undefined) await fn(arg);
       else await fn();
     } catch (e) {
       return { threw: String((e && e.message) || e) };
