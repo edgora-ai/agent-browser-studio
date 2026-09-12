@@ -100,6 +100,43 @@ if (fs.existsSync(HTML)) {
   }
 }
 
+// ── 1b-ii. HTML: English `placeholder` without a data-i18n-placeholder ─────
+// Section 1b scans element *text*, so it is structurally blind to attributes —
+// and a placeholder is visible copy that sits in an attribute. That is how
+// "e.g. 54321" (the fingerprint-seed field) and "My First Profile" (wizard step
+// 2) stayed English in a zh-CN UI while 1b reported success, even though the
+// seed field's own sibling input already carried data-i18n-placeholder.
+//
+// Format examples are *not* copy: a SQL starter (`SELECT * FROM customers`), a
+// proxy-import sample (`socks5://user:pass@1.2.3.4:1080`) or a bulk-import
+// column order are the same bytes in every locale and translating them would
+// misrepresent the input the user must type. Those opt out explicitly with
+// data-i18n-en-ok, matching how 1b handles the same judgement, so each
+// exemption is a visible decision in the markup rather than a silent rule.
+if (fs.existsSync(HTML)) {
+  const html = fs.readFileSync(HTML, "utf-8");
+  const lineOf = (offset) => html.slice(0, offset).split("\n").length;
+  const attrRe = /<([a-zA-Z][\w-]*)((?:[^<>"']|"[^"]*"|'[^']*')*?)>/g;
+  let m;
+  while ((m = attrRe.exec(html))) {
+    const attrs = m[2] || "";
+    const ph = attrs.match(/\splaceholder\s*=\s*"([^"]*)"/);
+    if (!ph) continue;
+    const text = ph[1].replace(/&#10;/g, " ").replace(/\s+/g, " ").trim();
+    if (!text || !LATIN_TEXT.test(text)) continue;
+    if (CJK.test(text)) continue;             // inline bilingual, serves both
+    if (attrs.includes("data-i18n-placeholder")) continue;
+    if (attrs.includes("data-i18n-en-ok")) continue;
+    if (LATIN_ALLOW_RE.some((re) => re.test(text))) continue;
+    problems.push({
+      file: "src/renderer/index.html",
+      line: lineOf(m.index),
+      kind: "html-placeholder-missing-i18n-key",
+      text: "<" + m[1] + ' placeholder="' + text.slice(0, 80) + '">',
+    });
+  }
+}
+
 // ── 1c. JS: t('key', …) call sites whose key exists in no locale ───────────
 // Such a call always renders its fallback, in *both* languages, so the string
 // silently ignores i18n. Two had Chinese fallbacks and therefore leaked Chinese
