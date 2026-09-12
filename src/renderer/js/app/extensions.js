@@ -54,8 +54,17 @@
   showExtensions: function (dirId) {
         agentBrowser._extDirId = dirId;
         api.profile.get(dirId).then(function(info) {
-          document.getElementById('ext-dlg-title').textContent = 'Extensions — ' + (info.name || dirId.slice(0,8));
-        }).catch(function(e){ document.getElementById('ext-dlg-title').textContent = 'Extensions'; toast((e && e.message) || String(e), 'error'); });
+          // R166: writes the [data-i18n] span, not the host — and goes through
+          // t() so the zh UI is not titled "Extensions".
+          var tEl = document.getElementById('ext-dlg-title');
+          var sp = tEl && tEl.querySelector('[data-i18n]');
+          if (sp) sp.textContent = t('ext.dlg.title', 'Extensions') + ' — ' + (info.name || dirId.slice(0,8));
+        }).catch(function(e){
+          var tEl = document.getElementById('ext-dlg-title');
+          var sp = tEl && tEl.querySelector('[data-i18n]');
+          if (sp) sp.textContent = t('ext.dlg.title', 'Extensions');
+          toast((e && e.message) || String(e), 'error');
+        });
         document.getElementById('ext-dlg-status').textContent = '';
         agentBrowser._extRefreshList();
         document.getElementById('dlg-extensions').showModal();

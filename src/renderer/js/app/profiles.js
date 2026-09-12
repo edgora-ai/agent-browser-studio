@@ -686,7 +686,10 @@
                   ? t("license.limit-hit", "Profile limit reached — activate a license for more. Your data is untouched.")
                   : t("license.expired-hit", "Trial expired — activate a license to continue. Your data is untouched.");
                 errorLines.push((s.name || ("row " + (idx + 1))) + ": " + gateMsg);
-                statusEl.innerHTML = '<span style="color: var(--success-text);">Imported ' + done + '/' + total + ' (' + errors + ' errors' + (skipped > 0 ? ', ' + skipped + ' not attempted' : '') + ')</span>' +
+                var impMsg = t("bulk.import.done", "Imported {done}/{total}").replace("{done}", String(done)).replace("{total}", String(total));
+                if (errors) impMsg += " " + t("bulk.import.errors", "({n} errors)").replace("{n}", String(errors));
+                if (skipped > 0) impMsg += ", " + t("bulk.import.skipped", "{n} not attempted").replace("{n}", String(skipped));
+                statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(impMsg) + '</span>' +
                   '<div style="margin-top:6px;font-size:11px;color: var(--danger-text);text-align:left;">' + errorLines.slice(0, 5).map(function (l) { return esc(l); }).join('<br>') + '</div>';
                 return;
               }

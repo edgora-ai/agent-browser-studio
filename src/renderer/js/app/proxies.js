@@ -382,7 +382,7 @@
   function renderHistoryTimeline(entry) {
     if (!entry || !entry.history || !entry.history.length) {
       /* R79: bare muted span joins .hint-line. */
-      return '<span class="hint-line">No detections recorded yet — run Detect to start tracking.</span>';
+      return '<span class="hint-line">' + esc(t('proxy.history.empty', 'No detections recorded yet — run Detect to start tracking.')) + '</span>';
     }
     var points = entry.history.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 8);
     var lines = points.map(function (h) {
@@ -411,7 +411,7 @@
       txt.innerHTML = renderHistoryTimeline(entry);
       row.style.display = '';
     } else {
-      txt.innerHTML = '<span class="hint-line">No detections recorded yet — run Detect to start tracking.</span>';
+      txt.innerHTML = '<span class="hint-line">' + esc(t('proxy.history.empty', 'No detections recorded yet — run Detect to start tracking.')) + '</span>';
       row.style.display = '';
     }
   }

@@ -173,8 +173,8 @@
   agentBrowser.loadSyncDiff = function() {
     var listEl = document.getElementById('sync-diff');
     var messageEl = document.getElementById('sync-diff-message');
-    if (listEl) listEl.innerHTML = '<div class="loading">Loading...</div>';
-    if (messageEl) messageEl.textContent = 'Loading...';
+    if (listEl) listEl.innerHTML = '<div class="loading">' + esc(t('common.loading', 'Loading…')) + '</div>';
+    if (messageEl) messageEl.textContent = t('common.loading', 'Loading…');
     return fetchSyncDiff().catch(function(e) {
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(e.message || e) + '</div>';
       if (messageEl) messageEl.textContent = t('sync.compare-failed', 'Comparison failed');
