@@ -246,9 +246,16 @@
 
   var proxyHealth = {
     entries: [
-      { proxyName: "hk01", risk: "good", score: 92, suggestion: "", cooldownUntil: 0, bindings: ["prof_amazon"], history: [{ success: true, hosting: false, isProxy: false, org: "HKT Limited", as: "AS4760" }] },
-      { proxyName: "us-residential", risk: "poor", score: 38, suggestion: "Exit is a datacenter IP — prefer a residential pool.", cooldownUntil: 0, bindings: ["prof_long"], history: [{ success: true, hosting: true, isProxy: true, org: "DigitalOcean", as: "AS14061" }] },
-      { proxyName: "de-datacenter", risk: "watch", score: 61, suggestion: "Latency spike across the last 3 checks.", cooldownUntil: NOW + 600000, bindings: [], history: [] },
+      // R154: suggestion strings used to be invented ("Exit is a datacenter IP
+      // — prefer a residential pool.", "Latency spike across the last 3
+      // checks."). The real producer is suggestionFor() in proxy-health.ts,
+      // which derives copy from the entry via tMain: hosting=true + org/as
+      // yields proxy.sug.idc, high avgLatencyMs yields proxy.sug.latency,
+      // good risk with no flags yields proxy.sug.good. Fixtures mirror that
+      // derivation (EN branch) so the page previews what users actually see.
+      { proxyName: "hk01", risk: "good", score: 92, suggestion: "Healthy", cooldownUntil: 0, bindings: ["prof_amazon"], history: [{ success: true, hosting: false, isProxy: false, org: "HKT Limited", as: "AS4760" }] },
+      { proxyName: "us-residential", risk: "poor", score: 38, suggestion: "Exit is a datacenter/IDC IP (DigitalOcean · AS14061). Cloud datacenter exits get flagged by ping0 and platform risk engines (net.isidc) — prefer a residential, non-IDC exit.", cooldownUntil: 0, bindings: ["prof_long"], history: [{ success: true, hosting: true, isProxy: true, org: "DigitalOcean", as: "AS14061" }] },
+      { proxyName: "de-datacenter", risk: "watch", score: 61, suggestion: "Latency is high — switch to a closer node", cooldownUntil: NOW + 600000, avgLatencyMs: 1200, bindings: [], history: [] },
     ],
     summary: { total: 3, good: 1, watch: 1, poor: 1, inCooldown: 1 },
   };

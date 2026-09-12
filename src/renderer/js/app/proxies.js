@@ -350,7 +350,12 @@
 
   function healthRowsHtml(entry) {
     var html = '<div class="info-row"><span>' + esc(t('proxy.row.health', 'Health')) + '</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
-    if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>' + esc(t('proxy.row.suggestion', 'Suggestion')) + '</span><span class="proxy-health-suggestion">' + esc(entry.suggestion) + '</span></div>';
+    // R154: the suggestion value sits in the generic ellipsising info-row cell,
+    // so long suggestions were cut with no way to read the rest — real ones
+    // (proxy.sug.idc with an org suffix) run ~140 chars. title restores the
+    // full text on hover; also update the dynamic refresh path (line ~533)
+    // which rewrites textContent after a re-check and would drop the title.
+    if (entry && entry.suggestion) html += '<div class="info-row proxy-health-suggestion-row"><span>' + esc(t('proxy.row.suggestion', 'Suggestion')) + '</span><span class="proxy-health-suggestion" title="' + escAttr(entry.suggestion) + '">' + esc(entry.suggestion) + '</span></div>';
     if (entry && entry.bindings && entry.bindings.length) html += '<div class="info-row"><span>' + esc(t('proxy.row.bindings', 'Bindings')) + '</span><span>' + esc(entry.bindings.join(", ")) + '</span></div>';
     html += '<div class="info-row proxy-history-row" style="display:none"><span>' + esc(t('proxy.row.history', 'History')) + '</span><span class="proxy-history-text"></span></div>';
     return html;
@@ -530,7 +535,8 @@
       if (sugRow) {
         if (entry && entry.suggestion) {
           var txt = sugRow.querySelector(".proxy-health-suggestion");
-          if (txt) txt.textContent = entry.suggestion;
+          // R154: keep the hover title in sync with the recomputed suggestion.
+          if (txt) { txt.textContent = entry.suggestion; txt.title = entry.suggestion; }
           sugRow.style.display = "";
         } else {
           sugRow.style.display = "none";
