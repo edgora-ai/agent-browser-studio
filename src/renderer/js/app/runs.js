@@ -15,7 +15,12 @@
 
   function statusBadge(run) {
     var cls = STATUS_CLS[run.status] || "status-stopped";
-    var label = t("runs.status." + run.status, run.status);
+    // R158: the fallback used to be run.status itself — undefined for a
+    // partial record printed the raw key "runs.status.undefined". The dict
+    // keys are enumerated; a status outside them renders as the status badge
+    // equivalent of "?" instead of leaking internals.
+    var known = { running: true, done: true, error: true };
+    var label = known[run.status] ? t("runs.status." + run.status, run.status) : t("runs.status.unknown", "?");
     return '<span class="status-badge ' + cls + '">' + esc(label) + "</span>";
   }
 
@@ -38,7 +43,21 @@
   function fmtDuration(ms) {
     if (!ms || ms < 0) return "-";
     if (ms < 1000) return ms + "ms";
-    return (ms / 1000).toFixed(1) + "s";
+    var s = ms / 1000;
+    // R158: long spans used to render as raw "32217160.3s". Humanize.
+    if (s < 60) return s.toFixed(1) + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
+    var h = Math.floor(s / 3600);
+    return h + "h " + Math.round((s - h * 3600) / 60) + "m";
+  }
+
+  // R158: the duration slot used to print "运行中…" for live runs — the same
+  // word the status badge right next to it already shows. Show elapsed time
+  // instead; finished runs keep the total duration.
+  function durationText(run) {
+    if (run.finishedAt) return fmtDuration(run.finishedAt - run.startedAt);
+    if (run.startedAt) return t("runs.elapsed-prefix", "已运行 ") + fmtDuration(Date.now() - run.startedAt);
+    return t("runs.running-hint", "运行中…");
   }
 
   // JSON for <pre>, safely (we escape on insert via textContent in detail rendering)
@@ -126,7 +145,7 @@
   }
 
   function renderRunCard(run) {
-    var dur = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
+    var dur = durationText(run);
     var name = esc(run.name);
     if (run.source && run.source.retryOf) {
       name += ' <span class="status-badge status-warn">' + esc(t("runs.retry-tag", "重试")) + '</span>';
@@ -170,7 +189,7 @@
   function renderGroupCard(runs) {
     var first = runs[0];
     var rows = runs.map(function(run) {
-      var durRow = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
+      var durRow = durationText(run);
       var err = run.error
         ? '<div style="color: var(--danger-text);font-size:11px;word-break:break-word;margin-top:4px;">' + esc(run.error).slice(0, 160) + "</div>"
         : "";
@@ -273,8 +292,14 @@
   };
 
   function renderDetail(run) {
-    document.getElementById("agent-run-title").textContent = run.name;
-    var dur = run.finishedAt ? fmtDuration(run.finishedAt - run.startedAt) : t("runs.running-hint", "运行中…");
+    // R158: a run without a name left the title's " — " separator dangling
+    // after the localized fallback ("运行详情 — "). Hide the separator when
+    // there's no run name (markup: <span id="agent-run-title-sep">).
+    var titleEl = document.getElementById("agent-run-title");
+    titleEl.textContent = run.name || "";
+    var sep = document.getElementById("agent-run-title-sep");
+    if (sep) sep.style.display = run.name ? "" : "none";
+    var dur = durationText(run);
     var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + dur;
     if (run.dirId) meta += ' · <span style="font-family:var(--mono);">' + esc(run.dirId) + "</span>";
     if (run.startedAt) meta += " · " + new Date(run.startedAt).toLocaleString();
@@ -302,7 +327,7 @@
       var okIcon = s.ok ? icon("check", 12) : icon("close", 12);
       var head = '<div class="run-step' + (s.ok ? "" : " run-step-error") + '">' +
         '<div class="run-step-head">' +
-          '<span class="run-step-num">' + (i + 1) + "</span> " + icon +
+          '<span class="run-step-num">' + (i + 1) + "</span> " + okIcon +
           ' <span class="run-step-tool">' + esc(s.tool) + "</span>" +
           ' <span class="run-step-dur">(' + fmtDuration(s.durationMs) + ")</span>" +
           (s.error ? ' <span style="color: var(--danger-text);">' + esc(s.error).slice(0, 120) + "</span>" : "") +

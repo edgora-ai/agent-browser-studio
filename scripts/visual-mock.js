@@ -47,7 +47,10 @@
 
   var HOUR = 3600000;
   var DAY = 86400000;
-  var NOW = 1757000000000;
+  // R158: NOW used to be a fixed 2025 timestamp — anything rendered relative
+  // to the wall clock (live-run "elapsed", cooldowns) drifted a year out of
+  // date as real time moved on. Anchor to load time instead.
+  var NOW = Date.now();
   var clone = function (o) { return JSON.parse(JSON.stringify(o)); };
 
   var profiles = [
@@ -370,7 +373,26 @@
       return Promise.resolve({ rows: clone(page), total: all.length, columns: columns.slice() });
     },
   });
-  def("agentRuns", { list: function () { return Promise.resolve(clone(runs)); } });
+  // R158: get() used to fall through to the ns() miss proxy →
+  // Promise.resolve([]). An empty array is truthy, so runsOpen() passed the
+  // `if (!run)` guard and renderDetail([]) printed "undefined" everywhere
+  // (title, raw "runs.status.undefined" key, garbage spans). The real handler
+  // (ipc/agent.ts agent-run:get → agentRunRecorder.getRun) returns the FULL
+  // AgentRun — steps + variables, unlike list() which returns stepCount
+  // summaries — or null for unknown ids. Fixture mirrors that contract.
+  var runDetailSteps = [
+    { id: "s1", tool: "browser_navigate", args: { url: "https://www.hk01.example/verify" }, result: { ok: true, title: "Verify — step 1 of 3" }, ok: true, durationMs: 2140, timestamp: NOW - 88000 },
+    { id: "s2", tool: "browser_snapshot", args: { selector: "#fingerprint-panel" }, result: { text: "canvas: managed · webgl: vendor=Apple" }, ok: true, durationMs: 340, timestamp: NOW - 84000 },
+    { id: "s3", tool: "llm_complete", args: { prompt: "Does the fingerprint panel report the expected locale?" }, result: { reply: "Yes — zh-CN, Asia/Hong_Kong, matching proxy exit." }, ok: true, durationMs: 6100, timestamp: NOW - 72000 },
+  ];
+  def("agentRuns", {
+      list: function () { return Promise.resolve(clone(runs)); },
+      get: function (runId) {
+        var found = runs.filter(function (r) { return r.id === runId; })[0];
+        if (!found) return Promise.resolve(null);
+        return Promise.resolve(clone(Object.assign({}, found, { steps: runDetailSteps, variables: { locale: "zh-CN", proxyExit: "hk01", url: "https://www.hk01.example/verify" } })));
+      },
+  });
   def("audit", {
       list: function (opts) {
         var cat = opts && opts.category;
