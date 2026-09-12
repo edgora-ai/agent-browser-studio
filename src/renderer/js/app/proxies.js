@@ -18,6 +18,19 @@
   var safeCodeLanguage = helpers.safeCodeLanguage;
   var hardwareSummary = helpers.hardwareSummary;
   var shortenGpu = helpers.shortenGpu;
+
+  // R157: dialog titles are <h3 data-icon><span data-i18n>label</span></h3>.
+  // Writing textContent on the h3 destroys the hydrated svg and dumps raw
+  // text next to it; writing on the span keeps both. The span's data-i18n is
+  // harmless — the next applyDom() overwrite re-localizes the *default* key,
+  // so a reopened dialog gets whichever title the opener wrote last.
+  function setDlgTitle(id, text) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var span = host.querySelector("[data-i18n]");
+    var target = span || host;
+    target.textContent = text;
+  }
   var fingerprintCompleteness = helpers.fingerprintCompleteness;
   var platformIcon = helpers.platformIcon;
   var parseTagInput = helpers.parseTagInput;
@@ -90,7 +103,11 @@
   editProxy: function (name) {
         api.proxy.get(name).then(function (cfg) {
           if (!cfg) return;
-          document.getElementById("dlg-proxy-title").textContent = "Edit: " + name;
+          // R157: the title h3 hosts a hydrated svg (data-icon="proxy"); the old
+          // textContent write nuked it and planted a hardcoded English string
+          // into the zh UI. The label span inside carries the i18n key, so write
+          // there and keep the name in a plain text node after it.
+          setDlgTitle("dlg-proxy-title", t("proxy.dlg.edit", "Edit Proxy") + ": " + name);
           document.getElementById("dlg-proxy-old-name").value = name;
           document.getElementById("dlg-proxy-name").value = name;
           document.getElementById("dlg-proxy-type").value = cfg.type;
@@ -147,7 +164,8 @@
       },
 
   newProxy: function () {
-        document.getElementById("dlg-proxy-title").textContent = "Add Proxy";
+        // R157: was textContent = "Add Proxy" — hardcoded English + svg clobber.
+        setDlgTitle("dlg-proxy-title", t("proxy.dlg.add", "Add Proxy"));
         document.getElementById("dlg-proxy-old-name").value = "";
         document.getElementById("dlg-proxy-name").value = "";
         document.getElementById("dlg-proxy-type").value = "http";

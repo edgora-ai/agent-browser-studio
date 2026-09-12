@@ -121,8 +121,17 @@
   }
 
 
+  // R157: dialog title h3 hosts a hydrated svg — write the label span, not the
+  // host (textContent on the host destroys the icon; see proxies.js setDlgTitle).
+  function setDlgTitle(id, text) {
+    var host = document.getElementById(id);
+    if (!host) return;
+    var span = host.querySelector("[data-i18n]");
+    (span || host).textContent = text;
+  }
+
   agentBrowser.agentAddAccount = function() {
-    document.getElementById('dlg-account-title').textContent = t('acct.dlg.add', 'Add Account');
+    setDlgTitle('dlg-account-title', t('acct.dlg.add', 'Add Account'));
     document.getElementById('acct-edit-index').value = '-1';
     document.getElementById('acct-url').value = '';
     document.getElementById('acct-username').value = '';
@@ -167,7 +176,8 @@
     R.agent.accounts.list().then(function(accounts) {
       var a = accounts[index];
       if (!a) { staleAccountToast(); return; }
-      document.getElementById('dlg-account-title').textContent = 'Edit Account';
+      // R157: was hardcoded 'Edit Account' — no key, English in the zh UI.
+      setDlgTitle('dlg-account-title', t('acct.dlg.edit', 'Edit Account'));
       document.getElementById('acct-edit-index').value = index;
       document.getElementById('acct-url').value = a.platformUrl || '';
       document.getElementById('acct-username').value = a.platformUserName || '';
