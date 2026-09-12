@@ -51,3 +51,6 @@ coverage/
 
 # Parallel-session working memory (never commit)
 .workbuddy/
+
+# Local workflow-runner state (parallel-session, never commit)
+.workflow-one/
