@@ -2621,6 +2621,30 @@ dialog textarea:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px
    Migrate incrementally: new code uses the class, old inline stays valid. */
 .hint-line { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 .hint-line-lg { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+/* R156: disclosures with an icon (details > summary[data-icon]) had the glyph
+   hard against the label — icons.apply() injects the <svg> at the host's
+   afterbegin and the summary is an inline block with no spacing between the
+   two. The disclosure triangle then read as "▶⚙高级设置", one fused token.
+   Flex + gap also vertically centres the glyph against the 12px label. */
+details > summary[data-icon] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* The marker is a ::before of the summary in WebKit; keep it outside the flex
+   gap's rhythm by hiding the native marker — the icon is the affordance. */
+details > summary[data-icon]::-webkit-details-marker { display: none; }
+details > summary[data-icon]::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  opacity: 0.55;
+  transition: transform 0.15s ease;
+}
+details[open] > summary[data-icon]::before { transform: rotate(90deg); }
 /* R152: audit target chip. The value used to be cut in JS at 24 chars, which
    clipped "https://example.com/login" to "…/logi" mid-word with no ellipsis.
    Now the full value renders and the chip caps itself. text-overflow applies
