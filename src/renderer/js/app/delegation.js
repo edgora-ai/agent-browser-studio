@@ -9,6 +9,26 @@
   var toast = helpers.toast;
   var esc = helpers.esc;
   var escAttr = helpers.escAttr;
+  function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
+
+  // R185: localize a control's constraint message. The field's own label (via
+  // the `for=` association fixed in R180) is what names it, so the message
+  // reads "Port must be between 1 and 65535" rather than "this field…".
+  function fieldErrorText(el) {
+    var label = document.querySelector('label[for="' + (el.id || "").replace(/"/g, '\\"') + '"]');
+    var name = (label && label.textContent.trim()) || el.getAttribute("aria-label") || el.name || el.placeholder || "";
+    // A trailing "*" is the form's required marker (see acct.field.username).
+    name = name.replace(/\s*\*+\s*$/, "").trim();
+    var v = el.validity || {};
+    if (v.valueMissing) return t("form.err.required", "{field} is required").replace("{field}", name);
+    if (v.rangeUnderflow || v.rangeOverflow || v.stepMismatch) {
+      var msg = t("form.err.range", "{field} must be between {min} and {max}")
+        .replace("{field}", name).replace("{min}", el.min).replace("{max}", el.max);
+      return el.min && el.max ? msg : t("form.err.number", "{field} must be a number").replace("{field}", name);
+    }
+    if (v.badInput || v.typeMismatch) return t("form.err.number", "{field} must be a number").replace("{field}", name);
+    return el.validationMessage;
+  }
   var fmt = helpers.fmt;
   var shortPath = helpers.shortPath;
   var renderChatMarkdown = helpers.renderChatMarkdown;
@@ -175,6 +195,26 @@
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
       else if (cmd) warnUnknown('change', cmd);
     });
+    // R185: Chromium's constraint messages follow the OS locale, not the UI
+    // language — with a Chinese macOS and an English UI, submitting a bad port
+    // said "值必须小于或等于 65535。". Replace them with our own localized
+    // text. `invalid` fires per control before submit; we set a custom message
+    // so the bubble and any programmatic read both carry the translated text.
+    document.addEventListener('invalid', function(e) {
+      var el = e.target;
+      if (!el || !el.validity || !el.setCustomValidity) return;
+      if (!el.validity.customError) el.setCustomValidity(fieldErrorText(el));
+    }, true);
+    // Clearing is required: a custom message makes the field permanently
+    // invalid, so it must be reset the moment the value becomes acceptable.
+    document.addEventListener('input', function(e) {
+      var el = e.target;
+      if (el && el.setCustomValidity && el.validity && el.validity.customError) el.setCustomValidity('');
+    }, true);
+    document.addEventListener('change', function(e) {
+      var el = e.target;
+      if (el && el.setCustomValidity && el.validity && el.validity.customError) el.setCustomValidity('');
+    }, true);
     document.addEventListener('submit', function(e) {
       var el = e.target.closest('[data-role="submit"]');
       if (!el) return;

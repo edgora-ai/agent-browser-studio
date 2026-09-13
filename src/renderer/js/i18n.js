@@ -753,6 +753,12 @@
       "common.close": "关闭",
       "common.refresh": "刷新",
       "common.loading": "加载中…",
+      // R185: native constraint messages (required/min/max/step) come from
+      // Chromium and follow the OS locale, not the UI language — an English
+      // UI showed "值必须小于或等于 65535。". These replace them.
+      "form.err.required": "请填写{field}",
+      "form.err.range": "{field}必须在 {min} 到 {max} 之间",
+      "form.err.number": "{field}必须是数字",
 
       // ── Confirm dialog ──
       "confirm.title": "确认",
@@ -1791,6 +1797,11 @@
       "common.close": "Close",
       "common.refresh": "Refresh",
       "common.loading": "Loading…",
+      // R185: native constraint messages come from Chromium and follow the OS
+      // locale, not the UI language — an English UI showed a Chinese message.
+      "form.err.required": "{field} is required",
+      "form.err.range": "{field} must be between {min} and {max}",
+      "form.err.number": "{field} must be a number",
 
       "confirm.title": "Confirm",
 
