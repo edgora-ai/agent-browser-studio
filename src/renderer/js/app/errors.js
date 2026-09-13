@@ -38,6 +38,12 @@
       "Launch blocked by a consistency conflict (timezone / locale / WebRTC vs proxy). Adjust the profile identity or the proxy, or turn off the gate in Browser Engine.", "open-engine"],
     [/locked by another device/i, "err.sync.locked",
       "This data is checked out (locked) by another device. Ask the owner to unlock, or push with force after confirming.", "open-team"],
+    // R189: must precede the network rules — the IPC error text is
+    // "<key> timed out after Ns", which the generic /timed? ?out/ rule below
+    // matches, so a hung *main process* was reported as "the target site or
+    // proxy is unreachable". Wrong diagnosis, wrong fix.
+    [/IPC_TIMEOUT|timed out after \d+s/i, "err.ipc.timeout",
+      "The app's own process stopped responding — this is a local hang, not a network problem. Retry; if it repeats, restart the app."],
     [/ECONNREFUSED/i, "err.net.refused",
       "Connection refused — the target service (often the local proxy) isn't running or the port is wrong."],
     [/ECONNRESET|socket hang up/i, "err.net.reset",

@@ -11,6 +11,13 @@
   var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
+  // R189: reads were bare `api.*.then()` with no timeout, so a hung main
+  // process left the list on "加载中…" permanently (measured: unchanged after
+  // 12s, no error, no retry). ipc.call already carries a per-kind budget.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
+
   var STATUS_CLS = { running: "status-running", done: "status-done", error: "status-stopped" };
 
   function statusBadge(run) {
@@ -103,7 +110,7 @@
   }
 
   agentBrowser.loadRunsTab = function() {
-    api.agentRuns.list().then(function(list) {
+    lcall("agentRuns.list", function () { return api.agentRuns.list(); }).then(function(list) {
       var el = document.getElementById("agent-run-list");
       if (!list || list.length === 0) {
         if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{empty:t("runs.empty-state","暂无记录")}); else el.innerHTML = '<div class="empty-state">' + t("runs.empty-state", "还没有运行记录。<br>在 Agent 里发一条消息,或让定时任务跑一次,记录会出现在这里。") + '</div>';

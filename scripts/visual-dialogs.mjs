@@ -241,13 +241,8 @@ const findings = [];
 // proxy answers [], which passes a null check and then reads as undefined —
 // see R182 (edit-proxy). Prefer a loud report over a dialog that looks
 // populated but is not.
-// Fire-and-forget telemetry is not a render path: ipc.js calls these purely
-// for side-effect accounting and swallows the result, so the [] fallback has
-// no visible consequence and reporting it would be noise.
-const TELEMETRY_ONLY = /^(?:observability\.(?:timing|counter|gauge|log|trace|metrics|events|export|status))\(\)$/;
 for (const [lang, res] of [["zh", zh], ["en", en]]) {
   for (const m of res.__mockMisses || []) {
-    if (TELEMETRY_ONLY.test(m)) continue;
     findings.push({ id: "—", kind: "unstubbed-in-dialog", detail: `[${lang}] ${m} — the fixture has no such method, so the dialog rendered the empty-array fallback` });
   }
 }

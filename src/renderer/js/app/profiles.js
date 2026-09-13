@@ -65,6 +65,14 @@
     return agentBrowser.ipc.call(key, fn, opts || { kind: "write" });
   }
 
+  // R189: reads were bare `api.*.then()` — no timeout. When the main process
+  // hung, the list stayed on "Loading..." forever with no error and no retry
+  // (measured: unchanged after 12s). ipc.call has had a per-kind budget all
+  // along (list: 5000ms); reads just were not using it.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
+
   function readGeolocationFields(prefix) {
     var mode = document.getElementById(prefix + "geolocation-mode").value;
     if (mode !== "custom") {
@@ -1457,7 +1465,7 @@
     var listError = null;
     var binaryProbeFailed = false;
     Promise.all([
-      api.browser.list().catch(function (e) { listError = e; return []; }),
+      lcall("browser.list", function () { return api.browser.list(); }).catch(function (e) { listError = e; return []; }),
       api.proxy.list(),
       api.browser.binary().catch(function () { binaryProbeFailed = true; return null; }),
       // R10 P1-3: cache the Firefox engine state too, so the launch gate

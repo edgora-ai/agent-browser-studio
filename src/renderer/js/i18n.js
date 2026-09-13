@@ -2829,6 +2829,8 @@
       "err.net.refused": "连接被拒绝——目标服务（通常是本地代理）未运行或端口不对。",
       "err.net.reset": "连接中途被重置——代理或防火墙切断了链路。请重试或检查代理。",
       "err.net.timeout": "连接超时——目标不可达或太慢。请检查代理与目标站点。",
+      // R189: a hung main process was reported with the network-timeout copy.
+      "err.ipc.timeout": "应用自身进程无响应——这是本地卡顿，不是网络问题。请重试；若反复出现请重启应用。",
       "err.net.dns": "DNS 解析失败——域名不存在或 DNS 故障。请检查地址，或设置可用的 DNS/代理。",
       "err.net.unreach": "网络不可达——没有到目标主机的路由。请检查网络或代理。",
       "err.rbac": "权限不足：你在工作区中的角色是只读（viewer）。请联系管理员在团队设置中调整角色。",
@@ -2989,6 +2991,8 @@
       "err.net.refused": "Connection refused — the target service (often the local proxy) isn't running or the port is wrong.",
       "err.net.reset": "The connection was reset mid-way — a proxy or firewall cut the link. Retry, or check the proxy.",
       "err.net.timeout": "Timed out — the target is unreachable or too slow. Check the proxy and the target site.",
+      // R189: a hung main process was reported with the network-timeout copy.
+      "err.ipc.timeout": "The app\u2019s own process stopped responding \u2014 a local hang, not a network problem. Retry; if it repeats, restart the app.",
       "err.net.dns": "DNS resolution failed — the host doesn't exist or DNS is broken. Check the address, or set a working DNS/proxy.",
       "err.net.unreach": "Network unreachable — no route to the host. Check your network or proxy.",
       "err.rbac": "Permission denied: your workspace role is read-only (viewer). An admin can change your role in Team Workspace.",

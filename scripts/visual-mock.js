@@ -579,6 +579,20 @@
     { id: "s2", tool: "browser_snapshot", args: { selector: "#fingerprint-panel" }, result: { text: "canvas: managed · webgl: vendor=Apple" }, ok: true, durationMs: 340, timestamp: NOW - 84000 },
     { id: "s3", tool: "llm_complete", args: { prompt: "Does the fingerprint panel report the expected locale?" }, result: { reply: "Yes — zh-CN, Asia/Hong_Kong, matching proxy exit." }, ok: true, durationMs: 6100, timestamp: NOW - 72000 },
   ];
+  // R189: ipc.call reports every timed call locally (timing + counter).
+  // Wiring the list reads through it made these newly reachable, so the
+  // fixture needs them or --audit reports two unstubbed paths.
+  def("observability", {
+      log: function () { return Promise.resolve({ ok: true }); },
+      trace: function () { return Promise.resolve({ ok: true }); },
+      timing: function () { return Promise.resolve({ ok: true }); },
+      counter: function () { return Promise.resolve({ ok: true }); },
+      gauge: function () { return Promise.resolve({ ok: true }); },
+      metrics: function () { return Promise.resolve({ timings: {}, counters: {}, gauges: {}, generatedAt: NOW }); },
+      events: function () { return Promise.resolve([]); },
+      export: function () { return Promise.resolve({ ok: true, path: null }); },
+      status: function () { return Promise.resolve({ enabled: true, generatedAt: NOW, counts: { timings: 0, counters: 0, gauges: 0 } }); },
+  });
   // R183: webrtc.ts:8 — runWebRtcDiagnostics returns
   // {ok, result?: WebRtcDiagnosticsEntry} (types.ts:89), not a list.
   def("webrtc", {
