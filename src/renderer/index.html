@@ -351,7 +351,7 @@
  <div class="form-row"><label for="agent-llm-provider" data-i18n="agent.llm.provider">Provider</label><select id="agent-llm-provider" data-role="change" data-change-cmd="agentProviderChanged"><option value="openai" data-i18n="agent.llm.provider.openai">OpenAI / Compatible</option><option value="claude" data-i18n="agent.llm.provider.claude">Claude</option></select></div>
  <div class="form-row"><label for="agent-llm-apikey" data-i18n="agent.config.apikey">API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..." data-i18n-en-ok></div>
  <div class="form-row"><label for="agent-llm-model" data-i18n="agent.config.model">Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="sync.field.endpoint">Endpoint</label><input id="agent-llm-url" placeholder="https://api.openai.com/v1/chat/completions" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="sync.field.endpoint" for="agent-llm-url">Endpoint</label><input id="agent-llm-url" placeholder="https://api.openai.com/v1/chat/completions" data-i18n-en-ok></div>
  <div style="display:flex;gap:8px;align-items:center;">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveConfig" data-i18n="common.save">Save</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentDetectConfig" data-icon="refresh"><span data-i18n="agent.config.detect">Auto-Detect</span></button>
@@ -597,7 +597,7 @@
  </p>
  <textarea id="bulk-import-text" rows="8" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="Work, windows, en-US, America/Chicago, 54321,
 Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
- <div class="form-row"><label data-i18n="profile.row.proxy">Proxy</label><select id="bulk-import-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
+ <div class="form-row"><label data-i18n="profile.row.proxy" for="bulk-import-proxy">Proxy</label><select id="bulk-import-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
  <div id="bulk-import-status" style="margin-top:4px;font-size:11px;"></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="profiles.import.submit">Import</button>
@@ -731,23 +731,23 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.latitude">Latitude</label><input id="new-agent-browser-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
- <div class="form-row"><label data-i18n="profile.new.field.longitude">Longitude</label><input id="new-agent-browser-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
- <div class="form-row"><label data-i18n="profile.new.field.accuracy">Accuracy (m)</label><input id="new-agent-browser-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.latitude" for="new-agent-browser-geolocation-latitude">Latitude</label><input id="new-agent-browser-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.longitude" for="new-agent-browser-geolocation-longitude">Longitude</label><input id="new-agent-browser-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.accuracy" for="new-agent-browser-geolocation-accuracy">Accuracy (m)</label><input id="new-agent-browser-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
  <p class="field-note-tight seed-note" data-i18n="profile.new.advanced.help">Leave empty to let the seed generate coherent hardware. Override only when a risk checker reports a specific mismatch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.cpu">CPU Cores</label><input id="new-agent-browser-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
- <div class="form-row"><label data-i18n="profile.new.field.memory">Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
- <div class="form-row"><label data-i18n="profile.new.field.screen-w">Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
- <div class="form-row"><label data-i18n="profile.new.field.screen-h">Screen Height</label><input id="new-agent-browser-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage">Storage Quota (MB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.taskbar">Taskbar Height</label><input id="new-agent-browser-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
- <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir">Fonts Directory</label><input id="new-agent-browser-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="new-agent-browser-gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="new-agent-browser-gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.cpu" for="new-agent-browser-hardware-concurrency">CPU Cores</label><input id="new-agent-browser-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.memory" for="new-agent-browser-device-memory">Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="new-agent-browser-screen-width">Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="new-agent-browser-screen-height">Screen Height</label><input id="new-agent-browser-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="new-agent-browser-storage-quota">Storage Quota (MB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="new-agent-browser-taskbar-height">Taskbar Height</label><input id="new-agent-browser-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
+ <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="new-agent-browser-fonts-dir">Fonts Directory</label><input id="new-agent-browser-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
  </details>
  </div>
@@ -910,8 +910,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="saveRepositoryExtension">
  <h3 data-icon="extensions"><span data-i18n="ext.repo.dlg.title">Add Chrome Extension to Repository</span></h3>
  <p class="dialog-note" data-i18n="ext.dlg.description">Paste a Chrome Web Store URL or a 32-character extension ID. The package is cached once in the private repository and profiles can enable it later.</p>
- <div class="form-row"><label data-i18n="ext.dlg.field.url">Chrome Extension URL / ID *</label><input id="repo-ext-input" placeholder="https://chromewebstore.google.com/detail/..." data-i18n-en-ok required></div>
- <div class="form-row"><label data-i18n="ext.dlg.field.tags">Tags</label><input id="repo-ext-tags" placeholder="wallet, captcha, work" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="ext.dlg.field.url" for="repo-ext-input">Chrome Extension URL / ID *</label><input id="repo-ext-input" placeholder="https://chromewebstore.google.com/detail/..." data-i18n-en-ok required></div>
+ <div class="form-row"><label data-i18n="ext.dlg.field.tags" for="repo-ext-tags">Tags</label><input id="repo-ext-tags" placeholder="wallet, captcha, work" data-i18n-en-ok></div>
  <div class="form-row"><label><input type="checkbox" id="repo-ext-shared"> <span data-i18n="ext.dlg.field.shared">Mark as shareable in exported catalog</span></label></div>
  <!-- R145: this dialog used to be store-only, so "Add Chrome Extension" was a
       dead end for anything on disk. Both local paths now live here too; the
@@ -948,7 +948,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row"><label for="acct-url" data-i18n="acct.field.url">Platform URL</label><input id="acct-url" placeholder="https://twitter.com" data-i18n-en-ok required></div>
  <div class="form-row"><label for="acct-username" data-i18n="acct.field.username">Username *</label><input id="acct-username" placeholder="myaccount" data-i18n-en-ok required></div>
  <div class="form-row"><label for="acct-password" data-i18n="acct.field.password">Password *</label><input id="acct-password" type="password" placeholder="password" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="acct.field.tags">Tags (comma-separated)</label><input id="acct-tags" placeholder="social, twitter" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="acct.field.tags" for="acct-tags">Tags (comma-separated)</label><input id="acct-tags" placeholder="social, twitter" data-i18n-en-ok></div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -1059,23 +1059,23 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-automation" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
  </div>
  <input type="hidden" id="auto-id">
- <div class="form-row"><label data-i18n="auto-editor.label-name">Name</label><input id="auto-name" placeholder="e.g. launch demo daily at 9" data-i18n-placeholder="auto-editor.name-placeholder"></div>
+ <div class="form-row"><label data-i18n="auto-editor.label-name" for="auto-name">Name</label><input id="auto-name" placeholder="e.g. launch demo daily at 9" data-i18n-placeholder="auto-editor.name-placeholder"></div>
  <h4 style="margin:14px 0 6px;font-size:13px;" data-i18n="auto-editor.trigger-title">Trigger</h4>
- <div class="form-row"><label data-i18n="auto-editor.trigger-type">Type</label>
+ <div class="form-row"><label data-i18n="auto-editor.trigger-type" for="auto-trigger-type">Type</label>
  <select id="auto-trigger-type">
  <option value="cron" data-i18n="auto-editor.trigger-cron">Schedule (cron)</option>
  <option value="once" data-i18n="auto-editor.trigger-once">One-time</option>
  <option value="event" data-i18n="auto-editor.trigger-event">Event trigger</option>
  </select>
  </div>
- <div id="auto-cron-row" class="form-row"><label data-i18n="auto-editor.cron-label">Cron Expression</label><input id="auto-cron" placeholder="min hr day mon dow (e.g. 0 9 * * * = daily at 9)" data-i18n-placeholder="auto-editor.cron-placeholder"><span id="auto-cron-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-left:8px;"></span></div>
- <div id="auto-once-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.once-label">Run Time</label><input id="auto-once" type="datetime-local" step="1"></div>
- <div id="auto-event-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.event-label">Event</label>
+ <div id="auto-cron-row" class="form-row"><label data-i18n="auto-editor.cron-label" for="auto-cron">Cron Expression</label><input id="auto-cron" placeholder="min hr day mon dow (e.g. 0 9 * * * = daily at 9)" data-i18n-placeholder="auto-editor.cron-placeholder"><span id="auto-cron-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-left:8px;"></span></div>
+ <div id="auto-once-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.once-label" for="auto-once">Run Time</label><input id="auto-once" type="datetime-local" step="1"></div>
+ <div id="auto-event-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.event-label" for="auto-event">Event</label>
  <select id="auto-event"><option value="profile:launched" data-i18n="auto-editor.event-launched">profile launched</option><option value="profile:exited" data-i18n="auto-editor.event-exited">profile exited</option></select>
  </div>
- <div id="auto-event-filter-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.event-filter">Limit to profile (optional)</label><select id="auto-event-profile"><option value="" data-i18n="auto-editor.event-all">(all profiles)</option></select></div>
+ <div id="auto-event-filter-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.event-filter" for="auto-event-profile">Limit to profile (optional)</label><select id="auto-event-profile"><option value="" data-i18n="auto-editor.event-all">(all profiles)</option></select></div>
  <h4 style="margin:14px 0 6px;font-size:13px;" data-i18n="auto-editor.action-title">Action</h4>
- <div class="form-row"><label data-i18n="auto-editor.action-type">Action</label>
+ <div class="form-row"><label data-i18n="auto-editor.action-type" for="auto-action-type">Action</label>
  <select id="auto-action-type">
  <option value="launch-profile" data-i18n="auto-editor.action-launch">Launch profile</option>
  <option value="stop-profile" data-i18n="auto-editor.action-stop">Stop profile</option>
@@ -1085,13 +1085,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="custom-js" data-i18n="auto-editor.action-js">Custom JS</option>
  </select>
  </div>
- <div id="auto-action-profile-row" class="form-row"><label data-i18n="auto-editor.profile-label">Profile</label><select id="auto-action-profile"><option value="" data-i18n="auto-editor.profile-select">(select)</option></select></div>
+ <div id="auto-action-profile-row" class="form-row"><label data-i18n="auto-editor.profile-label" for="auto-action-profile">Profile</label><select id="auto-action-profile"><option value="" data-i18n="auto-editor.profile-select">(select)</option></select></div>
  <div id="auto-action-batch-row" class="form-row" style="display:none;"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="auto-action-batch"> <span data-i18n="auto-editor.batch-label">Batch (multiple profiles)</span></label><div class="field-note-tight" data-i18n="auto-editor.batch-hint">Run the same prompt on every selected profile — one run each, scoped to that profile</div></div>
- <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div class="field-note-tight" data-i18n="auto-editor.profiles-hint">Ctrl/Cmd+click to select multiple</div></div>
- <div id="auto-action-concurrency-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.concurrency-label">Concurrency</label><input id="auto-action-concurrency" type="number" min="1" max="16" value="1" style="width:80px;"><div class="field-note-tight" data-i18n="auto-editor.concurrency-hint">Profiles launched in parallel (default 1 = sequential)</div></div>
- <div id="auto-action-template-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.template-label">Task Template</label><select id="auto-action-template"><option value="" data-i18n="auto.no-template">(no template)</option></select><div id="auto-template-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-top:4px;"></div></div>
- <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.prompt-label">Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
- <div id="auto-action-js-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.js-label">JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>
+ <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label" for="auto-action-profiles">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div class="field-note-tight" data-i18n="auto-editor.profiles-hint">Ctrl/Cmd+click to select multiple</div></div>
+ <div id="auto-action-concurrency-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.concurrency-label" for="auto-action-concurrency">Concurrency</label><input id="auto-action-concurrency" type="number" min="1" max="16" value="1" style="width:80px;"><div class="field-note-tight" data-i18n="auto-editor.concurrency-hint">Profiles launched in parallel (default 1 = sequential)</div></div>
+ <div id="auto-action-template-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.template-label" for="auto-action-template">Task Template</label><select id="auto-action-template"><option value="" data-i18n="auto.no-template">(no template)</option></select><div id="auto-template-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-top:4px;"></div></div>
+ <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.prompt-label" for="auto-action-prompt">Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
+ <div id="auto-action-js-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.js-label" for="auto-action-js">JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>
  <div class="form-row"><label><input type="checkbox" id="auto-enabled" checked> <span data-i18n="auto-editor.enabled-label">Enabled</span></label></div>
  <div class="btn-row" style="margin-top:12px;">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="auto.btn.save">Save</button>
@@ -1145,13 +1145,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </p>
  <input type="hidden" id="agent-browser-meta-dir-id">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.fingerprint-mode">Fingerprint Mode</label>
+ <div class="form-row"><label data-i18n="profile.new.field.fingerprint-mode" for="agent-browser-meta-fingerprint-mode">Fingerprint Mode</label>
  <select id="agent-browser-meta-fingerprint-mode">
  <option value="managed" data-i18n="profile.new.mode.managed">Managed identity</option>
  <option value="off" data-i18n="profile.new.mode.passthrough">Pass-through (real machine)</option>
  </select>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.version">Chromium Build</label>
+ <div class="form-row"><label data-i18n="profile.new.field.version" for="agent-browser-meta-browser-version">Chromium Build</label>
  <select id="agent-browser-meta-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
  </div>
  </div>
@@ -1164,7 +1164,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
  <div class="form-row"><label for="agent-browser-meta-name" data-i18n="profile.edit.field.name">Profile Name *</label><input id="agent-browser-meta-name" data-i18n-placeholder="profile.new.field.name.placeholder" placeholder="My Profile" required></div>
- <div class="form-row"><label data-i18n="profile.new.field.proxy">Proxy</label><select id="agent-browser-meta-proxy"><option value="" data-i18n="profile.new.proxy.none">(no proxy)</option></select></div>
+ <div class="form-row"><label data-i18n="profile.new.field.proxy" for="agent-browser-meta-proxy">Proxy</label><select id="agent-browser-meta-proxy"><option value="" data-i18n="profile.new.proxy.none">(no proxy)</option></select></div>
  </div>
  <!-- Seed + Platform -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -1174,7 +1174,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="agent-browser-meta-seed" data-icon="wand" data-i18n-aria-label="profile.new.random" aria-label="Random"></button>
  </div>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.platform">Platform</label>
+ <div class="form-row"><label data-i18n="profile.new.field.platform" for="agent-browser-meta-platform">Platform</label>
  <select id="agent-browser-meta-platform">
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
@@ -1183,7 +1183,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <!-- Timezone + Locale -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.timezone">Timezone</label>
+ <div class="form-row"><label data-i18n="profile.new.field.timezone" for="agent-browser-meta-timezone">Timezone</label>
  <select id="agent-browser-meta-timezone">
  <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
@@ -1207,7 +1207,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="Australia/Sydney">Australia/Sydney (UTC+10)</option>
  </select>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.locale">Language / Locale</label>
+ <div class="form-row"><label data-i18n="profile.new.field.locale" for="agent-browser-meta-locale">Language / Locale</label>
  <select id="agent-browser-meta-locale">
  <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
@@ -1231,7 +1231,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
+ <div class="form-row"><label data-i18n="profile.new.field.webrtc-mode" for="agent-browser-meta-webrtc-mode">WebRTC Mode</label>
  <select id="agent-browser-meta-webrtc-mode">
  <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
  <option value="real" data-i18n="profile.new.webrtc.real">Real network</option>
@@ -1239,11 +1239,11 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
  </select>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.webrtc">WebRTC IP</label>
+ <div class="form-row"><label data-i18n="profile.new.field.webrtc" for="agent-browser-meta-webrtc">WebRTC IP</label>
  <input id="agent-browser-meta-webrtc" data-i18n-placeholder="profile.new.field.webrtc.placeholder" placeholder="Proxy exit IP or explicit override">
  </div>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.geolocation">Geolocation</label>
+ <div class="form-row"><label data-i18n="profile.new.field.geolocation" for="agent-browser-meta-geolocation-mode">Geolocation</label>
  <select id="agent-browser-meta-geolocation-mode">
  <option value="real" data-i18n="profile.new.geo.real">Real (system/provider)</option>
  <option value="disable" data-i18n="profile.new.geo.disable">Disabled</option>
@@ -1251,23 +1251,23 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.latitude">Latitude</label><input id="agent-browser-meta-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
- <div class="form-row"><label data-i18n="profile.new.field.longitude">Longitude</label><input id="agent-browser-meta-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
- <div class="form-row"><label data-i18n="profile.new.field.accuracy">Accuracy (m)</label><input id="agent-browser-meta-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.latitude" for="agent-browser-meta-geolocation-latitude">Latitude</label><input id="agent-browser-meta-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.longitude" for="agent-browser-meta-geolocation-longitude">Longitude</label><input id="agent-browser-meta-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.accuracy" for="agent-browser-meta-geolocation-accuracy">Accuracy (m)</label><input id="agent-browser-meta-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
  <p class="field-note-tight seed-note" data-i18n="profile.edit.advanced.help">Leave empty to use seed-generated hardware. Explicit values are passed to managed Chromium launch flags and help tune ping0.cc/env risk items.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.cpu">CPU Cores</label><input id="agent-browser-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
- <div class="form-row"><label data-i18n="profile.new.field.memory">Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
- <div class="form-row"><label data-i18n="profile.new.field.screen-w">Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
- <div class="form-row"><label data-i18n="profile.new.field.screen-h">Screen Height</label><input id="agent-browser-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage">Storage Quota (MB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.taskbar">Taskbar Height</label><input id="agent-browser-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
- <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir">Fonts Directory</label><input id="agent-browser-meta-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="agent-browser-meta-gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="agent-browser-meta-gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.cpu" for="agent-browser-meta-hardware-concurrency">CPU Cores</label><input id="agent-browser-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.memory" for="agent-browser-meta-device-memory">Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="agent-browser-meta-screen-width">Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="agent-browser-meta-screen-height">Screen Height</label><input id="agent-browser-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="agent-browser-meta-storage-quota">Storage Quota (MB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="agent-browser-meta-taskbar-height">Taskbar Height</label><input id="agent-browser-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
+ <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="agent-browser-meta-fonts-dir">Fonts Directory</label><input id="agent-browser-meta-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
  </details>
  <div class="btn-row">
@@ -1349,7 +1349,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
    <h4><span class="wizard-step-num">2</span> <span data-i18n="wizard.step2.title">Create your first profile</span></h4>
    <p class="hint-line" data-i18n="wizard.step2.desc">A profile bundles a fingerprint seed, optional proxy, and isolated browser storage.</p>
    <div class="form-row" style="margin-top:6px;">
-    <label data-i18n="wizard.step2.field.name">Profile Name</label>
+    <label data-i18n="wizard.step2.field.name" for="wizard-profile-name">Profile Name</label>
     <input id="wizard-profile-name" data-i18n-placeholder="wizard.step2.field.name.placeholder" placeholder="My First Profile" disabled>
    </div>
    <div class="btn-row">

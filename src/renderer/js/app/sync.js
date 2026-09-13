@@ -406,7 +406,7 @@
     if (!team) {
       panel.innerHTML =
         '<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px;">' + esc(t("team.empty.desc", "No workspace initialized. Initialize one to manage member roles (owner / admin / member / viewer) and enforce read-only viewers on sync push and profile changes.")) + '</p>' +
-        '<div class="form-row"><label>' + esc(t("team.workspace.name", "Workspace name")) + '</label><input id="team-workspace-name" placeholder="' + escAttr(t("team.workspace.name-placeholder", "My Workspace")) + '"></div>' +
+        '<div class="form-row"><label for="team-workspace-name">' + esc(t("team.workspace.name", "Workspace name")) + '</label><input id="team-workspace-name" placeholder="' + escAttr(t("team.workspace.name-placeholder", "My Workspace")) + '"></div>' +
         '<div class="btn-row"><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="teamInit">' + esc(t("team.init", "Initialize Workspace")) + '</button></div>';
       return;
     }
@@ -422,7 +422,12 @@
       }).join('');
       var actions = '';
       if (canManage && m.deviceId !== team.ownerDeviceId && !isMe) {
-        actions = '<select class="team-role-select" data-device-id="' + escAttr(m.deviceId) + '" style="font-size:11px;height:24px;">' + roleOptions + '</select> ' +
+        // R180: this select is generated per member and has no id, so a
+        // <label for> cannot point at it — an aria-label carrying the member
+        // name is what gives it an accessible name. Without one, a screen
+        // reader announced a bare "popup button" for every row.
+        var memberName = m.name || shortId(m.deviceId);
+        actions = '<select class="team-role-select" data-device-id="' + escAttr(m.deviceId) + '" aria-label="' + escAttr(memberName + ' · ' + t('team.role-label', 'Role')) + '" style="font-size:11px;height:24px;">' + roleOptions + '</select> ' +
           '<button class="btn btn-xs btn-danger" data-action="team-remove" data-device-id="' + escAttr(m.deviceId) + '">' + (window.i18n && window.i18n.t ? window.i18n.t('team.remove', 'Remove') : 'Remove') + '</button>';
       }
       // R146: this rendered `t('sync.owner', 'owner')` — a key that exists in
@@ -442,9 +447,9 @@
     var addForm = '';
     if (canManage) {
       addForm =
-        '<div class="form-row"><label>' + esc(t('team.add.device-id', 'Device ID')) + '</label><input id="team-add-device-id" placeholder="' + escAttr(t('team.add.device-id-ph', 'device-id-from-another-install')) + '"></div>' +
-        '<div class="form-row"><label>' + esc(t('team.add.name', 'Name')) + '</label><input id="team-add-name" placeholder="' + escAttr(t('team.add.name-ph', 'Optional display name')) + '"></div>' +
-        '<div class="form-row"><label>' + esc(t('team.add.role', 'Role')) + '</label><select id="team-add-role">' +
+        '<div class="form-row"><label for="team-add-device-id">' + esc(t('team.add.device-id', 'Device ID')) + '</label><input id="team-add-device-id" placeholder="' + escAttr(t('team.add.device-id-ph', 'device-id-from-another-install')) + '"></div>' +
+        '<div class="form-row"><label for="team-add-name">' + esc(t('team.add.name', 'Name')) + '</label><input id="team-add-name" placeholder="' + escAttr(t('team.add.name-ph', 'Optional display name')) + '"></div>' +
+        '<div class="form-row"><label for="team-add-role">' + esc(t('team.add.role', 'Role')) + '</label><select id="team-add-role">' +
           ROLE_ORDER_LIST.map(function(r) {
             var disabled = (!isOwner && (r === 'owner' || r === 'admin')) ? ' disabled' : '';
             return '<option value="' + r + '"' + disabled + '>' + esc(roleLabel(r)) + '</option>';
@@ -454,7 +459,7 @@
     }
 
     var renameControl = isOwner
-      ? '<div class="form-row"><label>' + esc(t("team.rename-workspace", "Rename workspace")) + '</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename">' + esc(t("team.rename", "Rename")) + '</button></div>'
+      ? '<div class="form-row"><label for="team-workspace-rename">' + esc(t("team.rename-workspace", "Rename workspace")) + '</label><input id="team-workspace-rename" value="' + escAttr(team.name) + '" style="max-width:280px;"> <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="teamRename">' + esc(t("team.rename", "Rename")) + '</button></div>'
       : '';
     var enableControl = canManage
       ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="team-enabled"' + (team.enabled !== false ? ' checked' : '') + '> ' + esc(t('team.enforce', 'Enforce team RBAC (viewers read-only, member+ push/delete, admin+ force push)')) + '</label>'

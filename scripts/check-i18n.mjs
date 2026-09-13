@@ -377,6 +377,47 @@ function findShadowedPlaceholderLeaks() {
   return found;
 }
 
+// ── 1g. <label> without an association ─────────────────────────────────────
+// R180: this template writes the same field two ways — a <label for="x"> that
+// points at its control, and a bare <label> that merely sits next to it. Half
+// the file used each. Sighted users cannot tell the difference; a screen
+// reader can: an unassociated label contributes no accessible name, so the
+// control is announced as a bare "text field"/"popup button". Measured with
+// CDP Accessibility.getFullAXTree: 5 unnamed controls in the sync tab, and
+// ~52 more that would surface once their dialog renders.
+//
+// A label that *wraps* its control needs no for= and is not reported — the
+// pattern below only matches the "immediately followed by" form, which cannot
+// be a wrapper. Controls without an id are skipped: they cannot be fixed with
+// for=, and the JS-generated ones need aria-label instead (see sync.js
+// team-role-select).
+const LABEL_THEN_CONTROL = /<label(?<attrs>[^>]*)>(?<text>[^<]{0,80})<\/label>\s*(?<ctl><input|<select|<textarea)(?<ctlattrs>[^>]*)>/g;
+const A11Y_SKIP_TYPES = /type\s*=\s*["'](?:hidden|submit|button|reset|image)["']/;
+
+function findUnassociatedLabels() {
+  const found = [];
+  const targets = [...walk(JS_DIRS[0])];
+  const html = path.join(ROOT, "src/renderer/index.html");
+  if (fs.existsSync(html)) targets.push(html);
+  for (const file of targets) {
+    const src = fs.readFileSync(file, "utf-8");
+    let m;
+    LABEL_THEN_CONTROL.lastIndex = 0;
+    while ((m = LABEL_THEN_CONTROL.exec(src))) {
+      if (/\bfor\s*=/.test(m.groups.attrs)) continue;
+      if (!/\bid="[^"]+"/.test(m.groups.ctlattrs)) continue;
+      if (A11Y_SKIP_TYPES.test(m.groups.ctlattrs)) continue;
+      found.push({
+        file: path.relative(ROOT, file),
+        line: src.slice(0, m.start).split("\n").length,
+        kind: "label-not-associated",
+        text: `<label>${m.groups.text.trim().slice(0, 34)}</label> precedes a control but has no for= — the control has no accessible name`,
+      });
+    }
+  }
+  return found;
+}
+
 function findDroppedPlaceholders() {
   const found = [];
   for (const dir of JS_DIRS) {
@@ -518,6 +559,7 @@ problems.push(...findUndefinedKeys());
 problems.push(...findSeparatorLeaks());
 problems.push(...findDroppedPlaceholders());
 problems.push(...findShadowedPlaceholderLeaks());
+problems.push(...findUnassociatedLabels());
 
 if (problems.length) {
   console.log(`\n✗ ${problems.length} i18n problem(s) found:\n`);
