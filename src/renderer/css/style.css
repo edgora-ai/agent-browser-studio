@@ -1367,7 +1367,8 @@ dialog { line-height: 1.6; }
 
 /* Tool call chips */
 /* R24: tool chain gap 3→4px (4pt grid). */
-.chat-tools { padding: 2px 12px 6px; display: flex; flex-direction: column; gap: 4px; }
+/* R191: min-width:0 so the column can shrink inside its flex parent at 560px. */
+.chat-tools { padding: 2px 12px 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 /* R15: tool-chain microcopy 10→11px — was the only 10px interactive text,
    one step below the 12px code floor. */
 .chat-tool-chip {
@@ -1379,15 +1380,33 @@ dialog { line-height: 1.6; }
   border-radius: 4px;
   font-family: var(--mono);
 }
+/* R191: at 560px this row overflowed its container by 41px. Four flex items
+   (num / spinner / chip / args) plus the chip's own padding; only .chat-tool-args
+   had a width cap (70%), and `min-width: auto` on the chip meant it refused to
+   shrink below its text. Let the chip shrink and ellipsise instead. */
 .chat-tool-step {
   display: flex; align-items: center; gap: 4px;
   font-size: 11px; line-height: 1.4;
   color: var(--text-muted);
+  min-width: 0;
+}
+.chat-tool-chip {
+  /* Can shrink (560px has ~126px for num + spinner + chip + args) but with a
+     floor, so it never collapses to an unreadable stub. args gives up its
+     width first — flex: 1 1 0 on .chat-tool-args. */
+  min-width: 4ch;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-tool-num { font-variant-numeric: tabular-nums; min-width: 18px; }
 .chat-tool-args {
   font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text-muted);
   max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* R191: args are the least important part of the row — shrink them first so
+     the tool name (which identifies the step) keeps more of its width. */
+  flex: 1 1 0;
 }
 /* R86: spinner 1→1.6s — 1s blink felt anxious next to 2s status dots. */
 .chat-tool-spinner { color: var(--primary-text); animation: chat-pulse 1.6s ease-in-out infinite; }
