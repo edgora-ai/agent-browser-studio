@@ -86,14 +86,18 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build (bash on Windows)
+        # Kept inline: `npm run build` shells through cmd on Windows and its
+        # &&/quoting fails there (see b28520d). Keep this list in step with the
+        # `build` script in package.json — tests/unit/brand-assets.test.ts fails
+        # if a shipped resource is missing from either.
         run: |
           rm -rf dist
           npx tsc
           mkdir -p dist/renderer dist/resources
           cp -r src/renderer/index.html src/renderer/storage-migrate.html src/renderer/css src/renderer/js dist/renderer/
           cp src/main/preload.cjs dist/main/
-          cp resources/tray-icon-Template.png dist/resources/
-          cp resources/icon.icns dist/resources/
+          cp resources/tray-icon-Template.png resources/tray-icon-Template@2x.png dist/resources/
+          cp resources/icon.icns resources/icon.ico dist/resources/
           node scripts/build-masque-bridge.mjs
       - name: Unit + smoke tests
         run: npx vitest run tests/unit tests/smoke
