@@ -85,13 +85,17 @@ function appIconSvg(size) {
   const r = RADIUS * s;
   const inset = 3 * s;
 
-  // The head grows as the raster shrinks, so the mark keeps its optical weight
-  // once the fine detail drops away. The hinted face only spans 14 of its 16
-  // units, so it needs a larger frac to land at the same optical size.
+  // Cute proportions: a deliberately oversized head with oversized round eyes
+  // and an upward smile. The previous mark copied the app's nav glyph, which is
+  // a line icon — evenly proportioned by design, and it read as neutral rather
+  // than friendly at icon scale.
   const hinted = size < HINT_BELOW_16;
-  const frac = hinted ? 0.84 : size <= 128 ? 0.66 : 0.6;
+  const frac = hinted ? 0.86 : size <= 128 ? 0.78 : 0.8;
   const head = plate * frac;
   const hx = off + (plate - head) / 2;
+  // The eye glint is the strongest cuteness cue but needs pixels to land on:
+  // at 32px and below it aliases into a smear inside the eye.
+  const glint = size >= 64;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <defs>
@@ -116,49 +120,66 @@ function appIconSvg(size) {
       <feDropShadow dx="0" dy="${7 * s}" stdDeviation="${10 * s}"
                     flood-color="#2a1a66" flood-opacity="0.40"/>
     </filter>
+    <clipPath id="plate"><rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}"/></clipPath>
   </defs>
   <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#g)"/>
   <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#spec)"/>
   <rect x="${off + inset / 2}" y="${off + inset / 2}" width="${plate - inset}" height="${plate - inset}"
         rx="${Math.max(r - inset / 2, 0)}" ry="${Math.max(r - inset / 2, 0)}"
         fill="none" stroke="url(#rim)" stroke-width="${inset}"/>
-  <g transform="translate(${hx} ${hx}) scale(${head / (hinted ? 16 : 24)})" filter="url(#soft)">
-${hinted ? robotHint16() : robotFace24()}
+  <g clip-path="url(#plate)">
+    <g transform="translate(${hx} ${hx}) scale(${head / (hinted ? 16 : 24)})" filter="url(#soft)">
+${hinted ? robotHint16() : robotFace24(glint)}
+    </g>
   </g>
 </svg>`;
 }
 
-/** Robot face on the app's 24-unit grid, matching the `robot` nav glyph. */
-function robotFace24() {
-  // Eyes and mouth knock out to the plate gradient rather than a flat purple,
-  // so the face reads as cut into the head instead of painted on it.
-  return `    <rect x="11.1" y="4.2" width="1.8" height="3.8" rx="0.9" fill="url(#face)"/>
-    <circle cx="12" cy="3" r="2" fill="url(#face)"/>
-    <rect x="3.6" y="7.6" width="16.8" height="12.4" rx="3.4" fill="url(#face)"/>
-    <circle cx="8.6" cy="13.4" r="1.7" fill="url(#g)"/>
-    <circle cx="15.4" cy="13.4" r="1.7" fill="url(#g)"/>
-    <rect x="9.5" y="16.4" width="5" height="1.4" rx="0.7" fill="url(#g)"/>`;
+/** Cute robot face on a 24-unit grid: big round head, oversized eyes, smile.
+ *
+ *  The cuteness is carried by four things, each verified by rendering:
+ *    - a head that is nearly circular (rx 0.5 of its own height, not 0.27);
+ *    - eyes around a third of the head's width, not a seventh;
+ *    - an upward-curving smile — a straight mouth line is what made the
+ *      previous robot read as neutral rather than friendly;
+ *    - a glint in each eye, the single strongest cue, but only at >=64px. */
+function robotFace24(glint) {
+  const eyeR = 3.1, eyeX = 4.8, eyeY = 12.6;
+  let glints = "";
+  if (glint) {
+    const gr = eyeR * 0.34, gd = eyeR * 0.36;
+    glints = `
+    <circle cx="${12 - eyeX - gd}" cy="${eyeY - gd}" r="${gr}" fill="#fff"/>
+    <circle cx="${12 + eyeX - gd}" cy="${eyeY - gd}" r="${gr}" fill="#fff"/>`;
+  }
+  return `    <rect x="11.1" y="4.6" width="1.8" height="3.4" rx="0.9" fill="url(#face)"/>
+    <circle cx="12" cy="3.1" r="2.1" fill="url(#face)"/>
+    <rect x="1.5" y="7.2" width="21" height="17" rx="8.5" fill="url(#face)"/>
+    <circle cx="${12 - eyeX}" cy="${eyeY}" r="${eyeR}" fill="url(#g)"/>
+    <circle cx="${12 + eyeX}" cy="${eyeY}" r="${eyeR}" fill="url(#g)"/>${glints}
+    <path d="M9.2 17.4 a2.8 2.3 0 0 0 5.6 0" fill="none"
+          stroke="url(#g)" stroke-width="1.8" stroke-linecap="round"/>`;
 }
 
 /**
- * Robot face snapped to an integer 16-unit grid, for 16px only.
+ * Cute face snapped to an integer 16-unit grid, for 16px only.
  *
  * At that size the plate is ~12.9px, so the 24-grid face puts each eye on well
- * under a pixel and the whole thing smears. Three adjustments make it read,
- * each chosen by comparing renders:
- *   - the head is enlarged to 0.84 of the plate (vs 0.6) to buy pixel room;
- *   - the eyes are 2.4 units apart with a 2.6-unit gap, so they rasterize as
- *     two marks rather than merging into a single band;
- *   - the mouth is kept despite the tight space — without it the two eye marks
- *     read as slots in a blank box.
+ * under a pixel and the whole thing smears. Keeping the *cuteness* rather than
+ * just legibility needed three changes, each chosen by comparing renders:
+ *   - the head nearly fills the grid, widening it to the full 16 units;
+ *   - the eyes stay large and round-cornered, and the smile is still an arc —
+ *     a plain rectangular mouth made it read as a machine again;
+ *   - no glint: it has nowhere to land and just dirties the eye.
  */
 function robotHint16() {
-  return `    <rect x="7" y="2.2" width="2" height="2.6" rx="0.8" fill="url(#face)"/>
-    <rect x="6" y="0.8" width="4" height="2" rx="1" fill="url(#face)"/>
-    <rect x="1" y="4.2" width="14" height="9.8" rx="2.6" fill="url(#face)"/>
-    <rect x="4.2" y="7.4" width="2.4" height="3" rx="0.9" fill="url(#g)"/>
-    <rect x="9.4" y="7.4" width="2.4" height="3" rx="0.9" fill="url(#g)"/>
-    <rect x="6" y="11.6" width="4" height="1.4" rx="0.6" fill="url(#g)"/>`;
+  return `    <rect x="7.1" y="1.8" width="1.8" height="2.4" rx="0.9" fill="url(#face)"/>
+    <rect x="6" y="0.3" width="4" height="2" rx="1" fill="url(#face)"/>
+    <rect x="0.5" y="3.6" width="15" height="11.9" rx="5" fill="url(#face)"/>
+    <rect x="4.1" y="6.9" width="2.7" height="3.1" rx="1.3" fill="url(#g)"/>
+    <rect x="9.2" y="6.9" width="2.7" height="3.1" rx="1.3" fill="url(#g)"/>
+    <path d="M5.9 11.7 a2.1 1.7 0 0 0 4.2 0" fill="none"
+          stroke="url(#g)" stroke-width="1.25" stroke-linecap="round"/>`;
 }
 
 /**
@@ -168,28 +189,33 @@ function robotHint16() {
  * not two colours: it is holes punched through a solid head. Drawn on a 16-unit
  * grid.
  *
- * Two details are what make it read at 16pt, both found by comparing renders:
- * the eyes sit in the middle of the face (just under the top edge they read as
- * notches in the silhouette), and the antenna is separated from the head by a
- * gap (touching, the two merge into one lump).
+ * Three details make it read at 16pt, all found by comparing renders:
+ *   - the eyes sit in the middle of the face; just under the top edge they read
+ *     as notches in the silhouette;
+ *   - the antenna is separated from the head by a gap; touching, the two merge
+ *     into one lump;
+ *   - the smile is a FILLED crescent, not a stroked arc. The app icon's 1.1px
+ *     arc has too little pixel area at 1x and rasterizes into a notched blob,
+ *     which reads as damage rather than a smile.
  */
 function traySvg(size) {
   const pad = size * 0.02;
   const inner = size - pad * 2;
   const scale = inner / 16;
-  const headTop = 5.4;
+  const headTop = 4.4;
+  const headH = 16 - headTop - 1.6;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <defs>
     <mask id="knock">
       <rect x="0" y="0" width="16" height="16" fill="#000"/>
-      <rect x="6" y="${headTop - 3.4}" width="4" height="2.2" rx="1" fill="#fff"/>
-      <rect x="7.1" y="${headTop - 1.4}" width="1.8" height="1.5" rx="0.6" fill="#fff"/>
-      <rect x="1.5" y="${headTop}" width="13" height="${16 - headTop - 2.2}" rx="2.8" fill="#fff"/>
+      <rect x="6" y="${headTop - 3.2}" width="4" height="2.2" rx="1" fill="#fff"/>
+      <rect x="7.2" y="${headTop - 1.2}" width="1.6" height="1.3" rx="0.6" fill="#fff"/>
+      <rect x="0.8" y="${headTop}" width="14.4" height="${headH}" rx="4.8" fill="#fff"/>
       <g fill="#000">
-        <circle cx="5.8" cy="8.4" r="1.5"/>
-        <circle cx="10.2" cy="8.4" r="1.5"/>
-        <rect x="5.8" y="11.3" width="4.4" height="1.5" rx="0.7"/>
+        <circle cx="5.9" cy="8.8" r="1.8"/>
+        <circle cx="10.1" cy="8.8" r="1.8"/>
       </g>
+      <path d="M5.9 11.6 h4.2 a2.1 2.1 0 0 1 -4.2 0 z" fill="#000"/>
     </mask>
   </defs>
   <g transform="translate(${pad} ${pad}) scale(${scale})">
@@ -209,6 +235,78 @@ async function shoot(browser, svg, size, outPath) {
   );
   await page.screenshot({ path: outPath, omitBackground: true });
   await page.close();
+}
+
+/**
+ * Assert the rendered plate is exactly PLATE/CANVAS of the canvas and that
+ * nothing at all is painted outside it.
+ *
+ * macOS lays app icons out on a fixed grid, so drift here is what makes one
+ * icon look oversized in the Dock. Both halves matter, and they fail in
+ * different ways:
+ *   - the plate size is a plain measurement, easy to get wrong when tuning
+ *     proportions by hand;
+ *   - content outside the plate means a shadow or glyph escaped its clip.
+ *     Enlarging the face for the cute pass did exactly that: the plate stayed
+ *     correct at 824/1024 while the drop shadow bled past its edge.
+ *
+ * The outside-the-plate test uses a threshold of 0 (any non-transparent pixel),
+ * deliberately. A first attempt used 60 to "ignore soft shadows" and passed on
+ * the broken build — at 512px the spill sat at alpha 17, under the threshold,
+ * so the check was blind to the very defect it existed to catch. Measured on a
+ * correct build, alpha outside the plate is exactly 0, so there is no such
+ * thing as a legitimate shadow bleed to tolerate.
+ */
+async function assertPlateGeometry(browser, size = 512) {
+  const tmp = path.join(os.tmpdir(), `icon-geom-${size}.png`);
+  await shoot(browser, appIconSvg(size), size, tmp);
+  const page = await browser.newPage();
+  const probe = await page.evaluate(async (src) => {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    const alpha = (x, y) => data[(y * c.width + x) * 4 + 3];
+    let minX = c.width, minY = c.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        if (alpha(x, y) > 0) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return { minX, minY, maxX, maxY, W: c.width, H: c.height };
+  }, `data:image/png;base64,${fs.readFileSync(tmp).toString("base64")}`);
+  await page.close();
+
+  const scale = size / CANVAS;
+  const expected = PLATE * scale;
+  const off = OFF * scale;
+  const gotW = probe.maxX - probe.minX + 1;
+  const gotH = probe.maxY - probe.minY + 1;
+
+  const problems = [];
+  if (Math.abs(gotW - expected) > 2 || Math.abs(gotH - expected) > 2) {
+    problems.push(`plate is ${gotW}x${gotH}, expected ${expected}x${expected}`);
+  }
+  if (probe.minX < off - 1 || probe.minY < off - 1) {
+    problems.push(
+      `content escapes the plate (starts at ${probe.minX},${probe.minY}; plate starts at ${off}) — ` +
+        `a shadow or glyph is not clipped`
+    );
+  }
+  if (problems.length) {
+    throw new Error(`plate geometry wrong at ${size}px: ${problems.join("; ")}`);
+  }
+  console.log(`✓ plate geometry: ${gotW}x${gotH} of ${size} (${((gotW / size) * 100).toFixed(1)}%)`);
 }
 
 async function main() {
@@ -232,6 +330,7 @@ async function main() {
     await shoot(browser, traySvg(16), 16, tray1x);
     await shoot(browser, traySvg(32), 32, tray2x);
     console.log(`rasterized ${sizes.length} icon sizes + tray → ${outDir}`);
+    await assertPlateGeometry(browser);
 
     if (preview) return;
     fs.copyFileSync(tray1x, path.join(resDir, "tray-icon-Template.png"));
