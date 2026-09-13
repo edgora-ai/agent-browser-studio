@@ -2,7 +2,19 @@ appId: com.ahoo.agent-browser-studio
 productName: Agent Browser Studio
 copyright: Copyright © 2026
 afterPack: scripts/after-pack.mjs
-electronDist: node_modules/electron/dist
+# NOTE: no `electronDist` here on purpose.
+#
+# It was added for reproducible offline packaging, and it does that — but it
+# pins the Electron binary to node_modules/electron/dist, which is whichever
+# arch this machine installed (arm64 here). electron-builder then reuses that
+# directory for *every* requested target arch without checking it. So
+# `--mac zip --x64` silently produced an arm64 app named "-mac-x64.zip": a
+# package Intel users cannot launch, labelled as if they could.
+#
+# Omitting it makes electron-builder resolve the Electron build matching the
+# requested arch (cached under ~/Library/Caches/electron after first fetch).
+# For an offline/air-gapped build, point it at a matching dist explicitly:
+#   npx electron-builder --mac zip --x64 -c.electronDist=/path/to/electron-x64
 
 icon: dist/resources/icon.icns
 
