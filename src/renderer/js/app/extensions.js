@@ -2,6 +2,12 @@
   "use strict";
 
   var agentBrowser = window.agentBrowser;
+
+  // R190: reads went straight to api.* — no timeout, so a hung main process
+  // left this tab on "Loading…" forever. ipc.call has a per-kind budget.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
   var api = agentBrowser.api;
   var R = agentBrowser.R;
   var state = agentBrowser.state;
@@ -318,7 +324,7 @@
     var searchEl = document.getElementById("extension-repo-search");
     var filter = searchEl ? searchEl.value.trim() : "";
     container.innerHTML = '<div class="loading">' + esc(t('ext.loading', 'Loading extension repository...')) + '</div>';
-    api.settings.extensionRepository(filter).then(function (entries) {
+    lcall("settings.extensionRepository", function () { return api.settings.extensionRepository(filter); }).then(function (entries) {
       if (statusEl) statusEl.textContent = (entries || []).length + t('ext.col.count', ' extension(s) in private repository');
       if (!entries || entries.length === 0) {
         // R145: used to point only at the Web Store, which hid the two local

@@ -2,6 +2,12 @@
 (function() {
   "use strict";
   var agentBrowser = window.agentBrowser;
+
+  // R190: reads went straight to api.* — no timeout, so a hung main process
+  // left this tab on "Loading…" forever. ipc.call has a per-kind budget.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
   var api = agentBrowser.api;
   var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
@@ -218,7 +224,7 @@
 
   // R15 UX P1-7: list failure gets an error state + retry, not a stuck Loading.
   agentBrowser.loadAutomationTab = function() {
-    api.automation.list().then(function(rules) {
+    lcall("automation.list", function () { return api.automation.list(); }).then(function(rules) {
       currentRules = rules || [];
       var el = document.getElementById('automation-list');
       if (!rules || rules.length === 0) {

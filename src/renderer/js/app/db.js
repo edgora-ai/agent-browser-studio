@@ -2,6 +2,12 @@
 (function() {
   "use strict";
   var agentBrowser = window.agentBrowser;
+
+  // R190: reads went straight to api.* — no timeout, so a hung main process
+  // left this tab on "Loading…" forever. ipc.call has a per-kind budget.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
   var api = agentBrowser.api;
   var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
@@ -12,7 +18,7 @@
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
   agentBrowser.loadDbTab = function() {
-    api.agentDb.tables().then(function(tables) {
+    lcall("agentDb.tables", function () { return api.agentDb.tables(); }).then(function(tables) {
       var el = document.getElementById("db-tables");
       if (!tables || tables.length === 0) {
         el.innerHTML = '<div style="color:var(--text-muted);padding:8px;">' + t("db.empty-tables","还没有表。让 Agent 建一个,或在 SQL 框跑 <code>CREATE TABLE ...</code>。") + '</div>';
@@ -31,7 +37,17 @@
         if (!row || !el.contains(row)) return;
         agentBrowser.dbViewTable(row.dataset.table);
       };
-    }).catch(function(e) { toast(t("db.toast.load-failed","加载失败: ") + (e.message || e), "error"); });
+    }).catch(function(e) {
+      // R190: the catch only toasted — the list area kept its "加载中…"
+      // placeholder forever, so the tab looked like it was still working
+      // while the one signal sat in a toast that fades. Render the error
+      // where the loading text was, with a retry, like the other tabs.
+      var el = document.getElementById("db-tables");
+      if (el && window.agentBrowser.renderViewState) {
+        window.agentBrowser.renderViewState(el, { error: e.message || String(e), retry: { cmd: "loadDbTab" } });
+      }
+      toast(t("db.toast.load-failed","加载失败: ") + (e.message || e), "error");
+    });
   };
 
   agentBrowser.dbViewTable = function(table) {

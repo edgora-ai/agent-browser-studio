@@ -2,6 +2,12 @@
   "use strict";
 
   var agentBrowser = window.agentBrowser;
+
+  // R190: reads went straight to api.* — no timeout, so a hung main process
+  // left this tab on "Loading…" forever. ipc.call has a per-kind budget.
+  function lcall(key, fn) {
+    return agentBrowser.ipc.call(key, fn, { kind: "list" });
+  }
   var api = agentBrowser.api;
   var R = agentBrowser.R;
   var state = agentBrowser.state;
@@ -131,7 +137,7 @@
   agentBrowser.loadStorage = function () {
     var list = document.getElementById("storage-profile-list");
     agentBrowser.renderViewState(list, { loading: t("common.loading", "Loading...") });
-    api.storage.info().then(function (info) {
+    lcall("storage.info", function () { return api.storage.info(); }).then(function (info) {
       document.getElementById("stat-profile-total").textContent = fmt(info.totalProfileBytes || 0);
       document.getElementById("stat-disk-available").textContent = fmt(info.availableDiskBytes || 0);
       document.getElementById("stat-disk-usage").textContent = (info.diskUsagePercent || 0) + "%";
