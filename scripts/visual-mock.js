@@ -367,6 +367,16 @@
       }, "agent.accounts"),
       skills: ns({ list: function () { return Promise.resolve([]); }, marketplace: function () { return Promise.resolve([]); } }, "agent.skills"),
       platformAdapters: ns({ list: function () { return Promise.resolve([]); } }, "agent.platformAdapters"),
+      // R183: agent.ts:71 — the automation editor's template picker. Shape is
+      // {id, title, category, description, riskLevel, ...} (the handler maps
+      // TASK_TEMPLATES down to those fields).
+      taskTemplates: function () {
+        return Promise.resolve([
+          { id: "login-check", title: "Verify a login flow", category: "qa", description: "Sign in and confirm the dashboard renders", riskLevel: "low" },
+          { id: "price-sweep", title: "Collect listing prices", category: "ecom", description: "Walk a product page and extract price + stock", riskLevel: "medium" },
+          { id: "warmup", title: "Warm up a fresh profile", category: "maintenance", description: "Visit a few neutral sites to build history", riskLevel: "low" },
+        ]);
+      },
       llmConfig: function () { return Promise.resolve({ provider: "openai", model: "gpt-5.5-high", apiUrl: "https://api.openai.com/v1/chat/completions", hasApiKey: true }); },
       config: function () { return Promise.resolve({ provider: "openai", model: "gpt-5.5-high", apiKey: "", endpoint: "https://api.openai.com/v1/chat/completions" }); },
   });
@@ -382,6 +392,50 @@
         return Promise.resolve({ running: !!(found && found.running), pid: found && found.pid });
       },
       batchMaxConcurrency: function () { return Promise.resolve({ max: 6 }); },
+      // R183: the dialog sweep found the renderer calling these but the mock
+      // modelling nothing — the miss proxy answered [], which passes a null
+      // guard and then reads as undefined. Shapes mirror the real handlers.
+      // R183: browser.ts:281 → { ok, result: EnvironmentRiskResult }
+      // (environment-risk.ts:42). Note `ok` means "no high-severity findings",
+      // not "the call succeeded" — the dialog renders findings either way.
+      envRisk: function () {
+        return Promise.resolve({ ok: false, result: {
+          ok: false,
+          hostPlatform: "darwin",
+          hostLocale: "zh-CN",
+          resolvers: [
+            { address: "192.168.1.1", isCn: false, kind: "router" },
+            { address: "8.8.8.8", isCn: false, kind: "public" },
+          ],
+          cnFonts: [],
+          proxy: { mode: "named", type: "socks5", dnsLeakRisk: "high", note: "Proxy exit is HK but the host resolver answers in CN" },
+          raf: null,
+          findings: [
+            { severity: "high", code: "dns-leak", message: "DNS resolves outside the proxy exit country", fix: "Route DNS through the proxy, or switch to a resolver in the exit region" },
+            { severity: "warn", code: "locale-drift", message: "Host locale zh-CN differs from the profile locale en-US", fix: "Set the profile locale to match the host, or launch from a matching device" },
+          ],
+        } });
+      },
+      // R183: browser.ts:732 → { success, dirId, activity, logTail, logExists, logBytes }
+      logs: function (dirId) {
+        return Promise.resolve({
+          success: true,
+          dirId: dirId,
+          activity: (auditEntries || []).slice(0, 6).map(function (e) {
+            return { at: e.at, category: e.category, action: e.action, target: e.target, actor: e.actor, detail: e.detail };
+          }),
+          logTail: "[launch] resolved engine 152.0.7977.72\n[launch] profile dir ready\n[cdp] listening on 9222\n[nav] about:blank loaded in 412ms",
+          logExists: true,
+          logBytes: 4096,
+        });
+      },
+      envRiskHistory: function () {
+        // browser.ts:299 → { ok, entries: EnvRiskDiagnostic[] }
+        return Promise.resolve({ ok: true, entries: [
+          { at: NOW - HOUR * 3, verdict: "pass", summary: "IP, DNS, timezone and fonts agree with the proxy exit", findings: [] },
+          { at: NOW - DAY * 2, verdict: "warn", summary: "DNS resolver differs from the exit country", findings: [{ level: "warn", code: "dns-mismatch", detail: "Resolver 8.8.8.8 (US) vs exit HK" }] },
+        ] });
+      },
       engineStatus: function () { return Promise.resolve({ installed: true, version: "152.0.7977.72", firefox: { installed: true, version: "142.0" } }); },
   });
   def("proxy", {
@@ -392,6 +446,16 @@
       // and Save would have written those garbage values back. The real
       // handler (config-manager.ts:127) returns the ProxyConfig itself, or
       // null for an unknown name.
+      // R183: proxy.ts:221 → { success, uri, dataUrl } or { success:false, error }
+      qrcode: function (name) {
+        var found = proxies.filter(function (p) { return p.name === name; })[0];
+        if (!found) return Promise.resolve({ success: false, error: "Proxy not found" });
+        return Promise.resolve({
+          success: true,
+          uri: found.config.type + "://" + found.config.host + ":" + found.config.port,
+          dataUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=",
+        });
+      },
       get: function (name) {
         var found = proxies.filter(function (p) { return p.name === name; })[0];
         if (!found) return Promise.resolve(null);
@@ -440,6 +504,13 @@
         var list = q ? extensionRepo.filter(function (e) { return (e.name + " " + e.id).toLowerCase().indexOf(q) >= 0; }) : extensionRepo;
         return Promise.resolve(clone(list));
       },
+      // R183: settings.ts:47 → repository entries + an `enabled` flag derived
+      // from this profile's config. The dialog pairs it with the repo list.
+      extensions: function () {
+        return Promise.resolve(clone(extensionRepo.map(function (e, i) {
+          return Object.assign({}, e, { enabled: i % 2 === 0 });
+        })));
+      },
   });
   def("agentDb", {
     tables: function () { return Promise.resolve(clone(dbTables)); },
@@ -470,6 +541,26 @@
     { id: "s2", tool: "browser_snapshot", args: { selector: "#fingerprint-panel" }, result: { text: "canvas: managed · webgl: vendor=Apple" }, ok: true, durationMs: 340, timestamp: NOW - 84000 },
     { id: "s3", tool: "llm_complete", args: { prompt: "Does the fingerprint panel report the expected locale?" }, result: { reply: "Yes — zh-CN, Asia/Hong_Kong, matching proxy exit." }, ok: true, durationMs: 6100, timestamp: NOW - 72000 },
   ];
+  // R183: webrtc.ts:8 — runWebRtcDiagnostics returns
+  // {ok, result?: WebRtcDiagnosticsEntry} (types.ts:89), not a list.
+  def("webrtc", {
+      diag: function () {
+        return Promise.resolve({ ok: true, result: {
+          at: NOW - 60000,
+          success: true,
+          rtcAvailable: true,
+          candidates: ["host 192.168.1.24", "srflx 203.0.113.10", "relay 198.51.100.7"],
+          mdnsHosts: [],
+          hostIps: ["192.168.1.24"],
+          srflxIps: ["203.0.113.10"],
+          connectionState: "connected",
+          rttMs: 42,
+          error: null,
+          summary: "Host IP leaked (192.168.1.24) while the proxy exit is 203.0.113.10 — enable WebRTC rewriting for this profile.",
+        } });
+      },
+      diagHistory: function () { return Promise.resolve([]); },
+  });
   def("agentRuns", {
       list: function () { return Promise.resolve(clone(runs)); },
       get: function (runId) {
@@ -532,6 +623,20 @@
   ];
   def("profile", {
       list: function () { return Promise.resolve(clone(profiles)); },
+      // R183: ProfileInfo (types.ts:230) — the object shape, not a list.
+      get: function (dirId) {
+        var p = profiles.filter(function (x) { return x.dirId === dirId; })[0];
+        if (!p) return Promise.resolve(null);
+        return Promise.resolve(Object.assign(clone(p), { path: "/Users/ahoo/AgentBrowserStudio/profiles/" + dirId, pid: p.running ? 4321 : null }));
+      },
+      // R183: profile.ts:126 → { success, entries: (TrashEntry & {recoverable})[] }
+      // (browser-manager.ts:362).
+      trashList: function () {
+        return Promise.resolve({ success: true, entries: [
+          { dirId: "prof_trashed1", name: "Old Amazon Test", deletedAt: NOW - DAY * 2, recoverable: true },
+          { dirId: "prof_trashed2", name: "短名字已删除配置", deletedAt: NOW - DAY * 5, recoverable: false },
+        ] });
+      },
       cookies: function (dirId, filter) {
         var f = (filter || "").toLowerCase();
         var rows = cookieInfos.filter(function (c) {

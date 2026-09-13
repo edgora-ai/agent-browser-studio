@@ -220,6 +220,14 @@ async function run(lang, theme) {
       await page.screenshot({ path: path.join(OUT, `${d.id}.${lang}.png`) });
     }
   }
+  // R183: opening a dialog exercises API paths the tab census never touches —
+  // dlg-proxy is what calls proxy.get(). Collect the mock's miss list here so
+  // a dialog backed by a missing method is reported instead of silently
+  // rendering undefined (that was R182: edit-proxy filled Host with
+  // "undefined" because the mock modelled proxy.list but not proxy.get).
+  out.__mockMisses = await page.evaluate(
+    () => (window.__visualHarness && window.__visualHarness.mockMisses) || [],
+  );
   await browser.close();
   return out;
 }
@@ -229,6 +237,21 @@ const zh = await run("zh-CN", THEMES[0]);
 const en = await run("en-US", THEMES[0]);
 
 const findings = [];
+// A mock method the renderer called but the fixture never modelled. The miss
+// proxy answers [], which passes a null check and then reads as undefined —
+// see R182 (edit-proxy). Prefer a loud report over a dialog that looks
+// populated but is not.
+// Fire-and-forget telemetry is not a render path: ipc.js calls these purely
+// for side-effect accounting and swallows the result, so the [] fallback has
+// no visible consequence and reporting it would be noise.
+const TELEMETRY_ONLY = /^(?:observability\.(?:timing|counter|gauge|log|trace|metrics|events|export|status))\(\)$/;
+for (const [lang, res] of [["zh", zh], ["en", en]]) {
+  for (const m of res.__mockMisses || []) {
+    if (TELEMETRY_ONLY.test(m)) continue;
+    findings.push({ id: "—", kind: "unstubbed-in-dialog", detail: `[${lang}] ${m} — the fixture has no such method, so the dialog rendered the empty-array fallback` });
+  }
+}
+
 let opened = 0, skipped = 0;
 for (const d of DIALOGS) {
   const z = zh[d.id] || {};

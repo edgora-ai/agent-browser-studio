@@ -45,7 +45,11 @@
         /* R71: adapter card inline styles (12 sites) converged to classes. */
         html += '<div class="card adapter-card" data-adapter-id="' + escAttr(a.id) + '">';
         html += '<div class="adapter-head">';
-        html += '<span class="adapter-icon">' + icon + '</span>';
+        // R183: same defect as profiles.js renderProfileLogs — `catIcon` was
+        // computed on the line above and then ignored, and the bare `icon`
+        // identifier (the helper *function*) was concatenated into the HTML,
+        // printing its entire source into the card.
+        html += '<span class="adapter-icon">' + icon(catIcon, 16) + '</span>';
         html += '<strong class="adapter-name">' + esc(a.name) + '</strong>';
         html += '<span class="proxy-idc-badge">' + esc(label) + '</span>';
         if (a.regions && a.regions.length) html += '<span class="hint-line">' + esc(a.regions.join(" / ")) + '</span>';

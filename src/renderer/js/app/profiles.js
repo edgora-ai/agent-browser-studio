@@ -2429,7 +2429,7 @@
         var catIcon = e.category === "profile" ? "box" : "info";
         return '<div style="padding:4px 6px;border-bottom:1px solid var(--border);">' +
           '<span class="hint-line" style="white-space:nowrap;">' + esc(when) + '</span> ' +
-          icon + ' <strong>' + esc(e.action || "?") + '</strong>' +
+          icon(catIcon, 12) + ' <strong>' + esc(e.action || "?") + '</strong>' +
           (e.detail ? ' <span style="color:var(--text-muted);font-size:11px;">— ' + esc(String(e.detail).slice(0, 140)) + '</span>' : '') +
           '</div>';
       }).join("");
