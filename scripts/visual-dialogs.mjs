@@ -126,13 +126,16 @@ const DIALOGS = [
 const GARBAGE = /(?:^|[\s>])(undefined|NaN|\[object Object\])(?:$|[\s<.,;:!?])/;
 const RAW_KEY = /\b(?:[a-z][a-zA-Z0-9]*\.){2,}[a-zA-Z][a-zA-Z0-9-]*\b/;
 
-async function boot(browser, lang) {
+async function boot(browser, lang, theme) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const mock = fs.readFileSync(path.join(ROOT, "scripts/visual-mock.js"), "utf-8");
-  await page.addInitScript((l) => {
-    localStorage.setItem("agent-browser-studio-language", l);
-    localStorage.setItem("cloak-lite-language", l);
-  }, lang);
+  await page.addInitScript((arg) => {
+    localStorage.setItem("agent-browser-studio-language", arg.lang);
+    localStorage.setItem("cloak-lite-language", arg.lang);
+    // R178: the sweep only ever ran light. Dialog surfaces carry their own
+    // fills/borders, so dark mode is a separate untested surface.
+    localStorage.setItem("agent-browser-studio-theme", arg.theme);
+  }, { lang, theme });
   await page.addInitScript(mock);
   await page.goto("file://" + path.join(ROOT, "src/renderer/index.html"));
   await page.waitForTimeout(1200);
@@ -193,7 +196,7 @@ async function inspect(page, d) {
   }, d);
 }
 
-async function run(lang) {
+async function run(lang, theme) {
   let browser;
   try {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true });
@@ -206,7 +209,7 @@ async function run(lang) {
     console.log("  install with: npx playwright install chromium\n");
     process.exit(2);
   }
-  const page = await boot(browser, lang);
+  const page = await boot(browser, lang, theme);
   const out = {};
   for (const d of DIALOGS) {
     if (ONLY && d.id !== ONLY) continue;
@@ -221,8 +224,9 @@ async function run(lang) {
   return out;
 }
 
-const zh = await run("zh-CN");
-const en = await run("en-US");
+const THEMES = (arg("theme", "light,dark")).split(",").map((x) => x.trim()).filter(Boolean);
+const zh = await run("zh-CN", THEMES[0]);
+const en = await run("en-US", THEMES[0]);
 
 const findings = [];
 let opened = 0, skipped = 0;

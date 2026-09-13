@@ -2816,11 +2816,16 @@ details[open] > summary[data-icon]::before { transform: rotate(90deg); }
   gap: 8px;
 }
 /* R38: wizard num consumes the white token (was hardcoded #fff). */
+/* R178: background was --primary, a *tint* token meant for subtle fills.
+   White 12px text on it measured 4.33 (light) and 2.98 (dark) against AA's
+   4.5 — the dark --primary is a lighter indigo that white barely contrasts
+   with. --primary-fill is the solid-surface token (same pairing the filled
+   status chips use, see R147) and clears AA in both themes. */
 .wizard-step-num {
   display: inline-flex;
   width: 24px; height: 24px;
   border-radius: 50%;
-  background: var(--primary);
+  background: var(--primary-fill);
   color: var(--chat-user-color);
   align-items: center;
   justify-content: center;
