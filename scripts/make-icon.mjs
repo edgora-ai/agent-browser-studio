@@ -73,45 +73,90 @@ function resolveChromium() {
   return fs.existsSync(chrome) ? chrome : undefined;
 }
 
+/**
+ * The mark: a browser window (white card, chrome bar, traffic lights) carrying
+ * the brand bolt, on the accent-gradient plate.
+ *
+ * Read at three distances: the plate silhouette at 16px, the window at 32px,
+ * and the lights + bolt detail at 64px+. The plain bolt-on-a-plate version this
+ * replaced was legible but said nothing about what the app does.
+ */
 function appIconSvg(size) {
   const s = size / CANVAS;
   const plate = PLATE * s;
   const off = OFF * s;
   const r = RADIUS * s;
-
-  // Glyph occupies ~50% of the plate; it grows on small rasters so the mark
-  // keeps the same optical weight once hinting strips the fine detail.
-  const hinted = size < HINT_BELOW;
-  const frac = hinted ? 0.62 : size <= 128 ? 0.55 : 0.5;
-  const grid = hinted ? 16 : 24;
-  const side = plate * frac;
-  const scale = side / grid;
-  const gx = off + (plate - side) / 2;
   const inset = 3 * s;
+
+  // The window grows as the raster shrinks, so the mark keeps the same optical
+  // weight once the fine detail drops away.
+  const hinted = size < HINT_BELOW;
+  const frac = hinted ? 0.78 : size <= 128 ? 0.71 : 0.64;
+  const wside = plate * frac;
+  const wx = off + (plate - wside) / 2;
+  const wy = wx;
+  const wr = wside * 0.22;
+
+  // Chrome-bar detail has a floor below which it rasterizes into a grey smear
+  // rather than reading as a bar with lights (see how 16px rendered with it on).
+  const showBar = size >= 32;
+  const showLights = size >= 64;
+  const bar = showBar ? wside * 0.24 : 0;
+  const barEdge = Math.max(bar * 0.12, 0.5 * s);
+
+  const grid = hinted ? 16 : 24;
+  const bside = wside * 0.54;
+  const bscale = bside / grid;
+  const bx = wx + wside / 2 - bside / 2;
+  const by = wy + bar + (wside - bar) / 2 - bside / 2;
+
+  let lights = "";
+  if (showLights) {
+    const dr = bar * 0.29;
+    for (let i = 0; i < 3; i++) {
+      lights += `\n  <circle cx="${wx + bar * 0.66 + i * bar * 0.64}" cy="${wy + bar / 2}" r="${dr}" fill="#cccede"/>`;
+    }
+  }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0.85" y2="1">
+    <linearGradient id="g" x1="0.1" y1="0" x2="0.9" y2="1">
       <stop offset="0" stop-color="${GRAD_FROM}"/>
       <stop offset="1" stop-color="${GRAD_TO}"/>
     </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.26"/>
-      <stop offset="0.5" stop-color="#fff" stop-opacity="0.06"/>
+    <radialGradient id="spec" cx="0.3" cy="0.1" r="0.95">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.30"/>
+      <stop offset="0.55" stop-color="#fff" stop-opacity="0.05"/>
       <stop offset="1" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
+    </radialGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity="0.32"/>
-      <stop offset="0.4" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0" stop-color="#fff" stop-opacity="0.5"/>
+      <stop offset="0.45" stop-color="#fff" stop-opacity="0"/>
     </linearGradient>
+    <filter id="soft" x="-45%" y="-45%" width="190%" height="190%">
+      <feDropShadow dx="0" dy="${7 * s}" stdDeviation="${10 * s}"
+                    flood-color="#2a1a66" flood-opacity="0.42"/>
+    </filter>
+    <clipPath id="wc"><rect x="${wx}" y="${wy}" width="${wside}" height="${wside}" rx="${wr}" ry="${wr}"/></clipPath>
   </defs>
   <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#g)"/>
-  <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#sheen)"/>
+  <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#spec)"/>
   <rect x="${off + inset / 2}" y="${off + inset / 2}" width="${plate - inset}" height="${plate - inset}"
         rx="${Math.max(r - inset / 2, 0)}" ry="${Math.max(r - inset / 2, 0)}"
         fill="none" stroke="url(#rim)" stroke-width="${inset}"/>
-  <g transform="translate(${gx} ${gx}) scale(${scale})">
-    <path d="${hinted ? BOLT_HINT : BOLT}" fill="#fff"/>
+  <g filter="url(#soft)">
+    <rect x="${wx}" y="${wy}" width="${wside}" height="${wside}" rx="${wr}" ry="${wr}" fill="#ffffff"/>
+  </g>${
+    showBar
+      ? `
+  <g clip-path="url(#wc)">
+    <rect x="${wx}" y="${wy}" width="${wside}" height="${bar}" fill="#f1f1fa"/>
+    <rect x="${wx}" y="${wy + bar - barEdge}" width="${wside}" height="${barEdge}" fill="#dfdff0"/>
+  </g>${lights}`
+      : ""
+  }
+  <g transform="translate(${bx} ${by}) scale(${bscale})">
+    <path d="${hinted ? BOLT_HINT : BOLT}" fill="#7b5cf0"/>
   </g>
 </svg>`;
 }
