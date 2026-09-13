@@ -37,7 +37,11 @@
  <div class="sidebar-footer">
  <span id="sidebar-chrome-status" class="sidebar-version"></span>
  <div class="sidebar-controls" style="display:flex;gap:4px;margin-top:8px;align-items:center;">
- <div class="theme-toggle dark" data-role="cmd" data-cmd="toggleTheme" id="theme-toggle" style="flex:1;">
+ <!-- R181: was a bare <div> with a click handler — no tabindex, no role, so
+      the theme switch was mouse-only and announced as plain text. role=switch
+      + aria-checked is the correct semantic for a two-state control; the
+      click/keydown delegations and _updateThemeUI keep aria-checked in sync. -->
+ <div class="theme-toggle dark" data-role="cmd" data-cmd="toggleTheme" id="theme-toggle" role="switch" tabindex="0" aria-checked="true" style="flex:1;">
  <div class="toggle-track"><div class="toggle-thumb"></div></div>
  <span id="theme-label" data-i18n="theme.dark">Dark</span>
  </div>

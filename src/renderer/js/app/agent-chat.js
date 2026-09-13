@@ -100,7 +100,12 @@
       for (var i = 0; i < list.length; i++) {
         var c = list[i];
         var isActive = c.id === state.agentActiveConvId;
-        html += '<div data-role="cmd" data-cmd="agentSelectConv" data-cmd-arg="' + escAttr(c.id) + '" class="agent-conv-item" style="padding:10px 12px;cursor:pointer;' + (isActive ? 'background:var(--primary-bg);' : '') + '">';
+        // R181: this row is the only way to switch conversations and was a
+        // bare <div> with a click handler — unreachable by keyboard and
+        // absent from the accessibility tree. role=button + tabindex + an
+        // aria-current marker for the active row (colour alone does not
+        // convey selection to a screen reader).
+        html += '<div data-role="cmd" data-cmd="agentSelectConv" data-cmd-arg="' + escAttr(c.id) + '" class="agent-conv-item" role="button" tabindex="0" aria-current="' + (isActive ? 'true' : 'false') + '" style="padding:10px 12px;cursor:pointer;' + (isActive ? 'background:var(--primary-bg);' : '') + '">';
         html += '<div style="font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(convTitle(c)) + '</div>';
         html += '<div class="hint-line" style="margin-top:2px;">' + (c.messageCount || 0) + ' ' + esc(t('agent.msgs', 'msgs')) + '</div>';
         html += '</div>';

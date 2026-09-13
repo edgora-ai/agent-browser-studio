@@ -188,6 +188,21 @@
       if (!el) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentBrowser.agentSend(); }
     });
+    // R181: [data-role="cmd"] is wired for clicks only, and several of them
+    // are not <button> — the theme switch is a <div role="switch">, the nav
+    // items are <li role="tab">, the conversation rows are <div role="button">.
+    // A real <button> activates on Enter/Space natively; these do not, so they
+    // took focus and then ignored the key. Delegate the same activation here
+    // rather than hand-wiring each one.
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      var el = e.target.closest('[data-role="cmd"]');
+      if (!el) return;
+      if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SUMMARY') return; // native activation
+      if (el.getAttribute('role') === 'tab') return; // nav tabs have their own handler
+      e.preventDefault();
+      el.click();
+    });
     document.addEventListener('scroll', function(e) {
       var el = e.target.closest('[data-role="scroll"]');
       if (!el) return;

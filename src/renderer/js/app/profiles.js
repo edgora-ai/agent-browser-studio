@@ -1638,7 +1638,15 @@
         return '<div class="profile-card' + (isRunning ? ' running' : '') + (isBusy ? ' busy' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '" aria-busy="' + (isBusy ? 'true' : 'false') + '">' +
           '<div class="card-header">' +
             '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
-            '<span class="name" title="' + escAttr(t('profile.name.title', 'Click to rename')) + '" data-action="rename">' + esc(p.name) + '</span>' +
+            // R181: click-to-rename carried a title but was a bare <span> —
+            // no tabindex, no role, no keyboard path. The card menu has an
+            // equivalent Rename button, so this shortcut is not the only way
+            // in, but a mouse-only affordance that announces itself on hover
+            // should still be reachable: role+tabindex+Enter/Space, with the
+            // accessible name carrying the action rather than the title.
+            '<span class="name" role="button" tabindex="0" title="' + escAttr(t('profile.name.title', 'Click to rename')) +
+              '" aria-label="' + escAttr(t('profile.name.title', 'Click to rename') + ': ' + p.name) +
+              '" data-action="rename">' + esc(p.name) + '</span>' +
             // Premium-R11: badges live in their own row of the header grid.
             // Sharing a flex row with the name made a long name and the badge
             // cluster fight for width (and at 700px the badges overflowed the
@@ -1871,6 +1879,18 @@
   }
 
   function attachProfileCardHandlers(container) {
+    // R181: role="button" + tabindex makes .name focusable, but a div-based
+    // control gets no free Enter/Space activation the way a real <button>
+    // does — without this the element takes focus and then ignores the key.
+    // Same pattern as the env-risk history rows above.
+    container.onkeydown = function (event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      var target = event.target.closest("[data-action]");
+      if (!target || !container.contains(target)) return;
+      if (target.tagName === "BUTTON" || target.tagName === "SUMMARY") return; // native
+      event.preventDefault();
+      target.click();
+    };
     container.onclick = function (event) {
       var target = event.target.closest("[data-action]");
       if (!target || !container.contains(target)) return;

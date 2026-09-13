@@ -61,6 +61,9 @@
   agentBrowser._updateThemeUI = function(theme) {
     var toggle = document.getElementById('theme-toggle');
     var label = document.getElementById('theme-label');
+    // R181: keep the switch's announced state in step with its visual state —
+    // a role=switch that never updates aria-checked reads as permanently off.
+    if (toggle) toggle.setAttribute('aria-checked', theme === 'dark' ? 'true' : 'false');
     if (theme === 'dark') {
       toggle.classList.add('dark');
       label.textContent = window.i18n ? window.i18n.t('theme.dark') : 'Dark';
