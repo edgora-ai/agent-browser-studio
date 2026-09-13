@@ -418,7 +418,9 @@
     var close = document.createElement("button");
     close.className = "toast-close";
     close.type = "button";
-    close.setAttribute("aria-label", "Dismiss");
+    // R195: was a hardcoded "Dismiss" — this button is created dynamically, so
+    // applyDom() never sees it and the zh UI announced an English label.
+    close.setAttribute("aria-label", pi18n("common.dismiss", "Dismiss"));
     close.textContent = "\u00d7";
     close.addEventListener("click", function () {
       if (t.parentNode) t.parentNode.removeChild(t);

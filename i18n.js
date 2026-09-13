@@ -751,7 +751,6 @@
       "common.create": "创建",
       "common.rename": "重命名",
       "common.close": "关闭",
-      "common.dismiss": "关闭",
       "common.refresh": "刷新",
       "common.loading": "加载中…",
       // R185: native constraint messages (required/min/max/step) come from
@@ -1796,7 +1795,6 @@
       "common.create": "Create",
       "common.rename": "Rename",
       "common.close": "Close",
-      "common.dismiss": "Dismiss",
       "common.refresh": "Refresh",
       "common.loading": "Loading…",
       // R185: native constraint messages come from Chromium and follow the OS
