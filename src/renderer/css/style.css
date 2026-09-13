@@ -2719,6 +2719,17 @@ details[open] > summary[data-icon]::before { transform: rotate(90deg); }
   font-family: var(--mono);
   font-size: 11px;
 }
+/* R179: the detail line under an audit entry. Was an inline style; promoted
+   here because the wrap rule is load-bearing. `.slice(0,200)` bounds the
+   string, not the line — a single unbreakable token (an absolute path, a
+   200-char URL) has no soft-wrap point and ran out of the card. Measured
+   +327px overflow at a 900px viewport, +507px at 700px. */
+.activity-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
 /* R101: semantic note utilities — converge 60+ font-size/color/margin inlines. */
 .field-note { font-size: 11px; line-height: 1.55; color: var(--text-muted); margin: 6px 0 0; }
 .field-note-tight { font-size: var(--fs-micro); line-height: 1.5; color: var(--text-muted); margin: 4px 0 0; }

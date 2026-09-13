@@ -161,7 +161,13 @@
       var html = entries.map(function(e) {
         var meta = CATEGORY_META[e.category] || { icon: "info", label: e.category || "?" };
         var target = renderTarget(e);
-        var detail = e.detail ? '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' + esc(String(e.detail).slice(0, 200)) + "</div>" : "";
+        // R179: `.slice(0, 200)` caps the string but not the line. A single
+        // unbreakable token — an absolute path from rest-api-server.ts:395
+        // ("imported " + zipPath), the 200-char account URL that
+        // accounts index records as its target — has no soft-wrap point, so
+        // 200 characters ran straight out of the card (measured +327px at
+        // 900px, +507px at 700px). overflow-wrap makes the token break.
+        var detail = e.detail ? '<div class="activity-detail">' + esc(String(e.detail).slice(0, 200)) + "</div>" : "";
         // R146: two defects in one line. The join relied on a trailing space in
         // the zh value ("由" has none), so it rendered "由system"; and `actor`
         // is a stored enum (api/auto/system), so it shipped raw identifiers
