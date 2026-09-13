@@ -100,7 +100,11 @@
   var proxies = [
     { name: "hk01", isDefault: true, config: { type: "socks5", host: "proxy.example.com", port: 8080 } },
     { name: "us-residential", config: { type: "http", host: "us.example.com", port: 3128 } },
-    { name: "de-datacenter", config: { type: "https", host: "de.example.com", port: 8443 } },
+    // R182: was type "https", which is not a member of ProxyConfig["type"]
+    // ("http" | "socks5" | "socks5h"). The edit dialog's <select> has no such
+    // option, so it silently fell back to the first one and the form showed a
+    // type the config never had.
+    { name: "de-datacenter", config: { type: "http", host: "de.example.com", port: 8443, bypassList: ["*.internal"], fallbacks: ["de-backup"] } },
   ];
 
   // Team workspace (RBAC). `local` mirrors src/main/services/team.ts:232 —
@@ -382,6 +386,17 @@
   });
   def("proxy", {
       list: function () { return Promise.resolve(clone(proxies)); },
+      // R182: get() was missing, so editProxy() fell through to the ns() miss
+      // proxy and received []. Every field then read `undefined` off an array
+      // — the edit dialog opened with "undefined" in Host and an empty Port,
+      // and Save would have written those garbage values back. The real
+      // handler (config-manager.ts:127) returns the ProxyConfig itself, or
+      // null for an unknown name.
+      get: function (name) {
+        var found = proxies.filter(function (p) { return p.name === name; })[0];
+        if (!found) return Promise.resolve(null);
+        return Promise.resolve(clone(found.config));
+      },
       health: function () { return Promise.resolve({ score: 92, risk: "low", suggestions: [] }); },
       healthGet: function () { return Promise.resolve(clone(proxyHealth)); },
       rotationInfo: function (name) {
