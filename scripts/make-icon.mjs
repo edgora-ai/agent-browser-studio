@@ -27,7 +27,6 @@ const repoRoot = path.resolve(__dirname, "..");
 // ── Design tokens (mirror src/renderer/css/style.css) ──
 const GRAD_FROM = "#5b6cf0";
 const GRAD_TO = "#8b5cf6";
-const BOLT = "M13.2 2 5 13.2h4.6L10.8 22 19 10.8h-4.6L13.2 2z";
 
 // macOS Big Sur+ geometry: content occupies 824 of a 1024 canvas with an
 // 185.4pt corner radius. The previous icon filled 945/1024 (92%), which is why
@@ -37,17 +36,10 @@ const PLATE = 824;
 const OFF = (CANVAS - PLATE) / 2;
 const RADIUS = 185.4;
 
-// A raster smaller than this gets a hinted glyph instead of a scaled master:
-// the bolt's thin diagonal joins dissolve into mush below ~48px.
-const HINT_BELOW = 48;
-
-/**
- * Bolt snapped to an integer 16-unit grid, for rasters too small to resolve the
- * master's thin joins. It keeps the bolt silhouette (offset arms + diagonal)
- * rather than degenerating into a plus/dagger, which is what an axis-aligned
- * "pixel bolt" does at 16px.
- */
-const BOLT_HINT = "M10 0 3 9h3.5L5.5 16 13 7H9.5L10 0z";
+// A raster smaller than this gets a grid-snapped face instead of the scaled
+// master. Unlike the previous mark, only 16px needs it: the robot's features
+// are chunky enough that 32px renders the 24-unit version cleanly.
+const HINT_BELOW_16 = 32;
 
 /** Playwright pins one exact browser build; a cache holding a different build
  *  makes launch() throw even though a usable Chromium is on disk. */
@@ -74,12 +66,17 @@ function resolveChromium() {
 }
 
 /**
- * The mark: a browser window (white card, chrome bar, traffic lights) carrying
- * the brand bolt, on the accent-gradient plate.
+ * The mark: a robot head on the accent-gradient plate.
  *
- * Read at three distances: the plate silhouette at 16px, the window at 32px,
- * and the lights + bolt detail at 64px+. The plain bolt-on-a-plate version this
- * replaced was legible but said nothing about what the app does.
+ * The proportions come from the app's own `robot` glyph (src/renderer/js/app/
+ * icons.js, used by the Agents nav item), so the Dock icon and the product's
+ * icon set are the same character: rounded head, antenna with a ball, two eyes,
+ * a mouth line.
+ *
+ * Read at three distances: the plate at 16px, the head at 32px, the eyes and
+ * mouth at 64px+. The browser-window mark this replaced leaned on chrome detail
+ * that had to be suppressed at small sizes to avoid a grey smear; the robot's
+ * features scale down more gracefully.
  */
 function appIconSvg(size) {
   const s = size / CANVAS;
@@ -88,35 +85,13 @@ function appIconSvg(size) {
   const r = RADIUS * s;
   const inset = 3 * s;
 
-  // The window grows as the raster shrinks, so the mark keeps the same optical
-  // weight once the fine detail drops away.
-  const hinted = size < HINT_BELOW;
-  const frac = hinted ? 0.78 : size <= 128 ? 0.71 : 0.64;
-  const wside = plate * frac;
-  const wx = off + (plate - wside) / 2;
-  const wy = wx;
-  const wr = wside * 0.22;
-
-  // Chrome-bar detail has a floor below which it rasterizes into a grey smear
-  // rather than reading as a bar with lights (see how 16px rendered with it on).
-  const showBar = size >= 32;
-  const showLights = size >= 64;
-  const bar = showBar ? wside * 0.24 : 0;
-  const barEdge = Math.max(bar * 0.12, 0.5 * s);
-
-  const grid = hinted ? 16 : 24;
-  const bside = wside * 0.54;
-  const bscale = bside / grid;
-  const bx = wx + wside / 2 - bside / 2;
-  const by = wy + bar + (wside - bar) / 2 - bside / 2;
-
-  let lights = "";
-  if (showLights) {
-    const dr = bar * 0.29;
-    for (let i = 0; i < 3; i++) {
-      lights += `\n  <circle cx="${wx + bar * 0.66 + i * bar * 0.64}" cy="${wy + bar / 2}" r="${dr}" fill="#cccede"/>`;
-    }
-  }
+  // The head grows as the raster shrinks, so the mark keeps its optical weight
+  // once the fine detail drops away. The hinted face only spans 14 of its 16
+  // units, so it needs a larger frac to land at the same optical size.
+  const hinted = size < HINT_BELOW_16;
+  const frac = hinted ? 0.84 : size <= 128 ? 0.66 : 0.6;
+  const head = plate * frac;
+  const hx = off + (plate - head) / 2;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   <defs>
@@ -133,42 +108,93 @@ function appIconSvg(size) {
       <stop offset="0" stop-color="#fff" stop-opacity="0.5"/>
       <stop offset="0.45" stop-color="#fff" stop-opacity="0"/>
     </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eeeaff"/>
+    </linearGradient>
     <filter id="soft" x="-45%" y="-45%" width="190%" height="190%">
       <feDropShadow dx="0" dy="${7 * s}" stdDeviation="${10 * s}"
-                    flood-color="#2a1a66" flood-opacity="0.42"/>
+                    flood-color="#2a1a66" flood-opacity="0.40"/>
     </filter>
-    <clipPath id="wc"><rect x="${wx}" y="${wy}" width="${wside}" height="${wside}" rx="${wr}" ry="${wr}"/></clipPath>
   </defs>
   <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#g)"/>
   <rect x="${off}" y="${off}" width="${plate}" height="${plate}" rx="${r}" ry="${r}" fill="url(#spec)"/>
   <rect x="${off + inset / 2}" y="${off + inset / 2}" width="${plate - inset}" height="${plate - inset}"
         rx="${Math.max(r - inset / 2, 0)}" ry="${Math.max(r - inset / 2, 0)}"
         fill="none" stroke="url(#rim)" stroke-width="${inset}"/>
-  <g filter="url(#soft)">
-    <rect x="${wx}" y="${wy}" width="${wside}" height="${wside}" rx="${wr}" ry="${wr}" fill="#ffffff"/>
-  </g>${
-    showBar
-      ? `
-  <g clip-path="url(#wc)">
-    <rect x="${wx}" y="${wy}" width="${wside}" height="${bar}" fill="#f1f1fa"/>
-    <rect x="${wx}" y="${wy + bar - barEdge}" width="${wside}" height="${barEdge}" fill="#dfdff0"/>
-  </g>${lights}`
-      : ""
-  }
-  <g transform="translate(${bx} ${by}) scale(${bscale})">
-    <path d="${hinted ? BOLT_HINT : BOLT}" fill="#7b5cf0"/>
+  <g transform="translate(${hx} ${hx}) scale(${head / (hinted ? 16 : 24)})" filter="url(#soft)">
+${hinted ? robotHint16() : robotFace24()}
   </g>
 </svg>`;
 }
 
-/** Monochrome menu-bar template. macOS tints it, so only alpha matters; the
- *  bolt is drawn on a 16-unit grid to survive the 1x raster. */
+/** Robot face on the app's 24-unit grid, matching the `robot` nav glyph. */
+function robotFace24() {
+  // Eyes and mouth knock out to the plate gradient rather than a flat purple,
+  // so the face reads as cut into the head instead of painted on it.
+  return `    <rect x="11.1" y="4.2" width="1.8" height="3.8" rx="0.9" fill="url(#face)"/>
+    <circle cx="12" cy="3" r="2" fill="url(#face)"/>
+    <rect x="3.6" y="7.6" width="16.8" height="12.4" rx="3.4" fill="url(#face)"/>
+    <circle cx="8.6" cy="13.4" r="1.7" fill="url(#g)"/>
+    <circle cx="15.4" cy="13.4" r="1.7" fill="url(#g)"/>
+    <rect x="9.5" y="16.4" width="5" height="1.4" rx="0.7" fill="url(#g)"/>`;
+}
+
+/**
+ * Robot face snapped to an integer 16-unit grid, for 16px only.
+ *
+ * At that size the plate is ~12.9px, so the 24-grid face puts each eye on well
+ * under a pixel and the whole thing smears. Three adjustments make it read,
+ * each chosen by comparing renders:
+ *   - the head is enlarged to 0.84 of the plate (vs 0.6) to buy pixel room;
+ *   - the eyes are 2.4 units apart with a 2.6-unit gap, so they rasterize as
+ *     two marks rather than merging into a single band;
+ *   - the mouth is kept despite the tight space — without it the two eye marks
+ *     read as slots in a blank box.
+ */
+function robotHint16() {
+  return `    <rect x="7" y="2.2" width="2" height="2.6" rx="0.8" fill="url(#face)"/>
+    <rect x="6" y="0.8" width="4" height="2" rx="1" fill="url(#face)"/>
+    <rect x="1" y="4.2" width="14" height="9.8" rx="2.6" fill="url(#face)"/>
+    <rect x="4.2" y="7.4" width="2.4" height="3" rx="0.9" fill="url(#g)"/>
+    <rect x="9.4" y="7.4" width="2.4" height="3" rx="0.9" fill="url(#g)"/>
+    <rect x="6" y="11.6" width="4" height="1.4" rx="0.6" fill="url(#g)"/>`;
+}
+
+/**
+ * Monochrome menu-bar template — the same robot as the app icon.
+ *
+ * macOS recolours a template image from its ALPHA channel alone, so the face is
+ * not two colours: it is holes punched through a solid head. Drawn on a 16-unit
+ * grid.
+ *
+ * Two details are what make it read at 16pt, both found by comparing renders:
+ * the eyes sit in the middle of the face (just under the top edge they read as
+ * notches in the silhouette), and the antenna is separated from the head by a
+ * gap (touching, the two merge into one lump).
+ */
 function traySvg(size) {
-  const pad = size * 0.06;
+  const pad = size * 0.02;
   const inner = size - pad * 2;
-  const scale = inner / 24;
+  const scale = inner / 16;
+  const headTop = 5.4;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-  <g transform="translate(${pad} ${pad}) scale(${scale})"><path d="${BOLT}" fill="#000"/></g>
+  <defs>
+    <mask id="knock">
+      <rect x="0" y="0" width="16" height="16" fill="#000"/>
+      <rect x="6" y="${headTop - 3.4}" width="4" height="2.2" rx="1" fill="#fff"/>
+      <rect x="7.1" y="${headTop - 1.4}" width="1.8" height="1.5" rx="0.6" fill="#fff"/>
+      <rect x="1.5" y="${headTop}" width="13" height="${16 - headTop - 2.2}" rx="2.8" fill="#fff"/>
+      <g fill="#000">
+        <circle cx="5.8" cy="8.4" r="1.5"/>
+        <circle cx="10.2" cy="8.4" r="1.5"/>
+        <rect x="5.8" y="11.3" width="4.4" height="1.5" rx="0.7"/>
+      </g>
+    </mask>
+  </defs>
+  <g transform="translate(${pad} ${pad}) scale(${scale})">
+    <rect x="0" y="0" width="16" height="16" fill="#000" mask="url(#knock)"/>
+  </g>
 </svg>`;
 }
 
