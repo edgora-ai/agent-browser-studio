@@ -184,7 +184,11 @@
             /* R142: icon + action name are one `.icon-text` row — as a bare
                inline svg the category glyph sat 1.3px off the label baseline.
                actor/target stay outside it so they keep wrapping with the row. */
-            '<span><span class="icon-text">' + icon(meta.icon, 13) + '<strong>' + esc(actionLabel(e.action)) + '</strong></span>' + actor + target + '</span>' +
+            // R184: CATEGORY_META.label was dead — the table defined a
+            // translated category name per entry and no code ever read it, so
+            // the card showed a bare glyph with no way to tell a profile
+            // action from a proxy one. It now labels the icon.
+            '<span><span class="icon-text" title="' + escAttr(typeof meta.label === "function" ? meta.label() : "") + '" aria-label="' + escAttr(typeof meta.label === "function" ? meta.label() : "") + '">' + icon(meta.icon, 13) + '<strong>' + esc(actionLabel(e.action)) + '</strong></span>' + actor + target + '</span>' +
             '<span class="hint-line" style="white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
           "</div>" + detail + "</div>";
       }).join("");

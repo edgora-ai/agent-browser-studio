@@ -366,7 +366,45 @@
         },
       }, "agent.accounts"),
       skills: ns({ list: function () { return Promise.resolve([]); }, marketplace: function () { return Promise.resolve([]); } }, "agent.skills"),
-      platformAdapters: ns({ list: function () { return Promise.resolve([]); } }, "agent.platformAdapters"),
+      // R184: the hub's "Load full recipe" button calls platformAdapters.get(id)
+      // (agent-adapters.js:107), which fell through to the miss proxy → [] →
+      // `if (!a)` passed and the dialog printed a recipe panel built from
+      // undefined fields. Shape mirrors PlatformAdapter (platform-adapters.ts:32)
+      // plus the hub metadata from PlatformAdapterSummary.
+      platformAdapters: ns({
+        list: function () {
+          return Promise.resolve([
+            { id: "amazon", name: "Amazon", category: "ecommerce", regions: ["us", "eu"], presets: ["ecom-seller"],
+              pitch: "Sign in, keep the session warm, and read order state from Seller Central.",
+              domains: ["amazon.com", "sellercentral.amazon.com"], selectorVersion: 7,
+              capabilities: ["login", "orders", "inventory"], loginUrlHints: ["https://sellercentral.amazon.com/ap/signin"],
+              recipes: [
+                { id: "signin", title: "Sign in", steps: ["open login page", "fill email", "fill password", "submit", "assert dashboard"] },
+                { id: "read-orders", title: "Read order list", steps: ["open orders", "wait for table", "extract rows"] },
+              ],
+              lastVerifiedAt: "2026-09-01", notes: "MFA prompt appears after 3 failed attempts.",
+              loginCheck: "(() => ({ loggedIn: !!document.querySelector('#nav-link-accountList'), hint: 'account menu' }))()" },
+          ]);
+        },
+        get: function (id) {
+          var found = { id: "amazon", name: "Amazon", category: "ecommerce", regions: ["us", "eu"], presets: ["ecom-seller"],
+            pitch: "Sign in, keep the session warm, and read order state from Seller Central.",
+            domains: ["amazon.com", "sellercentral.amazon.com"], selectorVersion: 7,
+            capabilities: ["login", "orders", "inventory"], loginUrlHints: ["https://sellercentral.amazon.com/ap/signin"],
+            recipes: [
+              { id: "signin", title: "Sign in", steps: ["open login page", "fill email", "fill password", "submit", "assert dashboard"] },
+            ],
+            lastVerifiedAt: "2026-09-01", notes: "MFA prompt appears after 3 failed attempts.",
+            loginCheck: "(() => ({ loggedIn: !!document.querySelector('#nav-link-accountList'), hint: 'account menu' }))()" };
+          // Agent.ts:148 returns getPlatformAdapter(id) || null.
+          return Promise.resolve(found.id === id ? found : null);
+        },
+        detect: function () {
+          return Promise.resolve({ id: "amazon", name: "Amazon", category: "ecommerce", regions: ["us"], presets: [],
+            pitch: "", domains: ["amazon.com"], selectorVersion: 7, capabilities: ["login"],
+            loginUrlHints: [], recipes: [], lastVerifiedAt: "2026-09-01", notes: "", loginCheck: "" });
+        },
+      }, "agent.platformAdapters"),
       // R183: agent.ts:71 — the automation editor's template picker. Shape is
       // {id, title, category, description, riskLevel, ...} (the handler maps
       // TASK_TEMPLATES down to those fields).

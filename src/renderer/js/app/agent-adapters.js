@@ -12,14 +12,18 @@
     return (window.i18n && window.i18n.t) ? window.i18n.t(key, fallback) : fallback;
   };
   var CATEGORY_ICON = { ecommerce: "box", social: "users", ads: "chart", crypto: "key", productivity: "grid", utility: "settings", generic: "globe" };
-  var CATEGORY_LABEL = {
-    ecommerce: t("adapters.category.ecommerce", "E-commerce"),
-    social: t("adapters.category.social", "Social"),
-    ads: t("adapters.category.ads", "Ads"),
-    crypto: t("adapters.category.crypto", "Crypto"),
-    productivity: t("adapters.category.productivity", "Productivity"),
-    utility: t("adapters.category.utility", "Utility"),
-    generic: t("adapters.category.generic", "Generic"),
+  // R184: these were resolved once at module load, so the category chip kept
+  // the language the page started in — switching to English left it reading
+  // "电商". Store the key instead and translate at render time. (activity.js
+  // already does this correctly with label *functions*.)
+  var CATEGORY_LABEL_KEY = {
+    ecommerce: "adapters.category.ecommerce",
+    social: "adapters.category.social",
+    ads: "adapters.category.ads",
+    crypto: "adapters.category.crypto",
+    productivity: "adapters.category.productivity",
+    utility: "adapters.category.utility",
+    generic: "adapters.category.generic",
   };
 
   function formatCapabilities(caps) {
@@ -41,7 +45,8 @@
       for (var i = 0; i < items.length; i++) {
         var a = items[i];
         var catIcon = CATEGORY_ICON[a.category] || "globe";
-        var label = CATEGORY_LABEL[a.category] || a.category;
+        // R184: translate at render time, not at module load.
+        var label = CATEGORY_LABEL_KEY[a.category] ? t(CATEGORY_LABEL_KEY[a.category], a.category) : a.category;
         /* R71: adapter card inline styles (12 sites) converged to classes. */
         html += '<div class="card adapter-card" data-adapter-id="' + escAttr(a.id) + '">';
         html += '<div class="adapter-head">';
