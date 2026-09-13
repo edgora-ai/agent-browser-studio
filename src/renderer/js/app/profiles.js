@@ -1546,9 +1546,23 @@
 
       if (!profiles || profiles.length === 0) {
         var filtered = profileFilter.status !== "all" || (profileFilter.tags && profileFilter.tags.length);
-        container.innerHTML = filtered
-          ? '<div class="empty-state">' + esc(t("profiles.empty.filtered", "No profiles match the current filter.")) + '</div>'
-          : '<div class="empty-state">' + esc(t("profiles.empty.none", "No profiles yet. Click \"+ New Profile\" to get started.")) + '</div>';
+        if (filtered) {
+          // A filter result is a dead end the user created; the way out is to
+          // clear it, so offer that rather than sending them to the toolbar.
+          container.innerHTML = '<div class="empty-state">' +
+            esc(t("profiles.empty.filtered", "No profiles match the current filter.")) +
+            '<br><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="clearProfileFilters">' +
+            esc(t("profiles.filter.clear", "Clear filters")) + "</button></div>";
+        } else {
+          // R187: the copy told the user to click "+ New Profile" 244px away in
+          // the toolbar — the tabs that render through renderViewState() all
+          // put their CTA *in* the empty state (see accounts/proxy/storage).
+          // Same affordance here.
+          agentBrowser.renderViewState(container, {
+            empty: t("profiles.empty.none", "No profiles yet. Click \"+ New Profile\" to get started."),
+            cta: { label: t("profiles.new", "+ New Browser Profile"), cmd: "newProfile" },
+          });
+        }
         lastRenderSignature = "";
         profilePage = 1;
         var pagerEl = document.getElementById("profile-pagination");
