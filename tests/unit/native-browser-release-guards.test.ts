@@ -26,8 +26,28 @@ describe("native browser release guards", () => {
     const afterPack = fs.readFileSync(AFTER_PACK, "utf8");
     expect(afterPack.match(/"--deep"/g)).toHaveLength(2);
     expect(afterPack).toContain("the complete Electron app deeply");
-    expect(fs.readFileSync(BUILDER_CONFIG, "utf8"))
-      .toContain("electronDist: node_modules/electron/dist");
+
+    // This used to assert `electronDist: node_modules/electron/dist`, added in
+    // 527f6dc alongside the deep-sign hook. That line turned out to be the
+    // cause of a packaging defect: electronDist pins the Electron binary to
+    // whatever arch this machine installed, and electron-builder reuses it for
+    // every requested target arch without checking. So `--mac zip --x64`
+    // silently emitted an arm64 app under an x64 filename — a package Intel
+    // users cannot launch.
+    //
+    // The signing guarantee is independent of it: after-pack.mjs never reads
+    // electronDist (it operates on the already-packed bundle via
+    // context.appOutDir), and builds verify "valid on disk / satisfies its
+    // Designated Requirement" with the line removed.
+    //
+    // What must hold now is the opposite: no unconditional arch pinning, and
+    // the offline escape hatch stays documented.
+    const builderConfig = fs.readFileSync(BUILDER_CONFIG, "utf8");
+    expect(
+      builderConfig,
+      "an unconditional electronDist pins the host arch into every target; pass it per-invocation instead",
+    ).not.toMatch(/^electronDist:/m);
+    expect(builderConfig).toContain("-c.electronDist=");
   });
 
   it("fails closed when unpacking and versions the extraction cache", () => {
