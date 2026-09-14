@@ -807,6 +807,78 @@ dialog h4[data-icon] > svg {
   align-self: center;
 }
 
+/* R197: the two-row grid above exists for the *selection checkbox* — `select`
+   beside `name`, with badges dropping to a second row so a long name cannot
+   fight the pills for one line. Only the profiles card has a checkbox.
+
+   Every other card that borrowed `.profile-card` for its chrome (automation,
+   runs, extensions, browser, sync, proxies) emits just name + badge, so the
+   `select` column was always empty and the badge was shoved onto a row of its
+   own for nothing. Measured across five tabs before this: header 58-62px tall
+   where one row needs ~26px, name cy 177 vs badge cy 210 (Δ16-18px).
+
+   Cards opt in with `.card-head-inline` rather than the rule keying off the
+   absence of a checkbox. A negative selector cannot tell "this card has no
+   checkbox" from "this card's checkbox is not rendered right now" — the
+   profiles card briefly has no `.profile-select` while a list is loading, and
+   silently switching layout there would make the header jump mid-load.
+
+   STAYS A GRID, deliberately. The obvious rewrite is `display: flex`, and a
+   first attempt did exactly that — it put 24 overflow violations on the
+   storage tab (cards 244px past the content edge at 700px, light and dark).
+   A flex container's min-content is the largest item's contribution, so a
+   `white-space: nowrap` name contributes its full text width no matter how
+   small `min-width` is; the grid's `minmax(0, 1fr)` track is the only thing
+   keeping that floor at zero. See the R147 note above, which made the same
+   mistake and recorded the same 146px overflow.
+
+   So: keep the grid, drop the unused `select` track. One column, and the
+   badges move up beside the name. */
+.profile-card .card-header.card-head-inline {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "name" "badges";
+  row-gap: 8px;
+}
+/* Reclaim the column the absent checkbox left behind. Without this the name
+   sits in a `name` track sized for a checkbox that is not there. */
+.profile-card .card-header.card-head-inline > .name { grid-area: name; }
+.profile-card .card-header.card-head-inline > .card-status,
+.profile-card .card-header.card-head-inline > .status-badge { grid-area: badges; }
+
+/* Most of these headers are just a name plus one small pill, which fit on a
+   single row, so collapse to one and skip the badges row entirely. */
+.profile-card .card-header.card-head-inline {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name badges";
+  row-gap: 0;
+}
+.profile-card .card-header.card-head-inline > .name { align-self: center; }
+.profile-card .card-header.card-head-inline > .card-status,
+.profile-card .card-header.card-head-inline > .status-badge {
+  align-self: center;
+  justify-self: end;
+}
+
+/* The "× N profiles" suffix inside a run-group title. Was an inline
+   font-size/colour pair on the element; it is a repeated group marker, so it
+   belongs with the other 11px muted metadata rather than inline. */
+.run-group-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* A run-group header carries a retry button *and* a status badge beside a
+   title that itself has a count suffix. In the 3-column grid the card is
+   271px and that trailing pair measures 223px, so it cannot share the title's
+   row at any width. Left to itself the grid put the actions row first
+   (button cy 178, title cy 193) and truncated the name to "Nightly price …".
+   Stack it deliberately: title on its own row, actions right-aligned below. */
+.profile-card.run-group-card .card-header.card-head-inline { grid-template-areas: "name" "badges"; }
+.profile-card.run-group-card .card-header.card-head-inline > .card-status {
+  justify-self: end;
+}
+
 .profile-card .name {
   font-weight: 700;
   font-size: var(--fs-md);

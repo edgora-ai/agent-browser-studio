@@ -336,7 +336,7 @@
       container.innerHTML = entries.map(function (e) {
         var tags = (e.tags || []).map(function (tag) { return '<span style="background:var(--surface2);border:1px solid var(--border);padding:1px 6px;border-radius:4px;font-size:10px;">' + esc(tag) + '</span>'; }).join(' ');
         return '<div class="profile-card" data-ext-id="' + escAttr(e.id) + '">' +
-          '<div class="card-header"><span class="name">' + esc(e.name || e.id) + '</span><span class="status-badge ' + (e.shared ? 'status-running' : 'status-stopped') + '">' + esc(t(e.shared ? 'ext.badge.shared' : 'ext.badge.private', e.shared ? 'Shared' : 'Private')) + '</span></div>' +
+          '<div class="card-header card-head-inline"><span class="name">' + esc(e.name || e.id) + '</span><span class="status-badge ' + (e.shared ? 'status-running' : 'status-stopped') + '">' + esc(t(e.shared ? 'ext.badge.shared' : 'ext.badge.private', e.shared ? 'Shared' : 'Private')) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('ext.col.version', 'Version')) + '</span><span>v' + esc(e.version || '?') + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('ext.col.id', 'ID')) + '</span><span title="' + escAttr(e.id) + '">' + esc(e.id.slice(0, 16)) + '…</span></div>' +
           // "Chrome Web Store" stays English: it is a proper noun, not copy.

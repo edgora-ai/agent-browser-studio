@@ -723,7 +723,7 @@
     var status = info.installed ? pi18n("browser.status.installed", "Installed") : pi18n("browser.status.not-installed", "Not installed");
     var cls = info.installed ? "status-running" : "status-stopped";
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">Agent Browser Studio Managed Chromium</span><span class="status-badge ' + cls + '">' + esc(status) + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">Agent Browser Studio Managed Chromium</span><span class="status-badge ' + cls + '">' + esc(status) + '</span></div>' +
       '<div class="info-row"><span>' + esc(pi18n("browser.col.version", "Version")) + '</span><span>' + esc(info.version || "--") + '</span></div>' +
       '<div class="info-row"><span>' + esc(pi18n("browser.col.source", "Source")) + '</span><span>' + esc(info.source || "--") + '</span></div>' +
       '<div class="info-row"><span>' + esc(pi18n("browser.col.platform", "Platform")) + '</span><span>' + esc(info.platform || "--") + '</span></div>' +

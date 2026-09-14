@@ -232,7 +232,7 @@
       } else {
         el.innerHTML = rules.map(function(r) {
           return '<div class="profile-card" data-rule-id="' + escAttr(r.id) + '">' +
-            '<div class="card-header"><span class="name">' + esc(r.name) + '</span>' +
+            '<div class="card-header card-head-inline"><span class="name">' + esc(r.name) + '</span>' +
               '<span class="status-badge ' + (r.enabled ? 'status-running' : 'status-stopped') + '">' + esc(r.enabled ? t('auto.enabled','启用') : t('auto.disabled','停用')) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.trigger','触发')) + '</span><span style="font-size:12px;">' + describeTrigger(r.trigger) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.action','动作')) + '</span><span style="font-size:12px;">' + describeAction(r.action) + '</span></div>' +
@@ -294,7 +294,7 @@
           ? '<button class="btn btn-danger btn-sm" data-job-action="cancel">' + esc(t('auto.jobs.btn.cancel','取消')) + '</button>'
           : '';
         return '<div class="profile-card" data-job-id="' + escAttr(job.id) + '">' +
-          '<div class="card-header"><span class="name">' + esc(job.ruleName || job.ruleId || job.id) + '</span>' + jobStatusBadge(job) + '</div>' +
+          '<div class="card-header card-head-inline"><span class="name">' + esc(job.ruleName || job.ruleId || job.id) + '</span>' + jobStatusBadge(job) + '</div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.job','Job')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.id) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.source','来源')) + '</span><span>' + esc(job.source || '-') + ' · ' + esc(t('auto.jobs.attempt', 'attempt {n}').replace('{n}', String(job.attempt == null ? '-' : job.attempt))) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.created','创建')) + '</span><span>' + esc(fmtJobTime(job.createdAt)) + '</span></div>' +

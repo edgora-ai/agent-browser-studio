@@ -150,7 +150,7 @@
         return '<div class="profile-card" data-dir-id="' + escAttr(p.dirId) + '">' +
           // R137: storage-monitor hardcodes browser:"chromium" — render it as a
           // localized label instead of the raw main-process token.
-          '<div class="card-header"><span class="name">' + esc(p.name) + '</span><span class="status-badge status-stopped">' + esc(t("profile.card.chromium", "Managed Chromium")) + '</span></div>' +
+          '<div class="card-header card-head-inline"><span class="name">' + esc(p.name) + '</span><span class="status-badge status-stopped">' + esc(t("profile.card.chromium", "Managed Chromium")) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t("storage.col.size", "Size")) + '</span><span>' + fmt(p.sizeBytes || 0) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t("storage.col.modified", "Modified")) + '</span><span>' + (p.lastModified ? new Date(p.lastModified).toLocaleString() : '?') + '</span></div>' +
           '<div class="card-actions"><button class="btn btn-secondary btn-sm" data-action="clear-cache">' + esc(t("storage.action.clear-cache", "Clear Cache")) + '</button></div>' +

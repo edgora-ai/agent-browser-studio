@@ -191,7 +191,7 @@
       name += ' <span class="status-badge status-warn">' + esc(t("runs.retry-tag", "重试")) + '</span>';
     }
     return '<div class="profile-card" data-run-id="' + escAttr(run.id) + '">' +
-      '<div class="card-header"><span class="name">' + name + "</span>" + statusBadge(run) + "</div>" +
+      '<div class="card-header card-head-inline"><span class="name">' + name + "</span>" + statusBadge(run) + "</div>" +
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(run.source) + "</span></div>" +
       (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
       '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + "</span></div>" +
@@ -247,9 +247,15 @@
       "</div>";
     }).join("");
     return '<div class="profile-card run-group-card" data-group-id="' + escAttr(first.source && first.source.jobId ? first.source.jobId : "") + '">' +
-      '<div class="card-header"><span class="name">' + esc(first.name) +
-        ' <span style="color:var(--text-muted);font-size:11px;">× ' + runs.length + ' ' + t("runs.group.profiles", "profiles") + '</span></span>' +
-        '<span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;">' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(first.name) +
+        ' <span class="run-group-count">× ' + runs.length + ' ' + t("runs.group.profiles", "profiles") + '</span></span>' +
+        // R197: was an anonymous <span> with inline flex styles. The header is
+        // a flex row now, and an unclassed child gets no `margin-left: auto`,
+        // so the retry button and badge wrapped *above* the title — the name
+        // truncated to "Nightly price …" and the profile count was clipped.
+        // `.card-status` is the class the header CSS already knows: it takes
+        // the slack and wraps as a unit.
+        '<span class="card-status">' +
           groupRetryButton(runs) + groupBadge(runs) +
         "</span></div>" +
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(first.source) + "</span></div>" +

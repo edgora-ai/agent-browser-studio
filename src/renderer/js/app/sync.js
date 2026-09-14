@@ -25,7 +25,7 @@
   function previewCountCard(label, value, detail) {
     var displayValue = value == null ? 0 : value;
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">' + esc(label) + '</span><span class="status-badge status-done">' + esc(String(displayValue)) + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(label) + '</span><span class="status-badge status-done">' + esc(String(displayValue)) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);line-height:1.35;">' + esc(detail || '') + '</div>' +
     '</div>';
   }
@@ -51,7 +51,7 @@
       previewCountCard(t('sync.preview.title.accounts','Accounts'), preview.accounts || 0, t('sync.preview.accounts', 'Platform account metadata; passwords not shown')),
       previewCountCard(t('sync.preview.title.extensions','Extensions'), preview.extensions || 0, t('sync.preview.extensions', 'Private extension repository entries')),
     ].join('') + (running.length ? '<div class="profile-card" style="border-color: var(--warning-text);">' +
-      '<div class="card-header"><span class="name">' + esc(t('sync.preview.running-title','Running Profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Pull skip')) + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.preview.running-title','Running Profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Pull skip')) + '</span></div>' +
       '<div style="font-family:var(--mono);font-size:11px;color:var(--text-muted);word-break:break-all;">' + running.map(esc).join('<br>') + '</div>' +
     '</div>' : '');
   }
@@ -119,7 +119,7 @@
     }
     if (!chips.length) lines.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.no-diff', 'No differences')) + '</div>');
     return '<div class="profile-card">' +
-      '<div class="card-header"><span class="name">' + esc(title) + '</span><span>' + chips.join(' ') + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(title) + '</span><span>' + chips.join(' ') + '</span></div>' +
       lines.join('') +
     '</div>';
   }
@@ -139,19 +139,19 @@
     var cards = [];
     if ((diff.pushWarnings || []).length) {
       cards.push('<div class="profile-card" style="border-color: var(--danger-text);">' +
-        '<div class="card-header"><span class="name" style="color: var(--danger-text);">' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
+        '<div class="card-header card-head-inline"><span class="name" style="color: var(--danger-text);">' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
         (diff.pushWarnings || []).map(function(w) { return '<div style="font-size:11px;color: var(--danger-text);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
     if ((diff.pullNotes || []).length) {
       cards.push('<div class="profile-card">' +
-        '<div class="card-header"><span class="name">' + esc(t('sync.pull-will-change', 'Pull will change local data')) + '</span></div>' +
+        '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.pull-will-change', 'Pull will change local data')) + '</span></div>' +
         (diff.pullNotes || []).map(function(w) { return '<div style="font-size:11px;color:var(--text-muted);line-height:1.4;">' + esc(w) + '</div>'; }).join('') +
         '</div>');
     }
     var artifacts = diff.artifacts || {};
     cards.push('<div class="profile-card">' +
-      '<div class="card-header"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.remote-cookies', 'Remote cookies')) + ': ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
     cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', globalStrategy, true));
