@@ -18,7 +18,9 @@
     return agentBrowser.ipc.call(key, fn, { kind: "list" });
   }
 
-  var STATUS_CLS = { running: "status-running", done: "status-done", error: "status-stopped" };
+  // S2-18: error wore the gray stopped tint — a crashed run and a paused one
+  // were indistinguishable at a glance. Failed is danger, not idle.
+  var STATUS_CLS = { running: "status-running", done: "status-done", error: "status-failed" };
 
   function statusBadge(run) {
     var cls = STATUS_CLS[run.status] || "status-stopped";
@@ -196,7 +198,7 @@
       (run.dirId ? '<div class="info-row"><span>' + t("runs.row.profile", "Profile") + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(run.dirId) + "</span></div>" : "") +
       '<div class="info-row"><span>' + t("runs.row.steps", "步骤") + '</span><span>' + esc(t("runs.row.steps-n", "{n} steps").replace("{n}", String(run.stepCount))) + "</span></div>" +
       '<div class="info-row"><span>' + t("runs.row.duration", "耗时") + '</span>' + durationHtml(run) + "</div>" +
-      (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(run.startedAt).toLocaleString() + "</span></div>" : "") +
+      (run.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span class="num" title="' + escAttr(new Date(run.startedAt).toLocaleString()) + '">' + esc(helpers.relTime ? helpers.relTime(run.startedAt) : new Date(run.startedAt).toLocaleString()) + "</span></div>" : "") +
       '<div class="card-actions">' +
         '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
         retryButton(run) +
@@ -222,7 +224,8 @@
   function groupBadge(runs) {
     var running = runs.some(function(r) { return r.status === "running"; });
     var failed = runs.some(function(r) { return r.status === "error"; });
-    var cls = running ? "status-running" : (failed ? "status-stopped" : "status-done");
+    // S2-18: failed groups wore the stopped gray — same mis-mapping as single runs.
+    var cls = running ? "status-running" : (failed ? "status-failed" : "status-done");
     return '<span class="status-badge ' + cls + '">' + esc(groupSummary(runs)) + "</span>";
   }
 
@@ -255,16 +258,17 @@
         // truncated to "Nightly price …" and the profile count was clipped.
         // `.card-status` is the class the header CSS already knows: it takes
         // the slack and wraps as a unit.
-        '<span class="card-status">' +
-          groupRetryButton(runs) + groupBadge(runs) +
-        "</span></div>" +
+        // S2-19: the retry-all button moved to the card's footer — a primary
+        // action is the card's exit, not part of its title.
+        '<span class="card-status">' + groupBadge(runs) + "</span></div>" +
       '<div class="info-row"><span>' + t("runs.row.source", "来源") + '</span><span>' + sourceLabel(first.source) + "</span></div>" +
-      (first.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span>' + new Date(first.startedAt).toLocaleString() + "</span></div>" : "") +
+      (first.startedAt ? '<div class="info-row"><span>' + t("runs.row.started", "开始") + '</span><span class="num" title="' + escAttr(new Date(first.startedAt).toLocaleString()) + '">' + esc(helpers.relTime ? helpers.relTime(first.startedAt) : new Date(first.startedAt).toLocaleString()) + "</span></div>" : "") +
       '<details class="run-group-detail" open>' +
         '<summary style="cursor:pointer;font-size:12px;color:var(--text-muted);padding:6px 0;">' +
           esc(t("runs.group.expand-n", "展开/收起 {n} 个 profile 结果").replace("{n}", String(runs.length))) + "</summary>" +
         '<div class="run-group-rows">' + rows + "</div>" +
       "</details>" +
+      (groupRetryButton(runs) ? '<div class="card-actions" style="justify-content:flex-end;">' + groupRetryButton(runs) + "</div>" : "") +
     "</div>";
   }
 
@@ -348,7 +352,7 @@
     if (sep) sep.style.display = run.name ? "" : "none";
     var meta = statusBadge(run) + " · " + sourceLabel(run.source) + " · " + durationHtml(run);
     if (run.dirId) meta += ' · <span style="font-family:var(--mono);">' + esc(run.dirId) + "</span>";
-    if (run.startedAt) meta += " · " + new Date(run.startedAt).toLocaleString();
+    if (run.startedAt) meta += " · " + '<span class="num" title="' + escAttr(new Date(run.startedAt).toLocaleString()) + '">' + esc(helpers.relTime ? helpers.relTime(run.startedAt) : new Date(run.startedAt).toLocaleString()) + "</span>";
     if (run.error) meta += '<br><span style="color: var(--danger-text);">' + esc(run.error) + "</span>";
     document.getElementById("agent-run-meta").innerHTML = meta;
 

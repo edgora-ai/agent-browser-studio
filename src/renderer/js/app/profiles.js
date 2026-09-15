@@ -926,7 +926,10 @@
       return;
     }
     listEl.innerHTML = entries.map(function (en) {
-      var when = en.deletedAt ? new Date(en.deletedAt).toLocaleString() : "?";
+      // S2-24: "deleted 2 d ago" answers the 7-day-window question at a
+      // glance; the absolute stamp moves to the title.
+      var absWhen = en.deletedAt ? new Date(en.deletedAt).toLocaleString() : "";
+      var when = en.deletedAt ? (helpers.relTime ? helpers.relTime(en.deletedAt) : absWhen) : "?";
       var name = esc(en.name || (en.dirId || "").slice(0, 8));
       var id = escAttr(en.dirId || "");
       // R10 UX P1-1: every entry gets Restore + permanent Delete. Purge is
@@ -937,7 +940,7 @@
         : '<span style="font-size:11px;color: var(--danger-text);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>' + actions;
       return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
         '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + name + '</div>' +
-        '<div style="font-size:11px;color:var(--text-muted);">' + esc(when) + '</div></div>' + state + '</div>';
+        '<div class="num" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(absWhen) + '">' + esc(when) + '</div></div>' + state + '</div>';
     }).join("");
     // Wire restore buttons (re-rendered each open, so direct binding is fine).
     Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-restore]"), function (btn) {

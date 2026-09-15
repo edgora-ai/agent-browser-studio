@@ -575,6 +575,39 @@ svg { vertical-align: middle; }
    stop wobbling and read as data. Apply to any value that is mostly digits. */
 .num { font-variant-numeric: tabular-nums; letter-spacing: 0.1px; }
 
+/* S2-17: the meter — a thin track + fill for scores and usage. The number
+   says "92", the meter says "almost full" before the number is even read.
+   Fill colours come from the FILL token family (safe as backgrounds in both
+   themes); the track is one step off the surface like --surface2. */
+.meter {
+  display: inline-block;
+  width: 72px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  overflow: hidden;
+  vertical-align: middle;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+.meter.is-good > i { background: var(--success); }
+.meter.is-watch > i { background: var(--warning); }
+.meter.is-poor > i { background: var(--danger); }
+/* S2-21: a wide variant for the storage/sync usage rows. Fixed track width —
+   the host cell is an inline-flex whose shrink-to-fit width leaves a 100%
+   track nothing to resolve against (the bar collapsed to zero in practice). */
+.meter.meter-wide { width: 160px; height: 6px; }
+
+/* S2-18: failed is not stopped. error/failed statuses used to wear the same
+   gray `.status-stopped` tint as a paused item, so a dead run and an idle one
+   read identically. Danger tint + danger text, same anatomy as .status-running. */
+.status-failed { background: var(--danger-bg); color: var(--danger-text); }
+
 /* ═══════ Buttons ═══════ */
 /* Premium-R2: 13px/32px button baseline — was 12px with implicit height,
    felt cramped next to 14px body text. */
@@ -996,6 +1029,18 @@ dialog h4[data-icon] > svg {
   letter-spacing: 0.4px;
   white-space: nowrap;
 }
+/* S2-17: the health value cell holds badge + meter + IDC flags — the same
+   nowrap trap .tag-list hit (S2-6). Let it wrap as a flex row, and give the
+   meter a compact width here: at 72px the trio spilled the cell by 40px. */
+.proxy-health-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  white-space: normal;
+  min-width: 0;
+}
+.proxy-health-row .meter { width: 48px; flex: 0 0 auto; }
 .health-good { background: var(--success-bg); color: var(--badge-success-fg); }
 .health-watch { background: var(--warning-bg); color: var(--badge-warning-fg); }
 .health-poor { background: var(--danger-bg); color: var(--badge-danger-fg); }
@@ -2752,6 +2797,8 @@ kbd {
 .stat-row:last-child { border-bottom: none; }
 .stat-row span:first-child { color: var(--text-muted); font-weight: 500; }
 .stat-row span:last-child { font-weight: 600; color: var(--text); }
+/* S2-21: the usage cell pairs the meter with its percentage on one baseline. */
+.stat-usage-cell { display: inline-flex; align-items: center; gap: 10px; }
 
 /* R36: progress 6→8px pill — 6px track vanished on light theme. */
 .progress-bar {
@@ -3113,6 +3160,67 @@ details[open] > summary[data-icon]::before { transform: rotate(90deg); }
   font-size: 11px;
   margin-top: 2px;
   overflow-wrap: anywhere;
+}
+
+/* ── S2-20: audit timeline ──
+   One event used to occupy an entire card; six events filled the viewport.
+   Now a single card holds a real timeline: category glyph on a rail node,
+   action + actor + target on one line, detail wrapped under it, relative
+   time pinned right in tabular mono. The rail line connects the nodes so
+   the eye reads top-to-bottom as a sequence, not a stack of boxes. */
+.timeline-card { padding: 6px 14px 10px; }
+.timeline-list { display: flex; flex-direction: column; }
+.tl-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  min-width: 0;
+}
+/* the rail: a hairline drops from every node to the next row */
+.tl-row:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 13px; /* node width 28 / 2 − 1 */
+  top: 38px;
+  bottom: -1px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-light);
+}
+.tl-node {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: var(--surface2);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.tl-node > svg { width: 14px; height: 14px; }
+.tl-body { flex: 1; min-width: 0; padding-top: 4px; }
+.tl-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  line-height: 1.5;
+  min-width: 0;
+}
+.tl-head .hint-line { font-size: 11px; }
+.tl-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 /* R101: semantic note utilities — converge 60+ font-size/color/margin inlines. */
 .field-note { font-size: 11px; line-height: 1.55; color: var(--text-muted); margin: 6px 0 0; }

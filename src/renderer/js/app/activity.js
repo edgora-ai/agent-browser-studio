@@ -96,6 +96,15 @@
     try { return new Date(ms).toLocaleString(); } catch (e) { return String(ms); }
   }
 
+  /* S2-20: relative time in the row, absolute on the title — the audit
+     question is "when did this happen relative to now", and the exact stamp
+     stays one hover away. */
+  function relTimeHtml(ms) {
+    var abs = fmtTime(ms);
+    var rel = helpers.relTime ? helpers.relTime(ms) : abs;
+    return '<span class="tl-time num" title="' + escAttr(abs) + '">' + esc(rel) + '</span>';
+  }
+
   function targetKind(target) {
     var value = String(target || "");
     if (/^job_[a-z0-9_-]+$/i.test(value)) return "job";
@@ -179,20 +188,27 @@
         var actor = e.actor && e.actor !== "user"
           ? ' <span class="hint-line">' + esc(t("activity.actor-by", "by") + ' ' + actorLabel) + "</span>"
           : "";
-        return '<div class="profile-card" style="padding:8px 10px;margin-bottom:6px;">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+        // S2-20: one card per event became a rail timeline — the category
+        // glyph is the node, the action/actor/target share one flex line,
+        // the relative time pins right. ~46px per event instead of ~90.
+        var catLabel = typeof meta.label === "function" ? meta.label() : "";
+        return '<div class="tl-row">' +
+          '<span class="tl-node" title="' + escAttr(catLabel) + '" aria-label="' + escAttr(catLabel) + '">' + icon(meta.icon, 14) + '</span>' +
+          '<div class="tl-body">' +
             /* R142: icon + action name are one `.icon-text` row — as a bare
                inline svg the category glyph sat 1.3px off the label baseline.
                actor/target stay outside it so they keep wrapping with the row. */
             // R184: CATEGORY_META.label was dead — the table defined a
             // translated category name per entry and no code ever read it, so
             // the card showed a bare glyph with no way to tell a profile
-            // action from a proxy one. It now labels the icon.
-            '<span><span class="icon-text" title="' + escAttr(typeof meta.label === "function" ? meta.label() : "") + '" aria-label="' + escAttr(typeof meta.label === "function" ? meta.label() : "") + '">' + icon(meta.icon, 13) + '<strong>' + esc(actionLabel(e.action)) + '</strong></span>' + actor + target + '</span>' +
-            '<span class="hint-line" style="white-space:nowrap;">' + esc(fmtTime(e.at)) + "</span>" +
-          "</div>" + detail + "</div>";
+            // action from a proxy one. It now labels the node.
+            '<div class="tl-head"><strong>' + esc(actionLabel(e.action)) + '</strong>' + actor + target + '</div>' +
+            detail +
+          '</div>' +
+          relTimeHtml(e.at) +
+        "</div>";
       }).join("");
-      el.innerHTML = html;
+      el.innerHTML = '<div class="profile-card timeline-card"><div class="timeline-list">' + html + '</div></div>';
       el.onclick = function(event) {
         var btn = event.target.closest("[data-activity-action]");
         if (!btn || !el.contains(btn)) return;

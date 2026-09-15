@@ -71,10 +71,13 @@
         var a = accounts[i];
         var tagsHtml = (a.tags || []).map(function(t) { return '<span class="chip chip-info">' + esc(t) + '</span>'; }).join(' ');
         var chips = boundChips(a.profileIds, nameById);
+        var passTip = t('accounts.copy-pass', 'Copy password');
+        var bindTip = t('accounts.bind', 'Bind to profiles');
+        var userTip = t('accounts.copy-user', 'Copy username');
         var passBtn = (a.hasPassword && canManage)
-          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="Copy password" aria-label="Copy password">' + icon("key", 12) + '</button> '
+          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="' + escAttr(passTip) + '" aria-label="' + escAttr(passTip) + '">' + icon("key", 12) + '</button> '
           : '';
-        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="Bind to profiles" aria-label="Bind to profiles">' + icon("link", 12) + '</button> ' : '';
+        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="' + escAttr(bindTip) + '" aria-label="' + escAttr(bindTip) + '">' + icon("link", 12) + '</button> ' : '';
         html += '<div class="card" style="padding:10px;">';
         html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">';
         html += '<div style="min-width:0;">';
@@ -84,7 +87,7 @@
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';
-        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="Copy username" aria-label="Copy username">' + icon("accounts", 12) + '</button> ';
+        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="' + escAttr(userTip) + '" aria-label="' + escAttr(userTip) + '">' + icon("accounts", 12) + '</button> ';
         html += passBtn;
         html += bindBtn;
         html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">' + esc(window.i18n ? window.i18n.t("accounts.edit", "Edit") : "Edit") + '</button>';

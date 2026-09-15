@@ -144,6 +144,18 @@
       document.getElementById("stat-profile-total").textContent = fmt(info.totalProfileBytes || 0);
       document.getElementById("stat-disk-available").textContent = fmt(info.availableDiskBytes || 0);
       document.getElementById("stat-disk-usage").textContent = (info.diskUsagePercent || 0) + "%";
+      // S2-21: the percentage becomes a meter too — "61%" is a number,
+      // a two-thirds-full bar is a state. Colour follows how full the disk is.
+      var usageBar = document.getElementById("stat-disk-usage-bar");
+      if (usageBar) {
+        var pct = Math.max(0, Math.min(100, info.diskUsagePercent || 0));
+        usageBar.style.width = pct + "%";
+        var meter = usageBar.parentElement;
+        meter.classList.remove("is-good", "is-watch", "is-poor");
+        if (pct < 70) meter.classList.add("is-good");
+        else if (pct < 90) meter.classList.add("is-watch");
+        else meter.classList.add("is-poor");
+      }
       var profiles = info.profiles || [];
       if (profiles.length === 0) {
         agentBrowser.renderViewState(list, { empty: t("storage.empty", "No profile storage yet."), cta: { label: t("profiles.new", "Create profile"), cmd: "newProfile" } });
@@ -154,8 +166,8 @@
           // R137: storage-monitor hardcodes browser:"chromium" — render it as a
           // localized label instead of the raw main-process token.
           '<div class="card-header card-head-inline"><span class="name">' + esc(p.name) + '</span><span class="status-badge status-stopped">' + esc(t("profile.card.chromium", "Managed Chromium")) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t("storage.col.size", "Size")) + '</span><span>' + fmt(p.sizeBytes || 0) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t("storage.col.modified", "Modified")) + '</span><span>' + (p.lastModified ? new Date(p.lastModified).toLocaleString() : '?') + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t("storage.col.size", "Size")) + '</span><span class="num">' + fmt(p.sizeBytes || 0) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t("storage.col.modified", "Modified")) + '</span><span class="num" title="' + escAttr(p.lastModified ? new Date(p.lastModified).toLocaleString() : '') + '">' + esc(p.lastModified ? (helpers.relTime ? helpers.relTime(p.lastModified) : new Date(p.lastModified).toLocaleString()) : '?') + '</span></div>' +
           '<div class="card-actions"><button class="btn btn-secondary btn-sm" data-action="clear-cache">' + esc(t("storage.action.clear-cache", "Clear Cache")) + '</button></div>' +
         '</div>';
       }).join("");

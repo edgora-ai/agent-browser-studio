@@ -134,7 +134,7 @@
       listEl.innerHTML = '<div class="empty-state">' + esc(diff.message || t('sync.compare-failed', 'Comparison failed')) + '</div>';
       return;
     }
-    var timeHtml = diff.firstPush ? '  ·  ' + esc(t('sync.no-remote-yet', 'No remote data yet (first push)')) : (diff.remoteTimestamp ? '  ·  ' + esc(t('sync.remote-last-sync', 'Remote last synced')) + ': <strong>' + esc(escTime(diff.remoteTimestamp)) + '</strong>' : '');
+    var timeHtml = diff.firstPush ? '  ·  ' + esc(t('sync.no-remote-yet', 'No remote data yet (first push)')) : (diff.remoteTimestamp ? '  ·  ' + esc(t('sync.remote-last-sync', 'Remote last synced')) + ': <strong class="num" title="' + escAttr(escTime(diff.remoteTimestamp)) + '">' + esc(helpers.relTime ? helpers.relTime(diff.remoteTimestamp) : escTime(diff.remoteTimestamp)) + '</strong>' : '');
     messageEl.innerHTML = '<span class="health-text-good">' + esc(t('sync.compare-done', 'Comparison complete')) + '</span>' + timeHtml;
     var cards = [];
     if ((diff.pushWarnings || []).length) {

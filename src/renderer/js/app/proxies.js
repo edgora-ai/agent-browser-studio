@@ -342,7 +342,13 @@
     if (latest && latest.success && latest.isProxy === true) {
       riskBadges += ' <span class="proxy-idc-badge" title="' + escAttr(t('proxy.health.proxy-title', 'Exit is flagged as a public proxy/VPN')) + '">' + icon("alert", 11) + ' ' + esc(t('proxy.health.proxy', 'Proxy')) + '</span>';
     }
-    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + ' ' + t('proxy.health.points', 'pts') + cooldown + '</span>' + riskBadges;
+    /* S2-17: the score becomes a meter as well as a number — "almost full"
+       registers before the digits are read. Colour follows the risk class. */
+    var meterCls = entry.risk === "good" ? "is-good" : entry.risk === "watch" ? "is-watch" : "is-poor";
+    var meter = typeof entry.score === "number"
+      ? ' <span class="meter ' + meterCls + '" aria-hidden="true"><i style="width:' + Math.max(0, Math.min(100, entry.score)) + '%"></i></span>'
+      : "";
+    return '<span class="proxy-health-badge ' + cls + '" title="' + escAttr(entry.suggestion || "") + '">' + label + ' · ' + entry.score + ' ' + t('proxy.health.points', 'pts') + cooldown + '</span>' + meter + riskBadges;
   }
 
   function renderHealthSummary(health) {
@@ -386,8 +392,12 @@
     }
     var points = entry.history.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 8);
     var lines = points.map(function (h) {
+      /* S2-24: relative stamp, absolute kept on the title — the reader's
+         question is "how long ago", not "what was the wall clock". */
       var when = new Date(h.at);
-      var stamp = when.toLocaleDateString() + " " + when.toLocaleTimeString();
+      var abs = when.toLocaleDateString() + " " + when.toLocaleTimeString();
+      var rel = helpers.relTime ? helpers.relTime(h.at) : abs;
+      var stamp = '<span title="' + escAttr(abs) + '">' + esc(rel) + '</span>';
       if (h.success) {
         var bits = [];
         if (h.exitIp) bits.push(h.exitIp);
@@ -398,9 +408,9 @@
         if (h.isProxy === true) bits.push(t('proxy.health.proxy', 'Proxy'));
         if (typeof h.latencyMs === "number" && h.latencyMs !== null) bits.push(h.latencyMs + "ms");
         /* R79: detect lines converge to timeline classes. */
-        return '<div class="timeline-ok">' + esc(stamp) + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
+        return '<div class="timeline-ok">' + stamp + ' · ' + esc(bits.join(" | ") || "ok") + '</div>';
       }
-      return '<div class="timeline-err">' + esc(stamp) + ' · ' + esc(h.error || "failed") + '</div>';
+      return '<div class="timeline-err">' + stamp + ' · ' + esc(h.error || "failed") + '</div>';
     });
     return '<div class="timeline">' + lines.join("") + '</div>';
   }
@@ -468,6 +478,10 @@
          icon buttons, the convention the delete button and .btn-icon already
          establish, with the same i18n strings moved to title + aria-label so
          nothing is lost to a screen reader. Two rows, 68px, same 9 actions. */
+      /* S2-17: the icon row read as six mystery glyphs (two of them nearly
+         identical trash-adjacent symbols). The utilities now live in the same
+         ⋯ overflow menu the profile card v2 established — one action row,
+         labels where they matter, every utility named in the menu. */
       container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
         var cfg = p.config || {};
         var label = cfg.type + '://' + cfg.host + ':' + cfg.port;
@@ -492,22 +506,17 @@
             // R143: a disabled button needs to say why, or it reads as broken.
             '<button class="btn btn-secondary btn-sm" data-action="default-proxy"' + (p.isDefault ? ' disabled title="' + escAttr(t('proxy.already-default', 'Already the default proxy')) + '"' : '') + '>' + icon("star", 14) + ' ' + esc(t('proxy.set-default', 'Default')) + '</button> ' +
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">' + icon("edit", 14) + ' ' + esc(t('proxy.edit', 'Edit')) + '</button> ' +
-            // R143: the utilities live in their own flex band (see the CSS note)
-            // so the wrap lands between "primary three" and "occasional six"
-            // rather than orphaning one icon onto the labelled row.
-            '<span class="proxy-util-actions">' +
-            // R146: this was icon("trash") — the same glyph as delete-proxy two
-            // slots to its right, one of which irreversibly destroys the proxy.
-            // Two identical trash cans in one row is an unreadable affordance.
-            // Clearing the *check history* is a health-domain action, and an X
-            // would read as "remove this proxy", so it takes the lab glyph.
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="clear-health" title="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '" aria-label="' + escAttr(t('proxy.action.clear-health', 'Clear health')) + '">' + icon("beaker", 14) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="rotate-proxy" title="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '" aria-label="' + escAttr(t('proxy.action.rotate', 'Rotate')) + '">' + icon("refresh", 14) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="toggle-history" title="' + escAttr(t('proxy.action.history', 'History')) + '" aria-label="' + escAttr(t('proxy.action.history', 'History')) + '">' + icon("chart", 14) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="bind-profiles" title="' + escAttr(t('proxy.action.bind', 'Bind')) + '" aria-label="' + escAttr(t('proxy.action.bind', 'Bind')) + '">' + icon("link", 14) + '</button> ' +
-            '<button class="btn btn-secondary btn-sm btn-icon" data-action="qrcode-proxy" title="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '" aria-label="' + escAttr(t('proxy.action.qrcode', 'QR code')) + '">' + icon("qr", 14) + '</button> ' +
-            '<button class="btn btn-danger btn-sm btn-icon" data-action="delete-proxy" title="' + escAttr(t('proxy.delete', 'Delete')) + '" aria-label="' + escAttr(t('proxy.delete', 'Delete')) + '">' + icon("trash", 14) + '</button>' +
-            '</span>' +
+            '<details class="card-menu">' +
+              '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +
+              '<div class="card-menu-list">' +
+                '<button type="button" data-action="clear-health">' + icon("beaker", 14) + esc(t('proxy.action.clear-health', 'Clear health')) + '</button>' +
+                '<button type="button" data-action="rotate-proxy">' + icon("refresh", 14) + esc(t('proxy.action.rotate', 'Rotate')) + '</button>' +
+                '<button type="button" data-action="toggle-history">' + icon("chart", 14) + esc(t('proxy.action.history', 'History')) + '</button>' +
+                '<button type="button" data-action="bind-profiles">' + icon("link", 14) + esc(t('proxy.action.bind', 'Bind')) + '</button>' +
+                '<button type="button" data-action="qrcode-proxy">' + icon("qr", 14) + esc(t('proxy.action.qrcode', 'QR code')) + '</button>' +
+                '<button type="button" class="danger" data-action="delete-proxy">' + icon("trash", 14) + esc(t('proxy.delete', 'Delete')) + '</button>' +
+              '</div>' +
+            '</details>' +
           '</div>' +
         '</div>';
       }).join("");
@@ -525,6 +534,11 @@
       var name = card && card.dataset.proxyName;
       if (!name) return;
       var action = target.dataset.action;
+      // S2-17: any real action closes the overflow menu it came from (the
+      // summary toggle itself carries no data-action, so it never reaches
+      // this line and keeps its native open/close behaviour).
+      var menus = container.querySelectorAll(".card-menu[open]");
+      Array.prototype.forEach.call(menus, function (m) { m.removeAttribute("open"); });
       if (action === "detect-proxy") detectProxyIntoCard(name, card);
       else if (action === "default-proxy") agentBrowser.setDefault(name);
       else if (action === "clear-health") agentBrowser.clearHealth(name);

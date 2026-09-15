@@ -82,7 +82,9 @@
     return '';
   }
 
-  var JOB_STATUS_CLS = { queued: 'status-stopped', running: 'status-running', done: 'status-done', failed: 'status-stopped', skipped: 'status-stopped', cancelled: 'status-stopped' };
+  // S2-18: failed wore 'status-stopped' — a dead job and an idle one read
+  // identically (both gray). Failed is a danger state, not a pause state.
+  var JOB_STATUS_CLS = { queued: 'status-stopped', running: 'status-running', done: 'status-done', failed: 'status-failed', skipped: 'status-stopped', cancelled: 'status-stopped' };
 
   function jobStatusBadge(job) {
     var cls = JOB_STATUS_CLS[job.status] || 'status-stopped';
@@ -236,7 +238,7 @@
               '<span class="status-badge ' + (r.enabled ? 'status-running' : 'status-stopped') + '">' + esc(r.enabled ? t('auto.enabled','启用') : t('auto.disabled','停用')) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.trigger','触发')) + '</span><span style="font-size:12px;">' + describeTrigger(r.trigger) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.action','动作')) + '</span><span style="font-size:12px;">' + describeAction(r.action) + '</span></div>' +
-            (r.lastRunAt ? '<div class="info-row"><span>' + esc(t('auto.row.last','上次')) + '</span><span style="font-size:11px;color:' + (r.lastResult && !r.lastResult.includes('error') && !r.lastResult.includes('failed') ? 'var(--success-text)' : 'var(--text-muted)') + ';">' + new Date(r.lastRunAt).toLocaleString() + '</span></div>' : '') +
+            (r.lastRunAt ? '<div class="info-row"><span>' + esc(t('auto.row.last','上次')) + '</span><span class="num" title="' + escAttr(new Date(r.lastRunAt).toLocaleString()) + '" style="font-size:11px;color:' + (r.lastResult && !r.lastResult.includes('error') && !r.lastResult.includes('failed') ? 'var(--success-text)' : 'var(--text-muted)') + ';">' + esc(helpers.relTime ? helpers.relTime(r.lastRunAt) : new Date(r.lastRunAt).toLocaleString()) + '</span></div>' : '') +
             '<div class="card-actions">' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="toggle">' + esc(r.enabled ? t('auto.disabled','停用') : t('auto.enabled','启用')) + '</button>' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="test">' + esc(t('auto.btn.test','测试运行')) + '</button>' +
@@ -297,7 +299,7 @@
           '<div class="card-header card-head-inline"><span class="name">' + esc(job.ruleName || job.ruleId || job.id) + '</span>' + jobStatusBadge(job) + '</div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.job','Job')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.id) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.source','来源')) + '</span><span>' + esc(job.source || '-') + ' · ' + esc(t('auto.jobs.attempt', 'attempt {n}').replace('{n}', String(job.attempt == null ? '-' : job.attempt))) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t('auto.jobs.row.created','创建')) + '</span><span>' + esc(fmtJobTime(job.createdAt)) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('auto.jobs.row.created','创建')) + '</span><span class="num" title="' + escAttr(fmtJobTime(job.createdAt)) + '">' + esc(helpers.relTime ? helpers.relTime(job.createdAt) : fmtJobTime(job.createdAt)) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('auto.jobs.row.duration','耗时')) + '</span><span>' + esc(jobDuration(job)) + '</span></div>' +
           (job.runId ? '<div class="info-row"><span>' + esc(t('auto.jobs.row.run','Run')) + '</span><span style="font-family:var(--mono);font-size:11px;">' + esc(job.runId) + '</span></div>' : '') +
           '<div style="font-size:11px;color:' + (job.error ? 'var(--danger-text)' : 'var(--text-muted)') + ';margin:6px 0;line-height:1.35;">' + esc(summary) + '</div>' +

@@ -2905,6 +2905,11 @@
       // a template passed it and shipped verbatim into the zh UI. Found by the
       // differential audit in scripts/visual-shot.mjs (--only english).
       "accounts.password-saved": "已保存密码",
+      // S2-25: account-row icon buttons had English tooltips baked into the
+      // template — same leak class as the R146 batch above.
+      "accounts.copy-user": "复制用户名",
+      "accounts.copy-pass": "复制密码",
+      "accounts.bind": "绑定到配置",
       "team.this-device": "（本机）",
       "team.add.device-id": "设备 ID",
       "team.add.device-id-ph": "来自另一台设备的 device-id",
@@ -3064,6 +3069,9 @@
       "err.act.open-team": "Open Team Workspace",
       // R146: see the zh block for why these moved out of the JS templates.
       "accounts.password-saved": "password saved",
+      "accounts.copy-user": "Copy username",
+      "accounts.copy-pass": "Copy password",
+      "accounts.bind": "Bind to profiles",
       "team.this-device": "(this device)",
       "team.add.device-id": "Device ID",
       "team.add.device-id-ph": "device-id-from-another-install",
