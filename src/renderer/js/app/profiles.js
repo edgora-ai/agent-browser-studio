@@ -1652,7 +1652,9 @@
         var syncBadge = '<span class="status-badge badge-governance ' + syncCls + '" title="' + escAttr(syncTitle) + '">' + syncIcon + ' ' +
           esc(p.syncStatus === "synced" ? t('profile.sync.synced', 'Synced') : p.syncStatus === "dirty" ? t('profile.sync.dirty', 'Dirty') : t('profile.sync.never', 'Never')) + '</span>';
         var tagHtml = (p.tags || []).map(function(tag) {
-          return '<span class="status-badge status-done" style="font-size:11px;margin-right:4px;">' + esc(tag) + '</span>';
+          // S2-6: tags are metadata, not status — quiet .tag chip, not a
+          // heavy uppercase status pill (see the CSS note).
+          return '<span class="tag">' + esc(tag) + '</span>';
         }).join('');
 
         var proxyOptsHtml = renderProxyOptions(proxies, profileProxySelectionValue(p, "none"), true);
@@ -1697,7 +1699,7 @@
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
           '<div class="info-row info-row-health"><span>' + esc(t('profile.row.health', 'Health')) + '</span><span>' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
-          ((p.tags || []).length ? '<div class="info-row info-row-tags"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span>' + tagHtml + '</span></div>' : '') +
+          ((p.tags || []).length ? '<div class="info-row info-row-tags"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span class="tag-list">' + tagHtml + '</span></div>' : '') +
           '</div>' +
           // Premium-R11: the proxy switcher is a control, so it belongs in the
           // card's control band, not floating in its own bordered box below the

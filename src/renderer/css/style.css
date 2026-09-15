@@ -266,12 +266,20 @@ dialog,
   letter-spacing: -0.6px;
 }
 
+/* S2-4: version reads as a quiet chip instead of loose muted text — the
+   sidebar header is the brand block, so its metadata gets the same care as
+   the badges elsewhere. */
 .sidebar-header .version {
+  display: inline-block;
   font-size: var(--fs-micro);
+  line-height: 1.5;
   color: var(--text-muted);
-  font-weight: 500;
-  margin-top: 2px;
-  display: block;
+  font-weight: 600;
+  margin-top: 3px;
+  padding: 0 7px;
+  background: var(--surface2);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
 }
 
 /* R177: brand mark + grouped nav. Ported from the feat/sidebar-svg-icons WIP,
@@ -504,13 +512,68 @@ svg { vertical-align: middle; }
   align-items: center;
   gap: 10px;
 }
+/* S2-2: the page-title glyph graduates from a bare muted stroke to the tinted
+   plate the dialog titles already wear (R138). Every tab now carries the same
+   brand-tinted anchor, so a page reads as "a place" before a single word is
+   parsed — and the twelve headers stop varying between icon/no-icon. */
 .tab-header h2[data-icon] > svg {
   flex: 0 0 auto;
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 7px;
+  border-radius: 10px;
+  background: var(--primary-bg);
+  color: var(--primary-text);
+}
+
+/* S2-3: title + subtitle block. The description strips that used to float as
+   gray bars inside the first card of automation/runs/extensions/accounts move
+   under the page title — one scanning rhythm for every page: what it is, then
+   what it does, then the actions. */
+.tab-title { min-width: 0; }
+.tab-sub {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--text-muted);
-  margin-top: -2px;
+  max-width: 72ch;
 }
 
 .header-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* S2-6: tags are metadata, not status. They wore `.status-badge.status-done`
+   (a heavy uppercase green pill), which made a card with two tags look like
+   it had two extra success verdicts. `.tag` is the quiet counterpart: neutral
+   surface, hairline edge, sentence case — readable, never shouting. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 600;
+  background: var(--surface2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+.tag-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+  min-width: 0;
+  /* The info-row value cell is nowrap/ellipsis; tags wrap instead. */
+  white-space: normal;
+  overflow: visible;
+}
+
+/* S2-7: tabular figures for metrics, dates and durations — columns of numbers
+   stop wobbling and read as data. Apply to any value that is mostly digits. */
+.num { font-variant-numeric: tabular-nums; letter-spacing: 0.1px; }
 
 /* ═══════ Buttons ═══════ */
 /* Premium-R2: 13px/32px button baseline — was 12px with implicit height,
@@ -2156,11 +2219,15 @@ dialog p {
 }
 
 /* Engine banner (review item PL-07) */
+/* S2-5: slimmer strip — 11px vertical padding read as an alert bar even in
+   the healthy state. The ok variant becomes a quiet status card (surface +
+   hairline + whisper shadow) with a success-tinted glyph, so "engine fine"
+   and "engine missing" no longer share one gray-slab grammar. */
 .engine-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 11px 14px;
+  padding: 9px 14px;
   margin: 0 0 12px;
   border-radius: 12px;
   font-size: 13px;
@@ -2170,10 +2237,12 @@ dialog p {
   color: var(--text);
 }
 .engine-banner.ok {
-  border-color: var(--border);
-  background: var(--surface2);
-  color: var(--text-muted);
+  border-color: var(--border-light);
+  background: var(--surface);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
 }
+.engine-banner.ok > svg { color: var(--success-text); }
 
 /* Card overflow menu (UE-01): keeps the primary row down to 3 controls */
 .card-menu { position: relative; display: inline-block; }
@@ -2396,6 +2465,15 @@ dialog p {
   border-color: transparent;
   box-shadow: none;
   padding: 36px 24px;
+}
+/* S2-8: empty states get the brand robot — a list with no rows is the product
+   at its most hospitable, not a blank. Decorative (aria-hidden at the source),
+   muted ink so it never competes with the copy or the CTA. */
+.empty-state .empty-icon {
+  display: block;
+  margin: 0 auto 12px;
+  color: var(--text-muted);
+  opacity: 0.75;
 }
 .profile-grid > .empty-state,
 .profile-grid > .loading,

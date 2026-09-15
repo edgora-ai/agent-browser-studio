@@ -36,6 +36,7 @@
 
       // ── Profiles ──
       "profiles.title": "浏览器配置",
+      "profiles.sub": "隔离的浏览器配置 — 指纹、代理与运行状态，一屏掌握。",
       "profiles.new": "新建配置",
       "profiles.quick": "快速创建",
       "profiles.preset.none": "无 — 手动配置",
@@ -67,6 +68,7 @@
 
       // ── Proxy ──
       "proxy.title": "代理配置",
+      "proxy.sub": "命名代理池 — 健康评分、出口检测与配置绑定。",
       "proxy.add": "添加代理",
       "proxy.import": "导入代理",
       "proxy.export": "导出代理",
@@ -1099,6 +1101,7 @@
       "lang.toggle": "Lang",
 
       "profiles.title": "Browser Profiles",
+      "profiles.sub": "Isolated browser profiles — fingerprints, proxies, and run state at a glance.",
       "profiles.new": "New Profile",
       "profiles.quick": "Quick Create",
       "profiles.preset.none": "None — manual setup",
@@ -1129,6 +1132,7 @@
       "profiles.sync.never": "Never",
 
       "proxy.title": "Proxy Configurations",
+      "proxy.sub": "A named proxy pool — health scores, exit detection, and profile bindings.",
       "proxy.add": "Add Proxy",
       "proxy.import": "Import Proxies",
       "proxy.export": "Export Proxies",

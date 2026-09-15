@@ -125,7 +125,10 @@
       var emptyHtml = typeof sanitize === "function" ? sanitize(String(state.empty)) : esc(state.empty);
       // R163: the <br> was unconditional, so a CTA-less empty state ended on
       // a dangling line break (visible as extra bottom padding).
-      el.innerHTML = '<div class="empty-state">' + emptyHtml + (cta ? '<br>' + cta : '') + '</div>';
+      // S2-8: brand robot above the copy — an empty list is the product at its
+      // most hospitable. Decorative; svg() already marks it aria-hidden.
+      var robot = window.icons && window.icons.svg ? window.icons.svg("robot", { size: 40, className: "empty-icon" }) : "";
+      el.innerHTML = '<div class="empty-state">' + robot + emptyHtml + (cta ? '<br>' + cta : '') + '</div>';
       return;
     }
   };
