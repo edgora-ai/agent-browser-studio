@@ -1393,36 +1393,69 @@ dialog { line-height: 1.6; }
    button floated below the field's centre line. The bar now owns the layout
    (the inline style moved here) and the button is a 38px square matched to the
    field's resting height. */
+/* S2-11: the composer becomes a floating card (WorkBuddy pattern). The bar
+   itself is transparent; the card carries border + radius 16 + shadow, the
+   textarea is borderless inside it, and the focus ring moves to the card via
+   :focus-within so the whole control lights up as one unit. */
 .agent-input-bar {
   flex: 0 0 auto;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 10px 16px;
+  background: transparent;
+  padding: 8px 16px 10px;
   display: flex;
-  gap: 8px;
-  align-items: center;
 }
+.agent-composer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.agent-composer:hover { border-color: var(--border-hover); }
+.agent-composer:focus-within {
+  border-color: var(--primary-text);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.agent-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 8px 12px;
+}
+.agent-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* S2-11: circular primary send, 30px — the only accent element in the
+   composer, matched to WorkBuddy's send disc. */
 .agent-input-bar .btn-icon {
   flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: 999px;
 }
 
 #agent-chat-status {
   flex: 0 0 auto;
   min-height: 16px;
-  background: var(--surface);
+  background: transparent;
 }
 
 #agent-chat-input {
   flex: 1;
   font-size: 14px;
-  padding: 9px 14px;
-  border-radius: 14px;
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  padding: 10px 12px 4px;
+  border: none;
+  background: transparent;
   resize: none;
   color: var(--text);
   font-family: var(--font);
@@ -1430,18 +1463,34 @@ dialog { line-height: 1.6; }
   min-height: 38px;
   max-height: 120px;
   outline: none;
-  /* R81: 0.15→0.12s — interaction tier. */
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
-#agent-chat-input:hover { border-color: var(--border-hover); }
-/* R4-19: 1px color shift alone is not a visible focus indicator — add ring. */
-#agent-chat-input:focus { border-color: var(--primary-text); box-shadow: 0 0 0 3px var(--primary-ring); }
+/* S2-11: border/hover/focus chrome lives on .agent-composer now — the
+   textarea stays quiet so the two never double-ring. */
+#agent-chat-input:hover { border-color: transparent; }
+#agent-chat-input:focus { border-color: transparent; box-shadow: none; }
 /* R4-19b: placeholder follows the R2-7 rule (no halved opacity). */
 #agent-chat-input::placeholder { color: var(--text-muted); opacity: 1; }
 
 /* ── Chat bubbles ── */
 .chat-msg { display: flex; margin-bottom: 8px; padding: 0 8px; }
 .chat-msg-user { justify-content: flex-end; }
+/* S2-12: assistant messages carry the brand robot on a 24px tint plate, so a
+   glance separates agent output from user input without a label row. The
+   plate sits on the bubble's top edge; long answers keep the column clear. */
+.chat-avatar {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border-radius: 8px;
+  background: var(--primary-bg);
+  color: var(--primary-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chat-avatar > svg { width: 14px; height: 14px; }
+.chat-msg-agent .chat-bubble-agent { margin-top: 1px; }
 
 /* R1-2: removed dead duplicate .chat-bubble block (13px/1.4 never won —
    the later 12px/1.6 rule always applied). Single source below. */
@@ -1518,7 +1567,9 @@ dialog { line-height: 1.6; }
 /* Tool call chips */
 /* R24: tool chain gap 3→4px (4pt grid). */
 /* R191: min-width:0 so the column can shrink inside its flex parent at 560px. */
-.chat-tools { padding: 2px 12px 6px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* S2-12: steps indent to the bubble's left edge (8px msg padding + 24px
+   avatar + 8px gap), so the trace reads as belonging to the answer above. */
+.chat-tools { padding: 2px 12px 6px 40px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 /* R15: tool-chain microcopy 10→11px — was the only 10px interactive text,
    one step below the 12px code floor. */
 .chat-tool-chip {
@@ -1544,8 +1595,11 @@ dialog { line-height: 1.6; }
   /* Can shrink (560px has ~126px for num + spinner + chip + args) but with a
      floor, so it never collapses to an unreadable stub. args gives up its
      width first — flex: 1 1 0 on .chat-tool-args. */
+  /* S2-13: 0 1 auto, not 1 1 auto — a growing chip pushed the args to the far
+     right edge of the row; now the args sit right after the name they
+     belong to, and the row still shrinks the same way at 560px. */
   min-width: 4ch;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1562,6 +1616,148 @@ dialog { line-height: 1.6; }
 .chat-tool-spinner { color: var(--primary-text); animation: chat-pulse 1.6s ease-in-out infinite; }
 .chat-tool-done { color: var(--success-text); font-size: 11px; line-height: 1.5; }
 @keyframes chat-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── S2-13: tool-call trace card ──
+   The numbered step list collapses into a hairline card once the run
+   finishes: summary line (tool glyph + "Tool calls · N") stays visible,
+   steps expand on demand. While any step is still running the card renders
+   open so the spinner is always on screen. */
+.chat-trace {
+  margin: 0 12px 8px 40px; /* aligns with the bubble edge, see .chat-tools */
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+  min-width: 0;
+  max-width: 520px;
+}
+.chat-trace > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.chat-trace > summary::-webkit-details-marker { display: none; }
+.chat-trace > summary:hover { color: var(--text); }
+.chat-trace > summary > svg { flex: 0 0 auto; color: var(--text-muted); }
+.chat-trace[open] > summary { border-bottom: 1px solid var(--border-light); }
+.chat-trace .chat-trace-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.chat-trace .chat-tools { padding: 6px 10px 8px; }
+.chat-trace .chat-tool-dur {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── S2-14: welcome suggestions ──
+   Three prompt chips under the empty-state greeting. They are real prompts
+   (click = send), not decoration, so they use the quiet-chip anatomy with a
+   hover lift rather than button chrome. */
+.chat-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 18px;
+  width: min(320px, 100%);
+}
+.chat-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+.chat-suggestion:hover {
+  border-color: var(--primary-text);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.chat-suggestion > svg { flex: 0 0 auto; color: var(--primary-text); }
+
+/* ── S2-15: conversation list ── */
+.agent-conv-search { margin-top: 8px; }
+.agent-conv-search input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  font-family: var(--font);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.agent-conv-search input:focus {
+  border-color: var(--primary-text);
+  box-shadow: 0 0 0 3px var(--primary-ring);
+}
+.agent-conv-search input::placeholder { color: var(--text-muted); opacity: 1; }
+
+.agent-conv-item {
+  position: relative;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  min-width: 0;
+}
+.agent-conv-item:hover { background: var(--sidebar-hover); }
+.agent-conv-item.is-active { background: var(--primary-bg); }
+.agent-conv-item .agent-conv-title {
+  font-weight: 500;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* leave room for the hover-reveal delete so it never covers the text */
+  padding-right: 22px;
+}
+.agent-conv-item .agent-conv-meta { margin-top: 2px; }
+.agent-conv-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.agent-conv-item:hover .agent-conv-del,
+.agent-conv-del:focus-visible { opacity: 1; }
+
+/* ── S2-16: agent sub-navigation (config / accounts / skills / adapters) ──
+   The four floating secondary buttons read as an accident; now a quiet
+   toolbar on the sidebar's bottom hairline, tooltips localized. */
+.agent-subnav {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+.agent-subnav .btn-icon {
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+.agent-subnav .btn-icon:hover { color: var(--text); background: var(--sidebar-hover); }
 
 /* ── Chat empty state ── */
 /* R139: an empty conversation is the agent tab's default state, not an error,
@@ -1604,6 +1800,10 @@ dialog { line-height: 1.6; }
   line-height: 1.6;
   max-width: 36ch;
 }
+/* S2-14: the welcome greeting is a full sentence — 36ch splits a 24-char CJK
+   line into a one-word second row (CJK glyphs are ~2ch wide). The welcome
+   variant gets a wider measure; short hints elsewhere are unaffected. */
+.chat-empty .chat-empty-hint.is-wide { max-width: 54ch; }
 
 /* ── Theme toggle ── */
 /* Premium-R6: theme row joins the pill family, no top rule. */

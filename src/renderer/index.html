@@ -326,17 +326,20 @@
  <div class="agent-layout">
  <!-- Conversation Sidebar -->
  <div id="agent-sidebar" style="width:210px;min-width:160px;border-right:1px solid var(--border);display:flex;flex-direction:column;">
- <div style="padding:12px;border-bottom:1px solid var(--border);">
+ <div style="padding:12px 12px 10px;border-bottom:1px solid var(--border);">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentNewConv" style="width:100%;" data-icon="plus"><span data-i18n="agent.new-chat">New Chat</span></button>
+ <div class="agent-conv-search">
+ <input id="agent-conv-search" type="search" placeholder="Search chats" autocomplete="off" data-i18n-placeholder="agent.conv.search" data-i18n-aria-label="agent.conv.search" aria-label="Search chats" data-role="input" data-input-cmd="agentFilterConvs">
+ </div>
  </div>
  <div id="agent-conv-list" style="flex:1;overflow-y:auto;padding:6px;">
  <div style="color:var(--text-muted);font-size:11px;text-align:center;padding:16px;" data-i18n="common.loading">Loading...</div>
  </div>
- <div style="padding:6px 8px;border-top:1px solid var(--border);display:flex;gap:4px;">
- <button class="btn-icon btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="config" style="flex:1;" data-icon="settings" title="API Config" aria-label="API Config"></button>
- <button class="btn-icon btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="accounts" style="flex:1;" data-icon="key" title="Accounts" aria-label="Accounts"></button>
- <button class="btn-icon btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="skills" style="flex:1;" data-icon="list" title="Skills" aria-label="Skills"></button>
- <button class="btn-icon btn btn-secondary btn-xs" data-role="cmd" data-cmd="switchAgentSub" data-sub="adapters" style="flex:1;" data-icon="grid" title="Adapter Hub" aria-label="Adapter Hub"></button>
+ <div class="agent-subnav">
+ <button class="btn-icon btn btn-quiet btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="config" style="flex:1;" data-icon="settings" title="API Config" aria-label="API Config" data-i18n-title="agent.btn.config" data-i18n-aria-label="agent.btn.config"></button>
+ <button class="btn-icon btn btn-quiet btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="accounts" style="flex:1;" data-icon="key" title="Accounts" aria-label="Accounts" data-i18n-title="agent.btn.accounts" data-i18n-aria-label="agent.btn.accounts"></button>
+ <button class="btn-icon btn btn-quiet btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="skills" style="flex:1;" data-icon="list" title="Skills" aria-label="Skills" data-i18n-title="agent.btn.skills" data-i18n-aria-label="agent.btn.skills"></button>
+ <button class="btn-icon btn btn-quiet btn-sm" data-role="cmd" data-cmd="switchAgentSub" data-sub="adapters" style="flex:1;" data-icon="grid" title="Adapter Hub" aria-label="Adapter Hub" data-i18n-title="agent.adapters.title" data-i18n-aria-label="agent.adapters.title"></button>
  </div>
  </div>
 
@@ -350,11 +353,16 @@
  <button class="btn-icon btn btn-xs btn-quiet" data-role="cmd" data-cmd="agentDeleteConv" data-icon="trash" data-i18n-title="agent.chat.delete" data-i18n-aria-label="agent.chat.delete" title="Delete current conversation" aria-label="Delete current conversation"></button>
  </div>
  <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
- <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:72px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
+ <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:96px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
  <div class="agent-input-bar">
+ <div class="agent-composer">
  <textarea id="agent-chat-input" rows="1" placeholder="Ask the agent..." data-i18n-placeholder="agent.placeholder"
  data-role="keydown" data-keydown-cmd="agentSend"></textarea>
+ <div class="agent-composer-foot">
+ <span class="agent-hint" data-i18n="agent.hint.send">Enter to send · Shift+Enter for newline</span>
  <button class="btn-icon btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSend" data-icon="arrowUp" data-i18n-title="agent.chat.send" data-i18n-aria-label="agent.chat.send" title="Send message" aria-label="Send message"></button>
+ </div>
+ </div>
  </div>
  <span id="agent-chat-status" style="font-size:var(--fs-micro);color:var(--text-muted);padding:0 16px 4px;display:block;"></span>
  </div>

@@ -134,15 +134,19 @@
       id: "conv_1",
       title: "检查 hk01 代理的指纹漂移",
       messageCount: 3,
+      createdAt: Date.now() - 3 * 3600000,
+      updatedAt: Date.now() - 26 * 60000,
       messages: [
         { role: "user", content: "帮我看下 hk01 这个代理的指纹有没有漂移，顺便把 WebRTC 也查一下。" },
         {
           role: "assistant",
           content: "先跑了指纹基线对比，再查 WebRTC。\n\n**结论**：指纹一致，但 WebRTC 暴露了本机内网地址 `192.168.1.24`，需要重新开启 WebRTC 改写。",
           steps: [
-            { name: "fingerprint_drift", args: "profile=hk01", done: true },
-            { name: "webrtc_leak", args: "profile=hk01", done: true },
-            { name: "read_file", args: "profiles/hk01/fingerprint.json", done: true },
+            // at/doneAt mirror the S2-13 stamps so the duration column is
+            // exercised in shots; un-stamped steps render without one.
+            { name: "fingerprint_drift", args: "profile=hk01", done: true, at: Date.now() - 9400, doneAt: Date.now() - 8200 },
+            { name: "webrtc_leak", args: "profile=hk01", done: true, at: Date.now() - 8100, doneAt: Date.now() - 5700 },
+            { name: "read_file", args: "profiles/hk01/fingerprint.json", done: true, at: Date.now() - 5600, doneAt: Date.now() - 5300 },
           ],
         },
         { role: "tool", content: "192.168.1.24 → STUN srflx 203.0.113.10 (mismatch)" },
@@ -297,8 +301,10 @@
   def("agent", {
       conversations: ns({
         list: function () {
+          // Field parity with ipc/agent.ts conversations:list — the renderer's
+          // meta line reads updatedAt for the relative timestamp.
           return Promise.resolve(conversations.map(function (c) {
-            return { id: c.id, title: c.title, messageCount: c.messageCount };
+            return { id: c.id, title: c.title, messageCount: c.messageCount, createdAt: c.createdAt, updatedAt: c.updatedAt };
           }));
         },
         get: function (id) {
@@ -306,9 +312,10 @@
           return Promise.resolve(found ? JSON.parse(JSON.stringify(found)) : null);
         },
         create: function (title) {
-          var conv = { id: "conv_" + (conversations.length + 1), title: title || "New Chat", messageCount: 0, messages: [] };
+          var now = Date.now();
+          var conv = { id: "conv_" + (conversations.length + 1), title: title || "New Chat", messageCount: 0, messages: [], createdAt: now, updatedAt: now };
           conversations.unshift(conv);
-          return Promise.resolve({ id: conv.id, title: conv.title });
+          return Promise.resolve({ id: conv.id, title: conv.title, createdAt: now, updatedAt: now });
         },
         delete: function (id) {
           conversations = conversations.filter(function (c) { return c.id !== id; });
