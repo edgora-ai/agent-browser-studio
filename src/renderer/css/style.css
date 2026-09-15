@@ -1234,6 +1234,21 @@ dialog h4[data-icon] > svg {
   border-top: 1px solid var(--border-light);
 }
 
+/* S2-10: the profile card's footer is the whole control band — proxy switcher,
+   primary action, icon edit, overflow menu — one toolbar row instead of a
+   stacked select row + button row. STAYS A GRID for the same reason the card
+   header does (R147/R197): a flex row's min-content is the *sum* of every
+   child's min-content — the buttons plus the select's longest option measured
+   21px past the card's column at 700px. `minmax(0, 1fr)` is the only track
+   that floors at zero, letting the select shrink while the buttons take what
+   they need. The select's full label lives on its title attribute. */
+.profile-card .card-footer.card-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  column-gap: 8px;
+}
+
 /* Premium-R4: banners soften — hairline, 12px radius, airier padding. */
 .batch-bar {
   display: flex;

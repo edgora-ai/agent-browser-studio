@@ -1557,10 +1557,12 @@
         if (filtered) {
           // A filter result is a dead end the user created; the way out is to
           // clear it, so offer that rather than sending them to the toolbar.
-          container.innerHTML = '<div class="empty-state">' +
-            esc(t("profiles.empty.filtered", "No profiles match the current filter.")) +
-            '<br><button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="clearProfileFilters">' +
-            esc(t("profiles.filter.clear", "Clear filters")) + "</button></div>";
+          // S2-8: goes through renderViewState like every other empty state,
+          // so it picks up the brand robot too.
+          agentBrowser.renderViewState(container, {
+            empty: t("profiles.empty.filtered", "No profiles match the current filter."),
+            cta: { label: t("profiles.filter.clear", "Clear filters"), cmd: "clearProfileFilters" },
+          });
         } else {
           // R187: the copy told the user to click "+ New Profile" 244px away in
           // the toolbar — the tabs that render through renderViewState() all
@@ -1591,7 +1593,10 @@
         // re-enable a card mid-launch (setCardBusy also patches live nodes).
         var isBusy = !!busyCards[p.dirId];
         var disAttr = isBusy ? " disabled" : "";
-        var date = p.lastModified ? new Date(p.lastModified).toLocaleDateString() : "?";
+        // S2-9: the Modified row scans as "3 h ago"; the absolute string moves
+        // to the tooltip. relTime falls back to the locale date past 30 days.
+        var absDate = p.lastModified ? new Date(p.lastModified).toLocaleString() : "";
+        var date = p.lastModified && helpers.relTime ? helpers.relTime(p.lastModified) : (absDate || "?");
         var proxyStr = proxyDisplayLabel(p);
 
         var syncIcon = "", syncTitle = "", syncCls = "";
@@ -1694,28 +1699,28 @@
              jumped 26px from row to row. */
           '<div class="card-meta">' +
           '<div class="info-row"><span>' + esc(t('profile.row.browser', 'Browser')) + '</span><span class="icon-text">' + browserIcon + '<span class="icon-text-label">' + esc(browserName) + '</span></span></div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span>' + date + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span class="num" title="' + escAttr(absDate) + '">' + esc(date) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
           '<div class="info-row info-row-health"><span>' + esc(t('profile.row.health', 'Health')) + '</span><span>' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row info-row-tags"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span class="tag-list">' + tagHtml + '</span></div>' : '') +
           '</div>' +
-          // Premium-R11: the proxy switcher is a control, so it belongs in the
-          // card's control band, not floating in its own bordered box below the
-          // buttons (which read as a card inside a card).
-          '<div class="card-footer">' +
+          /* S2-10: one control band instead of two stacked ones. The proxy
+             switcher, primary action, edit and overflow menu are the card's
+             toolbar — giving the select its own full-width row spent ~40px of
+             every card on chrome. Edit goes icon-only (its accessible name is
+             unchanged); the label space belongs to the proxy name. */
+          '<div class="card-footer card-controls">' +
             // The dropdown only names the proxy; the resolved endpoint stays
             // reachable as a tooltip so merging the old "Proxy" row into this
             // control loses no information.
             '<select class="proxy-select" data-action="proxy" title="' + escAttr(proxyStr) + '" aria-label="' + escAttr(t('profile.row.proxy', 'Proxy')) + '">' + proxyOptsHtml + '</select>' +
-          '</div>' +
-          '<div class="card-actions">' +
             (isRunning
               ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>' + icon('stop', 14) + ' ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
               : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>' + icon('play', 14) + ' ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
-            '<button class="btn btn-secondary btn-sm" data-action="edit" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>' + icon('edit', 14) + ' ' + esc(t('profile.action.edit-label', 'Edit')) + '</button> ' +
-            (p.appUrl ? '<button class="btn btn-secondary btn-sm" data-action="open-app" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">' + icon('monitor', 14) + ' ' + esc(t('profile.action.app', 'App')) + '</button> ' : '') +
+            '<button class="btn btn-secondary btn-sm btn-icon" data-action="edit" title="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>' + icon('edit', 14) + '</button> ' +
+            (p.appUrl ? '<button class="btn btn-secondary btn-sm btn-icon" data-action="open-app" title="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">' + icon('monitor', 14) + '</button> ' : '') +
             // ── UE-08: every control has an accessible name ──
             '<details class="card-menu">' +
               '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +

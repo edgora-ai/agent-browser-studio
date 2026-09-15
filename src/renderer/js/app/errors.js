@@ -180,4 +180,23 @@
 
   helpers.friendlyError.translate = translate;
   helpers.friendlyError.catalog = CATALOG;
+
+  /* S2-9: relative timestamps. A wall of absolute dates all reads alike;
+     "3 h ago" is the piece of information the eye was actually looking for.
+     The absolute string belongs on the element's title attribute. Falls back
+     to the locale date past 31 days. */
+  helpers.relTime = function (ts) {
+    var d = typeof ts === "number" ? ts : Date.parse(ts);
+    if (!d || isNaN(d)) return "";
+    var diff = Date.now() - d;
+    if (diff < 0) diff = 0;
+    var min = Math.floor(diff / 60000);
+    if (min < 1) return pick("time.just-now", "just now");
+    if (min < 60) return pick("time.min-ago", "{n} min ago").replace("{n}", String(min));
+    var h = Math.floor(min / 60);
+    if (h < 24) return pick("time.hour-ago", "{n} h ago").replace("{n}", String(h));
+    var days = Math.floor(h / 24);
+    if (days < 31) return pick("time.day-ago", "{n} d ago").replace("{n}", String(days));
+    return new Date(d).toLocaleDateString();
+  };
 })();

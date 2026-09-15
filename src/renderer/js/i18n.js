@@ -756,6 +756,12 @@
       "common.dismiss": "关闭",
       "common.refresh": "刷新",
       "common.loading": "加载中…",
+      // S2-9: relative timestamps (helpers.relTime) — the absolute string
+      // stays on the element's title attribute.
+      "time.just-now": "刚刚",
+      "time.min-ago": "{n} 分钟前",
+      "time.hour-ago": "{n} 小时前",
+      "time.day-ago": "{n} 天前",
       // R185: native constraint messages (required/min/max/step) come from
       // Chromium and follow the OS locale, not the UI language — an English
       // UI showed "值必须小于或等于 65535。". These replace them.
@@ -1803,6 +1809,12 @@
       "common.dismiss": "Dismiss",
       "common.refresh": "Refresh",
       "common.loading": "Loading…",
+      // S2-9: relative timestamps (helpers.relTime) — the absolute string
+      // stays on the element's title attribute.
+      "time.just-now": "just now",
+      "time.min-ago": "{n} min ago",
+      "time.hour-ago": "{n} h ago",
+      "time.day-ago": "{n} d ago",
       // R185: native constraint messages come from Chromium and follow the OS
       // locale, not the UI language — an English UI showed a Chinese message.
       "form.err.required": "{field} is required",
