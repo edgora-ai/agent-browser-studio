@@ -36,6 +36,7 @@
 
       // ── Profiles ──
       "profiles.title": "浏览器配置",
+      "profiles.sub": "隔离的浏览器配置 — 指纹、代理与运行状态，一屏掌握。",
       "profiles.new": "新建配置",
       "profiles.quick": "快速创建",
       "profiles.preset.none": "无 — 手动配置",
@@ -67,6 +68,7 @@
 
       // ── Proxy ──
       "proxy.title": "代理配置",
+      "proxy.sub": "命名代理池 — 健康评分、出口检测与配置绑定。",
       "proxy.add": "添加代理",
       "proxy.import": "导入代理",
       "proxy.export": "导出代理",
@@ -291,6 +293,16 @@
       "agent.no-conv-hint": "从侧边栏选择或新建一个对话",
       "agent.start-title": "开始新对话",
       "agent.start-hint": "在下方输入消息即可开始",
+      "agent.welcome.title": "你好，我是浏览器智能体",
+      "agent.welcome.sub": "让我操作浏览器、检查代理、跑自动化 —— 直接说需求。",
+      "agent.suggest.1": "启动一个配置并打开网站",
+      "agent.suggest.2": "批量检查代理是否可用",
+      "agent.suggest.3": "这个应用能做什么？",
+      "agent.conv.search": "搜索对话",
+      "agent.conv.delete": "删除对话",
+      "agent.conv.no-match": "没有匹配的对话",
+      "agent.hint.send": "Enter 发送，Shift+Enter 换行",
+      "agent.trace.title": "工具调用",
       "agent.load-failed": "对话加载失败",
       "agent.conv-missing": "对话不存在 — 可能已被删除",
       "agent.conv-load-failed": "对话加载失败",
@@ -751,8 +763,15 @@
       "common.create": "创建",
       "common.rename": "重命名",
       "common.close": "关闭",
+      "common.dismiss": "关闭",
       "common.refresh": "刷新",
       "common.loading": "加载中…",
+      // S2-9: relative timestamps (helpers.relTime) — the absolute string
+      // stays on the element's title attribute.
+      "time.just-now": "刚刚",
+      "time.min-ago": "{n} 分钟前",
+      "time.hour-ago": "{n} 小时前",
+      "time.day-ago": "{n} 天前",
       // R185: native constraint messages (required/min/max/step) come from
       // Chromium and follow the OS locale, not the UI language — an English
       // UI showed "值必须小于或等于 65535。". These replace them.
@@ -1098,6 +1117,7 @@
       "lang.toggle": "Lang",
 
       "profiles.title": "Browser Profiles",
+      "profiles.sub": "Isolated browser profiles — fingerprints, proxies, and run state at a glance.",
       "profiles.new": "New Profile",
       "profiles.quick": "Quick Create",
       "profiles.preset.none": "None — manual setup",
@@ -1128,6 +1148,7 @@
       "profiles.sync.never": "Never",
 
       "proxy.title": "Proxy Configurations",
+      "proxy.sub": "A named proxy pool — health scores, exit detection, and profile bindings.",
       "proxy.add": "Add Proxy",
       "proxy.import": "Import Proxies",
       "proxy.export": "Export Proxies",
@@ -1343,6 +1364,16 @@
       "agent.no-conv-hint": "Select one from the sidebar or create a new one",
       "agent.start-title": "Start a conversation",
       "agent.start-hint": "Type a message below to begin",
+      "agent.welcome.title": "Hi, I'm your browser agent",
+      "agent.welcome.sub": "Ask me to drive the browser, check proxies, or run an automation.",
+      "agent.suggest.1": "Launch a profile and open a site",
+      "agent.suggest.2": "Check which proxies are alive",
+      "agent.suggest.3": "What can you do in this app?",
+      "agent.conv.search": "Search chats",
+      "agent.conv.delete": "Delete chat",
+      "agent.conv.no-match": "No matching chats",
+      "agent.hint.send": "Enter to send · Shift+Enter for newline",
+      "agent.trace.title": "Tool calls",
       "agent.load-failed": "Failed to load conversations",
       "agent.conv-missing": "Conversation not found — it may have been deleted",
       "agent.conv-load-failed": "Failed to load conversation",
@@ -1795,8 +1826,15 @@
       "common.create": "Create",
       "common.rename": "Rename",
       "common.close": "Close",
+      "common.dismiss": "Dismiss",
       "common.refresh": "Refresh",
       "common.loading": "Loading…",
+      // S2-9: relative timestamps (helpers.relTime) — the absolute string
+      // stays on the element's title attribute.
+      "time.just-now": "just now",
+      "time.min-ago": "{n} min ago",
+      "time.hour-ago": "{n} h ago",
+      "time.day-ago": "{n} d ago",
       // R185: native constraint messages come from Chromium and follow the OS
       // locale, not the UI language — an English UI showed a Chinese message.
       "form.err.required": "{field} is required",
@@ -2867,6 +2905,25 @@
       // a template passed it and shipped verbatim into the zh UI. Found by the
       // differential audit in scripts/visual-shot.mjs (--only english).
       "accounts.password-saved": "已保存密码",
+      // S2-25: account-row icon buttons had English tooltips baked into the
+      // template — same leak class as the R146 batch above.
+      "accounts.copy-user": "复制用户名",
+      "accounts.copy-pass": "复制密码",
+      "accounts.bind": "绑定到配置",
+      // S2-26: the per-profile extensions dialog (dlg-extensions) rendered
+      // every row string in English — the mock never opened it, so the
+      // differential gate could not see the leak.
+      "ext.dlg.empty": "仓库暂无可用扩展。",
+      "ext.dlg.empty-cta": "从扩展标签页打开私有仓库，添加 Chrome 扩展。",
+      "ext.dlg.tags": "标签",
+      "ext.dlg.manifest": "清单",
+      "ext.dlg.manifest-sha": "清单 SHA-512",
+      "ext.dlg.enabled": "启用",
+      "ext.dlg.disable": "停用",
+      "toast.ext.enabled-profile": "已为该配置启用",
+      "toast.ext.disabled-profile": "已为该配置停用",
+      "toast.ext.marked-shared": "已标记为可共享",
+      "toast.ext.marked-private": "已标记为私有",
       "team.this-device": "（本机）",
       "team.add.device-id": "设备 ID",
       "team.add.device-id-ph": "来自另一台设备的 device-id",
@@ -3026,6 +3083,21 @@
       "err.act.open-team": "Open Team Workspace",
       // R146: see the zh block for why these moved out of the JS templates.
       "accounts.password-saved": "password saved",
+      "accounts.copy-user": "Copy username",
+      "accounts.copy-pass": "Copy password",
+      "accounts.bind": "Bind to profiles",
+      // S2-26: see the zh block.
+      "ext.dlg.empty": "No repository extensions available.",
+      "ext.dlg.empty-cta": "Open the private repository from the Extensions tab to add Chrome extensions.",
+      "ext.dlg.tags": "Tags",
+      "ext.dlg.manifest": "Manifest",
+      "ext.dlg.manifest-sha": "Manifest SHA-512",
+      "ext.dlg.enabled": "Enabled",
+      "ext.dlg.disable": "Disable",
+      "toast.ext.enabled-profile": "Enabled for profile",
+      "toast.ext.disabled-profile": "Disabled for profile",
+      "toast.ext.marked-shared": "Marked shareable",
+      "toast.ext.marked-private": "Marked private",
       "team.this-device": "(this device)",
       "team.add.device-id": "Device ID",
       "team.add.device-id-ph": "device-id-from-another-install",
