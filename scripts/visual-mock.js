@@ -507,7 +507,22 @@
         return Promise.resolve(clone(found.config));
       },
       health: function () { return Promise.resolve({ score: 92, risk: "low", suggestions: [] }); },
-      healthGet: function () { return Promise.resolve(clone(proxyHealth)); },
+      // S2-26: the real suggestions come from suggestionFor() → tMain, which
+      // follows the UI language. The fixture used to serve the EN branch
+      // verbatim, so zh captures previewed a leak the product does not have.
+      // Resolve the same three branches per harness language at serve time.
+      healthGet: function () {
+        var zh = true;
+        try { zh = localStorage.getItem("agent-browser-studio-language") !== "en-US"; } catch (e) {}
+        var sug = zh ? {
+          hk01: "状态良好",
+          "us-residential": "出口是机房/IDC IP（DigitalOcean · AS14061），云机房出口会被 ping0/平台风控标记（net.isidc），建议换住宅/非 IDC 出口",
+          "de-datacenter": "延迟偏高，建议换更近的节点",
+        } : {};
+        var out = clone(proxyHealth);
+        out.entries.forEach(function (e) { if (sug[e.proxyName]) e.suggestion = sug[e.proxyName]; });
+        return Promise.resolve(out);
+      },
       rotationInfo: function (name) {
         return Promise.resolve({ info: name === "us-residential"
           ? { active: true, to: "de-datacenter", reason: "unhealthy" }

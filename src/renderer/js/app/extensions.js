@@ -82,7 +82,7 @@
         api.settings.extensions(dirId).then(function(exts) {
           var el = document.getElementById('ext-list');
           if (!exts || exts.length === 0) {
-            el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:24px;">No repository extensions available.<br><span style="font-size:11px;">Open the private repository from the Extensions menu to add Chrome extensions.</span></div>';
+            el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:24px;">' + esc(t('ext.dlg.empty', 'No repository extensions available.')) + '<br><span style="font-size:11px;">' + esc(t('ext.dlg.empty-cta', 'Open the private repository from the Extensions tab to add Chrome extensions.')) + '</span></div>';
             return;
           }
           var html = '';
@@ -96,15 +96,15 @@
             html += '<div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(e.name || e.id) + '</div>';
             html += '<div class="hint-line">v' + esc(e.version || '?') + ' · ' + esc(e.id).slice(0,16) + '…</div>';
             if (e.description) html += '<div class="hint-line" style="margin-top:2px;line-height:1.3;">' + esc(e.description).slice(0,100) + '</div>';
-            if (tags) html += '<div class="meta-line">Tags: ' + tags + '</div>';
-            if (e.manifestHash) html += '<div class="meta-line-ok icon-text" title="Manifest SHA-512">' + icon("check", 12) + ' Manifest: ' + esc(e.manifestHash).slice(0,12) + '…</div>';
+            if (tags) html += '<div class="meta-line">' + esc(t('ext.dlg.tags', 'Tags')) + ': ' + tags + '</div>';
+            if (e.manifestHash) html += '<div class="meta-line-ok icon-text" title="' + escAttr(t('ext.dlg.manifest-sha', 'Manifest SHA-512')) + '">' + icon("check", 12) + ' ' + esc(t('ext.dlg.manifest', 'Manifest')) + ': ' + esc(e.manifestHash).slice(0,12) + '…</div>';
             html += '</div>';
             html += '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">';
             html += '<label style="display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-muted);">';
-            html += '<input type="checkbox" data-ext-action="toggle" ' + (enabled ? 'checked' : '') + '> Enabled';
+            html += '<input type="checkbox" data-ext-action="toggle" ' + (enabled ? 'checked' : '') + '> ' + esc(t('ext.dlg.enabled', 'Enabled'));
             html += '</label>';
-            html += '<button type="button" class="btn btn-xs" data-ext-action="update">Update Repository</button>';
-            html += '<button type="button" class="btn btn-danger btn-xs" data-ext-action="disable">Disable</button>';
+            html += '<button type="button" class="btn btn-xs" data-ext-action="update">' + esc(t('ext.btn.update', 'Update')) + '</button>';
+            html += '<button type="button" class="btn btn-danger btn-xs" data-ext-action="disable">' + esc(t('ext.dlg.disable', 'Disable')) + '</button>';
             html += '</div>';
             html += '</div>';
           }
@@ -240,7 +240,7 @@
   extToggle: function(extId, enabled) {
         api.settings.toggleExtension(agentBrowser._extDirId, extId, enabled).then(function(r) {
           if (r && r.success) {
-            toast(enabled ? 'Enabled for profile' : 'Disabled for profile', 'success');
+            toast(enabled ? t('toast.ext.enabled-profile', 'Enabled for profile') : t('toast.ext.disabled-profile', 'Disabled for profile'), 'success');
           } else {
             toast((r && r.error) || t('toast.ext.toggle-failed', 'Toggle failed'), 'error');
             agentBrowser._extRefreshList();
@@ -299,7 +299,7 @@
 
   setRepositoryShared: function (extId, shared, tags) {
         api.settings.setRepositoryExtensionMeta(extId, { shared: shared, tags: tags || [] }).then(function (r) {
-          if (r.success) { toast(shared ? 'Marked shareable' : 'Marked private', 'success'); loadExtensionsTab(); }
+          if (r.success) { toast(shared ? t('toast.ext.marked-shared', 'Marked shareable') : t('toast.ext.marked-private', 'Marked private'), 'success'); loadExtensionsTab(); }
           else toast(r.error || 'Update failed', 'error');
         }).catch(function (e) { toast(e.message, 'error'); });
       },
