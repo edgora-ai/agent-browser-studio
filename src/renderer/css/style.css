@@ -252,7 +252,9 @@ dialog,
 }
 
 .sidebar-header {
-  padding: 28px 18px 18px;
+  /* hiddenInset traffic lights bottom out at y≈28 — 28px top padding put the
+     wordmark's first line flush against them; 34px leaves a 6px gap. */
+  padding: 34px 18px 18px;
   border-bottom: none;
 }
 
@@ -2680,12 +2682,21 @@ dialog p {
 /* R121: breakpoints track the 208px premium sidebar (were tuned for 200px). */
 @media (max-width: 1100px) {
   #sidebar { width: 188px; min-width: 188px; }
+  /* 188px sidebar leaves a 110px text column; "Agent Browser" measures
+     113px at 16px (and Segoe UI renders ~6% wider than SF), so 16px still
+     wrapped to 3 lines and pushed line 1 into the traffic lights. 14px/800
+     keeps the two-line break ("Agent Browser" / "Studio") with a 10px
+     margin, and 14 is on the type scale (14/16/20/24). */
+  #sidebar .sidebar-header h1 { font-size: 14px; letter-spacing: -0.3px; }
 }
 @media (max-width: 850px) {
   #sidebar { width: 168px; min-width: 168px; }
-  #sidebar .sidebar-header { padding: 12px 10px 10px; }
-  /* R123: narrow brand 15→16px — 15px was off the type scale. */
-  #sidebar .sidebar-header h1 { font-size: 16px; letter-spacing: -0.3px; }
+  /* Compact side/bottom only — the top must keep clearing the hiddenInset
+     traffic lights; they don't shrink with the window (was 12px: real overlap). */
+  #sidebar .sidebar-header { padding: 34px 10px 10px; gap: 8px; }
+  /* R123: narrow brand shrinks the mark too — a 28px plate buys the 14px
+     wordmark a 12px wrap margin (was 16px in a 106px column: 3-line wrap). */
+  #sidebar .brand-mark { width: 28px; height: 28px; min-width: 28px; }
   .nav-item { padding: 7px 10px; font-size: 12px; }
   /* R125: narrow footer stacks cleanly — J207 w700 shot showed the chrome
      version wrapping mid-string and the theme/lang controls overflowing. */
