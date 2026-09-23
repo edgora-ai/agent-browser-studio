@@ -97,6 +97,9 @@ const DIALOGS = [
   { id: "dlg-rename", cmd: "renameProfile", arg: "prof_amazon", arg2: "Amazon US Shop" },
   { id: "dlg-auto-job", cmd: "automationShowJob", arg: "job_4a83" },
   { id: "dlg-auto-log", cmd: "automationShowLogDetail", arg: { at: 1757000000000, ok: false, ruleId: "rule_nightly", ruleName: "Nightly price sweep", result: "step 9 failed: selector .price not found" } },
+  // M3: the reschedule dialog. rule_warmup is the missed-once fixture, so the
+  // prefill is exercised against a rule whose missed instant is days old.
+  { id: "dlg-auto-reschedule", cmd: "automationReschedule", arg: "rule_warmup" },
   // batch.showResult is exported (agentBrowser.batch.showResult), so the
   // dialog is reachable with a synthetic result — no live batch run needed.
   // Fixture mirrors the real contract (batch-queue.ts:187):

@@ -8,6 +8,7 @@ import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { tMain } from "./main-i18n.js";
 import { transact as storeTransact, readSnapshot, setAfterTransactHook, setConfigBaseProvider, setNormalizer } from "./config/store.js";
+import { assertConfigSize } from "./config/limits.js";
 import {
   clearLegacySecretMigrationCache,
   decryptSecretOr,
@@ -16,7 +17,7 @@ import {
   migrateSecret,
   usingEncryption,
 } from "./secrets.js";
-import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunStep, AgentRunSource, AgentRunStatus, AgentFsConfig, AgentFsMode, DrmConfig, TeamConfig } from "../types.js";
+import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunEndReason, AgentRunStep, AgentRunSource, AgentRunStatus, AgentRunVerification, AgentRunVerificationCounts, AgentRunVerificationIssue, AgentRunArtifactRef, AgentFsConfig, AgentFsMode, DrmConfig, TeamConfig } from "../types.js";
 import { normalizeManagedFirefoxVersion, sanitizeBrowserEngine } from "./browser-engine.js";
 
 /** Engine-aware version-pin normalization (R5): Firefox pins ("154.0") must
@@ -72,6 +73,7 @@ const DefaultConfig: MgmtConfig = {
   agentRuns: [],
   agentFs: { mode: "sandbox", allowlist: [] },
   drm: { cdmPath: null },
+  automationNotify: { system: false, sound: false },
 };
 
 // ── In-memory config cache ──
@@ -596,6 +598,12 @@ function sanitizeFingerprintMode(value: unknown): "managed" | "off" {
   if (value === undefined || value === null || value === "" || value === "managed") return "managed";
   if (value === "off") return "off";
   throw new Error(`Invalid fingerprint mode: ${JSON.stringify(value)}`);
+}
+
+function sanitizeRenderScaleMode(value: unknown): "native" | "strict" {
+  if (value === undefined || value === null || value === "" || value === "native") return "native";
+  if (value === "strict") return "strict";
+  throw new Error(`Invalid render scale mode: ${JSON.stringify(value)}`);
 }
 
 function sanitizeBoolean(value: unknown, label: string, fallback = false): boolean {
@@ -1231,6 +1239,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.storageQuota !== undefined) next.storageQuota = sanitizeOptionalInteger(meta.storageQuota, 1, 1048576);
   if (meta.taskbarHeight !== undefined) next.taskbarHeight = sanitizeOptionalInteger(meta.taskbarHeight, 0, 500);
   if (meta.fontsDir !== undefined) next.fontsDir = sanitizeOptionalFontsDir(meta.fontsDir);
+  if (meta.renderScaleMode !== undefined) next.renderScaleMode = sanitizeRenderScaleMode(meta.renderScaleMode);
   if (meta.windowTitlePrefix !== undefined) next.windowTitlePrefix = sanitizeWindowTitlePrefix(meta.windowTitlePrefix);
   if (meta.appUrl !== undefined) next.appUrl = sanitizeAppUrl(meta.appUrl);
   if (meta.extensions !== undefined) next.extensions = normalizeExtensionMap(meta.extensions);
@@ -1334,12 +1343,13 @@ function loadConfig(): MgmtConfig {
     return structuredClone(initial);
   }
 
+  // Stat cap (R7 #35): a 1 GiB --file must not spike RSS before JSON.parse.
+  // Checked OUTSIDE the corruption handler below: an oversized file is intact
+  // data that merely exceeds the budget, so it must not be backed up as
+  // .corrupt (which would imply damage) or reported as "fix or remove it".
+  const st = fs.statSync(configPath);
+  assertConfigSize(st.size, "config.json");
   try {
-    // Stat cap (R7 #35): a 1 GiB --file must not spike RSS before JSON.parse.
-    const st = fs.statSync(configPath);
-    if (st.size > 64 * 1024 * 1024) {
-      throw new Error(`config.json too large (${st.size} bytes, max 64 MiB)`);
-    }
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<MgmtConfig>;
     return mergeConfig(DefaultConfig, parsed, "load");
@@ -1544,6 +1554,15 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     const normalizedTeam = normalizeTeamManifest(parsed.team);
     if (normalizedTeam) merged.team = normalizedTeam;
   }
+  // M3 terminal notifications. Without this branch the strict whitelist below
+  // drops the key, so the user's opt-in would silently revert to the default
+  // (off) on the very next save.
+  if (parsed.automationNotify && typeof parsed.automationNotify === "object") {
+    merged.automationNotify = {
+      system: (parsed.automationNotify as any).system === true,
+      sound: (parsed.automationNotify as any).sound === true,
+    };
+  }
   for (const [key, value] of Object.entries(parsed)) {
     if (key in merged || key === "cloakBin" || key === "cloakProfiles" || key === "profiles" || key === "firefoxProfiles" || key === "chromeProfiles" || key === "chromeBin") continue;
     // Unknown top-level keys are dropped (strict whitelist): silently
@@ -1688,6 +1707,8 @@ function normalizeAutomationRules(raw: any): AutomationRule[] {
     }
     if (Number.isInteger(a.concurrency)) action.concurrency = Math.min(Math.max(a.concurrency, 1), 16);
     if (typeof a.templateId === "string") action.templateId = sanitizeOptionalText(a.templateId, 80) || undefined;
+    const templateInputs = normalizeTemplateInputs(a.templateInputs);
+    if (templateInputs) action.templateInputs = templateInputs;
     if (typeof a.agentPrompt === "string") action.agentPrompt = a.agentPrompt.slice(0, 8000);
     if (typeof a.jsCode === "string") action.jsCode = a.jsCode.slice(0, 50000);
     // Execution-hardening fields (optional; preserved across save).
@@ -1698,6 +1719,15 @@ function normalizeAutomationRules(raw: any): AutomationRule[] {
     const failureCount = Number.isInteger(item.failureCount) && item.failureCount >= 0 ? item.failureCount : undefined;
     const lastError = typeof item.lastError === "string" ? item.lastError.slice(0, 1000) : undefined;
     const cooldownUntil = typeof item.cooldownUntil === "number" && item.cooldownUntil > 0 ? item.cooldownUntil : undefined;
+    // M3 plan identity. The shape check is not cosmetic: planId is written only
+    // by the main process, so anything that does not look main-generated is
+    // dropped. A dropped value degrades to "legacy plan" in the classifier,
+    // which treats it as no evidence rather than as a completed plan.
+    const planId = typeof item.planId === "string" && /^plan_[a-zA-Z0-9_-]{1,64}$/.test(item.planId)
+      ? item.planId : undefined;
+    // Number.isFinite, not `typeof === "number"`: Infinity > 0 is true, so a
+    // non-finite value would otherwise survive and render as an absurd date.
+    const missedAt = Number.isFinite(item.missedAt) && item.missedAt > 0 ? item.missedAt : undefined;
     return {
       id,
       name,
@@ -1712,12 +1742,22 @@ function normalizeAutomationRules(raw: any): AutomationRule[] {
       ...(failureCount !== undefined ? { failureCount } : {}),
       ...(lastError !== undefined ? { lastError } : {}),
       ...(cooldownUntil !== undefined ? { cooldownUntil } : {}),
+      ...(planId !== undefined ? { planId } : {}),
+      ...(missedAt !== undefined ? { missedAt } : {}),
     };
   }).filter((r: AutomationRule | null): r is AutomationRule => Boolean(r));
 }
 
 // ── Agent Run trace normalization ──
 const AGENT_RUN_STATUSES = new Set<AgentRunStatus>(["running", "done", "error"]);
+const AGENT_RUN_END_REASONS = new Set<AgentRunEndReason>([
+  "completed",
+  "user_cancelled",
+  "timeout",
+  "round_limit",
+  "interrupted",
+  "execution_error",
+]);
 const RUN_ID_RE = /^run_[a-zA-Z0-9_-]{1,80}$/;
 const STEP_ID_RE = /^step_[a-zA-Z0-9_-]{1,80}$/;
 const SECRET_KEY_RE = /authorization|cookie|password|secret|token|api[-_]?key|credentials?/i;
@@ -1752,6 +1792,10 @@ function normalizeAgentRunSource(raw: any): AgentRunSource {
   if (typeof raw?.ruleId === "string") src.ruleId = raw.ruleId.slice(0, 100);
   if (typeof raw?.ruleName === "string") src.ruleName = raw.ruleName.slice(0, 120);
   if (typeof raw?.jobId === "string") src.jobId = raw.jobId.slice(0, 120);
+  if (typeof raw?.templateId === "string" && raw.templateId) src.templateId = raw.templateId.slice(0, 80);
+  if (Number.isSafeInteger(raw?.templateVersion) && raw.templateVersion >= 1 && raw.templateVersion <= 1e6) {
+    src.templateVersion = raw.templateVersion;
+  }
   if (typeof raw?.retryOf === "string") src.retryOf = raw.retryOf.slice(0, 100);
   return src;
 }
@@ -1773,6 +1817,218 @@ function normalizeAgentRunStep(raw: any, index: number): AgentRunStep | null {
   };
 }
 
+function normalizeAgentRunEndReason(raw: unknown): AgentRunEndReason | undefined {
+  return typeof raw === "string" && AGENT_RUN_END_REASONS.has(raw as AgentRunEndReason)
+    ? raw as AgentRunEndReason
+    : undefined;
+}
+
+// ── Verification / artifact normalization (M2) ──
+// A persisted "passed" is never trusted on its own: every non-unverified
+// state must carry a complete, internally consistent structure, otherwise it
+// degrades to { status: "unverified" }.
+const VERIFIER_ID_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/i;
+const VERIFICATION_AUTO_STATUSES = new Set(["passed", "partial", "failed"]);
+const VERIFICATION_COUNT_KEYS = ["expected", "observed", "inspected", "accepted", "rejected", "missing", "extra"] as const;
+const VERIFICATION_ISSUES_CAP = 100;
+
+type AutoVerification = Extract<AgentRunVerification, { status: "passed" | "partial" | "failed" }>;
+type ManualVerification = Extract<AgentRunVerification, { status: "manual_review" }>;
+
+function normalizeVerificationCounts(raw: unknown): AgentRunVerificationCounts | null {
+  if (!raw || typeof raw !== "object") return null;
+  const out = {} as Record<(typeof VERIFICATION_COUNT_KEYS)[number], number>;
+  for (const key of VERIFICATION_COUNT_KEYS) {
+    const v = (raw as any)[key];
+    if (!Number.isSafeInteger(v) || v < 0 || v > 1e9) return null;
+    out[key] = v;
+  }
+  if (out.inspected !== out.observed) return null;
+  if (out.accepted + out.rejected !== out.inspected) return null;
+  if (out.missing !== Math.max(out.expected - out.observed, 0)) return null;
+  if (out.extra !== Math.max(out.observed - out.expected, 0)) return null;
+  return out;
+}
+
+function normalizeVerificationIssues(raw: unknown): { issues: AgentRunVerificationIssue[]; truncated: boolean } | null {
+  if (!Array.isArray(raw)) return null;
+  const issues: AgentRunVerificationIssue[] = [];
+  for (const entry of raw.slice(0, VERIFICATION_ISSUES_CAP)) {
+    if (!entry || typeof entry !== "object") return null;
+    const code = typeof (entry as any).code === "string" ? (entry as any).code.slice(0, 80) : "";
+    if (!code) return null;
+    const issue: AgentRunVerificationIssue = { code };
+    for (const [key, max] of [["item", 2048], ["field", 64], ["detail", 1000]] as const) {
+      const v = (entry as any)[key];
+      if (v !== undefined) {
+        if (typeof v !== "string") return null;
+        issue[key] = v.slice(0, max);
+      }
+    }
+    issues.push(issue);
+  }
+  return { issues, truncated: raw.length > VERIFICATION_ISSUES_CAP };
+}
+
+function isCleanSweep(c: { accepted: number; expected: number; rejected: number; missing: number; extra: number }): boolean {
+  return c.accepted === c.expected && c.rejected === 0 && c.missing === 0 && c.extra === 0;
+}
+
+function normalizeAgentRunVerification(raw: unknown): AgentRunVerification {
+  if (!raw || typeof raw !== "object") return { status: "unverified" };
+  const status = (raw as any).status;
+  if (status === "unverified") return { status: "unverified" };
+
+  if (VERIFICATION_AUTO_STATUSES.has(status)) {
+    const verifierId = (raw as any).verifierId;
+    const verifierVersion = (raw as any).verifierVersion;
+    const checkedAt = (raw as any).checkedAt;
+    if (typeof verifierId !== "string" || !VERIFIER_ID_RE.test(verifierId)) return { status: "unverified" };
+    if (!Number.isSafeInteger(verifierVersion) || verifierVersion < 1 || verifierVersion > 1e6) return { status: "unverified" };
+    if (typeof checkedAt !== "number" || !Number.isFinite(checkedAt) || checkedAt < 0) return { status: "unverified" };
+    const counts = normalizeVerificationCounts((raw as any).counts);
+    if (!counts) return { status: "unverified" };
+    // Status/count agreement: passed requires a clean sweep, failed requires
+    // zero accepted with something expected, partial is anything in between
+    // with at least one accepted row.
+    const matches =
+      status === "passed" ? isCleanSweep(counts)
+        : status === "failed" ? counts.expected > 0 && counts.accepted === 0
+          : counts.accepted > 0 && !isCleanSweep(counts);
+    if (!matches) return { status: "unverified" };
+    const rawIssues = (raw as any).issues;
+    if (rawIssues !== undefined && !Array.isArray(rawIssues)) return { status: "unverified" };
+    const parsed = normalizeVerificationIssues(rawIssues ?? []);
+    if (!parsed) return { status: "unverified" };
+    const out: AutoVerification = {
+      status, verifierId, verifierVersion, checkedAt, counts,
+      issues: parsed.issues,
+      issuesTruncated: (raw as any).issuesTruncated === true || parsed.truncated,
+    };
+    return out;
+  }
+
+  if (status === "manual_review") {
+    const reasonCode = (raw as any).reasonCode;
+    const checkedAt = (raw as any).checkedAt;
+    if (typeof reasonCode !== "string" || !VERIFIER_ID_RE.test(reasonCode)) return { status: "unverified" };
+    if (typeof checkedAt !== "number" || !Number.isFinite(checkedAt) || checkedAt < 0) return { status: "unverified" };
+    const out: ManualVerification = { status: "manual_review", checkedAt, reasonCode };
+    const verifierId = (raw as any).verifierId;
+    if (typeof verifierId === "string" && VERIFIER_ID_RE.test(verifierId)) out.verifierId = verifierId;
+    const verifierVersion = (raw as any).verifierVersion;
+    if (Number.isSafeInteger(verifierVersion) && verifierVersion >= 1 && verifierVersion <= 1e6) out.verifierVersion = verifierVersion;
+    if ((raw as any).issues !== undefined) {
+      const parsed = normalizeVerificationIssues((raw as any).issues);
+      if (!parsed) return { status: "unverified" };
+      out.issues = parsed.issues;
+      out.issuesTruncated = (raw as any).issuesTruncated === true || parsed.truncated;
+    }
+    return out;
+  }
+
+  return { status: "unverified" };
+}
+
+const ARTIFACT_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+const ARTIFACT_REFS_CAP = 16;
+
+function normalizeBoundedColumnList(raw: unknown): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const entry of raw.slice(0, 64)) {
+    if (typeof entry !== "string" || !entry) return undefined;
+    out.push(entry.slice(0, 64));
+  }
+  return out;
+}
+
+function normalizeAgentRunArtifactRef(raw: unknown): AgentRunArtifactRef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as any;
+  if (typeof r.id !== "string" || !ARTIFACT_ID_RE.test(r.id)) return null;
+  if (r.kind !== "dataset" && r.kind !== "file") return null;
+  if (typeof r.name !== "string" || !r.name) return null;
+  if (typeof r.createdAt !== "number" || !Number.isFinite(r.createdAt) || r.createdAt < 0) return null;
+  if (!Number.isSafeInteger(r.bytes) || r.bytes < 0 || r.bytes > 64 * 1024 * 1024) return null;
+  if (typeof r.sha256 !== "string" || !SHA256_HEX_RE.test(r.sha256)) return null;
+  if (r.completeness !== "complete" && r.completeness !== "partial") return null;
+  if (r.exportPolicy !== "csv" && r.exportPolicy !== "original" && r.exportPolicy !== "none") return null;
+  const columns = normalizeBoundedColumnList(r.columns);
+  if (r.columns !== undefined && columns === undefined) return null;
+  const redactedColumns = normalizeBoundedColumnList(r.redactedColumns);
+  if (r.redactedColumns !== undefined && redactedColumns === undefined) return null;
+  const out: AgentRunArtifactRef = {
+    id: r.id,
+    kind: r.kind,
+    name: r.name.slice(0, 200),
+    mediaType: (typeof r.mediaType === "string" && r.mediaType ? r.mediaType.slice(0, 100) : "application/octet-stream"),
+    createdAt: r.createdAt,
+    bytes: r.bytes,
+    sha256: r.sha256,
+    completeness: r.completeness,
+    truncated: r.truncated === true,
+    exportPolicy: r.exportPolicy,
+  };
+  if (typeof r.truncationReason === "string" && r.truncationReason) out.truncationReason = r.truncationReason.slice(0, 200);
+  for (const key of ["rowCount", "sourceRowCount", "rejectedRowCount"] as const) {
+    const v = r[key];
+    if (v !== undefined) {
+      if (!Number.isSafeInteger(v) || v < 0 || v > 1e9) return null;
+      out[key] = v;
+    }
+  }
+  if (columns !== undefined) out.columns = columns;
+  if (redactedColumns !== undefined) out.redactedColumns = redactedColumns;
+  return out;
+}
+
+/** Malformed entries are dropped (bounded self-heal); a malformed container
+ * drops the whole list. Never throws. */
+function normalizeAgentRunArtifacts(raw: unknown): AgentRunArtifactRef[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const out: AgentRunArtifactRef[] = [];
+  for (const entry of raw.slice(0, ARTIFACT_REFS_CAP)) {
+    const ref = normalizeAgentRunArtifactRef(entry);
+    if (ref) out.push(ref);
+  }
+  return out;
+}
+
+// ── Template inputs (M2): bounded structured inputs for template agent-tasks ──
+export const TEMPLATE_INPUTS_LIMITS = {
+  maxKeys: 16,
+  maxKeyBytes: 64,
+  maxValueBytes: 2048,
+  maxTotalBytes: 8 * 1024,
+} as const;
+
+/** Structural bounds only; per-template semantic rules live in run-verifiers.
+ * Returns undefined when absent or ANY bound is violated (never silently
+ * keeps a subset — a mangled input set must not change run semantics). */
+export function normalizeTemplateInputs(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (!entries.length) return undefined;
+  if (entries.length > TEMPLATE_INPUTS_LIMITS.maxKeys) return undefined;
+  const out: Record<string, string> = {};
+  let total = 0;
+  for (const [k, v] of entries) {
+    const key = k.trim();
+    if (!key || key !== k || typeof v !== "string") return undefined;
+    const keyBytes = Buffer.byteLength(key, "utf8");
+    const valueBytes = Buffer.byteLength(v, "utf8");
+    if (keyBytes > TEMPLATE_INPUTS_LIMITS.maxKeyBytes || valueBytes > TEMPLATE_INPUTS_LIMITS.maxValueBytes) return undefined;
+    total += keyBytes + valueBytes;
+    if (total > TEMPLATE_INPUTS_LIMITS.maxTotalBytes) return undefined;
+    out[key] = v;
+  }
+  return out;
+}
+
 function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[] {
   if (!Array.isArray(raw)) return [];
   // Keep the NEWEST 200 runs (drop oldest).
@@ -1787,10 +2043,20 @@ function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[
     const name = (typeof r.name === "string" ? r.name.slice(0, 160) : id) || id;
     const startedAt = typeof r.startedAt === "number" ? r.startedAt : 0;
     const rawStatus = String(r.status) as string;
-    const isKnown = rawStatus === "running" || rawStatus === "done" || rawStatus === "error";
-    // Crash-recovery: stale running on load → error; on save preserve caller status
+    const isKnown = AGENT_RUN_STATUSES.has(rawStatus as AgentRunStatus);
+    // Crash-recovery: stale running on load → error; on save preserve caller status.
     const shouldRecover = mode === "load" && rawStatus === "running";
     const status: AgentRunStatus = (shouldRecover || !isKnown) ? "error" : (rawStatus as AgentRunStatus);
+    const persistedEndReason = normalizeAgentRunEndReason(r.endReason);
+    // A live run has no terminal reason. Only load-time crash recovery creates a
+    // reason; legacy terminal errors with no known cause remain reason-less.
+    const endReason = shouldRecover
+      ? "interrupted" as const
+      : status === "running"
+        ? undefined
+        : persistedEndReason;
+    const verification = normalizeAgentRunVerification(r.verification);
+    const artifacts = normalizeAgentRunArtifacts(r.artifacts);
     const steps = Array.isArray(r.steps)
       ? r.steps.slice(0, 500).map((s: any, i: number) => normalizeAgentRunStep(s, i)).filter((s: AgentRunStep | null): s is AgentRunStep => Boolean(s))
       : [];
@@ -1815,6 +2081,9 @@ function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[
       steps,
       variables,
       error: status === "error" && typeof r.error === "string" ? r.error.slice(0, 1000) : undefined,
+      endReason,
+      verification,
+      ...(artifacts !== undefined ? { artifacts } : {}),
     };
   }).filter((r: AgentRun | null): r is AgentRun => Boolean(r));
 }

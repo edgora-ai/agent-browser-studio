@@ -7,11 +7,15 @@ import * as path from "node:path";
 import { getAppDataDir } from "./config-manager.js";
 
 let db: DatabaseSync | null = null;
+let reader: DatabaseSync | null = null;
 
 function dbPath(): string {
   return path.join(getAppDataDir(), "agent-store.sqlite");
 }
 
+/** The single writable connection. Creating it also creates the database file,
+ *  so it must run before the read-only handle is opened (opening read-only
+ *  against a missing file fails with SQLITE_CANTOPEN). */
 function getDb(): DatabaseSync {
   if (!db) {
     fs.mkdirSync(getAppDataDir(), { recursive: true, mode: 0o700 });
@@ -22,15 +26,26 @@ function getDb(): DatabaseSync {
   return db;
 }
 
-/** Flush + close. Call on app quit so the WAL is checkpointed. */
-export function closeAgentDb(): void {
-  try { db?.close(); } catch { /* ignore */ }
-  db = null;
+/** Read-only connection used by agentDbQuery. Opens the writer first: on a
+ *  fresh install there is no file yet and a read-only handle cannot create one.
+ *  Enforcement lives here — the engine rejects the writes a `SELECT|WITH|
+ *  EXPLAIN` prefix check cannot see. */
+function getReader(): DatabaseSync {
+  getDb(); // writer first: creates the file and the WAL
+  if (!reader) {
+    reader = new DatabaseSync(dbPath(), { readOnly: true });
+  }
+  return reader;
 }
 
-// For tests: swap the connection (e.g. to :memory:).
-export function _setDbForTesting(testDb: DatabaseSync | null): void {
-  db = testDb;
+/** Flush + close. Call on app quit so the WAL is checkpointed. */
+export function closeAgentDb(): void {
+  // Reader first: a lingering read handle can hold the WAL and defeat the
+  // checkpoint this function exists to perform.
+  try { reader?.close(); } catch (e) { console.error("[agent-db] reader close failed:", e); }
+  reader = null;
+  try { db?.close(); } catch (e) { console.error("[agent-db] writer close failed:", e); }
+  db = null;
 }
 
 const READONLY_RE = /^\s*(SELECT|WITH|EXPLAIN)\b/i;
@@ -44,9 +59,12 @@ export interface QueryResult {
 }
 
 /** Read-only query (SELECT/WITH/EXPLAIN). Caps rows at 1000.
- * PRAGMA removed from the allowlist (R7 #41): PRAGMA journal_mode etc. have
- * write side effects — routing them through the read path bypasses the
- * destroy-approval gate. Use db_exec (approval-gated) for PRAGMA. */
+ *
+ *  The prefix check only produces the error message; the read-only handle is
+ *  what enforces the guarantee, so never fall back to the writer here.
+ *
+ *  PRAGMA stays refused (R7 #41): the write-bearing ones (journal_mode etc.)
+ *  would bypass the destroy-approval gate on db_exec. */
 export function agentDbQuery(sql: string, params?: unknown[]): QueryResult {
   if (!READONLY_RE.test(sql)) {
     throw new Error("db_query 只允许 SELECT/WITH/EXPLAIN;写操作请用 db_exec");
@@ -54,7 +72,7 @@ export function agentDbQuery(sql: string, params?: unknown[]): QueryResult {
   if (/^\s*PRAGMA\b/i.test(sql.replace(/^(--[^\n]*\n|\s|\(\*[\s\S]*?\*\/)*/, ""))) {
     throw new Error("db_query 不允许 PRAGMA（可能有写副作用）;请用 db_exec（需审批）");
   }
-  const stmt = getDb().prepare(sql);
+  const stmt = getReader().prepare(sql);
   const all = params && params.length ? stmt.all(...(params as any[])) : stmt.all();
   const truncated = all.length > ROW_CAP;
   return { rows: truncated ? all.slice(0, ROW_CAP) : all, count: all.length, truncated };
@@ -116,4 +134,83 @@ export function agentDbExecScript(sql: string): { ok: boolean; error?: string } 
   } catch (e: any) {
     return { ok: false, error: e.message || String(e) };
   }
+}
+
+// ── Controlled template tables (M2) ──
+// These tables are created and shape-validated by the MAIN process only.
+// The agent may INSERT rows scoped to its own run_id; it must never
+// CREATE/DROP/ALTER them (the execution contract says so, and the schema
+// check below turns any pre-existing incompatible table into a
+// manual_review verdict instead of a silent migration — never DROP).
+
+export const NEWS_RUN_TABLE = "news_run_results_v1";
+/** Physical column order, pinned; id first, run_id second. */
+const NEWS_RUN_COLUMNS = ["id", "run_id", "title", "url", "source", "published_at"] as const;
+
+export interface NewsRunRow {
+  id: number;
+  run_id: string;
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+}
+
+export type EnsureNewsSchemaResult =
+  | { ok: true }
+  | { ok: false; reasonCode: "schema_incompatible"; detail: string };
+
+/** Create (if absent) and shape-validate the controlled news table. Column
+ *  shape is checked BEFORE creating the index: a pre-existing incompatible
+ *  table must surface as schema_incompatible, not as a DDL error. */
+export function ensureNewsRunResultSchema(): EnsureNewsSchemaResult {
+  const d = getDb();
+  d.exec(`CREATE TABLE IF NOT EXISTS "${NEWS_RUN_TABLE}" (
+    id INTEGER PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    UNIQUE(run_id, url)
+  )`);
+  const cols = (d.prepare(`PRAGMA table_info("${NEWS_RUN_TABLE}")`).all() as Array<{ name: string }>).map((c) => c.name);
+  if (cols.length !== NEWS_RUN_COLUMNS.length || !NEWS_RUN_COLUMNS.every((c, i) => cols[i] === c)) {
+    return { ok: false, reasonCode: "schema_incompatible", detail: `${NEWS_RUN_TABLE} columns: ${cols.join(",")}` };
+  }
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_news_run_results_v1_run ON "${NEWS_RUN_TABLE}"(run_id)`);
+  const indexes = d.prepare(`PRAGMA index_list("${NEWS_RUN_TABLE}")`).all() as Array<{ name: string; unique: number | boolean }>;
+  const hasUniqueRunUrl = indexes.some((ix) => {
+    if (!ix.unique) return false;
+    if (!IDENT_RE.test(ix.name)) return false;
+    const ixCols = (d.prepare(`PRAGMA index_info("${ix.name}")`).all() as Array<{ name: string }>).map((c) => c.name);
+    return ixCols.length === 2 && ixCols[0] === "run_id" && ixCols[1] === "url";
+  });
+  if (!hasUniqueRunUrl) {
+    return { ok: false, reasonCode: "schema_incompatible", detail: `${NEWS_RUN_TABLE} missing UNIQUE(run_id, url)` };
+  }
+  return { ok: true };
+}
+
+/** Exact row count for a run (read-only handle). Table name is a compile-time
+ *  constant; run_id is always a bound parameter. */
+export function countNewsRowsForRun(runId: string): number {
+  const row = getReader()
+    .prepare(`SELECT COUNT(*) AS c FROM "${NEWS_RUN_TABLE}" WHERE run_id = ?`)
+    .get(runId) as { c: number };
+  return Number(row.c);
+}
+
+/** Read up to `limit` rows for a run in insertion order (read-only handle). */
+export function readNewsRowsForRun(runId: string, limit: number): NewsRunRow[] {
+  const cap = Math.min(Math.max(Math.trunc(limit), 1), 10000);
+  return getReader()
+    .prepare(`SELECT id, run_id, title, url, source, published_at FROM "${NEWS_RUN_TABLE}" WHERE run_id = ? ORDER BY id LIMIT ?`)
+    .all(runId, cap) as unknown as NewsRunRow[];
+}
+
+/** Delete every row belonging to a run (run cleanup / retention). */
+export function deleteNewsRowsForRun(runId: string): number {
+  const r = getDb().prepare(`DELETE FROM "${NEWS_RUN_TABLE}" WHERE run_id = ?`).run(runId);
+  return Number(r.changes);
 }

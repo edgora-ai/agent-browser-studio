@@ -59,6 +59,9 @@
     arrowRight: '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
     sparkle: '<path d="M12 4.5 13.6 9.4 18.5 11 13.6 12.6 12 17.5 10.4 12.6 5.5 11 10.4 9.4Z"/><path d="M18 4.2v2.4M16.8 5.4h2.4"/>',
     clock: '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.4V12l3.1 1.9"/>',
+    // M3: the completion-alert settings card. Distinct from `alert` (a warning
+    // triangle) — this is the notification bell, not a problem.
+    bell: '<path d="M6.5 10.2a5.5 5.5 0 0 1 11 0c0 4.2 1.5 5.6 1.5 5.6H5s1.5-1.4 1.5-5.6Z"/><path d="M10.2 18.6a2 2 0 0 0 3.6 0"/>',
     zap: '<path d="M13.2 3.5 6 13.4h5l-.9 7.1 7.5-10.2h-5.1Z"/>',
     box: '<path d="M4.5 8 12 4.2 19.5 8v8L12 19.8 4.5 16Z"/><path d="M4.5 8 12 11.8 19.5 8"/><path d="M12 11.8v8"/>',
     doc: '<path d="M6.5 3.5h7L18.5 8.5v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1Z"/><path d="M13 3.5v5h5.5"/><path d="M9 13h6M9 16.5h4"/>',

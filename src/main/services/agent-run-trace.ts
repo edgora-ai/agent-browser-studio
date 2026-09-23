@@ -2,8 +2,11 @@
 // agent run traces. Two entry points (chat-stream, automation agent-task) call
 // startRun/recordStep/finishRun and thread runId into executeToolCall.
 import { BrowserWindow, type WebContents } from "electron";
-import { getConfig, saveConfig, sanitizeTracePayload } from "./config-manager.js";
-import type { AgentRun, AgentRunStep } from "../types.js";
+import { getConfig, sanitizeTracePayload } from "./config-manager.js";
+import { transact } from "./config/store.js";
+import { runResultStore, type RunResultManifest } from "./run-result-store.js";
+import { cleanupTemplateRowsForRun } from "./run-verifiers.js";
+import type { AgentRun, AgentRunArtifactRef, AgentRunEndReason, AgentRunStep, AgentRunVerification } from "../types.js";
 
 const VAR_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 const RESERVED_VAR_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -27,6 +30,14 @@ export interface RecordStepParams {
   error?: string;
   durationMs: number;
   timestamp?: number;
+}
+
+export interface FinishRunMeta {
+  endReason?: AgentRunEndReason;
+  verification?: AgentRunVerification;
+  /** Materialized artifact references (M2). Already committed to the result
+   *  store by the caller; this only records the bounded references. */
+  artifacts?: AgentRunArtifactRef[];
 }
 
 function newRunId(): string {
@@ -74,6 +85,42 @@ function redactArgs(value: unknown): unknown {
   return sanitized;
 }
 
+/** Keep the newest MAX_RUNS runs (oldest dropped). Mirrors the retention the
+ *  config normalizer applies on save, enforced on the draft so the rule holds
+ *  at the point of write. Returns the ids of the runs that were dropped. */
+function trimRuns(draft: any): string[] {
+  if (Array.isArray(draft.agentRuns) && draft.agentRuns.length > MAX_RUNS) {
+    const dropped = (draft.agentRuns as AgentRun[]).slice(0, draft.agentRuns.length - MAX_RUNS);
+    draft.agentRuns = draft.agentRuns.slice(draft.agentRuns.length - MAX_RUNS);
+    return dropped.map((r) => r.id);
+  }
+  return [];
+}
+
+function findRun(draft: any, runId: string): AgentRun | undefined {
+  return (draft.agentRuns || []).find((r: AgentRun) => r.id === runId);
+}
+
+/** Best-effort removal of result-store payloads and controlled-table rows for
+ *  runs that are gone from the config. Config-first: callers invoke this only
+ *  after the config mutation has committed. Failures are logged, not thrown —
+ *  the startup reconcile converges any leftovers. */
+function cleanupRunResultData(runIds: string[]): void {
+  for (const runId of runIds) {
+    try {
+      const res = runResultStore.deleteRunResults(runId);
+      if (!res.ok) console.warn(`[runs] result store cleanup failed for ${runId}: ${res.error}`);
+    } catch (e) {
+      console.warn(`[runs] result store cleanup failed for ${runId}:`, e);
+    }
+    try {
+      cleanupTemplateRowsForRun(runId);
+    } catch (e) {
+      console.warn(`[runs] template row cleanup failed for ${runId}:`, e);
+    }
+  }
+}
+
 function redactTraceUrl(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
@@ -106,26 +153,35 @@ class RunRecorder {
       startedAt: Date.now(),
       steps: [],
       variables: {},
+      verification: { status: "unverified" },
     };
+
+    // Commit first: a run that never reached disk must not be announced, and
+    // must not be registered as live (callers gate on isActive()).
+    let evicted: string[] = [];
+    this.commit((draft) => {
+      draft.agentRuns = draft.agentRuns || [];
+      draft.agentRuns.push(run);
+      evicted = trimRuns(draft);
+    });
+    if (evicted.length) cleanupRunResultData(evicted);
+    // Read the run back rather than returning the local object: the value
+    // callers receive must be what the normalizer actually stored. A miss here
+    // means normalization rejected a run we just committed — surface it instead
+    // of handing back a run that is not in the config.
+    const persisted = this.persistedRun(run.id);
+    if (!persisted) throw new Error(`agent run ${run.id} was persisted but not found after the write`);
+
     this.runWebContents.set(run.id, p.webContents);
     this.runVariables.set(run.id, {});
-
-    const cfg = getConfig() as any;
-    cfg.agentRuns = cfg.agentRuns || [];
-    cfg.agentRuns.push(run);
-    this.trimAndSave(cfg);
-    this.emit("agent:run-start", { run: safeRun(run) }, p.webContents);
-    return run;
+    this.emit("agent:run-start", { run: safeRun(persisted) }, p.webContents);
+    return persisted;
   }
 
   recordStep(runId: string, p: RecordStepParams): AgentRunStep | null {
-    const cfg = getConfig() as any;
-    const run: AgentRun | undefined = (cfg.agentRuns || []).find((r: AgentRun) => r.id === runId);
-    if (!run) return null;
-    if (run.steps.length >= MAX_STEPS) {
-      // Drop oldest to make room rather than silently stop recording.
-      run.steps.shift();
-    }
+    // Unknown run first, before the payload is redacted/serialized: an unknown
+    // runId is a no-op regardless of what was passed in.
+    if (!this.hasRun(runId)) return null;
     const step: AgentRunStep = {
       id: newStepId(),
       tool: String(p.tool || "").slice(0, 80),
@@ -136,10 +192,28 @@ class RunRecorder {
       durationMs: typeof p.durationMs === "number" ? p.durationMs : 0,
       timestamp: typeof p.timestamp === "number" ? p.timestamp : Date.now(),
     };
-    run.steps.push(step);
-    this.trimAndSave(cfg);
-    this.emit("agent:run-step", { runId, run: safeRun(run), step }, this.runWebContents.get(runId));
-    return step;
+
+    let evicted: string[] = [];
+    this.commit((draft) => {
+      const run = findRun(draft, runId);
+      if (!run) return;
+      if (run.steps.length >= MAX_STEPS) {
+        // Drop oldest to make room rather than silently stop recording.
+        run.steps.shift();
+      }
+      run.steps.push(step);
+      evicted = trimRuns(draft);
+    });
+    if (evicted.length) cleanupRunResultData(evicted);
+
+    // Return the step as COMMITTED, matched by id: normalization drops a step
+    // with an empty tool, and reporting the local object would announce a step
+    // that is not in the persisted run.
+    const persisted = this.persistedRun(runId);
+    const savedStep = persisted?.steps.find((s) => s.id === step.id) || null;
+    if (!savedStep) return null;
+    this.emit("agent:run-step", { runId, run: persisted ? safeRun(persisted) : null, step: savedStep }, this.runWebContents.get(runId));
+    return savedStep;
   }
 
   setVar(runId: string, key: string, value: unknown): { key: string; value: string } {
@@ -147,19 +221,30 @@ class RunRecorder {
     if (!VAR_KEY_RE.test(k) || RESERVED_VAR_KEYS.has(k)) {
       return { key: k, value: "[invalid key]" };
     }
-      const v = typeof value === "string" ? value : JSON.stringify(value);
+    // Unknown run first, before the value is serialized: an unknown runId must
+    // not fail on a payload that would never be stored.
+    if (!this.hasRun(runId)) return { key: k, value: "[no active run]" };
+    const v = typeof value === "string" ? value : JSON.stringify(value);
     const sliced = v.slice(0, VAR_VALUE_CAP);
 
-    const cfg = getConfig() as any;
-    const run: AgentRun | undefined = (cfg.agentRuns || []).find((r: AgentRun) => r.id === runId);
-    if (!run) return { key: k, value: "[no active run]" };
+    let evicted: string[] = [];
+    this.commit((draft) => {
+      const run = findRun(draft, runId);
+      if (!run) return;
+      run.variables = run.variables || {};
+      run.variables[k] = redactedVarValue(sliced);
+      evicted = trimRuns(draft);
+    });
+    if (evicted.length) cleanupRunResultData(evicted);
+
+    // Only a committed write may enter the in-memory variable map: otherwise a
+    // rejected save would leave the raw secret readable via getVar() with
+    // nothing on disk backing it.
     const vars = this.runVariables.get(runId) || {};
     vars[k] = sliced;
     this.runVariables.set(runId, vars);
-    run.variables = run.variables || {};
-    run.variables[k] = redactedVarValue(sliced);
-    this.trimAndSave(cfg);
-    this.emit("agent:run-step", { runId, run: safeRun(run), step: null }, this.runWebContents.get(runId));
+    const persisted = this.persistedRun(runId);
+    this.emit("agent:run-step", { runId, run: persisted ? safeRun(persisted) : null, step: null }, this.runWebContents.get(runId));
     return { key: k, value: sliced };
   }
 
@@ -170,25 +255,49 @@ class RunRecorder {
     return { key: k, value: vars[k] ?? null };
   }
 
-  finishRun(runId: string, status: "done" | "error", error?: string): AgentRun | null {
-    const cfg = getConfig() as any;
-    const run: AgentRun | undefined = (cfg.agentRuns || []).find((r: AgentRun) => r.id === runId);
-    if (!run) return null;
-    run.status = status;
-    run.finishedAt = Date.now();
-    if (status === "error" && error) run.error = String(error).slice(0, 1000);
-    this.trimAndSave(cfg);
+  finishRun(runId: string, status: "done" | "error", error?: string, meta?: FinishRunMeta): AgentRun | null {
+    if (!this.hasRun(runId)) return null;
+    let evicted: string[] = [];
+    this.commit((draft) => {
+      const run = findRun(draft, runId);
+      if (!run) return;
+      run.status = status;
+      run.finishedAt = Date.now();
+      if (status === "error" && error) run.error = String(error).slice(0, 1000);
+      if (meta?.endReason !== undefined) run.endReason = meta.endReason;
+      if (meta?.verification !== undefined) run.verification = meta.verification;
+      if (meta?.artifacts !== undefined) run.artifacts = meta.artifacts;
+      evicted = trimRuns(draft);
+    });
+    if (evicted.length) cleanupRunResultData(evicted);
+
     const wc = this.runWebContents.get(runId);
     this.runWebContents.delete(runId);
     this.runVariables.delete(runId);
-    this.emit("agent:run-finish", { run: safeRun(run) }, wc);
-    return run;
+    const persisted = this.persistedRun(runId);
+    this.emit("agent:run-finish", { run: persisted ? safeRun(persisted) : null }, wc);
+    return persisted;
+  }
+
+  /** Release only process-local bindings once execution has actually stopped.
+   *  This is deliberately separate from finishRun: callers use it after a
+   *  terminal persistence failure without changing history or claiming that a
+   *  finish event was committed. */
+  releaseRun(runId: string): void {
+    this.runWebContents.delete(runId);
+    this.runVariables.delete(runId);
   }
 
   getRun(runId: string): AgentRun | null {
     const cfg = getConfig() as any;
     const run = (cfg.agentRuns || []).find((r: AgentRun) => r.id === runId) || null;
     return run ? safeRun(run) : null;
+  }
+
+  /** Whether the run exists in the committed config (not the live map — a
+   *  caller can record into a run after the process restarted it as an error). */
+  private hasRun(runId: string): boolean {
+    return Boolean(findRun(getConfig() as any, runId));
   }
 
   /** True while a run is live in memory (started but not yet finished).
@@ -207,39 +316,58 @@ class RunRecorder {
   }
 
   deleteRun(runId: string): boolean {
-    const cfg = getConfig() as any;
-    const before = (cfg.agentRuns || []).length;
-    cfg.agentRuns = (cfg.agentRuns || []).filter((r: AgentRun) => r.id !== runId);
-    const after = cfg.agentRuns.length;
-    if (before !== after) {
-      saveConfig(cfg);
-      this.runWebContents.delete(runId);
-      this.runVariables.delete(runId);
-    }
-    return before !== after;
+    let removed = false;
+    this.commit((draft) => {
+      const before = (draft.agentRuns || []).length;
+      draft.agentRuns = (draft.agentRuns || []).filter((r: AgentRun) => r.id !== runId);
+      removed = (draft.agentRuns as AgentRun[]).length !== before;
+    });
+    // A write that failed mid-flight throws before reaching here, so the live
+    // maps are released only once the removal actually landed — otherwise
+    // callers still streaming into the run would lose their binding to a run
+    // that the config still contains.
+    if (!removed) return false;
+    this.runWebContents.delete(runId);
+    this.runVariables.delete(runId);
+    // Config-first: the run is gone from disk-backed state; now drop its
+    // materialized results + controlled-table rows (best effort).
+    cleanupRunResultData([runId]);
+    return true;
   }
 
   clearRuns(): number {
-    const cfg = getConfig() as any;
-    const n = (cfg.agentRuns || []).length;
-    cfg.agentRuns = [];
-    saveConfig(cfg);
+    let n = 0;
+    let clearedIds: string[] = [];
+    this.commit((draft) => {
+      clearedIds = ((draft.agentRuns || []) as AgentRun[]).map((r) => r.id);
+      n = clearedIds.length;
+      draft.agentRuns = [];
+    });
     this.runWebContents.clear();
     this.runVariables.clear();
+    cleanupRunResultData(clearedIds);
     return n;
   }
 
-  private trimAndSave(_cfg: any): void {
-    try {
-      const { transact } = require("./config/store.js");
-      // We already mutated the singleton in-place; persist current snapshot transactionally
-      // To avoid double-apply, just persist current cache via transact no-op
-      const { getConfig } = require("./config-manager.js");
-      const snap = getConfig();
-      transact((draft: any) => { draft.agentRuns = snap.agentRuns; draft.agentFs = snap.agentFs; });
-      return;
-    } catch {}
-    saveConfig(_cfg);
+  /** Single write path for every mutation. `mutate` runs on the transact draft
+   *  (never on the shared getConfig() singleton) so a rejected write — over the
+   *  size budget, or a failing tmp/rename — leaves the cache, the file and the
+   *  live maps exactly as they were. The failure propagates: callers at the IPC,
+   *  REST and MCP boundaries already turn it into an error response, and the
+   *  agent tool executor turns it into a tool error, so a trace that cannot be
+   *  persisted surfaces instead of quietly recording nothing. */
+  private commit(mutate: (draft: any) => void): void {
+    transact(mutate);
+  }
+
+  /** The committed view of a run — read back after the write so returns and
+   *  events carry what the normalizer actually stored, not the pre-commit
+   *  draft. Only plain trace data is cloned here; live WebContents handles stay
+   *  in runWebContents and are never cloned. */
+  private persistedRun(runId: string): AgentRun | null {
+    const cfg = getConfig() as any;
+    const run = (cfg.agentRuns || []).find((r: AgentRun) => r.id === runId) || null;
+    return run ? structuredClone(run) : null;
   }
 
   private emit(channel: string, payload: unknown, wc?: WebContents): void {
@@ -258,3 +386,144 @@ class RunRecorder {
 }
 
 export const agentRunRecorder = new RunRecorder();
+
+// ── Startup reconcile (M2) ──
+// Converges config.json references with the on-disk result store. Runs once
+// at startup before IPC handlers and the scheduler come up. Never triggers
+// any agent/network/browser action; never deletes config entries.
+const RECONCILE_END_REASONS = new Set<AgentRunEndReason>([
+  "completed", "user_cancelled", "timeout", "round_limit", "interrupted", "execution_error",
+]);
+
+export interface ReconcileReport {
+  tmpFilesRemoved: number;
+  orphanDirsRemoved: number;
+  refsBackfilled: number;
+  terminalReplayed: number;
+  refsDropped: number;
+}
+
+export function reconcileRunResults(): ReconcileReport {
+  const report: ReconcileReport = { tmpFilesRemoved: 0, orphanDirsRemoved: 0, refsBackfilled: 0, terminalReplayed: 0, refsDropped: 0 };
+  try {
+    report.tmpFilesRemoved = runResultStore.sweepTempFiles();
+  } catch (e) {
+    console.warn("[runs] reconcile: tmp sweep failed:", e);
+  }
+
+  const cfg = getConfig() as any;
+  const runs: AgentRun[] = Array.isArray(cfg.agentRuns) ? cfg.agentRuns : [];
+  const byId = new Map(runs.map((r) => [r.id, r] as const));
+
+  let storedIds: string[] = [];
+  try {
+    storedIds = runResultStore.listStoredRunIds();
+  } catch (e) {
+    console.warn("[runs] reconcile: listing stored runs failed:", e);
+  }
+  const storedSet = new Set(storedIds);
+
+  const backfill = new Map<string, { verification?: AgentRunVerification; artifacts?: AgentRunArtifactRef[] }>();
+  const replay = new Map<string, { status: "done" | "error"; endReason?: AgentRunEndReason; finishedAt?: number; error?: string; verification?: AgentRunVerification; artifacts?: AgentRunArtifactRef[] }>();
+  const dropRefs = new Set<string>();
+
+  for (const runId of storedIds) {
+    const run = byId.get(runId);
+    if (!run) {
+      // Orphan directory: the run was deleted or evicted by retention. Remove
+      // its payloads + controlled-table rows. Failures are retried next boot.
+      try {
+        const res = runResultStore.deleteRunResults(runId);
+        if (res.ok) report.orphanDirsRemoved++;
+        else console.warn(`[runs] reconcile: orphan cleanup failed for ${runId}: ${res.error}`);
+      } catch (e) {
+        console.warn(`[runs] reconcile: orphan cleanup failed for ${runId}:`, e);
+      }
+      try {
+        cleanupTemplateRowsForRun(runId);
+      } catch { /* logged inside cleanup on a per-verifier basis */ }
+      continue;
+    }
+    let manifest: RunResultManifest | null = null;
+    try {
+      const m = runResultStore.readManifest(runId);
+      manifest = m.ok ? m.value : null;
+    } catch {
+      manifest = null;
+    }
+    if (!manifest) {
+      // Config references a missing/corrupt manifest → drop refs, downgrade.
+      if (run.artifacts && run.artifacts.length) dropRefs.add(runId);
+      continue;
+    }
+    const terminal = manifest.terminal;
+    const terminalValid = terminal && (terminal.status === "done" || terminal.status === "error");
+    const needsReplay = terminalValid
+      && run.status === "error"
+      && run.endReason === "interrupted"
+      && manifest.runStartedAt === run.startedAt
+      && manifest.templateId === run.source?.templateId
+      && manifest.templateVersion === run.source?.templateVersion;
+    if (needsReplay) {
+      replay.set(runId, {
+        status: terminal.status,
+        endReason: RECONCILE_END_REASONS.has(terminal.endReason as AgentRunEndReason) ? terminal.endReason as AgentRunEndReason : undefined,
+        finishedAt: typeof terminal.finishedAt === "number" ? terminal.finishedAt : undefined,
+        error: terminal.status === "error" && typeof terminal.error === "string" ? terminal.error.slice(0, 1000) : undefined,
+        verification: manifest.verification,
+        artifacts: manifest.artifacts,
+      });
+      continue;
+    }
+    const lacksRefs = !(run.artifacts && run.artifacts.length);
+    const lacksVerdict = !run.verification || run.verification.status === "unverified";
+    if (lacksRefs || lacksVerdict) {
+      backfill.set(runId, {
+        ...(lacksRefs ? { artifacts: manifest.artifacts } : {}),
+        ...(lacksVerdict ? { verification: manifest.verification } : {}),
+      });
+    }
+  }
+
+  // Config runs whose refs point at a store directory that no longer exists.
+  for (const run of runs) {
+    if (run.artifacts && run.artifacts.length && !storedSet.has(run.id) && !dropRefs.has(run.id)) {
+      dropRefs.add(run.id);
+    }
+  }
+
+  if (backfill.size || replay.size || dropRefs.size) {
+    try {
+      transact((draft: any) => {
+        for (const r of (draft.agentRuns || []) as AgentRun[]) {
+          const rp = replay.get(r.id);
+          if (rp) {
+            r.status = rp.status;
+            if (rp.endReason !== undefined) r.endReason = rp.endReason;
+            if (rp.finishedAt !== undefined) r.finishedAt = rp.finishedAt;
+            if (rp.error !== undefined) r.error = rp.error;
+            if (rp.verification !== undefined) r.verification = rp.verification;
+            if (rp.artifacts !== undefined) r.artifacts = rp.artifacts;
+            continue;
+          }
+          const bf = backfill.get(r.id);
+          if (bf) {
+            if (bf.artifacts !== undefined) r.artifacts = bf.artifacts;
+            if (bf.verification !== undefined) r.verification = bf.verification;
+            continue;
+          }
+          if (dropRefs.has(r.id)) {
+            delete r.artifacts;
+            r.verification = { status: "manual_review", checkedAt: Date.now(), reasonCode: "integrity_error" };
+          }
+        }
+      });
+      report.refsBackfilled = backfill.size;
+      report.terminalReplayed = replay.size;
+      report.refsDropped = dropRefs.size;
+    } catch (e) {
+      console.error("[runs] reconcile: config repair failed:", e);
+    }
+  }
+  return report;
+}

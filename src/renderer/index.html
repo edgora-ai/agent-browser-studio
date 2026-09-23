@@ -353,14 +353,33 @@
  <button class="btn-icon btn btn-xs btn-quiet" data-role="cmd" data-cmd="agentDeleteConv" data-icon="trash" data-i18n-title="agent.chat.delete" data-i18n-aria-label="agent.chat.delete" title="Delete current conversation" aria-label="Delete current conversation"></button>
  </div>
  <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
- <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:96px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
+ <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:180px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
  <div class="agent-input-bar">
+ <div class="agent-scope-panel">
+ <div class="agent-scope-row">
+ <label for="agent-env-select" class="agent-scope-label" data-icon="monitor"><span data-i18n="agent.env.label">Browser environment</span></label>
+ <select id="agent-env-select" data-role="change" data-change-cmd="agentEnvironmentChanged" data-i18n-aria-label="agent.env.label" aria-label="Browser environment">
+ <option value="" data-i18n="agent.env.none">No browser environment — browser actions disabled</option>
+ </select>
+ <button type="button" class="btn-icon btn btn-quiet btn-xs" data-role="cmd" data-cmd="agentRefreshEnvironments" data-icon="refresh" data-i18n-title="agent.env.refresh" data-i18n-aria-label="agent.env.refresh" title="Refresh browser environments" aria-label="Refresh browser environments"></button>
+ <button id="agent-env-start" type="button" class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="agentStartSelectedEnvironment" data-icon="play" style="display:none;"><span data-i18n="agent.env.start">Start selected environment</span></button>
+ </div>
+ <span id="agent-env-status" class="agent-env-status" data-i18n="agent.env.none-hint">Browser actions are off. Guarded database and file tools remain available.</span>
+ <span class="agent-scope-note" data-i18n="agent.env.scope-note">The environment is fixed once a task starts. The Agent cannot start browsers itself; restricted chat excludes arbitrary page scripts and schedule creation or deletion.</span>
+ </div>
+ <div id="agent-run-strip" class="agent-run-strip" style="display:none;" aria-live="polite">
+ <span id="agent-run-state" class="agent-run-state"></span>
+ <span id="agent-run-action" class="agent-run-action"></span>
+ <span id="agent-run-elapsed" class="agent-run-elapsed num"></span>
+ <span id="agent-run-verification" class="agent-run-verification"></span>
+ <button id="agent-chat-stop" type="button" class="btn btn-danger btn-xs" data-role="cmd" data-cmd="agentStopRun" data-icon="stop"><span id="agent-chat-stop-label" data-i18n="agent.run.stop">Stop</span></button>
+ </div>
  <div class="agent-composer">
  <textarea id="agent-chat-input" rows="1" placeholder="Ask the agent..." data-i18n-placeholder="agent.placeholder"
  data-role="keydown" data-keydown-cmd="agentSend"></textarea>
  <div class="agent-composer-foot">
  <span class="agent-hint" data-i18n="agent.hint.send">Enter to send · Shift+Enter for newline</span>
- <button class="btn-icon btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSend" data-icon="arrowUp" data-i18n-title="agent.chat.send" data-i18n-aria-label="agent.chat.send" title="Send message" aria-label="Send message"></button>
+ <button id="agent-chat-send" class="btn-icon btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSend" data-icon="arrowUp" data-i18n-title="agent.chat.send" data-i18n-aria-label="agent.chat.send" title="Send message" aria-label="Send message"></button>
  </div>
  </div>
  </div>
@@ -485,6 +504,13 @@
  <h3 data-i18n="auto.log-title">Execution Log</h3>
  <pre id="automation-log" data-i18n="auto.log-empty">(empty)</pre>
  </div>
+ <div class="card">
+ <h3 data-icon="bell"><span data-i18n="auto.notify.settings.title">Completion alerts</span></h3>
+ <p class="section-desc" data-i18n="auto.notify.settings.system-hint">Notify you of the final result when the app is not in the foreground. The notification body carries no result or error detail.</p>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="auto-notify-system"> <span data-i18n="auto.notify.settings.system">System notifications</span></label>
+ <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0;"><input type="checkbox" id="auto-notify-sound" data-i18n-title="auto.notify.settings.sound-hint" title="Whether the system notification plays a sound."> <span data-i18n="auto.notify.settings.sound">Sound</span></label>
+ <div id="auto-notify-status" class="status-note"></div>
+ </div>
  </section>
 
  <!-- ══════ Workflows Tab ══════ -->
@@ -499,6 +525,49 @@
  <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="runsClear" data-i18n="runs.btn.clear" data-icon="trash">Clear</button>
  </div>
  </div>
+ <!-- Filters: client-side over the capped summary list (no server query). -->
+ <div class="card run-filters">
+ <div class="run-filter-row">
+ <input id="run-filter-name" type="search" data-i18n-placeholder="runs.filter.name" placeholder="按任务名筛选…" autocomplete="off">
+ <select id="run-filter-range">
+ <option value="all" data-i18n="runs.filter.range.all">全部时间</option>
+ <option value="1h" data-i18n="runs.filter.range.1h">最近 1 小时</option>
+ <option value="24h" data-i18n="runs.filter.range.24h">最近 24 小时</option>
+ <option value="7d" data-i18n="runs.filter.range.7d">最近 7 天</option>
+ <option value="30d" data-i18n="runs.filter.range.30d">最近 30 天</option>
+ </select>
+ <select id="run-filter-source">
+ <option value="all" data-i18n="runs.filter.source.all">全部来源</option>
+ <option value="chat" data-i18n="runs.source.chat">Chat</option>
+ <option value="automation" data-i18n="runs.source.schedule">Scheduled</option>
+ </select>
+ <select id="run-filter-profile"><option value="all" data-i18n="runs.filter.any-profile">全部浏览器配置</option></select>
+ <select id="run-filter-endReason">
+ <option value="all" data-i18n="runs.filter.end.all">全部结束原因</option>
+ <option value="completed" data-i18n="agent.end.completed">Execution finished</option>
+ <option value="user_cancelled" data-i18n="agent.end.user-cancelled">Stopped by user</option>
+ <option value="timeout" data-i18n="agent.end.timeout">Timed out</option>
+ <option value="round_limit" data-i18n="agent.end.round-limit">Round limit reached</option>
+ <option value="interrupted" data-i18n="agent.end.interrupted">Interrupted</option>
+ <option value="execution_error" data-i18n="agent.end.execution-error">Execution failed</option>
+ <option value="none" data-i18n="runs.filter.end.none">未结束</option>
+ </select>
+ <select id="run-filter-verification">
+ <option value="all" data-i18n="runs.filter.verification.all">全部验收状态</option>
+ <option value="unverified" data-i18n="agent.run.unverified">Unverified</option>
+ <option value="passed" data-i18n="agent.run.passed">Passed</option>
+ <option value="partial" data-i18n="agent.run.partial">Partial</option>
+ <option value="failed" data-i18n="agent.run.failed">Failed</option>
+ <option value="manual_review" data-i18n="agent.run.manual-review">Needs review</option>
+ </select>
+ </div>
+ <div class="run-filter-row">
+ <span id="run-filter-summary" class="run-filter-summary"></span>
+ <!-- The cap is a retention policy, not a bug: say so where it bites. -->
+ <span class="run-filter-retention" data-i18n="runs.filter.retention">仅保留最近 200 条运行记录</span>
+ </div>
+ </div>
+
  <div class="card">
  <div id="agent-run-list" class="profile-grid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
@@ -551,7 +620,7 @@
  </section>
 
 <!-- Approval dialog (risky-operation authorization) -->
-<dialog id="dlg-approval">
+<dialog id="dlg-approval" data-no-close>
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
  <h3 id="dlg-approval-title" style="margin:0;" data-icon="alert"><span data-i18n="approval.dialog-title">Operation Authorization</span></h3>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="close" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
@@ -559,10 +628,12 @@
  <p style="font-size:13px;margin:0 0 6px;" data-i18n="approval.dialog-desc">The Agent requests a sensitive operation and needs your confirmation:</p>
  <div id="approval-desc" style="padding:10px;background:var(--surface);border-radius:6px;font-family:var(--mono);font-size:12px;margin-bottom:12px;word-break:break-all;"></div>
  <div id="approval-detail" class="hint-line approval-detail-box"></div>
- <div class="btn-row">
+ <span id="approval-queue-count" class="approval-queue-count" style="display:none;"></span>
+ <div class="btn-row approval-actions">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="approvalAllow" data-cmd-arg="once" data-icon="check"><span data-i18n="approval.btn.allow-once">Allow Once</span></button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="approvalAllow" data-cmd-arg="always" data-icon="check"><span data-i18n="approval.btn.allow-always">Always Allow</span></button>
- <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="deny" data-icon="close"><span data-i18n="approval.btn.deny">Deny</span></button>
+ <button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="deny" data-icon="close"><span data-i18n="approval.btn.deny">Deny this operation</span></button>
+ <button id="approval-stop-run" class="btn btn-danger btn-sm approval-stop-run" data-role="cmd" data-cmd="approvalStopRun" data-icon="stop" style="display:none;"><span data-i18n="approval.btn.stop-task">Stop current chat task</span></button>
  </div>
 </dialog>
 
@@ -761,6 +832,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row"><label data-i18n="profile.new.field.latitude" for="new-agent-browser-geolocation-latitude">Latitude</label><input id="new-agent-browser-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
  <div class="form-row"><label data-i18n="profile.new.field.longitude" for="new-agent-browser-geolocation-longitude">Longitude</label><input id="new-agent-browser-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
  <div class="form-row"><label data-i18n="profile.new.field.accuracy" for="new-agent-browser-geolocation-accuracy">Accuracy (m)</label><input id="new-agent-browser-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ </div>
+ <div class="form-row"><label for="new-agent-browser-render-scale-mode" data-i18n="profile.new.field.render-scale">Render Scale</label>
+ <select id="new-agent-browser-render-scale-mode">
+ <option value="native" data-i18n="profile.new.render-scale.native">Match host display (sharp)</option>
+ <option value="strict" data-i18n="profile.new.render-scale.strict">Strict identity match (blurry on HiDPI)</option>
+ </select>
+ <p class="field-note-tight" data-i18n="profile.new.render-scale.help">Host mode rasterizes at your display's real scale factor for crisp text while the fingerprint-reported devicePixelRatio stays unchanged. Strict mode aligns even the rendered pixels with the spoofed DPR — blurrier on HiDPI screens, but stronger against CSS resolution cross-checks. Chromium only.</p>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
@@ -1117,12 +1195,30 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div id="auto-action-profiles-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.profiles-label" for="auto-action-profiles">Profiles</label><select id="auto-action-profiles" multiple size="6"></select><div class="field-note-tight" data-i18n="auto-editor.profiles-hint">Ctrl/Cmd+click to select multiple</div></div>
  <div id="auto-action-concurrency-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.concurrency-label" for="auto-action-concurrency">Concurrency</label><input id="auto-action-concurrency" type="number" min="1" max="16" value="1" style="width:80px;"><div class="field-note-tight" data-i18n="auto-editor.concurrency-hint">Profiles launched in parallel (default 1 = sequential)</div></div>
  <div id="auto-action-template-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.template-label" for="auto-action-template">Task Template</label><select id="auto-action-template"><option value="" data-i18n="auto.no-template">(no template)</option></select><div id="auto-template-hint" style="font-size:var(--fs-micro);color:var(--text-muted);margin-top:4px;"></div></div>
+ <div id="auto-template-inputs-row" class="form-row" style="display:none;"><label data-i18n="auto.template-inputs-label">Template inputs (structured)</label><div id="auto-template-inputs" style="display:grid;gap:6px;"></div><div class="field-note-tight" data-i18n="auto.template-inputs-hint">Structured inputs are saved with the rule and used for run verification.</div></div>
  <div id="auto-action-prompt-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.prompt-label" for="auto-action-prompt">Agent Prompt</label><textarea id="auto-action-prompt" rows="3" placeholder="e.g. open example.com and screenshot" data-i18n-placeholder="auto-editor.prompt-placeholder"></textarea></div>
  <div id="auto-action-js-row" class="form-row" style="display:none;"><label data-i18n="auto-editor.js-label" for="auto-action-js">JS</label><textarea id="auto-action-js" rows="4" placeholder="Runs in main process; return a value" data-i18n-placeholder="auto-editor.js-placeholder" style="font-family:var(--mono);font-size:11px;"></textarea></div>
  <div class="form-row"><label><input type="checkbox" id="auto-enabled" checked> <span data-i18n="auto-editor.enabled-label">Enabled</span></label></div>
  <div class="btn-row" style="margin-top:12px;">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="auto.btn.save">Save</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-automation" data-i18n="auto.btn.cancel">Cancel</button>
+ </div>
+ </form>
+</dialog>
+
+<!-- M3: reschedule a missed one-time task -->
+<dialog id="dlg-auto-reschedule" aria-labelledby="dlg-auto-reschedule-title">
+ <form method="dialog" data-role="submit" data-submit-cmd="saveAutomationReschedule">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+ <h3 id="dlg-auto-reschedule-title" data-icon="clock"><span data-i18n="auto.dlg.reschedule.title">Reschedule one-time task</span></h3>
+ <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-auto-reschedule" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
+ </div>
+ <input type="hidden" id="auto-reschedule-id">
+ <div class="form-row"><label data-i18n="auto.dlg.reschedule.label" for="auto-reschedule-at">New run time</label><input id="auto-reschedule-at" type="datetime-local" step="1"></div>
+ <div class="field-note-tight" data-i18n="auto.dlg.reschedule.hint">Rescheduling starts a new plan: history is kept, but it is not counted as a result of this plan.</div>
+ <div class="btn-row" style="margin-top:12px;">
+ <button type="submit" class="btn btn-primary btn-sm" data-i18n="auto.dlg.reschedule.submit">Reschedule</button>
+ <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-auto-reschedule" data-i18n="auto.btn.cancel">Cancel</button>
  </div>
  </form>
 </dialog>
@@ -1153,10 +1249,33 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-cmd-target="dlg-agent-run" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
  </div>
  <div id="agent-run-meta" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;"></div>
- <h4 style="margin:8px 0 4px;font-size:13px;" data-icon="grid"><span data-i18n="runs.vars-title">Variables</span></h4>
- <div id="agent-run-vars" style="font-size:11px;margin-bottom:12px;max-height:120px;overflow-y:auto;"></div>
- <h4 style="margin:8px 0 4px;font-size:13px;" data-icon="list"><span data-i18n="runs.steps-title">Step Timeline</span></h4>
- <div id="agent-run-steps" style="max-height:360px;overflow-y:auto;"></div>
+
+ <!-- Layer 1 — Conclusion: the execution verdict (status/endReason) and the
+      business verdict (verification) side by side, never conflated. -->
+ <section class="run-layer" id="agent-run-conclusion">
+  <h4 class="run-layer-title" data-icon="check"><span data-i18n="runs.layer.conclusion">结论 / Conclusion</span></h4>
+  <div id="agent-run-verification-block" class="run-verification-block"></div>
+  <div id="agent-run-verification-counts" class="run-counts"></div>
+  <div id="agent-run-verification-issues" class="run-issues"></div>
+  <div class="run-layer-note" data-i18n="runs.layer.conclusion-note">执行结束不等于业务通过:上排是执行状态,下排是验收结论。</div>
+ </section>
+
+ <!-- Layer 2 — Results: what the run actually produced. -->
+ <section class="run-layer" id="agent-run-results-layer">
+  <h4 class="run-layer-title" data-icon="grid"><span data-i18n="runs.layer.results">成果 / Results</span></h4>
+  <div id="agent-run-artifacts" class="run-artifacts"></div>
+  <div id="agent-run-preview"></div>
+  <div id="agent-run-detail-actions" class="run-detail-actions"></div>
+ </section>
+
+ <!-- Layer 3 — Diagnostics: variables + step timeline, collapsed by default. -->
+ <details class="run-layer run-layer-collapsed" id="agent-run-diagnostics">
+  <summary class="run-layer-title" data-i18n="runs.layer.diagnostics">诊断 / Diagnostics</summary>
+  <h4 style="margin:8px 0 4px;font-size:13px;" data-icon="grid"><span data-i18n="runs.vars-title">Variables</span></h4>
+  <div id="agent-run-vars" style="font-size:11px;margin-bottom:12px;max-height:120px;overflow-y:auto;"></div>
+  <h4 style="margin:8px 0 4px;font-size:13px;" data-icon="list"><span data-i18n="runs.steps-title">Step Timeline</span></h4>
+  <div id="agent-run-steps" style="max-height:360px;overflow-y:auto;"></div>
+ </details>
 </dialog>
 
 <!-- Managed Chromium fingerprint edit dialog -->
@@ -1281,6 +1400,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row"><label data-i18n="profile.new.field.latitude" for="agent-browser-meta-geolocation-latitude">Latitude</label><input id="agent-browser-meta-geolocation-latitude" type="number" min="-90" max="90" step="any" placeholder="31.2304"></div>
  <div class="form-row"><label data-i18n="profile.new.field.longitude" for="agent-browser-meta-geolocation-longitude">Longitude</label><input id="agent-browser-meta-geolocation-longitude" type="number" min="-180" max="180" step="any" placeholder="121.4737"></div>
  <div class="form-row"><label data-i18n="profile.new.field.accuracy" for="agent-browser-meta-geolocation-accuracy">Accuracy (m)</label><input id="agent-browser-meta-geolocation-accuracy" type="number" min="0" max="100000" step="any" placeholder="50"></div>
+ </div>
+ <div class="form-row"><label for="agent-browser-meta-render-scale-mode" data-i18n="profile.new.field.render-scale">Render Scale</label>
+ <select id="agent-browser-meta-render-scale-mode">
+ <option value="native" data-i18n="profile.new.render-scale.native">Match host display (sharp)</option>
+ <option value="strict" data-i18n="profile.new.render-scale.strict">Strict identity match (blurry on HiDPI)</option>
+ </select>
+ <p class="field-note-tight" data-i18n="profile.new.render-scale.help">Host mode rasterizes at your display's real scale factor for crisp text while the fingerprint-reported devicePixelRatio stays unchanged. Strict mode aligns even the rendered pixels with the spoofed DPR — blurrier on HiDPI screens, but stronger against CSS resolution cross-checks. Chromium only.</p>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>

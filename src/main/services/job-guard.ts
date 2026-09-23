@@ -185,7 +185,9 @@ export async function withTimeout<T>(
     const raced = new Promise<T>((resolve, reject) => {
       loser = fn(controller.signal).then(resolve, reject) as Promise<T>;
       timer = setTimeout(() => {
-        controller.abort();
+        // Abort with a typed reason so the losing action (and the run trace it
+        // feeds) can record endReason "timeout" instead of a generic abort.
+        controller.abort(new Error(`${label} timed out after ${timeoutMs}ms`));
         try { opts?.onTimeout?.(loser as Promise<T>); } catch { /* never break the timeout path */ }
         // Attach a no-op catch so the still-running loser cannot surface as an
         // unhandled rejection when it settles after we've already rejected.

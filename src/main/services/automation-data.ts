@@ -1,9 +1,14 @@
 // Automation 数据层(CRUD) — 从 automation.ts 拆出,避免循环依赖
 // (automation.ts import agentChat,local-agent import automation 会环)
 // 这里只做 config 读写,调度由 automation.ts 管。
-import { getConfig, saveConfig } from "./config-manager.js";
+import { getConfig, saveConfig, normalizeTemplateInputs } from "./config-manager.js";
 import { reloadSchedule } from "./automation.js";
 import { validateCron } from "./cron-validate.js";
+import { validateTemplateInputsForAction } from "./run-verifiers.js";
+// automation-rules.js does not import this file (or automation.js), so this is
+// not a cycle. Sharing the generator keeps the `plan_` shape identical across
+// both create paths — the normalizer validates that shape on save.
+import { newPlanId } from "./automation-rules.js";
 import type { AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType } from "../types.js";
 
 
@@ -53,11 +58,23 @@ export function createAutomationRule(args: any): { success: boolean; rule?: Auto
     }
     if (Number.isInteger(a.concurrency)) action.concurrency = Math.min(Math.max(a.concurrency, 1), 16);
     if (typeof a.templateId === "string") action.templateId = a.templateId.slice(0, 80);
+    if (a.templateInputs !== undefined) {
+      const inputs = normalizeTemplateInputs(a.templateInputs);
+      if (!inputs) return { success: false, error: "templateInputs exceed structural bounds (≤16 keys, key ≤64B, value ≤2048B, total ≤8KiB)" };
+      action.templateInputs = inputs;
+    }
     if (typeof a.agentPrompt === "string") action.agentPrompt = a.agentPrompt.slice(0, 8000);
     if (typeof a.jsCode === "string") action.jsCode = a.jsCode.slice(0, 50000);
+    const inputCheck = validateTemplateInputsForAction(action, normalizeTemplateInputs);
+    if (!inputCheck.ok) return { success: false, error: inputCheck.error };
     const rule: AutomationRule = {
       id: newRuleId(), name, enabled: args?.enabled !== false,
       trigger, action, createdAt: Date.now(),
+      // M3: a brand-new rule is a brand-new plan on this path too. Without it
+      // an agent-created rule would have no planId, so its own runs could never
+      // be attributed to it and its card would read "no results for this plan"
+      // forever.
+      planId: newPlanId(),
     };
     try {
       const { transact } = require("./config/store.js");

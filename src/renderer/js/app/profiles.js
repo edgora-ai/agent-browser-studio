@@ -283,6 +283,7 @@
           document.getElementById("agent-browser-meta-locale").value = metaData.locale;
           document.getElementById("agent-browser-meta-webrtc-mode").value = metaData.webrtcMode;
           document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
+          document.getElementById("agent-browser-meta-render-scale-mode").value = p.renderScaleMode === "strict" ? "strict" : "native";
           writeGeolocationFields("agent-browser-meta-", metaData);
           writeHardwareFields("agent-browser-meta-", metaData);
           bindHardwareFieldValidation("agent-browser-meta-");
@@ -373,6 +374,7 @@
         document.getElementById("new-agent-browser-timezone").value = "";
         document.getElementById("new-agent-browser-locale").value = "";
         document.getElementById("new-agent-browser-webrtc").value = "";
+        document.getElementById("new-agent-browser-render-scale-mode").value = "native";
         writeGeolocationFields("new-agent-browser-", {});
         writeHardwareFields("new-agent-browser-", {});
         bindHardwareFieldValidation("new-agent-browser-");
@@ -562,6 +564,7 @@
         var loc = document.getElementById("new-agent-browser-locale").value || undefined;
         var webrtcMode = document.getElementById("new-agent-browser-webrtc-mode").value || "auto";
         var webrtcIp = document.getElementById("new-agent-browser-webrtc").value.trim() || undefined;
+        var renderScaleMode = document.getElementById("new-agent-browser-render-scale-mode").value || "native";
         var windowTitlePrefix = document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null;
         if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
         var hardware, geolocation;
@@ -591,6 +594,7 @@
           locale: loc,
           webrtcMode: webrtcMode,
           webrtcIp: webrtcIp,
+          renderScaleMode: renderScaleMode,
           proxyMode: proxySelection.mode,
           windowTitlePrefix: windowTitlePrefix,
           proxyName: proxySelection.name,
@@ -1444,6 +1448,7 @@
       drm: drm,
       fingerprintSeed: seed, platform: platform,
       timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
+      renderScaleMode: document.getElementById("agent-browser-meta-render-scale-mode").value === "strict" ? "strict" : "native",
       proxyMode: proxySelection.mode, proxyName: proxySelection.name,
       appUrl: appUrl,
       windowTitlePrefix: windowTitlePrefix

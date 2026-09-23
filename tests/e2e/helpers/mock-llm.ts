@@ -1,4 +1,4 @@
-// Mock OpenAI-compatible SSE server for J4 agent-stream test.
+// Local OpenAI-compatible fixture for streaming, tools and cancellation journeys.
 import * as http from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
 
@@ -7,21 +7,41 @@ export interface MockLlmOptions {
   delayMs?: number;
   statusCode?: number;
   model?: string;
-  /** Per-request response script. If set, request N uses responses[N]; each
-   *  entry can emit text chunks and/or OpenAI tool_calls (streamed). */
+  /** Request N uses responses[N], repeating the last entry when exhausted. */
   responses?: MockLlmResponse[];
+  /** Dynamic responder: sees the real request body and returns the next
+   *  response. Outranks `responses`. */
+  responder?: MockResponder;
 }
+
+/** Build a response from the actual request.
+ *
+ *  M2 needs this: the execution contract carries the real run_id in the
+ *  system prompt, and the fixture has to write rows under THAT id. Predicting
+ *  the id would test the prediction instead of the product, so the responder
+ *  reads it out of the request it was actually given. Returning `null` falls
+ *  back to the scripted/static response. */
+export type MockResponder = (
+  body: any,
+  context: { index: number; systemPrompt: string; userPrompt: string },
+) => MockLlmResponse | null;
 
 export interface MockLlmResponse {
   chunks?: string[];
-  /** OpenAI tool_calls to stream back (function name + JSON args). */
   toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  /** Hold before any response text/tools until releaseRequest(index). */
+  pause?: boolean;
+  /** Streaming only: emit this many chunks, then wait for releaseRequest. */
+  pauseAfterChunks?: number;
+  delayMs?: number;
 }
 
 export interface CapturedRequest {
   body: any;
   headers: IncomingHttpHeaders;
   receivedAt: number;
+  closedAt?: number;
+  closedBeforeEnd?: boolean;
 }
 
 export interface MockLlmServer {
@@ -34,6 +54,8 @@ export interface MockLlmServer {
   setNextResponse(opts: { statusCode?: number; body?: string }): void;
   setNextResponses(opts: Array<{ statusCode?: number; body?: string }>): void;
   setResponses(responses: MockLlmResponse[]): void;
+  setResponder(responder: MockResponder | null): void;
+  releaseRequest(index: number): boolean;
   close(): Promise<void>;
 }
 
@@ -44,154 +66,129 @@ export async function startMockLlm(opts: MockLlmOptions = {}): Promise<MockLlmSe
     statusCode: opts.statusCode ?? 200,
     model: opts.model ?? "e2e-mock-model",
     responses: opts.responses ? [...opts.responses] : null,
+    responder: opts.responder ?? null,
     requestCount: 0,
   };
-
   const requests: CapturedRequest[] = [];
+  const controls = new Map<number, () => void>();
   let nextOverrides: Array<{ statusCode?: number; body?: string }> = [];
 
   const server = http.createServer((req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/chat/completions")) {
-      res.statusCode = 404;
-      res.end("not found");
+      res.writeHead(404).end("not found");
       return;
     }
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c));
+    req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
-      let body: any = null;
+      let body: any;
       try {
         body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      } catch (_) {
-        body = null;
-      }
-      requests.push({ body, headers: req.headers, receivedAt: Date.now() });
-
-      const override = nextOverrides.shift() ?? null;
-
-      if (override?.statusCode && override.statusCode !== 200) {
-        res.statusCode = override.statusCode;
-        res.setHeader("content-type", "application/json");
-        res.end(override.body || JSON.stringify({ error: { message: "mock error" } }));
+      } catch (error) {
+        res.writeHead(400).end("Invalid fixture request JSON: " + String(error));
         return;
       }
-
-      res.statusCode = 200;
-
-      // If a scripted response exists for this request index, use it (text + tool_calls).
-      const scripted = state.responses && state.responses.length > 0
-        ? state.responses[Math.min(state.requestCount, state.responses.length - 1)]
-        : null;
-      const textChunks = scripted?.chunks ?? state.chunks;
-      const scriptedToolCalls = scripted?.toolCalls ?? [];
+      const index = requests.length;
+      const captured: CapturedRequest = { body, headers: req.headers, receivedAt: Date.now() };
+      requests.push(captured);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      res.on("close", () => {
+        captured.closedAt = Date.now();
+        captured.closedBeforeEnd = !res.writableFinished;
+        if (timer) clearTimeout(timer);
+        controls.delete(index);
+      });
+      const override = nextOverrides.shift();
+      const status = override?.statusCode ?? state.statusCode;
+      if (status !== 200) {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(override?.body || JSON.stringify({ error: { message: "mock error" } }));
+        return;
+      }
+      const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
+      const systemPrompt = String(messages.find((m) => m?.role === "system")?.content ?? "");
+      const lastUser = [...messages].reverse().find((m) => m?.role === "user");
+      const userPrompt = String(typeof lastUser?.content === "string" ? lastUser.content : "");
+      let dynamic: MockLlmResponse | null = null;
+      if (state.responder) {
+        dynamic = state.responder(body, { index, systemPrompt, userPrompt });
+      }
+      const scripted = dynamic ?? (state.responses?.length
+        ? state.responses[Math.min(state.requestCount, state.responses.length - 1)] : null);
       state.requestCount++;
+      const textChunks = scripted?.chunks ?? state.chunks;
+      const toolCalls = scripted?.toolCalls ?? [];
+      const pauseAt = scripted?.pauseAfterChunks ?? (scripted?.pause ? 0 : undefined);
+      let released = false;
+      let waiting: (() => void) | undefined;
+      controls.set(index, () => {
+        released = true;
+        const resume = waiting;
+        waiting = undefined;
+        resume?.();
+      });
+      const paused = (emitted: number, resume: () => void) => {
+        if (pauseAt === undefined || emitted < pauseAt || released) return false;
+        waiting = resume;
+        return true;
+      };
+      const toolPayload = () => toolCalls.map((call) => ({ id: call.id, type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.arguments) } }));
 
-      // Non-streaming request (body.stream falsy) → return a single JSON
-      // chat.completion. The automation engine uses the non-streaming path
-      // (agentChat → llmOpenAI), which parses choices[0].message.
-      if (!body?.stream) {
-        const message: any = { role: "assistant", content: (textChunks || []).join("") };
-        if (scriptedToolCalls.length > 0) {
-          message.tool_calls = scriptedToolCalls.map((tc) => ({
-            id: tc.id,
-            type: "function",
-            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-          }));
-        }
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          id: `mock-${Date.now()}`,
-          object: "chat.completion",
-          model: state.model,
-          choices: [{ index: 0, message, finish_reason: scriptedToolCalls.length ? "tool_calls" : "stop" }],
-        }));
+      if (!body.stream) {
+        const respond = () => {
+          if (res.destroyed || res.writableEnded || paused(0, respond)) return;
+          const message: any = { role: "assistant", content: textChunks.join("") };
+          if (toolCalls.length) message.tool_calls = toolPayload();
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ id: `mock-${index}`, object: "chat.completion", model: state.model,
+            choices: [{ index: 0, message, finish_reason: toolCalls.length ? "tool_calls" : "stop" }] }));
+        };
+        respond();
         return;
       }
-
-      res.setHeader("content-type", "text/event-stream");
-      res.setHeader("cache-control", "no-cache");
-      res.setHeader("connection", "keep-alive");
-      res.flushHeaders?.();
-
-      const write = (data: string) => {
-        res.write(data);
-      };
-
-      // First delta with role
-      write(`data: ${JSON.stringify({ choices: [{ delta: { role: "assistant" } }] })}\n\n`);
-
-      let i = 0;
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+      res.flushHeaders();
+      const write = (delta: any) => res.write(`data: ${JSON.stringify({ id: `mock-${index}`, object: "chat.completion.chunk", model: state.model,
+        choices: [{ index: 0, delta }] })}\n\n`);
+      write({ role: "assistant" });
+      let emitted = 0;
       const sendNext = () => {
-        if (i < textChunks.length) {
-          const delta = textChunks[i++];
-          write(
-            `data: ${JSON.stringify({
-              id: `mock-${Date.now()}`,
-              object: "chat.completion.chunk",
-              model: state.model,
-              choices: [{ index: 0, delta: { content: delta } }],
-            })}\n\n`,
-          );
-          setTimeout(sendNext, state.delayMs);
+        timer = undefined;
+        if (res.destroyed || res.writableEnded || paused(emitted, sendNext)) return;
+        if (emitted < textChunks.length) {
+          write({ content: textChunks[emitted++] });
+          timer = setTimeout(sendNext, scripted?.delayMs ?? state.delayMs);
           return;
         }
-        // Stream any tool_calls for this response (OpenAI streaming format).
-        if (i === textChunks.length && scriptedToolCalls.length > 0) {
-          for (let t = 0; t < scriptedToolCalls.length; t++) {
-            const tc = scriptedToolCalls[t];
-            write(
-              `data: ${JSON.stringify({
-                choices: [{
-                  index: 0,
-                  delta: {
-                    tool_calls: [{
-                      index: t,
-                      id: tc.id,
-                      type: "function",
-                      function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-                    }],
-                  },
-                }],
-              })}\n\n`,
-            );
-          }
-          i++; // advance past tool_calls so we don't re-emit
-        }
-        write(`data: [DONE]\n\n`);
-        res.end();
+        if (toolCalls.length) write({ tool_calls: toolPayload().map((call, index) => ({ index, ...call })) });
+        res.end("data: [DONE]\n\n");
       };
-      setTimeout(sendNext, state.delayMs);
+      timer = setTimeout(sendNext, scripted?.delayMs ?? state.delayMs);
     });
   });
-
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const addr = server.address();
-  if (!addr || typeof addr === "string") throw new Error("mock llm failed to bind");
-  const port = addr.port;
-  const origin = `http://127.0.0.1:${port}`;
-  const url = `${origin}/v1/chat/completions`;
-
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("mock llm failed to bind");
+  const origin = `http://127.0.0.1:${address.port}`;
   return {
-    url,
-    origin,
-    port,
-    model: state.model,
-    requests,
-    setChunks(chunks) {
-      state.chunks = chunks;
-    },
-    setNextResponse(o) {
-      nextOverrides.push(o);
-    },
-    setNextResponses(overrides) {
-      nextOverrides.push(...overrides);
-    },
-    setResponses(responses) {
-      state.responses = [...responses];
-      state.requestCount = 0;
+    url: `${origin}/v1/chat/completions`, origin, port: address.port, model: state.model, requests,
+    setChunks(chunks) { state.chunks = chunks; },
+    setNextResponse(override) { nextOverrides.push(override); },
+    setNextResponses(overrides) { nextOverrides.push(...overrides); },
+    setResponses(responses) { state.responses = [...responses]; state.requestCount = 0; },
+    setResponder(responder) { state.responder = responder; },
+    releaseRequest(index) {
+      const release = controls.get(index);
+      if (!release) return false;
+      release();
+      return true;
     },
     close() {
-      return new Promise<void>((resolve) => server.close(() => resolve()));
+      return new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+        server.closeAllConnections();
+      });
     },
   };
 }

@@ -43,6 +43,11 @@ const dict: Record<"zh-CN" | "en-US", Record<string, string>> = {
     "sync.note.pull-imports-profiles": "Pull 会把 {n} 个远端独有的 profile 导入本地：{ids}",
     "sync.note.pull-imports-proxies": "Pull 会把 {n} 个远端独有的代理导入本地",
     "sync.note.pull-overwrites-conflicts": "Pull 会用远端版本覆盖 {n} 个两边都有的 profile 冲突字段（本地优先不覆盖整档）",
+    "notify.done": "定时任务已完成",
+    "notify.failed": "定时任务执行失败",
+    "notify.cancelled": "定时任务已取消",
+    "notify.missed": "定时任务已错过",
+    "notify.default-rule-name": "定时任务",
   },
   "en-US": {
     "tray.show": "Show Agent Browser Studio",
@@ -75,6 +80,11 @@ const dict: Record<"zh-CN" | "en-US", Record<string, string>> = {
     "sync.note.pull-imports-profiles": "Pull will import {n} remote-only profile(s): {ids}",
     "sync.note.pull-imports-proxies": "Pull will import {n} remote-only proxy/proxies",
     "sync.note.pull-overwrites-conflicts": "Pull will overwrite conflicting fields on {n} profile(s) present on both sides (local-first does not replace the whole profile)",
+    "notify.done": "Scheduled task finished",
+    "notify.failed": "Scheduled task failed",
+    "notify.cancelled": "Scheduled task cancelled",
+    "notify.missed": "Scheduled task missed",
+    "notify.default-rule-name": "Scheduled task",
   },
 };
 

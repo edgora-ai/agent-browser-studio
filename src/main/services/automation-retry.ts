@@ -17,6 +17,10 @@ export function resolveRetryTarget(runId: string): { ok: true; target: RetryTarg
   const cfg = getConfig() as any;
   const run = agentRunRecorder.getRun(runId);
   if (!run) return { ok: false, error: "run not found" };
+  // M2: retry any TERMINAL automation run (done or error) — never a live one.
+  if (run.status === "running" || agentRunRecorder.isActive(run.id)) {
+    return { ok: false, error: "run is still active" };
+  }
   if (!run.dirId) return { ok: false, error: "run has no profile" };
   if (run.source?.type !== "automation" || !run.source.ruleId) {
     return { ok: false, error: "only automation agent runs can be retried" };

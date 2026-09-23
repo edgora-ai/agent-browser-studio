@@ -236,6 +236,36 @@
     { id: "job_4a83", ruleId: "rule_warmup", ruleName: "Weekly warm-up batch", status: "running", source: "scheduler", attempt: 1, createdAt: NOW - 45000, startedAt: NOW - 40000, finishedAt: null, result: "2 of 5 profiles warmed" },
   ];
 
+  // M3 schedule states, one rule per interesting phase so the badge, the rows
+  // and the missed-once actions are all exercised by the sweep. The shapes
+  // mirror RuleScheduleState in src/main/services/automation-state.ts.
+  var TZ = "Asia/Shanghai";
+  var scheduleStateByRule = {
+    rule_nightly: {
+      ruleId: "rule_nightly", phase: "scheduled-cron", nextRunAt: NOW + HOUR * 9, nextRunSource: "computed",
+      timezone: TZ, timezoneOffsetMinutes: 480, onceAt: null, missedAt: null, cooldownUntil: null,
+      lastOutcome: { status: "failed", at: NOW - HOUR * 2, attempt: 2, error: "step 9 failed" },
+      activeJob: null, lastAttempt: { attempt: 2, error: "step 9 failed", at: NOW - HOUR * 2 }, degraded: false,
+    },
+    rule_rotate: {
+      ruleId: "rule_rotate", phase: "user-disabled", nextRunAt: null, nextRunSource: null,
+      timezone: TZ, timezoneOffsetMinutes: 480, onceAt: null, missedAt: null, cooldownUntil: null,
+      lastOutcome: null, activeJob: null, lastAttempt: null, degraded: true,
+    },
+    // The phase M3 exists for: enabled in config, dead in reality, with the
+    // only two honest actions attached.
+    rule_warmup: {
+      ruleId: "rule_warmup", phase: "missed-once", nextRunAt: null, nextRunSource: null,
+      timezone: TZ, timezoneOffsetMinutes: 480, onceAt: NOW - DAY * 3, missedAt: NOW - HOUR * 30, cooldownUntil: null,
+      lastOutcome: null, activeJob: null, lastAttempt: null, degraded: false,
+    },
+  };
+
+  var automationNotifications = [
+    { dedupKey: "job:job_7c4a", jobId: "job_7c4a", ruleId: "rule_nightly", planId: "plan_7c4a", kind: "failed", createdAt: NOW - HOUR * 2, deliveredAt: NOW - HOUR * 2, readAt: null },
+    { dedupKey: "missed:rule_warmup:plan_warm", jobId: null, ruleId: "rule_warmup", planId: "plan_warm", kind: "missed", createdAt: NOW - HOUR * 30, deliveredAt: null, readAt: null },
+  ];
+
   var automationLogs = [
     { at: NOW - HOUR * 2, ok: false, ruleId: "rule_nightly", ruleName: "Nightly price sweep", result: "step 9 failed: selector .price not found" },
     { at: NOW - HOUR * 5, ok: true, ruleId: "rule_nightly", ruleName: "Nightly price sweep", result: "launched prof_amazon, 14 steps in 41.2s" },
@@ -282,10 +312,15 @@
   // state refreshes. Recording listeners lets a probe fire the same events the
   // main process would. Mirrors preload.cjs `on(channel, cb)` with its
   // channel allowlist, so a typo'd channel is silently ignored there too.
+  // M3 adds the three automation channels. They must be listed here for the
+  // same reason preload.cjs must list them: an unlisted channel is dropped
+  // silently, so a missing entry is an untestable surface, not an error.
   var EVENT_CHANNELS = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call",
-    "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error",
-    "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress"];
+    "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error",
+    "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress",
+    "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
   var eventListeners = {};
+  var approvalPending = [];
   mock.on = function (channel, cb) {
     if (typeof cb !== "function") return;
     if (EVENT_CHANNELS.indexOf(channel) === -1) return;
@@ -293,6 +328,10 @@
   };
   mock.emit = function (channel) {
     var args = Array.prototype.slice.call(arguments, 1);
+    if (channel === "agent:approval-request" && args[0] && args[0].id) {
+      approvalPending = approvalPending.filter(function (req) { return req.id !== args[0].id; });
+      approvalPending.push(clone(args[0]));
+    }
     (eventListeners[channel] || []).forEach(function (cb) {
       try { cb.apply(null, args); } catch (e) { /* a listener throwing must not stop the others */ }
     });
@@ -558,6 +597,12 @@
   def("drm", { status: function () { return Promise.resolve({ available: true, cdmPath: "/tmp/cdm" }); } });
   def("settings", {
       launchGates: function () { return Promise.resolve({ gates: [] }); },
+      // M3: both default OFF — the in-app record is always kept and the OS
+      // banner is opt-in. The card renders unchecked on a fresh profile.
+      automationNotify: function () { return Promise.resolve({ system: false, sound: false }); },
+      setAutomationNotify: function (prefs) {
+        return Promise.resolve({ success: true, automationNotify: { system: !!(prefs && prefs.system), sound: !!(prefs && prefs.sound) } });
+      },
       agentFsGet: function () { return Promise.resolve({ mode: "allowlist", allowlist: ["/Users/ahoo/workspace/abs-scratch", "/tmp/abs-exports"] }); },
       extensionRepository: function (filter) {
         var q = String(filter || "").trim().toLowerCase();
@@ -643,6 +688,18 @@
         return Promise.resolve(clone(Object.assign({}, found, { steps: runDetailSteps, variables: { locale: "zh-CN", proxyExit: "hk01", url: "https://www.hk01.example/verify" } })));
       },
   });
+  // Approval UI hydrates pending requests at module load, before a dialog probe
+  // emits its synthetic request. Keep the fixture stateful so list()/resolve()
+  // have the same semantics as the main-process gate instead of relying on the
+  // generic [] fallback (which the visual audit correctly treats as unstubbed).
+  def("approval", {
+      list: function () { return Promise.resolve(clone(approvalPending)); },
+      resolve: function (id) {
+        var before = approvalPending.length;
+        approvalPending = approvalPending.filter(function (req) { return req.id !== id; });
+        return Promise.resolve({ success: approvalPending.length !== before });
+      },
+  });
   def("audit", {
       list: function (opts) {
         var cat = opts && opts.category;
@@ -668,6 +725,41 @@
       validateCron: function (cron) {
         var parts = String(cron || "").trim().split(/\s+/);
         return Promise.resolve(parts.length === 5 ? { valid: true } : { valid: false, error: "expected 5 fields" });
+      },
+      // M3. scheduleState is a SEPARATE channel from list() by design — the
+      // rule object is round-tripped by the editor, so a display field living
+      // on it would have a path into config.
+      scheduleState: function () {
+        return Promise.resolve({ success: true, states: clone(Object.keys(scheduleStateByRule).map(function (k) { return scheduleStateByRule[k]; })) });
+      },
+      rescheduleOnce: function (params) {
+        var rule = automationRules.filter(function (r) { return r.id === (params && params.ruleId); })[0];
+        if (!rule) return Promise.resolve({ success: false, error: "rule not found" });
+        if (rule.trigger.type !== "once") return Promise.resolve({ success: false, error: "only a once rule can be rescheduled" });
+        rule.trigger.at = params.at;
+        rule.enabled = true;
+        delete scheduleStateByRule[rule.id].missedAt;
+        scheduleStateByRule[rule.id].phase = "scheduled-once";
+        scheduleStateByRule[rule.id].onceAt = params.at;
+        scheduleStateByRule[rule.id].nextRunAt = params.at;
+        return Promise.resolve({ success: true, rule: clone(rule) });
+      },
+      reconcile: function () {
+        return Promise.resolve({ interruptedJobs: 0, orphanedQueued: 0, orphanedRetryWaiting: 0, jobsReplayedFromRun: 0, pruned: 0, notificationsReplayed: 0 });
+      },
+      notifications: function (opts) {
+        var list = (opts && opts.unreadOnly) ? automationNotifications.filter(function (n) { return n.readAt == null; }) : automationNotifications;
+        return Promise.resolve(clone(list));
+      },
+      notificationsRead: function (keys) {
+        var n = 0;
+        (keys || []).forEach(function (k) {
+          automationNotifications.forEach(function (row) { if (row.dedupKey === k && row.readAt == null) { row.readAt = NOW; n++; } });
+        });
+        return Promise.resolve({ success: true, changed: n });
+      },
+      notificationsUnreadCount: function () {
+        return Promise.resolve(automationNotifications.filter(function (n) { return n.readAt == null; }).length);
       },
   });
   def("updates", { status: function () { return Promise.resolve({ active: "152.0.7977.72", pinned: null, installed: [], history: [] }); } });

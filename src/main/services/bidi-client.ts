@@ -1,3 +1,5 @@
+import { assertProtocolDispatchAllowed } from "./agent/dispatch-guard.js";
+
 // ── WebDriver BiDi runtime client (Slice 79) ──
 // The runtime bridge that gives Firefox profiles the managed capabilities
 // Chromium gets natively from its patched build + CDP:
@@ -88,6 +90,15 @@ export function normalizeBidiWebSocketUrl(value: string, port?: number): string 
   return url.toString();
 }
 
+function bidiEndpointPort(normalizedWsUrl: string): number {
+  const parsed = new URL(normalizedWsUrl);
+  const port = parsed.port ? Number(parsed.port) : 80;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("BiDi websocket target has an invalid port");
+  }
+  return port;
+}
+
 /**
  * Connect to a Firefox WebDriver BiDi endpoint and create a session
  * (`session.new`). The connection is short-lived by default; callers that need
@@ -97,7 +108,10 @@ export function normalizeBidiWebSocketUrl(value: string, port?: number): string 
 export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Promise<BidiConnection> {
   const timeoutMs = opts.timeoutMs ?? 15000;
   const normalized = normalizeBidiWebSocketUrl(wsUrl);
+  const endpointPort = bidiEndpointPort(normalized);
+  assertProtocolDispatchAllowed(endpointPort);
   const Ws = await getWsModule();
+  assertProtocolDispatchAllowed(endpointPort);
   if (!Ws) throw new Error("BiDi client unavailable (ws module missing)");
 
   let settled = false;
@@ -132,6 +146,7 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
   return new Promise<BidiConnection>((resolveInit, reject) => {
     initReject = reject;
     try {
+      assertProtocolDispatchAllowed(endpointPort);
       socket = new Ws(normalized);
     } catch (e: any) {
       failInit(e);
@@ -153,15 +168,28 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
       if (closedFlag && method !== "session.new") {
         return Promise.reject(new Error("BiDi connection is closed"));
       }
+      // Reject before allocating a command id/timer whenever possible.
+      assertProtocolDispatchAllowed(endpointPort);
       return new Promise((resolve, reject) => {
         const id = nextId++;
-        pending.set(id, { resolve, reject });
         const timer = setTimeout(() => {
           pending.delete(id);
           reject(new Error(`BiDi command ${method} timed out`));
         }, commandTimeoutMs);
-        pending.set(id, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
-        socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
+        pending.set(id, {
+          resolve: (v) => { clearTimeout(timer); resolve(v); },
+          reject: (e) => { clearTimeout(timer); reject(e); },
+        });
+        try {
+          // This second check is deliberately adjacent to the actual send. A
+          // rejection removes all state allocated for this command below.
+          assertProtocolDispatchAllowed(endpointPort);
+          socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
+        } catch (error) {
+          clearTimeout(timer);
+          pending.delete(id);
+          reject(error);
+        }
       });
     };
 
@@ -189,6 +217,9 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
             },
           },
         }, timeoutMs);
+        // Re-check after the handshake await and before handing off a cached,
+        // long-lived connection to the caller.
+        assertProtocolDispatchAllowed(endpointPort);
         finishInit();
         resolveInit({
           wsUrl: normalized,

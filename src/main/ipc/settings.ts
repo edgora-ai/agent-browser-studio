@@ -43,6 +43,28 @@ export function registerSettingsHandlers(): void {
     return { success: true };
   });
 
+  // ── Terminal notifications (M3) ──
+  // Both default OFF: the in-app record is always kept, and the OS banner is
+  // something the user opts into. Follows the launch-gates shape above — save
+  // on change, no save button, booleans coerced rather than trusted.
+  ipcMain.handle("settings:automation-notify", async () => {
+    const cfg = getConfig() as any;
+    return {
+      system: cfg.automationNotify?.system === true,
+      sound: cfg.automationNotify?.sound === true,
+    };
+  });
+
+  ipcMain.handle("settings:automation-notify:set", async (_event, prefs: { system?: boolean; sound?: boolean }) => {
+    const cfg = getConfig() as any;
+    cfg.automationNotify = {
+      system: typeof prefs?.system === "boolean" ? prefs.system : cfg.automationNotify?.system === true,
+      sound: typeof prefs?.sound === "boolean" ? prefs.sound : cfg.automationNotify?.sound === true,
+    };
+    saveConfig(cfg);
+    return { success: true, automationNotify: cfg.automationNotify };
+  });
+
   // ── Extension repository + per-profile selection ──
   ipcMain.handle("settings:extensions", async (_event, dirId: string) => {
     validateDirId(dirId);

@@ -10,6 +10,7 @@ import {
   buildRemoteDnsRule,
   parseBrowserProcessLine,
   patchThirdPartyCookieCompatibility,
+  resolveRenderScaleFactor,
   stripManagedFingerprintArgs,
 } from "../../src/main/services/browser-manager.js";
 
@@ -36,6 +37,23 @@ describe("fingerprint pass-through launch mode", () => {
     ])).toEqual([
       "--disable-features=ThrottleMainFrameTo60Hz,KeepDisabled",
     ]);
+  });
+
+  it("resolves the raster scale factor from renderScaleMode", () => {
+    // strict: raster scale matches the spoofed persona DPR exactly (legacy
+    // behavior — sharp only when the persona DPR equals the host scale).
+    expect(resolveRenderScaleFactor("strict", 1, 2)).toBe(1);
+    expect(resolveRenderScaleFactor("strict", 2.625, 2)).toBe(2.625);
+    // native (and the unset default): render at the host's real scale — crisp
+    // text on Retina/HiDPI while JS still reports the persona DPR.
+    expect(resolveRenderScaleFactor("native", 1, 2)).toBe(2);
+    expect(resolveRenderScaleFactor(undefined, 1, 2)).toBe(2);
+    expect(resolveRenderScaleFactor(null, 1, 1.5)).toBe(1.5);
+    // fallback: no detectable host scale (headless, unit tests) keeps the
+    // persona DPR so behavior stays deterministic.
+    expect(resolveRenderScaleFactor("native", 1, null)).toBe(1);
+    expect(resolveRenderScaleFactor(undefined, 2, 0)).toBe(2);
+    expect(resolveRenderScaleFactor("native", 1.5, NaN)).toBe(1.5);
   });
 
   it("removes every managed identity consumer while preserving operational and proxy switches", () => {

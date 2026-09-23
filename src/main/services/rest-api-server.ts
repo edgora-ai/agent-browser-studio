@@ -1948,7 +1948,7 @@ function sanitizeProfileOpts(opts: any): any {
     "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth", "screenHeight",
     "windowTitlePrefix",
     "appUrl",
-    "storageQuota", "taskbarHeight", "fontsDir", "proxyMode", "proxyName", "tags",
+    "storageQuota", "taskbarHeight", "fontsDir", "renderScaleMode", "proxyMode", "proxyName", "tags",
   ];
   const out: any = { name: String(opts.name).trim() };
   for (const k of keys) if (opts[k] !== undefined) out[k] = opts[k];

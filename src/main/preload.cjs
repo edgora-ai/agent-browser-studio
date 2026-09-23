@@ -100,6 +100,9 @@ const api = {
   settings: {
     launchGates: () => ipcRenderer.invoke("settings:launch-gates"),
     setLaunchGates: (gates) => ipcRenderer.invoke("settings:launch-gates:set", gates),
+    // M3 terminal notifications — both default off.
+    automationNotify: () => ipcRenderer.invoke("settings:automation-notify"),
+    setAutomationNotify: (prefs) => ipcRenderer.invoke("settings:automation-notify:set", prefs),
     extensions: (dirId) => ipcRenderer.invoke("settings:extensions", dirId),
     extensionRepository: (filter) => ipcRenderer.invoke("settings:extension-repository", filter),
     addRepositoryExtension: (extId, options) => ipcRenderer.invoke("settings:add-repository-extension", { extId, ...(options || {}) }),
@@ -176,8 +179,25 @@ const api = {
     llmConfig: () => ipcRenderer.invoke("agent:llm-config"),
     detectLlmConfig: () => ipcRenderer.invoke("agent:detect-llm-config"),
     saveLlmConfig: (config) => ipcRenderer.invoke("agent:save-llm-config", config),
-    chat: (conversationId, message) => ipcRenderer.invoke("agent:chat", { conversationId, message }),
-    chatStream: (conversationId, message, streamId) => ipcRenderer.invoke("agent:chat-stream", { conversationId, message, streamId }),
+    chat: (conversationId, message, options) => ipcRenderer.invoke("agent:chat", {
+      conversationId,
+      message,
+      profileDirId: options && options.profileDirId,
+      requestId: options && options.requestId,
+    }),
+    chatStream: (conversationId, message, streamId, options) => ipcRenderer.invoke("agent:chat-stream", {
+      conversationId,
+      message,
+      streamId,
+      profileDirId: options && options.profileDirId,
+      requestId: options && options.requestId,
+    }),
+    cancelRun: (params) => ipcRenderer.invoke("agent:chat-cancel", {
+      conversationId: params && params.conversationId,
+      runId: params && params.runId,
+      streamId: params && params.streamId,
+    }),
+    activeRun: (conversationId) => ipcRenderer.invoke("agent:chat-active", conversationId),
     chatSimple: (messages) => ipcRenderer.invoke("agent:chat-simple", { messages }),
     listSkills: () => ipcRenderer.invoke("agent:skills"),
     taskTemplates: () => ipcRenderer.invoke("agent:task-templates"),
@@ -232,12 +252,24 @@ const api = {
     jobs: (opts) => ipcRenderer.invoke("automation:jobs", opts),
     jobGet: (id) => ipcRenderer.invoke("automation:job-get", id),
     jobCancel: (id) => ipcRenderer.invoke("automation:job-cancel", id),
+    // M3: schedule state lives on its own channel, never merged into list().
+    scheduleState: () => ipcRenderer.invoke("automation:schedule-state"),
+    rescheduleOnce: (params) => ipcRenderer.invoke("automation:reschedule-once", params),
+    reconcile: () => ipcRenderer.invoke("automation:reconcile"),
+    notifications: (opts) => ipcRenderer.invoke("automation:notifications", opts),
+    notificationsRead: (keys) => ipcRenderer.invoke("automation:notifications-read", keys),
+    notificationsUnreadCount: () => ipcRenderer.invoke("automation:notifications-unread-count"),
   },
   agentRuns: {
     list: () => ipcRenderer.invoke("agent-run:list"),
     get: (runId) => ipcRenderer.invoke("agent-run:get", runId),
     delete: (runId) => ipcRenderer.invoke("agent-run:delete", runId),
     clear: () => ipcRenderer.invoke("agent-run:clear"),
+    // M2: stored results. Preview is paged; export is two-phase (plan → write)
+    // and the write path always goes through the main process.
+    resultsPreview: (params) => ipcRenderer.invoke("agent-run:results-preview", params),
+    exportPlan: (params) => ipcRenderer.invoke("agent-run:export-plan", params),
+    exportWrite: (params) => ipcRenderer.invoke("agent-run:export-write", params),
   },
   agentDb: {
     tables: () => ipcRenderer.invoke("agent-db:tables"),
@@ -274,7 +306,12 @@ const api = {
     activate: (code) => ipcRenderer.invoke("license:activate", code),
   },
   on: (channel, callback) => {
-    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress"];
+    // Hard allowlist: an unlisted channel is SILENTLY dropped, so a missing
+    // entry here means a listener that never fires and no error to explain it.
+    // M3 adds the three below — automation:run-finished (terminal alert),
+    // automation:open-run (system-notification click) and
+    // automation:schedule-changed (state refresh).
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
     if (validChannels.includes(channel)) {
       const wrapped = (_event, ...args) => callback(...args);
       listenerMap.set(callback, wrapped);

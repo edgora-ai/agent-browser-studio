@@ -247,15 +247,21 @@ describe("Integration — System tray", () => {
 });
 
 describe("Integration — Child process cleanup", () => {
-  it("before-quit calls stopAllBrowserProfiles and stopMcpServer", () => {
+  it("before-quit awaits chats and real browser exit before completing cleanup", () => {
     const idx = fs.readFileSync(path.join(ROOT, "src/main/index.ts"), "utf-8");
-    expect(idx).toContain("stopAllBrowserProfiles()");
-    expect(idx).toContain("stopMcpServer()");
+    const shutdown = idx.slice(idx.indexOf('app.on("before-quit"'));
+    expect(shutdown).toContain("await desktopChatRuns.shutdown()");
+    expect(shutdown).toContain("await shutdownAllBrowserProfiles()");
+    expect(shutdown).toContain("report.unfinished.length");
+    expect(shutdown).toContain("stopMcpServer()");
+    expect(shutdown.indexOf("await shutdownAllBrowserProfiles()")).toBeGreaterThan(shutdown.indexOf("await desktopChatRuns.shutdown()"));
+    expect(shutdown.indexOf("quitCleanupFinished = true")).toBeGreaterThan(shutdown.indexOf("await shutdownAllBrowserProfiles()"));
   });
 
-  it("browser-manager exports stopAllBrowserProfiles", () => {
+  it("browser-manager keeps stopAllBrowserProfiles and exports awaited shutdown", () => {
     const cm = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
-    expect(cm).toContain("stopAllBrowserProfiles");
+    expect(cm).toContain("export const stopAllBrowserProfiles");
+    expect(cm).toContain("export const shutdownAllBrowserProfiles");
   });
 });
 
@@ -362,9 +368,15 @@ describe("Integration — Agent streaming", () => {
   it("streaming IPC and events are wired", () => {
     const ipc = fs.readFileSync(path.join(ROOT, "src/main/ipc/agent.ts"), "utf-8");
     const preload = fs.readFileSync(path.join(ROOT, "src/main/preload.cjs"), "utf-8");
+    const chat = fs.readFileSync(path.join(ROOT, "src/main/services/agent/desktop-chat.ts"), "utf-8");
     expect(ipc).toContain("agent:chat-stream");
-    expect(ipc).toContain("llmStreamChat");
-    expect(ipc).toContain("getAllowedAgentTools");
+    expect(ipc).toContain("runDesktopChat(event.sender, params, true)");
+    expect(ipc).toContain("runDesktopChat(event.sender, params, false)");
+    expect(ipc).toContain("agent:chat-cancel");
+    expect(ipc).toContain("agent:chat-active");
+    expect(chat).toContain("llmStreamChat");
+    expect(chat).toContain("filterChatTools(getAllowedAgentTools(), scope)");
+    expect(preload).toContain("agent:stream-start");
     expect(preload).toContain("chatStream");
     expect(preload).toContain("agent:stream-chunk");
     expect(preload).toContain("agent:stream-done");
@@ -379,10 +391,12 @@ describe("Integration — Agent streaming", () => {
     expect(app).toContain("agent:stream-error");
   });
 
-  it("ipc handler persists assistant reply after stream completes", () => {
-    const ipc = fs.readFileSync(path.join(ROOT, "src/main/ipc/agent.ts"), "utf-8");
-    expect(ipc).toContain("addMessage(params.conversationId");
-    expect(ipc).toContain('addMessage(params.conversationId, "assistant"');
+  it("the shared desktop chat service persists linked user and assistant messages", () => {
+    const chat = fs.readFileSync(path.join(ROOT, "src/main/services/agent/desktop-chat.ts"), "utf-8");
+    expect(chat).toContain('addMessage(context.conversationId, "user"');
+    expect(chat).toContain('addMessage(context.conversationId, "assistant"');
+    expect(chat).toContain("requestId: context.streamId");
+    expect(chat).toContain("agentRunRecorder.finishRun");
   });
 });
 
@@ -653,7 +667,10 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).toContain("addHardwareFingerprintArgs(requestedArgs, meta)");
     expect(manager).toContain("--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}");
     expect(manager).toContain("--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}");
-    expect(manager).toContain("--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}");
+    // Raster scale goes through resolveRenderScaleFactor: `native` renders at
+    // the host's real scale (sharp on HiDPI), `strict` pins the spoofed DPR.
+    expect(manager).toContain("resolveRenderScaleFactor(");
+    expect(manager).toContain("--force-device-scale-factor=${renderScaleFactor}");
   });
 
   it("has no upstream wrapper dependency or fallback launch path", () => {

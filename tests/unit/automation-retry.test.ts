@@ -63,15 +63,44 @@ describe("resolveRetryTarget", () => {
 
   it("rejects chat runs", () => {
     const run = agentRunRecorder.startRun({ source: { type: "chat" }, name: "chat", dirId: "profile_a" });
+    agentRunRecorder.finishRun(run.id, "error", "boom");
     const r = resolveRetryTarget(run.id);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/automation/);
   });
 
+  it("rejects a run that is still active (M2: terminal-only retry)", () => {
+    addRule("rule_abc", { type: "agent-task", agentPrompt: "x", profileDirId: "profile_a" });
+    const run = agentRunRecorder.startRun({
+      source: { type: "automation", ruleId: "rule_abc", ruleName: "R" },
+      name: "R",
+      dirId: "profile_a",
+    });
+    const r = resolveRetryTarget(run.id);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/still active/);
+  });
+
+  it("resolves a COMPLETED automation run (M2: retry is not error-only)", () => {
+    addRule("rule_abc", { type: "agent-task", agentPrompt: "check", profileDirId: "profile_a" });
+    const run = agentRunRecorder.startRun({
+      source: { type: "automation", ruleId: "rule_abc", ruleName: "R" },
+      name: "R",
+      dirId: "profile_a",
+    });
+    agentRunRecorder.finishRun(run.id, "done");
+    const r = resolveRetryTarget(run.id);
+    expect(r.ok).toBe(true);
+  });
+
   it("rejects runs without a profile", () => {
     addRule("rule_abc", { type: "agent-task", agentPrompt: "x" });
     const run = agentRunRecorder.startRun({ source: { type: "automation", ruleId: "rule_abc" }, name: "R" });
+    // Terminal-only retry: the run must be finished or it is rejected as live
+    // before the profile check is ever reached.
+    agentRunRecorder.finishRun(run.id, "error", "boom");
     const r = resolveRetryTarget(run.id);
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -85,6 +114,7 @@ describe("resolveRetryTarget", () => {
       name: "R",
       dirId: "profile_a",
     });
+    agentRunRecorder.finishRun(run.id, "error", "boom");
     const cfg = getConfig() as any;
     cfg.automation = [];
     saveConfig(cfg);
@@ -101,6 +131,7 @@ describe("resolveRetryTarget", () => {
       name: "R",
       dirId: "profile_a",
     });
+    agentRunRecorder.finishRun(run.id, "error", "boom");
     const r = resolveRetryTarget(run.id);
     expect(r.ok).toBe(false);
     if (r.ok) return;

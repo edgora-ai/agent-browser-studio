@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, session, shell } from "electron";
+import { app, BrowserWindow, dialog, powerMonitor, session, shell } from "electron";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +11,7 @@ import { registerAppHandlers } from "./ipc/app.js";
 import { registerDetectHandlers } from "./ipc/detect.js";
 import { registerSettingsHandlers } from "./ipc/settings.js";
 import { registerAgentHandlers } from "./ipc/agent.js";
+import { desktopChatRuns } from "./services/agent/chat-runs.js";
 import { registerMcpHandlers } from "./ipc/mcp.js";
 import { registerApiHandlers } from "./ipc/api.js";
 import { registerBrowserHandlers } from "./ipc/browser.js";
@@ -23,11 +24,15 @@ import { registerUpdateHandlers } from "./ipc/updates.js";
 import { registerObservabilityHandlers } from "./ipc/observability.js";
 import { registerLicenseHandlers } from "./ipc/license.js";
 import { configureObservability, logInfo, logWarn, logError } from "./services/observability.js";
-import { startScheduler } from "./services/automation.js";
+import { startScheduler, reloadSchedule } from "./services/automation.js";
+import { reconcileAutomationState, handleSystemResume, setReloadSchedule } from "./services/automation-reconcile.js";
+import { configureNotifier } from "./services/automation-notify.js";
+import { getConfig } from "./services/config-manager.js";
+import { reconcileRunResults } from "./services/agent-run-trace.js";
 import { isHeadlessMode } from "./services/server-mode.js";
 import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
 import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
-import { stopAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } from "./services/browser-manager.js";
+import { shutdownAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } from "./services/browser-manager.js";
 import { migrateSecrets, getAppDataDir } from "./services/config-manager.js";
 import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
 import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
@@ -106,6 +111,7 @@ if (productIdentity.canonical && process.env.AGENT_BROWSER_DISABLE_LEGACY_MIGRAT
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+let quitCleanupFinished = false;
 
 function createWindow(): void {
   // Harden the UI session before any window exists: deny all permission
@@ -312,6 +318,53 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error("[observability] failed to configure:", error);
   }
+  // M2: converge config run references with the on-disk result store BEFORE
+  // any IPC handler or scheduled job can observe or mutate runs. Never starts
+  // agent/network/browser work.
+  try {
+    const reconcileReport = reconcileRunResults();
+    const { tmpFilesRemoved, orphanDirsRemoved, refsBackfilled, terminalReplayed, refsDropped } = reconcileReport;
+    if (tmpFilesRemoved || orphanDirsRemoved || refsBackfilled || terminalReplayed || refsDropped) {
+      console.log("[runs] startup reconcile:", JSON.stringify(reconcileReport));
+    }
+  } catch (error) {
+    console.error("[runs] startup reconcile failed:", error);
+  }
+  // M3: converge the automation job log with reality BEFORE handlers exist and
+  // before the scheduler can schedule anything. Runs after the M2 reconcile
+  // for the same reason that one runs before handlers: the job ↔ run replay
+  // step reads the run manifests M2 has just settled. Never starts work.
+  try {
+    const automationReport = reconcileAutomationState();
+    const { interruptedJobs, orphanedQueued, orphanedRetryWaiting, jobsReplayedFromRun } = automationReport;
+    if (interruptedJobs || orphanedQueued || orphanedRetryWaiting || jobsReplayedFromRun) {
+      console.log("[automation] startup reconcile:", JSON.stringify(automationReport));
+    }
+  } catch (error) {
+    console.error("[automation] startup reconcile failed:", error);
+  }
+  // The notifier is wired before handlers so a notification can be delivered
+  // from any path. `ensureWindow` covers the tray-only case: a click on a
+  // system notification must open a window, not silently do nothing.
+  configureNotifier({
+    systemEnabled: () => {
+      try { return (getConfig() as any)?.automationNotify?.system === true; } catch { return false; }
+    },
+    soundEnabled: () => {
+      try { return (getConfig() as any)?.automationNotify?.sound === true; } catch { return false; }
+    },
+    broadcast: (channel, payload) => {
+      try {
+        for (const win of BrowserWindow.getAllWindows()) {
+          const wc = win.webContents;
+          if (wc && !wc.isDestroyed()) wc.send(channel, payload);
+        }
+      } catch { /* no windows */ }
+    },
+    getWindow: () => mainWindow,
+    ensureWindow: () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); },
+    now: () => Date.now(),
+  });
   registerAllHandlers();
   // One-time copy of legacy renderer settings (theme / language / wizard
   // state) from the default session into the UI partition. Runs before the
@@ -322,6 +375,31 @@ app.whenReady().then(async () => {
     createWindow();
   }
   startScheduler();
+
+  // M3: react to the two ways the world changes underneath a scheduler without
+  // the process noticing — a suspend/resume, and a clock/timezone change.
+  // Both handlers are pure observers: they reconcile and re-read the schedule.
+  // Neither starts a job and neither re-arms anything, because a resume is the
+  // worst possible moment to begin side-effecting work unprompted.
+  setReloadSchedule(() => reloadSchedule());
+  try {
+    powerMonitor.on("resume", () => handleSystemResume("resume"));
+    powerMonitor.on("unlock-screen", () => handleSystemResume("unlock"));
+  } catch (error) {
+    console.error("[automation] powerMonitor wiring failed:", error);
+  }
+  if (!headless) {
+    // Electron has no timezone-change event, so a window focus is used as the
+    // sampling point. Throttled to once a minute: a focus storm must not
+    // trigger a reconcile per event.
+    let lastFocusCheck = 0;
+    app.on("browser-window-focus", () => {
+      const now = Date.now();
+      if (now - lastFocusCheck < 60_000) return;
+      lastFocusCheck = now;
+      try { handleSystemResume("focus"); } catch (error) { console.error("[automation] focus reconcile failed:", error); }
+    });
+  }
 
   // Idle auto-stop for running profiles: stops profiles with no REST/CDP/
   // automation activity for the timeout. Opt-in via AGENT_BROWSER_IDLE_TIMEOUT_MS
@@ -348,17 +426,14 @@ app.whenReady().then(async () => {
     // Create system tray
     createTray(() => mainWindow, {
       onShow: () => createWindow(),
-      onQuit: () => {
-        isQuitting = true;
-        app.quit();
-      },
+      onQuit: () => app.quit(),
     });
 
     // Periodically refresh tray menu to show updated profile status.
     // unref: a pending tray tick must not hold the process open on quit.
     setInterval(() => refreshTrayMenu(() => mainWindow, {
       onShow: () => createWindow(),
-      onQuit: () => { isQuitting = true; app.quit(); },
+      onQuit: () => app.quit(),
     }), 10000).unref();
 
     app.on("activate", () => {
@@ -389,20 +464,38 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async (event: any) => {
-  if (isQuitting) return;
-  // Block Electron's default quit so async cleanup can finish; re-trigger quit after.
+  if (quitCleanupFinished) return;
+  // Repeated quit requests cannot skip an in-progress asynchronous cleanup.
   event.preventDefault();
+  if (isQuitting) return;
   isQuitting = true;
   console.log(`${PRODUCT_NAME} shutting down — cleaning up child processes`);
-  const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T | void> =>
-    Promise.race([
-      p,
-      new Promise<void>((resolve) => setTimeout(() => { console.warn(`[shutdown] ${label} timed out after ${ms}ms`); resolve(); }, ms)),
-    ]) as Promise<T | void>;
+  const withTimeout = async <T>(p: Promise<T>, ms: number, label: string): Promise<T | void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        p,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => { console.warn(`[shutdown] ${label} timed out after ${ms}ms`); resolve(); }, ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   try {
-    stopAllBrowserProfiles();
+    const { unfinished } = await desktopChatRuns.shutdown();
+    if (unfinished) console.warn(`[shutdown] ${unfinished} chat task(s) did not settle; saved running records will recover as interrupted`);
+  } catch (error) {
+    console.error("[shutdown] failed to settle desktop chat tasks:", error);
+  }
+  try {
+    const report = await shutdownAllBrowserProfiles();
+    if (report.unfinished.length) {
+      console.warn(`[shutdown] managed browser processes still alive after ${report.elapsedMs}ms:`, report.unfinished);
+    }
   } catch (e) {
-    console.error("[shutdown] failed to stop managed Chromium children:", e);
+    console.error("[shutdown] failed to stop managed browser children:", e);
   }
   try {
     const { closeAgentDb } = await import("./services/agent-db.js");
@@ -419,6 +512,7 @@ app.on("before-quit", async (event: any) => {
   }
   await withTimeout(stopMcpServer().catch((e) => console.error("[shutdown] failed to stop MCP server:", e)), 2000, "stopMcpServer");
   await withTimeout(stopRestApiServer().catch((e) => console.error("[shutdown] failed to stop REST API server:", e)), 2000, "stopRestApiServer");
-  // Give a tick for SIGTERM handlers to flush, then quit for real.
+  // Cleanup has settled or reported its bounded timeout; quit on the next tick.
+  quitCleanupFinished = true;
   setTimeout(() => app.quit(), 50);
 });

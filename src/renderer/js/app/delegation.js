@@ -67,6 +67,10 @@
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
   function navTabs() { return Array.from(document.querySelectorAll('.nav-item[role="tab"]')); }
+  function closestEventTarget(event, selector) {
+    var target = event && event.target;
+    return target && typeof target.closest === 'function' ? target.closest(selector) : null;
+  }
   function focusNavTab(tab) {
     var tabs = navTabs();
     var idx = tabs.findIndex(function(t) { return t.dataset.tab === tab; });
@@ -123,7 +127,7 @@
   }
 
   function initEventDelegation() {    document.addEventListener('click', function(e) {
-      var el = e.target.closest('[data-role="cmd"]');
+      var el = closestEventTarget(e,'[data-role="cmd"]');
       if (!el) return;
       var cmd = el.getAttribute('data-cmd');
       if (!cmd) return;
@@ -182,14 +186,14 @@
       try { console.warn("[" + kind + "] unknown handler: " + cmd); } catch (warnErr) { /* logging best-effort */ }
     }
     document.addEventListener('input', function(e) {
-      var el = e.target.closest('[data-role="input"]');
+      var el = closestEventTarget(e,'[data-role="input"]');
       if (!el) return;
       var cmd = el.getAttribute('data-input-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
       else if (cmd) warnUnknown('input', cmd);
     });
     document.addEventListener('change', function(e) {
-      var el = e.target.closest('[data-role="change"]');
+      var el = closestEventTarget(e,'[data-role="change"]');
       if (!el) return;
       var cmd = el.getAttribute('data-change-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
@@ -216,7 +220,7 @@
       if (el && el.setCustomValidity && el.validity && el.validity.customError) el.setCustomValidity('');
     }, true);
     document.addEventListener('submit', function(e) {
-      var el = e.target.closest('[data-role="submit"]');
+      var el = closestEventTarget(e,'[data-role="submit"]');
       if (!el) return;
       e.preventDefault();
       var cmd = el.getAttribute('data-submit-cmd');
@@ -224,7 +228,7 @@
       else if (cmd) warnUnknown('submit', cmd);
     });
     document.addEventListener('keydown', function(e) {
-      var el = e.target.closest('[data-role="keydown"]');
+      var el = closestEventTarget(e,'[data-role="keydown"]');
       if (!el) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentBrowser.agentSend(); }
     });
@@ -236,7 +240,7 @@
     // rather than hand-wiring each one.
     document.addEventListener('keydown', function(e) {
       if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
-      var el = e.target.closest('[data-role="cmd"]');
+      var el = closestEventTarget(e,'[data-role="cmd"]');
       if (!el) return;
       if (el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'SUMMARY') return; // native activation
       if (el.getAttribute('role') === 'tab') return; // nav tabs have their own handler
@@ -244,7 +248,7 @@
       el.click();
     });
     document.addEventListener('scroll', function(e) {
-      var el = e.target.closest('[data-role="scroll"]');
+      var el = closestEventTarget(e,'[data-role="scroll"]');
       if (!el) return;
       var cmd = el.getAttribute('data-scroll-cmd');
       if (cmd && typeof agentBrowser[cmd] === 'function') agentBrowser[cmd]();
@@ -282,5 +286,12 @@
     })();
   }
 
-  document.addEventListener('DOMContentLoaded', function() { initEventDelegation(); });
+  // A renderer reload can evaluate this module after DOMContentLoaded has
+  // already fired. Bind immediately in that case so the composer and other
+  // delegated controls do not become inert after a reload.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initEventDelegation);
+  } else {
+    initEventDelegation();
+  }
 })();

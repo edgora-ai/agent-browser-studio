@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getAppDataDir, getConfigPath } from "./paths.js";
+import { assertConfigSize } from "./limits.js";
 
 /**
  * Stateless transactional persistence for MgmtConfig (AR-1, single ownership).
@@ -48,12 +49,19 @@ export function transact<T>(mutate: (draft: any) => T, base?: any): T {
   const draft = structuredClone(base !== undefined ? base : requireBase());
   const result = mutate(draft);
   const normalized = normalizer ? normalizer(draft, "save") : draft;
+  // Serialize once, then size-check the FINAL text — before the tmp file
+  // exists. Measuring the draft (or the pre-normalization object) would let
+  // normalization push the result back over the read path's cap, producing a
+  // config.json the next start refuses to load. Failing here leaves no tmp
+  // behind, the original file untouched, and the cache un-re-synced.
+  const text = JSON.stringify(normalized, null, 2);
+  assertConfigSize(Buffer.byteLength(text, "utf8"));
   const tmp = getConfigPath() + ".tmp-" + randomUUID();
   const dir = path.dirname(getConfigPath());
   try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch {}
   const fd = fs.openSync(tmp, "w", 0o600);
   try {
-    fs.writeFileSync(fd, JSON.stringify(normalized, null, 2), "utf-8");
+    fs.writeFileSync(fd, text, "utf-8");
     fsyncFile(fd);
   } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, getConfigPath());

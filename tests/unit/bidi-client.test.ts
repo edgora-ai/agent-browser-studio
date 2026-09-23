@@ -24,12 +24,14 @@ import {
 } from "../../src/main/services/bidi-client.js";
 import { evaluateInPage } from "../../src/main/services/page-eval.js";
 import { bidiCookieToCookieInfo, cookieInfoToBidiCookie } from "../../src/main/services/bidi-cookie-service.js";
+import { runWithProtocolDispatchGuard } from "../../src/main/services/agent/dispatch-guard.js";
 
 let server: http.Server | null = null;
 let wss: WebSocketServer | null = null;
 let port = 0;
 
 /** Fake BiDi responder table; tests may mutate `behaviors` before a call. */
+const wireCalls: Array<{ method: string; params: any }> = [];
 const behaviors: Record<string, (params: any) => any> = {
   "session.new": () => ({ sessionId: "fake-session-1", capabilities: { webSocketUrl: "ws://127.0.0.1:0/session" } }),
   "browsingContext.getTree": () => ({ contexts: [{ context: "ctx-1", url: "about:blank", children: [], parent: null }] }),
@@ -63,6 +65,7 @@ beforeAll(async () => {
       let msg: any;
       try { msg = JSON.parse(data.toString()); } catch { return; }
       if (!msg || typeof msg.id !== "number") return;
+      wireCalls.push({ method: msg.method, params: msg.params });
       try {
         const handler = behaviors[msg.method];
         if (!handler) {
@@ -157,6 +160,38 @@ describe("bidi-client wire protocol", () => {
   it("rejects with a clear protocol error for unknown commands", async () => {
     const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
     await expect(conn.send("bogus.command", {}, 5000)).rejects.toThrow(/Unsupported BiDi method/);
+    conn.close();
+  }, 15000);
+
+  it("consults the per-call guard at the actual endpoint without poisoning a shared connection", async () => {
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    const before = wireCalls.filter((call) => call.method === "browsingContext.getTree").length;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    let rejectedChecks = 0;
+    const rejected = runWithProtocolDispatchGuard((actualPort) => {
+      if (actualPort !== port) throw new Error("unexpected BiDi endpoint");
+      rejectedChecks += 1;
+      if (rejectedChecks === 2) throw new Error("cancelled at BiDi wire dispatch");
+    }, async () => {
+      await gate;
+      return conn.send("browsingContext.getTree", {}, 5000);
+    });
+    const allowed = runWithProtocolDispatchGuard((actualPort) => {
+      if (actualPort !== port) throw new Error("unexpected BiDi endpoint");
+    }, async () => {
+      await gate;
+      return conn.send("browsingContext.getTree", {}, 5000);
+    });
+    release();
+
+    await expect(rejected).rejects.toThrow(/cancelled at BiDi wire dispatch/);
+    expect(rejectedChecks).toBe(2);
+    await expect(allowed).resolves.toMatchObject({ contexts: [{ context: "ctx-1" }] });
+    expect(wireCalls.filter((call) => call.method === "browsingContext.getTree")).toHaveLength(before + 1);
+    // A denied call did not attach cancellation state or close the cached socket.
+    await expect(conn.send("browsingContext.getTree", {}, 5000)).resolves.toMatchObject({ contexts: [{ context: "ctx-1" }] });
     conn.close();
   }, 15000);
 

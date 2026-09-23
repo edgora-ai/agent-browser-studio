@@ -198,13 +198,22 @@ function isInsideAllowedRoots(resolved: string, existingReal: string | null): bo
   return false;
 }
 
-export function assertSafeArchiveExportPath(destPath: string): string {
+/** Core export-destination check: allowed roots + no symlink escape. The
+ *  extension allowlist is the caller's, so run-result exports (.json/.csv) can
+ *  reuse this instead of re-implementing the symlink walk. */
+export function assertSafeExportPath(destPath: string, allowedExtensions: string[] | null): string {
   if (typeof destPath !== "string" || !destPath.trim()) throw new Error("Invalid export destination: empty path");
   assertNoNul(destPath);
   const resolved = path.resolve(destPath.trim());
   assertNoNul(resolved);
-  if (path.extname(resolved).toLowerCase() !== ".zip") {
-    throw new Error("Export destination must be a .zip file: " + JSON.stringify(destPath));
+  if (allowedExtensions) {
+    const ext = path.extname(resolved).toLowerCase();
+    const allowed = allowedExtensions.map((e) => (e.startsWith(".") ? e : `.${e}`).toLowerCase());
+    if (!allowed.includes(ext)) {
+      throw new Error(allowed.length === 1
+        ? `Export destination must be a ${allowed[0]} file: ${JSON.stringify(destPath)}`
+        : `Export destination must end in ${allowed.join(" or ")}: ${JSON.stringify(destPath)}`);
+    }
   }
   // Disallow obvious sensitive dotfiles even inside allowed roots? Keep minimal:
   // the allowlist already blocks ~/.zshrc etc. because homedir itself is not allowed.
@@ -242,6 +251,10 @@ export function assertSafeArchiveExportPath(destPath: string): string {
     }
   }
   return resolved;
+}
+
+export function assertSafeArchiveExportPath(destPath: string): string {
+  return assertSafeExportPath(destPath, [".zip"]);
 }
 
 export function assertSafeArchiveExportDir(destDir: string): string {

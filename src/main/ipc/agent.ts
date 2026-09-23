@@ -1,23 +1,23 @@
-import { ipcMain, clipboard } from "electron";
-import { randomUUID } from "node:crypto";
+import { ipcMain, clipboard, dialog, BrowserWindow, type WebContents } from "electron";
+import { runDesktopChat, type DesktopChatRequest } from "../services/agent/desktop-chat.js";
+import { desktopChatRuns, type ChatCancelRequest } from "../services/agent/chat-runs.js";
 import {
   getAccounts, getRedactedAccounts, addAccount, updateAccount, deleteAccount, getProfileAccounts,
   getAccountPassword, setAccountProfileIds, parseAccountsBulkText, bulkAddAccounts,
   bulkCreateProfilesWithAccounts,
-  llmChat, llmStreamChat, agentChat,
-  loadConversations, createConversation, getConversation, listConversations,
-  deleteConversation, renameConversation, addMessage,
+  llmChat,
+  createConversation, getConversation, listConversations,
+  deleteConversation, renameConversation,
   getOrDetectLlmConfig,
   getLlmConfig, redactLlmConfig, saveLlmConfig,
-  getAllowedAgentTools,
-  executeToolCall,
-  buildAgentSystemPrompt,
   repairMessageSequence,
 } from "../services/local-agent.js";
 import { agentRunRecorder } from "../services/agent-run-trace.js";
+import { runResultStore } from "../services/run-result-store.js";
+import { planExport, writeExport, type ExportPlanArgs } from "../services/agent-run-export.js";
+import { assertSafeRunExportPath } from "../services/local-export-path-guard.js";
 import { agentDbTables, agentDbTableData, agentDbQuery, agentDbExecScript } from "../services/agent-db.js";
 import { listPendingApprovals, resolveApproval } from "../services/approval-gate.js";
-import { listBrowserProfiles } from "../services/browser-manager.js";
 import type { LlmConfig, LlmMessage } from "../services/local-agent.js";
 import type { PlatformAccount } from "../services/local-agent.js";
 import {
@@ -37,6 +37,11 @@ import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "../serv
 
 function gateAccount(r: RoleCheck): void {
   if (!r.ok) throw new Error(r.error);
+}
+
+function requireChatOwner(sender: WebContents): void {
+  const window = BrowserWindow.fromWebContents(sender);
+  if (!window || window.isDestroyed() || sender.isDestroyed()) throw new Error("Untrusted desktop chat sender.");
 }
 
 export { repairMessageSequence };
@@ -82,6 +87,7 @@ export function registerAgentHandlers(): void {
       prompt: t.prompt,
       steps: t.steps,
       outputTable: t.outputTable,
+      machine: t.machine,
     }));
   });
 
@@ -168,7 +174,21 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle("agent:conversations:get", async (_event, id: string) => {
-    return getConversation(id);
+    const conversation = getConversation(id);
+    if (!conversation) return null;
+    // Message association survives trace cleanup, but a duplicated message
+    // field must not contradict the authoritative run after crash recovery or
+    // a partial two-file save. Unknown/cleared runs have no claimed end reason.
+    return { ...conversation, messages: conversation.messages.map((message) => {
+      if (!message.runId) return message;
+      const run = agentRunRecorder.getRun(message.runId);
+      const { endReason: _storedReason, ...rest } = message;
+      // M2: the authoritative run carries the real verification. Chat runs are
+      // never template-graded, so this stays unverified for them — but the
+      // value must come from the run, not be hardcoded, or a graded run shown
+      // in a conversation would contradict the Runs page.
+      return { ...rest, endReason: run?.endReason, verification: run?.verification ?? { status: "unverified" as const } };
+    }) };
   });
 
   ipcMain.handle("agent:conversations:create", async (_event, title?: string) => {
@@ -177,6 +197,7 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle("agent:conversations:delete", async (_event, id: string) => {
+    if (desktopChatRuns.hasActive(id)) throw new Error("Stop this conversation's active task before deleting it.");
     return deleteConversation(id);
   });
 
@@ -188,72 +209,24 @@ export function registerAgentHandlers(): void {
   // Chat — tool-calling agent loop
   // ════════════════════════════════════════════════════════
 
-  ipcMain.handle("agent:chat", async (event, params: {
-    conversationId: string;
-    message: string;
-  }) => {
-    const config = getLlmConfig() || getOrDetectLlmConfig();
-    if (!config) {
-      return { error: "No LLM config. Please configure your API key in the Agent → API Config tab." };
+  ipcMain.handle("agent:chat", async (event, params: DesktopChatRequest) => {
+    requireChatOwner(event.sender);
+    return runDesktopChat(event.sender, params, false);
+  });
+
+  ipcMain.handle("agent:chat-cancel", async (event, params: ChatCancelRequest) => {
+    requireChatOwner(event.sender);
+    if (!params || typeof params.conversationId !== "string"
+      || (params.runId !== undefined && typeof params.runId !== "string")
+      || (params.streamId !== undefined && typeof params.streamId !== "string")) {
+      return { accepted: false, state: "not_found", error: "Invalid task identity." };
     }
+    return desktopChatRuns.cancel(event.sender, params);
+  });
 
-    // Load conversation
-    const conv = getConversation(params.conversationId);
-    if (!conv) {
-      return { error: "Conversation not found." };
-    }
-
-    addMessage(params.conversationId, "user", params.message);
-
-    // Build history from the snapshot (captured BEFORE addMessage above), then
-    // push the current message explicitly. repairMessageSequence collapses any
-    // resulting consecutive same-role turns.
-    const recentMsgs = conv.messages
-      .filter(m => m.role === "user" || m.role === "assistant")
-      .slice(-40);
-    let llmMsgs: LlmMessage[] = recentMsgs.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
-    llmMsgs.push({ role: "user", content: params.message });
-    llmMsgs = repairMessageSequence(llmMsgs);
-
-    try {
-      const result = await agentChat(config, llmMsgs, { webContents: event.sender });
-      if (result.error) {
-        // Persist an assistant error reply so the next turn's history stays a
-        // valid [user, assistant] pair instead of leaving an orphaned user.
-        addMessage(params.conversationId, "assistant", `❌ ${result.error}`, []);
-        return { error: result.error };
-      }
-
-      // Select LAST assistant response (not intermediate tool-call message)
-      const finalMsg = [...result.messages].reverse().find(m => m.role === "assistant" && m.content);
-      const reply = finalMsg?.content || "(no response)";
-
-      if (!finalMsg?.content) {
-        addMessage(params.conversationId, "assistant", "❌ Agent did not return a final response.", []);
-        return { error: "Agent did not return a final response." };
-      }
-
-      const redactedToolCalls = result.messages.flatMap(m =>
-        m.tool_calls?.map(tc => ({
-          name: tc.function.name,
-          redacted: true,
-        })) || []
-      );
-
-      // Save assistant reply without raw tool arguments; they may contain typed secrets.
-      addMessage(params.conversationId, "assistant", reply, redactedToolCalls);
-
-      return {
-        reply,
-        toolCalls: redactedToolCalls,
-      };
-    } catch (e: any) {
-      addMessage(params.conversationId, "assistant", `❌ ${e.message || String(e)}`, []);
-      return { error: e.message || String(e) };
-    }
+  ipcMain.handle("agent:chat-active", async (event, conversationId: string) => {
+    requireChatOwner(event.sender);
+    return typeof conversationId === "string" ? desktopChatRuns.snapshot(event.sender, conversationId) : null;
   });
 
   // Simple chat (no tools) for quick conversations
@@ -280,168 +253,9 @@ export function registerAgentHandlers(): void {
   // Streaming Chat (SSE-style) — pushes chunks via webContents.send
   // ════════════════════════════════════════════════════════
 
-  ipcMain.handle("agent:chat-stream", async (event, params: {
-    conversationId: string;
-    message: string;
-    streamId?: string;
-  }) => {
-    const streamId = params.streamId || randomUUID();
-    const config = getLlmConfig() || getOrDetectLlmConfig();
-    if (!config) {
-      event.sender.send("agent:stream-error", { error: "No LLM config", streamId });
-      return { error: "No LLM config", streamId };
-    }
-
-    const conv = getConversation(params.conversationId);
-    if (!conv) {
-      event.sender.send("agent:stream-error", { error: "Conversation not found", streamId });
-      return { error: "Conversation not found", streamId };
-    }
-
-    addMessage(params.conversationId, "user", params.message);
-
-    // Build history from the conversation snapshot. NOTE: `conv` was captured
-    // BEFORE addMessage() above, so the snapshot does NOT include the current
-    // message — we push it explicitly. repairMessageSequence then collapses any
-    // consecutive same-role turns (e.g. orphaned users from prior failed runs
-    // merging with this one) so Claude-format backends don't 400.
-    const recentMsgs = conv.messages
-      .filter(m => m.role === "user" || m.role === "assistant")
-      .slice(-40);
-    let llmMsgs: LlmMessage[] = recentMsgs.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
-    llmMsgs.push({ role: "user", content: params.message });
-    llmMsgs = repairMessageSequence(llmMsgs);
-    // Inject the system prompt (with currently-running profile ports) at the
-    // front so the model knows which CDP port to use without asking the user.
-    llmMsgs.unshift({
-      role: "system",
-      content: buildAgentSystemPrompt(
-        listBrowserProfiles()
-          .filter((p) => p.running && p.cdpPort)
-          .map((p) => ({ name: p.name, dirId: p.dirId, cdpPort: p.cdpPort })),
-      ),
-    });
-
-    const sendChunk = (text: string) => {
-      event.sender.send("agent:stream-chunk", { text, streamId });
-    };
-    const sendToolCall = (tc: { id: string; name: string; arguments: string }) => {
-      event.sender.send("agent:stream-tool-call", { id: tc.id, name: tc.name, arguments: "{}", redacted: true, streamId });
-    };
-    const sendDone = () => {
-      event.sender.send("agent:stream-done", { streamId });
-    };
-    const sendError = (error: string) => {
-      event.sender.send("agent:stream-error", { error, streamId });
-    };
-
-    const allowedTools = getAllowedAgentTools();
-    const allowedToolNames = new Set(allowedTools.map((t: any) => t.function.name));
-
-    // Multi-round tool-calling loop (max 6 rounds). Each round streams text to
-    // the UI; if the model emits tool_calls we execute them, feed the results
-    // back, and stream again. onDone is only emitted after the final round.
-    const MAX_TOOL_ROUNDS = 25;
-    let reply = "";
-    const allToolCalls: any[] = [];
-    const allRedactedToolCalls: any[] = [];
-
-    // Start a traceable run for this chat invocation.
-    const run = agentRunRecorder.startRun({
-      source: { type: "chat", conversationId: params.conversationId },
-      name: (params.message || "Agent chat").slice(0, 120),
-      webContents: event.sender,
-    });
-
-    const streamController = new AbortController();
-    const streamTimer = setTimeout(() => streamController.abort(), 120000);
-    try {
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const isFinalRound = round === MAX_TOOL_ROUNDS - 1;
-        const result = await llmStreamChat(config, llmMsgs, allowedTools, {
-          onText: sendChunk,
-          onToolCall: sendToolCall,
-          // Suppress the per-round done signal — we emit a single sendDone
-          // after the loop completes.
-          onDone: isFinalRound ? sendDone : undefined,
-          signal: streamController.signal,
-        });
-
-        if (result.content) reply += result.content;
-
-        // No tool calls → this round is the answer.
-        if (!result.tool_calls || result.tool_calls.length === 0) {
-          if (!isFinalRound) sendDone();
-          break;
-        }
-
-        // Record the assistant turn (with its tool_calls) and execute each.
-        llmMsgs.push({
-          role: "assistant",
-          content: result.content || "",
-          tool_calls: result.tool_calls,
-        });
-        allToolCalls.push(...result.tool_calls);
-
-        for (const tc of result.tool_calls) {
-          allRedactedToolCalls.push({ name: tc.function.name, redacted: true });
-          let args: any = {};
-          try { args = JSON.parse(tc.function.arguments || "{}"); }
-          catch { args = {}; }
-          const stepStart = Date.now();
-          let toolResult: any;
-          let stepOk = true;
-          let stepError: string | undefined;
-          try {
-            toolResult = await executeToolCall(tc.function.name, args, allowedToolNames, { runId: run.id, webContents: event.sender, signal: streamController.signal });
-          } catch (e: any) {
-            stepOk = false;
-            stepError = e.message || String(e);
-            toolResult = { error: stepError };
-          }
-          // Record the step in the run trace (recorder redacts args/result).
-          agentRunRecorder.recordStep(run.id, {
-            tool: tc.function.name,
-            args,
-            result: toolResult,
-            ok: stepOk,
-            error: stepError,
-            durationMs: Date.now() - stepStart,
-          });
-          // Feed the tool result back for the next round (both OpenAI + Claude
-          // field names for compatibility).
-          llmMsgs.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            call_id: tc.id,
-            name: tc.function.name,
-            content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
-          } as any);
-        }
-        // Continue to next round: the model will stream its follow-up answer.
-      }
-      agentRunRecorder.finishRun(run.id, "done");
-    } catch (e: any) {
-      const errMsg = e?.name === "AbortError" ? "LLM stream timed out" : (e.message || String(e));
-      agentRunRecorder.finishRun(run.id, "error", errMsg);
-      sendError(errMsg);
-      // Persist an assistant error reply so the next turn's history is a valid
-      // [user, assistant] pair. Without this, a failed run leaves an orphaned
-      // user message — and retries accumulate consecutive user turns that
-      // Claude-format backends reject ("tool_use without tool_result").
-      const partial = reply ? `${reply}\n\n❌ ${errMsg}` : `❌ ${errMsg}`;
-      addMessage(params.conversationId, "assistant", partial, allRedactedToolCalls);
-      return { error: errMsg };
-    } finally {
-      clearTimeout(streamTimer);
-    }
-
-    addMessage(params.conversationId, "assistant", reply, allRedactedToolCalls);
-
-    return { reply, toolCalls: allRedactedToolCalls, runId: run.id };
+  ipcMain.handle("agent:chat-stream", async (event, params: DesktopChatRequest) => {
+    requireChatOwner(event.sender);
+    return runDesktopChat(event.sender, params, true);
   });
 
   // ════════════════════════════════════════════════════════
@@ -547,6 +361,86 @@ export function registerAgentHandlers(): void {
       const { steps, ...summary } = run;
       return { ...summary, stepCount: steps.length };
     });
+  });
+
+  // ── M2: run results ──
+
+  /** Paged preview of a run's stored dataset. Integrity failures return an
+   *  error and NO rows — a payload whose hash no longer matches must never be
+   *  rendered as if it were the committed result. */
+  ipcMain.handle("agent-run:results-preview", async (_event, params?: { runId?: string; artifactId?: string; offset?: number; limit?: number }) => {
+    const runId = String(params?.runId || "");
+    if (!runId) return { ok: false, error: "runId is required" };
+    const artifactId = params?.artifactId ? String(params.artifactId) : undefined;
+    const res = runResultStore.readDatasetPreview(
+      runId,
+      artifactId || "dataset",
+      Number(params?.offset) || 0,
+      Number(params?.limit) || 100,
+    );
+    if (!res.ok) return { ok: false, error: res.detail, reasonCode: res.reasonCode };
+    return { ok: true, ...res.value };
+  });
+
+  ipcMain.handle("agent-run:export-plan", async (_event, params?: { runId?: string; artifactId?: string; kind?: string }) => {
+    const kind = params?.kind;
+    if (kind !== "summary-json" && kind !== "dataset-csv" && kind !== "file") {
+      return { ok: false, error: `unknown export kind: ${JSON.stringify(kind)}` };
+    }
+    const plan = planExport({ runId: String(params?.runId || ""), artifactId: params?.artifactId ? String(params.artifactId) : undefined, kind });
+    if (!plan.ok) return { ok: false, error: plan.detail, reasonCode: plan.reasonCode };
+    return { ok: true, plan };
+  });
+
+  ipcMain.handle("agent-run:export-write", async (event, params?: { runId?: string; artifactId?: string; kind?: string; destPath?: string }) => {
+    const kind = params?.kind;
+    if (kind !== "summary-json" && kind !== "dataset-csv" && kind !== "file") {
+      return { ok: false, error: `unknown export kind: ${JSON.stringify(kind)}` };
+    }
+    const runId = String(params?.runId || "");
+    const artifactId = params?.artifactId ? String(params.artifactId) : undefined;
+    // Annotated: an object literal widens the narrowed literal back to string.
+    const args: ExportPlanArgs = { runId, artifactId, kind };
+
+    // The plan is what the user approved — show it, then write.
+    const plan = planExport(args);
+    if (!plan.ok) return { ok: false, error: plan.detail, reasonCode: plan.reasonCode };
+
+    let destPath = typeof params?.destPath === "string" ? params.destPath.trim() : "";
+    let fromDialog = false;
+    if (!destPath) {
+      const dlgOpts = {
+        title: "Export Run Result",
+        defaultPath: plan.suggestedName,
+        filters: [{ name: plan.format.toUpperCase(), extensions: [plan.extension].filter(Boolean) }],
+      };
+      // Electron's overloads are (window, options) or (options) — passing an
+      // explicit undefined as the window is not a documented form.
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      const r = parent ? await dialog.showSaveDialog(parent, dlgOpts) : await dialog.showSaveDialog(dlgOpts);
+      if (r.canceled || !r.filePath) return { ok: false, error: "cancelled", reasonCode: "cancelled" };
+      destPath = r.filePath;
+      fromDialog = true;
+    }
+    try {
+      // Dialog paths are user-chosen but still guarded: the guard's job is to
+      // stop escapes and wrong extensions, not to second-guess the user.
+      destPath = assertSafeRunExportPath(destPath, kind === "summary-json" ? "json" : kind === "dataset-csv" ? "csv" : "original");
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e), reasonCode: "invalid_path" };
+    }
+
+    const res = writeExport({ ...args, destPath });
+    if (!res.ok) return { ok: false, error: res.detail, reasonCode: res.reasonCode };
+    recordAudit({
+      category: "run",
+      action: kind === "summary-json" ? "export-run-summary" : kind === "dataset-csv" ? "export-run-dataset" : "export-run-file",
+      target: runId,
+      actor: "user",
+      // Never the full path or any payload content.
+      detail: JSON.stringify({ format: plan.format, rows: res.rows ?? null, bytes: res.bytes, verification: plan.verification?.status ?? "unverified", viaDialog: fromDialog }),
+    });
+    return { ok: true, filePath: res.filePath, bytes: res.bytes, rows: res.rows };
   });
 
   ipcMain.handle("agent-run:get", async (_event, runId: string) => {

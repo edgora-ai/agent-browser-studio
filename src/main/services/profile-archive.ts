@@ -128,6 +128,7 @@ function sanitizeImportedMeta(raw: any): Record<string, unknown> {
     screenHeight: isInt(raw?.screenHeight) ? raw.screenHeight : null,
     storageQuota: isInt(raw?.storageQuota) ? raw.storageQuota : null,
     taskbarHeight: isInt(raw?.taskbarHeight) ? raw.taskbarHeight : null,
+    renderScaleMode: mode(raw?.renderScaleMode, ["native", "strict"], "native"),
     windowTitlePrefix: raw?.windowTitlePrefix === null ? null : (isStr(raw?.windowTitlePrefix) ? raw.windowTitlePrefix.slice(0, 64) : undefined),
     fontsDir: str(raw?.fontsDir, 500, null),
     proxyMode: mode(raw?.proxyMode, ["none", "default", "named"], "default"),

@@ -11,6 +11,22 @@ export interface TaskTemplateInput {
   example?: string;
 }
 
+/**
+ * Machine-checkable execution contract (M2). When present, the template
+ * writes into a main-process-CONTROLLED table (pre-created, never DDL'd by
+ * the agent) and a registered verifier in run-verifiers.ts can grade the
+ * run's actual rows. Templates without a contract stay prompt-guided only —
+ * their runs keep verification "unverified".
+ */
+export interface TaskTemplateMachineContract {
+  /** Contract version; bump when the table shape or row rules change. */
+  version: number;
+  /** Registered verifier id (run-verifiers.ts). */
+  verifierId: string;
+  /** Controlled physical table + business columns (run_id is implicit). */
+  table: { name: string; columns: string[] };
+}
+
 export interface TaskTemplate {
   id: string;
   title: string;
@@ -32,6 +48,8 @@ export interface TaskTemplate {
   outputTable?: { name: string; columns: string[] };
   /** Ordered step outline the agent should follow. */
   steps: string[];
+  /** Machine-checkable contract (M2); absent → prompt-guided only. */
+  machine?: TaskTemplateMachineContract;
 }
 
 export const TASK_TEMPLATES: TaskTemplate[] = [
@@ -63,24 +81,30 @@ export const TASK_TEMPLATES: TaskTemplate[] = [
     id: "news-collect",
     title: "新闻/资讯采集",
     category: "data",
-    description: "从搜索结果页提取前 N 条新闻,存入 news 表。",
+    description: "从列表/搜索结果页提取前 N 条新闻,写入系统受控表 news_run_results_v1(按 run 隔离,可机器验收)。",
     riskLevel: "low",
     requiredInputs: [
       { key: "sourceUrl", label: "资讯/搜索结果 URL", description: "需要采集的列表页或搜索结果页。", required: true },
       { key: "limit", label: "条数", description: "默认前 10 条。", required: false, example: "10" },
     ],
     tools: ["browser_navigate", "browser_wait_for_load", "browser_evaluate", "db_exec"],
-    successCriteria: ["news 表存在", "写入 title/url/source/published_at", "URL 去重", "总结采集条数"],
-    examplePrompt: "用 news-collect 模板从这个搜索结果页采集前 10 条新闻并写入 news 表: https://example.com/search?q=market",
-    prompt: "从指定搜索结果页提取前10条新闻,存入 news 表:title/url/source/published_at。",
-    outputTable: { name: "news", columns: ["title", "url", "source", "published_at"] },
+    successCriteria: ["news_run_results_v1 中本 run_id 下有 limit 条有效行", "每行 title/url/source/published_at 均有效", "URL 在同一 run 内去重", "总结采集条数"],
+    examplePrompt: "用 news-collect 模板从这个搜索结果页采集前 10 条新闻: https://example.com/search?q=market",
+    prompt: "从 sourceUrl 指定的页面提取前 limit 条新闻,按执行合同逐条写入受控表 news_run_results_v1。",
+    outputTable: { name: "news_run_results_v1", columns: ["title", "url", "source", "published_at"] },
     steps: [
-      "db_exec: CREATE TABLE IF NOT EXISTS news (id INTEGER PRIMARY KEY, title TEXT, url TEXT UNIQUE, source TEXT, published_at TEXT)",
-      "browser_navigate + browser_wait_for_load",
-      "browser_evaluate: 提取 [...items].map(e=>({title,url,source}))",
-      "db_exec: 多行参数化 INSERT",
-      "总结条数",
+      "受控表 news_run_results_v1 由系统预建(禁止 CREATE/DROP/ALTER)",
+      "browser_navigate + browser_wait_for_load 打开 sourceUrl",
+      "browser_evaluate: 提取 [...items].map(e=>({title,url,source,published_at}))",
+      "db_exec: 逐条参数化 INSERT INTO news_run_results_v1 (run_id, title, url, source, published_at) VALUES (?,?,?,?,?),run_id 使用执行合同给出的值",
+      "重复 URL 会被 UNIQUE(run_id,url) 拒绝,跳过该条继续",
+      "总结实际写入条数",
     ],
+    machine: {
+      version: 1,
+      verifierId: "news-collect.dataset",
+      table: { name: "news_run_results_v1", columns: ["title", "url", "source", "published_at"] },
+    },
   },
   {
     id: "account-check",
@@ -548,7 +572,8 @@ export function getTemplate(id: string): TaskTemplate | undefined {
 /** Render the template catalog for injection into the agent system prompt. */
 export function renderTemplateCatalog(): string {
   const lines = TASK_TEMPLATES.map((t) => {
-    const cols = t.outputTable ? ` → 表 ${t.outputTable.name}(${t.outputTable.columns.join(", ")})` : "";
+    const table = t.machine?.table ?? t.outputTable;
+    const cols = table ? ` → 表 ${table.name}(${table.columns.join(", ")})${t.machine ? "[系统预建,禁DDL]" : ""}` : "";
     const inputs = t.requiredInputs.filter((i) => i.required).map((i) => i.key).join(", ") || "none";
     return `- 【${t.id}】${t.title} [risk:${t.riskLevel}; tools:${t.tools.join("/")}; inputs:${inputs}]${cols}: ${t.description} 成功标准:${t.successCriteria.join("; ")}`;
   });
@@ -558,6 +583,6 @@ export function renderTemplateCatalog(): string {
     "",
     ...lines,
     "",
-    "执行模板时:先确认必要输入,再 db_exec 建表(CREATE TABLE IF NOT EXISTS),按 steps 顺序用 browser_*/http_request/db_exec 执行,最后按 successCriteria 汇报。高风险模板或 http_request POST/PUT/PATCH/DELETE 会触发用户审批,拒绝时必须停止外部写入并汇报。不要每次重新发明流程。",
+    "执行模板时:先确认必要输入。标注[系统预建]的表已由主进程创建,禁止对其 CREATE/DROP/ALTER,只按执行合同写入并带上给定的 run_id;其他模板先 db_exec 建表(CREATE TABLE IF NOT EXISTS)。按 steps 顺序用 browser_*/http_request/db_exec 执行,最后按 successCriteria 汇报。高风险模板或 http_request POST/PUT/PATCH/DELETE 会触发用户审批,拒绝时必须停止外部写入并汇报。不要每次重新发明流程。",
   ].join("\n");
 }

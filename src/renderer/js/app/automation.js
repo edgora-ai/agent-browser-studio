@@ -216,16 +216,149 @@
     var id = document.getElementById('auto-action-template').value;
     var tpl = taskTemplates.find(function(t) { return t.id === id; });
     var hint = document.getElementById('auto-template-hint');
-    if (!tpl) { hint.textContent = ''; return; }
+    if (!tpl) { hint.textContent = ''; renderTemplateInputs(null); return; }
     hint.textContent = t('auto.hint', 'risk={risk} · tools={tools} · success={success}')
       .replace('{risk}', String(tpl.riskLevel))
       .replace('{tools}', (tpl.tools || []).join(', '))
       .replace('{success}', (tpl.successCriteria || []).slice(0, 2).join('; '));
     document.getElementById('auto-action-prompt').value = templatePrompt(tpl);
+    renderTemplateInputs(tpl);
+  }
+
+  // M2: templates with a machine contract expose their requiredInputs as
+  // structured fields persisted into action.templateInputs. The main process
+  // re-validates authoritatively; these fields are UX-level prefill/edit.
+  var editingTemplateInputs = {};
+
+  function renderTemplateInputs(tpl) {
+    var row = document.getElementById('auto-template-inputs-row');
+    var box = document.getElementById('auto-template-inputs');
+    if (!row || !box) return;
+    if (!tpl || !tpl.machine) { row.style.display = 'none'; box.innerHTML = ''; return; }
+    row.style.display = '';
+    box.innerHTML = '';
+    (tpl.requiredInputs || []).forEach(function(input) {
+      var wrap = document.createElement('div');
+      var label = document.createElement('label');
+      label.setAttribute('for', 'auto-ti-' + input.key);
+      label.textContent = input.key + (input.required ? ' ' + t('auto.template-required', '(必填)') : ' ' + t('auto.template-optional', '(可选)'));
+      var field = document.createElement('input');
+      field.type = 'text';
+      field.id = 'auto-ti-' + input.key;
+      field.dataset.templateInputKey = input.key;
+      field.value = editingTemplateInputs[input.key] || '';
+      if (input.example) field.placeholder = input.example;
+      if (input.description) field.title = input.description;
+      wrap.appendChild(label);
+      wrap.appendChild(field);
+      box.appendChild(wrap);
+    });
+  }
+
+  /** Collect structured inputs for a machine-contract template. Returns null
+   *  (and toasts) when a required input is empty. */
+  function collectTemplateInputs(tpl) {
+    var inputs = {};
+    var missing = null;
+    document.querySelectorAll('#auto-template-inputs [data-template-input-key]').forEach(function(field) {
+      var key = field.dataset.templateInputKey;
+      var value = field.value.trim();
+      if (value) { inputs[key] = value; return; }
+      var spec = (tpl.requiredInputs || []).find(function(i) { return i.key === key; });
+      if (spec && spec.required) missing = key;
+    });
+    if (missing) {
+      toast(t('auto.error.missing-template-input', '请填写必填模板输入:') + ' ' + missing, 'error');
+      return null;
+    }
+    return inputs;
+  }
+
+  // ── M3: schedule state ──
+  // ruleId -> RuleScheduleState from the scheduler. Fetched SEPARATELY from
+  // the rule list, and never written back into it: the editor and the toggle
+  // send the whole rule object, so mixing display fields into the rule payload
+  // would give them a path into config. Keeping them apart is what makes "a
+  // badge cannot change scheduling" structural rather than a review promise.
+  var scheduleStates = {};
+
+  /** Badge class + label for a phase. The label states what the scheduler will
+   *  actually do — "Enabled" on a permanently dead rule is the bug M3 removes. */
+  function phaseBadge(state) {
+    if (!state) return { cls: 'status-stopped', label: t('auto.loading', '加载中…') };
+    // Classes are the ones style.css actually defines (status-running /
+    // -stopped / -done / -failed / -warn). An invented class name renders an
+    // unstyled badge, so this map is checked against the stylesheet.
+    var cls = 'status-stopped';
+    if (state.phase === 'running') cls = 'status-running';
+    else if (state.phase === 'scheduled-once' || state.phase === 'scheduled-cron') cls = 'status-done';
+    else if (state.phase === 'retry-waiting' || state.phase === 'queued') cls = 'status-warn';
+    else if (state.phase === 'missed-once' || state.phase === 'invalid-cron') cls = 'status-failed';
+    return { cls: cls, label: t('auto.phase.' + state.phase, state.phase) };
+  }
+
+  /** A local-time rendering of an instant, labelled with the host zone. */
+  function fmtWhen(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms)) return '';
+    try { return new Date(ms).toLocaleString(); } catch (e) { return String(ms); }
+  }
+
+  function scheduleRows(state) {
+    if (!state) return '';
+    var rows = '';
+    // Next run. Read from the state the SCHEDULER computed — never from a
+    // frontend date comparison against trigger.at.
+    if (state.nextRunAt) {
+      var label = state.phase === 'retry-waiting' ? t('auto.row.retry-at', '重试于') : t('auto.row.next', '下次');
+      var hint = state.nextRunSource === 'computed' ? ' <span style="color:var(--text-muted);font-size:11px;">' + esc(t('auto.row.computed-hint', '（按表达式计算，尚未进入触发窗口）')) + '</span>' : '';
+      rows += '<div class="info-row"><span>' + esc(label) + '</span><span class="num" title="' + escAttr(fmtWhen(state.nextRunAt)) + '" style="font-size:12px;">' + esc(helpers.relTime ? helpers.relTime(state.nextRunAt) : fmtWhen(state.nextRunAt)) + hint + '</span></div>';
+    } else if (state.phase === 'missed-once' || state.phase === 'user-disabled' || state.phase === 'disabled-after-success') {
+      rows += '<div class="info-row"><span>' + esc(t('auto.row.next', '下次')) + '</span><span style="font-size:12px;color:var(--text-muted);">' + esc(t('auto.row.next.none', '无')) + '</span></div>';
+    }
+    if (state.cooldownUntil) {
+      rows += '<div class="info-row"><span>' + esc(t('auto.row.cooldown-until', '冷却至')) + '</span><span class="num" title="' + escAttr(fmtWhen(state.cooldownUntil)) + '" style="font-size:12px;">' + esc(helpers.relTime ? helpers.relTime(state.cooldownUntil) : fmtWhen(state.cooldownUntil)) + '</span></div>';
+    }
+    // A once keeps showing its planned instant even when missed, so the user
+    // can see WHAT was missed before deciding to reschedule.
+    if (state.phase === 'missed-once' && state.onceAt) {
+      rows += '<div class="info-row"><span>' + esc(t('auto.row.once-at', '计划于')) + '</span><span class="num" title="' + escAttr(fmtWhen(state.onceAt)) + '" style="font-size:12px;">' + esc(fmtWhen(state.onceAt)) + '</span></div>';
+      rows += '<div class="info-row"><span></span><span style="font-size:12px;color:var(--text-muted);">' + esc(t('auto.missed.hint', '这次执行的时间已过，且没有待执行的工作。它不会自动补跑。')) + '</span></div>';
+    }
+    // Timezone: DISPLAY ONLY. The scheduler still interprets cron in host-local
+    // time; showing the zone is what stops a cross-zone user misreading it.
+    if (state.timezone && (state.phase === 'scheduled-once' || state.phase === 'scheduled-cron' || state.phase === 'missed-once')) {
+      rows += '<div class="info-row"><span>' + esc(t('auto.row.tz', '时区')) + '</span><span style="font-size:12px;color:var(--text-muted);">' + esc(state.timezone) + '</span></div>';
+    }
+    if (state.degraded) {
+      rows += '<div class="info-row"><span></span><span style="font-size:12px;color:var(--text-muted);">' + esc(t('auto.row.plan-none', '本计划尚无结果记录')) + '</span></div>';
+    }
+    return rows;
+  }
+
+  /** Extra actions a phase unlocks. `data-cmd` values are dispatched in the
+   *  card's click handler below, so a missing branch is a dead button. */
+  function scheduleActions(state) {
+    if (!state) return '';
+    if (state.phase === 'missed-once') {
+      return '<button class="btn btn-primary btn-sm" data-rule-action="reschedule">' + esc(t('auto.btn.reschedule', '重新安排')) + '</button>' +
+             '<button class="btn btn-secondary btn-sm" data-rule-action="toggle">' + esc(t('auto.btn.disable', '停用')) + '</button>';
+    }
+    return '';
   }
 
   // R15 UX P1-7: list failure gets an error state + retry, not a stuck Loading.
   agentBrowser.loadAutomationTab = function() {
+    // State and rules are fetched in parallel; a state failure must not hide
+    // the rules, so it degrades to "no state" rather than rejecting.
+    var statePromise = lcall("automation.schedule-state", function () { return api.automation.scheduleState(); })
+      .then(function (r) {
+        scheduleStates = {};
+        if (r && r.success && Array.isArray(r.states)) {
+          r.states.forEach(function (s) { scheduleStates[s.ruleId] = s; });
+        }
+        return r;
+      })
+      .catch(function () { scheduleStates = {}; return null; });
     lcall("automation.list", function () { return api.automation.list(); }).then(function(rules) {
       currentRules = rules || [];
       var el = document.getElementById('automation-list');
@@ -233,13 +366,17 @@
         if (window.agentBrowser && window.agentBrowser.renderViewState) { window.agentBrowser.renderViewState(el, { empty: t('auto.empty-state','暂无任务'), cta:{label:'新建任务',cmd:'automationNew'}}); } else el.innerHTML = '<div class="empty-state">' + t('auto.empty-state', '还没有自动化任务。<br>点「+ 新建任务」创建,或让 Agent 帮你建(在 Agent 里说"每天9点启动demo")。') + '</div>';
       } else {
         el.innerHTML = rules.map(function(r) {
+          var state = scheduleStates[r.id];
+          var badge = phaseBadge(state);
           return '<div class="profile-card" data-rule-id="' + escAttr(r.id) + '">' +
             '<div class="card-header card-head-inline"><span class="name">' + esc(r.name) + '</span>' +
-              '<span class="status-badge ' + (r.enabled ? 'status-running' : 'status-stopped') + '">' + esc(r.enabled ? t('auto.enabled','启用') : t('auto.disabled','停用')) + '</span></div>' +
+              '<span class="status-badge ' + badge.cls + '">' + esc(badge.label) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.trigger','触发')) + '</span><span style="font-size:12px;">' + describeTrigger(r.trigger) + '</span></div>' +
             '<div class="info-row"><span>' + esc(t('auto.row.action','动作')) + '</span><span style="font-size:12px;">' + describeAction(r.action) + '</span></div>' +
+            scheduleRows(state) +
             (r.lastRunAt ? '<div class="info-row"><span>' + esc(t('auto.row.last','上次')) + '</span><span class="num" title="' + escAttr(new Date(r.lastRunAt).toLocaleString()) + '" style="font-size:11px;color:' + (r.lastResult && !r.lastResult.includes('error') && !r.lastResult.includes('failed') ? 'var(--success-text)' : 'var(--text-muted)') + ';">' + esc(helpers.relTime ? helpers.relTime(r.lastRunAt) : new Date(r.lastRunAt).toLocaleString()) + '</span></div>' : '') +
             '<div class="card-actions">' +
+              scheduleActions(state) +
               '<button class="btn btn-secondary btn-sm" data-rule-action="toggle">' + esc(r.enabled ? t('auto.disabled','停用') : t('auto.enabled','启用')) + '</button>' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="test">' + esc(t('auto.btn.test','测试运行')) + '</button>' +
               '<button class="btn btn-secondary btn-sm" data-rule-action="edit">' + esc(t('auto.btn.edit','编辑')) + '</button>' +
@@ -258,6 +395,7 @@
           else if (action === 'test') agentBrowser.automationTest(ruleId);
           else if (action === 'edit') agentBrowser.automationEdit(rule);
           else if (action === 'delete') agentBrowser.automationDelete(ruleId);
+          else if (action === 'reschedule') agentBrowser.automationReschedule(ruleId);
         };
       }
     }).catch(function(e) {
@@ -410,7 +548,9 @@
     document.getElementById('auto-action-template').value = (rule && rule.action.templateId) || '';
     document.getElementById('auto-template-hint').textContent = '';
     document.getElementById('auto-action-prompt').value = '';
+    editingTemplateInputs = (rule && rule.action.templateInputs) || {};
     if (rule && rule.action.templateId) applyTemplateSelection();
+    else renderTemplateInputs(null);
     if (rule && rule.action.agentPrompt) document.getElementById('auto-action-prompt').value = rule.action.agentPrompt;
     document.getElementById('auto-action-js').value = (rule && rule.action.jsCode) || '';
     document.getElementById('auto-enabled').checked = rule ? rule.enabled : true;
@@ -483,6 +623,12 @@
     if (actionType === 'agent-task') {
       action.templateId = document.getElementById('auto-action-template').value || undefined;
       action.agentPrompt = document.getElementById('auto-action-prompt').value.trim();
+      var selectedTpl = taskTemplates.find(function(x) { return x.id === action.templateId; });
+      if (selectedTpl && selectedTpl.machine) {
+        var collected = collectTemplateInputs(selectedTpl);
+        if (!collected) return;
+        action.templateInputs = collected;
+      }
     }
     if (actionType === 'custom-js') action.jsCode = document.getElementById('auto-action-js').value;
     var enabled = document.getElementById('auto-enabled').checked;
@@ -534,5 +680,180 @@
         agentBrowser.loadAutomationTab();
       }).catch(function(e) { toast((e && e.message) || String(e), 'error'); });
     });
+  };
+
+  // ── M3: reschedule a missed one-time rule ──
+  // The ONLY way out of missed-once. Rescheduling mints a new planId in the
+  // main process, so this dialog deliberately does not offer "run it now":
+  // a catch-up run is exactly what the milestone refuses to do silently.
+
+  /** Epoch ms → the "YYYY-MM-DDTHH:MM:SS" a datetime-local input expects.
+   *  Built from local getters (not toISOString, which is UTC and would show
+   *  the user a time shifted by their offset). */
+  function toLocalInputValue(ms) {
+    var d = new Date(ms);
+    var pad = function(n){ return n < 10 ? '0' + n : String(n); };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  agentBrowser.automationReschedule = function(ruleId) {
+    var dlg = document.getElementById('dlg-auto-reschedule');
+    if (!dlg || !ruleId) return;
+    // The button lives on a card, so the list is normally already in memory —
+    // but this must not DEPEND on that. A programmatic call (or a list that
+    // failed to load) would otherwise report a bogus "not found" for a rule
+    // that exists.
+    var known = currentRules.some(function(x){ return x.id === ruleId; });
+    var ready = known
+      ? Promise.resolve(true)
+      : lcall("automation.list", function() { return api.automation.list(); })
+          .then(function(rules) {
+            currentRules = rules || [];
+            return currentRules.some(function(x){ return x.id === ruleId; });
+          })
+          .catch(function() { return false; });
+    ready.then(function(ok) {
+      if (!ok) { toast(t('auto.jobs.not-found', 'Job 不存在'), 'error'); return; }
+      var state = scheduleStates[ruleId];
+      document.getElementById('auto-reschedule-id').value = ruleId;
+      // Default: one hour from now, or one hour after the missed instant if
+      // that is further out — so the prefill is in the future even when the
+      // rule was missed days ago.
+      var base = Math.max(Date.now(), (state && state.onceAt) || 0);
+      document.getElementById('auto-reschedule-at').value = toLocalInputValue(base + 3600000);
+      dlg.showModal();
+    });
+  };
+
+  agentBrowser.saveAutomationReschedule = function() {
+    var ruleId = document.getElementById('auto-reschedule-id').value;
+    var raw = document.getElementById('auto-reschedule-at').value;
+    var at = new Date(raw).getTime();
+    if (!ruleId) return;
+    if (!raw || isNaN(at)) { toast(t('auto.error.invalid-time','执行时间无效'), 'error'); return; }
+    // Checked here so the user gets an immediate, specific message; the main
+    // process checks it again (rescheduleOnceRule), which is what actually
+    // enforces it — a renderer check is UX, never the guarantee.
+    if (at <= Date.now()) { toast(t('auto.error.reschedule-future','请选择一个将来的时间'), 'error'); return; }
+    var btn = document.querySelector('#dlg-auto-reschedule button[type="submit"]');
+    if (btn) btn.setAttribute('disabled', 'disabled');
+    api.automation.rescheduleOnce({ ruleId: ruleId, at: at }).then(function(r) {
+      if (btn) btn.removeAttribute('disabled');
+      if (r && r.success === false) { toast(r.error || t('toast.failed','操作失败'), 'error'); return; }
+      document.getElementById('dlg-auto-reschedule').close();
+      toast(t('auto.saved','已更新'), 'success');
+      agentBrowser.loadAutomationTab();
+    }).catch(function(e) {
+      if (btn) btn.removeAttribute('disabled');
+      toast((e && e.message) || String(e), 'error');
+    });
+  };
+
+  // ── M3: terminal alerts ──
+  // The main process broadcasts after the durable row is written, so a missed
+  // broadcast (window closed) loses nothing: the record is in the store and
+  // the Jobs list still shows it.
+
+  /** Kind → toast label key. `missed` is not an execution, so it has no run. */
+  var NOTIFY_LABEL = {
+    done: 'auto.notify.toast.done',
+    failed: 'auto.notify.toast.failed',
+    cancelled: 'auto.notify.toast.cancelled',
+    missed: 'auto.notify.toast.missed',
+  };
+
+  function onRunFinished(p) {
+    if (!p) return;
+    var key = NOTIFY_LABEL[p.kind];
+    if (!key) return;
+    var label = t(key, p.kind) + (p.ruleName || '');
+    var opts = {};
+    // A failure is sticky: it is the one outcome the user must not miss by
+    // looking away for four seconds.
+    if (p.kind === 'failed') opts.ttlMs = 0;
+    if (p.runId) {
+      opts.action = {
+        label: t('auto.notify.toast.open', '查看运行'),
+        // runsOpen opens the detail dialog on top of whatever tab is showing,
+        // so the user keeps their place and still sees the run.
+        onClick: function() { agentBrowser.runsOpen(p.runId); },
+      };
+    }
+    toast(label, p.kind === 'failed' ? 'error' : 'success', opts);
+    if (agentBrowser.state && agentBrowser.state.currentTab === 'automation') {
+      agentBrowser.automationRefreshJobs();
+    }
+  }
+
+  function bindAutomationEvents() {
+    if (!api || typeof api.on !== 'function') return;
+    if (agentBrowser.state.automationEventsBound) return;
+    agentBrowser.state.automationEventsBound = true;
+    // Both channels are on preload's hard allowlist. An unlisted channel is
+    // dropped silently, so a listener that never fires has no error to read.
+    api.on('automation:run-finished', onRunFinished);
+    // A system-notification click. The main process may have had to recreate
+    // the window first, so this can arrive at any time after load.
+    api.on('automation:open-run', function(p) {
+      if (p && p.runId) agentBrowser.runsOpen(p.runId);
+    });
+    // A reload (resume, clock change, reschedule) can change every rule's
+    // phase at once; refresh the list only when it is the visible tab.
+    api.on('automation:schedule-changed', function() {
+      if (agentBrowser.state && agentBrowser.state.currentTab === 'automation') {
+        agentBrowser.loadAutomationTab();
+      }
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAutomationEvents);
+  else bindAutomationEvents();
+
+  // ── M3: notification settings (follows the launch-gates precedent:
+  //    save on change, no save button, both default OFF) ──
+
+  function notifyEl(id) { return document.getElementById(id); }
+
+  agentBrowser.loadAutomationNotifySettings = function() {
+    if (!api.settings || !api.settings.automationNotify) return;
+    api.settings.automationNotify().then(function(p) {
+      if (!p) return;
+      if (notifyEl('auto-notify-system')) notifyEl('auto-notify-system').checked = p.system === true;
+      if (notifyEl('auto-notify-sound')) notifyEl('auto-notify-sound').checked = p.sound === true;
+    }).catch(function() { /* a settings read must not break the tab */ });
+  };
+
+  function saveNotifySettings() {
+    if (!api.settings || !api.settings.setAutomationNotify) return;
+    var statusEl = notifyEl('auto-notify-status');
+    api.settings.setAutomationNotify({
+      system: !!(notifyEl('auto-notify-system') && notifyEl('auto-notify-system').checked),
+      sound: !!(notifyEl('auto-notify-sound') && notifyEl('auto-notify-sound').checked),
+    }).then(function(r) {
+      if (!statusEl) return;
+      if (r && r.success === false) {
+        statusEl.innerHTML = '<span style="color:var(--danger-text);">' + esc(r.error || t('toast.failed','操作失败')) + '</span>';
+      } else {
+        statusEl.innerHTML = '<span style="color:var(--success-text);">' + esc(t('auto.notify.saved','已保存')) + '</span>';
+        setTimeout(function() { statusEl.textContent = ''; }, 2500);
+      }
+    }).catch(function() { /* ignore */ });
+  }
+
+  function wireNotifySettings() {
+    ['auto-notify-system', 'auto-notify-sound'].forEach(function(id) {
+      var el = notifyEl(id);
+      if (el && !el.dataset.notifyWired) {
+        el.dataset.notifyWired = '1';
+        el.onchange = function() { saveNotifySettings(); };
+      }
+    });
+  }
+
+  var _loadAutomationTab = agentBrowser.loadAutomationTab;
+  agentBrowser.loadAutomationTab = function() {
+    _loadAutomationTab();
+    agentBrowser.loadAutomationNotifySettings();
+    wireNotifySettings();
   };
 })();

@@ -117,6 +117,21 @@ export type WebRtcMode = "auto" | "real" | "altered" | "disable";
 export type FingerprintMode = "managed" | "off";
 /** Browser engine a profile launch uses. `chromium` is the managed Chromium build (default); `firefox` uses an installed Firefox (Slice 77). */
 export type BrowserEngine = "chromium" | "firefox";
+/**
+ * Raster scale strategy for managed Chromium windows (Chromium engine only;
+ * Firefox spoofs devicePixelRatio at the JS layer and always renders at the
+ * host scale):
+ * - `native` (default): render at the host display's real scale factor, so
+ *   text is crisp on HiDPI/Retina hosts. JS-visible identity (devicePixelRatio,
+ *   screen.*) still comes from the fingerprint config; only physical raster
+ *   scale changes. Small detection surface remains on unpatched CSS-level
+ *   channels (resolution media queries, srcset selection, canvas backing
+ *   store size).
+ * - `strict`: force the raster scale to the spoofed devicePixelRatio so the
+ *   rendered pixels match the claimed identity exactly. Blurry on HiDPI hosts
+ *   when the persona claims DPR 1.
+ */
+export type RenderScaleMode = "native" | "strict";
 
 export interface BrowserFingerprintMeta {
   /** `off` launches the selected build with all managed identity consumers disabled. */
@@ -144,6 +159,8 @@ export interface BrowserFingerprintMeta {
   storageQuota?: number | null;
   taskbarHeight?: number | null;
   fontsDir?: string | null;
+  /** Raster scale strategy at launch; defaults to `native`. */
+  renderScaleMode?: RenderScaleMode;
   /** Captured live-fingerprint baseline for drift detection. */
   fingerprintBaseline?: Record<string, unknown>;
 }
@@ -352,6 +369,23 @@ export interface MgmtConfig {
   team?: TeamConfig;
   /** Max automation jobs running concurrently. Default 3. */
   maxConcurrentJobs?: number;
+  /**
+   * Terminal-execution notifications (M3). The in-app record is written
+   * regardless of this setting; only the OS notification is opt-in.
+   */
+  automationNotify?: AutomationNotifyConfig;
+}
+
+export interface AutomationNotifyConfig {
+  /**
+   * Show an OS notification via the main process when a scheduled execution
+   * reaches a final state. Default false — the renderer Notification API is
+   * permanently unavailable on the UI session (deny-all permission handlers),
+   * so this is the only OS path, and it is opt-in.
+   */
+  system: boolean;
+  /** Play a sound with the OS notification. Default false (silent). */
+  sound: boolean;
 }
 
 export interface DrmConfig {
@@ -365,6 +399,97 @@ export interface DrmConfig {
 
 // ── Agent Runs (inspectable trace of each agent task execution) ──
 export type AgentRunStatus = "running" | "done" | "error";
+export type AgentRunEndReason =
+  | "completed"
+  | "user_cancelled"
+  | "timeout"
+  | "round_limit"
+  | "interrupted"
+  | "execution_error";
+
+export type AgentRunVerificationStatus =
+  | "unverified"
+  | "passed"
+  | "partial"
+  | "failed"
+  | "manual_review";
+
+/** Business-outcome counters produced by a template verifier. All values are
+ * non-negative integers satisfying: inspected === observed,
+ * accepted + rejected === inspected, missing === max(expected-observed, 0),
+ * extra === max(observed-expected, 0). */
+export interface AgentRunVerificationCounts {
+  expected: number;
+  observed: number;
+  inspected: number;
+  accepted: number;
+  rejected: number;
+  missing: number;
+  extra: number;
+}
+
+/** One bounded, sanitized verification finding. detail never carries raw
+ * secrets (produced from sanitized values only). */
+export interface AgentRunVerificationIssue {
+  code: string;
+  item?: string;
+  field?: string;
+  detail?: string;
+}
+
+/**
+ * Business-outcome verification of a run — a layer INDEPENDENT of the
+ * execution status/endReason. "unverified" is the honest default for free
+ * chat and templates without a machine verifier. Automatic states
+ * (passed/partial/failed) require a registered verifier and consistent
+ * counts; manual_review carries a reasonCode instead of counts. Anything
+ * malformed is normalized back to { status: "unverified" } on load/save —
+ * persisted "passed" is never trusted without matching structure.
+ */
+export type AgentRunVerification =
+  | { status: "unverified" }
+  | {
+      status: "passed" | "partial" | "failed";
+      verifierId: string;
+      verifierVersion: number;
+      checkedAt: number;
+      counts: AgentRunVerificationCounts;
+      issues: AgentRunVerificationIssue[];
+      issuesTruncated: boolean;
+    }
+  | {
+      status: "manual_review";
+      checkedAt: number;
+      reasonCode: string;
+      verifierId?: string;
+      verifierVersion?: number;
+      issues?: AgentRunVerificationIssue[];
+      issuesTruncated?: boolean;
+    };
+
+/**
+ * Bounded reference to a materialized run artifact stored under
+ * <userData>/agent-results/<runId>/. The config never carries the physical
+ * path; renderers address artifacts by runId + artifact id only.
+ */
+export interface AgentRunArtifactRef {
+  id: string;
+  kind: "dataset" | "file";
+  name: string;
+  mediaType: string;
+  createdAt: number;
+  bytes: number;
+  sha256: string;
+  completeness: "complete" | "partial";
+  truncated: boolean;
+  truncationReason?: string;
+  rowCount?: number;
+  sourceRowCount?: number;
+  rejectedRowCount?: number;
+  columns?: string[];
+  redactedColumns?: string[];
+  exportPolicy: "csv" | "original" | "none";
+}
 
 export interface AgentRunSource {
   type: "chat" | "automation";
@@ -372,6 +497,10 @@ export interface AgentRunSource {
   ruleId?: string;
   ruleName?: string;
   jobId?: string;
+  /** Template this run executed under (automation agent-task only). */
+  templateId?: string;
+  /** Machine contract version of the template at run time. */
+  templateVersion?: number;
   /** When set, this run is a manual retry of the referenced run (same profile). */
   retryOf?: string;
 }
@@ -399,6 +528,10 @@ export interface AgentRun {
   steps: AgentRunStep[];
   variables: Record<string, string>;
   error?: string;
+  endReason?: AgentRunEndReason;
+  verification?: AgentRunVerification;
+  /** Bounded references to materialized artifacts (≤16 per run). */
+  artifacts?: AgentRunArtifactRef[];
 }
 
 // ── Agent filesystem access config ──
@@ -434,6 +567,14 @@ export interface AutomationAction {
   concurrency?: number;    // batch agent-task: profiles launched in parallel (default 1 = sequential)
   templateId?: string;      // agent-task built-in template id
   agentPrompt?: string;     // agent-task preset prompt
+  /**
+   * Structured template inputs (agent-task with templateId). Bounded:
+   * ≤16 keys, key ≤64 chars, value ≤2048 bytes, ≤8 KiB serialized total.
+   * Authoritative validation happens in the main process; the renderer only
+   * pre-validates for UX. Legacy rules without inputs keep working — their
+   * runs just cannot be machine-verified (manual_review/input_unavailable).
+   */
+  templateInputs?: Record<string, string>;
   jsCode?: string;          // custom-js
 }
 
@@ -455,6 +596,21 @@ export interface AutomationRule {
   failureCount?: number;
   lastError?: string;
   cooldownUntil?: number;
+  // ── M3 plan identity (main process only) ──
+  /**
+   * Identity of the CURRENT plan (rule version). Reissued by the main process
+   * whenever trigger/action change materially — never read from a request body,
+   * so a renderer or the REST API cannot forge it. Jobs carry the planId they
+   * were created under, which is what stops a historical test run or an
+   * old-version success from being presented as "this plan already ran".
+   */
+  planId?: string;
+  /**
+   * Set when an enabled `once` was found past-due with no pending work.
+   * Display-only: it never affects arming, and marking it never disables the
+   * rule or rewrites trigger.at. Cleared by an explicit reschedule.
+   */
+  missedAt?: number;
 }
 
 export interface StorageInfo {

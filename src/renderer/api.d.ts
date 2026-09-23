@@ -125,6 +125,8 @@ export interface BrowserProfileInfo {
   storageQuota: number | null;
   taskbarHeight: number | null;
   fontsDir: string | null;
+  /** Raster scale strategy at launch; `native` renders at the host scale (sharp), `strict` forces the spoofed DPR. */
+  renderScaleMode: "native" | "strict";
   proxyMode: ProxyMode;
   proxyName: string | null;
   note: string | null;
@@ -190,6 +192,247 @@ export interface SkillRepositoryEntry {
   packageHash?: string;
   addedAt: number;
   updatedAt: number;
+}
+
+export type AgentEndReason =
+  | "completed"
+  | "user_cancelled"
+  | "timeout"
+  | "round_limit"
+  | "interrupted"
+  | "execution_error";
+
+/** M2 verification: a discriminated union. "unverified" is the honest default
+ *  for anything not graded by a template verifier. */
+export type AgentVerificationStatus = "unverified" | "passed" | "partial" | "failed" | "manual_review";
+
+export interface AgentVerificationCounts {
+  expected: number;
+  observed: number;
+  inspected: number;
+  accepted: number;
+  rejected: number;
+  missing: number;
+  extra: number;
+}
+
+export interface AgentVerificationIssue {
+  code: string;
+  item?: string;
+  field?: string;
+  detail?: string;
+}
+
+export type AgentVerification =
+  | { status: "unverified" }
+  | {
+      status: "passed" | "partial" | "failed";
+      verifierId: string;
+      verifierVersion: number;
+      checkedAt: number;
+      counts: AgentVerificationCounts;
+      issues: AgentVerificationIssue[];
+      issuesTruncated: boolean;
+    }
+  | {
+      status: "manual_review";
+      checkedAt: number;
+      reasonCode: string;
+      verifierId?: string;
+      verifierVersion?: number;
+      issues?: AgentVerificationIssue[];
+      issuesTruncated?: boolean;
+    };
+
+export interface AgentRunArtifactRef {
+  id: string;
+  kind: "dataset" | "file";
+  name: string;
+  mediaType: string;
+  createdAt: number;
+  bytes: number;
+  sha256: string;
+  completeness: "complete" | "partial";
+  truncated: boolean;
+  truncationReason?: string;
+  rowCount?: number;
+  sourceRowCount?: number;
+  rejectedRowCount?: number;
+  columns?: string[];
+  redactedColumns?: string[];
+  exportPolicy: "csv" | "original" | "none";
+}
+
+export type AgentRunExportKind = "summary-json" | "dataset-csv" | "file";
+
+export interface AgentRunExportPlan {
+  kind: AgentRunExportKind;
+  format: "json" | "csv" | "original";
+  suggestedName: string;
+  extension: string;
+  mediaType: string;
+  columns?: string[];
+  rowCount?: number;
+  sourceRowCount?: number;
+  rejectedRowCount?: number;
+  warnings: string[];
+  sha256?: string;
+  bytes?: number;
+  verification?: AgentVerification;
+  truncated?: boolean;
+}
+
+export interface AgentRunResultsPreview {
+  columns: string[];
+  /** Row-major: each row aligns with `columns`. */
+  rows: string[][];
+  total: number;
+  truncated: boolean;
+  sourceRowCount: number;
+  rejectedRowCount: number;
+}
+
+export interface AgentRunStep {
+  id: string;
+  tool: string;
+  args?: unknown;
+  result?: unknown;
+  ok: boolean;
+  error?: string;
+  durationMs: number;
+  timestamp: number;
+}
+
+export interface AgentConversationMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  timestamp: number;
+  toolCalls?: Array<{ name: string; redacted: true }>;
+  runId?: string;
+  requestId?: string;
+  endReason?: AgentEndReason;
+  verification?: AgentVerification;
+}
+
+export interface AgentConversation {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: AgentConversationMessage[];
+}
+
+export type AgentConversationSummary = Pick<AgentConversation, "id" | "title" | "createdAt" | "updatedAt"> & {
+  messageCount: number;
+};
+
+export interface AgentRun {
+  id: string;
+  dirId?: string;
+  name: string;
+  summary?: string;
+  source: {
+    type: "chat" | "automation";
+    conversationId?: string;
+    ruleId?: string;
+    ruleName?: string;
+    jobId?: string;
+    retryOf?: string;
+    templateId?: string;
+    templateVersion?: number;
+  };
+  status: "running" | "done" | "error";
+  startedAt: number;
+  finishedAt?: number;
+  endReason?: AgentEndReason;
+  verification?: AgentVerification;
+  artifacts?: AgentRunArtifactRef[];
+  error?: string;
+  steps: AgentRunStep[];
+  variables: Record<string, string>;
+  stepCount?: number;
+}
+
+export interface AgentActiveRunSnapshot {
+  conversationId: string;
+  streamId: string;
+  runId?: string;
+  profileDirId?: string;
+  profileName?: string;
+  state: "preparing" | "running" | "cancelling";
+  startedAt: number;
+  reply: string;
+  toolCalls: Array<{ name: string; redacted: true }>;
+  steps: AgentRunStep[];
+  currentTool?: string;
+}
+
+export interface AgentStreamTerminal {
+  conversationId: string;
+  streamId: string;
+  runId?: string;
+  reply: string;
+  toolCalls: Array<{ name: string; redacted: true }>;
+  status: "done" | "error";
+  endReason: AgentEndReason;
+  verification: AgentVerification;
+  persisted: boolean;
+  error?: string;
+  code?: string;
+}
+
+export interface AgentCancelResult {
+  accepted: boolean;
+  state: "cancelling" | "finished" | "not_found";
+  runId?: string;
+  streamId?: string;
+  endReason?: AgentEndReason;
+  error?: string;
+}
+
+/** M3: the scheduler's own account of what a rule will do next. */
+export type SchedulePhase =
+  | "event-driven" | "running" | "retry-waiting" | "queued" | "cooldown"
+  | "scheduled-once" | "missed-once" | "scheduled-cron" | "invalid-cron"
+  | "disabled-after-success" | "user-disabled";
+
+export interface RuleScheduleState {
+  ruleId: string;
+  phase: SchedulePhase;
+  nextRunAt: number | null;
+  /** "armed-timer" is an observation; "computed" is derived for a far-future cron. */
+  nextRunSource: "armed-timer" | "computed" | null;
+  timezone: string;
+  timezoneOffsetMinutes: number;
+  onceAt: number | null;
+  missedAt: number | null;
+  cooldownUntil: number | null;
+  lastOutcome: { status: string; at: number; attempt: number; error: string | null } | null;
+  activeJob: { id: string; status: string; attempt: number; startedAt: number | null; retryAt: number | null } | null;
+  lastAttempt: { attempt: number; error: string | null; at: number } | null;
+  /** No planId, or no job carries it — the card must not borrow an older row. */
+  degraded: boolean;
+}
+
+export interface StoredNotification {
+  dedupKey: string;
+  jobId: string | null;
+  ruleId: string;
+  planId: string | null;
+  kind: "done" | "failed" | "cancelled" | "missed";
+  createdAt: number;
+  deliveredAt: number | null;
+  readAt: number | null;
+}
+
+export interface ReconcileReport {
+  interruptedJobs: number;
+  orphanedQueued: number;
+  orphanedRetryWaiting: number;
+  jobsReplayedFromRun: number;
+  pruned: number;
+  /** Always 0: a durable dedup key makes a replayed alert impossible. */
+  notificationsReplayed: 0;
 }
 
 export interface AgentBrowserAPI {
@@ -273,6 +516,10 @@ export interface AgentBrowserAPI {
     preferences: (dirId: string) => Promise<any>;
     updatePreferences: (dirId: string, prefs: any) => Promise<{ success: boolean }>;
     applyProfile: (dirId: string, settings: any) => Promise<{ success: boolean }>;
+    // M3: terminal-notification preferences. Both default false — the in-app
+    // record is always kept, and the OS banner is opt-in.
+    automationNotify: () => Promise<{ system: boolean; sound: boolean }>;
+    setAutomationNotify: (prefs: { system?: boolean; sound?: boolean }) => Promise<{ success: boolean; automationNotify: { system: boolean; sound: boolean } }>;
   };
   mcp: {
     status: () => Promise<any>;
@@ -288,7 +535,7 @@ export interface AgentBrowserAPI {
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     launch: (dirId: string, opts?: { forceDeadProxy?: boolean }) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string; code?: string }>;
     stop: (dirId: string) => Promise<{ success: boolean; error?: string }>;
-    status: (dirId: string) => Promise<any>;
+    status: (dirId: string) => Promise<{ running: boolean; pid?: number | null; cdpPort?: number | null; error?: string }>;
     setSeed: (dirId: string, seed: number) => Promise<{ success: boolean }>;
     setMeta: (dirId: string, meta: any) => Promise<{ success: boolean }>;
     openRiskCheck: (dirId: string, opts?: { allowLaunch?: boolean; url?: string }) => Promise<{ success: boolean; error?: string; code?: string; autoLaunched?: boolean }>;
@@ -314,8 +561,10 @@ export interface AgentBrowserAPI {
     llmConfig: () => Promise<RedactedLlmConfig | null>;
     detectLlmConfig: () => Promise<RedactedLlmConfig | null>;
     saveLlmConfig: (config: { provider: "openai" | "claude" | "custom"; apiKey?: string; apiUrl?: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
-    chat: (conversationId: string, message: string) => Promise<any>;
-    chatStream: (conversationId: string, message: string, streamId?: string) => Promise<any>;
+    chat: (conversationId: string, message: string, options?: { profileDirId?: string; requestId?: string }) => Promise<AgentStreamTerminal>;
+    chatStream: (conversationId: string, message: string, streamId?: string, options?: { profileDirId?: string; requestId?: string }) => Promise<AgentStreamTerminal>;
+    cancelRun: (params: { conversationId: string; runId?: string; streamId?: string }) => Promise<AgentCancelResult>;
+    activeRun: (conversationId: string) => Promise<AgentActiveRunSnapshot | null>;
     chatSimple: (messages: Array<{ role: string; content: string }>) => Promise<any>;
     listSkills: () => Promise<SkillRepositoryEntry[]>;
     taskTemplates: () => Promise<Array<{ id: string; title: string; category: string; description: string; riskLevel: string; requiredInputs: any[]; tools: string[]; successCriteria: string[]; examplePrompt: string; prompt: string; steps: string[]; outputTable?: { name: string; columns: string[] } }>>;
@@ -334,7 +583,13 @@ export interface AgentBrowserAPI {
       get: (id: string) => Promise<PlatformAdapter | null>;
       detect: (url: string) => Promise<PlatformAdapter | null>;
     };
-    conversations: any;
+    conversations: {
+      list: () => Promise<AgentConversationSummary[]>;
+      get: (id: string) => Promise<AgentConversation | null>;
+      create: (title?: string) => Promise<AgentConversationSummary>;
+      delete: (id: string) => Promise<{ success?: boolean } | boolean>;
+      rename: (id: string, title: string) => Promise<{ success?: boolean } | boolean>;
+    };
     accounts: {
       list: () => Promise<RedactedPlatformAccount[]>;
       add: (account: { platformUrl: string; platformUserName: string; platformPassword: string; profileIds?: string[]; tags?: string[] }) => Promise<any>;
@@ -343,6 +598,53 @@ export interface AgentBrowserAPI {
       forProfile: (dirId: string) => Promise<RedactedPlatformAccount[]>;
     };
   };
+  automation: {
+    list: () => Promise<any[]>;
+    create: (rule: any) => Promise<{ success: boolean; rule?: any; error?: string }>;
+    update: (rule: any) => Promise<{ success: boolean; rule?: any; error?: string }>;
+    delete: (ruleId: string) => Promise<{ success: boolean; error?: string }>;
+    testRun: (ruleId: string) => Promise<{ ok: boolean; result?: string; error?: string }>;
+    retryRun: (runId: string) => Promise<{ success: boolean; error?: string }>;
+    retryJob: (jobId: string) => Promise<{ success: boolean; error?: string }>;
+    logs: () => Promise<any[]>;
+    validateCron: (expr: string) => Promise<{ valid: boolean; error?: string }>;
+    jobs: (opts?: { status?: string; limit?: number }) => Promise<any[]>;
+    jobGet: (id: string) => Promise<any>;
+    jobCancel: (id: string) => Promise<{ success: boolean; error?: string }>;
+    // M3: schedule state lives on its own channel, never merged into list().
+    // The rule object is round-tripped by the editor and by automationToggle,
+    // so mixing display fields into it would give a badge a path into config.
+    scheduleState: () => Promise<{ success: boolean; states?: RuleScheduleState[]; error?: string }>;
+    rescheduleOnce: (params: { ruleId: string; at: number }) => Promise<{ success: boolean; rule?: any; error?: string }>;
+    reconcile: () => Promise<ReconcileReport>;
+    notifications: (opts?: { limit?: number; unreadOnly?: boolean }) => Promise<StoredNotification[]>;
+    notificationsRead: (keys: string[]) => Promise<{ success: boolean; changed?: number }>;
+    notificationsUnreadCount: () => Promise<number>;
+  };
+  agentRuns: {
+    list: () => Promise<AgentRun[]>;
+    get: (runId: string) => Promise<AgentRun | null>;
+    delete: (runId: string) => Promise<{ success: boolean; error?: string }>;
+    clear: () => Promise<{ success: boolean; deleted?: number; error?: string }>;
+    resultsPreview: (params: { runId: string; artifactId?: string; offset?: number; limit?: number }) =>
+      Promise<({ ok: true } & AgentRunResultsPreview) | { ok: false; error: string; reasonCode?: string }>;
+    exportPlan: (params: { runId: string; artifactId?: string; kind: AgentRunExportKind }) =>
+      Promise<{ ok: true; plan: AgentRunExportPlan } | { ok: false; error: string; reasonCode?: string }>;
+    exportWrite: (params: { runId: string; artifactId?: string; kind: AgentRunExportKind; destPath?: string }) =>
+      Promise<{ ok: true; filePath: string; bytes: number; rows?: number } | { ok: false; error: string; reasonCode?: string }>;
+  };
+  approval: {
+    list: () => Promise<Array<{
+      id: string;
+      runId?: string;
+      category: "db-write" | "db-destroy" | "fs-write" | "http-write";
+      tool: string;
+      description: string;
+      detail?: string;
+      createdAt: number;
+    }>>;
+    resolve: (id: string, decision: "once" | "always" | "deny", opts: { confirmed: true }) => Promise<{ success: boolean; error?: string }>;
+  };
   license: {
     status: () => Promise<{
       plan: string; trialStartedAt: number | null; trialDays: number;
@@ -350,6 +652,14 @@ export interface AgentBrowserAPI {
       deviceId: string; daysLeft: number; expired: boolean; canActivate: boolean;
     }>;
     activate: (code: string) => Promise<{ ok: boolean; state?: any; code?: string; error?: string }>;
+  };
+  data: {
+    /** Structured JSON export. An unknown scope fails explicitly (M2) rather
+     *  than returning an empty object that reads as "no data". */
+    export: (scope: string) => Promise<
+      { ok: true; scope: string; exportedAt: number; data: any }
+      | { ok: false; error: string; allowed?: readonly string[] }
+    >;
   };
   on: (channel: string, callback: (...args: any[]) => void) => void;
   removeListener: (channel: string, callback: (...args: any[]) => void) => void;

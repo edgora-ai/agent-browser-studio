@@ -9,7 +9,7 @@ import * as net from "node:net";
 import { createHash } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { parseBrowserProcessLine, findBrowserByProfileSync } from "./process-discovery.js";
-import { BrowserWindow } from "electron";
+import { BrowserWindow, screen as electronScreen } from "electron";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
@@ -60,7 +60,7 @@ import {
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
-import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta, BrowserEngine } from "../types.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta, BrowserEngine, RenderScaleMode } from "../types.js";
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
 import {
   buildFirefoxLaunchArgs,
@@ -113,6 +113,8 @@ export interface BrowserProfile {
   storageQuota: number | null;
   taskbarHeight: number | null;
   fontsDir: string | null;
+  /** Raster scale strategy at launch (default `native`; Chromium only). */
+  renderScaleMode: RenderScaleMode;
   windowTitlePrefix?: string | null; // null = prefix disabled, undefined = default
   appUrl: string | null;  // Web App (PWA app-mode) launch URL, or null
   proxyMode: "none" | "default" | "named";
@@ -270,6 +272,8 @@ export function createBrowserProfile(opts: {
   taskbarHeight?: number | null;
   windowTitlePrefix?: string | null;
   fontsDir?: string | null;
+  /** Raster scale strategy (default `native`); see RenderScaleMode. */
+  renderScaleMode?: RenderScaleMode;
   appUrl?: string | null;
   proxyMode?: "none" | "default" | "named";
   proxyName?: string | null;
@@ -319,6 +323,7 @@ export function createBrowserProfile(opts: {
     proxyMode,
     proxyName: proxyMode === "named" ? opts.proxyName || null : null,
     drm: normalizeBoolean(opts.drm, "drm"),
+    renderScaleMode: normalizeRenderScaleMode(opts.renderScaleMode),
     windowTitlePrefix: opts.windowTitlePrefix === undefined ? undefined : (opts.windowTitlePrefix === null ? null : sanitizeWindowTitlePrefix(opts.windowTitlePrefix)),
     appUrl: sanitizeAppUrl(opts.appUrl),
     note: null,
@@ -620,6 +625,7 @@ export function listBrowserProfiles(): BrowserProfile[] {
       storageQuota: Number.isInteger(m.storageQuota) ? m.storageQuota : null,
       taskbarHeight: Number.isInteger(m.taskbarHeight) ? m.taskbarHeight : null,
       fontsDir: m.fontsDir || null,
+      renderScaleMode: m.renderScaleMode === "strict" ? "strict" : "native",
       // B2 (#107): the edit form reads windowTitlePrefix to decide the
       // checkbox state — omitting it made the checkbox always-on and every
       // save clobbered the stored prefix via setMeta.
@@ -1047,11 +1053,20 @@ export async function launchBrowser(
         detail: "warning: profile expects a proxy but no managed secure DNS is active — check proxy resolution" });
     }
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
+    // Raster scale: `native` renders at the host's real scale factor (crisp on
+    // HiDPI/Retina) while the fork still reports the persona's devicePixelRatio
+    // to JS; `strict` forces the raster scale to the spoofed DPR for maximum
+    // identity consistency at the cost of upscaled, blurry output on HiDPI.
+    const renderScaleFactor = resolveRenderScaleFactor(
+      meta.renderScaleMode,
+      nativeFingerprint.screen.devicePixelRatio,
+      detectHostScaleFactor(),
+    );
     args = dedupeChromeArgs([
       ...args,
       `--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}`,
       `--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}`,
-      `--force-device-scale-factor=${nativeFingerprint.screen.devicePixelRatio}`,
+      `--force-device-scale-factor=${renderScaleFactor}`,
     ]);
     args = applyManagedNativeRefreshRate(args);
   }
@@ -1695,7 +1710,15 @@ async function launchFirefoxProfile(
   return { pid, cdpPort: actualPort, driftCheck, envCheck, cookieCheck };
 }
 
-import { stopBrowser as _stopBrowser, statusBrowser as _statusBrowser, stopAllBrowserProfiles as _stopAll, getCdpWebSocketUrl as _getCdpUrl, findBrowserByProfile as _findByProfile } from "./browser/lifecycle.js";
+import {
+  stopBrowser as _stopBrowser,
+  statusBrowser as _statusBrowser,
+  stopAllBrowserProfiles as _stopAll,
+  shutdownAllBrowserProfiles as _shutdownAll,
+  getCdpWebSocketUrl as _getCdpUrl,
+  findBrowserByProfile as _findByProfile,
+} from "./browser/lifecycle.js";
+export type { BrowserShutdownReport, BrowserShutdownTarget } from "./browser/lifecycle.js";
 import {
   setIdlePolicyTimeoutMs as _setIdle,
   getIdlePolicyTimeoutMs as _getIdle,
@@ -1710,6 +1733,7 @@ import {
 export const stopBrowser = _stopBrowser;
 export const statusBrowser = _statusBrowser;
 export const stopAllBrowserProfiles = _stopAll;
+export const shutdownAllBrowserProfiles = _shutdownAll;
 export const getCdpWebSocketUrl = _getCdpUrl;
 const findBrowserByProfile = _findByProfile;
 
@@ -1968,6 +1992,40 @@ function normalizeFingerprintMode(value: unknown): FingerprintMode {
   if (value === undefined || value === null || value === "" || value === "managed") return "managed";
   if (value === "off") return "off";
   throw new Error(`Invalid fingerprint mode: ${JSON.stringify(value)}`);
+}
+
+function normalizeRenderScaleMode(value: unknown): RenderScaleMode {
+  if (value === undefined || value === null || value === "" || value === "native") return "native";
+  if (value === "strict") return "strict";
+  throw new Error(`Invalid render scale mode: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Host display's real raster scale (2 on Retina, 1 on a plain 1080p panel).
+ * Returns null when the screen module is unavailable (unit tests mock
+ * electron without `screen`, and `screen` throws before app-ready).
+ */
+function detectHostScaleFactor(): number | null {
+  try {
+    const scale = electronScreen?.getPrimaryDisplay?.()?.scaleFactor;
+    return typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pick the `--force-device-scale-factor` value for a managed launch.
+ * `strict` keeps the historical behavior — raster scale equals the spoofed
+ * devicePixelRatio, so the rendered pixels match the claimed identity exactly
+ * (blurry on HiDPI hosts when the persona claims DPR 1). `native` renders at
+ * the host's real scale for crisp text; JS-visible identity values still come
+ * from the fingerprint config, so only physical raster scale differs.
+ */
+export function resolveRenderScaleFactor(mode: RenderScaleMode | null | undefined, personaDevicePixelRatio: number, hostScaleFactor: number | null): number {
+  if (mode === "strict") return personaDevicePixelRatio;
+  if (hostScaleFactor !== null && Number.isFinite(hostScaleFactor) && hostScaleFactor > 0) return hostScaleFactor;
+  return personaDevicePixelRatio;
 }
 
 function normalizeBoolean(value: unknown, label: string, fallback = false): boolean {

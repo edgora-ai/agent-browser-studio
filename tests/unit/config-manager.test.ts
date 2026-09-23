@@ -579,17 +579,59 @@ describe("Agent Run normalization", () => {
     expect(back[0].variables.token).toBe("v1");
   });
 
-  it("marks stale running runs as error on reload", () => {
+  it("preserves running on save and marks only stale loaded runs as interrupted", () => {
     const cfg = getConfig();
     cfg.agentRuns = [{
       id: "run_stale", name: "x", source: { type: "chat" }, status: "running",
       startedAt: 1, steps: [], variables: {},
     }];
     saveConfig(cfg);
+
+    const saved = getConfig().agentRuns![0];
+    expect(saved.status).toBe("running");
+    expect(saved.endReason).toBeUndefined();
+    expect(saved.verification).toEqual({ status: "unverified" });
+    const savedOnDisk = JSON.parse(fs.readFileSync(getConfigPath(), "utf-8")).agentRuns[0];
+    expect(savedOnDisk.status).toBe("running");
+    expect(savedOnDisk.endReason).toBeUndefined();
+
     reloadConfig();
     const back = getConfig().agentRuns![0];
     expect(back.status).toBe("error");
+    expect(back.endReason).toBe("interrupted");
+    expect(back.verification).toEqual({ status: "unverified" });
     expect(back.finishedAt).toBeGreaterThan(0);
+  });
+
+  it("defaults legacy terminal records to unverified without inventing passed or an end reason", () => {
+    const cfg = getConfig() as any;
+    cfg.agentRuns = [
+      {
+        id: "run_legacy_done", name: "legacy done", source: { type: "chat" }, status: "done",
+        startedAt: 1, finishedAt: 2, steps: [], variables: {},
+      },
+      {
+        id: "run_legacy_error", name: "legacy error", source: { type: "chat" }, status: "error",
+        startedAt: 1, finishedAt: 2, steps: [], variables: {}, error: "unknown cause",
+      },
+      {
+        id: "run_bad_metadata", name: "bad metadata", source: { type: "chat" }, status: "done",
+        startedAt: 1, finishedAt: 2, steps: [], variables: {},
+        endReason: "made_up", verification: { status: "passed" },
+      },
+    ];
+    // Write the legacy-shaped payload directly so this exercises load
+    // normalization rather than first passing through save normalization.
+    fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), "utf-8");
+
+    reloadConfig();
+    const [done, error, invalid] = getConfig().agentRuns!;
+    expect(done.verification).toEqual({ status: "unverified" });
+    expect(done.endReason).toBeUndefined();
+    expect(error.verification).toEqual({ status: "unverified" });
+    expect(error.endReason).toBeUndefined();
+    expect(invalid.verification).toEqual({ status: "unverified" });
+    expect(invalid.endReason).toBeUndefined();
   });
 
   it("drops runs with invalid IDs", () => {

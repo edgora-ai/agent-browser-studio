@@ -21,7 +21,7 @@ import {
   createBrowserProfile,
   listBrowserProfiles,
 } from "../../src/main/services/browser-manager.js";
-import { reloadConfig } from "../../src/main/services/config-manager.js";
+import { reloadConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
 
 describe("listBrowserProfiles projection (audit B1/B2)", () => {
   beforeEach(() => {
@@ -59,5 +59,27 @@ describe("listBrowserProfiles projection (audit B1/B2)", () => {
     });
     const found = listBrowserProfiles().find((p) => p.dirId === dirId);
     expect(found!.windowTitlePrefix).toBe("shop-");
+  });
+
+  it("projects renderScaleMode with a native default and a strict round-trip", () => {
+    const { dirId: defaultId } = createBrowserProfile({
+      name: "ScaleDefault",
+      platform: "windows",
+      fingerprintSeed: 33333,
+    });
+    expect(listBrowserProfiles().find((p) => p.dirId === defaultId)!.renderScaleMode).toBe("native");
+
+    const { dirId: strictId } = createBrowserProfile({
+      name: "ScaleStrict",
+      platform: "windows",
+      fingerprintSeed: 44444,
+      renderScaleMode: "strict",
+    });
+    expect(listBrowserProfiles().find((p) => p.dirId === strictId)!.renderScaleMode).toBe("strict");
+
+    // setProfileMeta is the edit-dialog path — the stored value must survive
+    // a round-trip and project back into the list.
+    setProfileMeta(defaultId, { renderScaleMode: "strict" });
+    expect(listBrowserProfiles().find((p) => p.dirId === defaultId)!.renderScaleMode).toBe("strict");
   });
 });

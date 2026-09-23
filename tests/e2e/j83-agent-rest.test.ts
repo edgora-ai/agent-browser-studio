@@ -316,7 +316,13 @@ describe("J83 — Agent module REST endpoints", () => {
     expect(list.status).toBe(200);
     expect(Array.isArray(list.body.approvals)).toBe(true);
 
-    const missing = await apiRequest(port, token, "POST", "/api/agent/approvals/appr_missing/resolve", { decision: "once" });
+    // API callers may deny, but allow-decisions require the human UI dialog.
+    for (const decision of ["once", "always"]) {
+      const allow = await apiRequest(port, token, "POST", "/api/agent/approvals/appr_missing/resolve", { decision });
+      expect(allow.status).toBe(403);
+      expect(allow.body.error).toMatch(/UI approval dialog/);
+    }
+    const missing = await apiRequest(port, token, "POST", "/api/agent/approvals/appr_missing/resolve", { decision: "deny" });
     expect(missing.status).toBe(404);
     const badDecision = await apiRequest(port, token, "POST", "/api/agent/approvals/appr_missing/resolve", { decision: "maybe" });
     expect(badDecision.status).toBe(400);

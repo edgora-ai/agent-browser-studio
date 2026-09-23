@@ -54,7 +54,7 @@ import {
 } from "../services/batch-queue.js";
 import { newTraceId, logInfo } from "../services/observability.js";
 import { checkCreateAllowed, checkLaunchAllowed } from "../services/license.js";
-import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, WebRtcMode } from "../types.js";
+import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, RenderScaleMode, WebRtcMode } from "../types.js";
 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
 
@@ -192,6 +192,7 @@ export function registerBrowserHandlers(): void {
     geolocationMode?: GeolocationMode; geolocationLatitude?: number | null; geolocationLongitude?: number | null; geolocationAccuracy?: number | null;
     gpuVendor?: string | null; gpuRenderer?: string | null; hardwareConcurrency?: number | null; deviceMemory?: number | null;
     screenWidth?: number | null; screenHeight?: number | null; storageQuota?: number | null; taskbarHeight?: number | null; fontsDir?: string | null;
+    renderScaleMode?: RenderScaleMode;
     windowTitlePrefix?: string | null;
     appUrl?: string | null;
     proxyMode?: ProxyMode; proxyName?: string | null; tags?: string[];
@@ -223,6 +224,7 @@ export function registerBrowserHandlers(): void {
       storageQuota: opts.storageQuota,
       taskbarHeight: opts.taskbarHeight,
       fontsDir: opts.fontsDir,
+      renderScaleMode: opts.renderScaleMode,
       windowTitlePrefix: opts.windowTitlePrefix,
       appUrl: opts.appUrl,
       proxyMode: opts.proxyMode,
@@ -556,6 +558,7 @@ export function registerBrowserHandlers(): void {
     storageQuota?: number | null;
     taskbarHeight?: number | null;
     fontsDir?: string | null;
+    renderScaleMode?: RenderScaleMode;
     windowTitlePrefix?: string | null;
     note?: string;
     appUrl?: string | null;
@@ -595,6 +598,7 @@ export function registerBrowserHandlers(): void {
         screenHeight: params.screenHeight,
         storageQuota: params.storageQuota,
         taskbarHeight: params.taskbarHeight,
+        renderScaleMode: params.renderScaleMode,
         windowTitlePrefix: params.windowTitlePrefix,
         fontsDir: params.fontsDir,
         appUrl: params.appUrl,
