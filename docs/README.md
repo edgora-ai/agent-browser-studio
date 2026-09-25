@@ -13,6 +13,8 @@
 
 - [使用手册](USER_GUIDE.zh-CN.md)
 - [改进路线图](improvement-roadmap.md)
+- [问题追踪表与验收标准](review/issue-tracker.md)（唯一权威状态表）
+- [项目问题清单与优化建议（2026-09-25）](review/project-issues-and-optimization-2026-09-25.md)（复核证据、优先级与实施建议）
 - [安全政策](../SECURITY.md)
 - [隐私说明](../PRIVACY.md)
 - [可接受使用政策](../ACCEPTABLE_USE.md)

@@ -6,6 +6,7 @@ import { _electron as electron, ElectronApplication, Page } from "playwright";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { clickCardAction, clickCmd } from "./helpers/find.js";
+import { resolveElectronBinary } from "./helpers/app.js";
 
 const REPO = path.resolve(__dirname, "../..");
 const MAIN = path.join(REPO, "dist", "main", "index.js");
@@ -40,16 +41,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
   beforeAll(async () => {
     app = await electron.launch({
       args: [REPO, `--user-data-dir=${SANDBOX_USER_DATA}`],
-      executablePath: path.join(
-        REPO,
-        "node_modules",
-        "electron",
-        "dist",
-        "Electron.app",
-        "Contents",
-        "MacOS",
-        "Electron",
-      ),
+      executablePath: resolveElectronBinary(REPO),
       env: { ...process.env, ELECTRON_DISABLE_GPU: "1" },
       timeout: 30000,
     });

@@ -66,16 +66,18 @@ function newestCachedBinary(cacheDir: string): string | null {
 }
 
 const REPO = path.resolve(__dirname, "..", "..", "..");
-const ELECTRON_BIN = path.join(
-  REPO,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+
+// R0925-04: the node_modules Electron binary is platform-layout dependent.
+// Every dev-mode launcher must resolve it through here — never hand-splice
+// the macOS .app path, or Windows/Linux runners cannot even start the app.
+export function resolveElectronBinary(repoDir: string = REPO, platform: NodeJS.Platform = process.platform): string {
+  const dist = path.join(repoDir, "node_modules", "electron", "dist");
+  if (platform === "darwin") return path.join(dist, "Electron.app", "Contents", "MacOS", "Electron");
+  if (platform === "win32") return path.join(dist, "electron.exe");
+  return path.join(dist, "electron");
+}
+
+const ELECTRON_BIN = resolveElectronBinary();
 
 export interface SetupTestAppOptions {
   userDataDir: string;

@@ -69,8 +69,27 @@ export interface CommitArgs {
 }
 
 export type CommitResult =
-  | { ok: true; artifacts: AgentRunArtifactRef[]; reused: boolean }
+  | { ok: true; artifacts: AgentRunArtifactRef[]; reused: boolean; verification: AgentRunVerification }
   | { ok: false; reasonCode: "artifact_limit" | "integrity_conflict" | "artifact_invalid" | "write_failed"; detail: string };
+
+/**
+ * R0925-03: the verdict persisted in the manifest is decided HERE, where the
+ * actual truncation outcome is known — never upstream from pre-commit hopes.
+ * A truncated snapshot is partial evidence, so any automated verdict is
+ * honestly downgraded to manual_review before it touches disk.
+ */
+function effectiveVerification(v: AgentRunVerification, truncated: boolean, now: number): AgentRunVerification {
+  if (!truncated || v.status === "manual_review") return v;
+  return {
+    status: "manual_review",
+    checkedAt: now,
+    reasonCode: "artifact_limit",
+    ...(v.status !== "unverified"
+      ? { verifierId: v.verifierId, verifierVersion: v.verifierVersion }
+      : {}),
+    issues: [{ code: "artifact_limit", detail: "snapshot truncated to fit the result budget" }],
+  };
+}
 
 export interface DatasetEnvelope {
   schemaVersion: 1;
@@ -304,7 +323,7 @@ export class RunResultStore {
     if (!RUN_ID_RE.test(args.runId)) return { ok: false, reasonCode: "artifact_invalid", detail: "invalid run id" };
     if (!args.dataset) {
       // Nothing to materialize (e.g. manual_review without a snapshot).
-      return { ok: true, artifacts: [], reused: false };
+      return { ok: true, artifacts: [], reused: false, verification: args.verification };
     }
 
     const runDir = this.runDir(args.runId);
@@ -327,7 +346,7 @@ export class RunResultStore {
           return { ok: false, reasonCode: "integrity_conflict", detail: "existing manifest payload hash differs; refusing to overwrite" };
         }
       }
-      return { ok: true, artifacts: m.artifacts, reused: true };
+      return { ok: true, artifacts: m.artifacts, reused: true, verification: m.verification };
     }
     if (existing.reasonCode !== "not_found") {
       // A corrupt/unverifiable manifest is an integrity conflict — never
@@ -387,6 +406,7 @@ export class RunResultStore {
     }
 
     const createdAt = this.now();
+    const verification = effectiveVerification(args.verification, dataset.truncated, createdAt);
     const artifact: AgentRunArtifactRef = {
       id: "dataset",
       kind: "dataset",
@@ -411,7 +431,7 @@ export class RunResultStore {
       runStartedAt: args.runStartedAt,
       templateId: args.templateId,
       templateVersion: args.templateVersion,
-      verification: args.verification,
+      verification,
       terminal: args.terminal,
       artifacts: [artifact],
       createdAt,
@@ -435,7 +455,7 @@ export class RunResultStore {
     } catch (e: any) {
       return { ok: false, reasonCode: e?.code === "ENOSPC" ? "artifact_limit" : "write_failed", detail: String(e?.message || e).slice(0, 300) };
     }
-    return { ok: true, artifacts: [artifact], reused: false };
+    return { ok: true, artifacts: [artifact], reused: false, verification };
   }
 
   // ── Read path ──

@@ -1243,9 +1243,11 @@ try {
     printEnglishLeak(english);
     // Dead call sites, leaked `undefined`, and untranslated copy are real
     // defects; thin tabs and unstubbed paths are harness debt that silently
-    // undermines the rest.
+    // undermines the rest. R0925-07: an unstubbed REAL API call means a tab
+    // rendered on the empty-array fallback while the audit said PASS — count
+    // it as a failure so the fixture has to catch up with the renderer.
     const enFails = LANG === "en-US" ? 0 : english.length;
-    const failures = overflow.length + cellOverflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails;
+    const failures = overflow.length + cellOverflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails + unstubbed.length;
     console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${cellOverflow.length} cell overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${headerOrder.length} header order, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just
     // as something a human reads.

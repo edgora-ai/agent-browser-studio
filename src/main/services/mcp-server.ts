@@ -412,16 +412,22 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const result = await agentChat(config, repaired, { runId: run.id, signal: controller.signal });
-        agentRunRecorder.finishRun(run.id, "done");
+        // R0925-02: classify the outcome first, then commit the terminal state
+        // exactly once. A returned error or an empty final reply must never be
+        // persisted as "done".
         if (result.error) {
+          agentRunRecorder.finishRun(run.id, "error", result.error, { endReason: result.endReason ?? "execution_error" });
           addMessage(conversationId, "assistant", "❌ " + result.error, []);
           return { error: result.error, runId: run.id };
         }
         const finalMsg = [...result.messages].reverse().find((m: any) => m.role === "assistant" && m.content);
         if (!finalMsg?.content) {
-          addMessage(conversationId, "assistant", "❌ Agent did not return a final response.", []);
-          return { error: "Agent did not return a final response.", runId: run.id };
+          const errMsg = "Agent did not return a final response.";
+          agentRunRecorder.finishRun(run.id, "error", errMsg, { endReason: result.endReason ?? "execution_error" });
+          addMessage(conversationId, "assistant", "❌ " + errMsg, []);
+          return { error: errMsg, runId: run.id };
         }
+        agentRunRecorder.finishRun(run.id, "done", undefined, { endReason: result.endReason ?? "completed" });
         const redactedToolCalls = result.messages.flatMap((m: any) =>
           m.tool_calls?.map((tc: any) => ({ name: tc.function.name, redacted: true })) || []);
         addMessage(conversationId, "assistant", finalMsg.content, redactedToolCalls);

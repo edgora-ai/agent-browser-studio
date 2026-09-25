@@ -321,6 +321,11 @@
     "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
   var eventListeners = {};
   var approvalPending = [];
+  // R0925-07: agent.activeRun used to fall through to the miss proxy, so the
+  // chat tab rendered with the empty-array fallback and the audit still
+  // passed. Model the real contract (ChatRunSnapshot | null) — default null
+  // (no live run); a harness can opt into a running snapshot.
+  var activeRunFixture = null;
   mock.on = function (channel, cb) {
     if (typeof cb !== "function") return;
     if (EVENT_CHANNELS.indexOf(channel) === -1) return;
@@ -337,7 +342,16 @@
     });
   };
   mock.listenerCount = function (channel) { return (eventListeners[channel] || []).length; };
+  // null = idle (default). Pass a ChatRunSnapshot-shaped object to render the
+  // running state, e.g. { conversationId, streamId, runId, state: "running",
+  // startedAt, reply: "", toolCalls: [], steps: [], currentTool: null }.
+  mock.setActiveRun = function (snapshot) { activeRunFixture = snapshot || null; };
   def("agent", {
+      activeRun: function () {
+        // Shape mirrors desktopChatRuns.snapshot (chat-runs.ts): null when no
+        // live run owns this conversation.
+        return Promise.resolve(activeRunFixture ? clone(activeRunFixture) : null);
+      },
       conversations: ns({
         list: function () {
           // Field parity with ipc/agent.ts conversations:list — the renderer's

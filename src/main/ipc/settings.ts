@@ -19,6 +19,7 @@ import {
   setRepositoryExtensionMeta,
 } from "../services/extension-repository.js";
 import { validateDirId } from "../services/utils.js";
+import { requireSettingsMutation } from "../services/team.js";
 
 export function registerSettingsHandlers(): void {
 
@@ -34,6 +35,11 @@ export function registerSettingsHandlers(): void {
   });
 
   ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnProxyRisk?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
+    // R0925-05: launch safety gates are a local SECURITY policy, not a UI
+    // preference — same member+ rule as other settings mutations when a team
+    // workspace is enabled. A viewer denial must not touch the stored values.
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { success: false, error: gate.error };
     const cfg = getConfig() as any;
     if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
     if (typeof gates.blockOnProxyRisk === "boolean") cfg.blockOnProxyRisk = gates.blockOnProxyRisk;

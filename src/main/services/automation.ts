@@ -325,11 +325,10 @@ async function runAgentTaskOnProfile(
             });
             if (commit.ok) {
               artifacts = commit.artifacts;
-              // A truncated snapshot means the persisted copy is not complete:
-              // honest manual_review instead of a pass over partial evidence.
-              verification = commit.artifacts.some((a) => a.truncated)
-                ? manual("artifact_limit", "snapshot truncated to fit the per-run budget")
-                : outcome.verification;
+              // R0925-03: the store is the single source of truth for the
+              // verdict — it already downgraded to manual_review when the
+              // snapshot had to be truncated, so manifest and config agree.
+              verification = commit.verification;
             } else {
               verification = manual(commit.reasonCode === "artifact_limit" ? "artifact_limit" : "integrity_error", commit.detail);
             }

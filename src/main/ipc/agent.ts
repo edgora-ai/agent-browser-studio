@@ -32,7 +32,7 @@ import {
 } from "../services/skill-repository.js";
 import { recordAudit } from "../services/audit-log.js";
 import { TASK_TEMPLATES } from "../services/task-templates.js";
-import { requireAccountMutation, requireAccountSecret, type RoleCheck } from "../services/team.js";
+import { requireAccountMutation, requireAccountSecret, requireSettingsMutation, type RoleCheck } from "../services/team.js";
 import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "../services/platform-adapters.js";
 
 function gateAccount(r: RoleCheck): void {
@@ -467,7 +467,13 @@ export function registerAgentHandlers(): void {
     try { return { ok: true, ...agentDbQuery(sql) }; }
     catch (e: any) { return { ok: false, error: e.message || String(e) }; }
   });
-  ipcMain.handle("agent-db:exec", async (_e, sql: string) => agentDbExecScript(sql));
+  // Same member+ gate as REST /api/agent/db/exec (R0925-01): the UI SQL box
+  // writes the real SQLite store, so a viewer must not reach agentDbExecScript.
+  ipcMain.handle("agent-db:exec", async (_e, sql: string) => {
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { ok: false, error: gate.error };
+    return agentDbExecScript(sql);
+  });
 
   // ════════════════════════════════════════════════════════
   // Approval gate (risky-operation authorization)

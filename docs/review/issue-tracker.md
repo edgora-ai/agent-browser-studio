@@ -1,6 +1,6 @@
 # Agent Browser Studio 问题清单与验收标准（追踪表）
 
-> 来源：2026-08-29 三视角全面评审（产品经理 / 用户 / 系统架构）。
+> 来源：2026-08-29 三视角全面评审（产品经理 / 用户 / 系统架构），以及后续逐轮复核；2026-09-25 增量见第十一节。
 > 本文档是**唯一权威追踪表**：每个问题带验收标准与当前状态；状态变化必须附证据指针（测试文件 / 命令 / e2e 编号）。
 > 状态定义：✅ 已收口（验收全过）· 🟡 部分完成（剩余项已注明）· ⏳ 等外部条件 · 📋 未排期。
 
@@ -149,3 +149,23 @@
 - [ ] `npm run release:manifest` 生成首个 update-manifest.json 并发布
 - [ ] PM-3 仓库改名 + 文档 URL 同步
 - [ ] 全量 e2e（含 j1–j103）在打包产物上回归
+
+<a id="review-20260925"></a>
+
+## 十一、2026-09-25 复核增量（基线 `2bcd9fe`）
+
+> 详细复核证据、触发条件、优化建议与验证边界见[项目问题清单与优化建议](project-issues-and-optimization-2026-09-25.md)。本表仍是唯一权威状态表；优先级是建议顺序，不等同于漏洞评级；“复现测试通过”不代表问题已修复。
+> 修复批：2026-09-26 全部 8 项已实施并附回归；每项均做了反向验证（撤掉修复后新测试必红）。验证：unit+smoke 121 文件 / 1385 例、tsc、check:i18n、check:size、视觉审计（双主题弹窗 0 findings、tab audit 0 unstubbed 且 unstubbed 现已计入失败）。
+
+| # | 问题 | 验收标准 | 状态 | 证据 |
+|---|---|---|---|---|
+| R0925-01 | P1：数据库 IPC 写入与 REST 角色门禁不一致 | viewer 经真实 IPC/REST 均拒写且 SQLite 不变；授权角色成功写入、直接查库、重开读回与检索 | ✅ | `src/main/ipc/agent.ts` agent-db:exec 加 `requireSettingsMutation`；`tests/unit/agent-db-ipc-rbac.test.ts` 3 例（真实 SQLite：viewer 拒写后库文件不存在/成员写入直查库读回；去门禁反证 1 例变红） |
+| R0925-02 | P1：REST/MCP 空回复、轮数上限报错但持久化为 done | 两入口正常/HTTP500/空回复/轮数上限的响应、事件、状态与 endReason 一致；真实进程重开可检索 | ✅ | `rest-api-server.ts`/`mcp-server.ts` 先判后写一次提交（error+endReason / done+completed）；`tests/unit/chat-terminal-r0925.test.ts` 9 例（真实 HTTP 服务 + 真实 recorder：8 场景终态 + 401/200 鉴权 + reload 读回；回滚反证 7 例变红） |
+| R0925-03 | P2：截断成果的 manifest/config verdict 不一致，恢复可回放旧 passed | 最终 verdict 单一来源；截断不恢复为 passed；正常收尾与提交窗口恢复均正确，重复对账收敛；真实重开读盘验证 | ✅ | `run-result-store.ts` 截断即落 manual_review（manifest 唯一来源）+ `agent-run-trace.ts` 已提交 finalize 不回放、旧 manifest passed+truncated 读回降级 + `automation.ts` 用 commit.verification；`tests/unit/run-result-truncation-r0925.test.ts` 5 例（含 crash 窗口恢复、对账收敛、legacy manifest 降级；回滚反证 4 例变红）；M2 既有 5 套件 76 例仍绿 |
+| R0925-04 | P1/跨平台发版前：E2E launcher 固定 macOS Electron 路径 | 统一可执行路径；macOS/Windows/Linux 实际启动、主窗口/IPC smoke、相关 E2E 与安装包验证 | 🟡 解析器与源码门禁就位；Windows/Linux runner 实测仍随 PM-1 | `tests/e2e/helpers/app.ts` `resolveElectronBinary`（darwin/win32/linux），journey/j81 改用；`tests/unit/e2e-electron-path.test.ts` 3 例（三平台映射 + 本机二进制存在 + 源码扫描禁止再拼 macOS 路径） |
+| R0925-05 | 决策项：viewer 可修改本机启动安全开关 | 明确本机安全设置的角色矩阵；据决定验证允许或拒绝后的物理值；不影响界面偏好 | ✅（按“启动安全策略 member+、界面偏好开放”落地） | `src/main/ipc/settings.ts` launch-gates:set 加门禁（renderer 已有 success:false 错误展示）；`tests/unit/settings-launch-gates-rbac.test.ts` 3 例（viewer 拒写四项物理值不变、member 写入 reload 读回、只读 getter 开放；去门禁反证变红） |
+| R0925-06 | P2：Phase 5 新交互缺定向断言，旧 Markdown 镜像漂移 | 回归实际生产入口；覆盖复制、自增高、代码块与快捷键；故意破坏行为能使测试失败 | ✅ | `tests/unit/chat-markdown.test.ts` 重写为生产管线（真实 sanitizeMdHtml/wrapMdCodeBlocks/renderChatMarkdown，断言 breaks:false）20 例；`tests/unit/chat-content-r0925.test.ts` 11 例（复制按索引取值/失败不标成功、自增高 160px 上限、composer resize 钩子、SQL 快捷键只读路径/空库不绑定/单次绑定/exec 唯一写路径） |
+| R0925-07 | P2：视觉审计缺 fixture 不阻断，弹窗仅测首个主题 | 正确 activeRun fixture；未 stub 调用失败；主题×语言逐项报告；植入缺陷返回非零 | ✅ | `scripts/visual-mock.js` activeRun fixture（ChatRunSnapshot 契约 + setActiveRun）；`visual-shot.mjs` unstubbed 计入失败（撤 stub 反证 exit=1）；`visual-dialogs.mjs` 遍历全部主题。实测：双主题弹窗 sweep 0 findings、tab audit PASS 0 unstubbed |
+| R0925-08 | P2：当前里程碑状态与验收证据入口不同步 | 方案首页按日期区分实现/验证/未验证；M3 有独立证据记录；历史报告不改写；索引可达 | ✅ | `docs/product-optimization-plan-2026-09.md` 首页改里程碑状态表；`docs/m3-automation-status-notifications-validation-2026-09.md`（M3 单元 150 例 + 真实 Electron E2E 22 例实测通过） |
+
+维护债务继续沿用 AR-2，不重复建任务；[本轮渐进拆分建议](project-issues-and-optimization-2026-09-25.md#ar-2)不取代原验收目标。实施建议顺序：R0925-01/02 → R0925-04（可并行）→ R0925-03 → R0925-06/07/08；R0925-05 先明确权限约定。

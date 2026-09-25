@@ -427,6 +427,21 @@ export function reconcileRunResults(): ReconcileReport {
   const replay = new Map<string, { status: "done" | "error"; endReason?: AgentRunEndReason; finishedAt?: number; error?: string; verification?: AgentRunVerification; artifacts?: AgentRunArtifactRef[] }>();
   const dropRefs = new Set<string>();
 
+  // R0925-03: legacy manifests (pre single-source verdicts) can claim "passed"
+  // over a truncated snapshot. A valid sha256 proves integrity, not complete
+  // evidence — conservatively downgrade such verdicts on any read-back.
+  const honestVerification = (v: AgentRunVerification | undefined, artifacts: AgentRunArtifactRef[] | undefined): AgentRunVerification | undefined => {
+    if (!v || v.status !== "passed" || !artifacts?.some((a) => a.truncated)) return v;
+    return {
+      status: "manual_review",
+      checkedAt: Date.now(),
+      reasonCode: "artifact_limit",
+      verifierId: v.verifierId,
+      verifierVersion: v.verifierVersion,
+      issues: [{ code: "artifact_limit", detail: "manifest claimed pass over a truncated snapshot" }],
+    };
+  };
+
   for (const runId of storedIds) {
     const run = byId.get(runId);
     if (!run) {
@@ -458,9 +473,15 @@ export function reconcileRunResults(): ReconcileReport {
     }
     const terminal = manifest.terminal;
     const terminalValid = terminal && (terminal.status === "done" || terminal.status === "error");
+    // R0925-03: finishRun commits status + verification + refs in ONE write,
+    // so a run whose verification is no longer "unverified" provably completed
+    // its finalize path. Replaying the manifest over it would resurrect the
+    // pre-truncation verdict (e.g. passed over a manual_review downgrade).
+    const finalizeCommitted = Boolean(run.verification && run.verification.status !== "unverified");
     const needsReplay = terminalValid
       && run.status === "error"
       && run.endReason === "interrupted"
+      && !finalizeCommitted
       && manifest.runStartedAt === run.startedAt
       && manifest.templateId === run.source?.templateId
       && manifest.templateVersion === run.source?.templateVersion;
@@ -470,7 +491,7 @@ export function reconcileRunResults(): ReconcileReport {
         endReason: RECONCILE_END_REASONS.has(terminal.endReason as AgentRunEndReason) ? terminal.endReason as AgentRunEndReason : undefined,
         finishedAt: typeof terminal.finishedAt === "number" ? terminal.finishedAt : undefined,
         error: terminal.status === "error" && typeof terminal.error === "string" ? terminal.error.slice(0, 1000) : undefined,
-        verification: manifest.verification,
+        verification: honestVerification(manifest.verification, manifest.artifacts),
         artifacts: manifest.artifacts,
       });
       continue;
@@ -480,7 +501,7 @@ export function reconcileRunResults(): ReconcileReport {
     if (lacksRefs || lacksVerdict) {
       backfill.set(runId, {
         ...(lacksRefs ? { artifacts: manifest.artifacts } : {}),
-        ...(lacksVerdict ? { verification: manifest.verification } : {}),
+        ...(lacksVerdict ? { verification: honestVerification(manifest.verification, manifest.artifacts) } : {}),
       });
     }
   }

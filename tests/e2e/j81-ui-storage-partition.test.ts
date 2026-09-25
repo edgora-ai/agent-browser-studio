@@ -16,22 +16,13 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { setupTestApp, closeApp, type TestAppHandle } from "./helpers/app.js";
+import { setupTestApp, closeApp, resolveElectronBinary, type TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
 const execFileP = promisify(execFile);
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j81");
-const ELECTRON_BIN = path.join(
-  REPO,
-  "node_modules",
-  "electron",
-  "dist",
-  "Electron.app",
-  "Contents",
-  "MacOS",
-  "Electron",
-);
+const ELECTRON_BIN = resolveElectronBinary(REPO);
 const SEED_MAIN = path.join(REPO, "tests", "e2e", "helpers", "seed-legacy-storage.mjs");
 
 function partitionLevelDb(userDataDir: string): string {
