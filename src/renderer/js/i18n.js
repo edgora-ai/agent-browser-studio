@@ -284,6 +284,10 @@
       "agent.chat-title": "新对话",
       "agent.chat.delete": "删除当前对话",
       "agent.chat.send": "发送消息",
+      "agent.action.copy": "复制",
+      "agent.action.copied": "已复制",
+      "agent.action.copy-code": "复制代码",
+      "agent.action.copy-failed": "复制失败",
       "agent.thinking": "思考中...",
       "agent.stream-error": "流式出错",
       "agent.empty-title": "新对话",
@@ -753,6 +757,7 @@
       "db.exec-failed-default": "失败",
       "db.no-result": "（无结果，{n} 行）",
       "db.truncated": "（截断）",
+      "db.result-placeholder": "运行查询（⌘/Ctrl+Enter），或点击左侧的表浏览数据。",
       "runs.group.expand-n": "展开/收起 {n} 个 profile 结果",
 
       // ── Approval ──
@@ -1513,6 +1518,10 @@
       "agent.chat-title": "New Chat",
       "agent.chat.delete": "Delete current conversation",
       "agent.chat.send": "Send message",
+      "agent.action.copy": "Copy",
+      "agent.action.copied": "Copied",
+      "agent.action.copy-code": "Copy code",
+      "agent.action.copy-failed": "Copy failed",
       "agent.thinking": "Thinking...",
       "agent.stream-error": "Stream error",
       "agent.empty-title": "New conversation",
@@ -1787,8 +1796,8 @@
       "auto.hint-tools": "· tools=",
       "auto.hint-success": "· success=",
       "auto.empty-state": "No automation tasks yet.<br>Click \"New Task\", or ask the Agent to build one (say \"launch demo every day at 9\" in Agent).",
-      "auto.enabled": "Enabled",
-      "auto.disabled": "Disabled",
+      "auto.enabled": "Enable",
+      "auto.disabled": "Disable",
       "auto.row.trigger": "Trigger",
       "auto.row.action": "Action",
       "auto.row.last": "Last",
@@ -1971,6 +1980,7 @@
       "db.exec-failed-default": "Failed",
       "db.no-result": "(no result, {n} rows)",
       "db.truncated": "(truncated)",
+      "db.result-placeholder": "Run a query (⌘/Ctrl+Enter), or click a table on the left to browse its data.",
       "runs.group.expand-n": "Expand/collapse {n} profile result(s)",
 
       // ── Approval ──

@@ -20,12 +20,16 @@
   agentBrowser.loadDbTab = function() {
     lcall("agentDb.tables", function () { return api.agentDb.tables(); }).then(function(tables) {
       var el = document.getElementById("db-tables");
+      var countEl = document.getElementById("db-table-count");
+      if (countEl) countEl.textContent = tables && tables.length ? "(" + tables.length + ")" : "";
       if (!tables || tables.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);padding:8px;">' + t("db.empty-tables","还没有表。让 Agent 建一个,或在 SQL 框跑 <code>CREATE TABLE ...</code>。") + '</div>';
+        var emptyIcon = window.icons && window.icons.svg ? window.icons.svg("database", { size: 32, className: "empty-icon" }) : "";
+        el.innerHTML = '<div class="empty-state">' + emptyIcon +
+          '<div>' + t("db.empty-tables","还没有表。让 Agent 建一个,或在 SQL 框跑 <code>CREATE TABLE ...</code>。") + '</div></div>';
         return;
       }
       el.innerHTML = tables.map(function(tbl) {
-        return '<div class="db-table-row" data-table="' + escAttr(tbl.name) + '" style="padding:6px 8px;cursor:pointer;border-bottom:1px solid var(--border-light);">' +
+        return '<div class="db-table-row" data-table="' + escAttr(tbl.name) + '">' +
           // R142: `.icon-text` so the table glyph centres on the table name
           // instead of riding the text baseline 1.3px low.
           '<div class="icon-text" style="font-weight:600;">' + icon("table", 12) + esc(tbl.name) + '</div>' +
@@ -37,6 +41,7 @@
         if (!row || !el.contains(row)) return;
         agentBrowser.dbViewTable(row.dataset.table);
       };
+      bindSqlShortcut();
     }).catch(function(e) {
       // R190: the catch only toasted — the list area kept its "加载中…"
       // placeholder forever, so the tab looked like it was still working
@@ -50,7 +55,31 @@
     });
   };
 
+  // ⌘/Ctrl+Enter runs the query from inside the editor — the affordance every
+  // SQL workbench has. Bound once; loadDbTab runs on every tab visit.
+  var sqlShortcutBound = false;
+  function bindSqlShortcut() {
+    if (sqlShortcutBound) return;
+    var sqlEl = document.getElementById("db-sql");
+    if (!sqlEl) return;
+    sqlShortcutBound = true;
+    sqlEl.addEventListener("keydown", function(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        agentBrowser.dbRunSql();
+      }
+    });
+  }
+
   agentBrowser.dbViewTable = function(table) {
+    // Mark the picked row so the two panes read as master/detail.
+    var list = document.getElementById("db-tables");
+    if (list) {
+      var rows = list.querySelectorAll(".db-table-row");
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].classList.toggle("is-active", rows[i].dataset.table === table);
+      }
+    }
     api.agentDb.tableData(table, 100, 0).then(function(data) {
       var el = document.getElementById("db-result");
       if (!data || !data.rows || data.rows.length === 0) {

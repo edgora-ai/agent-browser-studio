@@ -662,6 +662,26 @@
     });
   }
 
+  // Wrap fenced code blocks in a card — header row (language label + copy
+  // action) above the <pre>, matching the anatomy of dedicated AI chat tools
+  // (WorkBuddy .cb-markdown-pre-container: 16px-radius card, 36px header).
+  // This runs AFTER sanitizeMdHtml, so the only interpolated value is the
+  // language name, which safeCodeLanguage reduces to [A-Za-z0-9_-]; the code
+  // body is marked's own escaped text and is reused verbatim.
+  function wrapMdCodeBlocks(html) {
+    return String(html || "").replace(/<pre><code(?:\s+class="([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g, function (match, cls, body) {
+      var lang = "";
+      var langMatch = /(?:^|\s)language-([^\s"]+)/.exec(cls || "");
+      if (langMatch) lang = safeCodeLanguage(langMatch[1]);
+      var copyCodeLabel = pi18n("agent.action.copy-code", "Copy code");
+      var copyLabel = pi18n("agent.action.copy", "Copy");
+      return '<div class="md-codeblock">' +
+        '<div class="md-codeblock-head"><span class="md-codeblock-lang">' + esc(lang || "text") + '</span>' +
+        '<button type="button" class="md-codeblock-copy" data-code-copy title="' + escAttr(copyCodeLabel) + '" aria-label="' + escAttr(copyCodeLabel) + '">' + icon("copy", 12) + '<span>' + esc(copyLabel) + '</span></button></div>' +
+        '<pre><code' + (cls ? ' class="' + cls + '"' : '') + '>' + body + '</code></pre></div>';
+    });
+  }
+
   function renderChatMarkdown(text) {
     var src = String(text || "");
     if (typeof window !== "undefined" && window.marked && window.marked.parse) {
@@ -673,7 +693,7 @@
           mangle: false,
         });
         var html = window.marked.parse(src);
-        return sanitizeMdHtml(html);
+        return wrapMdCodeBlocks(sanitizeMdHtml(html));
       } catch (e) {
         // fall through to minimal rendering
       }

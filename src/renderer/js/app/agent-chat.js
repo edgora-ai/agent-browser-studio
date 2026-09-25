@@ -81,6 +81,31 @@
     return title;
   }
 
+  function msgTime(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return "";
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  // Hover foot under each message: timestamp + copy-raw action, the pattern
+  // dedicated chat tools (WorkBuddy) use instead of always-on chrome. The
+  // click handler lives in agent-chat-content.js and resolves the message by
+  // its render index into state.agentMessages.
+  function msgFootHtml(message, idx, isUser) {
+    var time = message.timestamp ? msgTime(message.timestamp) : "";
+    var hasContent = !!String(message.content || "").trim();
+    if (!time && !hasContent) return "";
+    var copyLabel = t("agent.action.copy", "Copy");
+    return '<div class="chat-msg-foot' + (isUser ? " is-user" : "") + '">' +
+      (time ? '<span class="chat-msg-time num">' + esc(time) + "</span>" : "") +
+      (hasContent ? '<button type="button" class="chat-msg-copy" data-msg-copy="' + idx + '" title="' + escAttr(copyLabel) + '" aria-label="' + escAttr(copyLabel) + '">' + icon("copy", 12) + "</button>" : "") +
+      "</div>";
+  }
+
+  function resizeComposer() {
+    if (typeof agentBrowser.chatComposerResize === "function") agentBrowser.chatComposerResize();
+  }
+
   function emptyChatHtml(iconName, titleKey, titleFb, hintKey, hintFb, withSuggestions) {
     var h = '<div class="chat-empty"><div class="chat-empty-icon">' + icon(iconName, 40) + "</div>" +
       '<div class="chat-empty-title">' + esc(t(titleKey, titleFb)) + "</div>" +
@@ -161,7 +186,7 @@
     var title = byId("agent-chat-title");
     if (title) title.textContent = session.title || t("agent.chat-title", "New Chat");
     var input = byId("agent-chat-input");
-    if (input && !session.run) input.value = session.draft || "";
+    if (input && !session.run) { input.value = session.draft || ""; resizeComposer(); }
     renderComposerHint();
     agentBrowser.agentRenderMessages();
     renderRunUi(session);
@@ -847,7 +872,7 @@
       session.messagesRef.push(userMessage, assistantMessage);
       if (isActiveSession(session)) {
         var input = byId("agent-chat-input");
-        if (input) input.value = "";
+        if (input) { input.value = ""; resizeComposer(); }
         state.agentMessages = session.messagesRef;
         agentBrowser.agentRenderMessages();
         renderEnvironmentUi(session);
@@ -1410,23 +1435,40 @@
     var preserveScroll = !!(opts && opts.preserveScroll);
     var previousTop = el.scrollTop;
     var messages = state.agentMessages || [];
+    var session = activeSession();
+    // requestId survives adoptConversation's merge (object identity does not),
+    // so a mid-stream history refresh cannot detach the caret from the live
+    // answer.
+    var liveRequestId = session && session.run && !session.run.terminal ? session.run.requestId : null;
     var assistantRuns = Object.create(null);
     messages.forEach(function(message) {
       if (message.role === "assistant" && message.runId) assistantRuns[message.runId] = true;
     });
 
+    // Each message is a column (bubble + trace + run meta + hover foot) so the
+    // reading flow stays left-aligned like dedicated chat tools; only the
+    // user's own column hugs the right edge.
     var html = "";
-    messages.forEach(function(message) {
+    messages.forEach(function(message, idx) {
       if (message.role === "user") {
-        html += '<div class="chat-msg chat-msg-user"><div class="chat-bubble chat-bubble-user">' + esc(message.content) + "</div></div>";
+        html += '<div class="chat-msg chat-msg-user"><div class="chat-msg-col">' +
+          '<div class="chat-bubble chat-bubble-user">' + esc(message.content) + "</div>" +
+          msgFootHtml(message, idx, true);
         if (message.runId && !assistantRuns[message.runId]) html += messageRunMeta(message, true);
+        html += "</div></div>";
       } else if (message.role === "assistant") {
         var content = message.content
           ? renderChatMarkdown(message.content)
           : '<span class="chat-thinking">' + esc(t("agent.thinking", "Thinking…")) + "</span>";
-        html += '<div class="chat-msg chat-msg-agent"><div class="chat-avatar">' + icon("robot", 14) + '</div><div class="chat-bubble chat-bubble-agent">' + content + "</div></div>";
-        html += renderTrace(message);
-        if (message.runId || message.endReason || message.verification) html += messageRunMeta(message, true);
+        // A live run gets the blinking caret at the stream head, so an
+        // in-progress answer reads as typing rather than static text.
+        if (liveRequestId && message.requestId === liveRequestId) content += '<span class="chat-caret" aria-hidden="true"></span>';
+        html += '<div class="chat-msg chat-msg-agent"><div class="chat-avatar">' + icon("robot", 14) + '</div><div class="chat-msg-col">' +
+          '<div class="chat-bubble chat-bubble-agent">' + content + "</div>" +
+          renderTrace(message) +
+          ((message.runId || message.endReason || message.verification) ? messageRunMeta(message, true) : "") +
+          msgFootHtml(message, idx, false) +
+          "</div></div>";
       } else if (message.role === "tool") {
         html += '<div class="chat-tool-legacy"><span class="icon-text">' + icon("arrowRight", 11) + " " + esc(String(message.content).slice(0, 160)) + "</span></div>";
       }

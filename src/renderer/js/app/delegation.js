@@ -126,7 +126,43 @@
     dlg.insertBefore(btn, dlg.firstChild);
   }
 
+  // Markdown code-block cards (renderChatMarkdown wraps every fenced block)
+  // carry a copy affordance in their header. Handled ahead of the generic
+  // data-cmd dispatch because the text lives in the sibling <pre>, not in an
+  // attribute — copying needs the DOM context of the clicked button.
+  function copyCodeBlock(btn) {
+    var block = btn.closest ? btn.closest('.md-codeblock') : null;
+    var codeEl = block && block.querySelector ? block.querySelector('pre code') : null;
+    var text = codeEl ? String(codeEl.textContent || '') : '';
+    var copyLabel = t('agent.action.copy', 'Copy');
+    var doneLabel = t('agent.action.copied', 'Copied');
+    function paint(iconName, label) {
+      btn.innerHTML = (helpers.icon ? helpers.icon(iconName, 12) : '') + '<span>' + esc(label) + '</span>';
+    }
+    function markCopied() {
+      paint('check', doneLabel);
+      btn.classList.add('is-copied');
+      setTimeout(function () {
+        btn.classList.remove('is-copied');
+        paint('copy', copyLabel);
+      }, 1200);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(markCopied, function () {
+        toast(t('agent.action.copy-failed', 'Copy failed'), 'error');
+      });
+    } else {
+      toast(t('agent.action.copy-failed', 'Copy failed'), 'error');
+    }
+  }
+
   function initEventDelegation() {    document.addEventListener('click', function(e) {
+      var codeBtn = closestEventTarget(e,'[data-code-copy]');
+      if (codeBtn) {
+        copyCodeBlock(codeBtn);
+        e.preventDefault();
+        return;
+      }
       var el = closestEventTarget(e,'[data-role="cmd"]');
       if (!el) return;
       var cmd = el.getAttribute('data-cmd');

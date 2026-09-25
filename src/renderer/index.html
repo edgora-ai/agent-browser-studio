@@ -296,7 +296,7 @@
  </div>
  </div>
  <div id="ext-install-status" class="status-note"></div>
- <div class="card">
+ <div class="card ext-filter">
  <input id="extension-repo-search" placeholder="Search name, ID, description, or tag..." data-i18n-placeholder="ext.search" data-role="input" data-input-cmd="loadExtensionsTab">
  <div id="extension-repo-status" class="status-note"></div>
  </div>
@@ -581,19 +581,24 @@
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadDbTab" data-icon="refresh"><span data-i18n="db.btn.refresh">Refresh</span></button>
  </div>
  </div>
- <div style="display:flex;gap:16px;align-items:flex-start;">
- <div class="card" style="flex:0 0 260px;">
- <h4 data-i18n="db.tables-heading">Tables</h4>
+ <div class="db-layout">
+ <div class="card db-side">
+ <h4><span data-i18n="db.tables-heading">Tables</span> <span id="db-table-count" class="db-side-count"></span></h4>
  <div id="db-tables" class="db-tables"><div class="loading" data-i18n="common.loading">Loading...</div></div>
  </div>
- <div class="card" style="flex:1;min-width:0;">
+ <div class="card db-main">
  <h4 data-i18n="db.sql-heading">SQL</h4>
- <textarea id="db-sql" rows="3" placeholder="SELECT * FROM customers LIMIT 10" data-i18n-en-ok></textarea>
+ <textarea id="db-sql" rows="4" placeholder="SELECT * FROM customers LIMIT 10" data-i18n-en-ok></textarea>
  <div class="btn-row tight">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="dbRunSql" data-i18n="db.btn.run" data-icon="play">Run</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dbRunSql" data-cmd-arg="exec" data-icon="zap"><span data-i18n="db.btn.exec">Execute (write/DDL)</span></button>
  </div>
- <div id="db-result" class="db-result"></div>
+ <div id="db-result" class="db-result">
+ <div class="db-result-empty">
+ <span class="empty-icon" data-icon="database" aria-hidden="true"></span>
+ <div data-i18n="db.result-placeholder">Run a query, or click a table on the left to browse its data.</div>
+ </div>
+ </div>
  </div>
  </div>
  </section>
@@ -1570,6 +1575,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <script src="js/app/browser.js"></script>
 <script src="js/app/accounts.js"></script>
 <script src="js/app/agent-chat.js"></script>
+<script src="js/app/agent-chat-content.js"></script>
 <script src="js/app/agent-config.js"></script>
 <script src="js/app/agent-skills.js"></script>
 <script src="js/app/agent-adapters.js"></script>
