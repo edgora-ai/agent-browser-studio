@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-studio",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local-first browser profile management and AI automation studio for independently patched Chromium",
   "type": "module",
   "main": "dist/main/index.js",

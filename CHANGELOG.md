@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-26
+
 ### Changed
 
 - Fresh installs launch profiles with a **direct connection** until a proxy is
@@ -61,6 +63,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/); versions match
 - Crash safety: unhandled promise rejections and uncaught exceptions are
   logged through observability instead of being lost.
 - Docker: the MCP port (26581) is now exposed alongside the REST API (26582).
+- **Team-role parity on write paths** (R0925 review batch): the in-app
+  database SQL box (`agent-db:exec`) and the launch safety gates now enforce
+  the same member+ check as their REST counterparts — a viewer can no longer
+  write the agent SQLite store or weaken startup safety policy when a team
+  workspace is enabled.
+- **Run history no longer lies about failed chats**: REST/MCP chats that hit
+  the tool-call round limit or returned an empty reply were persisted as
+  `done`; they are now recorded as `error` with the real end reason
+  (`round_limit` / `execution_error`).
+- **Truncated results can no longer come back as "passed"**: when a run's
+  evidence snapshot had to be cut to fit the storage budget, the verdict is
+  now committed as `manual_review` at the source (manifest and run history
+  always agree), restart recovery never overwrites a finalized run, and
+  legacy manifests claiming a pass over truncated evidence are downgraded on
+  read.
+- Cross-platform E2E launchers resolve the Electron binary per platform
+  instead of a hard-coded macOS path.
 
 ### Docs
 
