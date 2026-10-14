@@ -984,7 +984,7 @@
       "profile.new.field.version": "版本",
       "profile.new.field.proxy": "代理",
       "profile.new.field.seed": "指纹种子",
-      "profile.new.field.seed.help": "一个整数控制 GPU、屏幕、硬件、Canvas、音频、字体——同种子 = 相同指纹。",
+      "profile.new.field.seed.help": "种子用于变化托管隐私特征，并不保证整个指纹相同。Chromium 显示本机 GPU；请选择与本机一致的操作系统，跨系统 GPU 兼容性未经验证。",
       "profile.new.field.seed.placeholder": "10000-99999（留空随机）",
       "profile.new.field.platform": "平台",
       "profile.new.field.timezone": "时区",
@@ -992,7 +992,7 @@
       "profile.new.field.webrtc": "WebRTC IP",
       "profile.new.field.webrtc.placeholder": "自动（代理出口 IP）— 或自定义 IP",
       "profile.new.advanced": "高级硬件指纹",
-      "profile.new.advanced.help": "留空让种子生成整套连贯硬件。显式值会作为整套画像约束；无法匹配 CPU/RAM/GPU/屏幕/DPR 的组合会被拒绝。",
+      "profile.new.advanced.help": "留空让种子选择连贯的 CPU、内存、屏幕与 DPR；非 GPU 显式值仍须共同匹配受支持画像。Chromium 不支持 gpuVendor / gpuRenderer 覆盖；旧值须手动清空。Firefox GPU 策略不变。",
       "profile.new.field.gpu-vendor": "GPU 厂商",
       "profile.new.field.gpu-renderer": "GPU 渲染器",
       "profile.new.field.cpu": "CPU 核心",
@@ -1047,10 +1047,10 @@
 
       // ── Profile edit (agent-browser-meta) ──
       "profile.edit.title": "托管 Chromium 配置——指纹与身份",
-      "profile.edit.help": "<strong>--fingerprint=&lt;seed&gt;</strong> 确定性生成 GPU、屏幕、硬件、Canvas、音频、字体。<br>同种子 + 平台 + 时区 + 区域 = 100% 相同指纹。",
+      "profile.edit.help": "<strong>指纹种子</strong> 用于变化托管隐私特征，不控制本机 GPU。<br>Chromium 显示本机 GPU；请选择与本机一致的操作系统，跨系统 GPU 兼容性未经验证。",
       "profile.edit.field.name": "配置名称 *",
       "profile.edit.field.seed": "指纹种子 *",
-      "profile.edit.advanced.help": "留空使用种子生成的整套硬件。显式值必须共同匹配受支持画像，避免只改 GPU 或 CPU 造成跨字段泄漏。",
+      "profile.edit.advanced.help": "留空让种子选择连贯的 CPU、内存、屏幕与 DPR；非 GPU 显式值仍须共同匹配受支持画像。Chromium 不支持 gpuVendor / gpuRenderer 覆盖；旧值须手动清空。Firefox GPU 策略不变。",
 
       // ── Bulk import ──
       "bulk.title": "批量导入配置",
@@ -2226,7 +2226,7 @@
       "profile.new.field.version": "Version",
       "profile.new.field.proxy": "Proxy",
       "profile.new.field.seed": "Fingerprint Seed",
-      "profile.new.field.seed.help": "One integer controls GPU, screen, hardware, canvas, audio, fonts — same seed = identical fingerprint.",
+      "profile.new.field.seed.help": "Seed varies managed privacy surfaces; it does not guarantee an identical whole fingerprint. Chromium exposes the host GPU. Choose the host OS; cross-OS GPU compatibility is unverified.",
       "profile.new.field.seed.placeholder": "10000-99999 (empty = random)",
       "profile.new.field.platform": "Platform",
       "profile.new.field.timezone": "Timezone",
@@ -2234,7 +2234,7 @@
       "profile.new.field.webrtc": "WebRTC IP",
       "profile.new.field.webrtc.placeholder": "Auto (proxy exit IP) - or custom IP",
       "profile.new.advanced": "Advanced hardware fingerprint",
-      "profile.new.advanced.help": "Leave empty for a coherent joint hardware persona. Explicit values constrain the whole persona; impossible CPU/RAM/GPU/screen/DPR combinations are rejected.",
+      "profile.new.advanced.help": "Leave empty for seed-selected CPU, memory, screen and DPR; explicit non-GPU values must still match a supported joint persona. Chromium rejects gpuVendor / gpuRenderer overrides; clear any saved values explicitly. Firefox GPU policy is unchanged.",
       "profile.new.field.gpu-vendor": "GPU Vendor",
       "profile.new.field.gpu-renderer": "GPU Renderer",
       "profile.new.field.cpu": "CPU Cores",
@@ -2288,10 +2288,10 @@
       "profile.new.random": "Random",
 
       "profile.edit.title": "Managed Chromium Profile — Fingerprint & Identity",
-      "profile.edit.help": "<strong>--fingerprint=&lt;seed&gt;</strong> deterministically generates GPU, screen, hardware, canvas, audio, fonts.<br>Same seed + platform + timezone + locale = 100% identical fingerprint.",
+      "profile.edit.help": "<strong>Fingerprint seed</strong> varies managed privacy surfaces, not the host GPU.<br>Chromium exposes the host GPU. Choose the host OS; cross-OS GPU compatibility is unverified.",
       "profile.edit.field.name": "Profile Name *",
       "profile.edit.field.seed": "Fingerprint Seed *",
-      "profile.edit.advanced.help": "Leave empty for the seed-owned joint persona. Explicit values must match one supported persona so a one-field override cannot leak cross-field inconsistency.",
+      "profile.edit.advanced.help": "Leave empty for seed-selected CPU, memory, screen and DPR; explicit non-GPU values must still match a supported joint persona. Chromium rejects gpuVendor / gpuRenderer overrides; clear any saved values explicitly. Firefox GPU policy is unchanged.",
 
       "bulk.title": "Bulk Import Profiles",
       "bulk.description": "One Browser profile per line. Format: <code>name, platform, locale, timezone, seed, webrtcIp</code>",

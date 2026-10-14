@@ -762,7 +762,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <input id="new-agent-browser-seed" type="number" data-i18n-placeholder="profile.new.field.seed.placeholder" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed" data-icon="wand"><span data-i18n="profile.new.random">Random</span></button>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.field.seed.help">One integer controls GPU, screen, hardware, canvas, audio, fonts — same seed = identical fingerprint.</p>
+ <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces; it does not guarantee an identical whole fingerprint. Chromium exposes the host GPU. Choose the host OS; cross-OS GPU compatibility is unverified.</p>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-timezone" data-i18n="profile.new.field.timezone">Timezone</label>

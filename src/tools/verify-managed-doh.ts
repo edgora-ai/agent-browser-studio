@@ -607,7 +607,14 @@ export async function runSample(opts: Options, proxy: LoggingProxy | null, index
   return { index, pageState, httpStatus, sessionIssue, netLog, ...computeVerdict(netLog, pageState, sessionIssue, opts.dnsRoute) };
 }
 
+export function filePermissionCoverage(platform: string = process.platform): string {
+  return platform === "win32"
+    ? "POSIX-mode proof is unsupported on Windows; owner-only ACL privacy is not verified. Exclusive file creation is preserved."
+    : "POSIX file mode 0600 and runtime directory mode 0700 requested; ACL and OS-wide privacy are not verified.";
+}
+
 export function writePrivateReport(file: string, report: unknown): void {
+  // Mode 0600 requests POSIX permissions, not verified Windows owner-only ACLs.
   // Exclusive creation prevents overwriting an earlier report or following an existing symlink.
   fs.writeFileSync(file, JSON.stringify(report, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 }
@@ -638,6 +645,7 @@ async function main(): Promise<void> {
     outcome, verdict: new Set(samples.map((sample) => sample.verdict)).size === 1 ? samples[0].verdict : "mixed-sample-results",
     dnsVerification: outcome === "pass" && samples.every((sample) => sample.verdict === "doh-via-proxy") ? "completed-correlated-doh-for-sampled-host" : outcome === "pass" ? "hostname-delegated-to-proxy-doh-not-exercised" : "not-verified",
     coverage: {
+      filePermissions: filePermissionCoverage(),
       tcp: "Selected HTTPS target and managed DoH endpoint only; fresh persistent profile; successful correlated proxy transport required.",
       proxyResolution: "proxy-resolves-all means the sampled hostname tunnel and origin succeeded without observed local DNS; the upstream resolver's implementation is not observed.",
       udpQuic: "Disabled, not verified. Completed failed IPv6 reachability probes with explicit creator/source evidence and no UDP traffic are counted separately, not as packet or OS-wide verification. Raw SOCKS5 TCP does not exercise the production MASQUE/UDP bridge. Every other UDP event or real QUIC session remains inconclusive, never a TCP pass.",
@@ -650,8 +658,10 @@ async function main(): Promise<void> {
   const report = opts.report || path.join(runtimeRoot, "report.json");
   writePrivateReport(report, result);
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-  process.stderr.write(`[verify-managed-doh] private report: ${report}\n`);
-  if (opts.keepNetLog) process.stderr.write(`[verify-managed-doh] private Default-capture logs retained under ${runtimeRoot}; they may contain DNS names. No profile is retained.\n`);
+  const privacyLabel = process.platform === "win32" ? "" : "private ";
+  process.stderr.write(`[verify-managed-doh] ${privacyLabel}report: ${report}\n`);
+  if (process.platform === "win32") process.stderr.write(`[verify-managed-doh] ${filePermissionCoverage()}\n`);
+  if (opts.keepNetLog) process.stderr.write(`[verify-managed-doh] ${privacyLabel}Default-capture logs retained under ${runtimeRoot}; they may contain DNS names. No profile is retained.\n`);
   process.exitCode = outcome === "pass" ? 0 : outcome === "inconclusive" ? 2 : 1;
 }
 

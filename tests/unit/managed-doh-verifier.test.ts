@@ -9,7 +9,7 @@ vi.mock("playwright", () => ({ chromium: { launchPersistentContext: native.launc
 vi.mock("node:child_process", () => ({ execFileSync: native.versionProbe }));
 
 import {
-  computeVerdict, isMainModule, parseExecutableVersion, parseNetLog, parseOptions, runSample,
+  computeVerdict, filePermissionCoverage, isMainModule, parseExecutableVersion, parseNetLog, parseOptions, runSample,
   scanNetLog, selectPlatform, validateDohTemplate, validateTestCertSpki, writePrivateReport,
   type ConnectRecord, type EvidenceContext, type Options,
 } from "../../src/tools/verify-managed-doh.js";
@@ -453,14 +453,15 @@ describe("owned persistent sample lifecycle and private bounded reporting (mock 
     expect(fs.existsSync(fake.paths().profilePath)).toBe(false);
     expect(native.versionProbe).not.toHaveBeenCalled();
   });
-  it("preserves explicitly kept private evidence, never a real profile or raw Everything capture", async () => {
+  it("preserves explicitly kept evidence with requested POSIX mode, never a real profile or raw Everything capture", async () => {
     const root = fs.mkdtempSync(path.join(workDir, "sample-preserved-"));
     const opts = options("doh", true);
     const fake = stub(root, opts);
     const result = await runSample(opts, fake.proxy, 0, root, version);
     expect(result.outcome).toBe("pass");
     expect(fs.existsSync(fake.paths().profilePath)).toBe(false);
-    expect(fs.statSync(fake.paths().logPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(fake.paths().logPath).mode & 0o777).toBe(0o600);
+    else expect(filePermissionCoverage()).toMatch(/unsupported on Windows.*ACL privacy is not verified/);
     expect(scanNetLog(fake.paths().logPath, context).successfulDohViaProxy).toBe(1);
   });
   it("proxy route disables DoH and requires forward/origin success, not mere loading", async () => {
@@ -496,11 +497,19 @@ describe("owned persistent sample lifecycle and private bounded reporting (mock 
     const second = stub(root, opts, "valid", version, 200, true);
     expect(await runSample(opts, second.proxy, 1, root, version)).toMatchObject({ outcome: "inconclusive", sessionIssue: "browser-close-failed-log-may-be-unfinished" });
   });
-  it("writes exclusive 0600 JSON reports, verifies stored content and preserves earlier evidence", () => {
+  it("discloses unsupported Windows POSIX-mode proof without claiming private ACLs", () => {
+    expect(filePermissionCoverage("win32")).toMatch(/unsupported on Windows.*ACL privacy is not verified/);
+    for (const platform of ["darwin", "linux"]) {
+      expect(filePermissionCoverage(platform)).toContain("POSIX file mode 0600");
+      expect(filePermissionCoverage(platform)).not.toContain("unsupported");
+    }
+  });
+  it("writes exclusive JSON reports with requested POSIX mode, verifies content and preserves earlier evidence", () => {
     const file = path.join(workDir, "private-report.json");
     const report = { schema: 2, outcome: "inconclusive", samples: [{ netLog: { status: "missing" } }] };
     writePrivateReport(file, report);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    else expect(filePermissionCoverage()).toMatch(/unsupported on Windows.*ACL privacy is not verified/);
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(report);
     expect(() => writePrivateReport(file, { outcome: "pass" })).toThrow();
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(report);
