@@ -29,10 +29,22 @@ class AgentBrowserClient:
         self.timeout = timeout
 
     # ── low-level ──────────────────────────────────────────────────────────
-    def request(self, method: str, path: str, body: Any = None, auth: bool = True) -> Any:
+    def request(self, method: str, path: str, body: Any = None, auth: bool = True,
+                headers: Optional[dict[str, str]] = None) -> Any:
+        """Optional custom headers are additive; auth keeps its positional slot.
+
+        Accounts require {'If-Match': '"' + selected_revision + '"'} from the
+        original /api/accounts list. No automatic fresh-revision retry occurs.
+        """
         url = self.base_url + path
         data = None
-        headers: dict[str, str] = {}
+        custom = headers or {}
+        headers = {}
+        for name, value in custom.items():
+            key = name.lower()
+            if key in ("authorization", "x-agent-browser-token", "x-cloak-token"):
+                raise AgentBrowserError("Custom request headers cannot override authentication")
+            headers[key] = value
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["content-type"] = "application/json"
@@ -53,20 +65,23 @@ class AgentBrowserClient:
                 pass
             raise AgentBrowserError(f"{method} {path} -> {exc.code}: {detail[:500]}") from exc
 
-    def get(self, path: str, auth: bool = True) -> Any:
-        return self.request("GET", path, auth=auth)
+    def get(self, path: str, auth: bool = True, headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("GET", path, auth=auth, headers=headers)
 
-    def post(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("POST", path, body, auth=auth)
+    def post(self, path: str, body: Any = None, auth: bool = True,
+             headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("POST", path, body, auth=auth, headers=headers)
 
-    def delete(self, path: str, auth: bool = True) -> Any:
-        return self.request("DELETE", path, auth=auth)
+    def delete(self, path: str, auth: bool = True, headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("DELETE", path, auth=auth, headers=headers)
 
-    def put(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("PUT", path, body, auth=auth)
+    def put(self, path: str, body: Any = None, auth: bool = True,
+            headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("PUT", path, body, auth=auth, headers=headers)
 
-    def patch(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("PATCH", path, body, auth=auth)
+    def patch(self, path: str, body: Any = None, auth: bool = True,
+              headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("PATCH", path, body, auth=auth, headers=headers)
 
     # ── system ─────────────────────────────────────────────────────────────
     def health(self) -> dict[str, Any]:

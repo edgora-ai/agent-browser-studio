@@ -156,12 +156,15 @@
     focusWhenReady();
   };
 
+  var activityLoadSeq = 0;
   agentBrowser.loadActivity = function() {
+    var seq = ++activityLoadSeq;
     var filter = "";
     var sel = document.getElementById("activity-filter");
     if (sel) filter = sel.value || "";
     var opts = filter ? { category: filter, limit: 300 } : { limit: 300 };
     api.audit.list(opts).then(function(entries) {
+      if (seq !== activityLoadSeq) return;
       var el = document.getElementById("activity-list");
       if (!entries || entries.length === 0) {
         el.innerHTML = '<div class="empty-state">' + t("activity.empty-state","还没有审计记录。<br>启动/停止 profile、保存代理/账号/LLM 配置、运行自动化任务都会记录在这里。") + '</div>';
@@ -217,7 +220,14 @@
         else if (btn.dataset.activityAction === "open-run") agentBrowser.runsOpen(id);
         else if (btn.dataset.activityAction === "open-profile") agentBrowser.activityOpenProfile(id);
       };
-    }).catch(function(e) { toast(t("activity.toast.load-failed","加载审计失败: ") + (e.message || e), "error"); });
+    }).catch(function(e) {
+      if (seq !== activityLoadSeq) return;
+      var msg = t("activity.toast.load-failed","加载审计失败: ") + (e.message || e);
+      var el = document.getElementById("activity-list");
+      if (el && agentBrowser.renderViewState) agentBrowser.renderViewState(el, { error: msg, retry: { cmd: "loadActivity" } });
+      else if (el) el.innerHTML = '<div class="empty-state">' + esc(msg) + '</div>';
+      toast(msg, "error");
+    });
   };
 
   agentBrowser.activityFilter = function() { agentBrowser.loadActivity(); };

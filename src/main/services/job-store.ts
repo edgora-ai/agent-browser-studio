@@ -177,10 +177,10 @@ export function markRunningAttempt(id: string, attempt: number): void {
  * Park the row between retry attempts. Guarded on status='running' so a
  * cancelled or already-terminal row can never be reopened by a late callback.
  */
-export function markRetryWaiting(id: string, retryAt: number): boolean {
+export function markRetryWaiting(id: string, retryAt: number, error?: string): boolean {
   const r = getDb().prepare(
-    "UPDATE jobs SET status='retry-waiting', retry_at=? WHERE id=? AND status='running'",
-  ).run(retryAt, id);
+    "UPDATE jobs SET status='retry-waiting', retry_at=?, error=? WHERE id=? AND status='running'",
+  ).run(retryAt, error ? String(error).slice(0, 2000) : null, id);
   return Number(r.changes) > 0;
 }
 
@@ -201,7 +201,7 @@ export function markRetryAbandoned(id: string, reason: string): boolean {
 }
 
 export function markDone(id: string, result: string): void {
-  getDb().prepare("UPDATE jobs SET status='done', result=?, finished_at=? WHERE id=? AND status='running'").run(result.slice(0, 2000), Date.now(), id);
+  getDb().prepare("UPDATE jobs SET status='done', result=?, error=NULL, finished_at=? WHERE id=? AND status='running'").run(result.slice(0, 2000), Date.now(), id);
 }
 
 export function markFailed(id: string, error: string): void {

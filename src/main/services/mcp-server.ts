@@ -16,7 +16,7 @@ import {
   listExtensionRepository,
 } from "./extension-repository.js";
 import { validateDirId } from "./utils.js";
-import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, findRuntimeChromiumBinary, getRuntimeChromiumVersion, getEngineStatus } from "./browser-manager.js";
+import { listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, getProfileRuntimeSnapshot, getEngineStatusAsync } from "./browser-manager.js";
 import { listSkillRepository, getSkill, installSkill } from "./skill-repository.js";
 import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platform-adapters.js";
 import { listPendingApprovals, resolveApproval } from "./approval-gate.js";
@@ -217,7 +217,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
   }
   switch (name) {
     case "agent_browser_list_profiles": {
-      const browserProfiles = listBrowserProfiles();
+      const runtime = getProfileRuntimeSnapshot();
+      const browserProfiles = listBrowserProfiles(runtime);
       return {
         profiles: browserProfiles.map(p => ({
           dirId: p.dirId, name: p.name, browser: "chromium",
@@ -226,7 +227,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           proxy: p.proxyMode === "none" ? "(no proxy)" : (p.proxyName || "(missing proxy)"),
           sizeMB: "0",
         })),
-        binary: { path: findRuntimeChromiumBinary(), version: getRuntimeChromiumVersion() },
+        binary: { path: runtime.chromiumPath, version: runtime.chromiumVersion, pending: runtime.pending },
       };
     }
     case "agent_browser_launch_profile": {
@@ -275,7 +276,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       };
     }
     case "agent_browser_list_accounts": {
-      return { accounts: getAccounts().map(a => ({ url: a.platformUrl, username: a.platformUserName, tags: a.tags })) };
+      return { accounts: getAccounts().map(a => ({
+        url: a.platformUrl, username: a.platformUserName, tags: a.tags,
+        ref: a.ref, hasPassword: Boolean(a.platformPassword),
+      })) };
     }
     case "agent_browser_profile_info": {
       validateDirId(args.dirId);
@@ -343,7 +347,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
     case "agent_browser_conversations_list": {
       return {
         conversations: listConversations().map((c: any) => ({
-          id: c.id, title: c.title, messageCount: c.messages.length, createdAt: c.createdAt, updatedAt: c.updatedAt,
+          id: c.id, title: c.title,
+          ...(c.titleKind === "literal" || c.titleKind === null || (c.titleKind === "default" && c.title === "New Chat")
+            ? { titleKind: c.titleKind } : {}),
+          messageCount: c.messages.length, createdAt: c.createdAt, updatedAt: c.updatedAt,
         })),
       };
     }
@@ -351,7 +358,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       const title = typeof args?.title === "string" && args.title.trim()
         ? args.title.trim().slice(0, 200) : undefined;
       const c = createConversation(title);
-      return { conversation: { id: c.id, title: c.title, messageCount: 0, createdAt: c.createdAt, updatedAt: c.updatedAt } };
+      return { conversation: { id: c.id, title: c.title,
+        ...(c.titleKind === "literal" || c.titleKind === null || (c.titleKind === "default" && c.title === "New Chat")
+          ? { titleKind: c.titleKind } : {}),
+        messageCount: 0, createdAt: c.createdAt, updatedAt: c.updatedAt } };
     }
     case "agent_browser_conversation_get": {
       const c = getConversation(args?.conversationId);
@@ -476,7 +486,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       return { adapter: getPlatformAdapter(detectAdapter(args.url).id) };
     }
     case "agent_browser_engine_status": {
-      const status = getEngineStatus();
+      const status = await getEngineStatusAsync();
       return { chromium: status.chromium, firefox: status.firefox };
     }
     case "agent_browser_approvals_list": {

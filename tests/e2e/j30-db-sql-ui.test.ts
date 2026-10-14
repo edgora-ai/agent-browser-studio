@@ -42,7 +42,11 @@ describe("J30 — DB tab SQL execution UI", () => {
     await h.page.locator("#db-sql").fill("SELECT body FROM notes");
     await h.page.locator('[data-cmd="dbRunSql"]:not([data-cmd-arg])').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
-    const resultText = await h.page.evaluate(() => document.getElementById("db-result").textContent);
+    const resultText = await h.page.evaluate(() => {
+      const result = document.getElementById("db-result");
+      if (!result) throw new Error("Expected #db-result to exist");
+      return result.textContent;
+    });
     expect(resultText).toContain("hello from UI");
   }, 20000);
 
@@ -50,7 +54,11 @@ describe("J30 — DB tab SQL execution UI", () => {
     await h.page.locator("#db-sql").fill("SELECT FROM notasdjf");
     await h.page.locator('[data-cmd="dbRunSql"]:not([data-cmd-arg])').click({ timeout: 5000 });
     await h.page.waitForTimeout(400);
-    const resultText = await h.page.evaluate(() => document.getElementById("db-result").textContent);
+    const resultText = await h.page.evaluate(() => {
+      const result = document.getElementById("db-result");
+      if (!result) throw new Error("Expected #db-result to exist");
+      return result.textContent;
+    });
     expect(resultText.toLowerCase()).toMatch(/error|失败|syntax|near/);
   }, 20000);
 

@@ -1,16 +1,53 @@
 // resolveRetryTarget unit tests: given a failed automation run scoped to one
 // profile, resolve the rule + agent-task action to re-run, and reject invalid
 // targets (chat runs, missing profile, deleted rule, non-agent actions).
-import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
+import { vi, describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-retry-test");
+// vi.hoisted runs before service imports and the Electron factory. Neither
+// provider may reconstruct a shared tmp path or delete a root it did not acquire.
+const fixture = await vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-retry-test-")));
+  const identity = fs.lstatSync(root);
+  const marker = path.join(root, ".fixture-owner");
+  const owner = JSON.stringify({ role: "automation-retry", root, dev: identity.dev, ino: identity.ino });
+  fs.writeFileSync(marker, owner, { flag: "wx", mode: 0o600 });
+  const markerIdentity = fs.lstatSync(marker);
+  function assertTree(p: string): void {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink() || (!st.isDirectory() && (!st.isFile() || st.nlink !== 1))) {
+      throw new Error("Refusing non-physical fixture cleanup: " + p);
+    }
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) assertTree(path.join(p, name));
+  }
+  function children(): string[] {
+    const st = fs.lstatSync(root);
+    const mark = fs.lstatSync(marker);
+    if (!st.isDirectory() || st.isSymbolicLink() || st.dev !== identity.dev || st.ino !== identity.ino ||
+        fs.realpathSync(root) !== root || !mark.isFile() || mark.isSymbolicLink() || mark.nlink !== 1 ||
+        mark.dev !== markerIdentity.dev || mark.ino !== markerIdentity.ino || fs.readFileSync(marker, "utf8") !== owner) {
+      throw new Error("Refusing unowned fixture cleanup: " + root);
+    }
+    const names = fs.readdirSync(root).filter((name) => name !== ".fixture-owner");
+    for (const name of names) {
+      if (name !== "config.json" && name !== "runs") throw new Error("Unexpected fixture role: " + name);
+      assertTree(path.join(root, name));
+    }
+    return names;
+  }
+  function clear(): void {
+    for (const name of children()) fs.rmSync(path.join(root, name), { recursive: true });
+  }
+  return { root, clear, dispose: () => { clear(); fs.unlinkSync(marker); fs.rmdirSync(root); } };
+});
+
+afterAll(() => fixture.dispose());
 
 vi.mock("electron", () => ({
   app: {
-    getPath: (name: string) => (name === "userData" || name === "home" ? TEST_USER_DATA : "/tmp"),
+    getPath: (_name: string) => fixture.root,
   },
   BrowserWindow: { getAllWindows: () => [] },
 }));
@@ -28,12 +65,14 @@ function addRule(id: string, action: any): void {
 
 describe("resolveRetryTarget", () => {
   beforeEach(() => {
-    fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    fixture.clear();
     reloadConfig();
   });
   afterEach(() => {
-    fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    // Release process-local live-run bindings before removing their owned data.
+    for (const run of getConfig().agentRuns || []) agentRunRecorder.releaseRun(run.id);
     reloadConfig();
+    fixture.clear();
   });
 
   it("resolves a failed automation run to its rule + agent-task action + profile", () => {

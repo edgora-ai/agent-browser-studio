@@ -2,7 +2,7 @@ import { ipcMain, clipboard, dialog, BrowserWindow, type WebContents } from "ele
 import { runDesktopChat, type DesktopChatRequest } from "../services/agent/desktop-chat.js";
 import { desktopChatRuns, type ChatCancelRequest } from "../services/agent/chat-runs.js";
 import {
-  getAccounts, getRedactedAccounts, addAccount, updateAccount, deleteAccount, getProfileAccounts,
+  getAccount, getRedactedAccount, getRedactedAccounts, addAccount, updateAccount, deleteAccount, getProfileAccounts,
   getAccountPassword, setAccountProfileIds, parseAccountsBulkText, bulkAddAccounts,
   bulkCreateProfilesWithAccounts,
   llmChat,
@@ -20,6 +20,7 @@ import { agentDbTables, agentDbTableData, agentDbQuery, agentDbExecScript } from
 import { listPendingApprovals, resolveApproval } from "../services/approval-gate.js";
 import type { LlmConfig, LlmMessage } from "../services/local-agent.js";
 import type { PlatformAccount } from "../services/local-agent.js";
+import type { AccountReference } from "../types.js";
 import {
   addOrUpdateSkill,
   exportSharedSkillRepository,
@@ -167,6 +168,8 @@ export function registerAgentHandlers(): void {
     return listConversations().map(c => ({
       id: c.id,
       title: c.title,
+      ...(c.titleKind === "literal" || c.titleKind === null || (c.titleKind === "default" && c.title === "New Chat")
+        ? { titleKind: c.titleKind } : {}),
       messageCount: c.messages.length,
       createdAt: c.createdAt,
       updatedAt: c.updatedAt,
@@ -193,7 +196,10 @@ export function registerAgentHandlers(): void {
 
   ipcMain.handle("agent:conversations:create", async (_event, title?: string) => {
     const c = createConversation(title);
-    return { id: c.id, title: c.title, messageCount: 0, createdAt: c.createdAt, updatedAt: c.updatedAt };
+    return { id: c.id, title: c.title,
+      ...(c.titleKind === "literal" || c.titleKind === null || (c.titleKind === "default" && c.title === "New Chat")
+        ? { titleKind: c.titleKind } : {}),
+      messageCount: 0, createdAt: c.createdAt, updatedAt: c.updatedAt };
   });
 
   ipcMain.handle("agent:conversations:delete", async (_event, id: string) => {
@@ -266,26 +272,27 @@ export function registerAgentHandlers(): void {
     return getRedactedAccounts();
   });
 
+  // Selected-row refetch validates the ORIGINAL displayed reference. Never
+  // resolve an old click using a newly fetched list's reference at that index.
+  ipcMain.handle("agent:accounts:get", async (_event, index: number, ref?: AccountReference) => {
+    return getRedactedAccount(index, ref);
+  });
+
   ipcMain.handle("agent:accounts:add", async (_event, account: PlatformAccount) => {
     gateAccount(requireAccountMutation());
-    const added = addAccount(account);
-    const { platformPassword: _platformPassword, ...safe } = added;
-    return { ...safe, hasPassword: Boolean(_platformPassword) };
+    return addAccount(account);
   });
 
   ipcMain.handle("agent:accounts:update", async (_event, params: {
-    index: number; account: Partial<PlatformAccount>;
+    index: number; account: Partial<PlatformAccount>; ref?: AccountReference;
   }) => {
     gateAccount(requireAccountMutation());
-    const updated = updateAccount(params.index, params.account);
-    if (!updated) return null;
-    const { platformPassword: _platformPassword, ...safe } = updated;
-    return { ...safe, hasPassword: Boolean(_platformPassword) };
+    return updateAccount(params?.index, params?.account, params?.ref);
   });
 
-  ipcMain.handle("agent:accounts:delete", async (_event, index: number) => {
+  ipcMain.handle("agent:accounts:delete", async (_event, index: number, ref?: AccountReference) => {
     gateAccount(requireAccountMutation());
-    return deleteAccount(index);
+    return deleteAccount(index, ref);
   });
 
   ipcMain.handle("agent:accounts:profile", async (_event, dirId: string) => {
@@ -296,38 +303,35 @@ export function registerAgentHandlers(): void {
   });
 
   // Copy username to the system clipboard (no secret involved).
-  ipcMain.handle("agent:accounts:copy-username", async (_event, index: number) => {
-    const accounts = getAccounts();
-    if (index < 0 || index >= accounts.length) return { ok: false, error: "account not found" };
-    const username = accounts[index].platformUserName || "";
+  ipcMain.handle("agent:accounts:copy-username", async (_event, index: number, ref?: AccountReference) => {
+    const account = getRedactedAccount(index, ref);
+    const username = account.platformUserName || "";
     if (!username) return { ok: false, error: "account has no username" };
     clipboard.writeText(username);
-    recordAudit({ category: "account", action: "copy-username", target: accounts[index].platformUrl.slice(0, 200), actor: "user" });
+    recordAudit({ category: "account", action: "copy-username", target: account.platformUrl.slice(0, 200), actor: "user" });
     return { ok: true };
   });
   // Reveal + copy password — member+ only. The plaintext never crosses into
   // the renderer; the main process writes the clipboard directly.
-  ipcMain.handle("agent:accounts:copy-password", async (_event, index: number) => {
+  ipcMain.handle("agent:accounts:copy-password", async (_event, index: number, ref?: AccountReference) => {
     gateAccount(requireAccountSecret());
-    const accounts = getAccounts();
-    if (index < 0 || index >= accounts.length) return { ok: false, error: "account not found" };
-    const password = getAccountPassword(index);
+    const account = getAccount(index, ref);
+    const password = getAccountPassword(index, ref);
     if (!password) return { ok: false, error: "account has no password" };
+    // Validation, decryption and clipboard dispatch have no intervening await.
     clipboard.writeText(password);
-    recordAudit({ category: "account", action: "copy-password", target: accounts[index].platformUrl.slice(0, 200), actor: "user" });
+    recordAudit({ category: "account", action: "copy-password", target: account.platformUrl.slice(0, 200), actor: "user" });
     return { ok: true };
   });
 
   // Bind an account to a set of profiles (replaces the profileIds list).
   ipcMain.handle("agent:accounts:bind", async (_event, params: {
-    index: number; profileIds: string[];
+    index: number; profileIds: string[]; ref?: AccountReference;
   }) => {
     gateAccount(requireAccountMutation());
-    const updated = setAccountProfileIds(params.index, params.profileIds);
-    if (!updated) return null;
-    const { platformPassword: _platformPassword, ...safe } = updated;
-    recordAudit({ category: "account", action: "bind", target: safe.platformUrl.slice(0, 200), actor: "user", detail: "profiles=" + (safe.profileIds || []).length });
-    return { ...safe, hasPassword: Boolean(_platformPassword) };
+    const updated = setAccountProfileIds(params?.index, params?.profileIds, params?.ref);
+    recordAudit({ category: "account", action: "bind", target: updated.platformUrl.slice(0, 200), actor: "user", detail: "profiles=" + (updated.profileIds || []).length });
+    return updated;
   });
 
   // Bulk import pasted account lines (url, username, password, tags).
@@ -448,11 +452,20 @@ export function registerAgentHandlers(): void {
   });
 
   ipcMain.handle("agent-run:delete", async (_event, runId: string) => {
-    return { success: agentRunRecorder.deleteRun(runId) };
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { success: false, error: gate.error };
+    const result = agentRunRecorder.deleteRunDetailed(runId);
+    return result === "deleted" ? { success: true } : {
+      success: false,
+      reasonCode: result,
+      error: result === "active" ? "Cannot delete a running run" : "Run not found",
+    };
   });
 
   ipcMain.handle("agent-run:clear", async () => {
-    return { deleted: agentRunRecorder.clearRuns() };
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { success: false, deleted: 0, skipped: 0, error: gate.error };
+    return { success: true, ...agentRunRecorder.clearRunsDetailed() };
   });
 
   // ════════════════════════════════════════════════════════

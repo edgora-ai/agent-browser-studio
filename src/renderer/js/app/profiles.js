@@ -9,7 +9,11 @@
   var profileSelection = {};
   // R9 P1-2: in-flight launch/stop per card. Kept outside the DOM so a list
   // re-render (keyed diff rebuilds card nodes) cannot drop the busy state.
-  var busyCards = {};
+  var busyCards = Object.create(null);
+  var trashPending = Object.create(null);
+  // A failed purge may have removed bytes. Keep restore blocked even if the
+  // current DOM (or a later list response) still calls the entry recoverable.
+  var trashPurgeFailed = Object.create(null);
   var helpers = agentBrowser.helpers;
   var toast = helpers.toast;
   var esc = helpers.esc;
@@ -89,6 +93,8 @@
   }
 
   var businessPresetCatalog = [];
+  var profilesLoadSeq = 0;
+  var newProfileProxySeq = 0;
   function writeGeolocationFields(prefix, meta) {
     document.getElementById(prefix + "geolocation-mode").value = meta.geolocationMode || "real";
     document.getElementById(prefix + "geolocation-latitude").value = meta.geolocationLatitude == null ? "" : meta.geolocationLatitude;
@@ -158,6 +164,9 @@
     api.browser.list().then(function (profiles) {
       var meta = (profiles || []).filter(function (p) { return p.dirId === dirId; })[0] || {};
       var engine = meta.engine || "chromium";
+      // Unknown/invalidated or available metadata must reach authoritative main
+      // discovery; a cached banner is not permission to refuse a current launch.
+      if (meta.runtimePending || meta.installed !== false) { cb(); return; }
       if (engine === "firefox") {
         if (firefoxMissing()) { guideToFirefox(); return; }
       } else {
@@ -312,20 +321,29 @@
         // (hard delete, no undo). Route it through the same soft-delete path
         // as batch delete so every UI deletion is recoverable for 7 days.
         // `browser:delete` stays as the hard-delete channel for the REST API.
-        agentBrowser.confirm(window.i18n ? window.i18n.t("profile.delete-confirm", "Delete profile? It stays recoverable in the trash for 7 days.") : "Delete profile? It stays recoverable in the trash for 7 days.", function () {
-          agentBrowser.ipc.call("profile.trash:" + dirId, function () { return api.profile.trash(dirId); }, { kind: "write" })
-            .then(function (r) {
-              if (r && r.success) {
-                toast(window.i18n ? window.i18n.t("toast.deleted", "Deleted") : "Deleted", "success", {
-                  ttlMs: 12000,
-                  detail: window.i18n ? window.i18n.t("toast.trash.hint", "Kept in the trash for 7 days.") : "Kept in the trash for 7 days.",
-                  action: { label: window.i18n ? window.i18n.t("toast.undo", "Undo") : "Undo", onClick: function () { restoreFromTrash([dirId]); } },
-                });
-                agentBrowser.refresh();
-              }
-              else toast((r && r.error) || (window.i18n ? window.i18n.t("toast.failed", "Failed") : "Failed"), "error");
-            }).catch(function (e) { toast(e.message, "error"); });
-        });
+        if (busyCards[dirId]) return;
+        setCardBusy(dirId, true);
+        agentBrowser.confirmAsync(t("profile.delete-confirm", "Delete profile? It stays recoverable in the trash for 7 days."))
+          .then(function (confirmed) {
+            if (!confirmed) return;
+            return agentBrowser.ipc.call("profile.trash:" + dirId, function () { return api.profile.trash(dirId); }, { kind: "write" })
+              .then(function (r) {
+                if (r && r.success) {
+                  toast(t("toast.deleted", "Deleted"), "success", {
+                    ttlMs: 12000,
+                    detail: t("toast.trash.hint", "Kept in the trash for 7 days."),
+                    action: { label: t("toast.undo", "Undo"), onClick: function () { restoreFromTrash([dirId]); } },
+                  });
+                  agentBrowser.refresh();
+                } else {
+                  toast(t("toast.trash.delete-failed", "Could not delete profile"), "error", { detail: trashFailureDetail(dirId, r && r.error), ttlMs: 0 });
+                }
+              });
+          })
+          .catch(function (e) {
+            toast(t("toast.trash.delete-failed", "Could not delete profile"), "error", { detail: trashFailureDetail(dirId, e), ttlMs: 0 });
+          })
+          .finally(function () { setCardBusy(dirId, false); });
       },
 
   renameProfile: function (dirId, oldName) {
@@ -354,12 +372,22 @@
       },
 
   loadNewProfileProxies: function () {
+        var seq = ++newProfileProxySeq;
+        var dialog = document.getElementById("dlg-profile");
+        var select = document.getElementById("new-profile-proxy");
         return api.proxy.list().then(function (proxies) {
-          document.getElementById("new-profile-proxy").innerHTML = renderProxyOptions(proxies, "default", false);
-        }).catch(function (e) { toast((window.i18n ? window.i18n.t("toast.proxy.load-failed", "Failed to load proxies") : "Failed to load proxies") + ": " + e.message, "error"); });
+          if (seq !== newProfileProxySeq || !dialog.open) return;
+          // Read the current choice, not the default captured before user input.
+          select.innerHTML = renderProxyOptions(proxies, select.value || "default", false);
+        }).catch(function (e) {
+          if (seq !== newProfileProxySeq || !dialog.open) return;
+          toast((window.i18n ? window.i18n.t("toast.proxy.load-failed", "Failed to load proxies") : "Failed to load proxies") + ": " + e.message, "error");
+        });
       },
 
   resetNewProfileForm: function (browser) {
+        ++newProfileProxySeq;
+        document.getElementById("new-profile-proxy").innerHTML = renderProxyOptions([], "default", false);
         document.getElementById("new-profile-name").value = "";
         if (document.getElementById("new-profile-browser")) {
           document.getElementById("new-profile-browser").value = browser;
@@ -374,6 +402,8 @@
         document.getElementById("new-agent-browser-timezone").value = "";
         document.getElementById("new-agent-browser-locale").value = "";
         document.getElementById("new-agent-browser-webrtc").value = "";
+        document.getElementById("new-agent-browser-webrtc-mode").value = "auto";
+        document.getElementById("new-agent-browser-window-title-enabled").checked = true;
         document.getElementById("new-agent-browser-render-scale-mode").value = "native";
         writeGeolocationFields("new-agent-browser-", {});
         writeHardwareFields("new-agent-browser-", {});
@@ -498,7 +528,6 @@
   newProfile: function () {
         agentBrowser.resetNewProfileForm("chromium");
         agentBrowser.loadBusinessPresets();
-        agentBrowser.loadNewProfileProxies();
         agentBrowser.profileBrowserChanged();
         var adv = document.getElementById("new-profile-advanced");
         if (adv && adv.open) adv.open = false; // RoxyBrowser 4.0.3-style: basic fields first, advanced collapsed
@@ -603,6 +632,7 @@
           // Sale-90/92: trial expiry / profile cap opens the paywall dialog
           // instead of closing the form with a misleading success toast.
           if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
+          if (!r || r.success === false || !r.dirId) { toast((r && r.error) || t("toast.profile.create-failed", "Profile creation failed"), "error"); return; }
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           // UI R3: after create, land on the new card (scroll + highlight)
@@ -748,9 +778,11 @@
       var imported = (rep.imported || []).length;
       var failed = (rep.failed || []).length;
       if (imported === 0 && failed === 0) return;
+      var warnings = (rep.imported || []).reduce(function(n, item) { return n + ((item.warnings || []).length); }, 0);
       var msg = t("toast.profile.imported", "Imported {n} profiles").replace("{n}", imported);
       if (failed) msg += t("toast.profile.import-failed-count", ", {n} failed").replace("{n}", failed);
-      toast(msg, failed ? "error" : "success");
+      if (warnings) msg += t("toast.profile.import-dependencies", ". {n} dependency warnings: check named proxies/credentials, install missing extensions, and configure local fonts if needed before launch.").replace("{n}", warnings);
+      toast(msg, failed ? "error" : (warnings ? "warning" : "success"));
       loadProfiles();
     }).catch(function(e) {
       toast(t("toast.profile.import-failed", "Import failed: ") + (e.message || String(e)), "error");
@@ -771,8 +803,9 @@
       // when Chromium was missing (and vice versa).
       var needChromium = stopped.some(function (p) { return (p.engine || "chromium") !== "firefox"; });
       var needFirefox = stopped.some(function (p) { return (p.engine || "chromium") === "firefox"; });
-      if (needChromium && !needFirefox && engineMissing()) { guideToEngine(); return; }
-      if (needFirefox && !needChromium && firefoxMissing()) { guideToFirefox(); return; }
+      var confirmedMissing = stopped.every(function (p) { return p.installed === false && !p.runtimePending; });
+      if (confirmedMissing && needChromium && !needFirefox && engineMissing()) { guideToEngine(); return; }
+      if (confirmedMissing && needFirefox && !needChromium && firefoxMissing()) { guideToFirefox(); return; }
       agentBrowser.batch.run({ kind: "launch", dirIds: stopped.map(function(p) { return p.dirId; }) })
         .then(finishBatch, finishBatch);
     }).catch(function(e){ toast((e && e.message) || String(e), 'error'); });
@@ -800,7 +833,7 @@
     if (bar) bar.style.display = count > 0 ? "" : "none";
     if (counter) counter.textContent = String(count);
     var sel = document.getElementById("batch-assign-proxy");
-    if (sel && proxies && proxies.length) {
+    if (sel && proxies) {
       var prev = sel.value;
       var html = '<option value="">' + esc(t("profiles.batch.proxy-default", "(Default proxy)")) + '</option>';
       (proxies || []).forEach(function (p) {
@@ -913,14 +946,22 @@
     var dlg = document.getElementById("dlg-trash");
     var listEl = document.getElementById("trash-list");
     if (!dlg || !listEl) return;
+    clearTrashActionError();
     listEl.innerHTML = '<div class="loading">' + esc(t("trash.loading", "Loading trash…")) + '</div>';
     if (!dlg.open) dlg.showModal();
     agentBrowser.ipc.call("profile.trash-list", function () { return api.profile.trashList(); }, { kind: "list" })
       .then(function (r) {
-        renderTrashList(listEl, (r && r.entries) || []);
+        if (!r || !Array.isArray(r.entries)) throw new Error((r && r.error) || t("toast.failed", "Failed"));
+        if (!r.success && !r.entries.length) throw new Error(r.error || t("toast.failed", "Failed"));
+        renderTrashList(listEl, r.entries);
+        if (!r.success) {
+          // A partial expiry failure must remain visible without hiding the
+          // affected entry or its manual recovery/purge action.
+          listEl.insertAdjacentHTML("afterbegin", '<div role="alert" style="color:var(--danger-text);padding:8px 0;">' + esc(r.error || t("toast.failed", "Failed")) + '</div>');
+        }
       })
       .catch(function (e) {
-        listEl.innerHTML = '<div class="empty-state">' + esc(e.message || String(e)) + '</div>';
+        listEl.innerHTML = '<div class="empty-state" role="alert">' + esc(e.message || String(e)) + '</div>';
       });
   };
 
@@ -939,93 +980,179 @@
       // R10 UX P1-1: every entry gets Restore + permanent Delete. Purge is
       // irreversible — the handler asks for an explicit ack first.
       var actions = '<button class="btn btn-danger btn-sm" data-trash-purge="' + id + '" data-trash-name="' + escAttr(en.name || en.dirId || "") + '">' + esc(t("trash.purge", "Delete forever")) + '</button>';
-      var state = en.recoverable
-        ? '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>' + actions
-        : '<span style="font-size:11px;color: var(--danger-text);">' + esc(t("trash.unrecoverable", "data missing")) + '</span>' + actions;
-      return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);padding:6px 0;">' +
-        '<div style="flex:1;min-width:0;"><div style="font-size:12.5px;font-weight:600;">' + name + '</div>' +
-        '<div class="num" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(absWhen) + '">' + esc(when) + '</div></div>' + state + '</div>';
+      var warningAttrs = 'class="trash-row-warning" role="alert"';
+      var warning = "";
+      if (en.recoveryRequired) {
+        actions = "";
+        warning = '<span ' + warningAttrs + '>' + esc(t("trash.recovery-required", "Recovery required — a live profile still uses this ID; resolve the conflict before deleting.")) + '</span>';
+      } else if (en.incomplete || trashPurgeFailed[en.dirId]) {
+        warning = '<span ' + warningAttrs + '>' + esc(t("trash.incomplete", "Data may be incomplete after a purge attempt; do not restore as complete.")) + '</span>';
+      } else if (en.recoverable) {
+        actions = '<button class="btn btn-primary btn-sm" data-trash-restore="' + id + '">' + esc(t("trash.restore", "Restore")) + '</button>' + actions;
+        warning = '<span data-trash-warning="' + id + '" ' + warningAttrs + ' hidden>' + esc(t("trash.incomplete", "Data may be incomplete after a purge attempt; do not restore as complete.")) + '</span>';
+      } else {
+        warning = '<span ' + warningAttrs + '>' + esc(t("trash.unrecoverable", "data missing")) + '</span>';
+      }
+      // Warnings own a full line, including one revealed after a failed purge.
+      // Keep action width separate from names so neither can paint over the other.
+      return '<div class="trash-row"><div class="trash-row-identity"><div class="trash-row-name">' + name + '</div>' +
+        '<div class="num trash-row-time" title="' + escAttr(absWhen) + '">' + esc(when) + '</div></div>' +
+        (actions ? '<div class="trash-row-actions">' + actions + '</div>' : '') + warning + '</div>';
     }).join("");
+    Object.keys(trashPending).forEach(applyTrashPending);
     // Wire restore buttons (re-rendered each open, so direct binding is fine).
     Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-restore]"), function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-trash-restore");
-        btn.setAttribute("disabled", "disabled");
-        agentBrowser.ipc.call("profile.trash-restore:" + id, function () { return api.profile.trashRestore(id); }, { kind: "write" })
-          .then(function (r) {
-            if (r && r.success) {
-              toast(t("toast.trash.restore-ok", "Restored {n} profiles").replace("{n}", 1), "success");
-              loadProfiles();
-              agentBrowser.showTrash();
-            } else toast((r && r.error) || t("toast.failed", "Failed"), "error");
-          })
-          .catch(function (e) { toast(e.message || String(e), "error"); });
+        if (trashPending[id] || trashPurgeFailed[id]) return;
+        performTrashAction(id, "restore");
       });
     });
     Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-purge]"), function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-trash-purge");
+        if (trashPending[id]) return;
         var nm = btn.getAttribute("data-trash-name") || id;
-        agentBrowser.confirm(
+        // Reserve the ID before confirmation; confirmAsync also releases it on
+        // Cancel/Esc and consumes the callback once, before starting the write.
+        setTrashPending(id, true);
+        agentBrowser.confirmAsync(
           t("trash.purge-confirm", "Permanently delete \"{name}\"? This cannot be undone.").replace("{name}", nm),
-          function () {
-            agentBrowser.ipc.call("profile.trash-purge:" + id, function () { return api.profile.trashPurge(id); }, { kind: "write" })
-              .then(function (r) {
-                if (r && r.success) {
-                  toast(t("trash.purged", "Permanently deleted"), "success");
-                  loadProfiles();
-                  agentBrowser.showTrash();
-                } else toast((r && r.error) || t("toast.failed", "Failed"), "error");
-              })
-              .catch(function (e) { toast(e.message || String(e), "error"); });
-          },
           { title: t("trash.purge-title", "Delete forever?") },
-        );
+        ).then(function (confirmed) {
+          if (confirmed) return performTrashAction(id, "purge");
+        }).catch(function (e) {
+          showTrashActionError("purge", id, e);
+        }).finally(function () { setTrashPending(id, false); });
       });
     });
+  }
+
+  function setTrashPending(id, pending) {
+    if (pending) trashPending[id] = true;
+    else delete trashPending[id];
+    applyTrashPending(id);
+  }
+
+  function applyTrashPending(id) {
+    var listEl = document.getElementById("trash-list");
+    if (!listEl) return;
+    Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-restore], [data-trash-purge]"), function (btn) {
+      var restoreId = btn.getAttribute("data-trash-restore");
+      if ((restoreId || btn.getAttribute("data-trash-purge")) !== id) return;
+      var disabled = trashPending[id] || (restoreId && trashPurgeFailed[id]);
+      if (disabled) btn.setAttribute("disabled", "disabled");
+      else btn.removeAttribute("disabled");
+      btn.setAttribute("aria-busy", trashPending[id] ? "true" : "false");
+    });
+    Array.prototype.forEach.call(listEl.querySelectorAll("[data-trash-warning]"), function (warning) {
+      if (warning.getAttribute("data-trash-warning") === id) warning.hidden = !trashPurgeFailed[id];
+    });
+  }
+
+  function clearTrashActionError() {
+    var errorEl = document.getElementById("trash-action-error");
+    if (errorEl) errorEl.hidden = true;
+  }
+
+  function showTrashActionError(action, id, error) {
+    if (action === "purge") trashPurgeFailed[id] = true;
+    var errorEl = document.getElementById("trash-action-error");
+    if (!errorEl) return;
+    // Foreground inside the native dialog: do not send raw backend exceptions
+    // through friendlyErrors or insert recovery paths as HTML.
+    errorEl.querySelector(".trash-action-summary").textContent = action === "restore"
+      ? t("toast.trash.restore-failed", "Could not restore profile")
+      : t("toast.trash.purge-failed", "Could not permanently delete profile");
+    var detailEl = errorEl.querySelector(".toast-detail");
+    detailEl.textContent = trashFailureDetail(id, error);
+    detailEl.scrollTop = 0;
+    errorEl.hidden = false;
+    errorEl.scrollIntoView({ block: "nearest" });
+  }
+
+  // Modal restore and both Undo entrypoints share the same per-ID reservation.
+  // A blocked Undo is a per-ID failure, not a successful restore or a reason to
+  // release a reservation owned by another operation.
+  function restoreTrashProfile(id) {
+    var blocked = trashPending[id]
+      ? t("toast.card.busy", "This profile is busy — wait for the current operation to finish")
+      : trashPurgeFailed[id]
+        ? t("trash.incomplete", "Data may be incomplete after a purge attempt; do not restore as complete.")
+        : null;
+    if (blocked) return Promise.resolve({ success: false, error: blocked });
+    setTrashPending(id, true);
+    return agentBrowser.ipc.call("profile.trash-restore:" + id, function () { return api.profile.trashRestore(id); }, { kind: "write" })
+      .finally(function () { setTrashPending(id, false); });
+  }
+
+  function performTrashAction(id, action) {
+    var request = action === "restore" ? restoreTrashProfile(id)
+      : agentBrowser.ipc.call("profile.trash-purge:" + id, function () { return api.profile.trashPurge(id); }, { kind: "write" });
+    return request.then(function (r) {
+      if (r && r.success) {
+        delete trashPurgeFailed[id];
+        toast(action === "restore" ? t("toast.trash.restore-ok", "Restored {n} profiles").replace("{n}", 1) : t("trash.purged", "Permanently deleted"), "success");
+        loadProfiles();
+        agentBrowser.showTrash();
+      } else showTrashActionError(action, id, r && r.error);
+    }).catch(function (e) { showTrashActionError(action, id, e); });
+    // Never refresh on failure: trash-list also sweeps expired entries, and a
+    // purge failure is not evidence that the directory bytes were rolled back.
+  }
+
+  function trashFailureDetail(id, error) {
+    var reason = error && typeof error === "object" ? (error.error || error.message || String(error)) : error;
+    return id + ": " + String(reason || t("toast.failed", "Failed"));
   }
 
   // PL-09: restores are serialised so two profiles never race for the same
   // directory while it is being moved back out of the trash.
   function restoreFromTrash(ids) {
     var pending = ids.slice();
-    var restored = 0, failed = 0;
+    var restored = 0, failures = [];
     function next() {
       if (!pending.length) {
-        if (failed) {
+        if (failures.length) {
           toast(t("toast.trash.restore-partial", "Restored {ok}, {failed} could not be restored")
-            .replace("{ok}", restored).replace("{failed}", failed), "error");
+            .replace("{ok}", restored).replace("{failed}", failures.length), "error", { detail: failures.join("\n") });
         } else {
           toast(t("toast.trash.restore-ok", "Restored {n} profiles").replace("{n}", restored), "success");
         }
-        loadProfiles();
+        if (restored) loadProfiles();
         return;
       }
       var id = pending.shift();
-      agentBrowser.ipc.call("profile.trash-restore:" + id, function () { return api.profile.trashRestore(id); }, { kind: "write" })
-        .then(function (r) { if (r && r.success) restored++; else failed++; })
-        .catch(function () { failed++; })
+      restoreTrashProfile(id)
+        .then(function (r) {
+          if (r && r.success === true) restored++;
+          else failures.push(trashFailureDetail(id, r && r.error));
+        })
+        .catch(function (e) { failures.push(trashFailureDetail(id, e)); })
         .then(next);
     }
     next();
   }
 
   function deleteProfilesWithTally(sel) {
-    var total = sel.length, done = 0, errors = 0;
+    var total = sel.length, done = 0, failures = [], succeeded = [];
     sel.forEach(function (dirId) {
       // PL-09: soft-delete, so the toast can offer a real undo.
       agentBrowser.ipc.call("profile.trash:" + dirId, function () { return api.profile.trash(dirId); }, { kind: "write" })
         .then(function (r) {
           done++;
-          if (r && r.success === false) errors++;
+          if (r && r.success === true) succeeded.push(dirId);
+          else failures.push(trashFailureDetail(dirId, r && r.error));
         })
-        .catch(function () { done++; errors++; })
+        .catch(function (e) { done++; failures.push(trashFailureDetail(dirId, e)); })
         .then(function () {
           if (done !== total) return;
-          sel.forEach(function (d) { delete profileSelection[d]; });
-          if (errors) {
+          succeeded.forEach(function (id) { delete profileSelection[id]; });
+          updateBatchBar();
+          if (failures.length) {
             toast(t("toast.batch.delete-partial", "Deleted {ok}/{total} profiles ({failed} failed)")
-              .replace("{ok}", total - errors).replace("{total}", total).replace("{failed}", errors), "error");
+              .replace("{ok}", succeeded.length).replace("{total}", total).replace("{failed}", failures.length),
+              "error", { detail: failures.join("\n") });
           } else {
             toast(t("toast.batch.delete-ok", "Deleted {n} profiles").replace("{n}", total), "success", {
               ttlMs: 12000,
@@ -1324,38 +1451,40 @@
   // R8 P2-3: the banner state is also cached so launch()/bulkStart can refuse
   // early with guidance instead of firing a doomed IPC and toasting afterwards.
   var lastEngineInfo = null;
-  function renderEngineBanner(info, probeFailed) {
+  function renderEngineBanner(info, probeFailed, pending) {
     lastEngineInfo = info || null;
     var el = document.getElementById("engine-banner");
     if (!el) return;
-    // R169: a FAILED probe (binary() rejected, caught into null) rendered the
-    // same banner as a genuinely missing engine — "No managed Chromium
-    // installed" plus an install guide, pushing users to reinstall an engine
-    // they already have. Distinguish "we could not tell" from "it is missing".
-    if (probeFailed) {
-      el.className = "engine-banner";
-      el.innerHTML = icon("alert", 13) + ' <span style="flex:1;">' +
+    var className = "engine-banner";
+    var html;
+    if (pending) {
+      html = icon("browser", 13) + " " + esc(t("common.loading", "Loading…"));
+    // R169: a failed probe is unknown, not evidence of a missing engine.
+    } else if (probeFailed) {
+      html = icon("alert", 13) + ' <span style="flex:1;">' +
         esc(t("engine.unknown", "Could not determine the managed Chromium status — check the log or retry.")) +
         '</span>' +
         '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="loadProfiles">' +
           esc(t("common.retry", "Retry")) + "</button>";
-      el.style.display = "";
-      return;
+    } else if (info && info.installed) {
+      className += " ok";
+      html = icon("browser", 13) + " " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
+    } else {
+      html = icon("alert", 13) + ' <span style="flex:1;">' +
+        esc(t("engine.missing", "No managed Chromium installed — profiles cannot start until you point at a local build.")) +
+        '</span>' +
+        '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' +
+          esc(t("engine.select", "Select local build…")) + "</button> " +
+        '<button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showEngineGuide">' +
+          esc(t("engine.guide", "Install guide")) + "</button>";
     }
-    if (info && info.installed) {
-      el.className = "engine-banner ok";
-      el.innerHTML = icon("browser", 13) + " " + esc(t("engine.ok", "Managed Chromium {v}").replace("{v}", info.version || "?"));
-      el.style.display = "";
-      return;
+    var signature = className + "|" + html;
+    if (el._engineBannerSignature !== signature) {
+      el.className = className;
+      el.innerHTML = html;
+      el._engineBannerSignature = signature;
     }
-    el.className = "engine-banner";
-    el.innerHTML = icon("alert", 13) + ' <span style="flex:1;">' +
-      esc(t("engine.missing", "No managed Chromium installed — profiles cannot start until you point at a local build.")) +
-      '</span>' +
-      '<button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="selectChromiumBinary">' +
-        esc(t("engine.select", "Select local build…")) + "</button> " +
-      '<button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showEngineGuide">' +
-        esc(t("engine.guide", "Install guide")) + "</button>";
+    el.setAttribute("aria-busy", pending ? "true" : "false");
     el.style.display = "";
   }
 
@@ -1461,8 +1590,12 @@
 
   // ══════ Profiles ══════
   function loadProfiles(soft) {
+    var seq = ++profilesLoadSeq;
     var container = document.getElementById("profile-list");
-    if (!soft) container.innerHTML = '<div class="loading">Loading...</div>';
+    if (!soft) {
+      closeAllCardMenus(container);
+      container.innerHTML = '<div class="loading">Loading...</div>';
+    }
 
     // R164: browser.list() failure used to be swallowed into [] — the page
     // then painted the *empty* state ("还没有配置。点击「新建配置」…"), reporting
@@ -1470,27 +1603,47 @@
     // error state instead; the other optional calls keep their soft fallbacks
     // (proxy.list() stays bare — it is load-bearing, and its rejection
     // reaches the outer catch below).
+    // Cold extraction/verification is independent of persisted metadata.
+    // Late status may update only this load's banner, never rebuild its cards.
+    var banner = document.getElementById("engine-banner");
+    if (!soft || !banner || !banner._engineBannerSignature) {
+      renderEngineBanner(null, false, true);
+    } else {
+      // Collapsing a settled banner shifts scroll anchoring and dismisses an
+      // open menu. Keep its presentation, not its authority, during recheck.
+      lastEngineInfo = null;
+      banner.setAttribute("aria-busy", "true");
+    }
+    lastFirefoxInfo = null;
+    Promise.resolve().then(function () { return api.browser.binary(); }).then(function (info) {
+      if (seq !== profilesLoadSeq || state.currentTab !== "profiles") return;
+      renderEngineBanner(info, !info);
+    }).catch(function () {
+      if (seq !== profilesLoadSeq || state.currentTab !== "profiles") return;
+      renderEngineBanner(null, true);
+    });
+    if (api.browser.engineStatus) Promise.resolve().then(function () { return api.browser.engineStatus(); }).then(function (info) {
+      if (seq !== profilesLoadSeq || state.currentTab !== "profiles") return;
+      lastFirefoxInfo = info && info.firefox || null;
+    }).catch(function () {
+      if (seq !== profilesLoadSeq || state.currentTab !== "profiles") return;
+      lastFirefoxInfo = null; // Unknown, not a false missing-engine launch gate.
+    });
     var listError = null;
-    var binaryProbeFailed = false;
     Promise.all([
       lcall("browser.list", function () { return api.browser.list(); }).catch(function (e) { listError = e; return []; }),
       api.proxy.list(),
-      api.browser.binary().catch(function () { binaryProbeFailed = true; return null; }),
-      // R10 P1-3: cache the Firefox engine state too, so the launch gate
-      // can tell "Chromium missing" from "Firefox missing".
-      (api.browser.engineStatus ? api.browser.engineStatus().catch(function () { return null; }) : Promise.resolve(null)),
     ]).then(function (results) {
+      if (seq !== profilesLoadSeq) return;
       if (listError) {
+        closeAllCardMenus(container);
         agentBrowser.renderViewState(container, { error: listError.message || String(listError), retry: { cmd: "loadProfiles" } });
         return;
       }
       var browserProfiles = results[0] || [];
       var proxies = results[1];
-      // PL-07: surface the engine state on the page that needs it.
-      renderEngineBanner(results[2], binaryProbeFailed);
       // Sale-90/92: trial/paywall banner refreshes with every profile load.
       try { if (typeof agentBrowser.refreshLicense === "function") agentBrowser.refreshLicense(); } catch (e) { /* banner is best-effort */ }
-      if (results[3] && results[3].firefox) lastFirefoxInfo = results[3].firefox;
 
       // Build a proxy lookup map for legacy renderer-side fallback.
       var proxyMap = {};
@@ -1561,6 +1714,7 @@
       }
 
       if (!profiles || profiles.length === 0) {
+        closeAllCardMenus(container);
         var filtered = profileFilter.status !== "all" || (profileFilter.tags && profileFilter.tags.length);
         if (filtered) {
           // A filter result is a dead end the user created; the way out is to
@@ -1585,6 +1739,7 @@
         profilePage = 1;
         var pagerEl = document.getElementById("profile-pagination");
         if (pagerEl) pagerEl.style.display = "none";
+        updateBatchBar(proxies);
         return;
       }
 
@@ -1601,10 +1756,9 @@
         // re-enable a card mid-launch (setCardBusy also patches live nodes).
         var isBusy = !!busyCards[p.dirId];
         var disAttr = isBusy ? " disabled" : "";
-        // S2-9: the Modified row scans as "3 h ago"; the absolute string moves
-        // to the tooltip. relTime falls back to the locale date past 30 days.
+        // Keep the render signature tied to metadata, not the passing clock.
+        // The relative Modified label is updated in place after reconciliation.
         var absDate = p.lastModified ? new Date(p.lastModified).toLocaleString() : "";
-        var date = p.lastModified && helpers.relTime ? helpers.relTime(p.lastModified) : (absDate || "?");
         var proxyStr = proxyDisplayLabel(p);
 
         var syncIcon = "", syncTitle = "", syncCls = "";
@@ -1674,7 +1828,7 @@
 
         return '<div class="profile-card' + (isRunning ? ' running' : '') + (isBusy ? ' busy' : '') + '" data-dir-id="' + escAttr(p.dirId) + '" data-lock="' + (isLocked ? '1' : '0') + '" aria-busy="' + (isBusy ? 'true' : 'false') + '">' +
           '<div class="card-header">' +
-            '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"' + (profileSelection[p.dirId] ? ' checked' : '') + '></label>' +
+            '<label class="profile-select" title="Select"><input type="checkbox" class="profile-select-checkbox" data-dir-id="' + escAttr(p.dirId) + '"></label>' +
             // R181: click-to-rename carried a title but was a bare <span> —
             // no tabindex, no role, no keyboard path. The card menu has an
             // equivalent Rename button, so this shortcut is not the only way
@@ -1707,7 +1861,7 @@
              jumped 26px from row to row. */
           '<div class="card-meta">' +
           '<div class="info-row"><span>' + esc(t('profile.row.browser', 'Browser')) + '</span><span class="icon-text">' + browserIcon + '<span class="icon-text-label">' + esc(browserName) + '</span></span></div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span class="num" title="' + escAttr(absDate) + '">' + esc(date) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span class="num profile-modified-time" data-modified-at="' + escAttr(p.lastModified || "") + '" title="' + escAttr(absDate) + '">' + esc(absDate || "?") + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
@@ -1732,7 +1886,7 @@
             // ── UE-08: every control has an accessible name ──
             '<details class="card-menu">' +
               '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +
-              '<div class="card-menu-list">' +
+              '<div class="card-menu-list" popover="manual">' +
                 '<button type="button" data-action="rename">' + icon('edit', 14) + esc(t('profile.menu.rename', 'Rename')) + '</button>' +
                 '<button type="button" data-action="note">' + icon('doc', 14) + esc(t('profile.menu.note', 'Note')) + '</button>' +
                 '<button type="button" data-action="cookies">' + icon('cookie', 14) + esc(t('profile.menu.cookies', 'Cookies')) + '</button>' +
@@ -1751,6 +1905,8 @@
       attachProfileCardHandlers(container);
       updateBatchBar(proxies);
     }).catch(function (e) {
+      if (seq !== profilesLoadSeq) return;
+      closeAllCardMenus(container);
       container.innerHTML = '<div class="empty-state">' + esc(t("profiles.load-error", "Error: ")) + esc(e.message || String(e)) + '</div>';
       lastRenderSignature = "";
     });
@@ -1809,6 +1965,17 @@
       '<button class="btn btn-secondary btn-sm" data-page="' + (profilePage + 1) + '"' + (profilePage >= pageCount ? " disabled" : "") + ">" + esc(t("profiles.pager.next", "Next")) + "</button>";
   }
 
+  function updateProfileCardView(card, lastModified) {
+    var checkbox = card.querySelector(".profile-select-checkbox");
+    var checked = !!profileSelection[card.dataset.dirId];
+    if (checkbox && checkbox.checked !== checked) checkbox.checked = checked;
+    var label = card.querySelector(".profile-modified-time");
+    if (!label) return;
+    var text = lastModified && helpers.relTime ? helpers.relTime(lastModified)
+      : (lastModified ? new Date(lastModified).toLocaleString() : "?");
+    if (label.textContent !== text) label.textContent = text;
+  }
+
   function renderProfileList(container, profiles, cardHtmlFn) {
     var total = profiles.length;
     var pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -1819,25 +1986,34 @@
 
     var cards = pageItems.map(function (p) {
       var html = cardHtmlFn(p);
-      return { dirId: p.dirId, html: html, sig: htmlSignature(html) };
+      return { dirId: p.dirId, html: html, sig: htmlSignature(html), lastModified: p.lastModified };
     });
 
-    // Fast path: nothing changed -> touch no DOM at all. Verify the DOM too:
-    // overlapping refreshes can replace the list with a loading placeholder
-    // after an earlier request has already recorded this data signature.
+    // Fast path: reuse unchanged cards, updating selection and relative-time
+    // display in place. Verify the DOM too: overlapping refreshes can replace
+    // the list with a placeholder after an earlier data signature was recorded.
     var signature = cards.map(function (c) { return c.dirId + ":" + c.sig; }).join("|") + "#" + pageCount;
+    var renderedCards = container.querySelectorAll(":scope > .profile-card");
     var renderedSignature = Array.prototype.map.call(
-      container.querySelectorAll(":scope > .profile-card"),
+      renderedCards,
       function (card) { return card.dataset.dirId + ":" + card.getAttribute("data-card-sig"); },
     ).join("|") + "#" + pageCount;
     if (signature === lastRenderSignature && renderedSignature === signature) {
+      cards.forEach(function (card, index) {
+        updateProfileCardView(renderedCards[index], card.lastModified);
+      });
       renderPagination(container, total, pageCount);
       return;
     }
     lastRenderSignature = signature;
 
+    // Even reused cards move into the fragment below. Close before the first
+    // detach, but leave a truly identical soft refresh entirely untouched.
+    closeAllCardMenus(container);
     // Remember focus + scroll so a refresh does not interrupt the user.
     var active = document.activeElement;
+    var focusIsMenuSummary = active && active.matches && active.matches('.card-menu > summary');
+    var focusIsSelection = active && active.matches && active.matches('.profile-select-checkbox');
     var activeCard = active && active.closest ? active.closest(".profile-card") : null;
     var focusKey = activeCard ? (activeCard.dataset.dirId || "") + "|" + (active.getAttribute("data-action") || active.className || "") : null;
     var scrollingEl = document.getElementById("content") || document.scrollingElement || document.documentElement;
@@ -1859,7 +2035,10 @@
         el = tmp.firstElementChild;
         if (el) el.setAttribute("data-card-sig", card.sig);
       }
-      if (el) frag.appendChild(el);
+      if (el) {
+        updateProfileCardView(el, card.lastModified);
+        frag.appendChild(el);
+      }
     });
     // Cards that are no longer present (deleted or paged away) get removed.
     Object.keys(existing).forEach(function (dirId) {
@@ -1880,7 +2059,8 @@
     if (scrollingEl && scrollTop) scrollingEl.scrollTop = scrollTop;
     if (focusKey) {
       var parts = focusKey.split("|");
-      var target = container.querySelector('.profile-card[data-dir-id="' + parts[0].replace(/"/g, "") + '"] [data-action="' + (parts[1] || "").replace(/"/g, "") + '"]');
+      var target = container.querySelector('.profile-card[data-dir-id="' + parts[0].replace(/"/g, "") + '"] ' +
+        (focusIsMenuSummary ? '.card-menu > summary' : focusIsSelection ? '.profile-select-checkbox' : '[data-action="' + (parts[1] || "").replace(/"/g, "") + '"]'));
       if (target && target.focus) target.focus();
     }
 
@@ -1900,6 +2080,7 @@
     applyCardBusy(card, busy);
   }
   function applyCardBusy(card, busy) {
+    if (busy) closeAllCardMenus(card);
     if (busy) card.classList.add("busy");
     else card.classList.remove("busy");
     card.setAttribute("aria-busy", busy ? "true" : "false");
@@ -1910,8 +2091,14 @@
     });
   }
 
-  function closeAllCardMenus() {
-    var menus = document.querySelectorAll("#profile-list .card-menu[open]");
+  function closeAllCardMenus(scope) {
+    var owner = scope || document.getElementById("profile-list");
+    if (typeof agentBrowser.closeCardMenus === "function") {
+      agentBrowser.closeCardMenus(owner || document);
+      return;
+    }
+    // Standalone renderer harnesses can omit the delegation module.
+    var menus = owner ? owner.querySelectorAll(".card-menu[open]") : document.querySelectorAll("#profile-list .card-menu[open]");
     Array.prototype.forEach.call(menus, function (m) { m.removeAttribute("open"); });
   }
 

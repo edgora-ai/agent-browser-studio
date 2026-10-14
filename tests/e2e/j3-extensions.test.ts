@@ -117,7 +117,7 @@ describe.skipIf(!J3_ENABLED)(
         const base = path.join(repoDir, EXT_ID);
         if (fs.existsSync(base)) {
           try {
-            for (const entry of fs.readdirSync(base, { withFileTypes: true, recursive: false } as any)) {
+            for (const entry of fs.readdirSync(base, { withFileTypes: true, recursive: false })) {
               const m = path.join(base, entry.name, "manifest.json");
               if (fs.existsSync(m)) {
                 manifestPath = m;

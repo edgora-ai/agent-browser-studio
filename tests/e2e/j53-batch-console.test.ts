@@ -82,7 +82,9 @@ describe("J53 — batch operations console", () => {
     await h.page.waitForTimeout(500);
     await h.page.locator("#profile-select-all").check();
     await h.page.waitForTimeout(300);
-    const count = (await h.page.textContent("#profile-selected-count")).trim();
+    const countText = await h.page.textContent("#profile-selected-count");
+    if (countText === null) throw new Error("Expected #profile-selected-count text content");
+    const count = countText.trim();
     expect(count).toBe("2");
     const barVisible = await h.page.evaluate(() =>
       (document.getElementById("profile-batch-actions") as HTMLElement)?.style.display !== "none");
@@ -107,7 +109,9 @@ describe("J53 — batch operations console", () => {
     await h.page.waitForTimeout(500);
     await h.page.locator("#profile-select-all").check();
     await h.page.waitForTimeout(300);
-    const selected = (await h.page.textContent("#profile-selected-count")).trim();
+    const selectedText = await h.page.textContent("#profile-selected-count");
+    if (selectedText === null) throw new Error("Expected #profile-selected-count text content");
+    const selected = selectedText.trim();
     expect(selected).toBe("1");
     await h.page.evaluate(() => (window as any).agentBrowser.batchDeleteSelected());
     await h.page.waitForSelector("#dlg-confirm[open]", { timeout: 5000 });

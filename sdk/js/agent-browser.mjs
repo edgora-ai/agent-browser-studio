@@ -37,21 +37,30 @@ export class AgentBrowserClient {
     this.timeout = options.timeout ?? 15000;
   }
 
-  headers(hasBody) {
+  headers(hasBody, requestHeaders = {}) {
     const headers = {};
+    for (const [name, value] of Object.entries(requestHeaders)) {
+      const key = name.toLowerCase();
+      if (['authorization', 'x-agent-browser-token', 'x-cloak-token'].includes(key)) {
+        throw new AgentBrowserError('Custom request headers cannot override authentication');
+      }
+      headers[key] = value;
+    }
     if (hasBody) headers['content-type'] = 'application/json';
     if (this.token) headers['authorization'] = 'Bearer ' + this.token;
     return headers;
   }
 
-  async request(method, path, body) {
+  // Account targeting: pass { 'If-Match': '"' + selectedRevision + '"' }
+  // from the original GET /api/accounts body. Never auto-refresh/retry writes.
+  async request(method, path, body, requestHeaders = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
     let resp;
     try {
       resp = await fetch(this.baseUrl + path, {
         method,
-        headers: this.headers(body !== undefined),
+        headers: this.headers(body !== undefined, requestHeaders),
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
@@ -69,12 +78,12 @@ export class AgentBrowserClient {
     return data;
   }
 
-  get(path) { return this.request('GET', path, undefined); }
-  post(path, body) { return this.request('POST', path, body); }
-  delete(path) { return this.request('DELETE', path, undefined); }
+  get(path, headers) { return this.request('GET', path, undefined, headers); }
+  post(path, body, headers) { return this.request('POST', path, body, headers); }
+  delete(path, headers) { return this.request('DELETE', path, undefined, headers); }
 
-  put(path, body) { return this.request('PUT', path, body); }
-  patch(path, body) { return this.request('PATCH', path, body); }
+  put(path, body, headers) { return this.request('PUT', path, body, headers); }
+  patch(path, body, headers) { return this.request('PATCH', path, body, headers); }
 
   health() { return this.request('GET', '/health'); }
   version() { return this.request('GET', '/version'); }

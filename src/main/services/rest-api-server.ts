@@ -19,11 +19,11 @@ import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./prox
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
 import { getDrmStatus, setProfileDrm, ensureManagedCdm } from "./drm.js";
 import { checkForUpdates, installRelease, activateVersion, rollback, getUpdateState, getCurrentVersion, assertSafeManifestUrl } from "./update-manager.js";
-import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret, requireSettingsMutation } from "./team.js";
+import { teamStatus, initTeam, addMember, removeMember, setMemberRole, renameWorkspace, setTeamEnabled, requireAccountMutation, requireAccountSecret, requireSettingsMutation, requireProfileMutation } from "./team.js";
 import { isHeadlessMode } from "./server-mode.js";
 import { setDrmCdmPath } from "./config-manager.js";
 import {
-  getAccounts, getAccountPassword, addAccount, updateAccount, deleteAccount,
+  getAccount, getAccountsSnapshot, getAccountPassword, addAccount, updateAccount, deleteAccount,
   parseAccountsBulkText, bulkAddAccounts, bulkCreateProfilesWithAccounts,
 } from "./local-agent.js";
 import {
@@ -47,8 +47,8 @@ import { listPlatformAdapters, getPlatformAdapter, detectAdapter } from "./platf
 import { createAutomationRule, updateAutomationRule, deleteAutomationRule } from "./automation-rules.js";
 import {
   listBrowserProfiles, launchBrowser, stopBrowser, statusBrowser, checkFingerprintDrift,
-  createBrowserProfile, deleteBrowserProfile, getEngineStatus,
-  findRuntimeChromiumBinary, getRuntimeChromiumVersion,
+  createBrowserProfile, deleteBrowserProfile, getEngineStatusAsync,
+  getRuntimeChromiumStatusAsync,
   touchProfileActivity, listRunningProfileIdle, getIdlePolicyTimeoutMs,
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
@@ -59,6 +59,7 @@ import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArch
 import { syncService } from "./sync-service.js";
 import { retryAgentRun, retryJobRuns, testRunRule, reloadSchedule, cancelRunningJob } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
+import { AccountOperationError } from "./config/store.js";
 
 const API_VERSION = "1.0.0";
 let server: http.Server | null = null;
@@ -87,7 +88,26 @@ function configuredApiPort(): number {
 // Request dispatch
 // ═══════════════════════════════════════════════════════════════
 
-interface JsonResponse { status: number; body: any; }
+interface JsonResponse { status: number; body: any; headers?: Record<string, string>; }
+
+// Revisions are opaque server nonces, not hashes of credentials or identities.
+// Accept exactly one strong quoted validator; never refresh or retry a target.
+function restAccountReference(req: http.IncomingMessage, index: number): import("../types.js").AccountReference {
+  const value = req.headers["if-match"];
+  if (value === undefined) throw new AccountOperationError("ACCOUNT_REFERENCE_REQUIRED", "If-Match is required");
+  if (typeof value !== "string" || !/^"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"$/.test(value)) {
+    throw new AccountOperationError("ACCOUNT_REFERENCE_INVALID", "If-Match must be one exact strong quoted account revision");
+  }
+  return { index, revision: value.slice(1, -1) };
+}
+function accountErrorResponse(error: unknown): JsonResponse {
+  const statuses: Record<string, number> = {
+    ACCOUNT_REFERENCE_REQUIRED: 428, ACCOUNT_REFERENCE_INVALID: 400,
+    ACCOUNT_REFERENCE_CONFLICT: 412, ACCOUNT_NOT_FOUND: 404, ACCOUNT_VALIDATION_FAILED: 400,
+  };
+  if (error instanceof AccountOperationError) return { status: statuses[error.code], body: { error: error.message, code: error.code } };
+  return { status: 400, body: { error: error instanceof Error ? error.message : String(error) } };
+}
 
 function profileSummary(p: any): any {
   return {
@@ -98,7 +118,7 @@ function profileSummary(p: any): any {
     running: Boolean(p.running),
     proxyMode: p.proxyMode,
     proxy: p.proxyMode === "none" ? null : (p.proxyName || null),
-    version: p.version || getRuntimeChromiumVersion() || "?",
+    version: p.version || "?",
     tags: Array.isArray(p.tags) ? p.tags : [],
   };
 }
@@ -150,7 +170,8 @@ function redactRestAccount(account: any, index: number): any {
     username: account.platformUserName,
     profileIds: Array.isArray(account.profileIds) ? account.profileIds : [],
     tags: Array.isArray(account.tags) ? account.tags : [],
-    hasPassword: Boolean(account.platformPassword),
+    hasPassword: account.hasPassword ?? Boolean(account.platformPassword),
+    ref: account.ref,
   };
 }
 
@@ -176,6 +197,8 @@ function conversationSummary(c: any): any {
   return {
     id: c.id,
     title: c.title,
+    ...(c.titleKind === "literal" || c.titleKind === null || (c.titleKind === "default" && c.title === "New Chat")
+      ? { titleKind: c.titleKind } : {}),
     messageCount: Array.isArray(c.messages) ? c.messages.length : 0,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
@@ -235,13 +258,14 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: buildOpenApi() };
   }
   if (method === "GET" && p === "/version") {
+    const chromium = await getRuntimeChromiumStatusAsync();
     return {
       status: 200,
       body: {
         name: PRODUCT_NAME,
         slug: PRODUCT_SLUG,
         version: API_VERSION,
-        chromium: { path: findRuntimeChromiumBinary(), version: getRuntimeChromiumVersion() },
+        chromium: { path: chromium.path, version: chromium.version },
       },
     };
   }
@@ -380,6 +404,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   // ── Profile backup (export / import via REST) ──
   // Note: /api/profiles/import must be matched before /api/profiles/{dirId}.
   if (method === "POST" && p === "/api/profiles/import") {
+    const mutationGate = requireProfileMutation();
+    if (!mutationGate.ok) return { status: 403, body: { error: mutationGate.error } };
     const body = await readJson(req).catch(() => null);
     if (!body || typeof body.zipPath !== "string" || !body.zipPath.trim()) {
       return { status: 400, body: { error: "zipPath is required" } };
@@ -393,13 +419,15 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     try {
       const r = importProfileArchive(zipPath);
       recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + zipPath });
-      return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes } };
+      return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes, warnings: r.warnings } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
   }
   // Batch import of several profile backup ZIPs.
   if (method === "POST" && p === "/api/profiles/import-batch") {
+    const mutationGate = requireProfileMutation();
+    if (!mutationGate.ok) return { status: 403, body: { error: mutationGate.error } };
     const body = await readJson(req).catch(() => null);
     if (!body || !Array.isArray(body.zipPaths) || !body.zipPaths.length) {
       return { status: 400, body: { error: "zipPaths (non-empty array) is required" } };
@@ -749,22 +777,23 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
 
   // ── Accounts ──
   if (method === "GET" && p === "/api/accounts") {
+    const snapshot = getAccountsSnapshot();
     return {
       status: 200,
-      body: { accounts: getAccounts().map((a, index) => redactRestAccount(a, index)) },
+      headers: { ETag: `"${snapshot.revision}"`, "Cache-Control": "no-store" },
+      body: { accounts: snapshot.accounts.map((a) => redactRestAccount(a, a.ref.index)), revision: snapshot.revision },
     };
   }
   if (method === "POST" && p === "/api/accounts") {
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
     const body = await readJson(req);
+    const currentDeny = requireRestAccountMutation();
+    if (currentDeny) return currentDeny;
     if (!body || typeof body.url !== "string" || !body.url.trim() || typeof body.username !== "string" || !body.username.trim()) {
       return { status: 400, body: { error: "url and username are required" } };
     }
-    const deny = requireRestAccountMutation();
-    if (deny) return deny;
     try {
-      // addAccount appends to the array; capture the index before the save
-      // because saveConfig rebuilds the config object (reference identity is lost).
-      const index = getAccounts().length;
       const added = addAccount({
         platformUrl: String(body.url).trim().slice(0, 1000),
         platformUserName: String(body.username).trim().slice(0, 200),
@@ -773,18 +802,20 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
         tags: normalizeRestTags(body.tags),
       });
       recordAudit({ category: "account", action: "add", target: added.platformUrl.slice(0, 200), actor: "api", detail: "added via API" });
-      return { status: 201, body: { success: true, account: redactRestAccount(added, index) } };
+      return { status: 201, body: { success: true, account: redactRestAccount(added, added.ref.index) } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
   }
   if (method === "POST" && p === "/api/accounts/bulk") {
+    const deny = requireRestAccountMutation();
+    if (deny) return deny;
     const body = await readJson(req);
+    const currentDeny = requireRestAccountMutation();
+    if (currentDeny) return currentDeny;
     if (!body || typeof body.text !== "string") {
       return { status: 400, body: { error: "text is required" } };
     }
-    const deny = requireRestAccountMutation();
-    if (deny) return deny;
     try {
       const parsed = parseAccountsBulkText(body.text);
       if (body.createProfiles) {
@@ -806,45 +837,67 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const deny = requireRestAccountSecret();
     if (deny) return deny;
     const index = Number(mAccountPassword[1]);
-    const account = getAccounts()[index];
-    const password = getAccountPassword(index);
-    if (!account || password === null) return { status: 404, body: { error: "Account not found or no password" } };
-    recordAudit({ category: "account", action: "reveal-password", target: account.platformUrl.slice(0, 200), actor: "api" });
-    return { status: 200, body: { success: true, password } };
+    try {
+      const ref = restAccountReference(req, index);
+      const account = getAccount(index, ref);
+      const password = getAccountPassword(index, ref);
+      if (password === null) return { status: 404, body: { error: "Account has no password" } };
+      recordAudit({ category: "account", action: "reveal-password", target: account.platformUrl.slice(0, 200), actor: "api" });
+      return { status: 200, headers: { "Cache-Control": "no-store" }, body: { success: true, password } };
+    } catch (error) {
+      return accountErrorResponse(error);
+    }
   }
   const mAccount = p.match(/^\/api\/accounts\/(\d+)$/);
   if (mAccount && method === "PATCH") {
-    const body = await readJson(req);
     const deny = requireRestAccountMutation();
     if (deny) return deny;
+    const body = await readJson(req);
+    // Retain the original post-body live RBAC check as well: a member can be
+    // demoted while a body is queued. The early gate only avoids denied reads.
+    const currentDeny = requireRestAccountMutation();
+    if (currentDeny) return currentDeny;
     const index = Number(mAccount[1]);
     try {
+      // Body may arrive after another writer commits. Do not validate a live
+      // revision before awaiting it, or silently substitute a newer revision.
+      const ref = restAccountReference(req, index);
+      if (!body || typeof body !== "object" || Array.isArray(body)
+        || Object.keys(body).some(key => !["url", "username", "password", "profileIds", "tags"].includes(key))) {
+        throw new AccountOperationError("ACCOUNT_VALIDATION_FAILED", "Unknown or malformed account patch fields");
+      }
       const patch: Partial<import("../types.js").PlatformAccount> = {};
-      if (body && body.url !== undefined) patch.platformUrl = String(body.url).trim().slice(0, 1000);
-      if (body && body.username !== undefined) patch.platformUserName = String(body.username).trim().slice(0, 200);
-      if (body && body.password !== undefined) patch.platformPassword = String(body.password);
-      if (body && body.profileIds !== undefined) patch.profileIds = normalizeRestProfileIds(body.profileIds);
-      if (body && body.tags !== undefined) patch.tags = normalizeRestTags(body.tags);
-      const updated = updateAccount(index, patch);
-      if (!updated) return { status: 404, body: { error: "Account not found" } };
+      if ("url" in body) patch.platformUrl = body.url;
+      if ("username" in body) patch.platformUserName = body.username;
+      if ("password" in body) patch.platformPassword = body.password;
+      if ("profileIds" in body) patch.profileIds = body.profileIds;
+      if ("tags" in body) {
+        if (!Array.isArray(body.tags) || body.tags.length > 20 || body.tags.some((tag: unknown) => typeof tag !== "string" || tag.trim().length > 40 || /[\x00-\x1f\x7f]/.test(tag.trim()))) {
+          throw new AccountOperationError("ACCOUNT_VALIDATION_FAILED", "Invalid tags");
+        }
+        // Preserve the REST trim/dedupe/empty-clears convention, without
+        // coercing malformed fields into a nominally successful write.
+        patch.tags = normalizeRestTags(body.tags);
+      }
+      const updated = updateAccount(index, patch, ref);
       recordAudit({ category: "account", action: "update", target: updated.platformUrl.slice(0, 200), actor: "api", detail: "updated via API" });
       return { status: 200, body: { success: true, account: redactRestAccount(updated, index) } };
-    } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+    } catch (error) {
+      return accountErrorResponse(error);
     }
   }
   if (mAccount && method === "DELETE") {
     const deny = requireRestAccountMutation();
     if (deny) return deny;
     const index = Number(mAccount[1]);
-    const target = getAccounts()[index]?.platformUrl || "";
     try {
-      const ok = deleteAccount(index);
-      if (!ok) return { status: 404, body: { error: "Account not found" } };
+      const ref = restAccountReference(req, index);
+      const target = getAccount(index, ref).platformUrl;
+      deleteAccount(index, ref);
       recordAudit({ category: "account", action: "delete", target: target.slice(0, 200), actor: "api", detail: "deleted via API" });
       return { status: 200, body: { success: true } };
-    } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+    } catch (error) {
+      return accountErrorResponse(error);
     }
   }
 
@@ -1064,7 +1117,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
 
   // ── Engine status (Slice 77): Chromium + Firefox availability ──
   if (method === "GET" && p === "/api/engine-status") {
-    return { status: 200, body: getEngineStatus() };
+    return { status: 200, body: await getEngineStatusAsync() };
   }
 
   // ── Jobs (durable queue control) ──
@@ -1269,9 +1322,9 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "DELETE" && p === "/api/agent/runs") {
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
-    const deleted = agentRunRecorder.clearRuns();
-    recordAudit({ category: "llm", action: "runs-clear", target: "", actor: "api", detail: "deleted=" + deleted });
-    return { status: 200, body: { success: true, deleted } };
+    const { deleted, skipped } = agentRunRecorder.clearRunsDetailed();
+    recordAudit({ category: "llm", action: "runs-clear", target: "", actor: "api", detail: `deleted=${deleted}, skipped=${skipped}` });
+    return { status: 200, body: { success: true, deleted, skipped } };
   }
   const mAgentRun = p.match(/^\/api\/agent\/runs\/([^/]+)$/);
   if (mAgentRun && method === "GET") {
@@ -1283,8 +1336,9 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
     const id = decodeURIComponent(mAgentRun[1]);
-    const ok = agentRunRecorder.deleteRun(id);
-    if (!ok) return { status: 404, body: { error: "Run not found" } };
+    const result = agentRunRecorder.deleteRunDetailed(id);
+    if (result === "active") return { status: 409, body: { error: "Cannot delete a running run" } };
+    if (result === "missing") return { status: 404, body: { error: "Run not found" } };
     recordAudit({ category: "llm", action: "run-delete", target: id, actor: "api" });
     return { status: 200, body: { success: true } };
   }
@@ -1416,7 +1470,11 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
   server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Browser-Token, X-Cloak-Token");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Browser-Token, X-Cloak-Token, If-Match");
+    res.setHeader("Access-Control-Expose-Headers", "ETag");
+    // Apply before auth/body parsing so errors and credential responses are
+    // never cached either. These paths do not change any unrelated API policy.
+    if (/^\/api\/accounts(?:\/|\?|$)/.test(req.url || "")) res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -1443,8 +1501,8 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
     }
 
     try {
-      const { status, body } = await handleRequest(req, url);
-      res.writeHead(status, { "Content-Type": "application/json" });
+      const { status, body, headers } = await handleRequest(req, url);
+      res.writeHead(status, { "Content-Type": "application/json", ...headers });
       res.end(JSON.stringify(body));
     } catch (e: any) {
       const status = e instanceof HttpError || (e && typeof e.status === "number") ? e.status : 500;
@@ -1534,6 +1592,17 @@ function buildOpenApi(): any {
     name: "extId", in: "path", required: true,
     schema: { type: "string" }, description: "32-char Chrome extension ID",
   };
+  const accountIfMatch = {
+    name: "If-Match", in: "header", required: true, schema: { type: "string" },
+    description: 'Exactly one strong quoted collection revision from GET /api/accounts, e.g. "550e8400-e29b-41d4-a716-446655440000". Retain the revision captured when selecting the index. Weak, wildcard, unquoted and multiple validators are rejected. Never auto-fetch/retry on conflict.',
+  };
+  const accountResponses = (description: string) => ({
+    "200": { description }, "400": { description: "Malformed If-Match/reference or invalid account fields" },
+    "401": { description: "Unauthorized" }, "403": { description: "Team role denied (when enabled)" },
+    "404": { description: "Current-valid reference has no target (or no password on reveal)" },
+    "412": { description: "Account snapshot changed; explicitly reselect/reconfirm" },
+    "428": { description: "If-Match required; unguarded positional operations are not supported" },
+  });
   const ok = (desc: string) => ({ "200": { description: desc } });
   const created = (desc: string) => ({ "201": { description: desc } });
   return {
@@ -1693,7 +1762,7 @@ function buildOpenApi(): any {
         get: { summary: "Read-only rotation status", responses: ok("Rotation info") },
       },
       "/api/accounts": {
-        get: { summary: "List stored accounts (index, url, username, tags, profileIds, hasPassword; never the password)", responses: ok("Account list") },
+        get: { summary: "List stored accounts (index, url, username, tags, profileIds, hasPassword, ref; never the password)", description: "Body: { accounts: [...], revision: <opaque UUID nonce> }. Each ref is { index, revision } with global index. ETag is the strong quoted revision. Cache-Control: no-store. Snapshot references are not durable IDs or authorization capabilities.", responses: ok("Account list with collection revision and ETag") },
         post: {
           summary: "Add an account (password encrypted at rest)",
           requestBody: { content: { "application/json": { schema: { type: "object", required: ["url", "username"], properties: { url: { type: "string" }, username: { type: "string" }, password: { type: "string" }, profileIds: { type: "array", items: { type: "string" } }, tags: { type: "array", items: { type: "string" } } } } } } },
@@ -1708,17 +1777,18 @@ function buildOpenApi(): any {
         },
       },
       "/api/accounts/{index}": {
-        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer", minimum: 0 } }, accountIfMatch],
         patch: {
           summary: "Update an account (partial; empty/omitted password keeps the stored one)",
           requestBody: { content: { "application/json": { schema: { type: "object", properties: { url: { type: "string" }, username: { type: "string" }, password: { type: "string" }, profileIds: { type: "array", items: { type: "string" } }, tags: { type: "array", items: { type: "string" } } } } } } },
-          responses: ok("Update result with account"),
+          description: "profileIds: [] clears to global/unbound. Only documented editable fields are accepted. Result is normalized committed metadata with a new ref; password is never echoed.",
+          responses: accountResponses("Update result with account and new ref"),
         },
-        delete: { summary: "Delete an account", responses: ok("Delete result") },
+        delete: { summary: "Delete an account", responses: accountResponses("Delete result") },
       },
       "/api/accounts/{index}/password": {
-        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer" } }],
-        get: { summary: "Reveal a stored account password (member+ when team enabled)", responses: ok("Revealed password") },
+        parameters: [{ name: "index", in: "path", required: true, schema: { type: "integer", minimum: 0 } }, accountIfMatch],
+        get: { summary: "Reveal a stored account password (member+ when team enabled)", description: "Cache-Control: no-store, including errors.", responses: accountResponses("Revealed password") },
       },
       "/api/automation/rules": {
         get: { summary: "List automation rules", responses: ok("Rule list") },
@@ -1840,20 +1910,46 @@ function buildOpenApi(): any {
         },
       },
       "/api/agent/conversations": {
-        get: { summary: "List agent conversations (summaries, newest first)", responses: ok("Conversation list") },
+        get: {
+          summary: "List agent conversations (summaries, newest first)",
+          responses: { "200": { description: "Conversation list", content: { "application/json": { schema: {
+            type: "object", properties: { conversations: { type: "array", items: {
+              type: "object", properties: { titleKind: { type: "string", nullable: true, enum: ["default", "literal", null],
+                description: "Optional sanitized title provenance. Missing or null is unknown; default is returned only with the canonical New Chat title." } },
+            } } },
+          } } } } },
+        },
         post: {
           summary: "Create a conversation (member+ when team enabled)",
           requestBody: { content: { "application/json": { schema: { type: "object", properties: { title: { type: "string" } } } } } },
-          responses: created("Created conversation"),
+          responses: { "201": { description: "Created conversation", content: { "application/json": { schema: {
+            type: "object", properties: { conversation: { type: "object", properties: {
+              titleKind: { type: "string", nullable: true, enum: ["default", "literal", null],
+                description: "Optional backend-derived title provenance; omitted or blank creation yields default, explicit nonblank text yields literal." },
+            } } },
+          } } } } },
         },
       },
       "/api/agent/conversations/{id}": {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-        get: { summary: "Get a conversation with its full message history", responses: ok("Conversation") },
+        get: {
+          summary: "Get a conversation with its full message history",
+          responses: { "200": { description: "Conversation", content: { "application/json": { schema: {
+            type: "object", properties: { conversation: { type: "object", properties: {
+              titleKind: { type: "string", nullable: true, enum: ["default", "literal", null],
+                description: "Optional sanitized title provenance. Missing or null is unknown; default is returned only with the canonical New Chat title." },
+            } } },
+          } } } } },
+        },
         patch: {
           summary: "Rename a conversation (member+ when team enabled)",
           requestBody: { content: { "application/json": { schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } } } } },
-          responses: ok("Renamed conversation"),
+          responses: { "200": { description: "Renamed conversation", content: { "application/json": { schema: {
+            type: "object", properties: { conversation: { type: "object", properties: {
+              titleKind: { type: "string", nullable: true, enum: ["default", "literal", null],
+                description: "Optional backend-derived title provenance; every successful explicit rename records literal, including a same-text rename." },
+            } } },
+          } } } } },
         },
         delete: { summary: "Delete a conversation (member+ when team enabled)", responses: ok("Delete result") },
       },
@@ -1873,12 +1969,12 @@ function buildOpenApi(): any {
       },
       "/api/agent/runs": {
         get: { summary: "List agent run traces (limit/dirId query params)", responses: ok("Run list") },
-        delete: { summary: "Clear all run traces (member+ when team enabled)", responses: ok("Clear result with deleted count") },
+        delete: { summary: "Clear terminal run traces; preserve running runs (member+ when team enabled)", responses: ok("Clear result with deleted and skipped counts") },
       },
       "/api/agent/runs/{runId}": {
         parameters: [{ name: "runId", in: "path", required: true, schema: { type: "string" } }],
         get: { summary: "Get one run trace with steps", responses: ok("Run detail") },
-        delete: { summary: "Delete one run trace (member+ when team enabled)", responses: ok("Delete result") },
+        delete: { summary: "Delete one terminal run trace (member+ when team enabled; running returns 409)", responses: ok("Delete result") },
       },
       "/api/agent/db/tables": {
         get: { summary: "List agent SQLite store tables with row counts", responses: ok("Table list") },

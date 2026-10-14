@@ -6,6 +6,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { setupTestApp, closeApp, TestAppHandle, userDataConfigPath } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
+import type { AgentBrowserAPI } from "../../src/renderer/api.js";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j76");
@@ -38,21 +39,36 @@ describe("J76 — accounts module alignment", () => {
   });
 
   it("copies the username to the system clipboard", async () => {
-    const r: any = await h.page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.copyUsername(0));
+    const r: any = await h.page.evaluate(async () => {
+      const accounts = (window as any).agentBrowser.api.agent.accounts as AgentBrowserAPI["agent"]["accounts"];
+      const selected = (await accounts.list())[0];
+      if (!selected) throw new Error("account missing before copying username");
+      return accounts.copyUsername(selected.ref.index, selected.ref);
+    });
     expect(r.ok).toBe(true);
     const clip = await h.app.evaluate(({ clipboard }: any) => clipboard.readText());
     expect(clip).toBe("j76user");
   });
 
   it("copies the password via a main-process decrypt (clipboard only)", async () => {
-    const r: any = await h.page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.copyPassword(0));
+    const r: any = await h.page.evaluate(async () => {
+      const accounts = (window as any).agentBrowser.api.agent.accounts as AgentBrowserAPI["agent"]["accounts"];
+      const selected = (await accounts.list())[0];
+      if (!selected) throw new Error("account missing before copying password");
+      return accounts.copyPassword(selected.ref.index, selected.ref);
+    });
     expect(r.ok).toBe(true);
     const clip = await h.app.evaluate(({ clipboard }: any) => clipboard.readText());
     expect(clip).toBe("j76secret");
   });
 
   it("binds the account to a profile and resolves it via forProfile", async () => {
-    const updated: any = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.agent.accounts.bind(0, [id]), dirId);
+    const updated: any = await h.page.evaluate(async (id: string) => {
+      const accounts = (window as any).agentBrowser.api.agent.accounts as AgentBrowserAPI["agent"]["accounts"];
+      const selected = (await accounts.list())[0];
+      if (!selected) throw new Error("account missing before binding profile");
+      return accounts.bind(selected.ref.index, [id], selected.ref);
+    }, dirId);
     expect(updated.profileIds).toEqual([dirId]);
     const forProfile: any[] = await h.page.evaluate((id: string) => (window as any).agentBrowser.api.agent.accounts.forProfile(id), dirId);
     expect(forProfile.length).toBe(1);
@@ -98,10 +114,14 @@ describe("J76 — accounts module alignment", () => {
     fs.writeFileSync(userDataConfigPath(USERDATA), JSON.stringify(cfg, null, 2));
     await h.page.evaluate(() => (window as any).agentBrowser.api.app.reloadConfig());
 
-    const copyErr: string = await h.page.evaluate(() =>
-      (window as any).agentBrowser.api.agent.accounts.copyPassword(0)
+    const copyErr: string = await h.page.evaluate(async () => {
+      const accounts = (window as any).agentBrowser.api.agent.accounts as AgentBrowserAPI["agent"]["accounts"];
+      const selected = (await accounts.list())[0];
+      if (!selected) throw new Error("account missing before viewer secret denial");
+      return accounts.copyPassword(selected.ref.index, selected.ref)
         .then(() => "no-error")
-        .catch((e: any) => e.message || String(e)));
+        .catch((e: any) => e.message || String(e));
+    });
     expect(copyErr).toContain("requires member role");
 
     const bulkErr: string = await h.page.evaluate(() =>

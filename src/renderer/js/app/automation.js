@@ -19,6 +19,9 @@
 
   var currentRules = [];
   var taskTemplates = [];
+  var automationLoadSeq = 0;
+  var jobsLoadSeq = 0;
+  var openJobSeq = 0;
 
   function describeTrigger(tr) {
     if (!tr) return '?';
@@ -174,6 +177,10 @@
     document.getElementById('auto-action-profiles-row').style.display = (isAgent && batch) ? '' : 'none';
     document.getElementById('auto-action-concurrency-row').style.display = (isAgent && batch) ? '' : 'none';
     document.getElementById('auto-action-template-row').style.display = isAgent ? '' : 'none';
+    var inputsRow = document.getElementById('auto-template-inputs-row');
+    var templateId = document.getElementById('auto-action-template').value;
+    var tpl = taskTemplates.find(function(x) { return x.id === templateId; });
+    if (inputsRow) inputsRow.style.display = isAgent && tpl && tpl.machine ? '' : 'none';
     document.getElementById('auto-action-prompt-row').style.display = isAgent ? '' : 'none';
     document.getElementById('auto-action-js-row').style.display = type === 'custom-js' ? '' : 'none';
   }
@@ -285,7 +292,7 @@
   /** Badge class + label for a phase. The label states what the scheduler will
    *  actually do — "Enabled" on a permanently dead rule is the bug M3 removes. */
   function phaseBadge(state) {
-    if (!state) return { cls: 'status-stopped', label: t('auto.loading', '加载中…') };
+    if (!state) return { cls: 'status-warn', label: t('auto.schedule-unavailable', 'Schedule unavailable') };
     // Classes are the ones style.css actually defines (status-running /
     // -stopped / -done / -failed / -warn). An invented class name renders an
     // unstyled badge, so this map is checked against the stylesheet.
@@ -340,26 +347,31 @@
   function scheduleActions(state) {
     if (!state) return '';
     if (state.phase === 'missed-once') {
-      return '<button class="btn btn-primary btn-sm" data-rule-action="reschedule">' + esc(t('auto.btn.reschedule', '重新安排')) + '</button>' +
-             '<button class="btn btn-secondary btn-sm" data-rule-action="toggle">' + esc(t('auto.btn.disable', '停用')) + '</button>';
+      return '<button class="btn btn-primary btn-sm" data-rule-action="reschedule">' + esc(t('auto.btn.reschedule', '重新安排')) + '</button>';
     }
     return '';
   }
 
   // R15 UX P1-7: list failure gets an error state + retry, not a stuck Loading.
   agentBrowser.loadAutomationTab = function() {
-    // State and rules are fetched in parallel; a state failure must not hide
-    // the rules, so it degrades to "no state" rather than rejecting.
+    var seq = ++automationLoadSeq;
+    var listEl = document.getElementById('automation-list');
+    if (listEl && agentBrowser.renderViewState) agentBrowser.renderViewState(listEl, { skeleton: 3, loading: t('auto.loading', 'Loading...') });
+    else if (listEl) listEl.innerHTML = '<div class="loading">' + esc(t('auto.loading', 'Loading...')) + '</div>';
+    // Fetch in parallel but render one matched pair. A failed state read must
+    // keep rule actions usable and report the read failure separately.
     var statePromise = lcall("automation.schedule-state", function () { return api.automation.scheduleState(); })
-      .then(function (r) {
-        scheduleStates = {};
-        if (r && r.success && Array.isArray(r.states)) {
-          r.states.forEach(function (s) { scheduleStates[s.ruleId] = s; });
-        }
-        return r;
-      })
-      .catch(function () { scheduleStates = {}; return null; });
-    lcall("automation.list", function () { return api.automation.list(); }).then(function(rules) {
+      .catch(function(error) { return { success: false, error: error.message || String(error) }; });
+    Promise.all([lcall("automation.list", function () { return api.automation.list(); }), statePromise]).then(function(results) {
+      if (seq !== automationLoadSeq) return;
+      var rules = results[0];
+      var stateResult = results[1];
+      scheduleStates = {};
+      if (stateResult && stateResult.success && Array.isArray(stateResult.states)) {
+        stateResult.states.forEach(function(s) { scheduleStates[s.ruleId] = s; });
+      } else {
+        toast(t('auto.schedule-load-failed', 'Could not load schedule: ') + ((stateResult && stateResult.error) || t('auto.schedule-unavailable', 'Schedule unavailable')), 'error');
+      }
       currentRules = rules || [];
       var el = document.getElementById('automation-list');
       if (!rules || rules.length === 0) {
@@ -399,6 +411,7 @@
         };
       }
     }).catch(function(e) {
+      if (seq !== automationLoadSeq) return;
       var errEl = document.getElementById('automation-list');
       var msg = (e && e.message) || String(e);
       if (window.agentBrowser && window.agentBrowser.renderViewState) {
@@ -412,15 +425,58 @@
     agentBrowser.automationRefreshJobs();
   };
 
+  // The requested window is not a storage/retention total. Repaint only this
+  // loaded-count caption on locale changes; never refetch or write jobs.
+  var jobsListLimit = 50;
+  var jobsShownCount = null;
+  var jobsLocaleRepaint = false;
+  function renderJobsListLimit() {
+    var grid = document.getElementById('automation-jobs');
+    if (!grid || !grid.parentNode) return;
+    var hint = document.getElementById('automation-jobs-limit');
+    if (jobsShownCount === null) {
+      if (hint) { hint.textContent = ''; hint.hidden = true; }
+      return;
+    }
+    if (!hint) {
+      hint = document.createElement('p');
+      hint.id = 'automation-jobs-limit';
+      hint.style.color = 'var(--text-muted)';
+      hint.style.fontSize = '12px';
+      hint.style.margin = '8px 0';
+      grid.parentNode.insertBefore(hint, grid);
+    }
+    hint.hidden = false;
+    hint.textContent = t('auto.jobs-list-limit', 'Showing {shown} jobs; this list loads up to {limit} newest jobs matching the selected status. Older jobs may not appear.')
+      .replace('{shown}', String(jobsShownCount)).replace('{limit}', String(jobsListLimit));
+  }
+  // agent-config's earlier locale listener reloads the current tab. Capture
+  // that intent before it runs, skipping only its synchronous Jobs read; all
+  // other locale listeners and rule/settings refreshes remain untouched.
+  document.addEventListener('agent-browser-language-change', function() {
+    jobsLocaleRepaint = true;
+  }, true);
+  document.addEventListener('agent-browser-language-change', function() {
+    jobsLocaleRepaint = false;
+    renderJobsListLimit();
+  });
+
   agentBrowser.automationRefreshJobs = function() {
+    if (jobsLocaleRepaint) return;
     var el = document.getElementById('automation-jobs');
     if (!el) return;
+    var seq = ++jobsLoadSeq;
     var statusEl = document.getElementById('automation-job-status');
     var status = statusEl && statusEl.value;
+    jobsShownCount = null;
+    renderJobsListLimit();
     // UI R2: skeleton instead of bare text.
     if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el, { skeleton: 3, loading: t('auto.loading', 'Loading...') });
     else el.innerHTML = '<div class="loading">' + esc(t('auto.loading', 'Loading...')) + '</div>';
-    api.automation.jobs({ status: status || undefined, limit: 50 }).then(function(jobs) {
+    api.automation.jobs({ status: status || undefined, limit: jobsListLimit }).then(function(jobs) {
+      if (seq !== jobsLoadSeq) return;
+      jobsShownCount = (jobs || []).length;
+      renderJobsListLimit();
       if (!jobs || jobs.length === 0) {
         if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{empty:t('auto.jobs.empty','暂无 jobs')}); else el.innerHTML = '<div class="empty-state">' + t('auto.jobs.empty', '还没有 durable jobs。<br>点击「测试运行」后会在这里看到执行记录。') + '</div>';
         return;
@@ -458,15 +514,41 @@
         else if (btn.dataset.jobAction === 'cancel') agentBrowser.automationCancelJob(jobId);
       };
     }).catch(function(e) {
+      if (seq !== jobsLoadSeq) return;
+      jobsShownCount = null;
+      renderJobsListLimit();
       if (window.agentBrowser && window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(el,{error: e.message||String(e), retry:{cmd:'automationRefreshJobs'}}); else el.innerHTML = '<div class="empty-state">' + esc(t('auto.jobs.load-failed','加载 jobs 失败: ')) + esc(e.message || e) + '</div>';
       toast(t('auto.jobs.load-failed','加载 jobs 失败: ') + (e.message || e), 'error');
     });
   };
 
+  var jobDialogBound = false;
+  function bindJobDialogIntent(dlg) {
+    if (!dlg || jobDialogBound) return;
+    jobDialogBound = true;
+    // close events are queued by the browser: invalidating there is too late
+    // for Promise replies, and an old close event can cancel a new reopening.
+    // All product close commands call this instance method; native cancellation
+    // and Escape invalidate at their synchronous intent events instead.
+    var close = dlg.close;
+    dlg.close = function() {
+      ++openJobSeq;
+      return close.apply(this, arguments);
+    };
+    dlg.addEventListener('cancel', function() { ++openJobSeq; });
+    dlg.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') ++openJobSeq;
+    });
+  }
+
   agentBrowser.automationShowJob = function(jobId) {
     // P2 (#109): a row click with a missing id used to do nothing at all.
     if (!jobId) { toast(t('auto.jobs.not-found', 'Job 不存在'), 'error'); return; }
+    var dlg = document.getElementById('dlg-auto-job');
+    bindJobDialogIntent(dlg);
+    var seq = ++openJobSeq;
     api.automation.jobGet(jobId).then(function(job) {
+      if (seq !== openJobSeq) return;
       if (!job) { toast(t('auto.jobs.not-found','Job 不存在'), 'error'); return; }
       // R173: the title was the bare job id ("Job Detail — job_4a83"), which
       // is also printed in the JSON body right below — so the heading repeated
@@ -478,8 +560,11 @@
       var actions = document.getElementById('auto-job-actions');
       actions.innerHTML = (job.runId ? '<button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="runsOpen" data-cmd-arg="' + escAttr(job.runId) + '">' + esc(t('auto.jobs.open-run','打开关联 Run')) + '</button>' : '') +
         (canCancelJob(job) ? '<button class="btn btn-danger btn-sm" data-role="cmd" data-cmd="automationCancelJob" data-cmd-arg="' + escAttr(job.id) + '">' + esc(t('auto.jobs.cancel-job','取消 Job')) + '</button>' : '');
-      document.getElementById('dlg-auto-job').showModal();
-    }).catch(function(e) { toast(t('auto.jobs.load-job-failed','加载 job 失败: ') + (e.message || e), 'error'); });
+      if (dlg && !dlg.open) dlg.showModal();
+    }).catch(function(e) {
+      if (seq !== openJobSeq) return;
+      toast(t('auto.jobs.load-job-failed','加载 job 失败: ') + (e.message || e), 'error');
+    });
   };
 
   agentBrowser.automationCancelJob = function(jobId) {

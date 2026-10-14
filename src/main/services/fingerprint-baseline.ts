@@ -198,6 +198,41 @@ export const CAPTURE_EXPRESSION = `(async function(){
 
 export type Fingerprint = Record<string, string | number | null | boolean>;
 
+// Keys produced by CAPTURE_EXPRESSION above. The JSON-encoded sub-signatures
+// (e.g. systemColors/workerIdentity) are strings, not arbitrary nested config.
+const CAPTURED_FIELDS = new Set([
+  "userAgent", "appVersion", "platform", "language", "languages", "hardwareConcurrency",
+  "deviceMemory", "maxTouchPoints", "doNotTrack", "screenW", "screenH", "availW", "availH",
+  "availLeft", "availTop", "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth",
+  "innerHeight", "colorDepth", "pixelDepth", "devicePixelRatio", "preferredColorScheme",
+  "systemColors", "tz", "tzOffset", "uaPlatform", "uaHighEntropy", "webglCapabilityHash",
+  "plugins", "mimeTypes", "glVendor", "glUnmaskedVendor", "glRenderer", "fontAvailability",
+  "fontCapabilityHash", "audioHash", "canvasLen", "canvasHash", "clientRect", "speechVoices",
+  "mediaDevices", "storageQuota", "webgpuVendor", "webgpuArchitecture", "webgpuDevice",
+  "webgpuDescription", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
+  "webgpuIsFallbackAdapter", "webgpuCapabilityHash", "workerIdentity",
+]);
+
+/** Only transfer actual captured scalar surfaces, with bounded snapshot size. */
+export function sanitizePortableFingerprintBaseline(value: unknown): Fingerprint | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid fingerprint baseline");
+  const baseline: Fingerprint = Object.create(null);
+  let bytes = 0;
+  for (const [key, field] of Object.entries(value)) {
+    if (!CAPTURED_FIELDS.has(key)) continue;
+    if (field !== null && typeof field !== "string" && typeof field !== "boolean" &&
+        !(typeof field === "number" && Number.isFinite(field))) {
+      throw new Error(`Invalid fingerprint baseline field: ${key}`);
+    }
+    const fieldBytes = Buffer.byteLength(JSON.stringify(field), "utf8");
+    bytes += fieldBytes;
+    if (fieldBytes > 64 * 1024 || bytes > 256 * 1024) throw new Error("Fingerprint baseline exceeds size limit");
+    baseline[key] = field;
+  }
+  return Object.keys(baseline).length ? baseline : undefined;
+}
+
 /** Capture the live fingerprint from a running profile (CDP or BiDi by engine). */
 export async function captureFingerprint(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<Fingerprint> {
   // Keep the probe importable by the standalone Chromium verifier without

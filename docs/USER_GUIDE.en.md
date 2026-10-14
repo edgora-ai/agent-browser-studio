@@ -79,6 +79,14 @@ Deleted profiles go to a **trash area for 7 days** — the success toast has an 
 
 🔒 **Lock to device** marks a profile as checked out by this machine. Other devices' pushes are refused (force-push still possible after confirmation). The lock syncs with the profile.
 
+### Native GPU and proxy DNS
+
+- Chromium keeps the host GPU's real WebGL/WebGPU identity and capabilities. Seeds still isolate the managed privacy surfaces; they do not turn Metal hardware into a Windows D3D GPU. A foreign-OS persona is an unsupported GPU-compatibility diagnostic, not a verified physical device.
+- Leave `gpuVendor` and `gpuRenderer` empty for managed Chromium. Explicit GPU overrides are rejected rather than silently ignored. Existing profile metadata is preserved; clear those two advanced fields explicitly before relaunching a legacy overridden profile. Firefox's existing tuple policy is unchanged.
+- Fixed HTTP/SOCKS proxies resolve origin hostnames at egress by default, including when fingerprint identity is off. A validated HTTPS `managedSecureDnsUrl` explicitly selects strict proxy DoH; this engine requires managed identity mode for that option. Proxy-side DNS uses TCP transport; native QUIC/MASQUE is only selected with explicit strict DoH. No direct fallback is added when the proxy fails.
+- A launch log saying **configured** is not proof of a completed DNS transaction. A third-party `resolver_count=0` alone proves neither fake-IP nor total DNS failure. Inspect successful requests and actual resolver/route evidence; no fixed third-party score is guaranteed.
+- Old GPU baselines can change after this repair. Review the actual drift; the application does not automatically delete baselines, reset licensing, or rewrite existing profiles.
+
 ### Fingerprint trust loop
 
 - **🧬 Drift** compares the live fingerprint against the stored baseline; risky drift can block launch (toggle in Browser Engine → Launch safety gates).
@@ -139,7 +147,9 @@ Treat the S3 bucket as sensitive storage: secrets are stripped from sync payload
 ## 11. Data & backups — please read once
 
 - Everything lives on **this machine**: `<user-data>/profiles/…` (cookies, localStorage), plus the encrypted credential vault and audit logs.
-- **Disk failure = account loss.** Use at least one of: **📦 Export backup** per profile, **☁️ Sync** to an S3 bucket, or the **trash window** (7 days) for accidental deletes.
+- **Disk failure can destroy local profile data.** Keep a **profile export backup on a separate disk or separately stored cloud backup**, or use **Sync to an independently stored S3 bucket**. An export left on the same disk does not protect against that disk failing. Check that your backup exists and rehearse restoration using a non-critical profile.
+- **The 7-day trash window protects against accidental deletion, not disk failure.** Trash stays in the local storage area on the same disk; it is not an independent backup and disappears on permanent purge or after its retention window.
+- Backups contain sensitive account data. Browser-encrypted cookies and sessions may be tied to the original OS/device; an export or sync does **not** guarantee that a logged-in session will work on another machine. Keep recovery credentials separately and be prepared to sign in again.
 - The Storage tab shows per-profile disk usage and keeps data-safety reminders visible.
 
 ## 12. Integration surfaces (for developers)

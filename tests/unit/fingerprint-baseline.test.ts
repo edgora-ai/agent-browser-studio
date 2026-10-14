@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffFingerprints, hasRiskyDrift, summarizeDrift, CAPTURE_EXPRESSION, checkPersonaConsistency, mismatchesAsDrift } from "../../src/main/services/fingerprint-baseline.js";
+import { diffFingerprints, hasRiskyDrift, summarizeDrift, CAPTURE_EXPRESSION, sanitizePortableFingerprintBaseline, checkPersonaConsistency, mismatchesAsDrift } from "../../src/main/services/fingerprint-baseline.js";
 
 describe("fingerprint baseline diff", () => {
   it("returns no drift for identical fingerprints", () => {
@@ -58,6 +58,17 @@ describe("fingerprint baseline diff", () => {
     expect(CAPTURE_EXPRESSION).toContain("availTop");
     expect(CAPTURE_EXPRESSION).toContain("return JSON.stringify");
     expect(() => new Function(`return ${CAPTURE_EXPRESSION}`)).not.toThrow();
+  });
+
+  it("keeps every field produced by the live capture in a portable baseline", () => {
+    const fields = [...new Set(Array.from(CAPTURE_EXPRESSION.matchAll(/\bo\.([a-zA-Z]\w*)\s*=/g), (match) => match[1]))];
+    expect(fields.length).toBeGreaterThan(40);
+    // The producer's payload shape is flat scalars; JSON-encoded sub-signatures
+    // remain strings rather than being interpreted as nested configuration.
+    const captured = Object.fromEntries(fields.map((name) => [name, `synthetic-${name}`]));
+    expect(sanitizePortableFingerprintBaseline(captured)).toEqual(captured);
+    expect(sanitizePortableFingerprintBaseline({ ...captured, otherDevicePath: { path: "/private/secret" } })).toEqual(captured);
+    expect(() => sanitizePortableFingerprintBaseline({ workerIdentity: { userAgent: "nested" } })).toThrow(/baseline field/i);
   });
 
   it("flags newly aligned native surfaces as risky drift", () => {

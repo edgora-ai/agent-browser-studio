@@ -124,12 +124,20 @@ export function registerProfileHandlers(): void {
   });
 
   ipcMain.handle("profile:trash-list", async () => {
+    let sweepError: unknown;
+    try { purgeExpiredTrash(); } // Sweep expired entries whenever the trash is inspected.
+    catch (error) { sweepError = error; }
     try {
-      // Sweep expired entries whenever the trash is inspected.
-      purgeExpiredTrash();
-      return { success: true, entries: listTrashedProfiles() };
-    } catch (e: any) {
-      return { success: false, entries: [], error: e.message };
+      const entries = listTrashedProfiles();
+      return sweepError
+        ? { success: false, entries, error: String(sweepError) }
+        : { success: true, entries };
+    } catch (error) {
+      const listingError = String(error);
+      const sweepMessage = sweepError ? String(sweepError) : "";
+      return { success: false, entries: [], error: sweepMessage && sweepMessage !== listingError
+        ? `${sweepMessage}; trash listing failed: ${listingError}`
+        : listingError };
     }
   });
 
@@ -168,7 +176,7 @@ export function registerProfileHandlers(): void {
   });
 
   ipcMain.handle("profile:import-archive", async (_event, opts?: { zipPath?: string }): Promise<{
-    success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; error?: string;
+    success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; warnings?: string[]; error?: string;
   }> => {
     try {
       let zipPath = opts?.zipPath;
@@ -184,7 +192,7 @@ export function registerProfileHandlers(): void {
         zipPath = assertSafeArchiveImportPath(zipPath);
       }
       const result = importProfileArchive(zipPath);
-      return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes };
+      return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes, warnings: result.warnings };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };
     }

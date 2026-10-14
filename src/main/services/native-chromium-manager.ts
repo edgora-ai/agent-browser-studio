@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { CHROMIUM_CACHE_DIR_NAME } from "../branding.js";
-import { bundledChromiumBinaryPath, readBundledBrowsersManifest } from "./bundled-native-browsers.js";
+import { bundledChromiumBinaryPath, bundledChromiumBinaryPathAsync, readBundledBrowsersManifest, readBundledBrowsersManifestAsync } from "./bundled-native-browsers.js";
+import { runBrowserCommand } from "./browser-command.js";
 
 export interface ManagedChromiumBinary {
   version: string;
@@ -43,21 +44,23 @@ export function listManagedChromiumBinaries(
     });
   }
 
+  return localChromiumCandidates(root, platform, candidates);
+}
+
+function localChromiumCandidates(
+  root: string,
+  platform: NodeJS.Platform,
+  candidates: ManagedChromiumBinary[],
+): ManagedChromiumBinary[] {
   if (!fs.existsSync(root)) return candidates;
 
   try {
     for (const entry of fs.readdirSync(root)) {
-      const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
-      if (!match) continue;
-      const installDir = path.join(root, entry);
-      const binaryPath = platform === "darwin"
-        ? path.join(installDir, "Chromium.app", "Contents", "MacOS", "Chromium")
-        : platform === "win32"
-          ? path.join(installDir, "chrome.exe")
-          : path.join(installDir, "chromium");
+      const candidate = localChromiumCandidate(root, entry, platform);
+      if (!candidate) continue;
       try {
-        if (fs.existsSync(binaryPath) && fs.statSync(binaryPath).isFile()) {
-          candidates.push({ version: match[1], binaryPath, installDir });
+        if (fs.existsSync(candidate.binaryPath) && fs.statSync(candidate.binaryPath).isFile()) {
+          candidates.push(candidate);
         }
       } catch {
         // Ignore one incomplete/broken install without hiding healthy builds.
@@ -68,6 +71,56 @@ export function listManagedChromiumBinaries(
   }
 
   return candidates.sort((a, b) => compareChromiumVersions(b.version, a.version));
+}
+
+function localChromiumCandidate(root: string, entry: string, platform: NodeJS.Platform): ManagedChromiumBinary | null {
+  const match = entry.match(/^chromium-(\d+(?:\.\d+){3})$/);
+  if (!match) return null;
+  const installDir = path.join(root, entry);
+  const binaryPath = platform === "darwin"
+    ? path.join(installDir, "Chromium.app", "Contents", "MacOS", "Chromium")
+    : path.join(installDir, platform === "win32" ? "chrome.exe" : "chromium");
+  return { version: match[1], binaryPath, installDir };
+}
+
+export async function listManagedChromiumBinariesAsync(
+  root = getManagedChromiumRoot(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ManagedChromiumBinary[]> {
+  const manifest = await readBundledBrowsersManifestAsync(platform);
+  const candidates: ManagedChromiumBinary[] = [];
+  const bundled = await bundledChromiumBinaryPathAsync(platform);
+  if (bundled) {
+    const output = await runBrowserCommand(bundled, ["--version"], { timeout: 5000 });
+    const raw = (output?.stdout || output?.stderr || "").trim();
+    candidates.push({
+      version: raw.match(/Chromium\s*(\d+\.\d+\.\d+\.\d+)/i)?.[1] || manifest?.chromiumVersion || "bundled",
+      binaryPath: bundled,
+      installDir: path.dirname(bundled),
+    });
+  }
+  let entries: string[];
+  try { entries = await fs.promises.readdir(root); } catch { return candidates; }
+  for (const entry of entries) {
+    const candidate = localChromiumCandidate(root, entry, platform);
+    if (!candidate) continue;
+    try {
+      if ((await fs.promises.stat(candidate.binaryPath)).isFile()) candidates.push(candidate);
+    } catch {
+      // One incomplete install must not hide the remaining healthy builds.
+    }
+  }
+  return candidates.sort((a, b) => compareChromiumVersions(b.version, a.version));
+}
+
+export async function findManagedChromiumBinaryAsync(
+  requestedVersion?: string | null,
+  root = getManagedChromiumRoot(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ManagedChromiumBinary | null> {
+  const version = normalizeManagedChromiumVersion(requestedVersion);
+  const candidates = await listManagedChromiumBinariesAsync(root, platform);
+  return version ? candidates.find(candidate => candidate.version === version) || null : candidates[0] || null;
 }
 
 function detectBinaryVersion(binaryPath: string): string | null {

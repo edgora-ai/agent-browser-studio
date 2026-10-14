@@ -8,6 +8,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 const TEST_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "license-test-"));
 
 vi.mock("electron", () => ({
+  ipcMain: { handle: vi.fn() },
   app: {
     getPath: (name: string) => (name === "userData" || name === "home" ? TEST_DATA : "/tmp"),
   },
@@ -30,9 +31,31 @@ import {
   setLicensePublicKeyForTests,
   DEFAULT_TRIAL_DAYS,
 } from "../../src/main/services/license.js";
-import { getConfig, saveConfig, reloadConfig } from "../../src/main/services/config-manager.js";
+import { getConfig, getConfigPath, saveConfig, reloadConfig } from "../../src/main/services/config-manager.js";
+
+import { ipcMain } from "electron";
+import { registerLicenseHandlers } from "../../src/main/ipc/license.js";
+
+async function readStatusHandler(): Promise<any> {
+  vi.mocked(ipcMain.handle).mockClear();
+  registerLicenseHandlers();
+  const handler = vi.mocked(ipcMain.handle).mock.calls.find(call => call[0] === "license:status")?.[1];
+  expect(handler).toBeTypeOf("function");
+  return handler!({} as any);
+}
 
 const DAY = 24 * 60 * 60 * 1000;
+
+function setProfileCount(count: number): void {
+  const cfg = getConfig();
+  cfg.browserProfiles = Object.fromEntries(Array.from({ length: count }, (_, i) => [
+    `fixture-profile-${i}`, { name: `Synthetic ${i}` },
+  ])) as typeof cfg.browserProfiles;
+  saveConfig(cfg);
+  expect(Object.keys(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles)).toHaveLength(count);
+  reloadConfig();
+  expect(Object.keys(getConfig().browserProfiles)).toHaveLength(count);
+}
 
 function b64url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -58,6 +81,33 @@ beforeEach(() => {
   // previous test's trial marker. Reload forces a fresh read.
   reloadConfig();
   setLicensePublicKeyForTests(null);
+});
+
+describe("F10 readiness through the actual license:status handler", () => {
+  it("reports no-key builds as trial-only and preserves both trial markers on disk/reload", async () => {
+    setLicensePublicKeyForTests(""); // Explicitly avoids host env/resources keys.
+    const st = await readStatusHandler();
+    expect(st).toMatchObject({ plan: "trial", canActivate: false, expired: false });
+    const disk = JSON.parse(fs.readFileSync(path.join(TEST_DATA, "license.json"), "utf8"));
+    const config = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(disk.trialStartedAt).toBe(st.trialStartedAt);
+    expect(config.trialStartedAt).toBe(st.trialStartedAt);
+    reloadConfig();
+    expect((await readStatusHandler()).trialStartedAt).toBe(st.trialStartedAt);
+    expect(getConfig().deviceId).toBe(st.deviceId);
+  });
+  it("reports an ephemeral valid test public key as activation-ready without granting a license", async () => {
+    const { pubB64 } = mintKeypair();
+    setLicensePublicKeyForTests(pubB64);
+    expect(await readStatusHandler()).toMatchObject({ plan: "trial", canActivate: true, expired: false });
+    expect(getLicenseState().plan).toBe("trial");
+    expect(activateLicense("not-a-code").code).toBe("INVALID_CODE");
+  });
+  it("does not advertise readiness for an unusable configured key", async () => {
+    setLicensePublicKeyForTests("synthetic-invalid-key");
+    expect(await readStatusHandler()).toMatchObject({ plan: "trial", canActivate: false });
+    expect(verifyLicenseSignature("{}", "AAAA")).toBe(false);
+  });
 });
 
 describe("license trial (sale-90/92)", () => {
@@ -197,5 +247,113 @@ describe("license gates (sale-92 paywall)", () => {
     getLicenseState(now);
     expect(checkCreateAllowed(now).allowed).toBe(true);
     expect(checkLaunchAllowed(now).allowed).toBe(true);
+  });
+
+  it("trial: the tenth profile can be created, the eleventh cannot, and existing profiles still launch", () => {
+    const now = Date.now();
+    expect(getLicenseState(now)).toMatchObject({ plan: "trial", maxProfiles: 10 });
+    setProfileCount(9);
+    expect(checkCreateAllowed(now).allowed).toBe(true);
+    expect(checkLaunchAllowed(now).allowed).toBe(true);
+    setProfileCount(10);
+    expect(checkCreateAllowed(now)).toMatchObject({ allowed: false, code: "PROFILE_LIMIT" });
+    expect(checkLaunchAllowed(now)).toMatchObject({ allowed: true, state: { plan: "trial" } });
+    setProfileCount(11); // An over-limit imported config still has launchable existing profiles.
+    expect(checkCreateAllowed(now)).toMatchObject({ allowed: false, code: "PROFILE_LIMIT" });
+    expect(checkLaunchAllowed(now).allowed).toBe(true);
+    const expired = now + DEFAULT_TRIAL_DAYS * DAY;
+    expect(checkCreateAllowed(expired).code).toBe("LICENSE_EXPIRED");
+    expect(checkLaunchAllowed(expired).code).toBe("LICENSE_EXPIRED");
+    expect(checkLaunchAllowed(now - 25 * 60 * 60 * 1000).code).toBe("LICENSE_EXPIRED");
+  });
+
+  it("signed capped paid: quota restricts creation, not launch; expiry still restricts both", () => {
+    const { pubB64, privateKey } = mintKeypair();
+    setLicensePublicKeyForTests(pubB64);
+    const now = Date.now();
+    getLicenseState(now);
+    const deviceId = String(getConfig().deviceId || "");
+    const expiresAt = now + 30 * DAY;
+    const code = mintCode(privateKey, {
+      plan: "monthly", licensedTo: "synthetic purchaser", expiresAt,
+      maxProfiles: 2, deviceId, issuedAt: now, nonce: "fixture-capped",
+    });
+    expect(activateLicense(code, now)).toMatchObject({ ok: true, state: { plan: "monthly", maxProfiles: 2 } });
+    setProfileCount(1);
+    expect(checkCreateAllowed(now).allowed).toBe(true);
+    setProfileCount(2);
+    expect(checkCreateAllowed(now)).toMatchObject({ allowed: false, code: "PROFILE_LIMIT" });
+    expect(checkLaunchAllowed(now)).toMatchObject({ allowed: true, state: { plan: "monthly", maxProfiles: 2 } });
+    setProfileCount(3);
+    expect(checkCreateAllowed(now).code).toBe("PROFILE_LIMIT");
+    expect(checkLaunchAllowed(now).allowed).toBe(true);
+    const pastTrial = now + (DEFAULT_TRIAL_DAYS + 1) * DAY;
+    expect(checkLaunchAllowed(pastTrial)).toMatchObject({ allowed: true, state: { plan: "monthly" } });
+    // The expired signed license falls back to the original (now-expired) trial.
+    expect(checkCreateAllowed(expiresAt).code).toBe("LICENSE_EXPIRED");
+    expect(checkLaunchAllowed(expiresAt).code).toBe("LICENSE_EXPIRED");
+    const disk = JSON.parse(fs.readFileSync(path.join(TEST_DATA, "license.json"), "utf8"));
+    expect(disk.payload).toBeTruthy();
+    expect(disk.signature).toBeTruthy();
+    reloadConfig();
+    expect(checkLaunchAllowed(now).allowed).toBe(true);
+  });
+
+  it("does not let an invalid signature or other device bypass an expired trial", () => {
+    const { pubB64, privateKey } = mintKeypair();
+    setLicensePublicKeyForTests(pubB64);
+    const now = Date.now();
+    getLicenseState(now);
+    setProfileCount(10);
+    const expiredTrial = now + (DEFAULT_TRIAL_DAYS + 1) * DAY;
+    const payload = {
+      plan: "lifetime", licensedTo: "synthetic purchaser", expiresAt: null,
+      maxProfiles: 10, deviceId: String(getConfig().deviceId || ""), issuedAt: now, nonce: "fixture-tamper",
+    };
+    const [, signature] = mintCode(privateKey, payload).split(".");
+    const licenseFile = path.join(TEST_DATA, "license.json");
+    const trialStartedAt = JSON.parse(fs.readFileSync(licenseFile, "utf8")).trialStartedAt;
+    fs.writeFileSync(licenseFile, JSON.stringify({ payload: JSON.stringify({ ...payload, licensedTo: "tampered" }), signature, trialStartedAt }));
+    expect(getLicenseState(now).plan).toBe("trial");
+    expect(checkLaunchAllowed(expiredTrial).code).toBe("LICENSE_EXPIRED");
+    const otherDevice = mintCode(privateKey, { ...payload, deviceId: "fixture-other-device" });
+    const parsed = parseActivationCode(otherDevice)!;
+    fs.writeFileSync(licenseFile, JSON.stringify({ payload: parsed.payload, signature: parsed.signatureB64, trialStartedAt }));
+    expect(getLicenseState(now).plan).toBe("trial");
+    expect(checkLaunchAllowed(expiredTrial).code).toBe("LICENSE_EXPIRED");
+    expect(checkCreateAllowed(expiredTrial).code).toBe("LICENSE_EXPIRED");
+  });
+});
+
+// F10: invoke the actual registered IPC handler, with an explicit override so
+// these tests never inspect host environment/resource keys. Keys exist only
+// inside this unit process; no signing fixture enters an app candidate.
+describe("license:status activation readiness", () => {
+  it("reports no-key trial-only truth and persists/reloads the same synthetic trial markers", async () => {
+    setLicensePublicKeyForTests("");
+    const status = await readStatusHandler();
+    expect(status).toMatchObject({ plan: "trial", canActivate: false, expired: false, daysLeft: DEFAULT_TRIAL_DAYS });
+    const disk = JSON.parse(fs.readFileSync(path.join(TEST_DATA, "license.json"), "utf8"));
+    const config = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(disk.trialStartedAt).toBe(status.trialStartedAt);
+    expect(config.trialStartedAt).toBe(status.trialStartedAt);
+    expect(config.deviceId).toBe(status.deviceId);
+    reloadConfig();
+    expect(await readStatusHandler()).toMatchObject({ canActivate: false, deviceId: status.deviceId, trialStartedAt: status.trialStartedAt });
+  });
+  it("reports ready with a unit-only ephemeral ed25519 public key without activating a license", async () => {
+    const { pubB64 } = mintKeypair();
+    setLicensePublicKeyForTests(pubB64);
+    const status = await readStatusHandler();
+    expect(status).toMatchObject({ canActivate: true, plan: "trial", expired: false });
+    expect(JSON.parse(fs.readFileSync(path.join(TEST_DATA, "license.json"), "utf8")).payload).toBeUndefined();
+    reloadConfig(); expect((await readStatusHandler()).canActivate).toBe(true);
+  });
+  it("reports unavailable for a malformed key without altering existing activation verification", async () => {
+    setLicensePublicKeyForTests("not-a-public-key");
+    expect((await readStatusHandler()).canActivate).toBe(false);
+    expect(verifyLicenseSignature("{}", "AAAA")).toBe(false);
+    setLicensePublicKeyForTests(Buffer.from("invalid DER bytes").toString("base64"));
+    expect((await readStatusHandler()).canActivate).toBe(false);
   });
 });

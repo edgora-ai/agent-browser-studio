@@ -284,6 +284,16 @@
     { platformUserName: "ops@northwind.example", platformUrl: "https://sellercentral.amazon.com", hasPassword: false, tags: ["ops"], profileIds: ["prof_amazon", "prof_long"] },
     { platformUserName: "短账号名测试中文溢出情况", platformUrl: "https://example.cn/login", hasPassword: true, tags: [], profileIds: [] },
   ];
+  // The readonly dialog sweep needs the same detached list/get snapshot ref
+  // as the real transport; a bare mutable index cannot open account binding.
+  var accountRevision = "visual-accounts-snapshot-1";
+  function accountView(index) {
+    var account = accountList[index];
+    if (!account) return null;
+    var view = clone(account);
+    view.ref = { index: index, revision: accountRevision };
+    return view;
+  }
 
   var proxyHealth = {
     entries: [
@@ -381,7 +391,13 @@
       // bind → the account (hasPassword) or null; delete → boolean; bulk → a
       // {added, created?, skipped} counts object.
       accounts: ns({
-        list: function () { return Promise.resolve(clone(accountList)); },
+        list: function () { return Promise.resolve(accountList.map(function (_, index) { return accountView(index); })); },
+        get: function (index, ref) {
+          if (!Number.isSafeInteger(index) || index < 0 || !ref || ref.index !== index || ref.revision !== accountRevision) {
+            return Promise.reject(Object.assign(new Error("ACCOUNT_REFERENCE_CONFLICT"), { code: "ACCOUNT_REFERENCE_CONFLICT" }));
+          }
+          return Promise.resolve(accountView(index));
+        },
         add: function (account) {
           var rec = Object.assign({}, account, { hasPassword: Boolean(account && account.platformPassword) });
           accountList.push({ platformUserName: rec.platformUserName, platformUrl: rec.platformUrl, hasPassword: rec.hasPassword, tags: rec.tags || [], profileIds: [] });

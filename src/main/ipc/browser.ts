@@ -2,8 +2,8 @@ import { ipcMain, BrowserWindow } from "electron";
 import * as nodePath from "node:path";
 import {
   launchBrowser, stopBrowser, statusBrowser, listBrowserProfiles, checkFingerprintDrift,
-  getRuntimeChromiumStatus, verifyRuntimeChromium, getEngineStatus,
-  getRuntimeChromiumVersion, isRuntimeChromiumInstalled,
+  getRuntimeChromiumStatusAsync, verifyRuntimeChromiumAsync, getEngineStatusAsync,
+  getProfileRuntimeSnapshot,
   createBrowserProfile, deleteBrowserProfile,
   getLaunchLogPath,
 } from "../services/browser-manager.js";
@@ -59,12 +59,14 @@ import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
 
 /**
- * Sale-90/92 license gate shared by every path that starts a profile:
+ * Sale-90/92 license gate shared by four browser IPC routes:
  * browser:launch, browser:batch-launch, browser:open-risk-check and
  * browser:open-app. Refusals throw with a machine `code` (LICENSE_EXPIRED /
- * PROFILE_LIMIT) so all four handlers surface the paywall through the same
- * `{ success: false, code }` shape. Stopping, exporting and deleting are
- * never gated — the lock is on features, never on data.
+ * PROFILE_LIMIT) so these handlers surface the paywall through the same
+ * `{ success: false, code }` shape. The launch gate checks validity/expiry,
+ * not creation quota; all four IPC launch paths must keep using this helper.
+ * Stopping, exporting and deleting are never gated. Other service callers
+ * of launchBrowser are outside this IPC gate (pre-existing boundary).
  */
 async function gatedLaunch(
   dirId: string,
@@ -126,27 +128,28 @@ export function registerBrowserHandlers(): void {
   });
 
   handleBrowser("list", async () => {
-    return listBrowserProfiles().map(p => ({
+    const runtime = getProfileRuntimeSnapshot();
+    return listBrowserProfiles(runtime).map(p => ({
       ...p,
-      installed: isRuntimeChromiumInstalled(),
-      version: p.version || getRuntimeChromiumVersion() || "?",
+      installed: runtime.chromiumInstalled,
+      runtimePending: runtime.pending,
     }));
   });
 
   handleBrowser("binary", async () => {
-    return getRuntimeChromiumStatus();
+    return getRuntimeChromiumStatusAsync();
   });
 
   // Combined engine status (Slice 77): Chromium + Firefox availability.
   handleBrowser("engine-status", async () => {
-    return getEngineStatus();
+    return getEngineStatusAsync();
   });
 
   handleBrowser("verify-binary", async () => {
     try {
-      return { success: true, status: verifyRuntimeChromium() };
+      return { success: true, status: await verifyRuntimeChromiumAsync() };
     } catch (e: any) {
-      return { success: false, error: e.message || String(e), status: getRuntimeChromiumStatus() };
+      return { success: false, error: e.message || String(e), status: await getRuntimeChromiumStatusAsync() };
     }
   });
 
@@ -174,7 +177,7 @@ export function registerBrowserHandlers(): void {
         actor: "user",
         detail: "chromium binary configured from the UI",
       });
-      return { success: true, path: exe, status: verifyRuntimeChromium() };
+      return { success: true, path: exe, status: await verifyRuntimeChromiumAsync() };
     } catch (e: any) {
       return { success: false, error: e?.message || String(e) };
     }

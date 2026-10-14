@@ -589,7 +589,6 @@ describe("Integration — Agent ↔ LLM", () => {
     for (const fn of expected) {
       const isAsync = ["agentChat", "llmChat", "cdpConnect", "cdpNavigate"].includes(fn);
       const pats = isAsync ? ["export async function " + fn, "export const " + fn] : ["export function " + fn, "export const " + fn]; const ok = pats.some(pat => la.includes(pat)); if(!ok) expect(la, 'missing export: '+fn+' (tried '+pats.join('|')+')').toContain(pats[0]); else expect(true).toBe(true); continue;
-      expect(la, `missing export: ${fn}`).toContain(pat);
     }
   });
 
@@ -649,11 +648,12 @@ describe("Integration — Hardware fingerprint controls", () => {
     }
   });
 
-  it("launch path passes explicit hardware flags to managed Chromium", () => {
+  it("launch path preserves non-GPU hardware flags while rejecting Chromium GPU overrides", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
+    const emitters = [...manager.matchAll(/^function addHardwareFingerprintArgs\([\s\S]*?^\}/gm)];
+    expect(emitters, "unique Chromium hardware argument emitter").toHaveLength(1);
+    const chromiumHardwareArgs = emitters[0][0];
     for (const flag of [
-      "--fingerprint-gpu-vendor",
-      "--fingerprint-gpu-renderer",
       "--fingerprint-hardware-concurrency",
       "--fingerprint-device-memory",
       "--fingerprint-screen-width",
@@ -662,9 +662,19 @@ describe("Integration — Hardware fingerprint controls", () => {
       "--fingerprint-taskbar-height",
       "--fingerprint-fonts-dir",
     ]) {
-      expect(manager, `missing launch flag ${flag}`).toContain(flag);
+      expect(chromiumHardwareArgs.includes(flag), `missing Chromium launch flag ${flag}`).toBe(true);
     }
-    expect(manager).toContain("addHardwareFingerprintArgs(requestedArgs, meta)");
+    for (const flag of ["--fingerprint-gpu-vendor", "--fingerprint-gpu-renderer"]) {
+      expect(chromiumHardwareArgs.includes(flag), `native Chromium GPU policy must not emit ${flag}`).toBe(false);
+    }
+    const validation = 'if (!passThrough) validateBrowserHardwareProfile(meta, "chromium")';
+    const hardwareArgs = "addHardwareFingerprintArgs(requestedArgs, meta)";
+    expect(manager.includes(validation), "Chromium GPU overrides must be rejected before launch").toBe(true);
+    expect(manager.indexOf(validation)).toBeLessThan(manager.indexOf(hardwareArgs));
+    const fingerprintConfig = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
+    expect(fingerprintConfig.includes('engine === "chromium" && gpuOverrides.length > 0'), "GPU rejection must remain engine-specific").toBe(true);
+    expect(fingerprintConfig.includes("Unsupported GPU overrides for Chromium"), "GPU overrides must fail closed").toBe(true);
+    expect(manager).toContain(hardwareArgs);
     expect(manager).toContain("--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}");
     expect(manager).toContain("--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}");
     // Raster scale goes through resolveRenderScaleFactor: `native` renders at
@@ -698,7 +708,16 @@ describe("Integration — Hardware fingerprint controls", () => {
     expect(manager).toContain("managedSecureDns");
     expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).not.toContain("--time-zone-for-testing=");
-    expect(manager).toContain("findManagedRuntimeChromium(requestedVersion)");
+    expect(manager).toContain("const requestedVersion = normalizeManagedChromiumVersion(meta.browserVersion)");
+    expect(manager).toContain("await findManagedChromiumBinaryAsync(requestedVersion)");
+    expect(manager).toContain("if (requestedVersion && !overrideBin && !managedBin)");
+    expect(manager).toContain("Chromium ${requestedVersion} is not installed");
+    expect(manager).toContain("if (version !== requestedVersion) throw new Error(");
+    const resolver = fs.readFileSync(path.join(ROOT, "src/main/services/native-chromium-manager.ts"), "utf-8");
+    const asyncResolver = resolver.slice(resolver.indexOf("export async function findManagedChromiumBinaryAsync("), resolver.indexOf("\nfunction detectBinaryVersion("));
+    expect(asyncResolver).toContain("normalizeManagedChromiumVersion(requestedVersion)");
+    expect(asyncResolver).toContain("await listManagedChromiumBinariesAsync(root, platform)");
+    expect(asyncResolver).toMatch(/return version\s*\? candidates\.find\(candidate => candidate\.version === version\) \|\| null : candidates\[0\] \|\| null/);
     expect(config).toContain('AGENT_BROWSER_FINGERPRINT_SWITCH = "--agent-browser-fingerprint-config="');
     expect(config).toContain('LEGACY_FINGERPRINT_SWITCH = "--roxy-fingerprint-config="');
     expect(config).toContain("schemaVersion: 1");

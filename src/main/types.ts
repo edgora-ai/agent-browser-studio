@@ -318,6 +318,21 @@ export interface LlmConfig {
   model?: string;
 }
 
+/** Transport-only, bound to one committed collection snapshot, not a durable ID. */
+export interface AccountReference {
+  index: number;
+  revision: string;
+}
+export interface ReferencedPlatformAccount extends PlatformAccount {
+  ref: AccountReference;
+}
+export interface RedactedPlatformAccount extends Omit<PlatformAccount, "platformPassword"> {
+  /** Never present at runtime; permits legacy redaction destructuring during integration. */
+  platformPassword?: never;
+  hasPassword: boolean;
+  ref: AccountReference;
+}
+
 export interface PlatformAccount {
   platformUrl: string;
   platformUserName: string;

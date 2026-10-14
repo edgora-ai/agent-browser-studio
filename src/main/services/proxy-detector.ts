@@ -562,6 +562,9 @@ export const proxyDetector = {
   },
 
   ping(config: ProxyConfig, opts?: { signal?: AbortSignal }): Promise<{ success: boolean; latencyMs: number | null; error: string | null }> {
+    if (opts?.signal?.aborted) {
+      return Promise.resolve({ success: false, latencyMs: null, error: "aborted" });
+    }
     return new Promise((resolve) => {
       const startTime = Date.now();
       let settled = false;

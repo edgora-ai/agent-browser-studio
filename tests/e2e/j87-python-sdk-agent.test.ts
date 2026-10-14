@@ -51,6 +51,7 @@ describe('J87 — Python SDK agent + skills surface', () => {
     });
     const line = stdout.split('\n').find((l) => l.startsWith('J87_RESULT '));
     expect(line, stdout).toBeTruthy();
+    if (!line) throw new Error('Expected a J87_RESULT line in Python SDK output');
     const out = JSON.parse(line.slice('J87_RESULT '.length));
     expect(out.health).toBe('headless');
     expect(out.llm_initial).toBe(true);

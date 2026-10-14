@@ -12,7 +12,7 @@ const USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j73');
 
 describe('J73 — JS SDK: Playwright/Puppeteer CDP drop-in', () => {
   let h: HeadlessAppHandle;
-  let sdk: any;
+  let sdk: typeof import('../../sdk/js/agent-browser.mjs');
 
   beforeAll(async () => {
     h = await launchHeadlessApp({ userDataDir: USERDATA, token: 'j73-sdk-token' });
@@ -51,9 +51,9 @@ describe('J73 — JS SDK: Playwright/Puppeteer CDP drop-in', () => {
       const page = await handle.browser.newPage();
       await page.goto('about:blank');
       const values = await page.evaluate(() => {
-        const s = (window as any).screen;
+        const s = window.screen;
         return {
-          webdriver: (navigator as any).webdriver,
+          webdriver: navigator.webdriver,
           ua: navigator.userAgent,
           screenW: s.width,
           screenH: s.height,
@@ -76,7 +76,7 @@ describe('J73 — JS SDK: Playwright/Puppeteer CDP drop-in', () => {
   }, 60000);
 
   it('connectPuppeteer fails fast with a helpful message when no driver is installed', async () => {
-    let error: any = null;
+    let error: unknown = null;
     try {
       await sdk.connectPuppeteer({
         baseUrl: 'http://127.0.0.1:' + h.port,
@@ -88,11 +88,12 @@ describe('J73 — JS SDK: Playwright/Puppeteer CDP drop-in', () => {
       error = e;
     }
     expect(error).toBeTruthy();
+    if (!(error instanceof Error)) throw new Error('Expected Puppeteer attach to throw an Error');
     expect(String(error.message)).toContain('puppeteer-core');
     // No profile should be left behind by the failed puppeteer attach.
     const client = new sdk.AgentBrowserClient('http://127.0.0.1:' + h.port, { token: h.token });
     const profiles = await client.listProfiles();
-    expect(profiles.some((p: any) => p.name === 'j73-pptr')).toBe(false);
+    expect(profiles.some((p) => p.name === 'j73-pptr')).toBe(false);
   }, 30000);
 
   it('attach mode reconnects to an already-running profile by dirId', async () => {
@@ -116,7 +117,7 @@ describe('J73 — JS SDK: Playwright/Puppeteer CDP drop-in', () => {
         expect(attached.cdpPort).toBe(created.cdpPort);
         const page = await attached.browser.newPage();
         await page.goto('about:blank');
-        expect(await page.evaluate(() => (navigator as any).webdriver)).toBe(false);
+        expect(await page.evaluate(() => navigator.webdriver)).toBe(false);
       } finally {
         await attached.stop();
       }

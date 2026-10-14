@@ -6,7 +6,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as net from "node:net";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { parseBrowserProcessLine, findBrowserByProfileSync } from "./process-discovery.js";
 import { BrowserWindow, screen as electronScreen } from "electron";
@@ -38,14 +38,16 @@ import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
   LEGACY_FINGERPRINT_SWITCH,
-  MANAGED_SECURE_DNS_TEMPLATES,
   buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
   validateBrowserHardwareProfile,
 } from "./browser-fingerprint-config.js";
 import {
   findManagedChromiumBinary,
+  findManagedChromiumBinaryAsync,
+  getManagedChromiumRoot,
   listManagedChromiumBinaries,
+  listManagedChromiumBinariesAsync,
   normalizeManagedChromiumVersion,
 } from "./native-chromium-manager.js";
 import {
@@ -64,9 +66,11 @@ import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, Profile
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
 import {
   buildFirefoxLaunchArgs,
-  detectFirefoxVersion,
-  findFirefoxBinary,
+  detectFirefoxVersionAsync,
+  findFirefoxBinaryAsync,
   getFirefoxStatus,
+  getFirefoxStatusAsync,
+  defaultFirefoxBinaryPaths,
   normalizeManagedFirefoxVersion,
   sanitizeBrowserEngine,
   spawnFirefoxWithDebugInfo,
@@ -76,13 +80,19 @@ import {
 import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInjectionProbeExpectation, judgeInjectionProbe, normalizeFirefoxVersion, shouldBlockInjectionProbe, type InjectionProbeCheck } from "./firefox-fingerprint.js";
 import {
   firefoxNativeModeRequested,
-  supportsFirefoxNativeConfig,
-  supportsFirefoxNativeParity,
+  readFirefoxNativeCapabilityReportAsync,
+  FIREFOX_NATIVE_CONFIG_CAPABILITIES,
+  FIREFOX_NATIVE_PARITY_CAPABILITIES,
 } from "./firefox-native-capabilities.js";
 import { connectBidi, bidiAddPreloadScript, bidiCreateContext, bidiCloseContext, bidiEvaluateInContext, registerFirefoxSession, dropFirefoxSession, getRegisteredFirefoxSession, type BidiConnection } from "./bidi-client.js";
 import { firefoxCookieService } from "./bidi-cookie-service.js";
 
+import { runBrowserCommand } from "./browser-command.js";
+import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
+import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
 import { runningProcesses } from "./browser/runtime-table.js";
+import { buildRemoteDnsRule, resolveChromiumDnsPolicy } from "./browser-dns-policy.js";
+export { buildRemoteDnsRule } from "./browser-dns-policy.js";
 import { launchBrowserPipeline } from "./browser/launch-pipeline.js";
 
 export interface BrowserProfile {
@@ -215,6 +225,183 @@ export function getRuntimeChromiumStatus(): ManagedChromiumStatus {
   };
 }
 
+function fileIdentity(file: string | null): unknown {
+  if (!file) return null;
+  try {
+    const stat = fs.statSync(file);
+    return [file, stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs];
+  } catch {
+    return [file, "missing"];
+  }
+}
+
+function firefoxIdentity(file: string | null): unknown {
+  if (!file) return null;
+  const marker = path.join(path.dirname(file), process.platform === "darwin" ? "XUL" : process.platform === "win32" ? "xul.dll" : "libxul.so");
+  return [fileIdentity(file), fileIdentity(marker)];
+}
+
+function runtimeSelectionKey(): string {
+  const configured = (getConfig() as any).chromiumBin || "auto";
+  const chromiumOverride = getChromiumBinaryOverride();
+  const firefoxOverride = process.env.AGENT_BROWSER_FIREFOX_BINARY_PATH || process.env.FIREFOX_BINARY_PATH || null;
+  const chromiumRoot = getManagedChromiumRoot();
+  const firefoxRoot = getManagedFirefoxRoot();
+  const resources = process.env.AGENT_BROWSER_BUNDLED_RESOURCES || process.resourcesPath || null;
+  const bundles = bundledBrowsersRoot(process.platform, resources);
+  const artifacts: unknown[] = [fileIdentity(configured === "auto" ? null : configured),
+    fileIdentity(chromiumOverride), firefoxIdentity(firefoxOverride)];
+  // Bound metadata projection to input roots and known paths, never enumerate
+  // installed engines synchronously. Discovery owns the asynchronous inventory.
+  for (const root of new Set([chromiumRoot, firefoxRoot])) artifacts.push(fileIdentity(root));
+  if (bundles) {
+    artifacts.push(fileIdentity(bundles));
+    if (process.platform === "darwin") {
+      artifacts.push(fileIdentity(path.join(bundles, "Chromium.app", "Contents", "MacOS", "Chromium")));
+      artifacts.push(firefoxIdentity(path.join(bundles, "Firefox.app", "Contents", "MacOS", "firefox")));
+    }
+    for (const name of ["browsers-manifest.json", "Chromium.app.zip", "Firefox.app.zip"]) {
+      artifacts.push(fileIdentity(path.join(bundles, name)));
+    }
+  }
+  return JSON.stringify([configured, chromiumOverride, firefoxOverride, chromiumRoot, firefoxRoot, resources,
+    process.env.AGENT_BROWSER_BUNDLED_CACHE_DIR || null, process.env.AGENT_BROWSER_FIREFOX_NATIVE || null,
+    ...defaultFirefoxBinaryPaths().map(firefoxIdentity), artifacts]);
+}
+
+let completedChromium: { key: string; value: ManagedChromiumStatus; identity: unknown } | null = null;
+let completedFirefox: { key: string; value: FirefoxStatus; identity: unknown } | null = null;
+const pendingChromium = new Map<string, Promise<ManagedChromiumStatus>>();
+const pendingFirefox = new Map<string, Promise<FirefoxStatus>>();
+const MAX_RUNTIME_DISCOVERIES = 64;
+
+async function executableIdentity(file: string | null): Promise<unknown> {
+  if (!file) return null;
+  try {
+    const stat = await fs.promises.stat(file);
+    return stat.isFile() ? [file, stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function detectBinaryVersionAsync(bin: string): Promise<string | null> {
+  // Directory labels are inventory hints, not evidence for a launch version pin.
+  const output = await runBrowserCommand(bin, ["--version"], { timeout: 5000 });
+  const raw = (output?.stdout || output?.stderr || "").trim();
+  return raw.match(/\b(?:Chromium|Google Chrome)\s+(\d+\.\d+\.\d+\.\d+)/i)?.[1] || null;
+}
+
+export async function findRuntimeChromiumBinaryAsync(requestedVersion?: string | null): Promise<string | null> {
+  const version = normalizeManagedChromiumVersion(requestedVersion);
+  const configured = (getConfig() as any).chromiumBin;
+  const override = getChromiumBinaryOverride();
+  for (const binary of [configured && configured !== "auto" ? configured : null, override]) {
+    if (binary && fs.existsSync(binary)) return !version || await detectBinaryVersionAsync(binary) === version ? binary : null;
+  }
+  const binary = (await findManagedChromiumBinaryAsync(version))?.binaryPath || null;
+  return binary && (!version || await detectBinaryVersionAsync(binary) === version) ? binary : null;
+}
+
+export function getRuntimeChromiumStatusAsync(): Promise<ManagedChromiumStatus> {
+  const key = runtimeSelectionKey();
+  const pending = pendingChromium.get(key);
+  if (pending) return pending;
+  if (pendingChromium.size >= MAX_RUNTIME_DISCOVERIES) return Promise.reject(new Error("Browser discovery is busy; retry the status request"));
+  const configured = (getConfig() as any).chromiumBin;
+  const override = getChromiumBinaryOverride();
+  const root = getManagedChromiumRoot();
+  const operation = (async () => {
+    const candidates = await listManagedChromiumBinariesAsync(root);
+    const binary = [configured && configured !== "auto" ? configured : null, override]
+      .find(candidate => candidate && fs.existsSync(candidate)) || candidates[0]?.binaryPath || null;
+    const selected = binary ? candidates.find(candidate => path.resolve(candidate.binaryPath) === path.resolve(binary)) : null;
+    const identity = await executableIdentity(binary);
+    if (binary && !identity) throw new Error("Chromium executable changed during discovery; retry the status request");
+    const version = binary ? await detectBinaryVersionAsync(binary) : null;
+    if (JSON.stringify(identity) !== JSON.stringify(await executableIdentity(binary))) {
+      throw new Error("Chromium executable changed during discovery; retry the status request");
+    }
+    const value: ManagedChromiumStatus = {
+      path: binary, version,
+      source: binary ? (selected ? "managed" : "configured") : null,
+      installed: binary !== null, platform: `${process.platform}-${process.arch}`,
+      cacheDir: selected?.installDir || null,
+      installedVersions: candidates.map(candidate => ({ version: candidate.version, path: candidate.binaryPath })),
+    };
+    if (runtimeSelectionKey() !== key) throw new Error("Browser selection changed during discovery; retry the status request");
+    completedChromium = { key, value, identity };
+    return value;
+  })();
+  pendingChromium.set(key, operation);
+  const clearPending = () => { if (pendingChromium.get(key) === operation) pendingChromium.delete(key); };
+  void operation.then(clearPending, () => {
+    clearPending();
+    if (completedChromium?.key === key) completedChromium = null;
+  }); // Callers still receive the original rejection; metadata becomes unknown.
+  return operation;
+}
+
+export async function getEngineStatusAsync(): Promise<{ chromium: ManagedChromiumStatus; firefox: FirefoxStatus }> {
+  const key = runtimeSelectionKey();
+  let firefox = pendingFirefox.get(key);
+  if (!firefox) {
+    if (pendingFirefox.size >= MAX_RUNTIME_DISCOVERIES) throw new Error("Browser discovery is busy; retry the status request");
+    firefox = getFirefoxStatusAsync({ ...process.env });
+    pendingFirefox.set(key, firefox);
+    const operation = firefox;
+    const clearPending = () => { if (pendingFirefox.get(key) === operation) pendingFirefox.delete(key); };
+    void operation.then(clearPending, () => {
+      clearPending();
+      if (completedFirefox?.key === key) completedFirefox = null;
+    }); // Keep discovery failures on the original promise.
+  }
+  const [chromiumResult, firefoxResult] = await Promise.all([
+    getRuntimeChromiumStatusAsync().then(value => ({ value, identity: fileIdentity(value.path) })),
+    firefox.then(value => ({ value, identity: firefoxIdentity(value.path) })),
+  ]);
+  if (runtimeSelectionKey() !== key ||
+      JSON.stringify(chromiumResult.identity) !== JSON.stringify(fileIdentity(chromiumResult.value.path)) ||
+      JSON.stringify(firefoxResult.identity) !== JSON.stringify(firefoxIdentity(firefoxResult.value.path))) {
+    throw new Error("Browser selection changed during discovery; retry the status request");
+  }
+  completedFirefox = { key, value: firefoxResult.value, identity: firefoxResult.identity };
+  return { chromium: chromiumResult.value, firefox: firefoxResult.value };
+}
+
+export interface ProfileRuntimeSnapshot {
+  chromiumPath: string | null;
+  chromiumVersion: string | null;
+  firefoxVersion: string | null;
+  chromiumInstalled: boolean | null;
+  pending: boolean;
+}
+
+/** Read-only projection: never prepares an engine or executes its binary.
+ * A cached absence is not fresh launch authority; project it as unknown.
+ */
+export function getProfileRuntimeSnapshot(): ProfileRuntimeSnapshot {
+  const key = runtimeSelectionKey();
+  const chromium = completedChromium?.key === key && completedChromium.value.installed && JSON.stringify(completedChromium.identity) === JSON.stringify(fileIdentity(completedChromium.value.path))
+    ? completedChromium.value : null;
+  const firefox = completedFirefox?.key === key && completedFirefox.value.installed && JSON.stringify(completedFirefox.identity) === JSON.stringify(firefoxIdentity(completedFirefox.value.path))
+    ? completedFirefox.value : null;
+  return { chromiumPath: chromium?.path || null, chromiumVersion: chromium?.version || null, firefoxVersion: firefox?.version || null,
+    chromiumInstalled: chromium?.installed ?? null, pending: !chromium || !firefox };
+}
+
+export async function verifyRuntimeChromiumAsync(): Promise<ManagedChromiumStatus> {
+  const status = await getRuntimeChromiumStatusAsync();
+  if (!status.installed || !status.path) {
+    throw new Error(
+      "Managed Chromium is not installed. Build the repository patchset and run " +
+      "`npm run install:chromium -- /path/to/Chromium.app`, or set " +
+      "AGENT_BROWSER_CHROMIUM_BINARY_PATH to an independently built binary.",
+    );
+  }
+  return status;
+}
+
 export function verifyRuntimeChromium(): ManagedChromiumStatus {
   const status = getRuntimeChromiumStatus();
   if (!status.installed || !status.path) {
@@ -331,7 +518,7 @@ export function createBrowserProfile(opts: {
     preset: opts.preset || null,
     updatedAt: Date.now(),
   };
-  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
+  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile, engine);
   cfg.browserProfiles[dirId] = profile;
 
   const profileDir = path.join(getProfilesDir(), dirId);
@@ -371,184 +558,307 @@ export interface TrashEntry {
   /** Full profile meta snapshot (R6 #73): restore must bring back engine,
    * version pin, proxy, fingerprint — not a fresh chromium shell. */
   meta?: Record<string, unknown>;
+  /** A purge was attempted; remaining files may be incomplete even if the directory exists. */
+  deletionAttempted?: true;
+}
+
+/** The writer and reader must enforce the same persisted-entry invariants. */
+function validateTrashIndex(parsed: unknown): TrashEntry[] {
+  if (!Array.isArray(parsed)) throw new Error("Invalid trash index: expected an array");
+  const seen = new Set<string>();
+  for (const value of parsed) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid trash index entry");
+    const entry = value as TrashEntry;
+    if (typeof entry.dirId !== "string") throw new Error("Invalid trash index profile ID");
+    validateDirId(entry.dirId);
+    if (typeof entry.name !== "string" ||
+        typeof entry.deletedAt !== "number" || !Number.isFinite(entry.deletedAt) || entry.deletedAt < 0 ||
+        (entry.deletionAttempted !== undefined && entry.deletionAttempted !== true) ||
+        (entry.meta !== undefined && (!entry.meta || typeof entry.meta !== "object" || Array.isArray(entry.meta) ||
+          ("name" in entry.meta && typeof entry.meta.name !== "string")))) {
+      throw new Error(`Invalid trash index entry for ${entry.dirId}`);
+    }
+    if (seen.has(entry.dirId)) throw new Error(`Duplicate trash index ID: ${entry.dirId}`);
+    seen.add(entry.dirId);
+  }
+  return parsed as TrashEntry[];
 }
 
 function readTrashIndex(): TrashEntry[] {
+  let raw: string;
   try {
-    const raw = fs.readFileSync(trashIndexPath(), "utf-8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+    raw = fs.readFileSync(trashIndexPath(), "utf-8");
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  return validateTrashIndex(JSON.parse(raw));
+}
+
+/** lstat (not existsSync): permission errors must never masquerade as absence. */
+function pathKind(p: string): "missing" | "directory" | "other" {
+  try {
+    const stat = fs.lstatSync(p);
+    return stat.isDirectory() && !stat.isSymbolicLink() ? "directory" : "other";
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return "missing";
+    throw error;
   }
 }
 
+/** Atomic visibility under normal execution, not a multi-resource/crash-atomic transaction. */
 function writeTrashIndex(entries: TrashEntry[]): void {
+  // Validate the serialized form as well: JSON may omit unsupported values.
+  const serialized = JSON.stringify(entries, null, 2);
+  validateTrashIndex(JSON.parse(serialized));
+  const indexPath = trashIndexPath();
+  const temp = `${indexPath}.tmp-${randomUUID()}`;
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true, mode: 0o700 });
+  let fd: number | undefined;
+  let error: unknown;
   try {
-    fs.mkdirSync(path.dirname(trashIndexPath()), { recursive: true });
-    fs.writeFileSync(trashIndexPath(), JSON.stringify(entries, null, 2), "utf-8");
-  } catch (e) {
-    console.warn("[agent-browser] failed to write trash index:", e);
+    fd = fs.openSync(temp, "wx", 0o600);
+    fs.writeFileSync(fd, serialized, "utf-8");
+    fs.fsyncSync(fd);
+  } catch (failure) {
+    error = failure;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (failure) {
+        error = error ? new AggregateError([error, failure], `Trash index write failed: ${String(error)}; close failed: ${String(failure)}`) : failure;
+      }
+    }
+  }
+  if (!error) {
+    try { fs.renameSync(temp, indexPath); } catch (failure) { error = failure; }
+  }
+  if (error) {
+    try { fs.rmSync(temp); } catch (cleanup: any) {
+      if (cleanup?.code !== "ENOENT") {
+        throw new AggregateError([error, cleanup],
+          `Trash index write failed: ${String(error)}; temporary cleanup failed: ${String(cleanup)}. Recovery required at ${temp}`);
+      }
+    }
+    throw error;
   }
 }
 
-/** List profiles currently recoverable from the trash. */
-export function listTrashedProfiles(): Array<TrashEntry & { recoverable: boolean }> {
-  return readTrashIndex().map((entry) => ({
-    ...entry,
-    recoverable: fs.existsSync(path.join(trashRoot(), entry.dirId)),
-  }));
+/** Report both failures and concrete state when best-effort compensation fails. */
+function compensateTrashMove(
+  failure: unknown, dirId: string, from: string, to: string, configUndo?: () => void,
+): never {
+  const failures: string[] = [];
+  if (configUndo) {
+    try { configUndo(); } catch (error) { failures.push(`config compensation: ${String(error)}`); }
+  }
+  try { fs.renameSync(from, to); } catch (error) { failures.push(`directory compensation: ${String(error)}`); }
+  if (failures.length) {
+    const location = (p: string) => {
+      try { return `${p} (${pathKind(p)})`; } catch (error) { return `${p} (inspection failed: ${String(error)})`; }
+    };
+    const configLocation = path.join(getAppDataDir(), "config.json");
+    const configState = (() => {
+      try {
+        const saved = JSON.parse(fs.readFileSync(configLocation, "utf-8"));
+        return `disk config ${configLocation}: profile ${Object.hasOwn(saved.browserProfiles || {}, dirId) ? "present" : "absent"}`;
+      } catch (error) { return `disk config ${configLocation}: inspection failed (${String(error)})`; }
+    })();
+    throw new Error(`Trash operation failed: ${String(failure)}. Recovery required: ${failures.join("; ")}. ` +
+      `Remaining paths: ${location(from)}, ${location(to)}, ${location(trashIndexPath())}; ${configState}.`, { cause: failure });
+  }
+  throw failure;
 }
 
-/** Move a stopped profile into the trash and drop it from the config. */
+/** A stale live config key or directory may be the only path back to a failed operation. */
+function trashRecoveryConflict(dirId: string, liveProfiles: Record<string, unknown>): boolean {
+  return Object.hasOwn(liveProfiles, dirId) || pathKind(path.join(getProfilesDir(), dirId)) !== "missing";
+}
+
+/** Directory presence alone cannot prove a prior recursive purge left intact data. */
+export function listTrashedProfiles(): Array<TrashEntry & { recoverable: boolean; incomplete: boolean; recoveryRequired: boolean }> {
+  const entries = readTrashIndex();
+  const liveProfiles = getConfig().browserProfiles || {};
+  return entries.map((entry) => {
+    const recoveryRequired = trashRecoveryConflict(entry.dirId, liveProfiles);
+    const incomplete = entry.deletionAttempted === true;
+    const kind = pathKind(path.join(trashRoot(), entry.dirId));
+    return {
+      ...entry,
+      incomplete,
+      recoveryRequired,
+      recoverable: !recoveryRequired && !incomplete && kind === "directory",
+    };
+  });
+}
+
+/** Move a stopped profile into the trash, remove exactly its config key, commit index. */
 export function trashBrowserProfile(dirId: string, opts?: { force?: boolean }): boolean {
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
-  // TE-05: a profile checked out by another device cannot be deleted from here.
-  assertProfileWritable(dirId, opts);
+  assertProfileWritable(dirId, opts); // TE-05 lock remains enforced
+  if (statusBrowser(dirId).running) throw new Error("Cannot delete profile while managed Chromium is running");
 
-  const st = statusBrowser(dirId);
-  if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
-
+  const entries = readTrashIndex(); // read and validate BEFORE any mutation
   const cfg = getConfig() as any;
-  const meta = cfg.browserProfiles?.[dirId];
+  if (!Object.hasOwn(cfg.browserProfiles || {}, dirId)) throw new Error("Profile metadata is missing; cannot move it to trash");
+  const meta = structuredClone(cfg.browserProfiles[dirId]);
+  const newEntry: TrashEntry = { dirId, name: meta?.name || dirId.slice(0, 8), deletedAt: Date.now(), meta };
   const profileDir = path.join(getProfilesDir(), dirId);
   const target = path.join(trashRoot(), dirId);
-
-  fs.mkdirSync(trashRoot(), { recursive: true });
-  // A previous trashed copy of the same id is already superseded.
-  if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
-  if (fs.existsSync(profileDir)) fs.renameSync(profileDir, target);
-
-  let removed = false;
-  try {
-    const { transact } = require("./config/store.js");
-    transact((draft: any) => {
-      if (draft.browserProfiles?.[dirId]) {
-        delete draft.browserProfiles[dirId];
-        removed = true;
-      }
-    });
-  } catch {
-    const fallback = getConfig() as any;
-    if (fallback.browserProfiles?.[dirId]) {
-      delete fallback.browserProfiles[dirId];
-      saveConfig(fallback);
-      removed = true;
-    }
+  if (pathKind(profileDir) !== "directory") throw new Error("Profile data directory is missing or is not a real directory");
+  if (entries.some((entry) => entry.dirId === dirId) || pathKind(target) !== "missing") {
+    throw new Error("A trashed copy with that id already exists; refusing to replace it");
   }
-
-  const entries = readTrashIndex().filter((e) => e.dirId !== dirId);
-  entries.push({
-    dirId,
-    name: meta?.name || dirId.slice(0, 8),
-    deletedAt: Date.now(),
-    meta: meta ? structuredClone(meta) : undefined,
-  });
-  writeTrashIndex(entries);
-
-  recordAudit({
-    category: "profile",
-    action: "trash",
-    target: dirId,
-    actor: "user",
-    detail: `moved to trash as "${meta?.name || dirId.slice(0, 8)}" (recoverable for 7 days)`,
-  });
-  return removed || !fs.existsSync(profileDir);
+  validateTrashIndex([...entries, newEntry]); // reject invalid snapshots BEFORE moving any data
+  fs.mkdirSync(trashRoot(), { recursive: true, mode: 0o700 });
+  fs.renameSync(profileDir, target);
+  let configCommitted = false;
+  try {
+    transact((draft: any) => {
+      if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Profile metadata disappeared during trash");
+      delete draft.browserProfiles[dirId];
+    });
+    configCommitted = true;
+    writeTrashIndex([...entries, newEntry]);
+  } catch (error) {
+    compensateTrashMove(error, dirId, target, profileDir, configCommitted ? () => {
+      transact((draft: any) => {
+        draft.browserProfiles = draft.browserProfiles || {};
+        if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during trash compensation");
+        draft.browserProfiles[dirId] = meta;
+      });
+    } : undefined);
+  }
+  recordAudit({ category: "profile", action: "trash", target: dirId, actor: "user",
+    detail: `moved to trash as "${meta.name || dirId.slice(0, 8)}" (recoverable for 7 days)` });
+  return true;
 }
 
-/** Put a trashed profile back, restoring its metadata. */
+/** Restore only into an unoccupied live config key AND directory. */
 export function restoreTrashedProfile(dirId: string): boolean {
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
 
-  const entry = readTrashIndex().find((e) => e.dirId === dirId);
+  const entries = readTrashIndex();
+  const entry = entries.find((value) => value.dirId === dirId);
   if (!entry) throw new Error("That profile is no longer in the trash");
   const source = path.join(trashRoot(), dirId);
-  if (!fs.existsSync(source)) throw new Error("The trashed profile data is missing");
-
   const profileDir = path.join(getProfilesDir(), dirId);
-  if (fs.existsSync(profileDir)) throw new Error("A profile with that id already exists");
-
-  fs.mkdirSync(getProfilesDir(), { recursive: true });
-  fs.renameSync(source, profileDir);
-
-  let restored = false;
-  try {
-    const { transact } = require("./config/store.js");
-    transact((draft: any) => {
-      draft.browserProfiles = draft.browserProfiles || {};
-      if (!draft.browserProfiles[dirId]) {
-        draft.browserProfiles[dirId] = entry.meta
-          ? { ...(entry.meta as object), dirId, createdAt: Date.now() }
-          : {
-              dirId,
-              name: entry.name || dirId.slice(0, 8),
-              createdAt: Date.now(),
-              engine: "chromium",
-            };
-      }
-      restored = true;
-    });
-  } catch {
-    const cfg = getConfig() as any;
-    cfg.browserProfiles = cfg.browserProfiles || {};
-    if (!cfg.browserProfiles[dirId]) {
-      cfg.browserProfiles[dirId] = { dirId, name: entry.name || dirId.slice(0, 8), createdAt: Date.now(), engine: "chromium" };
-    }
-    saveConfig(cfg);
-    restored = true;
+  if (entry.deletionAttempted) throw new Error("Trashed profile data may be incomplete after a purge attempt; cannot restore it as complete. Review and delete remaining files manually.");
+  if (pathKind(source) !== "directory") throw new Error("The trashed profile data is missing or not a real directory");
+  if (Object.hasOwn(getConfig().browserProfiles || {}, dirId) || pathKind(profileDir) !== "missing") {
+    throw new Error("A profile with that id already exists");
   }
 
-  writeTrashIndex(readTrashIndex().filter((e) => e.dirId !== dirId));
+  fs.mkdirSync(getProfilesDir(), { recursive: true, mode: 0o700 });
+  fs.renameSync(source, profileDir);
+  let configCommitted = false;
+  try {
+    transact((draft: any) => {
+      draft.browserProfiles = draft.browserProfiles || {};
+      if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during restore");
+      draft.browserProfiles[dirId] = entry.meta
+        ? { ...entry.meta, dirId, createdAt: entry.meta.createdAt ?? Date.now() }
+        : { dirId, name: entry.name, createdAt: Date.now(), engine: "chromium" };
+    });
+    configCommitted = true;
+    writeTrashIndex(entries.filter((value) => value.dirId !== dirId));
+  } catch (error) {
+    compensateTrashMove(error, dirId, profileDir, source, configCommitted ? () => {
+      transact((draft: any) => {
+        if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Restored metadata disappeared during compensation");
+        delete draft.browserProfiles[dirId];
+      });
+    } : undefined);
+  }
   recordAudit({ category: "profile", action: "restore", target: dirId, actor: "user", detail: `restored "${entry.name}"` });
-  return restored;
+  return true;
 }
 
-/**
- * Permanently delete one trashed profile (R10 UX P1-1): remove the trashed
- * data directory and drop the index entry. Requires a UI double-confirm —
- * this is irreversible, unlike restore. Also clears index-only leftovers
- * whose data directory is already gone (unrecoverable entries).
- */
+/** Irreversible deletion: only remove the index entry after rm succeeded. */
 export function purgeTrashedProfile(dirId: string): boolean {
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
   const entries = readTrashIndex();
-  const entry = entries.find((e) => e.dirId === dirId);
+  const entry = entries.find((value) => value.dirId === dirId);
   if (!entry) throw new Error("That profile is not in the trash");
   const target = path.join(trashRoot(), dirId);
-  try {
-    if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
-  } catch (e: any) {
-    throw new Error(`Failed to remove trashed data: ${e?.message || String(e)}`);
+  if (trashRecoveryConflict(dirId, getConfig().browserProfiles || {})) {
+    throw new Error(`Recovery required: live config or directory still occupies ${dirId}; refusing to delete ${target}`);
   }
-  writeTrashIndex(entries.filter((e) => e.dirId !== dirId));
+  const kind = pathKind(target);
+  if (kind === "other") throw new Error(`Refusing to purge non-directory trash path: ${target}`);
+  if (kind === "directory") {
+    // Persist uncertainty BEFORE recursive deletion: a partial rm (or process
+    // restart before the final index commit) must never advertise restoration.
+    if (!entry.deletionAttempted) {
+      try { writeTrashIndex(entries.map((value) => value.dirId === dirId ? { ...value, deletionAttempted: true } : value)); }
+      catch (error) { throw new Error(`Failed to mark trash data incomplete at ${target}; no deletion attempted: ${String(error)}`, { cause: error }); }
+    }
+    try { fs.rmSync(target, { recursive: true }); }
+    catch (error) { throw new Error(`Failed to remove trashed data at ${target}; data may be partially removed: ${String(error)}`, { cause: error }); }
+  }
+  try { writeTrashIndex(entries.filter((value) => value.dirId !== dirId)); }
+  catch (error) { throw new Error(`Trash index update failed after deleting ${target}; data may already be removed (no rollback): ${String(error)}`, { cause: error }); }
   recordAudit({ category: "profile", action: "purge", target: dirId, actor: "user", detail: `permanently deleted "${entry.name}" from trash` });
   return true;
 }
 
-/** Permanently remove trash entries older than the retention window. */
+/** Sweep one entry at a time: only committed removals count as purged. */
 export function purgeExpiredTrash(ttlMs: number = TRASH_TTL_MS): string[] {
   const cutoff = Date.now() - ttlMs;
-  const kept: TrashEntry[] = [];
+  let entries = readTrashIndex();
   const purged: string[] = [];
-  for (const entry of readTrashIndex()) {
-    if (entry.deletedAt < cutoff) {
-      try {
-        fs.rmSync(path.join(trashRoot(), entry.dirId), { recursive: true, force: true });
-      } catch {
-        /* already gone */
+  const failures: string[] = [];
+  for (const entry of entries.slice()) {
+    if (entry.deletedAt >= cutoff) continue;
+    const target = path.join(trashRoot(), entry.dirId);
+    let kind: ReturnType<typeof pathKind>;
+    try {
+      if (trashRecoveryConflict(entry.dirId, getConfig().browserProfiles || {})) {
+        failures.push(`${entry.dirId}: recovery required; live config or directory still exists; retained ${target}`);
+        continue;
       }
+      if (entry.deletionAttempted) {
+        failures.push(`${entry.dirId}: recovery required; earlier purge may have left incomplete data at ${target}; manual review needed`);
+        continue;
+      }
+      kind = pathKind(target);
+      if (kind === "other") throw new Error("not a real directory");
+    } catch (error) {
+      failures.push(`${entry.dirId}: inspection failed at ${target}; no deletion attempted: ${String(error)}`);
+      continue;
+    }
+    if (kind === "directory") {
+      try {
+        const marked = entries.map((value) => value.dirId === entry.dirId ? { ...value, deletionAttempted: true as const } : value);
+        writeTrashIndex(marked);
+        entries = marked;
+      } catch (error) {
+        failures.push(`${entry.dirId}: pre-delete index update failed at ${target}; no deletion attempted: ${String(error)}`);
+        continue;
+      }
+      try { fs.rmSync(target, { recursive: true }); }
+      catch (error) {
+        failures.push(`${entry.dirId}: removal failed at ${target}; data may be partially removed: ${String(error)}`);
+        continue;
+      }
+    }
+    try {
+      writeTrashIndex(entries.filter((value) => value.dirId !== entry.dirId));
+      entries = entries.filter((value) => value.dirId !== entry.dirId);
       purged.push(entry.dirId);
-    } else {
-      kept.push(entry);
+    } catch (error) {
+      failures.push(`${entry.dirId}: index update failed after deletion at ${target}; data may already be removed: ${String(error)}`);
     }
   }
-  if (purged.length) writeTrashIndex(kept);
+  if (failures.length) {
+    throw new Error(`Expired trash sweep partially failed: ${purged.length} committed purge(s) [${purged.join(", ")}]; ` +
+      `${failures.length} failure(s), index entries retained for review or manual retry: ${failures.join("; ")}`);
+  }
   return purged;
 }
 
@@ -577,7 +887,7 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
   return deleted;
 }
 
-export function listBrowserProfiles(): BrowserProfile[] {
+export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfileRuntimeSnapshot()): BrowserProfile[] {
   const cfg = getConfig() as any;
   const profiles = cfg.browserProfiles || {};
   const result: BrowserProfile[] = [];
@@ -594,8 +904,8 @@ export function listBrowserProfiles(): BrowserProfile[] {
       dirId,
       name: m.name || dirId.slice(0, 8),
       version: engine === "firefox"
-        ? (getFirefoxStatus().version || "?")
-        : (normalizeManagedChromiumVersion(m.browserVersion) || getRuntimeChromiumVersion() || "?"),
+        ? (normalizeManagedFirefoxVersion(m.browserVersion) || runtime.firefoxVersion || "?")
+        : (normalizeManagedChromiumVersion(m.browserVersion) || runtime.chromiumVersion || "?"),
       // Engine-aware pin display (R4): a Firefox "154.0" pin must not go
       // through the Chromium 4-segment validator (it throws and breaks the
       // entire profile list).
@@ -851,15 +1161,17 @@ export async function launchBrowser(
 
   // Firefox engine path (Slice 77): stock Firefox with remote debugging.
   if (sanitizeBrowserEngine(meta.engine) === "firefox") {
-    return launchFirefoxProfile(dirId, meta, cfg, opts?.headless, releaseLaunchLock, { forceDeadProxy: opts?.forceDeadProxy === true });
+    // This outer finally owns the launch lock across asynchronous discovery.
+    return await launchFirefoxProfile(dirId, meta, cfg, opts?.headless, null, { forceDeadProxy: opts?.forceDeadProxy === true });
   }
 
   const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
   const envBin = getChromiumBinaryOverride();
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const passThrough = fingerprintMode === "off";
+  if (!passThrough) validateBrowserHardwareProfile(meta, "chromium");
   const requestedVersion = normalizeManagedChromiumVersion(meta.browserVersion);
-  const managedBin = findManagedRuntimeChromium(requestedVersion);
+  const managedBin = (await findManagedChromiumBinaryAsync(requestedVersion))?.binaryPath || null;
   if (configuredBin && !fs.existsSync(configuredBin)) {
     throw new Error(`Configured Chromium binary does not exist: ${configuredBin}`);
   }
@@ -867,11 +1179,12 @@ export async function launchBrowser(
     throw new Error(`AGENT_BROWSER_CHROMIUM_BINARY_PATH does not exist: ${envBin}`);
   }
   const overrideBin = configuredBin || envBin;
-  if (requestedVersion && overrideBin && detectBinaryVersion(overrideBin) !== requestedVersion) {
-    throw new Error(`Profile requires Chromium ${requestedVersion}, but the configured binary is ${detectBinaryVersion(overrideBin) || "unknown"}`);
+  if (requestedVersion && overrideBin) {
+    const version = await detectBinaryVersionAsync(overrideBin);
+    if (version !== requestedVersion) throw new Error(`Profile requires Chromium ${requestedVersion}, but the configured binary is ${version || "unknown"}`);
   }
   if (requestedVersion && !overrideBin && !managedBin) {
-    const available = listManagedChromiumBinaries().map((candidate) => candidate.version).join(", ") || "none";
+    const available = (await listManagedChromiumBinariesAsync()).map((candidate) => candidate.version).join(", ") || "none";
     throw new Error(`Chromium ${requestedVersion} is not installed; available managed versions: ${available}`);
   }
   const preferredBin = configuredBin || envBin || managedBin;
@@ -915,6 +1228,17 @@ export async function launchBrowser(
     });
   }
   const activeProxy = resolvedProxy.config;
+  let dnsPolicy: ReturnType<typeof resolveChromiumDnsPolicy>;
+  try {
+    dnsPolicy = resolveChromiumDnsPolicy(activeProxy, cfg.managedSecureDnsUrl);
+    if (passThrough && dnsPolicy.route === "doh") {
+      throw new Error("Explicit proxy DoH requires managed Chromium identity mode in this engine; fingerprint-off profiles use proxy-side DNS without identity overrides");
+    }
+  } catch (error) {
+    recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+      detail: "failed: proxy DNS configuration is invalid or unsupported; browser was not spawned" });
+    throw error;
+  }
   const requestedWebRtcMode = passThrough ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
   const shouldResolveWebRtc = requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered";
   console.log(`[agent-browser] Preparing profile ${dirId.slice(0, 8)} mode=${fingerprintMode} browser=${requestedVersion || "auto"}`);
@@ -977,7 +1301,7 @@ export async function launchBrowser(
   console.log(`[agent-browser] Managed Chromium launch plan ready for ${dirId.slice(0, 8)}`);
   const bin = launchPlan.executablePath;
   if (!fs.existsSync(bin)) throw new Error("Managed Chromium binary is unavailable after selection");
-  const nativeChromiumVersion = detectBinaryVersion(bin) || getRuntimeChromiumVersion();
+  const nativeChromiumVersion = await detectBinaryVersionAsync(bin);
   if (requestedVersion && nativeChromiumVersion !== requestedVersion) {
     throw new Error(`Profile requires Chromium ${requestedVersion}, resolved ${nativeChromiumVersion || "unknown"}`);
   }
@@ -1018,13 +1342,9 @@ export async function launchBrowser(
       webrtcMode: effectiveWebRtcMode,
       webrtcIp,
     };
-    // Managed profiles with a proxy resolve DNS over HTTPS through that same
-    // proxy (secure-only, no host-resolver fallback) so the resolver and DNS
-    // queries stay consistent with the exit identity. Without a proxy the
-    // browser keeps its stock DNS behavior.
-    const managedSecureDns = activeProxy
-      ? { enabled: true, templates: [...MANAGED_SECURE_DNS_TEMPLATES] }
-      : null;
+    // Fixed proxies resolve origin hostnames at egress by default. Only an
+    // explicit, validated provider selects the engine's strict proxy DoH path.
+    const managedSecureDns = dnsPolicy.secureDns;
     const nativeFingerprint = buildBrowserFingerprintConfig(
       nativeFingerprintMeta,
       nativeChromiumVersion,
@@ -1041,17 +1361,6 @@ export async function launchBrowser(
       managedSecureDns,
       "chromium",
     ));
-    // DNS routing audit: managed profiles behind a proxy route every DNS query
-    // (including the DoH probe) through that same proxy with no host-resolver
-    // fallback, so the resolver stays coherent with the exit identity. Record
-    // per-launch evidence so profile logs prove proxy-coherent DNS.
-    if (managedSecureDns) {
-      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
-        detail: "proxy DNS active: DoH routed through the exit proxy (no host-resolver fallback)" });
-    } else if (!passThrough && resolvedProxy.mode !== "none") {
-      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
-        detail: "warning: profile expects a proxy but no managed secure DNS is active — check proxy resolution" });
-    }
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
     // Raster scale: `native` renders at the host's real scale factor (crisp on
     // HiDPI/Retina) while the fork still reports the persona's devicePixelRatio
@@ -1069,6 +1378,17 @@ export async function launchBrowser(
       `--force-device-scale-factor=${renderScaleFactor}`,
     ]);
     args = applyManagedNativeRefreshRate(args);
+  }
+
+  if (activeProxy) {
+    recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+      detail: dnsPolicy.route === "doh"
+        ? "configured: strict proxy DoH; successful DNS transactions have not yet been verified"
+        : "configured: proxy-side hostname resolution; successful DNS transactions have not yet been verified" });
+  }
+  if (!passThrough && platform !== (process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : null)) {
+    recordAudit({ category: "profile", action: "gpu-compatibility", target: dirId, actor: "auto",
+      detail: "unsupported cross-OS GPU persona: this engine exposes the native host GPU; foreign OS hardware compatibility is not verified" });
   }
 
   // RoxyBrowser-style taskbar/window title: show the profile name at the OS
@@ -1091,7 +1411,7 @@ export async function launchBrowser(
   if (activeProxy) {
     let chromiumProxy = activeProxy;
     const isSocks = activeProxy.type === "socks5" || activeProxy.type === "socks5h";
-    if (isSocks && supportsNativeQuicProxy(bin)) {
+    if (isSocks && supportsNativeQuicProxy(bin) && dnsPolicy.route === "doh") {
       const masqueBridge = await startMasqueSocksBridge(activeProxy);
       pendingProxyBridge = masqueBridge;
       const proxyOrigin = `${masqueBridge.proxyHost}:${masqueBridge.port}`;
@@ -1123,7 +1443,7 @@ export async function launchBrowser(
       args = dedupeChromeArgs([
         ...args,
         `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
-        ...(activeProxy.type === "socks5h"
+        ...(dnsPolicy.route === "proxy"
           ? [`--host-resolver-rules=${buildRemoteDnsRule(proxyConnectHost, getLaunchArgValue(args, "--host-resolver-rules"))}`]
           : []),
         "--disable-quic",
@@ -1385,17 +1705,18 @@ async function launchFirefoxProfile(
   releaseLaunchLock: (() => void) | null,
   opts?: { forceDeadProxy?: boolean },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
-  const bin = findFirefoxBinary();
+  const bin = await findFirefoxBinaryAsync();
   if (!bin) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(
       "Managed Firefox is required for this profile. Install Firefox or set AGENT_BROWSER_FIREFOX_BINARY_PATH.",
     );
   }
-  const firefoxVersion = detectFirefoxVersion(bin);
+  const firefoxVersion = await detectFirefoxVersionAsync(bin);
   // Compare major.minor (R4): a legal "154.0" pin must match a "154.0.1"
-  // binary — strict string inequality would always block.
-  if (meta.browserVersion && firefoxVersion && normalizeFirefoxVersion(firefoxVersion) !== normalizeFirefoxVersion(meta.browserVersion)) {
+  // binary — strict string inequality would always block. Unknown is not a match.
+  if (meta.browserVersion && !firefoxVersion) throw new Error(`Cannot verify the installed Firefox version required by profile: ${meta.browserVersion}`);
+  if (meta.browserVersion && normalizeFirefoxVersion(firefoxVersion) !== normalizeFirefoxVersion(meta.browserVersion)) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(`Profile requires Firefox ${meta.browserVersion}, but the installed binary is ${firefoxVersion}`);
   }
@@ -1404,8 +1725,10 @@ async function launchFirefoxProfile(
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
   const nativeRequested = firefoxNativeModeRequested();
-  const nativeConfig = supportsFirefoxNativeConfig(bin);
-  const nativeParity = supportsFirefoxNativeParity(bin);
+  const capabilityReport = await readFirefoxNativeCapabilityReportAsync(bin);
+  const capabilities = new Set(capabilityReport?.capabilities || []);
+  const nativeConfig = FIREFOX_NATIVE_CONFIG_CAPABILITIES.every(capability => capabilities.has(capability));
+  const nativeParity = FIREFOX_NATIVE_PARITY_CAPABILITIES.every(capability => capabilities.has(capability));
   if (managedIdentity && nativeRequested && !nativeConfig) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(
@@ -1824,22 +2147,6 @@ function mergeCommaSeparatedValue(value: string, existing: string | null): strin
   return [...new Set(entries)].join(",");
 }
 
-/**
- * Build the --host-resolver-rules value that makes Chromium resolve target
- * hostnames through a SOCKS5 proxy (socks5h semantics) instead of locally.
- * Chromium always resolves DNS locally for --proxy-server=socks5://; mapping
- * every hostname to ~NOTFOUND forces it to hand the hostname to the proxy,
- * which resolves at egress. The proxy connect host (and localhost) must stay
- * resolvable, so they are excluded. Existing rules (e.g. a MASQUE bridge map)
- * are preserved and merged.
- */
-export function buildRemoteDnsRule(proxyConnectHost: string, existing: string | null): string {
-  const host = String(proxyConnectHost || "").trim();
-  const excludes = Array.from(new Set(["localhost", "127.0.0.1", host].filter((v) => v && v !== "*")));
-  const rule = `MAP * ~NOTFOUND${excludes.map((entry) => `, EXCLUDE ${entry}`).join("")}`;
-  return mergeCommaSeparatedValue(rule, existing);
-}
-
 const THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE = "ThrottleMainFrameTo60Hz";
 
 function featureEntryName(entry: string): string {
@@ -1887,8 +2194,8 @@ function addDrmArgs(args: string[], dirId: string): void {
 
 function addHardwareFingerprintArgs(args: string[], meta: any): void {
   const normalized = normalizeHardwareFingerprintMeta(meta);
-  if (normalized.gpuVendor) args.push(`--fingerprint-gpu-vendor=${normalized.gpuVendor}`);
-  if (normalized.gpuRenderer) args.push(`--fingerprint-gpu-renderer=${normalized.gpuRenderer}`);
+  // Chromium keeps native GPU strings/capabilities; explicit overrides are
+  // rejected before launch rather than reintroduced through legacy switches.
   if (Number.isInteger(normalized.hardwareConcurrency)) args.push(`--fingerprint-hardware-concurrency=${normalized.hardwareConcurrency}`);
   if (Number.isInteger(normalized.deviceMemory)) args.push(`--fingerprint-device-memory=${normalized.deviceMemory}`);
   if (Number.isInteger(normalized.screenWidth)) args.push(`--fingerprint-screen-width=${normalized.screenWidth}`);

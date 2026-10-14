@@ -4,6 +4,7 @@ import {
   trialDaysLeft,
   isTrialExpired,
   activateLicense,
+  canActivateLicense,
   type LicenseState,
 } from "../services/license.js";
 import { getConfig } from "../services/config-manager.js";
@@ -26,7 +27,7 @@ export function registerLicenseHandlers(): void {
       expired: isTrialExpired(),
       deviceId: String((getConfig() as any)?.deviceId || ""),
       // canActivate is informational only — enforcement reads the key itself.
-      canActivate: true,
+      canActivate: canActivateLicense(),
     };
   });
 

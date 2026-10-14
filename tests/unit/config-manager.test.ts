@@ -54,13 +54,32 @@ import {
   clearWebRtcDiagnostics,
   sanitizeAppUrl,
 } from "../../src/main/services/config-manager.js";
-import type { MgmtConfig } from "../../src/main/types.js";
+import type { BrowserProfileMeta, MgmtConfig } from "../../src/main/types.js";
 import {
   decryptSecret,
   initializeSecretStorage,
   planSecretStorage,
   resetSecretStorageForTests,
 } from "../../src/main/services/secrets.js";
+
+// Intentionally invalid legacy JSON boundary, not a BrowserProfileMeta DTO.
+// Preserve the historical null sentinel and obsolete fields in routing/roundtrip
+// regressions without claiming they satisfy the current optional-number contract.
+type LegacyNullSyncedAtProfileFixture = Omit<BrowserProfileMeta, "syncedAt"> & {
+  syncedAt: null;
+  syncStatus: "never";
+  lastModified: number;
+};
+
+function setLegacyNullSyncedAtProfileFixture(
+  cfg: MgmtConfig,
+  id: string,
+  fixture: LegacyNullSyncedAtProfileFixture,
+): void {
+  if (!Reflect.set(cfg.browserProfiles, id, fixture)) {
+    throw new Error(`Could not install legacy-null negative fixture ${id}`);
+  }
+}
 
 describe("Config Manager (real functions)", () => {
   beforeEach(() => {
@@ -157,6 +176,7 @@ describe("Config Manager (real functions)", () => {
     expect(updateProxy("ts-proxy", { type: "http", host: "10.0.0.2", port: 8081 })).toBe(true);
     const t2 = getConfig().proxies["ts-proxy"].updatedAt;
     expect(typeof t2).toBe("number");
+    if (t1 === undefined || t2 === undefined) throw new Error("Expected proxy edit timestamps");
     expect(t2).toBeGreaterThanOrEqual(t1);
 
     // Profile edits stamp updatedAt too.
@@ -305,7 +325,7 @@ describe("Config Manager (real functions)", () => {
     setDefaultProxyName("primary");
 
     const cfg = getConfig();
-    cfg.browserProfiles["cb_profile_a"] = {
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_profile_a", {
       name: "Profile A",
       proxyMode: "named",
       proxyName: "work",
@@ -314,8 +334,8 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
-    cfg.browserProfiles["cb_profile_b"] = {
+    });
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_profile_b", {
       name: "Profile B",
       proxyMode: "none",
       fingerprintSeed: 54321,
@@ -323,8 +343,8 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
-    cfg.browserProfiles["cb_profile_c"] = {
+    });
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_profile_c", {
       name: "Profile C",
       proxyMode: "default",
       fingerprintSeed: 99999,
@@ -332,7 +352,7 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
+    });
     saveConfig(cfg);
 
     const resolvedNamed = resolveProfileProxy("cb_profile_a");
@@ -361,7 +381,7 @@ describe("Config Manager (real functions)", () => {
     // not silently adopt it, nor fail-closed; they launch direct.
     addProxy("solo", { type: "http", host: "1.1.1.1", port: 8080 });
     const cfg = getConfig();
-    cfg.browserProfiles["cb_direct"] = {
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_direct", {
       name: "Direct Profile",
       proxyMode: "default",
       fingerprintSeed: 11111,
@@ -369,7 +389,7 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
+    });
     saveConfig(cfg);
     const resolved = resolveProfileProxy("cb_direct");
     expect(resolved.mode).toBe("none");
@@ -380,7 +400,7 @@ describe("Config Manager (real functions)", () => {
     addProxy("p1", { type: "http", host: "1.1.1.1", port: 8080 });
     setDefaultProxyName("p1");
     const cfg = getConfig();
-    cfg.browserProfiles["cb_afterdel"] = {
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_afterdel", {
       name: "After Delete",
       proxyMode: "default",
       fingerprintSeed: 22222,
@@ -388,7 +408,7 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
+    });
     saveConfig(cfg);
     expect(resolveProfileProxy("cb_afterdel").name).toBe("p1");
 
@@ -476,6 +496,7 @@ describe("Config Manager (real functions)", () => {
     const cfg = getConfig();
     expect(cfg.browserProfiles.cb_migrated_profile.name).toBe("Migrated Profile");
     expect(cfg.proxies["migrated-proxy"].port).toBe(8080);
+    if (!cfg.extensionRepository) throw new Error("Expected migrated extension repository");
     expect(cfg.extensionRepository[extId].unpackedPath).toBe(expectedPath);
     expect(fs.readdirSync(TEST_USER_DATA).filter((f) => f.endsWith(".bak"))).toEqual([]);
   });
@@ -495,7 +516,7 @@ describe("Config Manager (real functions)", () => {
 
   it("persists fingerprint metadata in profiles", () => {
     const cfg = getConfig();
-    cfg.browserProfiles["cb_fp_test"] = {
+    setLegacyNullSyncedAtProfileFixture(cfg, "cb_fp_test", {
       name: "Fingerprint Test",
       tags: [" ecommerce ", "ai", "ecommerce", ""],
       proxyMode: "default",
@@ -524,7 +545,7 @@ describe("Config Manager (real functions)", () => {
       syncedAt: null,
       syncStatus: "never",
       lastModified: Date.now(),
-    };
+    });
     saveConfig(cfg);
     reloadConfig();
 

@@ -12,7 +12,7 @@ vi.mock("electron", () => {
   const TEST_DATA = path.join(os.tmpdir(), "agent-browser-proxy-import-test");
   return {
     app: {
-      getPath: (name) => {
+      getPath: (name: string) => {
         if (name === "userData") return TEST_DATA;
         if (name === "home") return TEST_DATA;
         return "/tmp";
@@ -20,8 +20,8 @@ vi.mock("electron", () => {
     },
     safeStorage: {
       isEncryptionAvailable: () => true,
-      encryptString: (plain) => Buffer.from(plain, "utf8"),
-      decryptString: (encrypted) => Buffer.from(encrypted).toString("utf8"),
+      encryptString: (plain: string) => Buffer.from(plain, "utf8"),
+      decryptString: (encrypted: Buffer) => Buffer.from(encrypted).toString("utf8"),
     },
   };
 });

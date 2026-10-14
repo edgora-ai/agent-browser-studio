@@ -2,6 +2,111 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { BrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
+
+interface MediaDevice {
+  kind: "audioinput" | "videoinput" | "audiooutput";
+  label: string;
+  deviceId: string;
+  groupId: string;
+}
+interface MediaSnapshot {
+  devices: MediaDevice[];
+  repeatIdentical?: boolean;
+  nativeEnumerate: { writable: boolean; enumerable: boolean; configurable: boolean; owner: string; source: string };
+}
+interface MediaRun { pre: MediaSnapshot; post: MediaSnapshot }
+interface ManagedMediaRun extends MediaRun {
+  iframeDenied: MediaSnapshot;
+  iframeDeniedPost: MediaSnapshot;
+  iframeNoCameraPost: MediaSnapshot;
+  iframeNoSpeakerPost: MediaSnapshot;
+  dedicatedWorker: { mediaDevices: string };
+  sharedWorker: { mediaDevices: string };
+}
+interface MediaDevicesCorpus {
+  capture: {
+    mode: string;
+    preloadScript: boolean;
+    nativeRequired: boolean;
+    fingerprintConfig: { mediaDevices: BrowserFingerprintConfig["mediaDevices"] };
+  };
+  capabilities: { capabilities: string[] };
+  evidence: {
+    managed: ManagedMediaRun;
+    disabled: MediaRun;
+    stock: MediaRun;
+    multi: MediaRun;
+    zero: MediaRun;
+    crossOrigin: { sameOriginRestart: MediaRun; otherOrigin: MediaRun };
+    legacy: {
+      noGrant: { pre: MediaSnapshot };
+      noGrantStock: { pre: MediaSnapshot };
+      grant: MediaRun;
+      grantStock: MediaRun;
+    };
+    noSinkid: { managed: MediaRun; stock: MediaRun };
+    rfp: { managed: MediaRun; stock: MediaRun };
+  };
+}
+
+function isCorpusObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isMediaDevice(value: unknown): value is MediaDevice {
+  return isCorpusObject(value) &&
+    (value.kind === "audioinput" || value.kind === "videoinput" || value.kind === "audiooutput") &&
+    typeof value.label === "string" && typeof value.deviceId === "string" && typeof value.groupId === "string";
+}
+function isMediaSnapshot(value: unknown): value is MediaSnapshot {
+  if (!isCorpusObject(value) || !Array.isArray(value.devices) || !value.devices.every(isMediaDevice)) return false;
+  const native = value.nativeEnumerate;
+  return (value.repeatIdentical === undefined || typeof value.repeatIdentical === "boolean") &&
+    isCorpusObject(native) && typeof native.writable === "boolean" && typeof native.enumerable === "boolean" &&
+    typeof native.configurable === "boolean" && typeof native.owner === "string" && typeof native.source === "string";
+}
+function isMediaRun(value: unknown): value is MediaRun {
+  return isCorpusObject(value) && isMediaSnapshot(value.pre) && isMediaSnapshot(value.post);
+}
+function isManagedMediaRun(value: unknown): value is ManagedMediaRun {
+  return isCorpusObject(value) && isMediaRun(value) && isMediaSnapshot(value.iframeDenied) &&
+    isMediaSnapshot(value.iframeDeniedPost) && isMediaSnapshot(value.iframeNoCameraPost) &&
+    isMediaSnapshot(value.iframeNoSpeakerPost) && isCorpusObject(value.dedicatedWorker) &&
+    typeof value.dedicatedWorker.mediaDevices === "string" && isCorpusObject(value.sharedWorker) &&
+    typeof value.sharedWorker.mediaDevices === "string";
+}
+function isMediaRunPair(value: unknown): value is { managed: MediaRun; stock: MediaRun } {
+  return isCorpusObject(value) && isMediaRun(value.managed) && isMediaRun(value.stock);
+}
+function isMediaDevicesCorpus(value: unknown): value is MediaDevicesCorpus {
+  if (!isCorpusObject(value) || !isCorpusObject(value.capture) || !isCorpusObject(value.capabilities) ||
+      !isCorpusObject(value.evidence)) return false;
+  const capture = value.capture;
+  if (typeof capture.mode !== "string" || typeof capture.preloadScript !== "boolean" ||
+      typeof capture.nativeRequired !== "boolean" || !isCorpusObject(capture.fingerprintConfig)) return false;
+  const config = capture.fingerprintConfig.mediaDevices;
+  if (!isCorpusObject(config) || typeof config.enabled !== "boolean" ||
+      ![config.audioInputs, config.videoInputs, config.audioOutputs].every((count) =>
+        typeof count === "number" && Number.isInteger(count) && count >= 0)) return false;
+  if (!Array.isArray(value.capabilities.capabilities) ||
+      !value.capabilities.capabilities.every((capability: unknown) => typeof capability === "string")) return false;
+  const evidence = value.evidence;
+  const crossOrigin = evidence.crossOrigin;
+  const legacy = evidence.legacy;
+  return isManagedMediaRun(evidence.managed) && isMediaRun(evidence.disabled) && isMediaRun(evidence.stock) &&
+    isMediaRun(evidence.multi) && isMediaRun(evidence.zero) && isCorpusObject(crossOrigin) &&
+    isMediaRun(crossOrigin.sameOriginRestart) && isMediaRun(crossOrigin.otherOrigin) && isCorpusObject(legacy) &&
+    isCorpusObject(legacy.noGrant) && isMediaSnapshot(legacy.noGrant.pre) &&
+    isCorpusObject(legacy.noGrantStock) && isMediaSnapshot(legacy.noGrantStock.pre) &&
+    isMediaRun(legacy.grant) && isMediaRun(legacy.grantStock) &&
+    isMediaRunPair(evidence.noSinkid) && isMediaRunPair(evidence.rfp);
+}
+function parseMediaDevicesCorpus(text: string): MediaDevicesCorpus {
+  const value: unknown = JSON.parse(text);
+  if (!isMediaDevicesCorpus(value)) throw new Error("Invalid media devices corpus shape");
+  // Keep the original objects, including extra captured fields used by deep equality.
+  return value;
+}
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const FIREFOX = path.join(ROOT, "patches", "firefox");
@@ -369,7 +474,7 @@ describe("Firefox 154 source and build scripts", () => {
   it("pins a real native media devices runtime corpus", () => {
     execFileSync(process.execPath, ["--check", VERIFY_MEDIA_DEVICES], { stdio: "pipe" });
     const verifier = fs.readFileSync(VERIFY_MEDIA_DEVICES, "utf8");
-    const corpus = JSON.parse(fs.readFileSync(MEDIA_DEVICES_CORPUS, "utf8"));
+    const corpus = parseMediaDevicesCorpus(fs.readFileSync(MEDIA_DEVICES_CORPUS, "utf8"));
     expect(verifier).toContain("--agent-browser-native-required");
     expect(verifier).toContain("Invalid mediaDevices config did not fail closed");
     expect(verifier).toContain("media.navigator.streams.fake");
@@ -408,7 +513,7 @@ describe("Firefox 154 source and build scripts", () => {
       "media-devices-v1",
       "speech-voices-v1",
     ]);
-    const shapeOf = (devices) => devices.map((device) => ({ kind: device.kind, label: device.label }));
+    const shapeOf = (devices: readonly MediaDevice[]) => devices.map((device) => ({ kind: device.kind, label: device.label }));
     const managed = corpus.evidence.managed;
     const config = corpus.capture.fingerprintConfig.mediaDevices;
     expect(config).toEqual({ enabled: true, audioInputs: 1, videoInputs: 1, audioOutputs: 1 });
@@ -434,6 +539,7 @@ describe("Firefox 154 source and build scripts", () => {
     const mic = managed.post.devices.find((device) => device.kind === "audioinput");
     const cam = managed.post.devices.find((device) => device.kind === "videoinput");
     const speaker = managed.post.devices.find((device) => device.kind === "audiooutput");
+    if (!mic || !cam || !speaker) throw new Error("Managed post-permission roster is missing mic, camera or speaker");
     expect(mic.groupId).toBe(speaker.groupId);
     expect(cam.groupId).not.toBe(mic.groupId);
     const restart = corpus.evidence.crossOrigin.sameOriginRestart.post.devices;
@@ -499,7 +605,7 @@ describe("Firefox 154 source and build scripts", () => {
     expect(corpus.evidence.noSinkid.stock.post.devices.some((device) => device.kind === "audiooutput")).toBe(false);
     // RFP windows resolve the stock RFP roster: kind+label shape is identical
     // to stock and persona labels never leak.
-    const rfpShape = (devices) => devices.map((device) => ({ kind: device.kind, label: device.label }));
+    const rfpShape = (devices: readonly MediaDevice[]) => devices.map((device) => ({ kind: device.kind, label: device.label }));
     expect(rfpShape(corpus.evidence.rfp.managed.pre.devices)).toEqual(rfpShape(corpus.evidence.rfp.stock.pre.devices));
     expect(rfpShape(corpus.evidence.rfp.managed.post.devices)).toEqual(rfpShape(corpus.evidence.rfp.stock.post.devices));
     for (const device of corpus.evidence.rfp.managed.post.devices) {

@@ -201,6 +201,19 @@ describe("firefox-agent-tools over the BiDi wire protocol", () => {
 });
 
 describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)", () => {
+  let uploadDir: string | undefined;
+
+  beforeAll(() => {
+    uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "j99-firefox-upload-"));
+  });
+
+  afterAll(() => {
+    if (!uploadDir) return;
+    const entry = fs.lstatSync(uploadDir);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("Refusing to clean a replaced Firefox upload fixture directory");
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+  });
+
   it("routes browser_navigate / evaluate / screenshot / get_cookies to BiDi for a firefox port", async () => {
     const ctx = {
       engineResolver: () => "firefox" as const,
@@ -218,7 +231,7 @@ describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)",
 
   it("routes interactions: click / type / press_key / select / scroll / upload", async () => {
     const ctx = { engineResolver: () => "firefox" as const, sessionResolver: () => conn };
-    const uploadPath = path.join(os.tmpdir(), `j99-firefox-upload-${process.pid}.txt`);
+    const uploadPath = path.join(uploadDir!, "upload.txt");
     fs.writeFileSync(uploadPath, "agent upload fixture");
     const click = await executeToolCall("browser_click", { port, selector: "#submit" }, undefined, ctx);
     expect(click.success).toBe(true);
@@ -228,7 +241,6 @@ describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)",
     await executeToolCall("browser_scroll", { port, direction: "down" }, undefined, ctx);
     await executeToolCall("browser_hover", { port, selector: "#a" }, undefined, ctx);
     await executeToolCall("browser_upload_file", { port, selector: "input[type=file]", filePath: uploadPath }, undefined, ctx);
-    fs.unlinkSync(uploadPath);
     expect(lastCall("input.performActions")).not.toBeNull();
   });
 

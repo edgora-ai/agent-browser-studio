@@ -77,10 +77,16 @@ const terminal = (status: "done" | "error" = "done") => ({
   finishedAt: Date.now(),
 });
 
+function requireRun(runId: string) {
+  const run = agentRunRecorder.getRun(runId);
+  if (run === null) throw new Error(`Expected persisted run ${runId}`);
+  return run;
+}
+
 function commit(runId: string, dataset?: DatasetSnapshot) {
   const res = smallStore().commitRunResult({
     runId,
-    runStartedAt: agentRunRecorder.getRun(runId)!.startedAt,
+    runStartedAt: requireRun(runId).startedAt,
     templateId: "fixture-template",
     templateVersion: 1,
     verification: PASSED,
@@ -117,6 +123,7 @@ describe("truncation-aware verdicts (R0925-03)", () => {
     const res = commit(run.id, fatDataset(50));
     expect(res.artifacts[0].truncated).toBe(true);
     expect(res.verification.status).toBe("manual_review");
+    if (res.verification.status !== "manual_review") throw new Error("Expected manual-review commit");
     if (res.verification.status === "manual_review") {
       expect(res.verification.reasonCode).toBe("artifact_limit");
       expect(res.verification.verifierId).toBe("fixture-verifier");
@@ -141,9 +148,10 @@ describe("truncation-aware verdicts (R0925-03)", () => {
     reloadConfig();
     const report = reconcileRunResults();
     expect(report.terminalReplayed).toBe(0);
-    const after = agentRunRecorder.getRun(run.id)!;
+    const after = requireRun(run.id);
     expect(after.status).toBe("error");
     expect(after.endReason).toBe("interrupted");
+    if (!after.verification) throw new Error("Expected persisted run verification");
     expect(after.verification.status).toBe("manual_review");
     // And a second reconcile pass stays converged.
     expect(reconcileRunResults().terminalReplayed).toBe(0);
@@ -154,11 +162,12 @@ describe("truncation-aware verdicts (R0925-03)", () => {
     const res = commit(run.id, fatDataset(2));
     agentRunRecorder.releaseRun(run.id); // simulated process death pre-finishRun
     reloadConfig();
-    expect(agentRunRecorder.getRun(run.id)!.endReason).toBe("interrupted");
+    expect(requireRun(run.id).endReason).toBe("interrupted");
     const report = reconcileRunResults();
     expect(report.terminalReplayed).toBe(1);
-    const after = agentRunRecorder.getRun(run.id)!;
+    const after = requireRun(run.id);
     expect(after.status).toBe("done");
+    if (!after.verification) throw new Error("Expected persisted run verification");
     expect(after.verification.status).toBe("passed");
     // Replay is convergent: the next boot does not replay again.
     expect(reconcileRunResults().terminalReplayed).toBe(0);
@@ -180,9 +189,11 @@ describe("truncation-aware verdicts (R0925-03)", () => {
     reloadConfig();
     const report = reconcileRunResults();
     expect(report.terminalReplayed).toBe(1);
-    const after = agentRunRecorder.getRun(run.id)!;
+    const after = requireRun(run.id);
     expect(after.status).toBe("done");
+    if (!after.verification) throw new Error("Expected persisted run verification");
     expect(after.verification.status).toBe("manual_review");
+    if (after.verification.status !== "manual_review") throw new Error("Expected manual-review verification");
     if (after.verification.status === "manual_review") {
       expect(after.verification.reasonCode).toBe("artifact_limit");
     }

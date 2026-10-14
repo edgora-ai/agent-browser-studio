@@ -23,7 +23,13 @@ export interface RedactedLlmConfig extends Omit<{
   hasApiKey?: boolean;
 }
 
+export interface AccountReference {
+  index: number;
+  revision: string;
+}
+
 export interface RedactedPlatformAccount {
+  ref: AccountReference;
   platformUrl: string;
   platformUserName: string;
   profileIds?: string[];
@@ -101,6 +107,9 @@ export interface EnvRiskDiagnosticsEntry {
 }
 
 export interface BrowserProfileInfo {
+  /** Runtime discovery is independent of metadata; null means not yet known. */
+  installed?: boolean | null;
+  runtimePending?: boolean;
   dirId: string;
   name: string;
   version: string;
@@ -317,12 +326,13 @@ export interface AgentConversationMessage {
 export interface AgentConversation {
   id: string;
   title: string;
+  titleKind?: "default" | "literal" | null;
   createdAt: number;
   updatedAt: number;
   messages: AgentConversationMessage[];
 }
 
-export type AgentConversationSummary = Pick<AgentConversation, "id" | "title" | "createdAt" | "updatedAt"> & {
+export type AgentConversationSummary = Pick<AgentConversation, "id" | "title" | "titleKind" | "createdAt" | "updatedAt"> & {
   messageCount: number;
 };
 
@@ -426,6 +436,13 @@ export interface StoredNotification {
 }
 
 export interface ReconcileReport {
+  success: boolean;
+  reason?: string;
+  /** Future timers rearmed by a live refresh, never a replayed execution. */
+  rearmed?: boolean;
+  timersRefreshed?: number;
+  workStarted?: false;
+  offsetChanged?: boolean;
   interruptedJobs: number;
   orphanedQueued: number;
   orphanedRetryWaiting: number;
@@ -446,9 +463,13 @@ export interface AgentBrowserAPI {
     // R9 P3-3: soft-delete channel the UI deletes through (7-day trash).
     trash: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     trashRestore: (dirId: string) => Promise<{ success: boolean; error?: string }>;
-    trashList: () => Promise<{ success: boolean; entries: Array<{ dirId: string; name: string; deletedAt: number; recoverable: boolean }>; error?: string }>;
+    trashList: () => Promise<{ success: boolean; entries: Array<{ dirId: string; name: string; deletedAt: number; recoverable: boolean; incomplete: boolean; recoveryRequired: boolean }>; error?: string }>;
     trashPurge: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     rename: (dirId: string, name: string) => Promise<{ success: boolean; error?: string }>;
+    exportArchive: (dirId: string, destPath?: string) => Promise<{ success: boolean; filePath?: string; entries?: number; bytes?: number; error?: string }>;
+    importArchive: (zipPath?: string) => Promise<{ success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; warnings?: string[]; error?: string }>;
+    exportArchives: (dirIds: string[], destDir?: string) => Promise<{ success: boolean; report?: { exported: Array<{ dirId: string; filePath: string; entries: number; bytes: number }>; skipped: Array<{ dirId: string; reason: string }>; failed: Array<{ dirId: string; error: string }> }; error?: string }>;
+    importArchives: (zipPaths?: string[]) => Promise<{ success: boolean; report?: { imported: Array<{ zipPath: string; dirId: string; name: string; files: number; bytes: number; warnings: string[] }>; failed: Array<{ zipPath: string; error: string }> }; error?: string }>;
     cookies: (dirId: string, filter?: string) => Promise<any[]>;
     setCookie: (dirId: string, cookie: any) => Promise<{ success: boolean; error?: string }>;
     deleteCookie: (dirId: string, domain: string, name: string) => Promise<{ success: boolean; error?: string }>;
@@ -487,6 +508,8 @@ export interface AgentBrowserAPI {
     configure: (config: any) => Promise<any>;
   };
   app: {
+    /** Acknowledges an exit request; actual termination must be observed separately. */
+    quit: () => Promise<{ success: boolean }>;
     paths: () => Promise<any>;
     reloadConfig: () => Promise<any>;
     openDir: (dirPath: string) => Promise<any>;
@@ -588,14 +611,20 @@ export interface AgentBrowserAPI {
       get: (id: string) => Promise<AgentConversation | null>;
       create: (title?: string) => Promise<AgentConversationSummary>;
       delete: (id: string) => Promise<{ success?: boolean } | boolean>;
-      rename: (id: string, title: string) => Promise<{ success?: boolean } | boolean>;
+      rename: (id: string, title: string) => Promise<AgentConversation | null>;
     };
     accounts: {
       list: () => Promise<RedactedPlatformAccount[]>;
-      add: (account: { platformUrl: string; platformUserName: string; platformPassword: string; profileIds?: string[]; tags?: string[] }) => Promise<any>;
-      update: (index: number, account: Partial<{ platformUrl: string; platformUserName: string; platformPassword: string; profileIds: string[]; tags: string[] }>) => Promise<any>;
-      delete: (index: number) => Promise<boolean>;
+      get: (index: number, ref: AccountReference) => Promise<RedactedPlatformAccount>;
+      add: (account: { platformUrl: string; platformUserName: string; platformPassword: string; profileIds?: string[]; tags?: string[] }) => Promise<RedactedPlatformAccount>;
+      update: (index: number, account: Partial<{ platformUrl: string; platformUserName: string; platformPassword: string; profileIds: string[]; tags: string[] }>, ref: AccountReference) => Promise<RedactedPlatformAccount>;
+      delete: (index: number, ref: AccountReference) => Promise<boolean>;
       forProfile: (dirId: string) => Promise<RedactedPlatformAccount[]>;
+      bind: (index: number, profileIds: string[], ref: AccountReference) => Promise<RedactedPlatformAccount>;
+      copyUsername: (index: number, ref: AccountReference) => Promise<{ ok: boolean; error?: string }>;
+      copyPassword: (index: number, ref: AccountReference) => Promise<{ ok: boolean; error?: string }>;
+      bulkAdd: (text: string) => Promise<{ added: number; skipped: number }>;
+      bulkCreate: (text: string, options?: { platform?: string; startUrl?: string }) => Promise<{ added: number; created: number; skipped: number; errors: string[] }>;
     };
   };
   automation: {
@@ -624,8 +653,8 @@ export interface AgentBrowserAPI {
   agentRuns: {
     list: () => Promise<AgentRun[]>;
     get: (runId: string) => Promise<AgentRun | null>;
-    delete: (runId: string) => Promise<{ success: boolean; error?: string }>;
-    clear: () => Promise<{ success: boolean; deleted?: number; error?: string }>;
+    delete: (runId: string) => Promise<{ success: boolean; reasonCode?: "active" | "missing"; error?: string }>;
+    clear: () => Promise<{ success: boolean; deleted: number; skipped: number; error?: string }>;
     resultsPreview: (params: { runId: string; artifactId?: string; offset?: number; limit?: number }) =>
       Promise<({ ok: true } & AgentRunResultsPreview) | { ok: false; error: string; reasonCode?: string }>;
     exportPlan: (params: { runId: string; artifactId?: string; kind: AgentRunExportKind }) =>

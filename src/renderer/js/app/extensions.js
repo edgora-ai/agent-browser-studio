@@ -54,21 +54,33 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  var extProfileSeq = 0;
+  var extListSeq = 0;
+  var extRepositorySeq = 0;
+  function clearExtensionRows() {
+    var list = document.getElementById('ext-list');
+    list.onclick = null;
+    list.onchange = null;
+    list.innerHTML = '';
+  }
+  function currentExtensionView(seq, dirId) {
+    return seq === extListSeq && dirId === agentBrowser._extDirId && document.getElementById('dlg-extensions').open;
+  }
   Object.assign(agentBrowser, {
   _extDirId: null,
 
   showExtensions: function (dirId) {
         agentBrowser._extDirId = dirId;
+        var seq = ++extProfileSeq;
+        var title = document.getElementById('ext-dlg-title');
+        if (title) title.textContent = t('ext.dlg.title', 'Extensions');
         api.profile.get(dirId).then(function(info) {
-          // R166: writes the [data-i18n] span, not the host — and goes through
-          // t() so the zh UI is not titled "Extensions".
-          var tEl = document.getElementById('ext-dlg-title');
-          var sp = tEl && tEl.querySelector('[data-i18n]');
-          if (sp) sp.textContent = t('ext.dlg.title', 'Extensions') + ' — ' + (info.name || dirId.slice(0,8));
+          if (seq !== extProfileSeq || !document.getElementById('dlg-extensions').open) return;
+          // The labelled span is the title itself, not a descendant.
+          if (title) title.textContent = t('ext.dlg.title', 'Extensions') + ' — ' + ((info && info.name) || dirId.slice(0,8));
         }).catch(function(e){
-          var tEl = document.getElementById('ext-dlg-title');
-          var sp = tEl && tEl.querySelector('[data-i18n]');
-          if (sp) sp.textContent = t('ext.dlg.title', 'Extensions');
+          if (seq !== extProfileSeq || !document.getElementById('dlg-extensions').open) return;
+          if (title) title.textContent = t('ext.dlg.title', 'Extensions');
           toast((e && e.message) || String(e), 'error');
         });
         document.getElementById('ext-dlg-status').textContent = '';
@@ -79,7 +91,11 @@
   _extRefreshList: function() {
         var dirId = agentBrowser._extDirId;
         if (!dirId) return;
+        var seq = ++extListSeq;
+        // Drop old rows and their delegated closures before the next read.
+        clearExtensionRows();
         api.settings.extensions(dirId).then(function(exts) {
+          if (!currentExtensionView(seq, dirId)) return;
           var el = document.getElementById('ext-list');
           if (!exts || exts.length === 0) {
             el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:24px;">' + esc(t('ext.dlg.empty', 'No repository extensions available.')) + '<br><span style="font-size:11px;">' + esc(t('ext.dlg.empty-cta', 'Open the private repository from the Extensions tab to add Chrome extensions.')) + '</span></div>';
@@ -110,22 +126,24 @@
           }
           el.innerHTML = html;
           el.onchange = function (event) {
+            if (!currentExtensionView(seq, dirId)) return;
             var target = event.target;
             if (!target || target.dataset.extAction !== "toggle") return;
             var row = target.closest(".extension-row");
             var ext = row ? exts[Number(row.dataset.extIndex)] : null;
-            if (ext) agentBrowser.extToggle(ext.id, target.checked);
+            if (ext && el.contains(target)) agentBrowser.extToggle(ext.id, target.checked, dirId);
           };
           el.onclick = function (event) {
+            if (!currentExtensionView(seq, dirId)) return;
             var target = event.target.closest("[data-ext-action]");
             if (!target || target.dataset.extAction === "toggle" || !el.contains(target)) return;
             var row = target.closest(".extension-row");
             var ext = row ? exts[Number(row.dataset.extIndex)] : null;
             if (!ext) return;
             if (target.dataset.extAction === "update") agentBrowser.extCheckUpdate(ext.id);
-            else if (target.dataset.extAction === "disable") agentBrowser.extToggle(ext.id, false);
+            else if (target.dataset.extAction === "disable") agentBrowser.extToggle(ext.id, false, dirId);
           };
-        }).catch(function(e) { toast(t('toast.browser.action-failed', 'Failed: ') + e.message, 'error'); });
+        }).catch(function(e) { if (currentExtensionView(seq, dirId)) toast(t('toast.browser.action-failed', 'Failed: ') + e.message, 'error'); });
       },
 
   /* R143: three commands removed here — extShowInstall, extInstallTab and
@@ -237,15 +255,24 @@
 
   // R15 UX P1-5: revert the checkbox on failure instead of leaving it
   // showing the opposite of the actual state.
-  extToggle: function(extId, enabled) {
-        api.settings.toggleExtension(agentBrowser._extDirId, extId, enabled).then(function(r) {
+  extToggle: function(extId, enabled, dirId) {
+        dirId = dirId || agentBrowser._extDirId;
+        if (!dirId) return;
+        var session = extProfileSeq;
+        function stillOpen() {
+          return session === extProfileSeq && dirId === agentBrowser._extDirId && document.getElementById('dlg-extensions').open;
+        }
+        api.settings.toggleExtension(dirId, extId, enabled).then(function(r) {
+          if (!stillOpen()) return;
           if (r && r.success) {
             toast(enabled ? t('toast.ext.enabled-profile', 'Enabled for profile') : t('toast.ext.disabled-profile', 'Disabled for profile'), 'success');
+            agentBrowser._extRefreshList();
           } else {
             toast((r && r.error) || t('toast.ext.toggle-failed', 'Toggle failed'), 'error');
             agentBrowser._extRefreshList();
           }
         }).catch(function(e) {
+          if (!stillOpen()) return;
           toast(t('toast.ext.toggle-failed', 'Toggle failed') + ': ' + e.message, 'error');
           agentBrowser._extRefreshList();
         });
@@ -321,10 +348,19 @@
     var container = document.getElementById("extension-repo-list");
     var statusEl = document.getElementById("extension-repo-status");
     if (!container) return;
+    var seq = ++extRepositorySeq;
+    container.onclick = null;
+    if (statusEl) statusEl.textContent = '';
     var searchEl = document.getElementById("extension-repo-search");
     var filter = searchEl ? searchEl.value.trim() : "";
+    var tab = state.currentTab;
+    function currentRepositoryView() {
+      return seq === extRepositorySeq && state.currentTab === tab &&
+        (searchEl ? searchEl.value.trim() : "") === filter;
+    }
     container.innerHTML = '<div class="loading">' + esc(t('ext.loading', 'Loading extension repository...')) + '</div>';
     lcall("settings.extensionRepository", function () { return api.settings.extensionRepository(filter); }).then(function (entries) {
+      if (!currentRepositoryView()) return;
       if (statusEl) statusEl.textContent = (entries || []).length + t('ext.col.count', ' extension(s) in private repository');
       if (!entries || entries.length === 0) {
         // R145: used to point only at the Web Store, which hid the two local
@@ -354,6 +390,7 @@
         '</div>';
       }).join("");
       container.onclick = function (event) {
+        if (!currentRepositoryView()) return;
         var target = event.target.closest("[data-action]");
         if (!target || !container.contains(target)) return;
         var card = target.closest(".profile-card");
@@ -367,6 +404,7 @@
         } else if (action === "repo-delete") agentBrowser.extDelete(extId);
       };
     }).catch(function (e) {
+      if (!currentRepositoryView()) return;
       if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(container,{error:e.message||String(e), retry:{cmd:'loadExtensionsTab'}}); } else container.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   }

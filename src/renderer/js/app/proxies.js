@@ -454,8 +454,17 @@
     });
   }
 
+  function closeProxyCardMenus(container) {
+    if (typeof agentBrowser.closeCardMenus === "function") {
+      agentBrowser.closeCardMenus(container);
+      return;
+    }
+    // Standalone renderer harnesses can omit the delegation module.
+    Array.prototype.forEach.call(container.querySelectorAll(".card-menu[open]"), function (menu) { menu.removeAttribute("open"); });
+  }
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
+    closeProxyCardMenus(container);
     // UI R2: skeleton instead of bare text so the list doesn't flash empty.
     // R170: the aria-label on the loading skeleton was a bare EN string.
     agentBrowser.renderViewState(container, { skeleton: 3, loading: t("proxy.loading", "Loading proxies...") });
@@ -468,6 +477,7 @@
     }).then(function (proxies) {
       var health = window.__proxyHealth || { entries: [], summary: null };
       if (!proxies || proxies.length === 0) {
+        closeProxyCardMenus(container);
         agentBrowser.renderViewState(container, { empty: t("proxy.empty", "No proxies configured."), cta: { label: t("proxy.add", "Add Proxy"), cmd: "newProxy" } });
         return;
       }
@@ -482,6 +492,7 @@
          identical trash-adjacent symbols). The utilities now live in the same
          ⋯ overflow menu the profile card v2 established — one action row,
          labels where they matter, every utility named in the menu. */
+      closeProxyCardMenus(container);
       container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
         var cfg = p.config || {};
         var label = cfg.type + '://' + cfg.host + ':' + cfg.port;
@@ -508,7 +519,7 @@
             '<button class="btn btn-secondary btn-sm" data-action="edit-proxy">' + icon("edit", 14) + ' ' + esc(t('proxy.edit', 'Edit')) + '</button> ' +
             '<details class="card-menu">' +
               '<summary aria-label="' + escAttr(t('profile.action.more', 'More actions')) + '" title="' + escAttr(t('profile.action.more', 'More actions')) + '">⋯</summary>' +
-              '<div class="card-menu-list">' +
+              '<div class="card-menu-list" popover="manual">' +
                 '<button type="button" data-action="clear-health">' + icon("beaker", 14) + esc(t('proxy.action.clear-health', 'Clear health')) + '</button>' +
                 '<button type="button" data-action="rotate-proxy">' + icon("refresh", 14) + esc(t('proxy.action.rotate', 'Rotate')) + '</button>' +
                 '<button type="button" data-action="toggle-history">' + icon("chart", 14) + esc(t('proxy.action.history', 'History')) + '</button>' +
@@ -523,6 +534,7 @@
       attachProxyHandlers(container);
       loadRotationInfo(container);
     }).catch(function (e) {
+      closeProxyCardMenus(container);
       agentBrowser.renderViewState(container, { error: e.message || String(e), retry: { cmd: "loadProxies" } });
     });
   }
@@ -537,8 +549,7 @@
       // S2-17: any real action closes the overflow menu it came from (the
       // summary toggle itself carries no data-action, so it never reaches
       // this line and keeps its native open/close behaviour).
-      var menus = container.querySelectorAll(".card-menu[open]");
-      Array.prototype.forEach.call(menus, function (m) { m.removeAttribute("open"); });
+      closeProxyCardMenus(container);
       if (action === "detect-proxy") detectProxyIntoCard(name, card);
       else if (action === "default-proxy") agentBrowser.setDefault(name);
       else if (action === "clear-health") agentBrowser.clearHealth(name);

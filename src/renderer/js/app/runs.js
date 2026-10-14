@@ -176,6 +176,7 @@
     verification: "all",     // all | <five states>
   };
   var lastList = [];
+  var loadRunsSeq = 0;
 
   function readFilters() {
     var get = function(id) { var el = document.getElementById(id); return el ? el.value : ""; };
@@ -247,9 +248,12 @@
   }
 
   agentBrowser.loadRunsTab = function() {
+    var seq = ++loadRunsSeq;
     readFilters();
     lcall("agentRuns.list", function () { return api.agentRuns.list(); }).then(function(list) {
+      if (seq !== loadRunsSeq) return;
       var el = document.getElementById("agent-run-list");
+      bindRunListActions(el);
       lastList = list || [];
       syncProfileOptions(lastList);
       if (!lastList || lastList.length === 0) {
@@ -269,23 +273,28 @@
         return item.group ? renderGroupCard(item.group) : renderRunCard(item.single);
       }).join("");
       ensureLiveTicker();
-      el.onclick = function(event) {
-        var btn = event.target.closest("[data-run-action], [data-group-action]");
-        if (!btn || !el.contains(btn)) return;
-        if (btn.dataset.groupAction === "retry-failed") {
-          var gcard = btn.closest("[data-group-id]");
-          if (gcard) agentBrowser.runsRetryJob(gcard.dataset.groupId);
-          return;
-        }
-        var card = btn.closest("[data-run-id]");
-        if (!card) return;
-        var runId = card.dataset.runId;
-        if (btn.dataset.runAction === "open") agentBrowser.runsOpen(runId);
-        else if (btn.dataset.runAction === "delete") agentBrowser.runsDelete(runId);
-        else if (btn.dataset.runAction === "retry") agentBrowser.runsRetry(runId);
-      };
-    }).catch(function(e) { var _el=document.getElementById("agent-run-list"); if(window.agentBrowser&&window.agentBrowser.renderViewState&&_el) window.agentBrowser.renderViewState(_el,{error:e.message||String(e), retry:{cmd:"loadRunsTab"}}); toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
+    }).catch(function(e) { if (seq !== loadRunsSeq) return; var _el=document.getElementById("agent-run-list"); if(window.agentBrowser&&window.agentBrowser.renderViewState&&_el) window.agentBrowser.renderViewState(_el,{error:e.message||String(e), retry:{cmd:"loadRunsTab"}}); toast(t("runs.toast.load-failed", "加载失败: ") + (e.message || e), "error"); });
   };
+
+  // Install on the stable list even when the first render is empty/filtered.
+  function bindRunListActions(el) {
+    if (!el) return;
+    el.onclick = function(event) {
+      var btn = event.target.closest("[data-run-action], [data-group-action]");
+      if (!btn || !el.contains(btn)) return;
+      if (btn.dataset.groupAction === "retry-failed") {
+        var gcard = btn.closest("[data-group-id]");
+        if (gcard) agentBrowser.runsRetryJob(gcard.dataset.groupId);
+        return;
+      }
+      var card = btn.closest("[data-run-id]");
+      if (!card) return;
+      var runId = card.dataset.runId;
+      if (btn.dataset.runAction === "open") agentBrowser.runsOpen(runId);
+      else if (btn.dataset.runAction === "delete") agentBrowser.runsDelete(runId);
+      else if (btn.dataset.runAction === "retry") agentBrowser.runsRetry(runId);
+    };
+  }
 
   // Batch runs from one automation job share source.jobId (one job = one batch
   // execution). Group those into a single expandable card; everything else
@@ -332,10 +341,23 @@
       : "";
   }
 
+  function deleteButton(run) {
+    return run.status === "done" || run.status === "error"
+      ? '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>'
+      : "";
+  }
+
   function groupRetryButton(runs) {
-    var n = runs.filter(canRetryRun).length;
-    return n > 0
-      ? '<button class="btn btn-primary btn-sm" data-group-action="retry-failed">' + t("runs.btn.retry-all", "重试全部失败") + " (" + n + ")</button>"
+    // retryJobRuns selects the full job's eligible execution errors, not the
+    // displayed rows. Even lastList is capped, so it cannot supply an honest
+    // target count. Known hidden errors keep the action available; the backend
+    // remains authoritative about targets and reports the actual attempt count.
+    var jobId = runs[0] && runs[0].source && runs[0].source.jobId;
+    var hasError = lastList.some(function(run) {
+      return run.source && run.source.jobId === jobId && run.status === "error" && canRetryRun(run);
+    });
+    return hasError
+      ? '<button class="btn btn-primary btn-sm" data-group-action="retry-failed">' + esc(t("runs.btn.retry-all", "重试全部失败")) + "</button>"
       : "";
   }
 
@@ -354,7 +376,7 @@
       '<div class="card-actions">' +
         '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
         retryButton(run) +
-        '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>' +
+        deleteButton(run) +
       "</div>" +
     "</div>";
   }
@@ -396,7 +418,7 @@
           '<span style="margin-left:auto;display:inline-flex;gap:6px;">' +
             '<button class="btn btn-secondary btn-sm" data-run-action="open">' + t("runs.btn.view", "查看") + '</button>' +
             retryButton(run) +
-            '<button class="btn btn-danger btn-sm" data-run-action="delete">' + t("runs.btn.delete", "删除") + '</button>' +
+            deleteButton(run) +
           "</span>" +
         "</div>" + err +
       "</div>";
@@ -432,6 +454,11 @@
     var dlg = document.getElementById("dlg-agent-run");
     if (!dlg) return;
     detailActionsBound = true;
+    dlg.addEventListener("close", function() {
+      ++openRunSeq;
+      ++previewSeq;
+      lastDetailRun = null;
+    });
     dlg.addEventListener("click", function(event) {
       var detailBtn = event.target.closest("[data-detail-action]");
       if (detailBtn && dlg.contains(detailBtn)) {
@@ -504,6 +531,8 @@
   agentBrowser.runsOpen = function(runId) {
     if (!runId) return Promise.resolve(null);
     var seq = ++openRunSeq;
+    ++previewSeq;
+    lastDetailRun = null;
     return lcall("agentRuns.get:" + runId, function() { return api.agentRuns.get(runId); }).then(function(run) {
       if (seq !== openRunSeq) return null;
       if (!run) {
@@ -533,9 +562,13 @@
   // R15 UX P1-1/P1-13: single delete gets a confirm like clear does, and
   // both paths check the result + catch transport errors.
   agentBrowser.runsDelete = function(runId) {
+    if (lastList.some(function(run) { return run.id === runId && run.status === "running"; })) {
+      toast(t("runs.toast.active-delete", "Running records cannot be deleted"), "info");
+      return;
+    }
     agentBrowser.confirm(t("runs.confirm.delete-one", "删除这条运行记录?"), function() {
       api.agentRuns.delete(runId).then(function(r) {
-        if (r && r.success === false) { toast(r.error || t("toast.failed", "Failed"), "error"); return; }
+        if (!r || !r.success) { toast((r && r.error) || t("toast.failed", "Failed"), "error"); return; }
         toast(t("runs.toast.deleted", "已删除"), "success");
         agentBrowser.loadRunsTab();
       }).catch(function(e) { toast(e.message || String(e), "error"); });
@@ -543,10 +576,14 @@
   };
 
   agentBrowser.runsClear = function() {
-    agentBrowser.confirm(t("runs.confirm.clear-all", "清空所有运行记录?"), function() {
+    agentBrowser.confirm(t("runs.confirm.clear-all", "Clear completed run records? Running records will be kept."), function() {
       api.agentRuns.clear().then(function(r) {
-        if (r && r.success === false) { toast(r.error || t("toast.failed", "Failed"), "error"); return; }
-        toast(t("runs.toast.cleared-n", "Cleared {n} record(s)").replace("{n}", String((r && r.deleted) || 0)), "success");
+        if (!r || r.success === false || typeof r.deleted !== "number" || typeof r.skipped !== "number") {
+          toast((r && r.error) || t("toast.failed", "Failed"), "error"); return;
+        }
+        var msg = t("runs.toast.cleared-n", "Cleared {n} record(s)").replace("{n}", String(r.deleted));
+        if (r.skipped) msg += "; " + t("runs.toast.clear-skipped", "kept {n} running").replace("{n}", String(r.skipped));
+        toast(msg, r.deleted ? "success" : "info");
         agentBrowser.loadRunsTab();
       }).catch(function(e) { toast(e.message || String(e), "error"); });
     }, { ackLabel: t("confirm.ack.permanent","我了解此操作会永久删除数据且不可撤销。") });
@@ -663,6 +700,7 @@
     var previewEl = document.getElementById("agent-run-preview");
     if (!el) return;
     var refs = Array.isArray(run.artifacts) ? run.artifacts : [];
+    ++previewSeq;
     previewState = { runId: run.id, artifactId: "", offset: 0, total: 0, columns: [] };
     if (previewEl) previewEl.innerHTML = "";
 
@@ -883,17 +921,22 @@
       if (agentBrowser.state.currentTab === "runs") agentBrowser.loadRunsTab();
     };
     api.on("agent:run-start", refreshIfActive);
-    api.on("agent:run-step", function() {
-      // If a detail dialog is open for this run, refresh it.
-      var dlg = document.getElementById("dlg-agent-run");
-      if (dlg && dlg.open) {
-        var title = document.getElementById("agent-run-title").textContent;
-        // Refresh list + re-render detail if still open (best-effort match by title is fragile;
-        // simplest: refresh list; user can reopen).
-      }
+    var refreshChangedRun = function(payload) {
       refreshIfActive();
-    });
-    api.on("agent:run-finish", refreshIfActive);
+      var runId = payload && (payload.runId || (payload.run && payload.run.id));
+      var dlg = document.getElementById("dlg-agent-run");
+      if (!runId || !dlg || !dlg.open || !lastDetailRun || lastDetailRun.id !== runId) return;
+      var seq = ++openRunSeq;
+      lcall("agentRuns.get:" + runId, function() { return api.agentRuns.get(runId); }).then(function(run) {
+        if (seq !== openRunSeq || !dlg.open) return;
+        if (run) renderDetail(run);
+      }).catch(function(error) {
+        if (seq !== openRunSeq || !dlg.open) return;
+        toast(t("runs.toast.detail-load-failed", "Could not load run details: ") + ((error && error.message) || error), "error");
+      });
+    };
+    api.on("agent:run-step", refreshChangedRun);
+    api.on("agent:run-finish", refreshChangedRun);
   }
 
   function bindAll() {

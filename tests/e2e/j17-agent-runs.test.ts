@@ -144,11 +144,16 @@ describe("J17 — Agent Run trace (http + vars + files)", () => {
       return card ? card.getAttribute("data-run-id") : null;
     });
     expect(firstRunId).toBeTruthy();
+    if (!firstRunId) throw new Error("Expected a run card with a non-empty data-run-id");
     await h.page.evaluate((id: string) => (window as any).agentBrowser.runsOpen(id), firstRunId);
     await h.page.waitForTimeout(500);
     const stepCount = await h.page.evaluate(() => document.querySelectorAll("#agent-run-steps .run-step").length);
     expect(stepCount).toBeGreaterThanOrEqual(4);
-    const hasVar = await h.page.evaluate(() => document.getElementById("agent-run-vars").textContent);
+    const hasVar = await h.page.evaluate(() => {
+      const variables = document.getElementById("agent-run-vars");
+      if (!variables) throw new Error("Expected #agent-run-vars to exist");
+      return variables.textContent;
+    });
     expect(hasVar).toContain("order_id");
   });
 

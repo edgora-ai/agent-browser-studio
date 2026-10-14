@@ -490,67 +490,200 @@ for (const dir of JS_DIRS) {
   }
 }
 
-// ── 3. Translation table: zh/en key parity ─────────────────────────────────
+// ── 3. Translation table: full merged zh/en parity ─────────────────────────
+// A locale-header regex missed quoted headers entirely; reading only the first
+// literal also misses extraDict/auditFixDict. Execute the whole renderer runtime
+// with inert DOM/storage fixtures, then compare its own keys (never t fallback).
+// AST last-merge winners independently catch late value shadows/runtime drift;
+// this is a structural check, not a linguistic audit of all legacy translations.
 let keyReport = null;
-if (fs.existsSync(I18N)) {
+try {
   const src = fs.readFileSync(I18N, "utf-8");
-  const locales = {};
-  const localeRe = /(zh[-_]?CN|zh|en[-_]?US|en)\s*:\s*\{/gi;
-  let m;
-  while ((m = localeRe.exec(src))) {
-    const name = m[1].toLowerCase().startsWith("zh") ? "zh" : "en";
-    // brace-match the object literal
-    let depth = 0;
-    let i = m.index + m[0].length - 1;
-    const start = i;
-    for (; i < src.length; i++) {
-      if (src[i] === "{") depth++;
-      else if (src[i] === "}") {
-        depth--;
-        if (depth === 0) break;
+  const { default: ts } = await import("typescript");
+  const vm = await import("node:vm");
+  const file = ts.createSourceFile(I18N, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const requireShape = (condition, message) => { if (!condition) throw new Error(message); };
+  requireShape(file.parseDiagnostics.length === 0, "Renderer dictionary has invalid JavaScript");
+  const localeNames = ["en-US", "zh-CN"];
+  const layerNames = ["dict", "extraDict", "auditFixDict"];
+  const layers = [];
+  const merges = [];
+  const exposes = [];
+  const expected = Object.fromEntries(localeNames.map(locale => [locale, Object.create(null)]));
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && layerNames.includes(node.name.text)) {
+      requireShape(node.initializer && ts.isObjectLiteralExpression(node.initializer), `Non-literal ${node.name.text}`);
+      const locales = [];
+      for (const property of node.initializer.properties) {
+        requireShape(ts.isPropertyAssignment(property) && ts.isStringLiteral(property.name) && ts.isObjectLiteralExpression(property.initializer), `Invalid locale in ${node.name.text}`);
+        const locale = property.name.text;
+        requireShape(localeNames.includes(locale) && !locales.includes(locale), `Unexpected locale ${locale}`);
+        locales.push(locale);
+        for (const entry of property.initializer.properties) {
+          requireShape(ts.isPropertyAssignment(entry) && ts.isStringLiteral(entry.name) && ts.isStringLiteral(entry.initializer), `Non-string entry in ${node.name.text}/${locale}`);
+          expected[locale][entry.name.text] = entry.initializer.text;
+        }
+      }
+      requireShape(localeNames.every(locale => locales.includes(locale)), `Missing locale in ${node.name.text}`);
+      layers.push(node.name.text);
+    }
+    if (ts.isCallExpression(node) && node.expression.getText(file) === "Object.assign") {
+      merges.push(node.getText(file).replace(/\s+/g, ""));
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && node.left.getText(file) === "window.i18n") exposes.push(node.getStart(file));
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  requireShape(JSON.stringify(layers) === JSON.stringify(layerNames), "Renderer dictionary layer shape changed");
+  requireShape(JSON.stringify(merges) === JSON.stringify(layerNames.slice(1).map(name => `Object.assign(dict[locale]||{},${name}[locale])`)), "Renderer dictionary merge order changed");
+  requireShape(exposes.length === 1, "Renderer i18n exposure must be unique");
+  const window = {};
+  const document = { documentElement: {}, querySelectorAll: () => [], addEventListener: () => {}, dispatchEvent: () => true };
+  const context = {
+    window, document, navigator: { language: "en-US" },
+    localStorage: { getItem: () => null, setItem: () => {} },
+    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+  };
+  const at = exposes[0];
+  vm.runInNewContext(src.slice(0, at) + "window.__guardBundles = dict;\n" + src.slice(at), context, { filename: I18N, timeout: 2000 });
+  const bundles = window.__guardBundles;
+  requireShape(bundles && window.i18n, "Renderer dictionary/runtime did not load");
+  for (const locale of localeNames) {
+    requireShape(Object.hasOwn(bundles, locale) && bundles[locale] && typeof bundles[locale] === "object", `Missing own renderer locale ${locale}`);
+    window.i18n.set(locale);
+    requireShape(window.i18n.get() === locale, `Cannot select renderer locale ${locale}`);
+    const actual = bundles[locale];
+    for (const key of new Set([...Object.keys(expected[locale]), ...Object.keys(actual)])) {
+      if (!Object.hasOwn(actual, key) || !Object.hasOwn(expected[locale], key) || actual[key] !== expected[locale][key] || window.i18n.t(key, "__GUARD_FALLBACK__") !== expected[locale][key]) {
+        problems.push({ file: path.relative(ROOT, I18N), line: 1, kind: "i18n-effective-value", text: `${locale}: ${key} disagrees with the literal last-merge winner` });
       }
     }
-    const body = src.slice(start + 1, i);
-    const keys = new Set();
-    const keyRe = /(?:^|[,{\s])["']([A-Za-z0-9_.\-]+)["']\s*:/g;
-    let k;
-    while ((k = keyRe.exec(body))) keys.add(k[1]);
-    locales[name] = locales[name] ? new Set([...locales[name], ...keys]) : keys;
   }
-  if (locales.zh && locales.en) {
-    const missingInZh = [...locales.en].filter((k) => !locales.zh.has(k));
-    const missingInEn = [...locales.zh].filter((k) => !locales.en.has(k));
-    keyReport = { zh: locales.zh.size, en: locales.en.size, missingInZh, missingInEn };
-  }
+  const en = Object.keys(bundles["en-US"]);
+  const zh = Object.keys(bundles["zh-CN"]);
+  keyReport = {
+    zh: zh.length, en: en.length,
+    missingInZh: en.filter(key => !Object.hasOwn(bundles["zh-CN"], key)),
+    missingInEn: zh.filter(key => !Object.hasOwn(bundles["en-US"], key)),
+  };
+} catch (error) {
+  problems.push({ file: path.relative(ROOT, I18N), line: 1, kind: "i18n-parity-evaluation", text: error.message });
 }
 
-// ── 3b. Main-process table: zh/en key parity ───────────────────────────────
-// The main process owns a second, separate dictionary (tray, proxy
-// suggestions, WebRTC summaries, sync warnings). Nothing checked it, so a key
-// added only to one locale would silently fall back to the hardcoded English
-// default in tMain — the same shape of bug as the renderer leak this script
-// already guards, one layer down.
+// ── 3b. Main-process table: bounded own zh/en key parity ───────────────────
+// Never evaluate this service module. A suffix scan of zh also read en and hid
+// missing Chinese keys; locale order/quotes/indentation must not affect ownership.
+// Main has one static top-level table, unlike the renderer's merged runtime.
+// Reject unexpected structure and writes/aliases instead of guessing its keys.
+// Renderer-only fixtures may omit the module; a present module must validate.
 if (fs.existsSync(MAIN_I18N)) {
-  const src = fs.readFileSync(MAIN_I18N, "utf-8");
-  const grab = (from) => {
-    const body = src.slice(from);
-    const keys = new Set();
-    const re = /^\s{4}"([\w.\-]+)"\s*:/gm;
-    let k;
-    while ((k = re.exec(body))) keys.add(k[1]);
-    return keys;
-  };
-  const zhAt = src.indexOf('"zh-CN": {');
-  const enAt = src.indexOf('"en-US": {');
-  if (zhAt >= 0 && enAt >= 0 && enAt > zhAt) {
-    const zh = grab(zhAt);
-    const en = grab(enAt);
+  try {
+    const src = fs.readFileSync(MAIN_I18N, "utf-8");
+    const { default: ts } = await import("typescript");
+    const file = ts.createSourceFile(MAIN_I18N, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const requireShape = (condition, message) => { if (!condition) throw new Error(message); };
+    requireShape(file.parseDiagnostics.length === 0, "Main dictionary has invalid TypeScript");
+    const declarations = [];
+    const references = [];
+    function visit(node) {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "dict") declarations.push(node);
+      if (ts.isIdentifier(node) && node.text === "dict"
+        && !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)
+        && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) references.push(node);
+      ts.forEachChild(node, visit);
+    }
+    visit(file);
+    requireShape(declarations.length === 1, "Main dictionary declaration must be unique");
+    const declaration = declarations[0];
+    requireShape(ts.isVariableDeclarationList(declaration.parent)
+      && (declaration.parent.flags & ts.NodeFlags.Const) !== 0
+      && ts.isVariableStatement(declaration.parent.parent)
+      && declaration.parent.parent.parent === file
+      && declaration.initializer && ts.isObjectLiteralExpression(declaration.initializer),
+    "Main dictionary must be one top-level const object");
+    const locales = new Map();
+    for (const property of declaration.initializer.properties) {
+      requireShape(ts.isPropertyAssignment(property) && ts.isStringLiteral(property.name)
+        && ts.isObjectLiteralExpression(property.initializer), "Main dictionary locale structure changed");
+      const locale = property.name.text;
+      requireShape(["zh-CN", "en-US"].includes(locale) && !locales.has(locale), "Main dictionary locale structure changed");
+      const keys = new Set();
+      for (const entry of property.initializer.properties) {
+        requireShape(ts.isPropertyAssignment(entry) && ts.isStringLiteral(entry.name)
+          && ts.isStringLiteral(entry.initializer), "Main dictionary entries must be literal strings");
+        // __proto__ is a prototype setter in an object literal, not an own key.
+        requireShape(entry.name.text !== "__proto__", "Main dictionary contains a non-own property");
+        // Duplicate literal properties are still one own key, as at runtime.
+        keys.add(entry.name.text);
+      }
+      requireShape(keys.size > 0, "Main dictionary locale must not be empty");
+      locales.set(locale, keys);
+    }
+    requireShape(locales.size === 2 && locales.has("zh-CN") && locales.has("en-US"), "Main dictionary locale structure changed");
+
+    // Bound the supported reader as well as direct dict references: its bundle
+    // alias must not mutate or escape. This is a syntax allowlist for the pure
+    // existing reader, not a general JavaScript side-effect/security analysis.
+    // AST comparison ignores comments, whitespace and string quote style, but
+    // rejects added statements, nested captures, shadowed bindings and writes.
+    const supportedReader = ts.createSourceFile("main-reader.ts", `
+      export function tMain(key: string, fallback?: string): string {
+        const bundle = dict[currentLang] || dict["en-US"];
+        if (bundle && bundle[key] !== undefined) return bundle[key];
+        if (dict["en-US"][key] !== undefined) return dict["en-US"][key];
+        return fallback !== undefined ? fallback : key;
+      }
+    `, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS).statements[0];
+    function readerShape(node) {
+      const children = [];
+      ts.forEachChild(node, child => { children.push(readerShape(child)); });
+      return [node.kind, ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : null,
+        ts.isVariableDeclarationList(node) ? node.flags & ts.NodeFlags.BlockScoped : null, children];
+    }
+    const readers = file.statements.filter(node => ts.isFunctionDeclaration(node) && node.name?.text === "tMain");
+    requireShape(readers.length === 1
+      && JSON.stringify(readerShape(readers[0])) === JSON.stringify(readerShape(supportedReader)),
+    "Main dictionary reader structure changed");
+
+    // An unmodelled use outside this reader can also change ownership after the
+    // initializer; fail closed rather than execute main-process code to find out.
+    const isIdentifier = (node, name) => node && ts.isIdentifier(node) && node.text === name;
+    function isSupportedRead(reference) {
+      let owner = reference.parent;
+      while (owner && !ts.isFunctionDeclaration(owner)) owner = owner.parent;
+      if (!owner || owner.parent !== file || !isIdentifier(owner.name, "tMain")) return false;
+      const access = reference.parent;
+      if (!ts.isElementAccessExpression(access) || access.expression !== reference) return false;
+      const argument = access.argumentExpression;
+      const english = ts.isStringLiteral(argument) && argument.text === "en-US";
+      const parent = access.parent;
+      if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+        const variable = parent.parent;
+        return (english || isIdentifier(argument, "currentLang"))
+          && ts.isVariableDeclaration(variable) && isIdentifier(variable.name, "bundle") && variable.initializer === parent
+          && parent.left.getText(file).replace(/\s/g, "") === "dict[currentLang]"
+          && ts.isElementAccessExpression(parent.right) && isIdentifier(parent.right.expression, "dict")
+          && ts.isStringLiteral(parent.right.argumentExpression) && parent.right.argumentExpression.text === "en-US";
+      }
+      if (!english || !ts.isElementAccessExpression(parent) || parent.expression !== access || !isIdentifier(parent.argumentExpression, "key")) return false;
+      const use = parent.parent;
+      return (ts.isReturnStatement(use) && use.expression === parent)
+        || (ts.isBinaryExpression(use) && use.left === parent
+          && use.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken && isIdentifier(use.right, "undefined"));
+    }
+    requireShape(references.filter(reference => reference !== declaration.name).every(isSupportedRead), "Main dictionary has unsupported writes or aliases");
+    const zh = locales.get("zh-CN");
+    const en = locales.get("en-US");
     mainKeyReport = {
-      zh: zh.size,
-      en: en.size,
-      missingInEn: [...zh].filter((k) => !en.has(k)),
-      missingInZh: [...en].filter((k) => !zh.has(k)),
+      zh: zh.size, en: en.size,
+      missingInEn: [...zh].filter(key => !en.has(key)),
+      missingInZh: [...en].filter(key => !zh.has(key)),
     };
+  } catch (error) {
+    // Do not expose source, translations, parser excerpts or host exception text.
+    const diagnostic = error instanceof Error && /^Main dictionary /.test(error.message)
+      ? error.message : "Main dictionary could not be inspected";
+    problems.push({ file: path.relative(ROOT, MAIN_I18N), line: 1, kind: "main-i18n-parity-structure", text: diagnostic });
   }
 }
 
@@ -585,6 +718,6 @@ const mainKeyMismatch = mainKeyReport && (mainKeyReport.missingInEn.length > 0 |
 if (problems.length || keyMismatch || mainKeyMismatch) {
   const parity = keyMismatch || mainKeyMismatch ? "FAILED" : "ok";
   console.log(`\n${problems.length} string problem(s), key parity ${parity}\n`);
-  process.exit(strict || problems.length || mainKeyMismatch ? 1 : 0);
+  process.exit(strict || problems.length || keyMismatch || mainKeyMismatch ? 1 : 0);
 }
 console.log("\n✓ i18n check passed\n");

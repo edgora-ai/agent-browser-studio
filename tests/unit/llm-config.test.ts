@@ -68,7 +68,9 @@ describe("LLM config service", () => {
     const redacted = redactLlmConfig({ provider: "openai", apiKey: "sk-secret", model: "gpt-5.5" });
     expect(redacted).toEqual({ provider: "openai", model: "gpt-5.5", hasApiKey: true });
     expect((redacted as any).apiKey).toBeUndefined();
-    expect(redactLlmConfig({ provider: "custom", apiKey: "" }).hasApiKey).toBe(false);
+    const emptyKeyRedacted = redactLlmConfig({ provider: "custom", apiKey: "" });
+    if (emptyKeyRedacted === null) throw new Error("Expected redacted config for an empty key");
+    expect(emptyKeyRedacted.hasApiKey).toBe(false);
   });
 
   it("saveLlmConfig persists provider/model/apiUrl and the key", () => {

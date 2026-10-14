@@ -30,13 +30,16 @@
     return (caps || []).map(function(c) { return c.replace(/-/g, " "); }).join(" · ");
   }
 
+  var adapterListSeq = 0;
   agentBrowser.agentLoadAdapters = function() {
     var el = document.getElementById("agent-adapters-list");
     var search = document.getElementById("adapter-hub-search");
     if (!el) return;
     var filter = search ? search.value.trim() : "";
+    var seq = ++adapterListSeq;
     el.innerHTML = '<div class="loading">Loading adapter hub...</div>';
     R.agent.platformAdapters.list(filter).then(function(items) {
+      if (seq !== adapterListSeq) return;
       if (!items || items.length === 0) {
         el.innerHTML = '<div class="empty-state">No matching platform adapters in the hub.</div>';
         return;
@@ -79,6 +82,7 @@
       }
       el.innerHTML = html;
     }).catch(function(e) {
+      if (seq !== adapterListSeq) return;
       el.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   };
@@ -108,8 +112,12 @@
     var card = findAdapterCard(id);
     var holder = card ? card.querySelector('.adapter-full-detail') : null;
     if (!holder) return;
+    var seq = String((Number(holder.dataset.detailSeq) || 0) + 1);
+    holder.dataset.detailSeq = seq;
+    holder.style.display = "block";
     holder.innerHTML = '<div class="loading">Loading full recipe...</div>';
     R.agent.platformAdapters.get(id).then(function(a) {
+      if (holder.dataset.detailSeq !== seq) return;
       if (!a) { holder.innerHTML = '<div class="empty-state">Adapter not found.</div>'; return; }
       /* R72: recipe pre blocks converge to .code-block (were 10px inline). */
       var html = '<div class="form-row"><label>loginCheck (browser_evaluate)</label><pre class="code-block">' + esc(a.loginCheck) + '</pre></div>';
@@ -117,6 +125,7 @@
       holder.innerHTML = html;
       holder.style.display = "block";
     }).catch(function(e) {
+      if (holder.dataset.detailSeq !== seq) return;
       holder.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   };

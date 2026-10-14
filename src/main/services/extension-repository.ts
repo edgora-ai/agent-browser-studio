@@ -420,6 +420,20 @@ export const __extensionRepositoryTestHooks = {
   extractZipSafely,
 };
 
+/** An archive may carry an enabled ID while the destination only has a stale
+ * repository record. Use the same launch-path checks as the browser, not just
+ * the presence of an entry in config.json, when reporting missing packages. */
+export function hasInstalledRepositoryExtension(extId: string): boolean {
+  const entry = getRepositoryExtension(extId);
+  if (!entry?.unpackedPath) return false;
+  try {
+    return isValidRepositoryLaunchPath(extId, entry.unpackedPath);
+  } catch (error) {
+    console.warn(`Extension repository package unavailable for ${extId}:`, error);
+    return false;
+  }
+}
+
 export function getEnabledRepositoryExtensionPaths(dirId: string): string[] {
   const cfg = getConfig() as any;
   const profile = cfg.browserProfiles?.[dirId];

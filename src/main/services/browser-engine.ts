@@ -27,17 +27,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { ProxyConfig } from "../types.js";
-import { bundledFirefoxBinaryPath } from "./bundled-native-browsers.js";
+import { bundledFirefoxBinaryPath, bundledFirefoxBinaryPathAsync } from "./bundled-native-browsers.js";
+import { runBrowserCommand } from "./browser-command.js";
 import {
   findManagedFirefoxBinary,
+  findManagedFirefoxBinaryAsync,
   getManagedFirefoxRoot,
 } from "./native-firefox-manager.js";
 import {
   FIREFOX_NATIVE_REQUIRED_SWITCH,
+  FIREFOX_NATIVE_CONFIG_CAPABILITIES,
+  FIREFOX_NATIVE_PARITY_CAPABILITIES,
   firefoxNativeModeRequested,
+  getFirefoxNativeSelectionIdentityAsync,
   readFirefoxNativeCapabilityReport,
-  supportsFirefoxNativeConfig,
-  supportsFirefoxNativeParity,
+  readFirefoxNativeCapabilityReportAsync,
+  type FirefoxNativeCapabilityReport,
 } from "./firefox-native-capabilities.js";
 
 export type BrowserEngine = "chromium" | "firefox";
@@ -106,6 +111,54 @@ export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string 
   return null;
 }
 
+async function firefoxPathExists(candidate: string): Promise<boolean> {
+  try {
+    await fs.promises.access(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Async discovery preserves explicit-override fail-closed precedence. */
+export async function findFirefoxBinaryAsync(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const override = getFirefoxBinaryOverride(env);
+  if (override) return await firefoxPathExists(override) ? override : null;
+  const managed = await findManagedFirefoxBinaryAsync(null, getManagedFirefoxRoot(env));
+  if (managed) return managed.binaryPath;
+  const bundled = await bundledFirefoxBinaryPathAsync();
+  if (bundled) return bundled;
+  for (const candidate of defaultFirefoxBinaryPaths()) {
+    if (await firefoxPathExists(candidate)) return candidate;
+  }
+  return null;
+}
+
+function firefoxVersionShellAttempts(bin: string): readonly boolean[] | null {
+  if (/[&|;`$<>(){}$!\n\r]/.test(bin)) return null;
+  const isShim = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
+  // CMD expands %VAR%, uses ^ escapes, and permits quote-based command injection.
+  // Reject these before either shim attempt; ordinary shim paths remain supported.
+  if (isShim && /[%^"']/.test(bin)) return null;
+  return isShim ? [false, true] : [false];
+}
+
+/** Detect the Firefox product version without blocking the main thread. */
+export async function detectFirefoxVersionAsync(bin: string): Promise<string | null> {
+  const attempts = firefoxVersionShellAttempts(bin);
+  if (!attempts) return null;
+  for (const useShell of attempts) {
+    const result = await runBrowserCommand(bin, ["--version"], { timeout: 5000, shell: useShell, retryTimeout: attempts.length === 1 });
+    if (!result) continue;
+    const raw = String(result.stdout || result.stderr || "").trim();
+    if (!raw) continue;
+    const match = raw.match(/Mozilla Firefox\s*([\d.]+)/i);
+    if (match) return match[1];
+    return raw;
+  }
+  return null;
+}
+
 /** Detect the Firefox product version via `firefox --version`. */
 export function detectFirefoxVersion(bin: string): string | null {
   // Shell-metacharacter guard: the win32 shim path below spawns via a shell,
@@ -113,9 +166,8 @@ export function detectFirefoxVersion(bin: string): string | null {
   // must never execute — reject it before it reaches spawnSync.
   // NOTE: backslash is a normal Windows path separator (C:\...), NOT a shell
   // metacharacter — it must not be in the reject set (broke .cmd shims).
-  if (/[&|;`$<>(){}$!\n\r]/.test(bin)) return null;
-  const isShim = process.platform === "win32" && (bin.endsWith(".js") || bin.endsWith(".cmd") || bin.endsWith(".bat"));
-  const attempts: boolean[] = isShim ? [false, true] : [false];
+  const attempts = firefoxVersionShellAttempts(bin);
+  if (!attempts) return null;
   const run = (useShell: boolean): ReturnType<typeof spawnSync> | null => {
     try {
       return spawnSync(bin, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true, shell: useShell } as any);
@@ -153,6 +205,40 @@ export interface FirefoxStatus {
 
 export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxStatus {
   const bin = findFirefoxBinary(env);
+  const report = bin ? readFirefoxNativeCapabilityReport(bin) : null;
+  return buildFirefoxStatus(bin, bin ? detectFirefoxVersion(bin) : null, report, env);
+}
+
+function firefoxSelectionChangedError(): Error & { code: string; retryable: boolean } {
+  return Object.assign(
+    new Error("Firefox binary or XUL changed while status was being checked; retry discovery."),
+    { code: "FIREFOX_SELECTION_CHANGED", retryable: true },
+  );
+}
+
+export async function getFirefoxStatusAsync(env: NodeJS.ProcessEnv = process.env): Promise<FirefoxStatus> {
+  const bin = await findFirefoxBinaryAsync(env);
+  if (!bin) return buildFirefoxStatus(null, null, null, env);
+  const before = await getFirefoxNativeSelectionIdentityAsync(bin);
+  if (!before) throw firefoxSelectionChangedError();
+  const [report, version] = await Promise.all([
+    readFirefoxNativeCapabilityReportAsync(bin), detectFirefoxVersionAsync(bin),
+  ]);
+  // Each probe validates its own response, but XUL can change after attestation
+  // finishes and before the version probe finishes. Validate the combined result.
+  if (await getFirefoxNativeSelectionIdentityAsync(bin) !== before) {
+    // Changed selection is unknown, not evidence that Firefox is missing.
+    throw firefoxSelectionChangedError();
+  }
+  return buildFirefoxStatus(bin, version, report, env);
+}
+
+function buildFirefoxStatus(
+  bin: string | null,
+  version: string | null,
+  report: FirefoxNativeCapabilityReport | null,
+  env: NodeJS.ProcessEnv,
+): FirefoxStatus {
   if (!bin) {
     return {
       engine: "firefox",
@@ -168,9 +254,9 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
       hint: `Firefox binary not found. Install Firefox or set ${FIREFOX_ENV}.`,
     };
   }
-  const report = readFirefoxNativeCapabilityReport(bin);
-  const nativeConfig = supportsFirefoxNativeConfig(bin);
-  const fingerprintParity = supportsFirefoxNativeParity(bin);
+  const capabilities = new Set(report?.capabilities ?? []);
+  const nativeConfig = FIREFOX_NATIVE_CONFIG_CAPABILITIES.every((capability) => capabilities.has(capability));
+  const fingerprintParity = FIREFOX_NATIVE_PARITY_CAPABILITIES.every((capability) => capabilities.has(capability));
   const nativeRequested = firefoxNativeModeRequested(env);
   const nativeActive = nativeConfig && (fingerprintParity || nativeRequested);
   const nativeCapabilities = report?.capabilities ?? [];
@@ -190,7 +276,7 @@ export function getFirefoxStatus(env: NodeJS.ProcessEnv = process.env): FirefoxS
     engine: "firefox",
     installed: true,
     path: bin,
-    version: detectFirefoxVersion(bin),
+    version,
     fingerprintParity,
     managedInjection: nativeActive ? "native" : "prefs+bidi-preload",
     nativeConfig,

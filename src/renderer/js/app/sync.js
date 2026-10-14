@@ -85,7 +85,7 @@
     } catch (e) { return ''; }
   }
 
-  function diffSectionCard(title, section, sectionName, globalStrategy, conflictSelectable) {
+  function diffSectionCard(title, section, sectionName, conflictSelectable) {
     section = section || { localOnly: [], remoteOnly: [], changed: [] };
     var chips = [];
     var lines = [];
@@ -101,10 +101,10 @@
     if (section.changed.length && conflictSelectable && sectionName) {
       lines.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t('sync.per-item', 'Per-item conflict decisions (they default to the global strategy and apply to Pull only)')) + ':</div>');
       section.changed.forEach(function(c) {
-        var value = globalStrategy === 'remote' || globalStrategy === 'newest' ? globalStrategy : 'local';
-        var opts = ['local', 'remote', 'newest'].map(function(v) {
+        // Inherit is distinct from an explicit choice, even the old default.
+        var opts = '<option value="" selected>' + esc(t('sync.use-global', 'Use global strategy')) + '</option>' + ['local', 'remote', 'newest'].map(function(v) {
           var label = v === 'local' ? t('sync.keep-local', 'Keep local') : (v === 'remote' ? t('sync.take-remote', 'Take remote') : t('sync.take-newest', 'Take newest'));
-          return '<option value="' + v + '"' + (v === value ? ' selected' : '') + '>' + label + '</option>';
+          return '<option value="' + v + '">' + esc(label) + '</option>';
         }).join('');
         lines.push('<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:4px;word-break:break-all;">' +
           '<select class="sync-entry-strategy" data-section="' + escAttr(sectionName) + '" data-id="' + escAttr(c.id) + '" style="flex:0 0 auto;font-size:11px;padding:2px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);">' + opts + '</select>' +
@@ -124,7 +124,7 @@
     '</div>';
   }
 
-  function renderSyncDiff(diff, globalStrategy) {
+  function renderSyncDiff(diff) {
     var messageEl = document.getElementById('sync-diff-message');
     var listEl = document.getElementById('sync-diff');
     if (!messageEl || !listEl) return;
@@ -154,18 +154,19 @@
       '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.remote-cookies', 'Remote cookies')) + ': ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
-    cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', globalStrategy, true));
-    cards.push(diffSectionCard(t('sync.preview.title.proxies','Proxies'), diff.proxies, 'proxies', globalStrategy, true));
-    cards.push(diffSectionCard(t('sync.preview.title.accounts','Accounts'), diff.accounts, 'accounts', globalStrategy, true));
-    cards.push(diffSectionCard(t('sync.preview.title.extensions','Extensions'), diff.extensions, 'extensions', globalStrategy, false));
+    cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', true));
+    cards.push(diffSectionCard(t('sync.preview.title.proxies','Proxies'), diff.proxies, 'proxies', true));
+    cards.push(diffSectionCard(t('sync.preview.title.accounts','Accounts'), diff.accounts, 'accounts', true));
+    cards.push(diffSectionCard(t('sync.preview.title.extensions','Extensions'), diff.extensions, 'extensions', false));
     listEl.innerHTML = cards.join('');
   }
 
+  var syncDiffSeq = 0;
   function fetchSyncDiff() {
-    var strategySel = document.getElementById('sync-merge-strategy');
-    var strategy = strategySel ? strategySel.value : 'local';
+    var seq = ++syncDiffSeq;
     return api.sync.previewDiff().then(function(diff) {
-      renderSyncDiff(diff, strategy);
+      if (seq === syncDiffSeq) renderSyncDiff(diff);
+      // A Push must still check its own preflight, even if Compare supersedes it.
       return diff;
     });
   }
@@ -175,7 +176,9 @@
     var messageEl = document.getElementById('sync-diff-message');
     if (listEl) listEl.innerHTML = '<div class="loading">' + esc(t('common.loading', 'Loading…')) + '</div>';
     if (messageEl) messageEl.textContent = t('common.loading', 'Loading…');
+    var seq = syncDiffSeq + 1;
     return fetchSyncDiff().catch(function(e) {
+      if (seq !== syncDiffSeq) return null;
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(e.message || e) + '</div>';
       if (messageEl) messageEl.textContent = t('sync.compare-failed', 'Comparison failed');
       toast(t('sync.compare-failed-prefix', 'Comparison failed: ') + (e.message || String(e)), 'error');
@@ -186,13 +189,11 @@
 
   agentBrowser.syncPush = function() {
     var reset = setButtonBusy('#tab-sync [data-cmd="syncPush"]', 'Checking...');
-    fetchPreview().catch(function() { /* preview card is best-effort */ }).then(function() {
-      return fetchSyncDiff().catch(function(e) {
-        toast(t('sync.toast.preview-failed','Preview failed: ') + (e.message || String(e)), 'error');
-        return null;
-      });
+    return fetchPreview().catch(function() { /* preview card is best-effort */ }).then(function() {
+      return fetchSyncDiff();
     }).then(function(diff) {
-      if (diff && (diff.pushWarnings || []).length) {
+      if (!diff || !diff.ok) throw new Error((diff && diff.message) || t('sync.compare-failed', 'Comparison failed'));
+      if ((diff.pushWarnings || []).length) {
         var removeMsg = t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
         return agentBrowser.confirmAsync(removeMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(ok) {
           if (!ok) { if (reset) reset(); return null; }
@@ -234,12 +235,12 @@
       var section = sel.getAttribute('data-section');
       var id = sel.getAttribute('data-id');
       var value = sel.value;
-      if (section && id && value && value !== strategy) resolutions[section + ':' + id] = value;
+      if (section && id && value) resolutions[section + ':' + id] = value;
     });
-    fetchPreview().then(function(preview) {
+    return fetchPreview().then(function(preview) {
       var running = (preview && preview.runningProfiles) || [];
       var proceed = function() {
-        api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
+        return api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
           toastSyncResult(r, t('sync.toast.pull-failed', 'Pull failed'));
           if (!r.success) { agentBrowser.loadSyncPreview(); return; }
           return api.app.reloadConfig().then(function() {
@@ -250,21 +251,19 @@
           });
         }).catch(function(e) {
           toast(t('sync.toast.pull-error','Pull failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
-        }).finally(function() {
-          if (reset) reset();
         });
       };
       if (running.length) {
         var runMsg = t('sync.confirm.pull-running','Detected {n} running profile(s). Pull will skip localStorage/preferences for them. Continue?').replace('{n}', String(running.length));
-        agentBrowser.confirmAsync(runMsg).then(function(ok) {
-          if (!ok) { if (reset) reset(); return; }
-          proceed();
+        return agentBrowser.confirmAsync(runMsg).then(function(ok) {
+          if (!ok) return;
+          return proceed();
         });
-        return;
       }
-      proceed();
+      return proceed();
     }).catch(function(e) {
       toast(t('sync.toast.preview-failed','Preview failed: ') + (e.message || String(e)), 'error');
+    }).finally(function() {
       if (reset) reset();
     });
   };
@@ -498,7 +497,7 @@
         if (!r || !r.success) { toast((r && r.error) || 'Role update failed', 'error'); loadTeamPanel(); return; }
         toast(t('toast.sync.role-updated', 'Role updated'), 'success');
         loadTeamPanel();
-      }).catch(function(e) { toast(e.message, 'error'); });
+      }).catch(function(e) { toast(e.message, 'error'); loadTeamPanel(); });
     };
     var enabledBox = document.getElementById('team-enabled');
     if (enabledBox) {
@@ -506,7 +505,7 @@
         api.team.setEnabled(enabledBox.checked).then(function(r) {
           if (!r || !r.success) { toast((r && r.error) || 'Update failed', 'error'); }
           loadTeamPanel();
-        }).catch(function(e) { toast(e.message, 'error'); });
+        }).catch(function(e) { toast(e.message, 'error'); loadTeamPanel(); });
       };
     }
   }

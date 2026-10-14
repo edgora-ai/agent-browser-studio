@@ -4,7 +4,7 @@ import { getConfig } from "../services/config-manager.js";
 import { createAutomationRule, updateAutomationRule, deleteAutomationRule, rescheduleOnceRule } from "../services/automation-rules.js";
 import { reloadSchedule, testRunRule, getRunLogs, validateCron, cancelRunningJob, retryAgentRun, retryJobRuns, getScheduleStates } from "../services/automation.js";
 import { listJobs, getJob, markCancelled, listNotifications, markNotificationsRead, countUnreadNotifications } from "../services/job-store.js";
-import { reconcileAutomationState } from "../services/automation-reconcile.js";
+import { handleSystemResume } from "../services/automation-reconcile.js";
 import type { AutomationRule } from "../types.js";
 
 export function registerAutomationHandlers(): void {
@@ -103,11 +103,11 @@ export function registerAutomationHandlers(): void {
     }
   });
 
-  // Shared by the startup path and the sleep/resume path, so the reconciliation
-  // logic is testable without a real suspend.
+  // Manual reconciliation while the app is live has the same timer-only policy
+  // as resume. Startup orphan recovery is deliberately not exposed over IPC.
   ipcMain.handle("automation:reconcile", async () => {
     try {
-      return { success: true, ...reconcileAutomationState() };
+      return { success: true, ...handleSystemResume("manual") };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }

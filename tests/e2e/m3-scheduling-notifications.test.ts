@@ -56,6 +56,22 @@ describe("M3 — schedule truth and terminal alerts", () => {
 
   async function launch(resetUserData = false) {
     h = await setupTestApp({ userDataDir: USERDATA, resetUserData, env: { AGENT_BROWSER_API_PORT: "0" } });
+    const isolation = await h.app.evaluate(({ app }) => ({
+      nodeHome: process.getBuiltinModule("os").homedir(),
+      envHome: process.env.HOME,
+      userData: app.getPath("userData"),
+      providerKeys: Object.keys(process.env).filter((key) => /^(ANTHROPIC|OPENAI|AZURE_OPENAI|GEMINI|GOOGLE|GROQ|DEEPSEEK|COHERE|MISTRAL)_/.test(key)),
+    }));
+    expect(fs.realpathSync(isolation.nodeHome)).toBe(fs.realpathSync(path.join(USERDATA, "test-home")));
+    expect(fs.realpathSync(isolation.envHome!)).toBe(fs.realpathSync(isolation.nodeHome));
+    expect(fs.realpathSync(isolation.userData)).toBe(fs.realpathSync(USERDATA));
+    expect(isolation.providerKeys).toEqual([]);
+    const llm = await h.page.evaluate(async () => ({
+      configured: await (window as any).agentBrowserAPI.agent.llmConfig(),
+      detected: await (window as any).agentBrowserAPI.agent.detectLlmConfig(),
+    }));
+    expect(llm.configured?.hasApiKey ?? false).toBe(false);
+    expect(llm.detected?.hasApiKey ?? false).toBe(false);
   }
 
   async function createRule(partial: Record<string, unknown>): Promise<any> {
@@ -108,6 +124,174 @@ describe("M3 — schedule truth and terminal alerts", () => {
     expect(state.nextRunAt).toBe(at);
     expect(state.nextRunSource).toBe("armed-timer");
     expect(state.timezone).toBeTruthy();
+  }, 60_000);
+
+  it.each([25, 30, 365])("keeps a %i-day once dormant, then executes its rescheduled plan once", async (days) => {
+    const at = Date.now() + days * 24 * 60 * 60 * 1000;
+    const rule = await createRule({
+      name: `f04-once-${days}-days`, enabled: true,
+      trigger: { type: "once", at },
+      action: { type: "custom-js", jsCode: "return 'f04-executed'" },
+    });
+    const forRule = () => jobsRows().filter((j) => j.rule_id === rule.id && j.source === "once");
+    const stored = config().automation.find((r: any) => r.id === rule.id);
+    expect(stored).toMatchObject({ enabled: true, trigger: { type: "once", at } });
+    expect(stored.planId).toBeTruthy();
+    expect(forRule()).toEqual([]); // independent SQLite read, not a create() result
+    expect(await stateOf(rule.id)).toMatchObject({ phase: "scheduled-once", onceAt: at, nextRunAt: at, nextRunSource: "armed-timer" });
+    const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(report).toMatchObject({ success: true, workStarted: false });
+    await new Promise((resolve) => setTimeout(resolve, 150)); // catches Node's 1-ms overflow clamp
+    expect(forRule()).toEqual([]);
+    expect(config().automation.find((r: any) => r.id === rule.id)).toMatchObject({ enabled: true, planId: stored.planId });
+    const readFar = await h.page.evaluate(async (id) => ({
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: id }),
+    }), rule.id);
+    expect(readFar.rule).toMatchObject({ enabled: true, planId: stored.planId, trigger: { type: "once", at } });
+    expect(readFar.jobs).toEqual([]);
+
+    // A new near-term plan proves the dormant rule can still fire through the
+    // production timer, write a terminal SQLite row and consume config once.
+    const nearAt = Date.now() + 1_800;
+    const updated = await h.page.evaluate((args) => (window as any).agentBrowser.api.automation.rescheduleOnce(args),
+      { ruleId: rule.id, at: nearAt });
+    expect(updated.success, JSON.stringify(updated)).toBe(true);
+    const newPlan = config().automation.find((r: any) => r.id === rule.id);
+    expect(newPlan).toMatchObject({ enabled: true, trigger: { type: "once", at: nearAt } });
+    expect(newPlan.planId).not.toBe(stored.planId);
+    await vi.waitFor(() => {
+      expect(forRule()).toHaveLength(1);
+      expect(forRule()[0]).toMatchObject({ status: "done", source: "once", plan_id: newPlan.planId });
+      expect(config().automation.find((r: any) => r.id === rule.id).enabled).toBe(false);
+    }, { timeout: 15_000, interval: 50 });
+    const row = forRule()[0];
+    expect(row.created_at).toBeGreaterThanOrEqual(nearAt);
+    expect(row.finished_at).toBeGreaterThanOrEqual(row.created_at);
+    expect(row.result).toContain("f04-executed");
+    const readDone = await h.page.evaluate(async (args) => ({
+      job: await (window as any).agentBrowser.api.automation.jobGet(args.jobId),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: args.ruleId }),
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === args.ruleId),
+    }), { jobId: row.id, ruleId: rule.id });
+    expect(readDone.job).toMatchObject({ id: row.id, status: "done", planId: newPlan.planId, result: row.result });
+    expect(readDone.jobs.map((j: any) => j.id)).toEqual([row.id]);
+    expect(readDone.rule).toMatchObject({ enabled: false, planId: newPlan.planId, trigger: { type: "once", at: nearAt } });
+    expect(forRule()).toHaveLength(1);
+  }, 60_000);
+
+  it("does not replay a cooldown-skipped Once plan after main-process clock rollback", async () => {
+    const at = Date.now() + 5_000;
+    const rule = await createRule({
+      name: "f04-cooldown-skip-rollback", enabled: true,
+      trigger: { type: "once", at },
+      action: { type: "custom-js", jsCode: "return 'new plan only'" },
+    });
+    const cooldownUntil = at + 60_000;
+    const updated = await h.page.evaluate((input) => (window as any).agentBrowser.api.automation.update(input), {
+      ...rule, cooldownUntil,
+    });
+    expect(updated.success, JSON.stringify(updated)).toBe(true);
+    const stored = config().automation.find((r: any) => r.id === rule.id);
+    expect(stored).toMatchObject({ enabled: true, cooldownUntil, planId: rule.planId, trigger: { type: "once", at } });
+    const forRule = () => jobsRows().filter((j) => j.rule_id === rule.id && j.source === "once");
+    await vi.waitFor(() => {
+      const rows = forRule();
+      expect(rows.map((j) => j.status)).toEqual(["skipped"]);
+      expect(rows[0].plan_id).toBe(stored.planId);
+      // SQLite can finish the skipped row before config persists the missed
+      // marker. Wait for both stores for this plan, not just the first write.
+      const missed = config().automation.find((r: any) => r.id === rule.id);
+      expect(missed).toMatchObject({ enabled: true, planId: stored.planId });
+      expect(missed.missedAt).toBeGreaterThanOrEqual(at);
+    }, { timeout: 15_000, interval: 50 });
+    const skipped = forRule()[0]; // durable SQLite row, not an IPC success claim
+    expect(skipped).toMatchObject({ plan_id: stored.planId, result: "skipped: cooldown" });
+    const skippedRule = config().automation.find((r: any) => r.id === rule.id);
+    expect(skippedRule).toMatchObject({ enabled: true, planId: stored.planId, missedAt: expect.any(Number) });
+    expect(skippedRule.missedAt).toBeGreaterThanOrEqual(at);
+    const byId = await h.page.evaluate(async (args) => ({
+      job: await (window as any).agentBrowser.api.automation.jobGet(args.jobId),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: args.ruleId }),
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === args.ruleId),
+      state: (await (window as any).agentBrowser.api.automation.scheduleState()).states.find((s: any) => s.ruleId === args.ruleId),
+    }), { jobId: skipped.id, ruleId: rule.id });
+    expect(byId.job).toMatchObject({ id: skipped.id, status: "skipped", planId: stored.planId });
+    expect(byId.jobs.map((j: any) => j.id)).toEqual([skipped.id]);
+    expect(byId.rule.missedAt).toBe(skippedRule.missedAt);
+    expect(byId.state).toMatchObject({ phase: "missed-once", nextRunAt: null, lastOutcome: { status: "skipped" } });
+
+    // Only the isolated Electron main-process Date.now changes, never the host
+    // clock. Restore it even on failed assertions, then outwait the old timer.
+    const rolledBack = await h.app.evaluate((_electron, deadline: number) => {
+      const g = globalThis as typeof globalThis & { __f04OriginalDateNow?: typeof Date.now };
+      if (g.__f04OriginalDateNow) throw new Error("F04 clock override already active");
+      const original = Date.now;
+      const shift = original() - deadline + 2_500;
+      g.__f04OriginalDateNow = original;
+      Date.now = () => original() - shift;
+      return Date.now();
+    }, at);
+    try {
+      expect(rolledBack).toBeLessThan(at);
+      const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+      expect(report).toMatchObject({ success: true, workStarted: false });
+      expect((await stateOf(rule.id))).toMatchObject({ phase: "missed-once", nextRunAt: null });
+    } finally {
+      await h.app.evaluate(() => {
+        const g = globalThis as typeof globalThis & { __f04OriginalDateNow?: typeof Date.now };
+        if (!g.__f04OriginalDateNow) throw new Error("F04 clock override was lost");
+        Date.now = g.__f04OriginalDateNow;
+        delete g.__f04OriginalDateNow;
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    expect(forRule()).toEqual([skipped]); // no second skip or done for this plan
+    expect(config().automation.find((r: any) => r.id === rule.id)).toMatchObject({
+      enabled: true, planId: stored.planId, missedAt: skippedRule.missedAt,
+    });
+    const readAfter = await h.page.evaluate(async (id) => ({
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: id }),
+      state: (await (window as any).agentBrowser.api.automation.scheduleState()).states.find((s: any) => s.ruleId === id),
+    }), rule.id);
+    expect(readAfter.rule.missedAt).toBe(skippedRule.missedAt);
+    expect(readAfter.jobs.map((j: any) => j.id)).toEqual([skipped.id]);
+    expect(readAfter.state.phase).toBe("missed-once");
+
+    // Remove the old cooldown without reissuing the plan: its missed marker
+    // must still block the old deadline. Only an explicit reschedule may run.
+    const cooled = await h.page.evaluate(async (id) => {
+      const current = (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id);
+      return (window as any).agentBrowser.api.automation.update({ ...current, cooldownUntil: Date.now() - 1 });
+    }, rule.id);
+    expect(cooled.success).toBe(true);
+    expect(config().automation.find((r: any) => r.id === rule.id)).toMatchObject({
+      planId: stored.planId, missedAt: skippedRule.missedAt,
+    });
+    const nearAt = Date.now() + 1_800;
+    const res = await h.page.evaluate((args) => (window as any).agentBrowser.api.automation.rescheduleOnce(args),
+      { ruleId: rule.id, at: nearAt });
+    expect(res.success, JSON.stringify(res)).toBe(true);
+    const newPlan = config().automation.find((r: any) => r.id === rule.id);
+    expect(newPlan.planId).not.toBe(stored.planId);
+    expect(newPlan.missedAt).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(forRule().map((j) => [j.plan_id, j.status])).toEqual([
+        [stored.planId, "skipped"], [newPlan.planId, "done"],
+      ]);
+      expect(config().automation.find((r: any) => r.id === rule.id).enabled).toBe(false);
+    }, { timeout: 15_000, interval: 50 });
+    const done = forRule()[1];
+    expect(done.result).toContain("new plan only");
+    const doneRead = await h.page.evaluate(async (args) => ({
+      job: await (window as any).agentBrowser.api.automation.jobGet(args.jobId),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: args.ruleId }),
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === args.ruleId),
+    }), { jobId: done.id, ruleId: rule.id });
+    expect(doneRead.job).toMatchObject({ id: done.id, planId: newPlan.planId, status: "done", result: done.result });
+    expect(doneRead.jobs.map((j: any) => j.id).sort()).toEqual([skipped.id, done.id].sort());
+    expect(doneRead.rule).toMatchObject({ enabled: false, planId: newPlan.planId });
   }, 60_000);
 
   it("reports a cron as scheduled and a far-future one as computed", async () => {
@@ -226,6 +410,82 @@ describe("M3 — schedule truth and terminal alerts", () => {
     expect(stored.planId).toBeTruthy();
     expect(stored.planId).not.toBe(oldPlanId);
     expect(stored.enabled).toBe(true);
+  }, 60_000);
+
+  it("keeps a persisted missed once inert after main-process clock rollback until explicit reschedule", async () => {
+    const at = Date.now() - 3_600_000;
+    const rule = await createRule({
+      name: "f03-missed-clock-rollback", enabled: true,
+      trigger: { type: "once", at },
+      action: { type: "custom-js", jsCode: "return 'should never execute old plan'" },
+    });
+    const forRule = () => jobsRows().filter((j) => j.rule_id === rule.id && j.source === "once");
+    const storedBefore = config().automation.find((r: any) => r.id === rule.id);
+    expect(storedBefore).toMatchObject({ enabled: true, trigger: { type: "once", at } });
+    expect(storedBefore.missedAt).toBeGreaterThan(0);
+    expect(forRule()).toEqual([]);
+    expect((await stateOf(rule.id)).phase).toBe("missed-once");
+    const baseline = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(baseline.success).toBe(true);
+
+    // Simulate only the scheduler's wall clock moving behind the persisted at.
+    // Restore it in finally, even if an assertion fails; never change host time.
+    const rolledBack = await h.app.evaluate((_electron, deadline: number) => {
+      const g = globalThis as typeof globalThis & { __f03OriginalDateNow?: typeof Date.now };
+      if (g.__f03OriginalDateNow) throw new Error("F03 clock override already active");
+      const original = Date.now;
+      const shift = original() - deadline + 2_500;
+      g.__f03OriginalDateNow = original;
+      Date.now = () => original() - shift;
+      return Date.now();
+    }, at);
+    try {
+      expect(rolledBack).toBeLessThan(at);
+      const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+      expect(report).toMatchObject({ success: true, workStarted: false });
+      // Other future rules still have timers. This original missed plan must
+      // not add one to the count merely because its deadline is future again.
+      expect(report.timersRefreshed).toBe(baseline.timersRefreshed);
+    } finally {
+      await h.app.evaluate(() => {
+        const g = globalThis as typeof globalThis & { __f03OriginalDateNow?: typeof Date.now };
+        const original = g.__f03OriginalDateNow;
+        if (!original) throw new Error("F03 clock override was lost");
+        Date.now = original;
+        delete g.__f03OriginalDateNow;
+      });
+    }
+
+    // Longer than the old code's armed 2.5-second timer: a return value alone
+    // could look correct while a delayed custom-js still writes a durable job.
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    expect(forRule()).toEqual([]); // direct SQLite query, not the IPC response
+    const storedAfter = config().automation.find((r: any) => r.id === rule.id);
+    expect(storedAfter).toMatchObject({ planId: storedBefore.planId, missedAt: storedBefore.missedAt, enabled: true });
+    const byId = await h.page.evaluate(async (id) => ({
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id),
+      jobs: await (window as any).agentBrowser.api.automation.jobs({ ruleId: id }),
+      state: (await (window as any).agentBrowser.api.automation.scheduleState()).states.find((s: any) => s.ruleId === id),
+    }), rule.id);
+    expect(byId.rule).toMatchObject({ planId: storedBefore.planId, missedAt: storedBefore.missedAt });
+    expect(byId.jobs).toEqual([]);
+    expect(byId.state).toMatchObject({ phase: "missed-once", nextRunAt: null });
+
+    const newAt = Date.now() + 3_600_000;
+    const rescheduled = await h.page.evaluate((args) => (window as any).agentBrowser.api.automation.rescheduleOnce(args),
+      { ruleId: rule.id, at: newAt });
+    expect(rescheduled.success).toBe(true);
+    const newPlan = config().automation.find((r: any) => r.id === rule.id);
+    expect(newPlan.planId).not.toBe(storedBefore.planId);
+    expect(newPlan.missedAt).toBeUndefined();
+    expect(newPlan.trigger.at).toBe(newAt);
+    const readBack = await h.page.evaluate(async (id) => ({
+      rule: (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id),
+      state: (await (window as any).agentBrowser.api.automation.scheduleState()).states.find((s: any) => s.ruleId === id),
+    }), rule.id);
+    expect(readBack.rule.planId).toBe(newPlan.planId);
+    expect(readBack.state).toMatchObject({ phase: "scheduled-once", nextRunAt: newAt, nextRunSource: "armed-timer" });
+    expect(forRule()).toEqual([]);
   }, 60_000);
 
   it("refuses to reschedule into the past", async () => {
@@ -349,46 +609,127 @@ describe("M3 — schedule truth and terminal alerts", () => {
     expect(rule.id).toBeTruthy();
   }, 60_000);
 
-  it("converges a queued row left by a dead process to cancelled", async () => {
-    // Fabricate the crash artifact directly in the store, then reconcile.
+  it("keeps a real active once running across manual reconcile, then persists its completion", async () => {
     const rule = await createRule({
-      name: "m3-orphan-queued", enabled: true,
+      name: "m3-live-once", enabled: true,
+      trigger: { type: "once", at: Date.now() + 1_200 },
+      action: { type: "custom-js", jsCode: "return new Promise(resolve => setTimeout(() => resolve('finished after reconcile'), 3500))" },
+    });
+    const forRule = () => jobsRows().filter((j) => j.rule_id === rule.id && j.source === "once");
+    await vi.waitFor(() => expect(forRule().map((j) => j.status)).toEqual(["running"]),
+      { timeout: 15_000, interval: 50 });
+    const before = forRule()[0]; // direct SQLite read, no API assumption
+    expect(config().automation.find((r: any) => r.id === rule.id).enabled).toBe(true);
+    const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(report).toMatchObject({ success: true, interruptedJobs: 0, orphanedQueued: 0, orphanedRetryWaiting: 0 });
+    expect(forRule()[0]).toMatchObject({ id: before.id, status: "running", started_at: before.started_at });
+    const live = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobGet(id), before.id);
+    expect(live).toMatchObject({ id: before.id, status: "running" });
+    await vi.waitFor(() => expect(forRule()[0]?.status).toBe("done"),
+      { timeout: 15_000, interval: 100 });
+    const finalRow = forRule()[0];
+    expect(finalRow.result).toContain("finished after reconcile");
+    expect(finalRow.finished_at).toBeGreaterThan(before.started_at);
+    expect(forRule()).toHaveLength(1);
+    expect(config().automation.find((r: any) => r.id === rule.id).enabled).toBe(false);
+    const persistedRule = await h.page.evaluate(async (id) =>
+      (await (window as any).agentBrowser.api.automation.list()).find((r: any) => r.id === id), rule.id);
+    expect(persistedRule.enabled).toBe(false);
+    const finished = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobGet(id), before.id);
+    expect(finished).toMatchObject({ id: before.id, status: "done", result: finalRow.result });
+    const byRule = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobs({ ruleId: id }), rule.id);
+    expect(byRule.map((j: any) => j.id)).toContain(before.id);
+  }, 60_000);
+
+  it("preserves a real retry-waiting row and its retry instant on manual reconcile", async () => {
+    const at = Date.now() + 1_200;
+    const action = { type: "custom-js", jsCode: "throw new Error('synthetic retry failure')" };
+    const rule = await createRule({
+      name: "m3-live-retry", enabled: true, maxRetries: 1,
+      trigger: { type: "once", at }, action,
+    });
+    const forRule = () => jobsRows().filter((j) => j.rule_id === rule.id && j.source === "once");
+    await vi.waitFor(() => expect(forRule().map((j) => j.status)).toEqual(["retry-waiting"]),
+      { timeout: 10_000, interval: 50 });
+    const before = forRule()[0];
+    expect(before.attempt).toBe(0);
+    expect(before.retry_at).toBeGreaterThan(Date.now());
+    const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(report).toMatchObject({ success: true, orphanedRetryWaiting: 0, workStarted: false });
+    expect(forRule()[0]).toMatchObject({ id: before.id, status: "retry-waiting", retry_at: before.retry_at, attempt: 0 });
+    expect(config().automation.find((r: any) => r.id === rule.id).missedAt).toBeUndefined();
+    const readBack = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobGet(id), before.id);
+    expect(readBack).toMatchObject({ id: before.id, status: "retry-waiting", retryAt: before.retry_at, attempt: 0 });
+    // Explicit edit still invalidates a retry as before F03. Do not leave a
+    // pending retry timer running into later E2E cases.
+    const changed = await h.page.evaluate((input) => (window as any).agentBrowser.api.automation.update(input), {
+      id: rule.id, name: rule.name, enabled: false, maxRetries: 1,
+      trigger: { type: "once", at }, action,
+    });
+    expect(changed.success).toBe(true);
+    expect(forRule()[0]).toMatchObject({ id: before.id, status: "failed", retry_at: null });
+  }, 60_000);
+
+  it("preserves live rows on IPC reconcile, then recovers only after a real process restart", async () => {
+    const rule = await createRule({
+      name: "m3-owned-jobs", enabled: true,
       trigger: { type: "cron", cron: FAR_CRON },
       action: { type: "custom-js", jsCode: "return 1" },
     });
+    // Synthetic rows in an isolated jobs.sqlite: no browser, model, sync or
+    // proxy action is sent. While this process is alive they must NOT be
+    // declared orphaned by the public manual IPC path.
+    const now = Date.now();
+    const ids = ["job_live_running_m3", "job_live_queued_m3", "job_live_retry_m3"];
     const db = new DatabaseSync(jobsDbPath());
     try {
-      db.prepare(
-        "INSERT INTO jobs (id, rule_id, rule_name, source, status, attempt, created_at) VALUES (?, ?, ?, ?, 'queued', 0, ?)",
-      ).run("job_orphan_m3", rule.id, "m3-orphan-queued", "scheduler", Date.now());
+      const insert = db.prepare(
+        "INSERT INTO jobs (id, rule_id, rule_name, source, status, attempt, created_at, started_at, retry_at) VALUES (?, ?, ?, 'cron', ?, ?, ?, ?, ?)",
+      );
+      insert.run(ids[0], rule.id, rule.name, "running", 0, now, now, null);
+      insert.run(ids[1], rule.id, rule.name, "queued", 0, now, null, null);
+      insert.run(ids[2], rule.id, rule.name, "retry-waiting", 1, now, now, now + 60_000);
     } finally { db.close(); }
-
-    await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
-    const row = jobsRows().find((j) => j.id === "job_orphan_m3");
-    expect(row.status).toBe("cancelled");
-  }, 60_000);
-
-  it("converges a retry-waiting row left by a dead process to failed, and never re-arms it", async () => {
-    const rule = await createRule({
-      name: "m3-orphan-retry", enabled: true,
-      trigger: { type: "cron", cron: FAR_CRON },
-      action: { type: "custom-js", jsCode: "return 1" },
+    const inspect = () => jobsRows().filter((j) => ids.includes(j.id)).sort((a, b) => a.id.localeCompare(b.id));
+    const before = inspect(); // direct SQLite read, independent of the IPC path
+    expect(before.map((j) => j.status).sort()).toEqual(["queued", "retry-waiting", "running"]);
+    const count = jobsRows().length;
+    const report = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(report).toMatchObject({
+      success: true, reason: "manual", workStarted: false, interruptedJobs: 0,
+      orphanedQueued: 0, orphanedRetryWaiting: 0, jobsReplayedFromRun: 0,
+      notificationsReplayed: 0,
     });
-    const db = new DatabaseSync(jobsDbPath());
-    try {
-      db.prepare(
-        "INSERT INTO jobs (id, rule_id, rule_name, source, status, attempt, created_at, retry_at) VALUES (?, ?, ?, ?, 'retry-waiting', 1, ?, ?)",
-      ).run("job_orphan_retry_m3", rule.id, "m3-orphan-retry", "scheduler", Date.now(), Date.now() + 60_000);
-    } finally { db.close(); }
+    expect(report.timersRefreshed).toBeGreaterThan(0);
+    expect(inspect()).toEqual(before);
+    expect(jobsRows()).toHaveLength(count);
+    for (const row of before) {
+      const readBack = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobGet(id), row.id);
+      expect(readBack).toMatchObject({ id: row.id, status: row.status, attempt: row.attempt, retryAt: row.retry_at });
+    }
+    const byRule = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobs({ ruleId: id }), rule.id);
+    expect(ids.every((id) => byRule.some((j: any) => j.id === id))).toBe(true);
 
-    const before = jobsRows().length;
-    await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
-    const row = jobsRows().find((j) => j.id === "job_orphan_retry_m3");
-    expect(row.status).toBe("failed");
-    expect(row.retry_at == null).toBe(true);
-    // Convergence, not a retry: no new row was created.
-    expect(jobsRows().length).toBe(before);
-  }, 60_000);
+    // closeApp force-kills this process, so none of its in-memory ownership or
+    // retry timers survive. Startup recovery is now allowed to converge rows.
+    await closeApp(h);
+    await launch(false);
+    const after = inspect();
+    expect(after.map((j) => j.status)).toEqual(["cancelled", "failed", "failed"]);
+    const byId = Object.fromEntries(after.map((row) => [row.id, row]));
+    expect(byId[ids[0]].error).toBe("interrupted by restart");
+    expect(byId[ids[1]].error).toContain("orphaned queued");
+    expect(byId[ids[2]].error).toContain("not rescheduled");
+    expect(byId[ids[2]].retry_at).toBeNull();
+    expect(jobsRows()).toHaveLength(count);
+    for (const row of after) {
+      const readBack = await h.page.evaluate((id) => (window as any).agentBrowser.api.automation.jobGet(id), row.id);
+      expect(readBack).toMatchObject({ id: row.id, status: row.status, error: row.error });
+    }
+    const idempotent = await h.page.evaluate(() => (window as any).agentBrowser.api.automation.reconcile());
+    expect(idempotent).toMatchObject({ interruptedJobs: 0, orphanedQueued: 0, orphanedRetryWaiting: 0 });
+    expect(inspect()).toEqual(after);
+  }, 180_000);
 
   // ── 7. Notifications ──
 

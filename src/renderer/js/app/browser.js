@@ -151,7 +151,7 @@
       if (forceCheck) {
         api.updates.check().then(function (cr) {
           if (cr && cr.success === false) {
-            if (statusEl) statusEl.textContent = t("toast.browser.check-failed", "Check failed: ") + esc(cr.error || t("common.unknown", "unknown"));
+            if (statusEl) statusEl.textContent = t("toast.browser.check-failed", "Check failed: ") + (cr.error || t("common.unknown", "unknown"));
           } else if (cr) {
             lastAvailableUpdates = cr.available || [];
             if (statusEl) statusEl.textContent = lastAvailableUpdates.length
@@ -171,7 +171,7 @@
   function runUpdateAction(action, version, statusEl) {
     var t = function (key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; };
     var done = function (r) {
-      if (r && r.success === false) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + esc(r.error || t("common.unknown", "unknown")); return; }
+      if (r && r.success === false) { if (statusEl) statusEl.textContent = t("toast.browser.action-failed", "Failed: ") + (r.error || t("common.unknown", "unknown")); return; }
       if (action === "install") { if (statusEl) statusEl.textContent = t("browser.updates.installed-ok", "Staged — ready to activate."); }
       else if (action === "activate") { if (statusEl) statusEl.textContent = t("browser.updates.activated", "Activated — takes effect on next launch."); }
       else if (action === "rollback") { if (statusEl) statusEl.textContent = t("browser.updates.rolled-back", "Rolled back to the previous version."); }
@@ -220,29 +220,66 @@
       blockOnEnvironmentRisk: gateEl("gate-env-risk") ? gateEl("gate-env-risk").checked : false,
     };
   }
+  var gateReadSeq = 0;
+  var gateSaving = false;
+  var savedGates = null;
+  function applyGates(g) {
+    if (gateEl("gate-consistency")) gateEl("gate-consistency").checked = g.blockOnConsistencyConflict === true;
+    if (gateEl("gate-proxy-risk")) gateEl("gate-proxy-risk").checked = g.blockOnProxyRisk === true;
+    if (gateEl("gate-drift")) gateEl("gate-drift").checked = g.blockOnFingerprintDrift !== false;
+    if (gateEl("gate-env-risk")) gateEl("gate-env-risk").checked = g.blockOnEnvironmentRisk === true;
+  }
+  function disableGates(disabled) {
+    ["gate-consistency", "gate-proxy-risk", "gate-drift", "gate-env-risk"].forEach(function (id) {
+      if (gateEl(id)) gateEl(id).disabled = disabled;
+    });
+  }
+  function gateFailure(error) {
+    var statusEl = gateEl("gate-status");
+    if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(error || t("toast.failed", "Failed")) + '</span>';
+  }
   function loadLaunchGates() {
-    if (!api.settings || !api.settings.launchGates) return;
-    api.settings.launchGates().then(function (g) {
-      if (!g) return;
-      if (gateEl("gate-consistency")) gateEl("gate-consistency").checked = g.blockOnConsistencyConflict === true;
-      if (gateEl("gate-proxy-risk")) gateEl("gate-proxy-risk").checked = g.blockOnProxyRisk === true;
-      if (gateEl("gate-drift")) gateEl("gate-drift").checked = g.blockOnFingerprintDrift !== false;
-      if (gateEl("gate-env-risk")) gateEl("gate-env-risk").checked = g.blockOnEnvironmentRisk === true;
-    }).catch(function () { /* ignore */ });
+    if (!api.settings || !api.settings.launchGates) return Promise.resolve(false);
+    if (gateSaving) return Promise.resolve(false);
+    var seq = ++gateReadSeq;
+    disableGates(true);
+    return api.settings.launchGates().then(function (g) {
+      if (seq !== gateReadSeq) return false;
+      if (!g) throw new Error(t("toast.failed", "Failed"));
+      savedGates = g;
+      applyGates(g);
+      return true;
+    }).catch(function (e) {
+      if (seq === gateReadSeq) gateFailure(e.message || String(e));
+      return false;
+    }).finally(function () { if (seq === gateReadSeq) disableGates(false); });
   }
   function saveGates() {
-    if (!api.settings || !api.settings.setLaunchGates) return;
+    if (!api.settings || !api.settings.setLaunchGates || gateSaving) return;
     var gates = currentGates();
+    gateSaving = true;
+    ++gateReadSeq;
+    disableGates(true);
+    var failure = null;
     api.settings.setLaunchGates(gates).then(function (r) {
-      var statusEl = gateEl("gate-status");
-      if (!statusEl) return;
-      if (r && r.success === false) {
-        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(r.error || "save failed") + '</span>';
-      } else {
-        statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t("browser.gate.saved", "saved") : "saved") + '</span>';
-        setTimeout(function () { statusEl.textContent = ""; }, 2500);
+      if (!r || !r.success) failure = (r && r.error) || t("toast.failed", "Failed");
+    }).catch(function (e) { failure = e.message || String(e); }).then(function () {
+      gateSaving = false;
+      if (failure) {
+        if (savedGates) applyGates(savedGates);
+        gateFailure(failure);
       }
-    }).catch(function () { /* ignore */ });
+      // A rejection may follow a partial write. Always read the persisted policy.
+      return loadLaunchGates().then(function (loaded) {
+        if (failure || !loaded) return;
+        var statusEl = gateEl("gate-status");
+        var seq = gateReadSeq;
+        if (statusEl) {
+          statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(t("browser.gate.saved", "saved")) + '</span>';
+          setTimeout(function () { if (seq === gateReadSeq) statusEl.textContent = ""; }, 2500);
+        }
+      });
+    });
   }
   function wireLaunchGateEvents() {
     ["gate-consistency", "gate-proxy-risk", "gate-drift", "gate-env-risk"].forEach(function (id) {
