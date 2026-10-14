@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-archive-test");
+const TEST_USER_DATA = path.join(os.tmpdir(), `agent-browser-archive-test-${process.pid}`);
 vi.mock("electron", () => ({
   app: {
     getPath: (name: string) => (name === "userData" || name === "home" ? TEST_USER_DATA : "/tmp"),
@@ -15,12 +15,19 @@ vi.mock("electron", () => ({
 }));
 
 import { vi } from "vitest";
+const stoppedFixture = vi.hoisted(() => ({ discover: vi.fn() }));
+// These profiles are synthetic and never launched. Isolate only the real OS
+// process scanner; actual ZIP creation, validation, disk and reload paths stay real.
+vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/main/services/process-discovery.js")>(),
+  findBrowserByProfileSync: stoppedFixture.discover,
+}));
 import { createBrowserProfile, deleteBrowserProfile } from "../../src/main/services/browser-manager.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../../src/main/services/profile-archive.js";
 import { getProfilesDir, getProfileMeta, getConfig, getConfigPath, reloadConfig, saveConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
 import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
 
-const ARCHIVES = path.join(os.tmpdir(), "agent-browser-archive-export");
+const ARCHIVES = path.join(os.tmpdir(), `agent-browser-archive-export-${process.pid}`);
 
 function profileDir(dirId: string): string {
   return path.join(getProfilesDir(), dirId);
@@ -39,12 +46,17 @@ function diskProfile(dirId: string): any {
 
 describe("profile archive export/import", () => {
   beforeEach(() => {
+    stoppedFixture.discover.mockReset().mockReturnValue(null);
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     fs.rmSync(ARCHIVES, { recursive: true, force: true });
     fs.mkdirSync(ARCHIVES, { recursive: true });
     reloadConfig();
   });
   afterEach(() => {
+    for (const [dirId, expectedDir] of stoppedFixture.discover.mock.calls) {
+      expect(path.resolve(expectedDir)).toBe(path.resolve(getProfilesDir(), dirId));
+      expect(path.resolve(expectedDir).startsWith(path.resolve(TEST_USER_DATA) + path.sep)).toBe(true);
+    }
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     fs.rmSync(ARCHIVES, { recursive: true, force: true });
     reloadConfig();
@@ -212,6 +224,7 @@ describe("profile archive export/import", () => {
         expect(getProfileMeta(created.dirId)?.note).toBe(note);
         expect(Object.keys(getConfig().browserProfiles)).toEqual([created.dirId]);
       }
+      expect(stoppedFixture.discover).toHaveBeenCalledWith(created.dirId, path.resolve(getProfilesDir(), created.dirId));
     },
   );
 

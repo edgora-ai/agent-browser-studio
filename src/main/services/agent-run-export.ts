@@ -272,7 +272,7 @@ function sha256Of(data: Buffer): string {
 }
 
 /** Atomic write: unique O_EXCL tmp in the SAME directory, 0600, fsync, rename,
- *  directory fsync. An interrupted export leaves either the old file or the
+ *  directory fsync where supported. An interrupted export leaves either the old file or the
  *  new one, never a half-written one. */
 function atomicWriteFile(destPath: string, data: Buffer): void {
   const dir = path.dirname(destPath);
@@ -289,6 +289,11 @@ function atomicWriteFile(destPath: string, data: Buffer): void {
     try {
       dfd = fs.openSync(dir, fs.constants.O_RDONLY);
       fs.fsyncSync(dfd);
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException;
+      // Windows cannot fsync directory descriptors. No directory durability
+      // guarantee is claimed; file fsync and atomic rename remain mandatory.
+      if (dfd === null || process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
     } finally {
       if (dfd !== null) try { fs.closeSync(dfd); } catch { /* best effort */ }
     }

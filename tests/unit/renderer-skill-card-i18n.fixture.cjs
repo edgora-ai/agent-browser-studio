@@ -78,8 +78,24 @@ class Element {
     return this.tagName.toLowerCase() === selector.toLowerCase();
   }
   closest(selector) { for (let el = this; el; el = el.parentNode) if (el.matches(selector)) return el; return null; }
-  querySelectorAll(selector) { return this.children.flatMap(el => [...(el.matches(selector) ? [el] : []), ...el.querySelectorAll(selector)]); }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  querySelectorAll(selector) {
+    const result = [], pending = this.children.slice().reverse();
+    while (pending.length) {
+      const el = pending.pop();
+      if (el.matches(selector)) result.push(el);
+      for (let i = el.children.length - 1; i >= 0; i--) pending.push(el.children[i]);
+    }
+    return result;
+  }
+  querySelector(selector) {
+    const pending = this.children.slice().reverse();
+    while (pending.length) {
+      const el = pending.pop();
+      if (el.matches(selector)) return el;
+      for (let i = el.children.length - 1; i >= 0; i--) pending.push(el.children[i]);
+    }
+    return null;
+  }
   addEventListener(type, fn) { const callbacks = this.listeners.get(type) || []; callbacks.push(fn); this.listeners.set(type, callbacks); }
   dispatchEvent(event) { for (const fn of this.listeners.get(event.type) || []) fn(event); return true; }
   showModal() { this.open = true; }
@@ -87,7 +103,46 @@ class Element {
   focus() { this.doc.activeElement = this; }
   click() { for (let el = this; el; el = el.parentNode) if (el.onclick) el.onclick({ target: this }); }
 }
+// Pre-parse only the immutable shipped template, not rendered card output.
+// Instructions contain strings/booleans only; no DOM nodes, contexts or state.
+function initialMarkupPlan() {
+  const input = HTML.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+  const plan = [];
+  for (const token of input.match(/<!--[\s\S]*?-->|<(?:"[^"]*"|'[^']*'|[^'">])*>|[^<]+/g) || []) {
+    if (/^<!/.test(token)) continue;
+    if (/^<\//.test(token)) {
+      plan.push(Object.freeze({ kind: 'close', tag: token.slice(2, -1).trim().toUpperCase() }));
+    } else if (token.startsWith('<')) {
+      const match = /^<([\w-]+)([\s\S]*?)\/?\s*>$/.exec(token);
+      if (!match) continue;
+      const attrs = {}, style = {};
+      for (const attr of match[2].matchAll(/([\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) attrs[attr[1]] = decode(attr[2] ?? attr[3] ?? attr[4] ?? '');
+      for (const part of (attrs.style || '').split(';')) { const index = part.indexOf(':'); if (index >= 0) style[part.slice(0, index).trim()] = part.slice(index + 1).trim(); }
+      plan.push(Object.freeze({ kind: 'element', tag: match[1], attrs: Object.freeze(attrs), style: Object.freeze(style),
+        open: !/\/>$/.test(token) && !['INPUT', 'BR', 'HR', 'IMG', 'META', 'LINK', 'SOURCE'].includes(match[1].toUpperCase()) }));
+    } else plan.push(Object.freeze({ kind: 'text', text: decode(token) }));
+  }
+  return Object.freeze(plan);
+}
+const INITIAL_MARKUP = initialMarkupPlan();
 function parse(input, root) {
+  if (input === HTML) {
+    const stack = [root];
+    for (const instruction of INITIAL_MARKUP) {
+      if (instruction.kind === 'close') {
+        const index = stack.findLastIndex(el => el.tagName === instruction.tag);
+        if (index > 0) stack.length = index;
+      } else if (instruction.kind === 'element') {
+        const el = new Element(root.doc, instruction.tag);
+        Object.assign(el.attrs, instruction.attrs); Object.assign(el.style, instruction.style);
+        el.value = el.attrs.value || ''; el.checked = 'checked' in el.attrs; el.disabled = 'disabled' in el.attrs;
+        stack.at(-1).appendChild(el);
+        if (instruction.open) stack.push(el);
+      } else stack.at(-1).appendChild(new Element(root.doc, '#text', instruction.text));
+    }
+    return;
+  }
+  // Dynamic render output still takes the original parser path on every call.
   input = input.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
   const stack = [root];
   for (const token of input.match(/<!--[\s\S]*?-->|<(?:"[^"]*"|'[^']*'|[^'">])*>|[^<]+/g) || []) {

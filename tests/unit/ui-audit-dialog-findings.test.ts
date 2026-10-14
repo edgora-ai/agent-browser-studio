@@ -82,3 +82,46 @@ describe("dialog audit findings from the actual analysis loop", () => {
       { first: body("Normal content"), later: body("Later content") })).toEqual([]);
   });
 });
+
+interface AccountRef { index: number; revision: string }
+interface AccountView { ref: AccountRef; tags: string[]; profileIds: string[] }
+interface AccountsApi {
+  list(): Promise<AccountView[]>;
+  get(index: number, ref?: AccountRef): Promise<AccountView | null>;
+}
+const mockScript = new vm.Script(fs.readFileSync(new URL("../../scripts/visual-mock.js", import.meta.url), "utf8"));
+function accountsFixture(): AccountsApi {
+  const window = {} as { agentBrowserAPI: { agent: { accounts: AccountsApi } } };
+  mockScript.runInNewContext({ window });
+  return window.agentBrowserAPI.agent.accounts;
+}
+
+describe("visual account read snapshots", () => {
+  it("lists a displayed reference that the selected-account getter can read", async () => {
+    const accounts = accountsFixture();
+    const listed = await accounts.list();
+    expect(listed).toHaveLength(3);
+    expect(listed[0].ref).toEqual({ index: 0, revision: expect.any(String) });
+    expect(listed[0].ref.revision).not.toBe("");
+    expect(await accounts.get(0, listed[0].ref)).toEqual(listed[0]);
+  });
+
+  it("keeps list and get results detached from later reads", async () => {
+    const accounts = accountsFixture();
+    const before = await accounts.list();
+    const selected = await accounts.get(0, before[0].ref);
+    expect(selected).not.toBeNull();
+    if (!selected) throw new Error("Selected fixture account missing");
+    selected.tags.push("mutated returned view");
+    selected.ref.revision = "mutated reference";
+    expect(await accounts.list()).toEqual(before);
+  });
+
+  it("rejects missing or conflicting selected-account references", async () => {
+    const accounts = accountsFixture();
+    const listed = await accounts.list();
+    await expect(accounts.get(0)).rejects.toMatchObject({ code: "ACCOUNT_REFERENCE_CONFLICT" });
+    await expect(accounts.get(0, { index: 0, revision: "stale" })).rejects.toMatchObject({ code: "ACCOUNT_REFERENCE_CONFLICT" });
+    await expect(accounts.get(1, listed[0].ref)).rejects.toMatchObject({ code: "ACCOUNT_REFERENCE_CONFLICT" });
+  });
+});

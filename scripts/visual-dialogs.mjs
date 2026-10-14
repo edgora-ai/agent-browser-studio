@@ -70,7 +70,7 @@ function findChromium() {
 // falsifiable rather than mysterious.
 const DIALOGS = [
   { id: "dlg-account", cmd: "agentAddAccount" },
-  { id: "dlg-account-bind", cmd: "agentBindAccounts", arg: 0 },
+  { id: "dlg-account-bind", cmd: "agentBindAccounts", accountRefIndex: 0 },
   { id: "dlg-account-import", cmd: "agentImportAccounts" },
   { id: "dlg-agent-run", cmd: "runsOpen", arg: "run_9f0b" },
   { id: "dlg-agent-browser-seed", cmd: "editProfile", arg: "prof_amazon" },
@@ -159,7 +159,7 @@ async function boot(browser, lang, theme) {
 
 // Open one dialog and return what the user would see.
 async function inspect(page, d) {
-  return page.evaluate(async ({ id, cmd, arg, arg2, emit, emitArg }) => {
+  return page.evaluate(async ({ id, cmd, arg, arg2, accountRefIndex, emit, emitArg }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
     if (emit) {
       // Fire the same IPC channel the main process broadcasts on.
@@ -172,6 +172,11 @@ async function inspect(page, d) {
       const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
       if (typeof fn !== "function") return { unavailable: `no command ${cmd}` };
       try {
+        if (accountRefIndex !== undefined) {
+          const accounts = await window.agentBrowser.R.agent.accounts.list();
+          arg = accounts[accountRefIndex] && accounts[accountRefIndex].ref;
+          if (!arg) return { unavailable: "account fixture has no displayed snapshot reference" };
+        }
         if (arg2 !== undefined) await fn(arg, arg2);
         else if (arg !== undefined) await fn(arg);
         else await fn();
@@ -183,6 +188,12 @@ async function inspect(page, d) {
     const dlg = document.getElementById(id);
     if (!dlg) return { unavailable: "not in DOM" };
     if (!dlg.open) return { didNotOpen: true };
+    if (accountRefIndex !== undefined) {
+      const save = dlg.querySelector('[data-cmd="agentSaveAccountBind"]');
+      if (!dlg.querySelector(".acct-bind-cb") || !save || save.disabled) {
+        return { unavailable: "account-bind fixture did not complete its referenced account/profile reads" };
+      }
+    }
     const text = dlg.innerText.replace(/\r/g, "").trim();
     // title = the h3 that labels the dialog
     const h3 = dlg.querySelector("h3");
