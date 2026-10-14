@@ -3,6 +3,7 @@
 // startRun/recordStep/finishRun and thread runId into executeToolCall.
 import { BrowserWindow, type WebContents } from "electron";
 import { getConfig, sanitizeTracePayload } from "./config-manager.js";
+import { isProtectedRun, registerActiveRunLookup, registerRunEvictionCleanup, retainAgentRuns } from "./agent-run-retention.js";
 import { transact } from "./config/store.js";
 import { runResultStore, type RunResultManifest } from "./run-result-store.js";
 import { cleanupTemplateRowsForRun } from "./run-verifiers.js";
@@ -85,16 +86,13 @@ function redactArgs(value: unknown): unknown {
   return sanitized;
 }
 
-/** Keep the newest MAX_RUNS runs (oldest dropped). Mirrors the retention the
- *  config normalizer applies on save, enforced on the draft so the rule holds
- *  at the point of write. Returns the ids of the runs that were dropped. */
+/** Same stable retention as config save/load. Return only actually evicted
+ * terminal IDs, so their result data is removed after the config commit. */
 function trimRuns(draft: any): string[] {
-  if (Array.isArray(draft.agentRuns) && draft.agentRuns.length > MAX_RUNS) {
-    const dropped = (draft.agentRuns as AgentRun[]).slice(0, draft.agentRuns.length - MAX_RUNS);
-    draft.agentRuns = draft.agentRuns.slice(draft.agentRuns.length - MAX_RUNS);
-    return dropped.map((r) => r.id);
-  }
-  return [];
+  if (!Array.isArray(draft.agentRuns)) return [];
+  const { kept, dropped } = retainAgentRuns(draft.agentRuns as AgentRun[], MAX_RUNS);
+  draft.agentRuns = kept;
+  return dropped.map((r) => r.id);
 }
 
 function findRun(draft: any, runId: string): AgentRun | undefined {
@@ -102,9 +100,8 @@ function findRun(draft: any, runId: string): AgentRun | undefined {
 }
 
 /** Best-effort removal of result-store payloads and controlled-table rows for
- *  runs that are gone from the config. Config-first: callers invoke this only
- *  after the config mutation has committed. Failures are logged, not thrown —
- *  the startup reconcile converges any leftovers. */
+ * runs gone from config. Call only after the config write commits. Startup
+ * reconcile retries filesystem cleanup after a crash or partial failure. */
 function cleanupRunResultData(runIds: string[]): void {
   for (const runId of runIds) {
     try {
@@ -315,38 +312,59 @@ class RunRecorder {
     return filtered.map(safeRun);
   }
 
+  /** The boolean service contract remains for existing callers; API boundaries
+   * use the detailed result to distinguish a missing ID from a protected one. */
   deleteRun(runId: string): boolean {
-    let removed = false;
+    return this.deleteRunDetailed(runId) === "deleted";
+  }
+
+  deleteRunDetailed(runId: string): "deleted" | "active" | "missing" {
+    const current = findRun(getConfig() as any, runId);
+    if (!current) return "missing";
+    if (isProtectedRun(current)) return "active";
     this.commit((draft) => {
-      const before = (draft.agentRuns || []).length;
-      draft.agentRuns = (draft.agentRuns || []).filter((r: AgentRun) => r.id !== runId);
-      removed = (draft.agentRuns as AgentRun[]).length !== before;
+      // Guard again at the mutation boundary, not only in the UI or API.
+      const run = findRun(draft, runId);
+      if (!run || isProtectedRun(run)) return;
+      draft.agentRuns = (draft.agentRuns as AgentRun[]).filter((r) => r.id !== runId);
     });
-    // A write that failed mid-flight throws before reaching here, so the live
-    // maps are released only once the removal actually landed — otherwise
-    // callers still streaming into the run would lose their binding to a run
-    // that the config still contains.
-    if (!removed) return false;
+    // The transaction throws on persistence failure; never claim a deletion or
+    // release bindings/results before its config write has committed.
+    if (this.hasRun(runId)) return "active";
     this.runWebContents.delete(runId);
     this.runVariables.delete(runId);
-    // Config-first: the run is gone from disk-backed state; now drop its
-    // materialized results + controlled-table rows (best effort).
     cleanupRunResultData([runId]);
-    return true;
+    return "deleted";
   }
 
   clearRuns(): number {
-    let n = 0;
+    return this.clearRunsDetailed().deleted;
+  }
+
+  clearRunsDetailed(): { deleted: number; skipped: number } {
+    const existing = (getConfig().agentRuns || []) as AgentRun[];
+    const candidates = existing.filter((run) => !isProtectedRun(run));
+    if (!candidates.length) return { deleted: 0, skipped: existing.length };
     let clearedIds: string[] = [];
+    let skipped = 0;
     this.commit((draft) => {
-      clearedIds = ((draft.agentRuns || []) as AgentRun[]).map((r) => r.id);
-      n = clearedIds.length;
-      draft.agentRuns = [];
+      const retained: AgentRun[] = [];
+      for (const run of (draft.agentRuns || []) as AgentRun[]) {
+        if (isProtectedRun(run)) {
+          retained.push(run);
+          skipped++;
+        } else {
+          clearedIds.push(run.id);
+        }
+      }
+      draft.agentRuns = retained;
     });
-    this.runWebContents.clear();
-    this.runVariables.clear();
+    for (const id of clearedIds) {
+      this.runWebContents.delete(id);
+      this.runVariables.delete(id);
+    }
     cleanupRunResultData(clearedIds);
-    return n;
+    return { deleted: clearedIds.length, skipped };
   }
 
   /** Single write path for every mutation. `mutate` runs on the transact draft
@@ -386,6 +404,8 @@ class RunRecorder {
 }
 
 export const agentRunRecorder = new RunRecorder();
+registerActiveRunLookup((runId) => agentRunRecorder.isActive(runId));
+registerRunEvictionCleanup(cleanupRunResultData);
 
 // ── Startup reconcile (M2) ──
 // Converges config.json references with the on-disk result store. Runs once

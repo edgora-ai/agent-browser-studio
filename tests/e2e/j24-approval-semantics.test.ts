@@ -56,8 +56,10 @@ async function runApproving(h: TestAppHandle, message: string, mode: "once" | "a
     }, mode);
     // Resolve pending approvals via the dialog helper (resolves + closes modal).
     await h.page.evaluate((m) => {
-      if ((window as any).agentBrowser.approvalAllow && document.getElementById("dlg-approval").open) {
-        (window as any).agentBrowser.approvalAllow(m);
+      if ((window as any).agentBrowser.approvalAllow) {
+        const dialog = document.getElementById("dlg-approval");
+        if (!(dialog instanceof HTMLDialogElement)) throw new Error("Expected #dlg-approval to be a dialog");
+        if (dialog.open) (window as any).agentBrowser.approvalAllow(m);
       }
     }, mode);
     if (st.d || st.e) break;

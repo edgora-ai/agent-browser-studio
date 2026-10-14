@@ -5,13 +5,14 @@
 // message reports how many entries were adopted from remote.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j62");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j62-sync-merge-"));
 const CONFIG_KEY = "agent-browser-studio-config.json";
 
 function startMockS3(): Promise<{ port: number; get: (key: string) => Buffer | undefined; put: (key: string, body: Buffer) => void; close: () => Promise<void> }> {
@@ -79,6 +80,7 @@ describe("J62 — sync pull merge strategy", () => {
       bucket: "bucket",
       accessKey: "testak",
       secretKey: "testsk",
+      custodyConsent: true,
     });
     const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J62", platform: "windows", fingerprintSeed: 62626 }));
     dirId = r.dirId;
@@ -90,6 +92,8 @@ describe("J62 — sync pull merge strategy", () => {
   afterAll(async () => {
     if (h) await closeApp(h);
     if (s3) await s3.close();
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j62-sync-merge-")) throw new Error("Unsafe J62 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("default pull is local-wins: conflict keeps local, remote-only data imported", async () => {

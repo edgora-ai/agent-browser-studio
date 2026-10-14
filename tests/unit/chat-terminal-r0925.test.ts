@@ -129,6 +129,12 @@ async function mcpChat(conversationId: string): Promise<any> {
   return { http: res.status, isError: Boolean(rpc.result.isError), payload };
 }
 
+function requireRun(runId: string) {
+  const run = recorder.getRun(runId);
+  if (run === null) throw new Error(`Expected persisted run ${runId}`);
+  return run;
+}
+
 function lastRun() {
   const runs = recorder.listRuns();
   expect(runs.length).toBeGreaterThan(0);
@@ -154,7 +160,7 @@ describe("chat terminal state (R0925-02)", () => {
     const r = await restChat("c1");
     expect(r.status).toBe(200);
     expect(r.body.reply).toBe("hello");
-    const run = recorder.getRun(r.body.runId)!;
+    const run = requireRun(r.body.runId);
     expect(run.status).toBe("done");
     expect(run.endReason).toBe("completed");
   });
@@ -164,7 +170,7 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c2", { id: "c2", title: "t", messages: [] });
     const r = await restChat("c2");
     expect(r.status).toBe(400);
-    const run = recorder.getRun(r.body.runId)!;
+    const run = requireRun(r.body.runId);
     expect(run.status).toBe("error");
   });
 
@@ -173,7 +179,7 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c3", { id: "c3", title: "t", messages: [] });
     const r = await restChat("c3");
     expect(r.status).toBe(400);
-    const run = recorder.getRun(r.body.runId)!;
+    const run = requireRun(r.body.runId);
     expect(run.status).toBe("error");
     expect(run.endReason).toBe("execution_error");
     expect(run.error).toContain("final response");
@@ -184,7 +190,7 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c4", { id: "c4", title: "t", messages: [] });
     const r = await restChat("c4");
     expect(r.status).toBe(400);
-    const run = recorder.getRun(r.body.runId)!;
+    const run = requireRun(r.body.runId);
     expect(run.status).toBe("error");
     expect(run.endReason).toBe("round_limit");
   });
@@ -195,7 +201,7 @@ describe("chat terminal state (R0925-02)", () => {
     const r = await mcpChat("c5");
     expect(r.http).toBe(200);
     expect(r.isError).toBe(false);
-    const run = recorder.getRun(r.payload.runId)!;
+    const run = requireRun(r.payload.runId);
     expect(run.status).toBe("done");
     expect(run.endReason).toBe("completed");
   });
@@ -205,7 +211,7 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c6", { id: "c6", title: "t", messages: [] });
     const r = await mcpChat("c6");
     expect(r.isError).toBe(true);
-    const run = recorder.getRun(r.payload.runId)!;
+    const run = requireRun(r.payload.runId);
     expect(run.status).toBe("error");
     expect(run.endReason).toBe("execution_error");
   });
@@ -215,7 +221,7 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c7", { id: "c7", title: "t", messages: [] });
     const r = await mcpChat("c7");
     expect(r.isError).toBe(true);
-    const run = recorder.getRun(r.payload.runId)!;
+    const run = requireRun(r.payload.runId);
     expect(run.status).toBe("error");
     expect(run.endReason).toBe("round_limit");
   });
@@ -225,9 +231,10 @@ describe("chat terminal state (R0925-02)", () => {
     h.conversations.set("c8", { id: "c8", title: "t", messages: [] });
     const r = await restChat("c8");
     configManager.reloadConfig();
-    const run = recorder.getRun(r.body.runId)!;
+    const run = requireRun(r.body.runId);
     expect(run.status).toBe("error");
     expect(run.endReason).toBe("round_limit");
+    if (!run.verification) throw new Error("Expected persisted run verification");
     expect(run.verification.status).toBe("unverified");
   });
 });

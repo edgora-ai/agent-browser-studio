@@ -4,10 +4,11 @@ import * as net from "node:net";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
+import { sanitizePortableFingerprintBaseline } from "./fingerprint-baseline.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { tMain } from "./main-i18n.js";
-import { transact as storeTransact, readSnapshot, setAfterTransactHook, setConfigBaseProvider, setNormalizer } from "./config/store.js";
+import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommittedConfig, adoptLoadedConfig, setNormalizer } from "./config/store.js";
 import { assertConfigSize } from "./config/limits.js";
 import {
   clearLegacySecretMigrationCache,
@@ -19,6 +20,7 @@ import {
 } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunEndReason, AgentRunStep, AgentRunSource, AgentRunStatus, AgentRunVerification, AgentRunVerificationCounts, AgentRunVerificationIssue, AgentRunArtifactRef, AgentFsConfig, AgentFsMode, DrmConfig, TeamConfig } from "../types.js";
 import { normalizeManagedFirefoxVersion, sanitizeBrowserEngine } from "./browser-engine.js";
+import { cleanupNormalizedRunEvictions, isOwnedRun, retainAgentRuns } from "./agent-run-retention.js";
 
 /** Engine-aware version-pin normalization (R5): Firefox pins ("154.0") must
  * not go through the Chromium 4-segment validator. Engine is resolved first
@@ -76,21 +78,13 @@ const DefaultConfig: MgmtConfig = {
   automationNotify: { system: false, sound: false },
 };
 
-// ── In-memory config cache ──
-let config: MgmtConfig | null = null;
-
 // ── Public API ──
-
+// The store owns one config/witness/revision bundle; no second config cache.
 export function getConfig(): MgmtConfig {
-  if (!config) {
-    config = loadConfig();
-  }
-  // Sale-90: always ensure, not just on first load. The missing-file branch
-  // of loadConfig seeds the cache via saveConfig's afterTransact hook BEFORE
-  // identity is assigned, so a reloadConfig() over a deleted config.json used
-  // to leave deviceId empty forever (license device binding then failed).
-  ensureDeviceIdentity(config);
-  return config;
+  if (!getCommittedConfig()) adoptLoadedConfig(loadConfig());
+  // Always ensure identity, including a reload over a deleted config file.
+  ensureDeviceIdentity(getCommittedConfig()!);
+  return getCommittedConfig()!;
 }
 
 /** Assign a stable per-install device identity (used for team profile locks). */
@@ -573,6 +567,14 @@ function sanitizeOptionalText(value: unknown, maxLength: number): string | null 
   if (!trimmed) return null;
   if (trimmed.length > maxLength || /[\x00-\x1f\x7f]/.test(trimmed)) throw new Error("Invalid fingerprint text value");
   return trimmed;
+}
+
+function sanitizePortableProfileNote(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  // Notes allow TAB/LF/CR, but validate before trim/truncation so other
+  // controls cannot disappear at the boundaries of the retained text.
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error("Invalid profile note text value");
+  return value.slice(0, 2000).trim() || null;
 }
 
 function sanitizeOptionalFontsDir(value: unknown): string | null {
@@ -1139,6 +1141,11 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     note: cp.note || null,
     tags: normalizeProfileTags(cp.tags),
     preset: sanitizeOptionalText(cp.preset, 64),
+    drm: sanitizeBoolean(cp.drm, "drm"),
+    appUrl: sanitizeAppUrl(cp.appUrl),
+    renderScaleMode: sanitizeRenderScaleMode(cp.renderScaleMode),
+    windowTitlePrefix: cp.windowTitlePrefix === undefined ? undefined : sanitizeWindowTitlePrefix(cp.windowTitlePrefix),
+    fingerprintBaseline: sanitizePortableFingerprintBaseline(cp.fingerprintBaseline),
     platform: cp.platform === "windows" || cp.platform === "macos" || cp.platform === "android" ? cp.platform : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
@@ -1160,6 +1167,70 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     fontsDir: sanitizeOptionalFontsDir(cp.fontsDir),
     extensions: normalizeExtensionMap(cp.extensions),
   };
+}
+
+/** Validate only transferable fields from a version-1 profile archive. No
+ * device paths, sync markers, lock, repository packages or credentials enter
+ * this object; the archive's field selection is also explicit on export. */
+export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid archive profile metadata");
+  const p = raw as Record<string, unknown>;
+  const fallbackText = (value: unknown, max: number, fallback: string | null): string | null =>
+    typeof value === "string" ? value.slice(0, max) : fallback;
+  const pickMode = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+    typeof value === "string" && allowed.includes(value as T) ? value as T : fallback;
+  const engine = sanitizeBrowserEngine(p.engine);
+  const proxyMode = pickMode(p.proxyMode, ["none", "default", "named"] as const, "default");
+  const proxyName = proxyMode === "named" ? fallbackText(p.proxyName, 120, null) : null;
+  if (proxyMode === "named" && (!proxyName || !isValidProxyName(proxyName))) {
+    throw new Error("Invalid named proxy reference in archive");
+  }
+  if (p.extensions !== undefined && (p.extensions === null || typeof p.extensions !== "object" || Array.isArray(p.extensions))) {
+    throw new Error("Invalid profile extension references in archive");
+  }
+  const extensions = normalizeProfileExtensionMap(p.extensions as Record<string, boolean> | undefined);
+  if (Object.keys(extensions).length > 200) throw new Error("Too many profile extension references in archive");
+  const profile: BrowserProfileMeta = {
+    name: sanitizeOptionalText(fallbackText(p.name, 120, "Imported profile"), 120) || "Imported profile",
+    fingerprintMode: sanitizeFingerprintMode(pickMode(p.fingerprintMode, ["managed", "off"] as const, "managed")),
+    engine,
+    browserVersion: normalizeProfileBrowserVersion({ engine, browserVersion: p.browserVersion }),
+    allowThirdPartyCookies: sanitizeBoolean(p.allowThirdPartyCookies, "third-party cookie compatibility"),
+    fingerprintSeed: p.fingerprintSeed === undefined ? Math.floor(Math.random() * 90000) + 10000 : sanitizeFingerprintSeed(p.fingerprintSeed),
+    platform: sanitizeBrowserPlatform(pickMode(p.platform, ["windows", "macos", "android"] as const, "windows")),
+    timezone: sanitizeOptionalTimezone(p.timezone),
+    locale: sanitizeOptionalLocale(p.locale),
+    webrtcMode: sanitizeWebRtcMode(pickMode(p.webrtcMode, ["auto", "altered", "disable", "real"] as const, "auto")),
+    webrtcIp: sanitizeOptionalIp(p.webrtcIp),
+    geolocationMode: sanitizeGeolocationMode(pickMode(p.geolocationMode, ["real", "disable", "custom"] as const, "real")),
+    geolocationLatitude: sanitizeOptionalNumber(p.geolocationLatitude, -90, 90),
+    geolocationLongitude: sanitizeOptionalNumber(p.geolocationLongitude, -180, 180),
+    geolocationAccuracy: sanitizeOptionalNumber(p.geolocationAccuracy, 0, 100000),
+    gpuVendor: sanitizeOptionalText(p.gpuVendor, 80),
+    gpuRenderer: sanitizeOptionalText(p.gpuRenderer, 160),
+    hardwareConcurrency: sanitizeOptionalInteger(p.hardwareConcurrency, 1, 64),
+    deviceMemory: sanitizeOptionalInteger(p.deviceMemory, 1, 128),
+    screenWidth: sanitizeOptionalInteger(p.screenWidth, 320, 10000),
+    screenHeight: sanitizeOptionalInteger(p.screenHeight, 240, 10000),
+    storageQuota: sanitizeOptionalInteger(p.storageQuota, 1, 1048576),
+    taskbarHeight: sanitizeOptionalInteger(p.taskbarHeight, 0, 500),
+    renderScaleMode: sanitizeRenderScaleMode(pickMode(p.renderScaleMode, ["native", "strict"] as const, "native")),
+    windowTitlePrefix: p.windowTitlePrefix === undefined ? undefined : sanitizeWindowTitlePrefix(p.windowTitlePrefix),
+    appUrl: sanitizeAppUrl(p.appUrl),
+    drm: sanitizeBoolean(p.drm, "drm"),
+    proxyMode,
+    proxyName,
+    note: sanitizePortableProfileNote(p.note),
+    tags: normalizeProfileTags(p.tags),
+    preset: sanitizeOptionalText(p.preset, 64),
+    extensions,
+    fingerprintBaseline: sanitizePortableFingerprintBaseline(p.fingerprintBaseline),
+    updatedAt: Date.now(),
+  };
+  if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
+  validateGeolocationMeta(profile);
+  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
+  return profile;
 }
 
 /**
@@ -1328,7 +1399,7 @@ function normalizeSyncBucket(value: string): string {
 }
 
 export function reloadConfig(): void {
-  config = loadConfig();
+  adoptLoadedConfig(loadConfig());
 }
 
 // ── Internal ──
@@ -1374,27 +1445,24 @@ function loadConfig(): MgmtConfig {
   }
 }
 
-// Single ownership (AR-1): config-manager holds the in-memory cache that all
-// getConfig() consumers share; config/store.ts is the ONLY write path
-// (atomic tmp+rename+fsync). There is deliberately no fallback: if the
-// transactional write fails, the error propagates instead of silently leaving
-// memory and disk divergent. Direct store.transact writers elsewhere (skills,
-// team, automation rules, trace trimming) re-sync this cache via the hook
-// below, so no write path can leave getConfig() stale.
-setConfigBaseProvider(() => config);
+// The store publishes config and account identity state at the rename commit
+// point. This hook owns ONLY best-effort run-eviction cleanup, not publication.
 setNormalizer((draft, mode) => mergeConfig(DefaultConfig, draft, mode));
-setAfterTransactHook((normalized) => { config = normalized; });
+setAfterTransactHook((normalized, draft) => {
+  // Only normalization-evicted terminal IDs, not every run omitted by a
+  // caller. Result files and controlled-table rows are removed after rename,
+  // regardless of whether the writer was the recorder or an unrelated setting.
+  cleanupNormalizedRunEvictions(draft.agentRuns, normalized.agentRuns);
+});
 
 export function saveConfig(cfg: MgmtConfig): void {
   const snap = structuredClone(cfg) as any;
-  // cfg IS the full new content, so it also serves as the draft base — this
-  // keeps the bootstrap path (first load, before `config` exists) deadlock-free.
+  // cfg is full replacement content and a bootstrap base before initial load.
   storeTransact((draft: any) => {
     // Replace draft with snap's normalized content via shallow assign of enumerable domains
     for (const k of Object.keys(snap)) (draft as any)[k] = (snap as any)[k];
   }, snap);
-  // The afterTransact hook has already re-synced `config` from the store
-  // (exactly what was normalized and written to disk).
+  // The store has already published exactly what was normalized and written.
 }
 
 function ensureAppDir(): void {
@@ -2031,11 +2099,10 @@ export function normalizeTemplateInputs(raw: unknown): Record<string, string> | 
 
 function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[] {
   if (!Array.isArray(raw)) return [];
-  // Keep the NEWEST 200 runs (drop oldest).
-  if (raw.length > MERGE_CAPS.agentRuns) {
-    console.warn(`[config] agentRuns truncated: ${raw.length} -> ${MERGE_CAPS.agentRuns} newest kept`);
+  const { kept: recent, dropped } = retainAgentRuns(raw, MERGE_CAPS.agentRuns);
+  if (dropped.length) {
+    console.warn(`[config] agentRuns truncated: ${raw.length} -> ${recent.length}, oldest terminal runs dropped`);
   }
-  const recent = raw.length > MERGE_CAPS.agentRuns ? raw.slice(raw.length - MERGE_CAPS.agentRuns) : raw;
   return recent.map((r: any): AgentRun | null => {
     if (!r || typeof r !== "object") return null;
     const id = String(r.id || "").trim();
@@ -2044,8 +2111,10 @@ function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[
     const startedAt = typeof r.startedAt === "number" ? r.startedAt : 0;
     const rawStatus = String(r.status) as string;
     const isKnown = AGENT_RUN_STATUSES.has(rawStatus as AgentRunStatus);
-    // Crash-recovery: stale running on load → error; on save preserve caller status.
-    const shouldRecover = mode === "load" && rawStatus === "running";
+    // Crash-recovery applies only to runs no longer owned by this process.
+    // Sync Pull also reloads config while execution is live; marking its run
+    // interrupted would wrongly expose terminal actions in the Runs UI.
+    const shouldRecover = mode === "load" && rawStatus === "running" && !isOwnedRun(id);
     const status: AgentRunStatus = (shouldRecover || !isKnown) ? "error" : (rawStatus as AgentRunStatus);
     const persistedEndReason = normalizeAgentRunEndReason(r.endReason);
     // A live run has no terminal reason. Only load-time crash recovery creates a

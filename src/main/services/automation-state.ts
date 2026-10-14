@@ -53,7 +53,8 @@ export interface SchedulerLiveState {
   retryAt: number | null;
   /** Waiting for a global run slot; has a queued job row. */
   waitingForSlot: boolean;
-  /** Epoch ms the armed timer will fire at, when a real timer is armed. */
+  /** Once: execution deadline (also during intermediate waits). Cron: next
+   * fire time only when its armed timer is not an intermediate chunk. */
   armedAt: number | null;
   /** Whether a timer is currently armed for this rule. */
   armed: boolean;
@@ -94,7 +95,8 @@ export interface RuleScheduleState {
   /** Epoch ms of the next fire, or null when there is none (or it is unknown). */
   nextRunAt: number | null;
   /**
-   * "armed-timer" = read off a real armed timer (an observation).
+   * "armed-timer" = read from the scheduler's armed deadline (for a once,
+   *                 the execution time even while its wait is chunked).
    * "computed"    = derived by nextCronTime, because a far-future cron is
    *                 re-armed in ≤24h chunks and has no true deadline yet.
    */
@@ -247,12 +249,11 @@ export function classifyRuleState(input: ClassifyInput): RuleScheduleState {
   // 6. Cooling down. Not a schedule: the guard will refuse the next fire, so
   //    reporting a next-run time here would be a promise the scheduler breaks.
   //
-  //    Skipped for a past-due `once`, because there is no future fire for the
-  //    cooldown to delay — nothing is being postponed. Reporting a transient
-  //    10-minute block there would imply the rule resumes when it ends, and it
-  //    never will: the permanent missed-once state is the truth that matters.
-  const oncePastDue = trigger.type === "once" && (trigger.at ?? 0) <= now;
-  if (cooldownUntil && !oncePastDue) {
+  //    Skipped for a past-due OR already-marked `once`: after a clock rollback,
+  //    its deadline can look future while its original plan remains permanently
+  //    missed. Reporting a transient cooldown there would imply it resumes.
+  const onceMissed = trigger.type === "once" && (Boolean(rule.missedAt) || (trigger.at ?? 0) <= now);
+  if (cooldownUntil && !onceMissed) {
     return { ...base, phase: "cooldown", nextRunAt: null, nextRunSource: null, cooldownUntil };
   }
 

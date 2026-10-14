@@ -1,6 +1,6 @@
 // Unit tests for health-based proxy rotation (fallback selection, resolution,
 // rotation counters, and CRUD fallback-reference maintenance).
-import { describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -26,6 +26,7 @@ import {
   reloadConfig,
   saveConfig,
   getConfig,
+  getConfigPath,
   renameProxy,
   deleteProxy,
   resolveProfileProxy,
@@ -37,9 +38,19 @@ import { recordProxyDetection, recordProxyRotation } from "../../src/main/servic
 // which is en-US — otherwise the test would change meaning if the default moved.
 import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 
+import type { BrowserProfileMeta } from "../../src/main/types.js";
+
+// Named negative fixture: intentionally retains the old null-synced on-disk
+// boundary without widening or pretending it satisfies BrowserProfileMeta.
+type LegacyNullSyncedProfile = Omit<BrowserProfileMeta, "syncedAt"> & {
+  syncedAt: null;
+  syncStatus: "never";
+  lastModified: number;
+};
+
 function bindProfile(dirId: string, proxyName: string): void {
   const cfg = getConfig();
-  cfg.browserProfiles[dirId] = {
+  const legacyNullProfile: LegacyNullSyncedProfile = {
     name: dirId,
     proxyMode: "named",
     proxyName,
@@ -49,7 +60,14 @@ function bindProfile(dirId: string, proxyName: string): void {
     syncStatus: "never",
     lastModified: Date.now(),
   };
+  if (!Reflect.set(cfg.browserProfiles, dirId, legacyNullProfile)) {
+    throw new Error("Failed to install legacy-null profile fixture");
+  }
   saveConfig(cfg);
+  const persisted: unknown = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+  expect(persisted).toMatchObject({ browserProfiles: { [dirId]: legacyNullProfile } });
+  reloadConfig();
+  expect(getConfig().browserProfiles[dirId].syncedAt).toBeNull();
 }
 
 function setFallbacks(name: string, fallbacks: string[]): void {

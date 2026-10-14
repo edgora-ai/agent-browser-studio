@@ -14,9 +14,23 @@ import {
   judgeInjectionProbe,
   shouldBlockInjectionProbe,
 } from "../../src/main/services/firefox-fingerprint.js";
-import { buildBrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
+import { buildBrowserFingerprintConfig, type BrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
 import { FIREFOX_NATIVE_CONFIG_PREF } from "../../src/main/services/firefox-native-capabilities.js";
-import type { BrowserFingerprintMeta, BrowserFingerprintConfig } from "../../src/main/types.js";
+import type { BrowserFingerprintMeta } from "../../src/main/types.js";
+
+type InjectedCollection<T> = T[] & {
+  item(index: number): T | null;
+  namedItem(name: string): T | null;
+};
+type InjectedMime = BrowserFingerprintConfig["pluginProfile"]["mimeTypes"][number];
+type InjectedPlugin = Omit<BrowserFingerprintConfig["pluginProfile"]["plugins"][number], "mimeTypes"> & {
+  mimeTypes: InjectedCollection<InjectedMime>;
+};
+
+function requireInjectedItem<T>(item: T | null): T {
+  if (item === null) throw new Error("Expected injected plugin/mime item is missing");
+  return item;
+}
 
 function meta(overrides: Partial<BrowserFingerprintMeta> = {}): BrowserFingerprintMeta {
   return {
@@ -258,7 +272,7 @@ describe("buildFirefoxManagedIdentity", () => {
 });
 
 describe("injection self-check probe (Slice 79.2)", () => {
-  const exp = buildInjectionProbeExpectation(buildBrowserFingerprintConfig(meta({})));
+  const exp = buildInjectionProbeExpectation(buildBrowserFingerprintConfig(meta({}), null));
 
   it("expression carries a marker, reads webdriver and double-draws a canvas", () => {
     const expression = buildInjectionProbeExpression();
@@ -360,9 +374,16 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
       open() {}
       send() {}
     }
-    class NavigatorStub {}
+    class NavigatorStub {
+      // The preload installs prototype getters; declarations emit no shadowing fields.
+      declare readonly platform: string;
+      declare readonly plugins: InjectedCollection<InjectedPlugin>;
+      declare readonly mimeTypes: InjectedCollection<InjectedMime>;
+      declare readonly pdfViewerEnabled: boolean;
+    }
     class WindowStub {}
     class ScreenStub {
+      declare readonly width: number;
       orientation: any;
       constructor(orientation: any) { this.orientation = orientation; }
     }
@@ -412,7 +433,13 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
     // Real navigators expose these on the PROTOTYPE (accessors), not as own
     // instance fields — class fields here would shadow the shim's prototype
     // writes and the persona re-application assertions would never hold.
-    class WorkerNavigator {}
+    class WorkerNavigator {
+      declare readonly platform: string;
+      declare readonly oscpu: string;
+      declare readonly webdriver: boolean;
+      declare readonly maxTouchPoints: number;
+      declare readonly languages: string[];
+    }
     const navigatorProto = WorkerNavigator.prototype as any;
     const hostFields: Record<string, unknown> = {
       platform: hostPlatform,
@@ -459,9 +486,9 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
       expect(world.navigator.plugins[0].name).toBe("Internal PDF Plugin");
       expect(world.navigator.plugins[0].filename).toBe("pdfium.dll");
       expect(world.navigator.plugins.namedItem("Widevine Content Decryption Module")).not.toBeNull();
-      expect(world.navigator.plugins.item(1).mimeTypes.length).toBe(0);
+      expect(requireInjectedItem(world.navigator.plugins.item(1)).mimeTypes.length).toBe(0);
       expect(world.navigator.mimeTypes.length).toBe(1);
-      expect(world.navigator.mimeTypes.namedItem("application/pdf").suffixes).toBe("pdf");
+      expect(requireInjectedItem(world.navigator.mimeTypes.namedItem("application/pdf")).suffixes).toBe("pdf");
       expect(world.navigator.pdfViewerEnabled).toBe(true);
       expect(world.screen.width).toBe(config.screen.width);
 

@@ -3,16 +3,52 @@
 // - appUrl + lock (card App button + lock badge)
 // - windowTitlePrefix (edit-form checkbox state; omission forced it on and
 //   every save clobbered the stored value via setMeta)
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-list-projection-test");
+// One exclusively acquired binding is shared by the test and hoisted mock.
+const fixture = await vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-list-projection-test-")));
+  const identity = fs.lstatSync(root);
+  const marker = path.join(root, ".fixture-owner");
+  const owner = JSON.stringify({ role: "profile-list-projection", root, dev: identity.dev, ino: identity.ino });
+  fs.writeFileSync(marker, owner, { flag: "wx", mode: 0o600 });
+  const markerIdentity = fs.lstatSync(marker);
+  function assertTree(p: string): void {
+    const st = fs.lstatSync(p);
+    if (st.isSymbolicLink() || (!st.isDirectory() && (!st.isFile() || st.nlink !== 1))) {
+      throw new Error("Refusing non-physical fixture cleanup: " + p);
+    }
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) assertTree(path.join(p, name));
+  }
+  function children(): string[] {
+    const st = fs.lstatSync(root);
+    const mark = fs.lstatSync(marker);
+    if (!st.isDirectory() || st.isSymbolicLink() || st.dev !== identity.dev || st.ino !== identity.ino ||
+        fs.realpathSync(root) !== root || !mark.isFile() || mark.isSymbolicLink() || mark.nlink !== 1 ||
+        mark.dev !== markerIdentity.dev || mark.ino !== markerIdentity.ino || fs.readFileSync(marker, "utf8") !== owner) {
+      throw new Error("Refusing unowned fixture cleanup: " + root);
+    }
+    const names = fs.readdirSync(root).filter((name) => name !== ".fixture-owner");
+    for (const name of names) {
+      if (name !== "config.json" && name !== "profiles") throw new Error("Unexpected fixture role: " + name);
+      assertTree(path.join(root, name));
+    }
+    return names;
+  }
+  function clear(): void {
+    for (const name of children()) fs.rmSync(path.join(root, name), { recursive: true });
+  }
+  return { root, clear, dispose: () => { clear(); fs.unlinkSync(marker); fs.rmdirSync(root); } };
+});
+
+afterAll(() => fixture.dispose());
 
 vi.mock("electron", () => ({
   app: {
-    getPath: (name: string) => (name === "userData" || name === "home" ? TEST_USER_DATA : "/tmp"),
+    getPath: (_name: string) => fixture.root,
   },
   BrowserWindow: { getAllWindows: () => [] },
 }));
@@ -25,12 +61,13 @@ import { reloadConfig, setProfileMeta } from "../../src/main/services/config-man
 
 describe("listBrowserProfiles projection (audit B1/B2)", () => {
   beforeEach(() => {
-    fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    fixture.clear();
     reloadConfig();
   });
   afterEach(() => {
-    fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+    // Reload while the fixture still exists; do not recreate data after cleanup.
     reloadConfig();
+    fixture.clear();
   });
 
   it("projects appUrl, lock and windowTitlePrefix", () => {

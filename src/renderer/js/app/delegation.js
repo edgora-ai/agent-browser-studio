@@ -100,6 +100,173 @@
       if (tab2) agentBrowser.switchTab(tab2);
     }
   });
+  // Keep overflow panels in their original details/card for action delegation,
+  // but paint them in the native top layer, outside scroll/transform clipping.
+  var openCardMenu = null;
+  var cardMenuObserver = null;
+
+  function cardMenuSummary(menu) { return menu.querySelector('summary'); }
+  function cardMenuPanel(menu) { return menu.querySelector('.card-menu-list'); }
+  function usableCardMenuSummary(summary) {
+    if (!summary || !summary.isConnected || summary.closest('[hidden]') || !summary.getClientRects().length) return false;
+    var style = window.getComputedStyle(summary);
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+  }
+  function cardMenuAvailable(menu) {
+    return usableCardMenuSummary(cardMenuSummary(menu)) &&
+      !menu.closest('.busy, [aria-busy="true"]');
+  }
+  function prepareCardMenu(menu) {
+    var panel = cardMenuPanel(menu);
+    if (panel && panel.getAttribute('popover') !== 'manual') panel.setAttribute('popover', 'manual');
+    return panel;
+  }
+
+  // CSS-pixel positioning: constrain width before measuring wrapped height.
+  // Kept separate from the details lifecycle so another custom panel can reuse
+  // this arithmetic without taking on a new widget/keyboard protocol.
+  function positionFloatingPanel(anchor, panel) {
+    var viewport = window.visualViewport;
+    var left = viewport ? viewport.offsetLeft : 0;
+    var top = viewport ? viewport.offsetTop : 0;
+    var width = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+    var height = window.innerHeight;
+    if (viewport) { width = Math.min(width, viewport.width); height = Math.min(height, viewport.height); }
+    var edge = 8;
+    var gap = 6;
+    var availableWidth = Math.max(0, width - edge * 2);
+    panel.style.minWidth = Math.min(200, availableWidth) + 'px';
+    panel.style.maxWidth = availableWidth + 'px';
+    panel.style.maxHeight = 'none';
+    var trigger = anchor.getBoundingClientRect();
+    var box = panel.getBoundingClientRect();
+    var below = Math.max(0, top + height - edge - trigger.bottom - gap);
+    var above = Math.max(0, trigger.top - gap - top - edge);
+    var down = box.height <= below || (box.height > above && below >= above);
+    var space = down ? below : above;
+    var panelHeight = Math.min(box.height, space);
+    panel.style.maxHeight = space + 'px';
+    panel.style.left = Math.max(left + edge, Math.min(trigger.right - box.width, left + width - edge - box.width)) + 'px';
+    panel.style.top = Math.max(top + edge, Math.min(down ? trigger.bottom + gap : trigger.top - gap - panelHeight,
+      top + height - edge - panelHeight)) + 'px';
+  }
+
+  function dismissCardMenus() { closeCardMenus(document, false); }
+  function cardMenuScroll(event) {
+    var panel = openCardMenu && cardMenuPanel(openCardMenu);
+    if (panel && panel.contains(event.target)) return; // Internal scrolling must keep actions reachable.
+    dismissCardMenus();
+  }
+  function stopCardMenuWatch(menu) {
+    if (openCardMenu !== menu) return;
+    openCardMenu = null;
+    if (cardMenuObserver) cardMenuObserver.disconnect();
+    document.removeEventListener('scroll', cardMenuScroll, true);
+    window.removeEventListener('scroll', dismissCardMenus);
+    window.removeEventListener('resize', dismissCardMenus);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('scroll', dismissCardMenus);
+      window.visualViewport.removeEventListener('resize', dismissCardMenus);
+    }
+  }
+  function watchCardMenu(menu) {
+    if (openCardMenu === menu) return;
+    openCardMenu = menu;
+    document.addEventListener('scroll', cardMenuScroll, true);
+    window.addEventListener('scroll', dismissCardMenus);
+    window.addEventListener('resize', dismissCardMenus);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('scroll', dismissCardMenus);
+      window.visualViewport.addEventListener('resize', dismissCardMenus);
+    }
+    if (!cardMenuObserver) {
+      cardMenuObserver = new MutationObserver(function() {
+        var current = openCardMenu;
+        if (current && (!current.open || !cardMenuAvailable(current))) closeCardMenu(current, false);
+      });
+    }
+    cardMenuObserver.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ['hidden', 'style', 'class', 'aria-busy', 'open']
+    });
+  }
+  function hideCardMenuPanel(menu) {
+    stopCardMenuWatch(menu);
+    var panel = cardMenuPanel(menu);
+    if (panel && panel.hasAttribute('popover') && panel.matches(':popover-open')) panel.hidePopover();
+  }
+  function closeCardMenu(menu, restoreFocus) {
+    var panel = cardMenuPanel(menu);
+    var summary = cardMenuSummary(menu);
+    var returnFocus = restoreFocus !== false && panel && panel.contains(document.activeElement) && usableCardMenuSummary(summary);
+    // A closed details can still retain :popover-open with a zero rect. Hide
+    // the native state first, not just menus selected by the open attribute.
+    hideCardMenuPanel(menu);
+    menu.open = false;
+    if (returnFocus) summary.focus({ preventScroll: true });
+  }
+  function closeCardMenus(scope, restoreFocus) {
+    scope = scope || document;
+    var menus = Array.prototype.slice.call(scope.querySelectorAll('.card-menu'));
+    if (scope.matches && scope.matches('.card-menu')) menus.unshift(scope);
+    // Detached owners are no longer found by document.querySelectorAll.
+    if (openCardMenu && (scope === document || scope.contains(openCardMenu)) && menus.indexOf(openCardMenu) === -1) menus.push(openCardMenu);
+    menus.forEach(function(menu) { closeCardMenu(menu, restoreFocus); });
+  }
+  function syncCardMenu(menu) {
+    var panel = prepareCardMenu(menu);
+    if (!menu.open || !panel || !cardMenuAvailable(menu)) { closeCardMenu(menu, false); return; }
+    if (openCardMenu && openCardMenu !== menu) closeCardMenu(openCardMenu, true);
+    if (!panel.matches(':popover-open')) {
+      panel.showPopover();
+      panel.scrollTop = 0;
+    }
+    positionFloatingPanel(cardMenuSummary(menu), panel);
+    watchCardMenu(menu);
+  }
+  function initCardMenus() {
+    document.addEventListener('click', function(event) {
+      var summary = closestEventTarget(event, '.card-menu > summary');
+      if (summary) {
+        var menu = summary.closest('.card-menu');
+        prepareCardMenu(menu); // Lazy preparation covers dynamically rebuilt cards.
+        if (!cardMenuAvailable(menu)) {
+          event.preventDefault();
+          closeCardMenu(menu, false);
+        } else if (menu.open) {
+          // Hide now, but let the native summary default clear details.open.
+          hideCardMenuPanel(menu);
+        } else {
+          closeCardMenus(document, false);
+        }
+      } else if (openCardMenu && !openCardMenu.contains(event.target)) {
+        dismissCardMenus(); // An outside click must never steal its new focus.
+      }
+    }, true);
+    document.addEventListener('toggle', function(event) {
+      var target = event.target;
+      if (!target || !target.matches) return;
+      if (target.matches('.card-menu')) {
+        // toggle tasks coalesce: use the actual state, never a stale newState.
+        syncCardMenu(target);
+      } else if (target.matches('.card-menu-list[popover]') && !target.matches(':popover-open')) {
+        var menu = target.closest('.card-menu');
+        if (menu && menu === openCardMenu && menu.open) closeCardMenu(menu, false);
+      }
+    }, true);
+    document.addEventListener('keydown', function(event) {
+      if (event.key !== 'Escape' || !openCardMenu) return;
+      closeCardMenus();
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+    Array.prototype.forEach.call(document.querySelectorAll('.card-menu'), function(menu) {
+      prepareCardMenu(menu);
+      if (menu.open) syncCardMenu(menu);
+    });
+  }
+  agentBrowser.closeCardMenus = closeCardMenus;
+
   /**
    * Give a dialog a visible way out.
    *
@@ -156,7 +323,9 @@
     }
   }
 
-  function initEventDelegation() {    document.addEventListener('click', function(e) {
+  function initEventDelegation() {
+    initCardMenus();
+    document.addEventListener('click', function(e) {
       var codeBtn = closestEventTarget(e,'[data-code-copy]');
       if (codeBtn) {
         copyCodeBlock(codeBtn);
@@ -168,10 +337,7 @@
       var cmd = el.getAttribute('data-cmd');
       if (!cmd) return;
       // Close any open overflow menu after an item is picked (UE-01 / UE-05).
-      try {
-        var openMenus = document.querySelectorAll('.card-menu[open]');
-        Array.prototype.forEach.call(openMenus, function (m) { m.removeAttribute('open'); });
-      } catch (menuErr) { /* menus are best effort */ }
+      closeCardMenus();
       if (cmd === 'close-dialog') {
         var targetId = el.getAttribute('data-cmd-target');
         var d = null;
@@ -266,7 +432,7 @@
     document.addEventListener('keydown', function(e) {
       var el = closestEventTarget(e,'[data-role="keydown"]');
       if (!el) return;
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentBrowser.agentSend(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); agentBrowser.agentSend(); }
     });
     // R181: [data-role="cmd"] is wired for clicks only, and several of them
     // are not <button> — the theme switch is a <div role="switch">, the nav
@@ -303,6 +469,7 @@
     (function() {
       var origShowModal = HTMLDialogElement.prototype.showModal;
       HTMLDialogElement.prototype.showModal = function() {
+        closeCardMenus(); // Restore the summary before capturing the dialog's return target.
         if (!this._returnFocus && document.activeElement instanceof HTMLElement) {
           this._returnFocus = document.activeElement;
         }

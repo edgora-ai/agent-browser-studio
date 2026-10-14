@@ -7,7 +7,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProfilesDir, getConfig, saveConfig, getProfileMeta } from "./config-manager.js";
+import { getProfilesDir, getConfig, getProfileMeta, normalizePortableProfileMeta } from "./config-manager.js";
+import type { BrowserProfileMeta } from "../types.js";
+import { transact } from "./config/store.js";
+import { requireProfileMutation } from "./team.js";
+import { hasInstalledRepositoryExtension } from "./extension-repository.js";
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { PROFILE_ID_PREFIX } from "../branding.js";
@@ -39,6 +43,8 @@ export interface ImportProfileResult {
   name: string;
   files: number;
   bytes: number;
+  /** Local dependencies referenced by the backup, never bundled with it. */
+  warnings: string[];
 }
 
 export interface BatchExportItem {
@@ -60,6 +66,7 @@ export interface BatchImportItem {
   name: string;
   files: number;
   bytes: number;
+  warnings: string[];
 }
 
 export interface BatchImportReport {
@@ -93,51 +100,41 @@ function collectProfileEntries(profileDir: string): Array<ZipFileEntry | ZipDirE
   return entries;
 }
 
-/** Strip sync/team fields so an imported profile starts as a local profile. */
-function sanitizeImportedMeta(raw: any): Record<string, unknown> {
-  const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-  const isStr = (v: unknown): v is string => typeof v === "string";
-  const isInt = (v: unknown): v is number => Number.isInteger(v);
-  const str = (v: unknown, max: number, fallback: string | null): string | null => (isStr(v) ? v.slice(0, max) : fallback);
-  const mode = (v: unknown, allowed: string[], fallback: string): string =>
-    isStr(v) && allowed.includes(v) ? v : fallback;
-  // Engine first (R6 #73): the version pin validates per engine, so a
-  // Firefox "154.0" pin must not be re-validated as Chromium on import.
-  const engine = raw?.engine === "firefox" ? "firefox" : "chromium";
-  return {
-    name: str(raw?.name, 120, "Imported profile") || "Imported profile",
-    fingerprintMode: mode(raw?.fingerprintMode, ["off", "managed"], "managed"),
-    engine,
-    browserVersion: str(raw?.browserVersion, 80, null),
-    allowThirdPartyCookies: raw?.allowThirdPartyCookies === true,
-    fingerprintSeed: isInt(raw?.fingerprintSeed) ? raw.fingerprintSeed : Math.floor(Math.random() * 90000) + 10000,
-    platform: mode(raw?.platform, ["windows", "macos", "android"], "windows"),
-    timezone: str(raw?.timezone, 64, null),
-    locale: str(raw?.locale, 32, null),
-    webrtcMode: mode(raw?.webrtcMode, ["auto", "altered", "disable", "real"], "auto"),
-    webrtcIp: str(raw?.webrtcIp, 64, null),
-    geolocationMode: mode(raw?.geolocationMode, ["real", "disable", "custom"], "real"),
-    geolocationLatitude: isNum(raw?.geolocationLatitude) ? raw.geolocationLatitude : null,
-    geolocationLongitude: isNum(raw?.geolocationLongitude) ? raw.geolocationLongitude : null,
-    geolocationAccuracy: isNum(raw?.geolocationAccuracy) ? raw.geolocationAccuracy : null,
-    gpuVendor: str(raw?.gpuVendor, 128, null),
-    gpuRenderer: str(raw?.gpuRenderer, 256, null),
-    hardwareConcurrency: isInt(raw?.hardwareConcurrency) ? raw.hardwareConcurrency : null,
-    deviceMemory: isInt(raw?.deviceMemory) ? raw.deviceMemory : null,
-    screenWidth: isInt(raw?.screenWidth) ? raw.screenWidth : null,
-    screenHeight: isInt(raw?.screenHeight) ? raw.screenHeight : null,
-    storageQuota: isInt(raw?.storageQuota) ? raw.storageQuota : null,
-    taskbarHeight: isInt(raw?.taskbarHeight) ? raw.taskbarHeight : null,
-    renderScaleMode: mode(raw?.renderScaleMode, ["native", "strict"], "native"),
-    windowTitlePrefix: raw?.windowTitlePrefix === null ? null : (isStr(raw?.windowTitlePrefix) ? raw.windowTitlePrefix.slice(0, 64) : undefined),
-    fontsDir: str(raw?.fontsDir, 500, null),
-    proxyMode: mode(raw?.proxyMode, ["none", "default", "named"], "default"),
-    proxyName: str(raw?.proxyName, 120, null),
-    note: str(raw?.note, 2000, null),
-    tags: Array.isArray(raw?.tags) ? raw.tags.filter(isStr).slice(0, 20) : [],
-    fingerprintBaseline: raw?.fingerprintBaseline && typeof raw.fingerprintBaseline === "object" ? raw.fingerprintBaseline : undefined,
-    updatedAt: Date.now(),
-  };
+// Version 1 remains compatible: new properties are optional, and this single
+// allowlist is used on both sides. Never export device paths (fontsDir), sync
+// markers, team locks, credentials, or extension repository/package paths.
+const PORTABLE_PROFILE_FIELDS = [
+  "name", "fingerprintMode", "engine", "browserVersion", "allowThirdPartyCookies",
+  "fingerprintSeed", "platform", "timezone", "locale", "webrtcMode", "webrtcIp",
+  "geolocationMode", "geolocationLatitude", "geolocationLongitude", "geolocationAccuracy",
+  "gpuVendor", "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth",
+  "screenHeight", "storageQuota", "taskbarHeight", "renderScaleMode", "windowTitlePrefix",
+  "appUrl", "drm", "proxyMode", "proxyName", "note", "tags", "preset",
+  "extensions", "fingerprintBaseline",
+] as const satisfies readonly (keyof BrowserProfileMeta)[];
+
+function portableProfile(raw: BrowserProfileMeta): Partial<BrowserProfileMeta> {
+  const result: Record<string, unknown> = {};
+  for (const field of PORTABLE_PROFILE_FIELDS) {
+    if (raw[field] !== undefined) result[field] = raw[field];
+  }
+  return result as Partial<BrowserProfileMeta>;
+}
+
+function importWarnings(profile: BrowserProfileMeta, hadLocalFontsDir: boolean): string[] {
+  const warnings: string[] = [];
+  if (hadLocalFontsDir) {
+    warnings.push("Custom fonts directory is device-local and not included in this backup; configure a local fonts directory before launching.");
+  }
+  if (profile.proxyMode === "named" && profile.proxyName) {
+    warnings.push(`Named proxy ${profile.proxyName} is not included in this backup; configure its settings and credentials before launching.`);
+  }
+  for (const [id, enabled] of Object.entries(profile.extensions || {})) {
+    if (enabled && !hasInstalledRepositoryExtension(id)) {
+      warnings.push(`Extension ${id} package is not included in this backup; install it in the private repository before launching.`);
+    }
+  }
+  return warnings;
 }
 
 function uniqueName(baseName: string): string {
@@ -164,7 +161,9 @@ export async function exportProfileArchive(dirId: string, destPath: string): Pro
     formatVersion: PROFILE_ARCHIVE_FORMAT,
     exportedAt: Date.now(),
     sourceDirId: dirId,
-    profile: meta,
+    // Boolean only: never leak the source machine's absolute fonts path.
+    omitted: { fontsDir: Boolean(meta.fontsDir) },
+    profile: portableProfile(meta),
   };
   const dataEntries = collectProfileEntries(profileDir);
   const result = await writeZipArchive(destPath, [
@@ -175,6 +174,8 @@ export async function exportProfileArchive(dirId: string, destPath: string): Pro
 }
 
 export function importProfileArchive(zipPath: string): ImportProfileResult {
+  const mutationGate = requireProfileMutation();
+  if (!mutationGate.ok) throw new Error(mutationGate.error);
   zipPath = assertSafeArchiveImportPath(zipPath);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "abs-profile-import-"));
   try {
@@ -190,23 +191,33 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
     if (metaDoc?.formatVersion !== PROFILE_ARCHIVE_FORMAT) {
       throw new Error("Unsupported archive format: " + JSON.stringify(metaDoc?.formatVersion));
     }
-    const importedMeta = sanitizeImportedMeta(metaDoc.profile);
-
+    const importedMeta = normalizePortableProfileMeta(metaDoc.profile);
+    const hadLocalFontsDir = metaDoc.omitted?.fontsDir === true ||
+      (typeof metaDoc.profile?.fontsDir === "string" && Boolean(metaDoc.profile.fontsDir.trim()));
+    const warnings = importWarnings(importedMeta, hadLocalFontsDir);
     const dirId = newDirId();
     const profileDir = path.join(getProfilesDir(), dirId);
-    fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
-    // Move extracted entries (everything except meta.json) into the profile dir.
-    for (const child of fs.readdirSync(tmpDir)) {
-      if (child === META_FILE) continue;
-      fs.renameSync(path.join(tmpDir, child), path.join(profileDir, child));
+    const importedName = uniqueName(importedMeta.name);
+    try {
+      fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+      // Move extracted entries (everything except meta.json) into the profile dir.
+      for (const child of fs.readdirSync(tmpDir)) {
+        if (child === META_FILE) continue;
+        fs.renameSync(path.join(tmpDir, child), path.join(profileDir, child));
+      }
+      transact((draft) => {
+        draft.browserProfiles = draft.browserProfiles || {};
+        draft.browserProfiles[dirId] = { ...importedMeta, name: importedName };
+      });
+    } catch (error) {
+      // Only the newly allocated destination is ours to remove; a failed
+      // config commit must not leave unlisted browser data behind.
+      fs.rmSync(profileDir, { recursive: true, force: true });
+      throw error;
     }
-
-    const importedName = uniqueName(String(importedMeta.name));
-    const newProfile = { ...importedMeta, name: importedName } as any;
-    try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ draft.browserProfiles=draft.browserProfiles||{}; draft.browserProfiles[dirId]=newProfile; }); } catch { const cfg = getConfig(); cfg.browserProfiles=cfg.browserProfiles||{}; cfg.browserProfiles[dirId]=newProfile; saveConfig(cfg as any); }
-    const cfg = getConfig() as any;
-
-    return { dirId, name: cfg.browserProfiles[dirId].name as string, files: extracted.files, bytes: extracted.bytes };
+    const stored = getProfileMeta(dirId);
+    if (!stored) throw new Error("Imported profile was not saved");
+    return { dirId, name: stored.name, files: extracted.files, bytes: extracted.bytes, warnings };
   } finally {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
@@ -250,7 +261,7 @@ export function importProfileArchives(zipPaths: string[]): BatchImportReport {
   for (const zipPath of zipPaths) {
     try {
       const r = importProfileArchive(zipPath);
-      report.imported.push({ zipPath, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes });
+      report.imported.push({ zipPath, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes, warnings: r.warnings });
     } catch (e: any) {
       report.failed.push({ zipPath, error: e?.message || String(e) });
     }

@@ -6,15 +6,23 @@ import {
   getProfilesDir,
   reloadConfig,
 } from "../services/config-manager.js";
-import { findRuntimeChromiumBinary } from "../services/browser-manager.js";
+import { findRuntimeChromiumBinaryAsync } from "../services/browser-manager.js";
 import { setMainLanguage, getMainLanguage } from "../services/main-i18n.js";
 
 export function registerAppHandlers(): void {
+  ipcMain.handle("app:quit", async () => {
+    // A renderer window.close() only hides to tray. Use the existing before-quit
+    // cleanup chain for an explicit exit; the reply acknowledges the request,
+    // not completion of process shutdown.
+    app.quit();
+    return { success: true };
+  });
+
   ipcMain.handle("app:paths", async () => {
     const appDataDir = getAppDataDir();
     const profilesDir = getProfilesDir();
     return {
-      chromiumBin: findRuntimeChromiumBinary(),
+      chromiumBin: await findRuntimeChromiumBinaryAsync(),
       appDataDir,
       profilesDir,
       configPath: getConfigPath(),
@@ -35,14 +43,14 @@ export function registerAppHandlers(): void {
       getAppDataDir(),
       getProfilesDir(),
       getConfigPath(),
-      findRuntimeChromiumBinary(),
     ].filter((p): p is string => Boolean(p));
     const resolved = path.resolve(dirPath);
     const profilesRoot = path.resolve(getProfilesDir());
     const isManagedProfilePath = resolved === profilesRoot || resolved.startsWith(profilesRoot + path.sep);
     const isAllowed = isManagedProfilePath || allowedPaths.some((allowedPath) => resolved === path.resolve(allowedPath));
     if (!isAllowed) {
-      throw new Error("Refusing to open unmanaged path");
+      const binary = await findRuntimeChromiumBinaryAsync();
+      if (!binary || resolved !== path.resolve(binary)) throw new Error("Refusing to open unmanaged path");
     }
     await shell.openPath(resolved);
     return { success: true };

@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import { getSyncConfig, getConfig, saveConfig, getProfilesDir } from "./config-manager.js";
+import { transact } from "./config/store.js";
 import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
 import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
@@ -303,14 +304,31 @@ export const syncService = {
       const allowedProfileIds = new Set(Object.keys(remoteConfig.browserProfiles || {}));
       if (allowedProfileIds.size > MAX_SYNC_PROFILES) throw new Error("Remote config contains too many profiles");
       validateArtifactProfileIds(payload, allowedProfileIds);
+
+      // Select artifacts from a frozen local snapshot BEFORE touching any
+      // profile directory, cookies, or files. At commit, verify each selected
+      // remote profile still matches that snapshot and merge into the live draft.
+      // Equal metadata still has an artifact source: browser state may differ.
+      // Clone because callers can mutate the current config object before save.
+      const profileSnapshot = structuredClone(getConfig().browserProfiles || {});
+      const mergeStrategy = normalizeMergeStrategy(opts?.strategy);
+      const resolutions = opts?.resolutions;
+      const profileResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "profiles", id);
+      const remoteProfiles = remoteConfig.browserProfiles || {};
+      const selectedRemoteProfiles = selectRemoteEntries(profileSnapshot, remoteProfiles, mergeStrategy, profileResolve);
+      const selectedRemoteEntries = Object.fromEntries(
+        [...selectedRemoteProfiles].map((id) => [id, remoteProfiles[id]]),
+      );
+
       let aggregateCookies = 0;
       let aggregateLocalStorage = 0;
       let aggregateLocalStorageBytes = 0;
       let aggregatePreferenceBytes = 0;
 
-      for (const dirId of allowedProfileIds) {
+      for (const dirId of selectedRemoteProfiles) {
         assertSyncNotAborted(signal);
         validateDirId(dirId);
+        assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         ensureProfileDefaultDir(dirId);
       }
 
@@ -320,7 +338,8 @@ export const syncService = {
         for (const [dirId, b64] of Object.entries(payload.cookies)) {
           assertSyncNotAborted(signal);
           validateDirId(dirId);
-          if (!b64) continue;
+          if (!selectedRemoteProfiles.has(dirId) || !b64) continue;
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
           try {
             const list = parseCookieBlob(b64);
             aggregateCookies += list.length;
@@ -341,6 +360,9 @@ export const syncService = {
             if (signal?.aborted) throw e;
             console.error(`[sync] pull cookie error for ${dirId}:`, e.message);
           }
+          // Runtime import may have awaited a concurrent user edit. Stop before
+          // writing any further artifacts or metadata for this stale selection.
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         }
       }
 
@@ -350,6 +372,8 @@ export const syncService = {
         for (const [dirId, b64] of Object.entries(payload.localStorage)) {
           assertSyncNotAborted(signal);
           validateDirId(dirId);
+          if (!selectedRemoteProfiles.has(dirId)) continue;
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
           if (isProfileRunningForRestore(dirId)) {
             console.log(`[sync] pull: skipped localStorage for running profile ${dirId.slice(0, 8)}`);
             continue;
@@ -374,6 +398,8 @@ export const syncService = {
         for (const [dirId, b64] of Object.entries(payload.preferences)) {
           assertSyncNotAborted(signal);
           validateDirId(dirId);
+          if (!selectedRemoteProfiles.has(dirId)) continue;
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
           if (isProfileRunningForRestore(dirId)) {
             console.log(`[sync] pull: skipped preferences for running profile ${dirId.slice(0, 8)}`);
             continue;
@@ -406,42 +432,39 @@ export const syncService = {
         }
       }
 
-      const latestConfig = getConfig();
-      const mergeStrategy = normalizeMergeStrategy(opts?.strategy);
-      const resolutions = opts?.resolutions;
-      const profileResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "profiles", id);
       const proxyResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "proxies", id);
       const accountResolve = (id: string): MergeStrategy | null =>
         resolutionFor(resolutions, "accounts", id.split("\u0000").join(" @ "));
-      const localProfiles = latestConfig.browserProfiles || {};
-      const remoteProfiles = remoteConfig.browserProfiles || {};
-      const mergedProfiles = mergeSectionById(localProfiles, remoteProfiles, mergeStrategy, profileResolve);
-      const mergedProxies = mergeSectionById(latestConfig.proxies || {}, remoteConfig.proxies || {}, mergeStrategy, proxyResolve);
-      const mergedAccounts = mergeAccountSection((remoteConfig as any).accounts, (latestConfig as any).accounts, mergeStrategy, accountResolve);
-      const adoptedProfiles = countAdoptedFromRemote(localProfiles, mergedProfiles, mergeStrategy, profileResolve);
-      const adoptedProxies = countAdoptedFromRemote(latestConfig.proxies || {}, mergedProxies, mergeStrategy, proxyResolve);
-     const adoptedAccounts = countAdoptedFromRemote(
-       accountMapOf((latestConfig as any).accounts),
-       accountMapOf(mergedAccounts),
-      mergeStrategy,
-      accountResolve,
-    );
-    const merged = {
-        ...remoteConfig,
-        ...latestConfig,
-        defaultProxy: remoteConfig.defaultProxy || latestConfig.defaultProxy,
-        proxies: mergedProxies,
-        accounts: mergedAccounts,
-        sync: latestConfig.sync,
-        browserProfiles: mergedProfiles,
-        team: mergeTeam((latestConfig as any).team, (remoteConfig as any).team),
-      } as MgmtConfig;
-
-      markRemoteProfilesSynced(merged, remoteConfig, pullTimestamp, {
-        preferences: importedPreferenceIds,
-        preferenceHashes: importedPreferenceHashes,
-      });
-      try { const { transact } = require("./config/store.js"); transact((draft:any)=>{ draft.defaultProxy=merged.defaultProxy; draft.proxies=merged.proxies; (draft as any).accounts=merged.accounts; draft.browserProfiles=merged.browserProfiles; draft.sync=merged.sync; (draft as any).team=merged.team; }); } catch { saveConfig(merged as any); }
+      let adoptedProfiles = 0;
+      let adoptedProxies = 0;
+      let adoptedAccounts = 0;
+      assertSyncNotAborted(signal);
+      // Read the live config at commit, not before an awaited runtime import.
+      // Only remote-selected profile entries are eligible for replacement;
+      // unrelated profiles (including ones created during the await) survive.
+      // A selected entry edited or deleted during the await fails closed.
+      transact((draft: MgmtConfig) => {
+        const localProfiles = draft.browserProfiles || {};
+        for (const dirId of selectedRemoteProfiles) {
+          assertSelectedProfileUnchanged(profileSnapshot, localProfiles, dirId);
+        }
+        const mergedProfiles = mergeSectionById(localProfiles, selectedRemoteEntries, "remote");
+        const mergedProxies = mergeProxySection(draft.proxies || {}, remoteConfig.proxies || {}, mergeStrategy, proxyResolve);
+        const mergedAccounts = mergeAccountSection((remoteConfig as any).accounts, (draft as any).accounts, mergeStrategy, accountResolve);
+        adoptedProfiles = countAdoptedFromRemote(localProfiles, mergedProfiles, mergeStrategy, profileResolve);
+        adoptedProxies = countAdoptedFromRemote(draft.proxies || {}, mergedProxies, mergeStrategy, proxyResolve);
+        adoptedAccounts = countAdoptedFromRemote(accountMapOf((draft as any).accounts), accountMapOf(mergedAccounts), mergeStrategy, accountResolve);
+        draft.defaultProxy = remoteConfig.defaultProxy || draft.defaultProxy;
+        draft.proxies = mergedProxies;
+        (draft as any).accounts = mergedAccounts;
+        draft.browserProfiles = mergedProfiles;
+        (draft as any).team = mergeTeam((draft as any).team, (remoteConfig as any).team);
+        markRemoteProfilesSynced(draft, remoteConfig, pullTimestamp, {
+          selectedRemoteProfiles,
+          preferences: importedPreferenceIds,
+          preferenceHashes: importedPreferenceHashes,
+        });
+      }, undefined, { forceAccountRevision: true });
 
       // Extensions: for each remote entry not present locally (or stale hash),
       // pull the package from S3 and install it via installLocalExtension.
@@ -1343,12 +1366,13 @@ function getSyncProfileName(config: MgmtConfig | SyncSafeConfig, dirId: string):
   return cfg.browserProfiles?.[dirId]?.name || dirId.slice(0, 8);
 }
 
-function markRemoteProfilesSynced(merged: MgmtConfig, remoteConfig: MgmtConfig, timestamp: number, artifacts: { preferences: Set<string>; preferenceHashes: Record<string, string> }): void {
+function markRemoteProfilesSynced(merged: MgmtConfig, remoteConfig: MgmtConfig, timestamp: number, artifacts: { selectedRemoteProfiles: Set<string>; preferences: Set<string>; preferenceHashes: Record<string, string> }): void {
   const local = merged as any;
   const remote = remoteConfig as any;
   const remoteProfiles = remote.browserProfiles || {};
   const mergedProfiles = local.browserProfiles || {};
   for (const [dirId, remoteProfile] of Object.entries(remoteProfiles)) {
+    if (!artifacts.selectedRemoteProfiles.has(dirId)) continue;
     const mergedProfile = mergedProfiles[dirId];
     if (!mergedProfile) continue;
     if (!(remoteProfile as any).syncedHash || !artifacts.preferences.has(dirId)) continue;
@@ -1485,6 +1509,35 @@ function entryUpdatedAt(entry: any): number {
   return Number.isFinite(ts) ? ts : 0;
 }
 
+function remoteWins(localEntry: any, remoteEntry: any, strategy: MergeStrategy): boolean {
+  return strategy === "remote" || (strategy === "newest" && entryUpdatedAt(remoteEntry) > entryUpdatedAt(localEntry));
+}
+
+// Artifact selection must not use the merged object's identity: the metadata
+// merge deliberately keeps the local instance for equal metadata even when the
+// remote browser files differ. Remote-only entries are always imported.
+function selectRemoteEntries(
+  localMap: Record<string, any>,
+  remoteMap: Record<string, any>,
+  strategy: MergeStrategy,
+  resolutionFor?: (id: string) => MergeStrategy | null,
+): Set<string> {
+  const selected = new Set<string>();
+  for (const [id, remoteEntry] of Object.entries(remoteMap || {})) {
+    if (!Object.hasOwn(localMap, id) || remoteWins(localMap[id], remoteEntry, resolutionFor?.(id) ?? strategy)) {
+      selected.add(id);
+    }
+  }
+  return selected;
+}
+
+function assertSelectedProfileUnchanged(snapshot: Record<string, any>, current: Record<string, any>, id: string): void {
+  if (Object.hasOwn(snapshot, id) !== Object.hasOwn(current, id)
+    || (Object.hasOwn(snapshot, id) && stableStringify(snapshot[id]) !== stableStringify(current[id]))) {
+    throw new Error(`Profile changed during sync pull: ${id}`);
+  }
+}
+
 // Merge an id-keyed section (profiles / proxies / extensions) by strategy.
 //   local  → keep the local entry on conflicts (legacy behaviour)
 //   remote → adopt the remote entry on conflicts
@@ -1495,24 +1548,49 @@ function mergeSectionById(
   remoteMap: Record<string, any>,
   strategy: MergeStrategy,
   resolutionFor?: (id: string) => MergeStrategy | null,
+  localOnly?: { ignoredFields: Set<string>; onRemoteWin: (local: any, remote: any) => any },
 ): Record<string, any> {
   const merged: Record<string, any> = {};
   for (const [id, entry] of Object.entries(localMap || {})) merged[id] = entry;
   for (const [id, remoteEntry] of Object.entries(remoteMap || {})) {
-    if (!(id in merged)) {
+    if (!Object.hasOwn(merged, id)) {
       merged[id] = remoteEntry;
       continue;
     }
     const localEntry = merged[id];
-    if (changedTopFields(localEntry, remoteEntry, SYNC_BOOKKEEPING_FIELDS).length === 0) continue;
+    if (changedTopFields(localEntry, remoteEntry, localOnly?.ignoredFields ?? SYNC_BOOKKEEPING_FIELDS).length === 0) continue;
     const effective = resolutionFor ? (resolutionFor(id) ?? strategy) : strategy;
-    if (effective === "remote") {
-      merged[id] = remoteEntry;
-    } else if (effective === "newest" && entryUpdatedAt(remoteEntry) > entryUpdatedAt(localEntry)) {
-      merged[id] = remoteEntry;
+    if (remoteWins(localEntry, remoteEntry, effective)) {
+      merged[id] = localOnly ? localOnly.onRemoteWin(localEntry, remoteEntry) : remoteEntry;
     }
   }
   return merged;
+}
+
+// Only these fields are intentionally absent from sync snapshots. Keep them
+// from the live commit-time draft, never from the untrusted remote payload.
+const PROXY_SYNC_IGNORED_FIELDS = new Set([...SYNC_BOOKKEEPING_FIELDS, "username", "password"]);
+const ACCOUNT_SYNC_IGNORED_FIELDS = new Set([...SYNC_BOOKKEEPING_FIELDS, "platformPassword"]);
+
+function mergeProxySection(
+  local: Record<string, ProxyConfig>,
+  remote: Record<string, ProxyConfig>,
+  strategy: MergeStrategy,
+  resolutionFor?: (id: string) => MergeStrategy | null,
+): Record<string, ProxyConfig> {
+  return mergeSectionById(local, remote, strategy, resolutionFor, {
+    ignoredFields: PROXY_SYNC_IGNORED_FIELDS,
+    onRemoteWin: (previous: ProxyConfig, incoming: ProxyConfig): ProxyConfig => {
+      // A proxy name alone does not identify the authentication target. A new
+      // protocol, host or port needs fresh credentials, not the old endpoint's.
+      if (previous.type !== incoming.type || previous.host !== incoming.host || previous.port !== incoming.port) return incoming;
+      return {
+        ...incoming,
+        ...(typeof previous.username === "string" ? { username: previous.username } : {}),
+        ...(typeof previous.password === "string" ? { password: previous.password } : {}),
+      };
+    },
+  });
 }
 
 function accountMapOf(accounts: any[]): Record<string, any> {
@@ -1532,7 +1610,15 @@ function mergeAccountSection(
   strategy: MergeStrategy,
   resolutionFor?: (id: string) => MergeStrategy | null,
 ): any[] {
-  return Object.values(mergeSectionById(accountMapOf(local), accountMapOf(remote), strategy, resolutionFor));
+  return Object.values(mergeSectionById(accountMapOf(local), accountMapOf(remote), strategy, resolutionFor, {
+    ignoredFields: ACCOUNT_SYNC_IGNORED_FIELDS,
+    onRemoteWin: (previous: any, incoming: any) => ({
+      ...incoming,
+      // The map key is the full username + URL identity. Never match another
+      // account by array position, profile binding, or just its username.
+      ...(typeof previous.platformPassword === "string" ? { platformPassword: previous.platformPassword } : {}),
+    }),
+  }));
 }
 
 // Count conflicting entries (present on both sides, differing) that ended up
@@ -1727,6 +1813,7 @@ export const __syncTestHooks = {
   stableStringify,
   mergeAccountArrays,
   mergeSectionById,
+  mergeProxySection,
   mergeAccountSection,
   countAdoptedFromRemote,
   normalizeMergeStrategy,

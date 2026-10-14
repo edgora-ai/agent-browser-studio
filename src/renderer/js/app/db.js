@@ -17,8 +17,14 @@
   var icon = helpers.icon;
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
+  var tablesLoadSeq = 0;
+  var resultSeq = 0;
+
   agentBrowser.loadDbTab = function() {
+    var seq = ++tablesLoadSeq;
+    bindSqlShortcut();
     lcall("agentDb.tables", function () { return api.agentDb.tables(); }).then(function(tables) {
+      if (seq !== tablesLoadSeq) return;
       var el = document.getElementById("db-tables");
       var countEl = document.getElementById("db-table-count");
       if (countEl) countEl.textContent = tables && tables.length ? "(" + tables.length + ")" : "";
@@ -41,8 +47,8 @@
         if (!row || !el.contains(row)) return;
         agentBrowser.dbViewTable(row.dataset.table);
       };
-      bindSqlShortcut();
     }).catch(function(e) {
+      if (seq !== tablesLoadSeq) return;
       // R190: the catch only toasted — the list area kept its "加载中…"
       // placeholder forever, so the tab looked like it was still working
       // while the one signal sat in a toast that fades. Render the error
@@ -72,6 +78,9 @@
   }
 
   agentBrowser.dbViewTable = function(table) {
+    var seq = ++resultSeq;
+    var resultEl = document.getElementById("db-result");
+    if (resultEl) resultEl.textContent = t("db.running", "运行中...");
     // Mark the picked row so the two panes read as master/detail.
     var list = document.getElementById("db-tables");
     if (list) {
@@ -81,6 +90,7 @@
       }
     }
     api.agentDb.tableData(table, 100, 0).then(function(data) {
+      if (seq !== resultSeq) return;
       var el = document.getElementById("db-result");
       if (!data || !data.rows || data.rows.length === 0) {
         el.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + esc(t("db.table-empty", "Table {table} is empty ({n} rows).").replace("{table}", table).replace("{n}", String(data ? data.total : 0))) + '</div>';
@@ -109,26 +119,42 @@
       });
       html += "</tbody></table>";
       el.innerHTML = html;
-    }).catch(function(e) { toast(t("db.toast.read-failed","读取失败: ") + (e.message || e), "error"); });
+    }).catch(function(e) {
+      if (seq !== resultSeq) return;
+      var msg = t("db.toast.read-failed","读取失败: ") + (e.message || e);
+      if (resultEl) resultEl.innerHTML = '<div style="color:var(--danger-text);">' + esc(msg) + '</div>';
+      toast(msg, "error");
+    });
   };
 
   agentBrowser.dbRunSql = function(mode) {
     var sql = document.getElementById("db-sql").value.trim();
     if (!sql) { toast(t("db.toast.no-sql","请输入 SQL"), "error"); return; }
+    var seq = ++resultSeq;
     var el = document.getElementById("db-result");
     var isExec = mode === "exec";
     el.innerHTML = '<span style="color: var(--primary-text);">' + t("db.running","运行中...") + '</span>';
     if (isExec) {
       api.agentDb.exec(sql).then(function(r) {
+        // A completed write still changes the table list, even when a newer
+        // read owns the result pane. Never let its acknowledgement replace it.
+        if (r.ok) agentBrowser.loadDbTab();
+        if (seq !== resultSeq) {
+          if (!r.ok) toast(r.error || t("db.exec-failed-default","Failed"), "error");
+          return;
+        }
         if (r.ok) {
           el.innerHTML = '<div style="color: var(--success-text);">' + t("db.exec-done","Executed.") + '</div>';
-          agentBrowser.loadDbTab();
         } else {
           el.innerHTML = '<div style="color: var(--danger-text);">' + esc(r.error || t("db.exec-failed-default","Failed")) + "</div>";
         }
-      }).catch(function(e) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>"; });
+      }).catch(function(e) {
+        if (seq !== resultSeq) { toast(e.message || String(e), "error"); return; }
+        el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>";
+      });
     } else {
       api.agentDb.query(sql).then(function(r) {
+        if (seq !== resultSeq) return;
         if (!r.ok) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(r.error || t("db.exec-failed-default","Failed")) + "</div>"; return; }
         var rows = r.rows || [];
         if (rows.length === 0) { el.innerHTML = '<div style="color:var(--text-muted);">' + esc(t("db.no-result", "No result ({n} rows)").replace("{n}", String(r.count))) + "</div>"; return; }
@@ -148,7 +174,7 @@
         });
         html += "</tbody></table>";
         el.innerHTML = html;
-      }).catch(function(e) { el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>"; });
+      }).catch(function(e) { if (seq !== resultSeq) return; el.innerHTML = '<div style="color: var(--danger-text);">' + esc(e.message || e) + "</div>"; });
     }
   };
 })();

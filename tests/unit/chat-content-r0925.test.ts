@@ -54,16 +54,22 @@ function loadChatContent(opts: {
   const agentBrowser: any = {
     helpers: { toast, icon: (name: string) => `[icon:${name}]` },
     state: { agentMessages: opts.messages },
+    agentRenderConvs: vi.fn(),
   };
+  // Use real registration/dispatch semantics for the content module's document
+  // language listener; this affordance-only fixture has no title element.
+  const document = Object.assign(new EventTarget(), {
+    getElementById: (id: string) => elements[id] || null,
+  });
   const sandbox: any = {
     window: { agentBrowser, i18n: { t: (_k: string, f: string) => f } },
-    document: { getElementById: (id: string) => elements[id] || null },
+    document,
     navigator: opts.clipboard ? { clipboard: opts.clipboard } : {},
     setTimeout: (fn: () => void) => { fn(); return 0; },
   };
   vm.createContext(sandbox);
   vm.runInContext(CHAT_CONTENT, sandbox);
-  return { container, input, toast, agentBrowser };
+  return { container, input, toast, agentBrowser, document };
 }
 
 function copyButton(index: number) {
@@ -145,6 +151,21 @@ describe("agent-chat-content.js — composer auto-grow", () => {
     input.scrollHeight = 42;
     agentBrowser.chatComposerResize();
     expect(input.style.height).toBe("42px");
+  });
+});
+
+describe("agent-chat-content.js — document language events", () => {
+  it("dispatches registered language callbacks without treating unrelated events as language changes", () => {
+    const { document, input, agentBrowser } = loadChatContent({ messages: [] });
+    input.value = "  unsent draft\n ";
+    expect(agentBrowser.agentRenderConvs).not.toHaveBeenCalled();
+    document.dispatchEvent(new Event("unrelated-fixture-event"));
+    expect(agentBrowser.agentRenderConvs).not.toHaveBeenCalled();
+    document.dispatchEvent(new Event("agent-browser-language-change"));
+    expect(agentBrowser.agentRenderConvs).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(new Event("agent-browser-language-change"));
+    expect(agentBrowser.agentRenderConvs).toHaveBeenCalledTimes(2);
+    expect(input.value).toBe("  unsent draft\n ");
   });
 });
 

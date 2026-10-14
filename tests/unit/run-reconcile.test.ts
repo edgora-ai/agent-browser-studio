@@ -103,7 +103,10 @@ describe("finishRun metadata", () => {
 });
 
 describe("config-first cleanup", () => {
-  it("eviction by the 200-run retention removes result dir and template rows", () => {
+  it("retention evicts only terminal results/rows, keeping the oldest active result writable", () => {
+    const protectedRun = agentRunRecorder.startRun({ source: { type: "automation", templateId: "news-collect", templateVersion: 1 }, name: "protected" });
+    insertRow(protectedRun.id, "https://example.com/protected");
+    commitResultFor(protectedRun, { status: "done", endReason: "completed", finishedAt: Date.now() });
     const first = agentRunRecorder.startRun({ source: { type: "automation", templateId: "news-collect", templateVersion: 1 }, name: "evicted" });
     insertRow(first.id, "https://example.com/evicted");
     commitResultFor(first, { status: "done", endReason: "completed", finishedAt: Date.now() });
@@ -117,12 +120,24 @@ describe("config-first cleanup", () => {
     expect((getConfig() as any).agentRuns.find((r: any) => r.id === first.id)).toBeUndefined();
     expect(fs.existsSync(runDir(first.id))).toBe(false);
     expect(countNewsRowsForRun(first.id)).toBe(0);
+    expect((getConfig() as any).agentRuns.find((r: any) => r.id === protectedRun.id)?.status).toBe("running");
+    expect(fs.existsSync(runDir(protectedRun.id))).toBe(true);
+    expect(countNewsRowsForRun(protectedRun.id)).toBe(1);
+    expect(agentRunRecorder.recordStep(protectedRun.id, { tool: "after-retention", args: {}, ok: true, durationMs: 1 })).not.toBeNull();
+    const result = runResultStore.readManifest(protectedRun.id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(agentRunRecorder.finishRun(protectedRun.id, "done", undefined, { artifacts: result.value.artifacts })?.status).toBe("done");
+    expect(fs.existsSync(runDir(protectedRun.id))).toBe(true);
+    expect(countNewsRowsForRun(protectedRun.id)).toBe(1);
+    expect((getConfig() as any).agentRuns.find((r: any) => r.id === protectedRun.id)?.steps).toHaveLength(1);
   }, 60000);
 
   it("deleteRun removes the result dir and rows after the config commit", () => {
     const run = agentRunRecorder.startRun({ source: { type: "automation", templateId: "news-collect", templateVersion: 1 }, name: "delete me" });
     insertRow(run.id, "https://example.com/deleteme");
     commitResultFor(run, { status: "done", endReason: "completed", finishedAt: Date.now() });
+    agentRunRecorder.finishRun(run.id, "done", undefined, { endReason: "completed" });
     expect(agentRunRecorder.deleteRun(run.id)).toBe(true);
     expect(fs.existsSync(runDir(run.id))).toBe(false);
     expect(countNewsRowsForRun(run.id)).toBe(0);
@@ -135,7 +150,9 @@ describe("config-first cleanup", () => {
     insertRow(b.id, "https://example.com/b");
     commitResultFor(a, { status: "done", endReason: "completed", finishedAt: Date.now() });
     commitResultFor(b, { status: "done", endReason: "completed", finishedAt: Date.now() });
-    expect(agentRunRecorder.clearRuns()).toBeGreaterThanOrEqual(2);
+    agentRunRecorder.finishRun(a.id, "done", undefined, { endReason: "completed" });
+    agentRunRecorder.finishRun(b.id, "done", undefined, { endReason: "completed" });
+    expect(agentRunRecorder.clearRuns()).toBe(2);
     expect(fs.existsSync(runDir(a.id))).toBe(false);
     expect(fs.existsSync(runDir(b.id))).toBe(false);
     expect(countNewsRowsForRun(a.id)).toBe(0);

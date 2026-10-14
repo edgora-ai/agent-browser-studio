@@ -730,6 +730,48 @@ describe("Sync merge strategy (mergeSectionById / mergeAccountSection / countAdo
     expect(merged).toHaveLength(1);
     expect(merged[0].tags).toEqual(["l"]);
   });
+
+  it("keeps only local proxy credentials for a remote metadata winner at the same endpoint", () => {
+    const local = { p: { type: "http", host: "same.test", port: 80, username: "local", password: "v2:local", fallbacks: ["old"], updatedAt: 100 } };
+    const remote = { p: { type: "http", host: "same.test", port: 80, bypassList: ["new.test"], updatedAt: 200 } };
+    const chosen = __syncTestHooks.mergeProxySection(local as any, remote as any, "newest").p;
+    expect(chosen).toEqual({ ...remote.p, username: "local", password: "v2:local" });
+    expect(__syncTestHooks.countAdoptedFromRemote(local, { p: chosen }, "newest")).toBe(1);
+    // Credentials missing from a snapshot are not a metadata conflict.
+    const unchanged = __syncTestHooks.mergeProxySection({ p: { ...remote.p, username: "local", password: "v2:local" } } as any, remote as any, "remote");
+    expect(unchanged.p).toEqual({ ...remote.p, username: "local", password: "v2:local" });
+    expect(__syncTestHooks.mergeProxySection({ p: { ...remote.p, username: "local", password: "" } } as any,
+      { p: { ...remote.p, bypassList: ["different.test"] } } as any, "remote").p.password).toBe("");
+  });
+
+  it("drops proxy authentication for every changed target dimension, without moving other local metadata", () => {
+    const old = { type: "http", host: "same.test", port: 80, username: "local", password: "v2:local", fallbacks: ["old"] };
+    for (const changed of [{ type: "socks5" }, { host: "new.test" }, { port: 81 }]) {
+      const remote = { ...old, ...changed, username: undefined, password: undefined, fallbacks: undefined };
+      const result = __syncTestHooks.mergeProxySection({ p: old } as any, { p: remote } as any, "remote").p;
+      expect(result.username).toBeUndefined();
+      expect(result.password).toBeUndefined();
+      expect(result.fallbacks).toBeUndefined();
+    }
+    expect(__syncTestHooks.mergeProxySection({}, { new: { type: "http", host: "new.test", port: 82 } } as any, "local").new.username).toBeUndefined();
+  });
+
+  it("carries an account password only across the exact username+URL key", () => {
+    const local = [{ platformUserName: "alice", platformUrl: "https://a.test", platformPassword: "v2:local", tags: ["local"], createdAt: 1, updatedAt: 100 }];
+    const remote = [
+      { platformUserName: "alice", platformUrl: "https://a.test", tags: ["remote"], updatedAt: 200 },
+      { platformUserName: "alice", platformUrl: "https://b.test", tags: ["other"] },
+      { platformUserName: "bob", platformUrl: "https://a.test", tags: ["other"] },
+    ];
+    const result = __syncTestHooks.mergeAccountSection(remote as any, local as any, "newest");
+    expect(result.find((a: any) => a.platformUserName === "alice" && a.platformUrl === "https://a.test"))
+      .toEqual({ ...remote[0], platformPassword: "v2:local" });
+    expect(result.filter((a: any) => a.platformUrl === "https://b.test" || a.platformUserName === "bob"))
+      .toEqual([remote[1], remote[2]]);
+    const sameMetadata = __syncTestHooks.mergeAccountSection([remote[0]] as any,
+      [{ ...remote[0], platformPassword: "v2:local" }] as any, "remote");
+    expect(sameMetadata[0].platformPassword).toBe("v2:local");
+  });
 });
 
 describe("Sync team profile locks", () => {

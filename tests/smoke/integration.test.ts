@@ -589,7 +589,6 @@ describe("Integration — Agent ↔ LLM", () => {
     for (const fn of expected) {
       const isAsync = ["agentChat", "llmChat", "cdpConnect", "cdpNavigate"].includes(fn);
       const pats = isAsync ? ["export async function " + fn, "export const " + fn] : ["export function " + fn, "export const " + fn]; const ok = pats.some(pat => la.includes(pat)); if(!ok) expect(la, 'missing export: '+fn+' (tried '+pats.join('|')+')').toContain(pats[0]); else expect(true).toBe(true); continue;
-      expect(la, `missing export: ${fn}`).toContain(pat);
     }
   });
 

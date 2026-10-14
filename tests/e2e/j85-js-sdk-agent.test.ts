@@ -14,8 +14,8 @@ const USERDATA = path.join(REPO, 'tests', 'e2e', 'userdata', 'j85');
 describe('J85 — JS SDK agent surface', () => {
   let h: HeadlessAppHandle;
   let mock: Awaited<ReturnType<typeof startMockLlm>>;
-  let sdk: any;
-  let client: any;
+  let sdk: typeof import('../../sdk/js/agent-browser.mjs');
+  let client: InstanceType<typeof sdk.AgentBrowserClient>;
 
   beforeAll(async () => {
     mock = await startMockLlm({ delayMs: 20, chunks: ['J85 ', 'mock ', 'reply.'] });
@@ -62,10 +62,12 @@ describe('J85 — JS SDK agent surface', () => {
       apiUrl: mock.url,
     });
     expect(saved.success).toBe(true);
+    if (saved.config === null) throw new Error('Saved LLM config is missing');
     expect(saved.config.hasApiKey).toBe(true);
     expect(saved.config.apiKey).toBeUndefined();
 
     const reread = await client.llmConfig();
+    if (reread.config === null) throw new Error('Reread LLM config is missing');
     expect(reread.config.model).toBe('e2e-mock-model');
     expect(reread.config.hasApiKey).toBe(true);
 
@@ -81,7 +83,7 @@ describe('J85 — JS SDK agent surface', () => {
     expect(convId).toMatch(/^conv_/);
 
     const list = await client.listConversations();
-    expect(list.some((c: any) => c.id === convId)).toBe(true);
+    expect(list.some((c) => c.id === convId)).toBe(true);
 
     const got = await client.getConversation(convId);
     expect(got.conversation.id).toBe(convId);
@@ -92,8 +94,8 @@ describe('J85 — JS SDK agent surface', () => {
 
     const del = await client.deleteConversation(convId);
     expect(del.success).toBe(true);
-    let err: any = null;
-    try { await client.getConversation(convId); } catch (e: any) { err = e; }
+    let err: unknown = null;
+    try { await client.getConversation(convId); } catch (e) { err = e; }
     expect(err).toBeTruthy();
     expect(String(err)).toContain('404');
   }, 30000);
@@ -115,13 +117,13 @@ describe('J85 — JS SDK agent surface', () => {
 
     const run = await client.agentRun(chat.runId);
     expect(run.run.status).toBe('done');
-    expect(run.run.steps.some((s: any) => s.tool === 'set_var')).toBe(true);
+    expect(run.run.steps.some((s) => s.tool === 'set_var')).toBe(true);
 
     const runs = await client.agentRuns();
-    expect(runs.some((r: any) => r.id === chat.runId)).toBe(true);
+    expect(runs.some((r) => r.id === chat.runId)).toBe(true);
 
     const got = await client.getConversation(convId);
-    expect(got.conversation.messages.some((m: any) =>
+    expect(got.conversation.messages.some((m) =>
       m.role === 'assistant' && m.content.includes('J85 tool answer.'))).toBe(true);
 
     const delRun = await client.deleteAgentRun(chat.runId);
@@ -142,12 +144,16 @@ describe('J85 — JS SDK agent surface', () => {
    await client.dbExec("INSERT INTO j85_items (label) VALUES ('alpha')");
 
     const tables1 = await client.dbTables();
-    expect(tables1.some((t: any) => t.name === 'j85_items')).toBe(true);
+    expect(tables1.some((t) => t.name === 'j85_items')).toBe(true);
 
     const data = await client.dbTable('j85_items');
     expect(data.columns).toContain('label');
     expect(data.rows.length).toBe(1);
-    expect(data.rows[0].label).toBe('alpha');
+    const firstRow = data.rows[0];
+    if (typeof firstRow !== 'object' || firstRow === null || !('label' in firstRow) || typeof firstRow.label !== 'string') {
+      throw new Error('Expected the stored j85_items row to have a string label');
+    }
+    expect(firstRow.label).toBe('alpha');
 
     const q = await client.dbQuery('SELECT label FROM j85_items');
     expect(q.ok).toBe(true);

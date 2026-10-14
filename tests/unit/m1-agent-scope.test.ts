@@ -30,6 +30,13 @@ vi.mock("../../src/main/services/config-manager.js", () => ({
     return profile ? { name: profile.name, engine: profile.engine } : null;
   },
 }));
+vi.mock("../../src/main/services/config/store.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/main/services/config/store.js")>(),
+  readAccountSnapshot: () => ({
+    accounts: structuredClone(mocks.accounts),
+    revision: "24600000-0000-4000-8000-000000000001",
+  }),
+}));
 vi.mock("../../src/main/services/browser-manager.js", () => ({
   launchBrowser: vi.fn(),
   listBrowserProfiles: () => mocks.profiles,
@@ -421,9 +428,9 @@ describe("M1 scoped tool catalog and backend enforcement", () => {
     registerProfile("profile-a", "A", 42001);
     registerProfile("profile-b", "B", 42002);
     mocks.accounts = [
+      { platformUrl: "https://b.example", platformUserName: "bob", platformPassword: "v2:SYNTHETIC_BOB", profileIds: ["profile-b"] },
       { platformUrl: "https://shared.example", platformUserName: "shared" },
-      { platformUrl: "https://a.example", platformUserName: "alice", profileIds: ["profile-a"] },
-      { platformUrl: "https://b.example", platformUserName: "bob", profileIds: ["profile-b"] },
+      { platformUrl: "https://a.example", platformUserName: "alice", platformPassword: "v2:SYNTHETIC_ALICE", profileIds: ["profile-a"], tags: ["synthetic"] },
     ];
     const scope = captureChatBrowserScope("profile-a")!;
 
@@ -431,6 +438,15 @@ describe("M1 scoped tool catalog and backend enforcement", () => {
     expect(profiles.profiles.map((profile: any) => profile.dirId)).toEqual(["profile-a"]);
     const accounts = await executeToolCall("list_accounts", {}, undefined, { browserScope: scope });
     expect(accounts.accounts.map((account: any) => account.username)).toEqual(["shared", "alice"]);
+    expect(accounts.accounts.map((account: any) => account.ref)).toEqual([
+      { index: 1, revision: "24600000-0000-4000-8000-000000000001" },
+      { index: 2, revision: "24600000-0000-4000-8000-000000000001" },
+    ]);
+    expect(accounts.accounts.map((account: any) => account.hasPassword)).toEqual([false, true]);
+    expect(accounts.accounts.every((account: any) => !("platformPassword" in account))).toBe(true);
+    expect(JSON.stringify(accounts)).not.toContain("SYNTHETIC_");
+    accounts.accounts[1].tags.push("detached");
+    expect(mocks.accounts[2].tags).toEqual(["synthetic"]);
     expect(await executeToolCall("list_profiles", {}, undefined, { browserScope: null })).toEqual({ profiles: [] });
     expect(await executeToolCall("list_accounts", {}, undefined, { browserScope: null })).toEqual({ accounts: [] });
   });

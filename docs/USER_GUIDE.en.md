@@ -139,7 +139,9 @@ Treat the S3 bucket as sensitive storage: secrets are stripped from sync payload
 ## 11. Data & backups — please read once
 
 - Everything lives on **this machine**: `<user-data>/profiles/…` (cookies, localStorage), plus the encrypted credential vault and audit logs.
-- **Disk failure = account loss.** Use at least one of: **📦 Export backup** per profile, **☁️ Sync** to an S3 bucket, or the **trash window** (7 days) for accidental deletes.
+- **Disk failure can destroy local profile data.** Keep a **profile export backup on a separate disk or separately stored cloud backup**, or use **Sync to an independently stored S3 bucket**. An export left on the same disk does not protect against that disk failing. Check that your backup exists and rehearse restoration using a non-critical profile.
+- **The 7-day trash window protects against accidental deletion, not disk failure.** Trash stays in the local storage area on the same disk; it is not an independent backup and disappears on permanent purge or after its retention window.
+- Backups contain sensitive account data. Browser-encrypted cookies and sessions may be tied to the original OS/device; an export or sync does **not** guarantee that a logged-in session will work on another machine. Keep recovery credentials separately and be prepared to sign in again.
 - The Storage tab shows per-profile disk usage and keeps data-safety reminders visible.
 
 ## 12. Integration surfaces (for developers)

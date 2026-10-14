@@ -11,7 +11,7 @@
 // - Secrets: license file is 0600; never log the license key or code.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { verify } from "node:crypto";
+import { createPublicKey, verify } from "node:crypto";
 import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
 
 export type LicensePlan = "trial" | "monthly" | "yearly" | "lifetime";
@@ -87,6 +87,18 @@ export function getLicensePublicKeyB64(): string {
     }
   } catch { /* packaged path unavailable (dev/test) */ }
   return "";
+}
+
+/** Informational readiness only; activation still enforces signature/device/expiry. */
+export function canActivateLicense(): boolean {
+  const pubB64 = getLicensePublicKeyB64();
+  if (!pubB64) return false;
+  try {
+    return createPublicKey({ key: Buffer.from(pubB64, "base64"), format: "der", type: "spki" }).asymmetricKeyType === "ed25519";
+  } catch {
+    // A present but unusable key cannot verify any activation code.
+    return false;
+  }
 }
 
 function licensePath(): string {
@@ -342,7 +354,7 @@ function activeProfileCount(): number {
   }
 }
 
-function evaluateGate(now: number): LicenseGate {
+function evaluateGate(now: number, enforceProfileLimit: boolean): LicenseGate {
   const state = getLicenseState(now);
   if (state.plan !== "trial") {
     if (state.expiresAt !== null && state.expiresAt <= now) {
@@ -353,7 +365,7 @@ function evaluateGate(now: number): LicenseGate {
         state,
       };
     }
-    if (typeof state.maxProfiles === "number" && activeProfileCount() >= state.maxProfiles) {
+    if (enforceProfileLimit && typeof state.maxProfiles === "number" && activeProfileCount() >= state.maxProfiles) {
       return {
         allowed: false,
         code: "PROFILE_LIMIT",
@@ -371,7 +383,7 @@ function evaluateGate(now: number): LicenseGate {
       state,
     };
   }
-  if (typeof state.maxProfiles === "number" && activeProfileCount() >= state.maxProfiles) {
+  if (enforceProfileLimit && typeof state.maxProfiles === "number" && activeProfileCount() >= state.maxProfiles) {
     return {
       allowed: false,
       code: "PROFILE_LIMIT",
@@ -384,10 +396,10 @@ function evaluateGate(now: number): LicenseGate {
 
 /** Gate for browser:create — trial expiry or profile cap refuses new profiles. */
 export function checkCreateAllowed(now = Date.now()): LicenseGate {
-  return evaluateGate(now);
+  return evaluateGate(now, true);
 }
 
-/** Gate for browser:launch — same policy: lock features, never data. */
+/** Gate for browser:launch — validity and expiry apply, but a full quota cannot lock existing profiles. */
 export function checkLaunchAllowed(now = Date.now()): LicenseGate {
-  return evaluateGate(now);
+  return evaluateGate(now, false);
 }

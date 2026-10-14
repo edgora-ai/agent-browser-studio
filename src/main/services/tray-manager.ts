@@ -6,7 +6,7 @@ import { app, Menu, Tray, BrowserWindow, nativeImage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listBrowserProfiles } from "./browser-manager.js";
+import { getProfileRuntimeSnapshot, listBrowserProfiles } from "./browser-manager.js";
 import { tMain } from "./main-i18n.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -97,7 +97,7 @@ export function refreshTrayMenu(
   if (!tray) return;
   let runningCount = 0;
   try {
-    runningCount = listBrowserProfiles().filter((p) => p.running).length;
+    runningCount = listBrowserProfiles(getProfileRuntimeSnapshot()).filter((p) => p.running).length;
   } catch {
     runningCount = 0;
   }

@@ -7,13 +7,14 @@ import * as os from "node:os";
 import * as http from "node:http";
 import { _electron as electron, ElectronApplication, Page } from "playwright";
 import { closeAllDialogs } from "./diag.js";
+import { buildIsolatedTestLaunchEnv, normalizeTestLaunchFixtureEnv, selectTestChromiumFixtureEnv, stageVersionedChromiumInstallations } from "./launch-env.js";
 
 const execFileP = promisify(execFile);
 
 // Locate the independently built Chromium cache without consulting a wrapper
 // cache or network service.
-function resolveManagedChromiumPath(env: NodeJS.ProcessEnv = process.env): string | null {
-  const explicitPath = env.AGENT_BROWSER_CHROMIUM_BINARY_PATH || env.CLOAKLITE_CHROMIUM_BINARY_PATH;
+export function resolveManagedChromiumPath(fixtureEnv: NodeJS.ProcessEnv = {}): string | null {
+  const explicitPath = fixtureEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH || fixtureEnv.CLOAKLITE_CHROMIUM_BINARY_PATH;
   if (explicitPath) {
     const resolved = path.resolve(explicitPath);
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
@@ -21,20 +22,13 @@ function resolveManagedChromiumPath(env: NodeJS.ProcessEnv = process.env): strin
     }
     return resolved;
   }
+  const explicitRoot = fixtureEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR || fixtureEnv.CLOAKLITE_CHROMIUM_CACHE_DIR;
+  if (explicitRoot) return newestCachedBinary(path.resolve(explicitRoot));
+  // Inspect only installed browser binaries before isolating the child HOME;
+  // never pass a host HOME, config directory or provider environment through.
   const home = os.homedir();
-  const currentCached = newestCachedBinary(path.join(home, ".agent-browser-studio"));
-  if (currentCached) return currentCached;
-  return newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
-}
-
-function resolveManagedChromiumCacheRoot(env: NodeJS.ProcessEnv = process.env): string | null {
-  const explicitRoot = env.AGENT_BROWSER_CHROMIUM_CACHE_DIR || env.CLOAKLITE_CHROMIUM_CACHE_DIR;
-  if (explicitRoot) return path.resolve(explicitRoot);
-  const home = os.homedir();
-  const currentRoot = path.join(home, ".agent-browser-studio");
-  if (newestCachedBinary(currentRoot)) return currentRoot;
-  const legacyRoot = path.join(home, ".roxy-lite-cloak");
-  return newestCachedBinary(legacyRoot) ? legacyRoot : null;
+  return newestCachedBinary(path.join(home, ".agent-browser-studio"))
+    || newestCachedBinary(path.join(home, ".roxy-lite-cloak"));
 }
 
 function newestCachedBinary(cacheDir: string): string | null {
@@ -87,8 +81,11 @@ export interface SetupTestAppOptions {
   /** Wipe userDataDir before launch. Default true. Set false when relaunching to
    *  preserve state (e.g. persistence tests). */
   resetUserData?: boolean;
-  /** Do not force the newest binary through the environment; allows profile pins. */
+  /** Do not force a binary override; expose installed browser builds as
+   *  versioned entries in the isolated cache unless a fixture supplies its own. */
   allowProfileVersionSelection?: boolean;
+  /** Preserve first-run wizard/terms dialogs for tests that exercise them. Default false. */
+  keepInitialDialogs?: boolean;
 }
 
 export interface TestAppHandle {
@@ -130,20 +127,20 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   const pageErrors: string[] = [];
   const cdpPids: number[] = [];
 
-  const launchEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ELECTRON_DISABLE_GPU: "1",
-    ELECTRON_ENABLE_LOGGING: "1",
-    ...opts.env,
-  };
-  const chromiumBin = resolveManagedChromiumPath(launchEnv);
-  if (opts.allowProfileVersionSelection) {
-    delete launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH;
-    delete launchEnv.CLOAKLITE_CHROMIUM_BINARY_PATH;
-    const cacheRoot = resolveManagedChromiumCacheRoot(launchEnv);
-    if (cacheRoot && !launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR && !launchEnv.CLOAKLITE_CHROMIUM_CACHE_DIR) {
-      launchEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR = cacheRoot;
-    }
+  const fixtureEnv = normalizeTestLaunchFixtureEnv(opts.env);
+  // Runner browser inputs are discovery-only; never copy them into the child.
+  const chromiumBin = opts.allowProfileVersionSelection ? null : resolveManagedChromiumPath(selectTestChromiumFixtureEnv(fixtureEnv));
+  const launchEnv = buildIsolatedTestLaunchEnv({ userDataDir: opts.userDataDir, fixtureEnv });
+  if (opts.allowProfileVersionSelection
+      && fixtureEnv.AGENT_BROWSER_CHROMIUM_CACHE_DIR === undefined
+      && fixtureEnv.CLOAKLITE_CHROMIUM_CACHE_DIR === undefined
+      && fixtureEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH === undefined
+      && fixtureEnv.CLOAKLITE_CHROMIUM_BINARY_PATH === undefined) {
+    const home = os.homedir();
+    stageVersionedChromiumInstallations(opts.userDataDir, [
+      path.join(home, ".agent-browser-studio"),
+      path.join(home, ".roxy-lite-cloak"),
+    ]);
   } else if (chromiumBin) {
     launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
   }
@@ -181,7 +178,7 @@ export async function setupTestApp(opts: SetupTestAppOptions): Promise<TestAppHa
   );
   await page.waitForSelector("#tab-profiles", { timeout: 15000 });
   await page.waitForTimeout(500);
-  await dismissWizard(page);
+  if (!opts.keepInitialDialogs) await dismissWizard(page);
 
   return {
     app,
@@ -253,17 +250,15 @@ export async function launchHeadlessApp(opts: {
 }): Promise<HeadlessAppHandle> {
   fs.rmSync(opts.userDataDir, { recursive: true, force: true });
   fs.mkdirSync(opts.userDataDir, { recursive: true });
-  const token = opts.token || "test-headless-token";
-  const port = await freePort();
-  const launchEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ELECTRON_DISABLE_GPU: "1",
-    ELECTRON_ENABLE_LOGGING: "1",
-    AGENT_BROWSER_API_PORT: String(port),
-    AGENT_BROWSER_API_TOKEN: token,
-    ...opts.env,
-  };
-  const chromiumBin = resolveManagedChromiumPath(launchEnv);
+  const fixtureEnv = normalizeTestLaunchFixtureEnv(opts.env);
+  const token = opts.token || fixtureEnv.AGENT_BROWSER_API_TOKEN || fixtureEnv.CLOAK_API_TOKEN || "test-headless-token";
+  const requestedPort = fixtureEnv.AGENT_BROWSER_API_PORT ?? fixtureEnv.CLOAK_API_PORT;
+  const port = requestedPort && requestedPort !== "0" ? Number(requestedPort) : await freePort();
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid headless test API port fixture");
+  const chromiumBin = resolveManagedChromiumPath(selectTestChromiumFixtureEnv(fixtureEnv));
+  const launchEnv = buildIsolatedTestLaunchEnv({ userDataDir: opts.userDataDir, fixtureEnv });
+  launchEnv.AGENT_BROWSER_API_PORT = String(port);
+  launchEnv.AGENT_BROWSER_API_TOKEN = token;
   if (chromiumBin) launchEnv.AGENT_BROWSER_CHROMIUM_BINARY_PATH = chromiumBin;
 
   const app = await electron.launch({

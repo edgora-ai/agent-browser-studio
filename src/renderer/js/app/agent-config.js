@@ -64,6 +64,7 @@
     // R181: keep the switch's announced state in step with its visual state —
     // a role=switch that never updates aria-checked reads as permanently off.
     if (toggle) toggle.setAttribute('aria-checked', theme === 'dark' ? 'true' : 'false');
+    label.setAttribute('data-i18n', theme === 'dark' ? 'theme.dark' : 'theme.light');
     if (theme === 'dark') {
       toggle.classList.add('dark');
       label.textContent = window.i18n ? window.i18n.t('theme.dark') : 'Dark';
@@ -76,13 +77,8 @@
   // ── Language toggle ──
   agentBrowser.toggleLanguage = function() {
     if (!window.i18n) return;
+    // next() dispatches the language-change event; refresh only in its listener.
     window.i18n.next();
-    agentBrowser._updateLangUI();
-    agentBrowser._updateThemeUI(document.documentElement.getAttribute('data-theme') || 'dark');
-    // Refresh the currently visible tab so its dynamic strings re-render
-    // in the new language. Falls back to agent skills if no tab is active.
-    if (agentBrowser.reloadCurrentTab) agentBrowser.reloadCurrentTab();
-    else agentBrowser.agentLoadSkills();
   };
 
   agentBrowser._updateLangUI = function() {
@@ -92,43 +88,101 @@
       var l = window.i18n.get();
       langLabel.textContent = l === 'zh-CN' ? t('agent-config.lang-zh','中') : t('agent-config.lang-en','EN');
     }
-    // Also update the theme label (it gets overridden by i18n after apply)
   };
 
   // Listen for language changes
   document.addEventListener('agent-browser-language-change', function() {
     agentBrowser._updateLangUI();
-    if (agentBrowser.reloadCurrentTab) agentBrowser.reloadCurrentTab();
+    agentBrowser._updateThemeUI(document.documentElement.getAttribute('data-theme') || 'light');
+    updateBrowserStatus();
+    // Loading the Agent tab navigates back to Chat and reloads config. A
+    // locale change must retain the visible subview and unsaved form values.
+    if (state.currentTab === 'agent') {
+      var views = ['chat', 'config', 'accounts', 'skills', 'adapters'];
+      for (var i = 0; i < views.length; i++) {
+        var view = document.getElementById('agent-view-' + views[i]);
+        if (!view || view.style.display === 'none') continue;
+        if (views[i] === 'chat') {
+          agentBrowser.agentRenderConvs();
+          agentBrowser.agentRenderMessages({ preserveScroll: true });
+          agentBrowser.agentRefreshEnvironments();
+        } else if (views[i] === 'config') renderFsAllowlist();
+        else if (views[i] === 'accounts') agentBrowser.agentLoadAccounts();
+        else if (views[i] === 'skills') agentBrowser.agentLoadSkills();
+        else if (views[i] === 'adapters') agentBrowser.agentLoadAdapters();
+        break;
+      }
+    } else if (agentBrowser.reloadCurrentTab) agentBrowser.reloadCurrentTab();
   });
   // ── LLM Config ──
-  agentBrowser.agentLoadConfig = function() {
-    R.agent.llmConfig().then(function(cfg) {
-      if (cfg) {
-        document.getElementById('agent-llm-provider').value = cfg.provider || 'openai';
-        document.getElementById('agent-llm-apikey').value = '';
-        document.getElementById('agent-llm-apikey').placeholder = cfg.hasApiKey ? 'saved — leave blank to keep' : 'API key';
-        document.getElementById('agent-llm-model').value = cfg.model || '';
-        document.getElementById('agent-llm-url').value = cfg.apiUrl || '';
-      } else {
-        // Try auto-detect
-        agentBrowser.agentDetectConfig();
-      }
-    }).catch(function(){ agentBrowser.agentDetectConfig(); });
-  };
+  var configReadSeq = 0;
+  var configFieldIds = ['agent-llm-provider', 'agent-llm-apikey', 'agent-llm-model', 'agent-llm-url'];
+  var configFields = Object.create(null);
+  configFieldIds.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var field = configFields[id] = { value: el.value, dirty: false, revision: 0 };
+    function edited() { field.dirty = true; ++field.revision; }
+    el.addEventListener('input', edited);
+    el.addEventListener('change', edited);
+  });
 
-  agentBrowser.agentDetectConfig = function() {
-    R.agent.detectLlmConfig().then(function(cfg) {
+  function configSnapshot() {
+    var snapshot = Object.create(null);
+    configFieldIds.forEach(function(id) {
+      var el = document.getElementById(id);
+      var field = configFields[id];
+      if (el && field) snapshot[id] = { value: el.value, revision: field.revision, dirty: field.dirty || el.value !== field.value };
+    });
+    return snapshot;
+  }
+
+  function applyConfig(cfg, snapshot) {
+    var values = [cfg.provider || 'openai', '', cfg.model || '', cfg.apiUrl || ''];
+    configFieldIds.forEach(function(id, index) {
+      var el = document.getElementById(id);
+      var field = configFields[id];
+      var before = snapshot[id];
+      // Keep each unsaved field, including intentional empty values, but still
+      // hydrate untouched fields. A read is never authority over later edits.
+      if (el && field && before && !before.dirty && field.revision === before.revision && el.value === before.value) {
+        el.value = values[index];
+        field.value = el.value;
+        field.dirty = false;
+      }
+    });
+    var key = document.getElementById('agent-llm-apikey');
+    if (key) key.placeholder = cfg.hasApiKey ? 'saved — leave blank to keep' : 'API key';
+  }
+
+  function detectConfig(seq, snapshot) {
+    return R.agent.detectLlmConfig().then(function(cfg) {
+      if (seq !== configReadSeq) return;
       if (cfg) {
-        document.getElementById('agent-llm-provider').value = cfg.provider || 'openai';
-        document.getElementById('agent-llm-apikey').value = '';
-        document.getElementById('agent-llm-apikey').placeholder = cfg.hasApiKey ? 'saved — leave blank to keep' : 'API key';
-        document.getElementById('agent-llm-model').value = cfg.model || '';
-        document.getElementById('agent-llm-url').value = cfg.apiUrl || '';
+        applyConfig(cfg, snapshot);
         toast((window.i18n ? window.i18n.t("toast.llm.auto-detected", "Auto-detected LLM config from ~/.claude/settings.json") : "Auto-detected LLM config from ~/.claude/settings.json"), 'success');
       } else {
         toast((window.i18n ? window.i18n.t("toast.llm.not-found", "No local LLM config found. Please enter your API key.") : "No local LLM config found. Please enter your API key."), 'error');
       }
-    }).catch(function(e) { toast(t('toast.agent.auto-detect-failed', 'Auto-detect failed: ') + e.message, 'error'); });
+    }).catch(function(e) {
+      if (seq === configReadSeq) toast(t('toast.agent.auto-detect-failed', 'Auto-detect failed: ') + e.message, 'error');
+    });
+  }
+
+  agentBrowser.agentLoadConfig = function() {
+    var seq = ++configReadSeq;
+    var snapshot = configSnapshot();
+    return R.agent.llmConfig().then(function(cfg) {
+      if (seq !== configReadSeq) return;
+      if (cfg) applyConfig(cfg, snapshot);
+      else return detectConfig(seq, snapshot);
+    }).catch(function() {
+      if (seq === configReadSeq) return detectConfig(seq, snapshot);
+    });
+  };
+
+  agentBrowser.agentDetectConfig = function() {
+    return detectConfig(++configReadSeq, configSnapshot());
   };
 
   agentBrowser.agentProviderChanged = function() {
@@ -152,9 +206,22 @@
       apiUrl: document.getElementById('agent-llm-url').value.trim() || undefined,
     };
     if (!config.apiKey && !document.getElementById('agent-llm-apikey').placeholder.match(/^saved/)) { toast((window.i18n ? window.i18n.t("toast.llm.key-required", "API Key is required") : "API Key is required"), 'error'); return; }
+    // A save supersedes earlier reads; acknowledge only fields that have not
+    // changed again while saving. The payload/blank-key contract stays intact.
+    ++configReadSeq;
+    var savedFields = configSnapshot();
     // R15 UX P1-2: surface backend refusal instead of silent no-op.
     R.agent.saveLlmConfig(config).then(function(r) {
       if (r && r.success) {
+        configFieldIds.forEach(function(id) {
+          var input = document.getElementById(id);
+          var field = configFields[id];
+          var saved = savedFields[id];
+          if (input && field && saved && input.value === saved.value && field.revision === saved.revision) {
+            field.value = input.value;
+            field.dirty = false;
+          }
+        });
         var el = document.getElementById('agent-config-saved');
         el.style.display = 'inline';
         setTimeout(function(){ el.style.display = 'none'; }, 3000);

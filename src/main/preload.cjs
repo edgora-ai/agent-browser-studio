@@ -2,6 +2,21 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const listenerMap = new WeakMap();
 
+// Electron transports thrown Error messages, not custom Error properties.
+// Preserve rejection (including for legacy truthy-success checks) and restore
+// the explicit account precondition code from its stable message prefix.
+async function invokeAccount(channel, ...args) {
+  try {
+    return await ipcRenderer.invoke(channel, ...args);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    const match = message.match(/\b(ACCOUNT_REFERENCE_REQUIRED|ACCOUNT_REFERENCE_INVALID|ACCOUNT_REFERENCE_CONFLICT|ACCOUNT_NOT_FOUND|ACCOUNT_VALIDATION_FAILED):/);
+    const rejected = new Error(message);
+    if (match) rejected.code = match[1];
+    throw rejected;
+  }
+}
+
 const api = {
   profile: {
     list: () => ipcRenderer.invoke("profile:list"),
@@ -89,6 +104,7 @@ const api = {
     setEnabled: (enabled) => ipcRenderer.invoke("team:set-enabled", { enabled }),
   },
   app: {
+    quit: () => ipcRenderer.invoke("app:quit"),
     paths: () => ipcRenderer.invoke("app:paths"),
     reloadConfig: () => ipcRenderer.invoke("app:reload-config"),
     openDir: (dirPath) => ipcRenderer.invoke("app:open-dir", dirPath),
@@ -227,16 +243,17 @@ const api = {
     },
     // Accounts
     accounts: {
-      list: () => ipcRenderer.invoke("agent:accounts:list"),
-      add: (account) => ipcRenderer.invoke("agent:accounts:add", account),
-      update: (index, account) => ipcRenderer.invoke("agent:accounts:update", { index, account }),
-      delete: (index) => ipcRenderer.invoke("agent:accounts:delete", index),
-      forProfile: (dirId) => ipcRenderer.invoke("agent:accounts:profile", dirId),
-      copyUsername: (index) => ipcRenderer.invoke("agent:accounts:copy-username", index),
-      copyPassword: (index) => ipcRenderer.invoke("agent:accounts:copy-password", index),
-      bind: (index, profileIds) => ipcRenderer.invoke("agent:accounts:bind", { index, profileIds }),
-      bulkAdd: (text) => ipcRenderer.invoke("agent:accounts:bulk-add", text),
-      bulkCreate: (text, options) => ipcRenderer.invoke("agent:accounts:bulk-create", { text, options }),
+      list: () => invokeAccount("agent:accounts:list"),
+      get: (index, ref) => invokeAccount("agent:accounts:get", index, ref),
+      add: (account) => invokeAccount("agent:accounts:add", account),
+      update: (index, account, ref) => invokeAccount("agent:accounts:update", { index, account, ref }),
+      delete: (index, ref) => invokeAccount("agent:accounts:delete", index, ref),
+      forProfile: (dirId) => invokeAccount("agent:accounts:profile", dirId),
+      copyUsername: (index, ref) => invokeAccount("agent:accounts:copy-username", index, ref),
+      copyPassword: (index, ref) => invokeAccount("agent:accounts:copy-password", index, ref),
+      bind: (index, profileIds, ref) => invokeAccount("agent:accounts:bind", { index, profileIds, ref }),
+      bulkAdd: (text) => invokeAccount("agent:accounts:bulk-add", text),
+      bulkCreate: (text, options) => invokeAccount("agent:accounts:bulk-create", { text, options }),
     },
   },
   automation: {

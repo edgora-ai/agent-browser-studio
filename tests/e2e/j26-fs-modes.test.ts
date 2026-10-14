@@ -11,10 +11,10 @@ import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { startMockLlm } from "./helpers/mock-llm.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j26");
-const TRUSTED = fs.mkdtempSync(path.join(os.tmpdir(), "j26-trusted-"));
-const OUTSIDE = fs.mkdtempSync(path.join(os.tmpdir(), "j26-outside-"));
+let TEST_ROOT: string | undefined;
+let USERDATA: string;
+let TRUSTED: string;
+let OUTSIDE: string;
 
 async function configureMock(h: TestAppHandle, mock: { url: string }) {
   await h.page.evaluate(() => (window as any).agentBrowser.switchTab("agent"));
@@ -67,23 +67,37 @@ describe("J26 — file-access modes gate write_file", () => {
   let mock: Awaited<ReturnType<typeof startMockLlm>>;
 
   beforeAll(async () => {
+    TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "j26-fs-modes-"));
+    USERDATA = path.join(TEST_ROOT, "userdata");
+    TRUSTED = path.join(TEST_ROOT, "trusted");
+    OUTSIDE = path.join(TEST_ROOT, "outside");
+    for (const dir of [USERDATA, TRUSTED, OUTSIDE]) fs.mkdirSync(dir);
     mock = await startMockLlm({ delayMs: 20 });
-    h = await setupTestApp({ userDataDir: USERDATA });
+    h = await setupTestApp({ userDataDir: USERDATA, resetUserData: false });
     await configureMock(h, mock);
   }, 60000);
 
   afterAll(async () => {
-    try { if (mock) await mock.close(); } catch {}
-    if (h) await closeApp(h);
-    try { fs.rmSync(TRUSTED, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(OUTSIDE, { recursive: true, force: true }); } catch {}
+    try {
+      if (mock) await mock.close();
+    } finally {
+      try {
+        if (h) await closeApp(h);
+      } finally {
+        if (TEST_ROOT) {
+          const entry = fs.lstatSync(TEST_ROOT);
+          if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("Refusing to clean a replaced J26 fixture directory");
+          fs.rmSync(TEST_ROOT, { recursive: true, force: true });
+        }
+      }
+    }
   });
 
   it("sandbox: relative path allowed, absolute + traversal blocked", async () => {
     await h.page.evaluate(() => (window as any).agentBrowser.api.settings.agentFsSet("sandbox", []));
     mock.setResponses([
       { chunks: [], toolCalls: [{ id: "s1", name: "write_file", arguments: { path: "sub/ok.txt", content: "hi" } }] },
-      { chunks: [], toolCalls: [{ id: "s2", name: "write_file", arguments: { path: "/tmp/j26-sandbox-escape.txt", content: "x" } }] },
+      { chunks: [], toolCalls: [{ id: "s2", name: "write_file", arguments: { path: path.join(OUTSIDE, "sandbox-escape.txt"), content: "x" } }] },
       { chunks: [], toolCalls: [{ id: "s3", name: "write_file", arguments: { path: "../escape.txt", content: "x" } }] },
       { chunks: ["done"] },
     ]);

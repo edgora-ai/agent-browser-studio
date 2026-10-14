@@ -14,6 +14,53 @@
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var _role = null;
   var _rolePromise = null;
+  var _accountRequest = 0;
+  var _accountReady = false;
+  var _accountSaving = false;
+  var _accountRef = null;
+  var _accountIndex = -1;
+  var _listRequests = {};
+  var _bindRequest = 0;
+  var _bindRef = null;
+  var _bindIndex = -1;
+
+  // A command carries the displayed snapshot, not an index resolved against a
+  // later list. Delegation supplies its JSON form; direct callers may supply it.
+  function captureAccountRef(value) {
+    try {
+      var ref = typeof value === 'string' ? JSON.parse(value) : value;
+      if (!ref || !Number.isSafeInteger(ref.index) || ref.index < 0 || typeof ref.revision !== 'string' || !ref.revision) return null;
+      return Object.freeze({ index: ref.index, revision: ref.revision });
+    } catch (e) { return null; }
+  }
+
+  function sameAccountRef(a, b) {
+    return a && b && a.index === b.index && a.revision === b.revision;
+  }
+
+  function isAccountConflict(e) {
+    return /ACCOUNT_REFERENCE_(REQUIRED|INVALID|CONFLICT)|ACCOUNT_NOT_FOUND/.test((e && e.code) || '') ||
+      /ACCOUNT_REFERENCE_(REQUIRED|INVALID|CONFLICT)|ACCOUNT_NOT_FOUND/.test((e && e.message) || '');
+  }
+
+  function readSelectedAccount(ref) {
+    return R.agent.accounts.get(ref.index, ref).then(function(a) {
+      // Check before touching any target fields, even if a provider returned a
+      // response from a different snapshot. Never adopt its replacement ref.
+      if (!a || !sameAccountRef(a.ref, ref)) {
+        var e = new Error('ACCOUNT_REFERENCE_CONFLICT');
+        e.code = 'ACCOUNT_REFERENCE_CONFLICT';
+        throw e;
+      }
+      return a;
+    });
+  }
+
+  function accountCommand(cmd, ref) {
+    return ' data-role="cmd" data-cmd="' + cmd + '" data-cmd-arg="' + escAttr(JSON.stringify(ref)) + '"';
+  }
+  var _bindReady = false;
+  var _bindSaving = false;
 
   function loadAccountRole() {
     if (_role) return Promise.resolve(_role);
@@ -34,6 +81,59 @@
     return _rolePromise;
   }
 
+  function withAccountRole(action) {
+    return loadAccountRole().then(function(role) {
+      if (role === 'viewer') {
+        toast(t('toast.account.read-only', 'Accounts are read-only for viewers'), 'error');
+        return;
+      }
+      return action();
+    });
+  }
+
+  function setAccountReady(ready) {
+    _accountReady = ready;
+    var btn = document.querySelector('#dlg-account button[type="submit"]');
+    if (btn) btn.disabled = !ready || _accountSaving;
+  }
+
+  function setBindReady(ready) {
+    _bindReady = ready;
+    var btn = document.querySelector('#dlg-account-bind [data-cmd="agentSaveAccountBind"]');
+    if (btn) btn.disabled = !ready || _bindSaving;
+  }
+
+  // Close/cancel invalidates pending reads/writes; they must not reopen or
+  // close a later dialog. Already-dispatched backend writes are not cancelled.
+  (function wireAccountDialogs() {
+    var accountDlg = document.getElementById('dlg-account');
+    var bindDlg = document.getElementById('dlg-account-bind');
+    function clearAccount() {
+      _accountRequest++;
+      _accountRef = null;
+      _accountIndex = -1;
+      _accountSaving = false;
+      setAccountReady(false);
+    }
+    function clearBind() {
+      _bindRequest++;
+      _bindRef = null;
+      _bindIndex = -1;
+      _bindSaving = false;
+      setBindReady(false);
+    }
+    if (accountDlg) {
+      accountDlg.addEventListener('cancel', clearAccount);
+      accountDlg.addEventListener('close', function() { if (!accountDlg.open) clearAccount(); });
+    }
+    if (bindDlg) {
+      bindDlg.addEventListener('cancel', clearBind);
+      bindDlg.addEventListener('close', function() { if (!bindDlg.open) clearBind(); });
+    }
+    setAccountReady(false);
+    setBindReady(false);
+  })();
+
   function profileNameById() {
     return api.browser.list().catch(function() { return []; }).then(function(profiles) {
       var m = {};
@@ -51,6 +151,7 @@
   }
 
   function loadAccountsTab() {
+    applyAccountRoleToToolbar();
     renderAccountsList('accounts-tab-list');
   }
   agentBrowser.loadAccountsTab = loadAccountsTab;
@@ -58,26 +159,30 @@
   function renderAccountsList(targetId) {
     var el = document.getElementById(targetId);
     if (!el) return;
+    var request = (_listRequests[targetId] || 0) + 1;
+    _listRequests[targetId] = request;
     Promise.all([R.agent.accounts.list(), profileNameById(), loadAccountRole()]).then(function(res) {
+      if (request !== _listRequests[targetId]) return;
       var accounts = res[0] || [];
       var nameById = res[1] || {};
       var role = res[2];
       var canManage = role !== 'viewer';
-      if (!accounts || accounts.length === 0) { if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{empty:t('acct.empty','No accounts saved yet.'), cta:{label:t('acct.add','Add Account'),cmd:'agentAddAccount'}}); } else el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">' + esc(t('acct.empty','No accounts saved yet.')) + '</div>';
+      if (!accounts || accounts.length === 0) { if(window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{empty:t('acct.empty','No accounts saved yet.'), cta:canManage ? {label:t('acct.add','Add Account'),cmd:'agentAddAccount'} : null}); } else el.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:20px;">' + esc(t('acct.empty','No accounts saved yet.')) + '</div>';
         return;
       }
       var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
       for (var i = 0; i < accounts.length; i++) {
         var a = accounts[i];
+        var ref = captureAccountRef(a.ref);
         var tagsHtml = (a.tags || []).map(function(t) { return '<span class="chip chip-info">' + esc(t) + '</span>'; }).join(' ');
         var chips = boundChips(a.profileIds, nameById);
         var passTip = t('accounts.copy-pass', 'Copy password');
         var bindTip = t('accounts.bind', 'Bind to profiles');
         var userTip = t('accounts.copy-user', 'Copy username');
-        var passBtn = (a.hasPassword && canManage)
-          ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountPassword(' + i + ')" title="' + escAttr(passTip) + '" aria-label="' + escAttr(passTip) + '">' + icon("key", 12) + '</button> '
+        var passBtn = (ref && a.hasPassword && canManage)
+          ? '<button class="btn btn-secondary btn-xs" ' + accountCommand('agentCopyAccountPassword', ref) + ' title="' + escAttr(passTip) + '" aria-label="' + escAttr(passTip) + '">' + icon("key", 12) + '</button> '
           : '';
-        var bindBtn = canManage ? '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentBindAccounts(' + i + ')" title="' + escAttr(bindTip) + '" aria-label="' + escAttr(bindTip) + '">' + icon("link", 12) + '</button> ' : '';
+        var bindBtn = ref && canManage ? '<button class="btn btn-secondary btn-xs" ' + accountCommand('agentBindAccounts', ref) + ' title="' + escAttr(bindTip) + '" aria-label="' + escAttr(bindTip) + '">' + icon("link", 12) + '</button> ' : '';
         html += '<div class="card" style="padding:10px;">';
         html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">';
         html += '<div style="min-width:0;">';
@@ -87,11 +192,13 @@
         html += '</div>';
         html += '<div>' + tagsHtml + '</div>';
         html += '<div style="white-space:nowrap;">';
-        html += '<button class="btn btn-secondary btn-xs" onclick="agentBrowser.agentCopyAccountUsername(' + i + ')" title="' + escAttr(userTip) + '" aria-label="' + escAttr(userTip) + '">' + icon("accounts", 12) + '</button> ';
+        if (ref) html += '<button class="btn btn-secondary btn-xs" ' + accountCommand('agentCopyAccountUsername', ref) + ' title="' + escAttr(userTip) + '" aria-label="' + escAttr(userTip) + '">' + icon("accounts", 12) + '</button> ';
         html += passBtn;
         html += bindBtn;
-        html += '<button class="btn btn-secondary btn-sm" onclick="agentBrowser.agentEditAccount(' + i + ')" style="margin-left:2px;">' + esc(window.i18n ? window.i18n.t("accounts.edit", "Edit") : "Edit") + '</button>';
-        html += '<button class="btn btn-danger btn-sm" onclick="agentBrowser.agentDeleteAccount(' + i + ')">' + esc(window.i18n ? window.i18n.t("accounts.delete", "Del") : "Del") + '</button>';
+        if (ref && canManage) {
+          html += '<button class="btn btn-secondary btn-sm" ' + accountCommand('agentEditAccount', ref) + ' style="margin-left:2px;">' + esc(window.i18n ? window.i18n.t("accounts.edit", "Edit") : "Edit") + '</button>';
+          html += '<button class="btn btn-danger btn-sm" ' + accountCommand('agentDeleteAccount', ref) + '>' + esc(window.i18n ? window.i18n.t("accounts.delete", "Del") : "Del") + '</button>';
+        }
         html += '</div>';
         html += '</div>';
         if (chips) html += '<div style="margin-top:6px;">' + chips + '</div>';
@@ -100,6 +207,7 @@
       html += '</div>';
       el.innerHTML = html;
     }).catch(function(e) {
+      if (request !== _listRequests[targetId]) return;
       var el = document.getElementById(targetId);
       if (el && window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{error: e.message||String(e), retry:{cmd:'agentLoadAccounts'}}); } else if (el) el.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
@@ -112,15 +220,19 @@
   };
 
   function applyAccountRoleToToolbar() {
-    loadAccountRole().then(function(role) {
-      var canManage = role !== 'viewer';
-      var addBtn = document.querySelector('#tab-accounts [data-cmd="agentAddAccount"]');
+    function apply(role) {
+      var canManage = role && role !== 'viewer';
+      document.querySelectorAll('[data-cmd="agentAddAccount"]').forEach(function(btn) {
+        btn.style.display = canManage ? '' : 'none';
+      });
       var importBtn = document.getElementById('acct-bulk-import-btn');
       var exportBtn = document.getElementById('acct-export-btn');
-      if (addBtn) addBtn.style.display = canManage ? '' : 'none';
       if (importBtn) importBtn.style.display = canManage ? '' : 'none';
       if (exportBtn) exportBtn.style.display = canManage ? '' : 'none';
-    });
+    }
+    // Both the standalone and Agent toolbar stay read-only while role loads.
+    apply(_role);
+    loadAccountRole().then(apply);
   }
 
 
@@ -134,175 +246,262 @@
   }
 
   agentBrowser.agentAddAccount = function() {
-    setDlgTitle('dlg-account-title', t('acct.dlg.add', 'Add Account'));
-    document.getElementById('acct-edit-index').value = '-1';
-    document.getElementById('acct-url').value = '';
-    document.getElementById('acct-username').value = '';
-    document.getElementById('acct-password').value = '';
-    document.getElementById('acct-tags').value = '';
-    document.getElementById('dlg-account').showModal();
+    var request = ++_accountRequest;
+    _accountRef = null;
+    _accountIndex = -1;
+    _accountSaving = false;
+    setAccountReady(false);
+    return withAccountRole(function() {
+      if (request !== _accountRequest) return;
+      setDlgTitle('dlg-account-title', t('acct.dlg.add', 'Add Account'));
+      document.getElementById('acct-edit-index').value = '-1';
+      document.getElementById('acct-url').value = '';
+      document.getElementById('acct-username').value = '';
+      document.getElementById('acct-password').value = '';
+      document.getElementById('acct-tags').value = '';
+      setAccountReady(true);
+      var dlg = document.getElementById('dlg-account');
+      if (!dlg.open) dlg.showModal();
+    });
   };
 
   agentBrowser.saveAccount = function() {
-    var index = parseInt(document.getElementById('acct-edit-index').value);
-    var account = {
-      platformUrl: document.getElementById('acct-url').value.trim(),
-      platformUserName: document.getElementById('acct-username').value.trim(),
-      platformPassword: document.getElementById('acct-password').value.trim(),
-      tags: document.getElementById('acct-tags').value.split(',').map(function(s) { return s.trim(); }).filter(Boolean),
-    };
-    if (!account.platformUrl || !account.platformUserName || (index < 0 && !account.platformPassword)) {
-      toast((window.i18n ? window.i18n.t("toast.account.fields-required", "URL, username, and password are required") : "URL, username, and password are required"), 'error'); return;
-    }
-    var p;
-    if (index >= 0) {
-      p = R.agent.accounts.update(index, account);
-    } else {
-      p = R.agent.accounts.add(account);
-    }
-    p.then(function(r) {
-      document.getElementById('dlg-account').close();
-      toast(index >= 0 ? 'Account updated' : 'Account added', 'success');
-      agentBrowser.agentLoadAccounts();
-      // P2 (#109): the Accounts tab renders its own list — refresh it too.
-      if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
-    }).catch(function(e) { toast(e.message, 'error'); });
+    var request = _accountRequest;
+    return withAccountRole(function() {
+      var dlg = document.getElementById('dlg-account');
+      if (request !== _accountRequest || !dlg.open || !_accountReady || _accountSaving) return;
+      var index = Number(document.getElementById('acct-edit-index').value);
+      var ref = _accountRef;
+      if (index !== _accountIndex || (index >= 0 && !ref)) return;
+      var account = {
+        platformUrl: document.getElementById('acct-url').value.trim(),
+        platformUserName: document.getElementById('acct-username').value.trim(),
+        platformPassword: document.getElementById('acct-password').value.trim(),
+        tags: document.getElementById('acct-tags').value.split(',').map(function(s) { return s.trim(); }).filter(Boolean),
+      };
+      if (!account.platformUrl || !account.platformUserName || (index < 0 && !account.platformPassword)) {
+        toast((window.i18n ? window.i18n.t("toast.account.fields-required", "URL, username, and password are required") : "URL, username, and password are required"), 'error'); return;
+      }
+      _accountSaving = true;
+      setAccountReady(true);
+      var p = index >= 0 ? R.agent.accounts.update(index, account, ref) : R.agent.accounts.add(account);
+      return p.then(function(r) {
+        if (request !== _accountRequest || !dlg.open) return;
+        _accountSaving = false;
+        if (!r) { setAccountReady(false); staleAccountToast(); return; }
+        dlg.close();
+        toast(index >= 0 ? t('toast.account.updated', 'Account updated') : t('toast.account.added', 'Account added'), 'success');
+        agentBrowser.agentLoadAccounts();
+        // P2 (#109): the Accounts tab renders its own list — refresh it too.
+        if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+      }).catch(function(e) {
+        if (request !== _accountRequest || !dlg.open) return;
+        _accountSaving = false;
+        if (isAccountConflict(e)) { setAccountReady(false); staleAccountToast(); }
+        else { setAccountReady(true); toast(e.message, 'error'); }
+      });
+    });
   };
 
   // P2 (#109): stale indexes used to dead-end silently — surface it.
   function staleAccountToast() {
-    toast((window.i18n ? window.i18n.t("toast.account.stale", "Account no longer exists — the list was refreshed") : "Account no longer exists — the list was refreshed"), "error");
+    toast((window.i18n ? window.i18n.t("toast.account.reference-conflict", "Account changed — reselect it from the refreshed list and confirm again") : "Account changed — reselect it from the refreshed list and confirm again"), "error");
     agentBrowser.agentLoadAccounts();
     if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
   }
-  agentBrowser.agentEditAccount = function(index) {
-    R.agent.accounts.list().then(function(accounts) {
-      var a = accounts[index];
-      if (!a) { staleAccountToast(); return; }
-      // R157: was hardcoded 'Edit Account' — no key, English in the zh UI.
-      setDlgTitle('dlg-account-title', t('acct.dlg.edit', 'Edit Account'));
-      document.getElementById('acct-edit-index').value = index;
-      document.getElementById('acct-url').value = a.platformUrl || '';
-      document.getElementById('acct-username').value = a.platformUserName || '';
-      document.getElementById('acct-password').value = '';
-      document.getElementById('acct-password').placeholder = a.hasPassword ? 'saved — leave blank to keep' : 'password';
-      document.getElementById('acct-tags').value = (a.tags || []).join(', ');
-      document.getElementById('dlg-account').showModal();
+  agentBrowser.agentEditAccount = function(value) {
+    var ref = captureAccountRef(value);
+    if (!ref) { staleAccountToast(); return Promise.resolve(); }
+    var index = ref.index;
+    var request = ++_accountRequest;
+    _accountRef = ref;
+    _accountIndex = index;
+    _accountSaving = false;
+    setAccountReady(false);
+    return withAccountRole(function() {
+      if (request !== _accountRequest) return;
+      return readSelectedAccount(ref).then(function(a) {
+        if (request !== _accountRequest) return;
+        // R157: was hardcoded 'Edit Account' — no key, English in the zh UI.
+        setDlgTitle('dlg-account-title', t('acct.dlg.edit', 'Edit Account'));
+        document.getElementById('acct-edit-index').value = index;
+        document.getElementById('acct-url').value = a.platformUrl || '';
+        document.getElementById('acct-username').value = a.platformUserName || '';
+        document.getElementById('acct-password').value = '';
+        document.getElementById('acct-password').placeholder = a.hasPassword ? 'saved — leave blank to keep' : 'password';
+        document.getElementById('acct-tags').value = (a.tags || []).join(', ');
+        setAccountReady(true);
+        var dlg = document.getElementById('dlg-account');
+        if (!dlg.open) dlg.showModal();
+      }).catch(function(e) {
+        if (request !== _accountRequest) return;
+        if (isAccountConflict(e)) staleAccountToast();
+        else toast(e.message, 'error');
+      });
     });
   };
 
-  agentBrowser.agentDeleteAccount = function(index) {
-    agentBrowser.confirm((window.i18n ? window.i18n.t("acct.delete-confirm", "Delete this account?") : "Delete this account?"), function() {
-      R.agent.accounts.delete(index).then(function(r) {
-        if (r) {
-          toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted"));
-          agentBrowser.agentLoadAccounts();
-          if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
-        }
-      }).catch(function(e) { toast(e.message, 'error'); });
+  agentBrowser.agentDeleteAccount = function(value) {
+    var ref = captureAccountRef(value);
+    if (!ref) { staleAccountToast(); return Promise.resolve(); }
+    var index = ref.index;
+    return withAccountRole(function() {
+      agentBrowser.confirm((window.i18n ? window.i18n.t("acct.delete-confirm", "Delete this account?") : "Delete this account?"), function() {
+        R.agent.accounts.delete(index, ref).then(function(r) {
+          if (r) {
+            toast((window.i18n ? window.i18n.t("toast.account.deleted", "Account deleted") : "Account deleted"));
+            agentBrowser.agentLoadAccounts();
+            if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+          }
+        }).catch(function(e) {
+          if (isAccountConflict(e)) staleAccountToast();
+          else toast(e.message, 'error');
+        });
+      });
     });
   };
 
   // ── Quick copy (main process writes the clipboard; secrets never cross) ──
-  agentBrowser.agentCopyAccountUsername = function(index) {
-    R.agent.accounts.copyUsername(index).then(function(r) {
+  agentBrowser.agentCopyAccountUsername = function(value) {
+    var ref = captureAccountRef(value);
+    if (!ref) { staleAccountToast(); return Promise.resolve(); }
+    return R.agent.accounts.copyUsername(ref.index, ref).then(function(r) {
       if (r && r.ok) toast(t('toast.account.username-copied', 'Username copied to clipboard'), 'success');
       else toast((r && r.error) || t('toast.account.copy-failed', 'Copy failed'), 'error');
-    }).catch(function(e) { toast(e.message, 'error'); });
+    }).catch(function(e) {
+      if (isAccountConflict(e)) staleAccountToast();
+      else toast(e.message, 'error');
+    });
   };
 
-  agentBrowser.agentCopyAccountPassword = function(index) {
-    R.agent.accounts.copyPassword(index).then(function(r) {
-      if (r && r.ok) toast(t('toast.account.password-copied', 'Password copied to clipboard'), 'success');
-      else toast((r && r.error) || t('toast.account.copy-failed', 'Copy failed'), 'error');
-    }).catch(function(e) { toast(e.message, 'error'); });
+  agentBrowser.agentCopyAccountPassword = function(value) {
+    var ref = captureAccountRef(value);
+    if (!ref) { staleAccountToast(); return Promise.resolve(); }
+    return withAccountRole(function() {
+      return R.agent.accounts.copyPassword(ref.index, ref).then(function(r) {
+        if (r && r.ok) toast(t('toast.account.password-copied', 'Password copied to clipboard'), 'success');
+        else toast((r && r.error) || t('toast.account.copy-failed', 'Copy failed'), 'error');
+      }).catch(function(e) {
+        if (isAccountConflict(e)) staleAccountToast();
+        else toast(e.message, 'error');
+      });
+    });
   };
 
   // ── Account ↔ profile binding ──
-  agentBrowser.agentBindAccounts = function(index) {
-    R.agent.accounts.list().then(function(accounts) {
-      var a = accounts[index];
-      if (!a) { staleAccountToast(); return; }
+  agentBrowser.agentBindAccounts = function(value) {
+    var ref = captureAccountRef(value);
+    if (!ref) { staleAccountToast(); return Promise.resolve(); }
+    var index = ref.index;
+    var request = ++_bindRequest;
+    _bindRef = ref;
+    _bindIndex = index;
+    _bindSaving = false;
+    setBindReady(false);
+    return withAccountRole(function() {
+      if (request !== _bindRequest) return;
+      var dlg = document.getElementById('dlg-account-bind');
+      var listEl = document.getElementById('acct-bind-list');
       document.getElementById('acct-bind-index').value = index;
-      // R168: was `.catch(function () { return []; })` — a failed profile
-      // lookup rendered "No profiles yet. Create a profile first.", telling
-      // the user to create profiles they may well already have (the same
-      // lie-to-the-user bug as profiles.js in R164), and that copy was
-      // hardcoded English in the zh UI. Show the loading state the dict
-      // already defines, then the list or a real error.
-      var listEl0 = document.getElementById('acct-bind-list');
-      if (listEl0) listEl0.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.loading', 'Loading profiles...')) + '</div>';
-      return api.browser.list().then(function(profiles) {
-        var listEl = document.getElementById('acct-bind-list');
-        var bound = a.profileIds || [];
-        if (!profiles || profiles.length === 0) {
-          listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.no-profiles', 'No profiles yet. Create a profile first.')) + '</div>';
-        } else {
-          listEl.innerHTML = profiles.map(function(p) {
-            var checked = bound.indexOf(p.dirId) >= 0 ? ' checked' : '';
-            return '<label style="display:block;padding:4px 0;font-size:13px;"><input type="checkbox" class="acct-bind-cb" value="' + escAttr(p.dirId) + '"' + checked + '> ' + esc(p.name || p.dirId) + '</label>';
-          }).join('');
-        }
-        document.getElementById('dlg-account-bind').showModal();
+      // R168: a failed lookup is an error, not an empty profile list. Keep
+      // Save disabled until BOTH reads belong to this dialog and succeed.
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.loading', 'Loading profiles...')) + '</div>';
+      if (!dlg.open) dlg.showModal();
+      return readSelectedAccount(ref).then(function(a) {
+        if (request !== _bindRequest || !dlg.open) return;
+        return api.browser.list().then(function(profiles) {
+          if (request !== _bindRequest || !dlg.open) return;
+          var bound = a.profileIds || [];
+          if (!profiles || profiles.length === 0) {
+            listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">' + esc(t('acct.bind.no-profiles', 'No profiles yet. Create a profile first.')) + '</div>';
+          } else {
+            listEl.innerHTML = profiles.map(function(p) {
+              var checked = bound.indexOf(p.dirId) >= 0 ? ' checked' : '';
+              return '<label style="display:block;padding:4px 0;font-size:13px;"><input type="checkbox" class="acct-bind-cb" value="' + escAttr(p.dirId) + '"' + checked + '> ' + esc(p.name || p.dirId) + ' <span class="hint-line">(' + esc(p.dirId) + ')</span></label>';
+            }).join('');
+          }
+          setBindReady(true);
+        });
       }).catch(function(e) {
-        var listEl = document.getElementById('acct-bind-list');
-        if (window.agentBrowser && window.agentBrowser.renderViewState && listEl) {
-          window.agentBrowser.renderViewState(listEl, { error: e.message || String(e), retry: { cmd: 'agentBindAccounts', arg: String(index) } });
-        } else if (listEl) {
+        if (request !== _bindRequest || !dlg.open) return;
+        setBindReady(false);
+        if (isAccountConflict(e)) { staleAccountToast(); return; }
+        if (window.agentBrowser && window.agentBrowser.renderViewState) {
+          window.agentBrowser.renderViewState(listEl, { error: e.message || String(e), retry: { cmd: 'agentBindAccounts', arg: JSON.stringify(ref) } });
+        } else {
           listEl.innerHTML = '<div class="empty-state" style="color:var(--danger-text);">' + esc(e.message || String(e)) + '</div>';
         }
-        document.getElementById('dlg-account-bind').showModal();
       });
-    }).catch(function(e) { toast(e.message, 'error'); });
+    });
   };
 
   agentBrowser.agentSaveAccountBind = function() {
-    var index = parseInt(document.getElementById('acct-bind-index').value);
-    var cbs = document.querySelectorAll('#acct-bind-list .acct-bind-cb:checked');
-    var profileIds = [];
-    cbs.forEach(function(cb) { profileIds.push(cb.value); });
-    R.agent.accounts.bind(index, profileIds).then(function(r) {
-      document.getElementById('dlg-account-bind').close();
-      toast(t('toast.account.profiles-updated', 'Account profiles updated'), 'success');
-      agentBrowser.agentLoadAccounts();
-    }).catch(function(e) { toast(e.message, 'error'); });
+    var request = _bindRequest;
+    return withAccountRole(function() {
+      var dlg = document.getElementById('dlg-account-bind');
+      var index = Number(document.getElementById('acct-bind-index').value);
+      var ref = _bindRef;
+      if (request !== _bindRequest || !dlg.open || !_bindReady || _bindSaving || index !== _bindIndex || !ref) return;
+      var cbs = document.querySelectorAll('#acct-bind-list .acct-bind-cb:checked');
+      var profileIds = [];
+      cbs.forEach(function(cb) { profileIds.push(cb.value); });
+      _bindSaving = true;
+      setBindReady(true);
+      return R.agent.accounts.bind(index, profileIds, ref).then(function(r) {
+        if (request !== _bindRequest || !dlg.open) return;
+        _bindSaving = false;
+        if (!r) { setBindReady(false); staleAccountToast(); return; }
+        dlg.close();
+        toast(t('toast.account.profiles-updated', 'Account profiles updated'), 'success');
+        agentBrowser.agentLoadAccounts();
+      }).catch(function(e) {
+        if (request !== _bindRequest || !dlg.open) return;
+        _bindSaving = false;
+        if (isAccountConflict(e)) { setBindReady(false); staleAccountToast(); }
+        else { setBindReady(true); toast(e.message, 'error'); }
+      });
+    });
   };
 
   // ── Bulk import (url, username, password, tags per line) ──
   agentBrowser.agentImportAccounts = function() {
-    document.getElementById('acct-import-text').value = '';
-    document.getElementById('acct-import-status').innerHTML = '';
-    var cb = document.getElementById('acct-import-create-profiles');
-    if (cb) { cb.checked = false; document.getElementById('acct-import-create-options').style.display = 'none'; }
-    document.getElementById('dlg-account-import').showModal();
+    return withAccountRole(function() {
+      document.getElementById('acct-import-text').value = '';
+      document.getElementById('acct-import-status').innerHTML = '';
+      var cb = document.getElementById('acct-import-create-profiles');
+      if (cb) { cb.checked = false; document.getElementById('acct-import-create-options').style.display = 'none'; }
+      document.getElementById('dlg-account-import').showModal();
+    });
   };
 
   agentBrowser.agentRunAccountImport = function() {
-    var text = document.getElementById('acct-import-text').value || '';
-    var statusEl = document.getElementById('acct-import-status');
-    var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
-    var platform = document.getElementById('acct-import-platform') ? document.getElementById('acct-import-platform').value : 'windows';
-    statusEl.innerHTML = '<span style="color:var(--text-muted);">' + esc(t('acct.importing', 'Importing...')) + '</span>';
-    var p = createProfiles
-      ? R.agent.accounts.bulkCreate(text, { platform: platform })
-      : R.agent.accounts.bulkAdd(text);
-    p.then(function(r) {
-      var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
-      if (createProfiles && r.created) msg += ', created ' + r.created + ' profile' + (r.created === 1 ? '' : 's');
-      if (r.skipped) msg += ', skipped ' + r.skipped;
-      statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(msg) + '</span>';
-      toast(msg, r.added ? 'success' : 'error');
-      // P2 (#109): close the dialog on success (like saveAccount/bind) and
-      // refresh BOTH lists — the Accounts tab list went stale behind the toast.
-      if (r.added) {
-        agentBrowser.agentLoadAccounts();
-        if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
-        if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true);
-        var imDlg = document.getElementById('dlg-account-import');
-        if (imDlg && imDlg.open) imDlg.close();
-      }
-    }).catch(function(e) {
-      statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
+    return withAccountRole(function() {
+      var text = document.getElementById('acct-import-text').value || '';
+      var statusEl = document.getElementById('acct-import-status');
+      var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
+      var platform = document.getElementById('acct-import-platform') ? document.getElementById('acct-import-platform').value : 'windows';
+      statusEl.innerHTML = '<span style="color:var(--text-muted);">' + esc(t('acct.importing', 'Importing...')) + '</span>';
+      var p = createProfiles
+        ? R.agent.accounts.bulkCreate(text, { platform: platform })
+        : R.agent.accounts.bulkAdd(text);
+      return p.then(function(r) {
+        var msg = 'Added ' + r.added + ' account' + (r.added === 1 ? '' : 's');
+        if (createProfiles && r.created) msg += ', created ' + r.created + ' profile' + (r.created === 1 ? '' : 's');
+        if (r.skipped) msg += ', skipped ' + r.skipped;
+        statusEl.innerHTML = '<span style="color: var(--success-text);">' + esc(msg) + '</span>';
+        toast(msg, r.added ? 'success' : 'error');
+        // P2 (#109): close the dialog on success (like saveAccount/bind) and
+        // refresh BOTH lists — the Accounts tab list went stale behind the toast.
+        if (r.added) {
+          agentBrowser.agentLoadAccounts();
+          if (typeof agentBrowser.loadAccountsTab === "function") agentBrowser.loadAccountsTab();
+          if (createProfiles && agentBrowser.loadProfiles) agentBrowser.loadProfiles(true);
+          var imDlg = document.getElementById('dlg-account-import');
+          if (imDlg && imDlg.open) imDlg.close();
+        }
+      }).catch(function(e) {
+        statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message) + '</span>';
+      });
     });
   };
 
@@ -318,24 +517,26 @@
 
   // ── Export CSV — metadata only; passwords never leave the vault ──
   agentBrowser.agentExportAccounts = function() {
-    R.agent.accounts.list().then(function(accounts) {
-      var rows = [['url', 'username', 'tags', 'profile_ids']];
-      (accounts || []).forEach(function(a) {
-        rows.push([a.platformUrl || '', a.platformUserName || '', (a.tags || []).join(';'), (a.profileIds || []).join(';')]);
-      });
-      var csv = rows.map(function(r) {
-        return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
-      }).join('\n');
-      var blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement("a");
-      a.href = url;
-      a.download = "accounts-" + new Date().toISOString().slice(0, 10) + ".csv";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-      toast((window.i18n ? window.i18n.t("toast.account.exported", "Accounts exported (metadata only)") : "Accounts exported (metadata only)"), "success");
-    }).catch(function(e) { toast(e.message, 'error'); });
+    return withAccountRole(function() {
+      return R.agent.accounts.list().then(function(accounts) {
+        var rows = [['url', 'username', 'tags', 'profile_ids']];
+        (accounts || []).forEach(function(a) {
+          rows.push([a.platformUrl || '', a.platformUserName || '', (a.tags || []).join(';'), (a.profileIds || []).join(';')]);
+        });
+        var csv = rows.map(function(r) {
+          return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+        }).join('\n');
+        var blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "accounts-" + new Date().toISOString().slice(0, 10) + ".csv";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+        toast((window.i18n ? window.i18n.t("toast.account.exported", "Accounts exported (metadata only)") : "Accounts exported (metadata only)"), "success");
+      }).catch(function(e) { toast(e.message, 'error'); });
+    });
   };
 })();

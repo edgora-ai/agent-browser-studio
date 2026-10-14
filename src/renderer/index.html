@@ -17,7 +17,7 @@
  <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4.5v3.5"/><circle cx="12" cy="4" r="1.2"/><path d="M9.2 12.5h.01M14.8 12.5h.01"/><path d="M9.8 15.6h4.4"/></svg></div>
  <div class="brand-text">
  <h1>Agent Browser Studio</h1>
- <span class="version">v1.0.0</span>
+ <span id="sidebar-app-version" class="version">—</span>
  </div>
  </div>
  <ul class="nav-menu" role="tablist" aria-label="Main navigation">
@@ -114,7 +114,7 @@
  <div id="backup-hint" class="card backup-hint" style="display:none;">
   <div style="flex:1;">
    <b data-icon="lock"><span data-i18n="backup.hint.title">Your data lives only on this machine</span></b>
-   <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles hold real account state (cookies, sessions). A disk failure means losing them. Use 📦 Export backup per profile, ☁️ Sync to S3, or rely on the 7-day trash for accidents.</div>
+   <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles contain real account data. Keep export backups on a separate disk or independently stored cloud/S3 backup. The local 7-day trash only protects against accidental deletion, not disk failure. Encrypted cookies and sessions may require signing in again on another machine.</div>
   </div>
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dismissBackupHint" data-i18n="backup.hint.dismiss">Don't remind me again</button>
  </div>
@@ -325,8 +325,8 @@
  <section id="tab-agent" class="tab-content" role="tabpanel" aria-labelledby="nav-agent">
  <div class="agent-layout">
  <!-- Conversation Sidebar -->
- <div id="agent-sidebar" style="width:210px;min-width:160px;border-right:1px solid var(--border);display:flex;flex-direction:column;">
- <div style="padding:12px 12px 10px;border-bottom:1px solid var(--border);">
+ <div id="agent-sidebar">
+ <div class="agent-sidebar-head">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentNewConv" style="width:100%;" data-icon="plus"><span data-i18n="agent.new-chat">New Chat</span></button>
  <div class="agent-conv-search">
  <input id="agent-conv-search" type="search" placeholder="Search chats" autocomplete="off" data-i18n-placeholder="agent.conv.search" data-i18n-aria-label="agent.conv.search" aria-label="Search chats" data-role="input" data-input-cmd="agentFilterConvs">
@@ -349,11 +349,11 @@
  <!-- Chat -->
  <div id="agent-view-chat" class="agent-view" style="display:flex;">
  <div id="agent-chat-header" style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
- <span id="agent-chat-title" style="font-weight:600;font-size:14px;" data-i18n="agent.chat-title">New Chat</span>
+ <span id="agent-chat-title" data-i18n-en-ok style="font-weight:600;font-size:14px;">New Chat</span>
  <button class="btn-icon btn btn-xs btn-quiet" data-role="cmd" data-cmd="agentDeleteConv" data-icon="trash" data-i18n-title="agent.chat.delete" data-i18n-aria-label="agent.chat.delete" title="Delete current conversation" aria-label="Delete current conversation"></button>
  </div>
  <div id="agent-chat-messages" data-role="scroll" data-scroll-cmd="onAgentScroll"></div>
- <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;position:absolute;right:16px;bottom:180px;z-index:2;box-shadow:0 4px 12px rgba(0,0,0,0.12);" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
+ <button id="agent-scroll-bottom" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentScrollBottom" data-icon="arrowDown" style="display:none;" title="Scroll to bottom"><span data-i18n="agent.chat.bottom">Bottom</span> <span id="agent-scroll-badge" data-i18n="agent.chat.new" style="display:none;margin-left:6px;background:var(--primary);color:#fff;border-radius:999px;padding:0 6px;font-size:var(--fs-micro);line-height:16px;">new</span></button>
  <div class="agent-input-bar">
  <div class="agent-scope-panel">
  <div class="agent-scope-row">
@@ -394,7 +394,7 @@
  <div class="form-row"><label for="agent-llm-apikey" data-i18n="agent.config.apikey">API Key</label><input id="agent-llm-apikey" type="password" placeholder="sk-..." data-i18n-en-ok></div>
  <div class="form-row"><label for="agent-llm-model" data-i18n="agent.config.model">Model</label><input id="agent-llm-model" placeholder="gpt-5.5-high" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="sync.field.endpoint" for="agent-llm-url">Endpoint</label><input id="agent-llm-url" placeholder="https://api.openai.com/v1/chat/completions" data-i18n-en-ok></div>
- <div style="display:flex;gap:8px;align-items:center;">
+ <div class="agent-action-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveConfig" data-i18n="common.save">Save</button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="agentDetectConfig" data-icon="refresh"><span data-i18n="agent.config.detect">Auto-Detect</span></button>
  <span id="agent-config-saved" data-icon="check" style="display:none;color:var(--success-text);font-size:12px;"><span data-i18n="agent.config.saved">Saved</span></span>
@@ -416,7 +416,7 @@
  <button type="button" class="btn btn-secondary btn-xs" data-role="cmd" data-cmd="agentFsAddDir" data-i18n="agent-fs.btn.add-dir" data-icon="plus">+ Add Dir</button>
  </div>
  </div>
- <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+ <div class="agent-action-row" style="margin-top:6px;">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="agentSaveFs" data-i18n="agent-fs.btn.save">Save File Settings</button>
  <span id="agent-fs-saved" style="display:none;color:var(--success-text);font-size:12px;" data-icon="check"><span data-i18n="agent-fs.saved">Saved</span></span>
  </div>
@@ -436,9 +436,9 @@
 
  <!-- Skills -->
  <div id="agent-view-skills" class="agent-view agent-view-scroll" style="display:none;">
- <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;">
+ <div class="skill-view-header">
  <h4 data-icon="list"><span data-i18n="agent.skills.title">Skills</span></h4>
- <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+ <div class="skill-view-actions">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="skillMarket" data-icon="grid"><span data-i18n="agent.skills.market">Marketplace</span></button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="showSkillEditor" data-icon="plus"><span data-i18n="agent.skills.add">Add Skill</span></button>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="exportSharedSkills" data-i18n="ext.export-shared">Export Shared</button>
@@ -564,7 +564,7 @@
  <div class="run-filter-row">
  <span id="run-filter-summary" class="run-filter-summary"></span>
  <!-- The cap is a retention policy, not a bug: say so where it bites. -->
- <span class="run-filter-retention" data-i18n="runs.filter.retention">仅保留最近 200 条运行记录</span>
+ <span class="run-filter-retention" data-i18n="runs.filter.retention">通常保留最多 200 条运行记录；优先移除最早已结束的记录，保护运行中的记录</span>
  </div>
  </div>
 
@@ -664,7 +664,7 @@
 <!-- ── WebRTC Diagnostics Dialog ── -->
 <dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
-  <h3 data-icon="globe"><span data-i18n="webrtc.diag.title">浏览器内 WebRTC 诊断</span></h3>
+  <h3 id="dlg-webrtc-diag-title" data-icon="globe"><span data-i18n="webrtc.diag.title">浏览器内 WebRTC 诊断</span></h3>
   <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
   <div id="webrtc-diag-history"></div>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
@@ -678,7 +678,7 @@
 <!-- ── Profile Logs Dialog (RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs) ── -->
 <dialog id="dlg-profile-logs" aria-labelledby="dlg-profile-logs-title" style="max-width:760px;width:96%;">
  <div>
-  <h3 data-icon="list"><span data-i18n="logs.title">Profile Operation Logs &amp; Browser Tail</span></h3>
+  <h3 id="dlg-profile-logs-title" data-icon="list"><span data-i18n="logs.title">Profile Operation Logs &amp; Browser Tail</span></h3>
   <input type="hidden" id="profile-logs-dir-id">
   <h4 style="font-size:13px;margin:6px 0 4px;" data-i18n="logs.recent-activity">Recent Activity</h4>
   <div id="profile-logs-activity" style="max-height:26vh;overflow:auto;font-size:12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;" data-i18n="common.loading">Loading...</div>
@@ -935,7 +935,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <!-- ── Proxy Bulk Import Dialog ── -->
 <dialog id="dlg-proxy-import" aria-labelledby="dlg-proxy-import-title">
  <form method="dialog" data-role="submit" data-submit-cmd="doImportProxies">
- <h3 data-icon="download"><span data-i18n="proxy.import.title">导入代理</span></h3>
+ <h3 id="dlg-proxy-import-title" data-icon="download"><span data-i18n="proxy.import.title">导入代理</span></h3>
  <p class="status-note compact"><span data-i18n="proxy.import.format-prefix">One proxy per line:</span> <code>type://user:pass@host:port</code><span data-i18n="proxy.import.format-mid"> (http/socks5/socks5h) or</span> <code>host:port</code><span data-i18n="proxy.import.format-suffix">. CSV headers are also supported:</span> <code>name,type,host,port,username,password</code><span data-i18n="proxy.import.format-tail">. Lines starting with # are ignored.</span></p>
  <textarea id="dlg-proxy-import-text" rows="10" style="width:100%;font-family:var(--mono);font-size:11px;" placeholder="socks5://user:pass@1.2.3.4:1080&#10;5.6.7.8:8080&#10;# comment" data-i18n-en-ok></textarea>
  <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;"><input type="checkbox" id="dlg-proxy-import-replace"> <span data-i18n="proxy.import.replace">Replace on name conflict (otherwise append -2/-3)</span></label>
@@ -950,7 +950,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <!-- ── Proxy Bind Profiles Dialog ── -->
 <dialog id="dlg-proxy-bind" aria-labelledby="dlg-proxy-bind-title" style="max-width:540px;width:92%;">
  <form method="dialog" data-role="submit" data-submit-cmd="doBindProxyToProfiles">
- <h3 data-icon="link"><span data-i18n="proxy.bind.title">One-Click Link to Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
+ <h3 id="dlg-proxy-bind-title" data-icon="link"><span data-i18n="proxy.bind.title">One-Click Link to Profile</span> — <span id="dlg-proxy-bind-proxy"></span></h3>
  <p class="hint-line-lg" data-i18n="proxy.bind.hint">勾选要绑定到此代理的 profile（已绑定的会切换为当前代理）。</p>
  <div id="dlg-proxy-bind-list" class="bind-list"></div>
  <div class="btn-row">
@@ -1096,7 +1096,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <dialog id="dlg-skill-market" aria-labelledby="dlg-skill-market-title" class="dialog-wide">
- <h3 data-icon="grid"><span data-i18n="agent.market.title">Skill Marketplace</span></h3>
+ <h3 id="dlg-skill-market-title" data-icon="grid"><span data-i18n="agent.market.title">Skill Marketplace</span></h3>
  <p class="hint-line market-note" data-i18n="agent.market.description">Local/private marketplace of Agent automation prompt/tool recipes. These are not Chrome extensions; enabled skills are appended to the Agent system prompt.</p>
  <input id="skill-market-search" placeholder="Search skills, descriptions, tags..." data-i18n-placeholder="agent.market.search" data-role="input" data-input-cmd="refreshSkillMarket" style="margin-bottom:10px;">
  <div id="skill-market-list">
@@ -1109,7 +1109,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
 </dialog>
 
-<dialog id="dlg-skill-editor" aria-labelledby="dlg-skill-editor-title" class="dialog-wide">
+<dialog id="dlg-skill-editor" aria-labelledby="skill-editor-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveSkill">
  <h3 id="skill-editor-title" data-i18n="skills.editor.add-title">Add Agent Skill</h3>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -1162,7 +1162,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- Automation editor dialog -->
-<dialog id="dlg-automation" aria-labelledby="dlg-automation-title" class="dialog-wide">
+<dialog id="dlg-automation" aria-labelledby="auto-dlg-title" class="dialog-wide">
  <form method="dialog" data-role="submit" data-submit-cmd="saveAutomation">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 data-icon="clock"><span id="auto-dlg-title" data-i18n="automation.new-task">New Task</span></h3>
@@ -1459,6 +1459,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
    <input type="checkbox" id="terms-ack" style="margin-top:2px;">
    <span data-i18n="terms.ack">I will use this software only for lawful purposes and accept that platform risk is my own responsibility.</span>
   </label>
+  <p id="terms-quit-error" role="alert" hidden style="font-size:12px;color:var(--danger-text);margin:10px 0 0;"></p>
   <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="termsDecline" data-i18n="terms.decline">Decline &amp; Quit</button>
    <button type="button" class="btn btn-primary" id="terms-accept-btn" data-role="cmd" data-cmd="termsAccept" data-i18n="terms.accept">Accept &amp; Continue</button>
@@ -1490,7 +1491,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <dialog id="dlg-wizard" aria-labelledby="dlg-wizard-title" class="dialog-wide">
- <h3 data-icon="sparkle"><span data-i18n="wizard.title">Welcome to Agent Browser Studio</span></h3>
+ <h3 id="dlg-wizard-title" data-icon="sparkle"><span data-i18n="wizard.title">Welcome to Agent Browser Studio</span></h3>
  <p data-i18n="wizard.subtitle" style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">Let's get your fingerprint browser ready in 3 quick steps.</p>
 
  <div id="wizard-steps">
@@ -1542,6 +1543,10 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <!-- ══════ Trash (R9 P1-3: 7-day recoverable delete needs a UI) ══════ -->
 <dialog id="dlg-trash" aria-labelledby="dlg-trash-title" style="min-width:420px;max-width:600px;">
  <h3 id="dlg-trash-title" style="margin:0 0 10px;" data-icon="trash"><span data-i18n="trash.title">Trash — deleted profiles (7 days)</span></h3>
+ <div id="trash-action-error" role="alert" aria-live="assertive" aria-atomic="true" hidden>
+  <div class="trash-action-summary"></div>
+  <div class="toast-detail" tabindex="0"></div>
+ </div>
  <div id="trash-list" style="max-height:50vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
  <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>

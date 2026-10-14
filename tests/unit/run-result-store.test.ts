@@ -37,7 +37,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-import { RunResultStore } from "../../src/main/services/run-result-store.js";
+import { RunResultStore, type CommitArgs } from "../../src/main/services/run-result-store.js";
 import type { DatasetSnapshot } from "../../src/main/services/run-verifiers.js";
 import type { AgentRunVerification } from "../../src/main/types.js";
 
@@ -52,7 +52,7 @@ const VERIFICATION: AgentRunVerification = {
   issuesTruncated: false,
 };
 
-function makeDataset(rows: string[][]): DatasetSnapshot {
+function makeDataset(rows: DatasetSnapshot["rows"]): DatasetSnapshot {
   return {
     columns: ["title", "url", "source", "published_at"],
     rows,
@@ -62,7 +62,7 @@ function makeDataset(rows: string[][]): DatasetSnapshot {
   };
 }
 
-function makeArgs(rows: string[][], overrides: Record<string, unknown> = {}): any {
+function makeArgs(rows: DatasetSnapshot["rows"], overrides: Partial<CommitArgs> = {}): CommitArgs {
   return {
     runId: RUN,
     runStartedAt: 1700000000000,
@@ -75,7 +75,7 @@ function makeArgs(rows: string[][], overrides: Record<string, unknown> = {}): an
   };
 }
 
-const ROWS = [
+const ROWS: DatasetSnapshot["rows"] = [
   { title: "Title A", url: "https://example.com/a", source: "example.com", published_at: "2026-09-19T08:00:00Z" },
   { title: "Title B", url: "https://example.com/b", source: "example.com", published_at: "2026-09-19T09:00:00Z" },
 ];
@@ -169,8 +169,9 @@ describe("quotas", () => {
     expect(ref.truncated).toBe(true);
     expect(ref.completeness).toBe("partial");
     expect(ref.truncationReason).toBe("run_quota");
-    expect(ref.rowCount!).toBeGreaterThanOrEqual(0);
-    expect(ref.rowCount!).toBeLessThan(50);
+    if (ref.rowCount === undefined) throw new Error("committed dataset is missing rowCount");
+    expect(ref.rowCount).toBeGreaterThanOrEqual(0);
+    expect(ref.rowCount).toBeLessThan(50);
     expect(ref.sourceRowCount).toBe(50);
     const preview = tiny.readDatasetPreview(RUN, "dataset", 0, 100);
     expect(preview.ok && preview.value.rows.length).toBe(ref.rowCount);
@@ -265,7 +266,15 @@ describe("integrity + path safety", () => {
     const bigCell = store.commitRunResult(makeArgs([{ title: "x".repeat(64 * 1024 + 1), url: "u", source: "s", published_at: "t" }]));
     expect(bigCell.ok).toBe(false);
     if (!bigCell.ok) expect(bigCell.reasonCode).toBe("artifact_invalid");
-    const nonObject = store.commitRunResult(makeArgs(["only-one" as any]));
+    // Deliberately malformed boundary DTO, not an accepted DatasetSnapshot row.
+    const malformedNonObjectArgs: Omit<CommitArgs, "dataset"> & {
+      dataset: Omit<DatasetSnapshot, "rows"> & { rows: string[] };
+    } = {
+      ...makeArgs([]),
+      dataset: { ...makeDataset([]), rows: ["only-one"], sourceRowCount: 1 },
+    };
+    // @ts-expect-error Negative boundary: the runtime must reject non-object rows.
+    const nonObject = store.commitRunResult(malformedNonObjectArgs);
     expect(nonObject.ok).toBe(false);
     if (!nonObject.ok) expect(nonObject.reasonCode).toBe("artifact_invalid");
   });

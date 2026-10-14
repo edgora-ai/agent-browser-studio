@@ -152,7 +152,7 @@ describe("bidi-client wire protocol", () => {
     expect(info.sameSite).toBe(1); // lax
     expect(info.expires).toBe(1799999999);
 
-    expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1 }), 5000)).toBe(true);
+    expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1, expires: null }), 5000)).toBe(true);
     expect(await bidiDeleteCookies(conn, { name: "k" }, 5000)).toBe(1);
     conn.close();
   }, 15000);
@@ -277,7 +277,7 @@ describe("page-eval engine routing", () => {
 
 describe("cookie mapping (CookieInfo ↔ BiDi)", () => {
   it("maps strict/none and session cookies", () => {
-    const strict = cookieInfoToBidiCookie({ domain: ".example.com", name: "a", value: "b", path: "/", secure: true, httpOnly: true, sameSite: 2 });
+    const strict = cookieInfoToBidiCookie({ domain: ".example.com", name: "a", value: "b", path: "/", secure: true, httpOnly: true, sameSite: 2, expires: null });
     expect(strict.sameSite).toBe("strict");
     expect(strict.domain).toBe("example.com"); // leading dot stripped
     expect(strict.value).toEqual({ type: "string", value: "b" });

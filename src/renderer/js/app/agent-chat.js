@@ -25,9 +25,7 @@
     return Promise.resolve().then(fn);
   }
 
-  // Each conversation owns its message array and current request. The renderer's
-  // state.agentMessages remains a compatibility view of only the selected
-  // conversation; stream handlers never write through that global pointer.
+  // Sessions own messages/requests; agentMessages only mirrors the selection.
   var sessions = Object.create(null);
   var sessionsByStream = Object.create(null);
   var sessionsByRun = Object.create(null);
@@ -36,14 +34,15 @@
   var environmentStartSeq = 0;
   var environmentProfiles = [];
   var _autoCreateConvTried = false;
-
+  var conversationListState = "idle", conversationListSeq = 0, composerConversationId = null;
   function ensureSession(conversationId) {
     if (!conversationId) return null;
     if (!sessions[conversationId]) {
       sessions[conversationId] = {
         conversationId: conversationId,
-        title: "",
         loaded: false,
+        historySeq: 0,
+        recoverySeq: 0,
         messagesRef: [],
         draft: "",
         selectedProfileDirId: "",
@@ -54,21 +53,17 @@
     }
     return sessions[conversationId];
   }
-
   function activeSession() {
     return state.agentActiveConvId ? ensureSession(state.agentActiveConvId) : null;
   }
-
   function isActiveSession(session) {
-    return !!session && state.agentActiveConvId === session.conversationId;
+    return !!session && sessions[session.conversationId] === session && state.agentActiveConvId === session.conversationId;
   }
-
   function captureActiveDraft() {
     var session = activeSession();
     var input = byId("agent-chat-input");
-    if (session && input && !session.run) session.draft = input.value || "";
+    if (session && input && composerConversationId === session.conversationId && !session.run) session.draft = input.value || "";
   }
-
   function setSendIcon(btn, name) {
     if (!btn) return;
     var markup = icon(name, 16);
@@ -76,30 +71,14 @@
   }
 
   function convTitle(conv) {
-    var title = conv && conv.title;
-    if (!title || title === "New Chat") return t("agent.chat-title", "New Chat");
-    return title;
+    if (!conv || (conv.titleKind === "default" && conv.title === "New Chat")) return t("agent.chat-title", "New Chat");
+    return conv.title;
   }
+  agentBrowser.chatTitleDisplay = convTitle;
 
-  function msgTime(ts) {
-    var d = new Date(ts);
-    if (isNaN(d.getTime())) return "";
-    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-  }
-
-  // Hover foot under each message: timestamp + copy-raw action, the pattern
-  // dedicated chat tools (WorkBuddy) use instead of always-on chrome. The
-  // click handler lives in agent-chat-content.js and resolves the message by
-  // its render index into state.agentMessages.
+  // Content owns both the hover foot markup and its delegated copy action.
   function msgFootHtml(message, idx, isUser) {
-    var time = message.timestamp ? msgTime(message.timestamp) : "";
-    var hasContent = !!String(message.content || "").trim();
-    if (!time && !hasContent) return "";
-    var copyLabel = t("agent.action.copy", "Copy");
-    return '<div class="chat-msg-foot' + (isUser ? " is-user" : "") + '">' +
-      (time ? '<span class="chat-msg-time num">' + esc(time) + "</span>" : "") +
-      (hasContent ? '<button type="button" class="chat-msg-copy" data-msg-copy="' + idx + '" title="' + escAttr(copyLabel) + '" aria-label="' + escAttr(copyLabel) + '">' + icon("copy", 12) + "</button>" : "") +
-      "</div>";
+    return agentBrowser.chatMessageFootHtml ? agentBrowser.chatMessageFootHtml(message, idx, isUser) : "";
   }
 
   function resizeComposer() {
@@ -112,8 +91,15 @@
       '<div class="chat-empty-hint' + (withSuggestions ? " is-wide" : "") + '">' + esc(t(hintKey, hintFb)) + "</div>";
     if (withSuggestions) {
       h += '<div class="chat-suggestions">';
-      for (var i = 1; i <= 3; i++) {
-        var prompt = t("agent.suggest." + i, "");
+      var session = activeSession();
+      var scoped = session && session.selectedProfileDirId;
+      var suggestions = [
+        scoped ? ["agent.chat-suggest.navigation", "Open a website in the selected running environment"] : ["agent.chat-suggest.scope-help", "Explain which actions need a browser environment"],
+        ["agent.chat-suggest.automation", "Please list recent automation rules and logs"],
+        ["agent.suggest.3", "What can you do in this app?"],
+      ];
+      for (var i = 0; i < suggestions.length; i++) {
+        var prompt = t(suggestions[i][0], suggestions[i][1]);
         if (!prompt) continue;
         h += '<button type="button" class="chat-suggestion" data-role="cmd" data-cmd="agentUseSuggestion" data-cmd-arg="' + escAttr(prompt) + '">' + icon("sparkle", 14) + "<span>" + esc(prompt) + "</span></button>";
       }
@@ -123,7 +109,7 @@
   }
 
   function welcomeHtml() {
-    return emptyChatHtml("robot", "agent.welcome.title", "Hi, I'm your browser agent", "agent.welcome.sub", "Ask me to drive the browser, check proxies, or run an automation.", true);
+    return emptyChatHtml("robot", "agent.welcome.title", "Hi, I'm your browser agent", "agent.chat-welcome.scope", "Select and start a running environment for browser actions. Without one, ask about available tools or recent automation rules and logs.", true);
   }
 
   function noConvHtml() {
@@ -168,8 +154,10 @@
     return merged;
   }
 
-  function adoptConversation(session, conv) {
-    session.title = convTitle(conv);
+  function adoptConversation(session, conv, titleRevision) {
+    if (session.titleRevision === titleRevision) {
+      Object.assign(session, { title: conv.title, titleKind: conv.titleKind });
+    }
     session.messagesRef = mergeMessages(conv.messages || [], session.messagesRef, session.run);
     session.loaded = true;
   }
@@ -178,15 +166,20 @@
     var hint = document.querySelector("#agent-view-chat .agent-hint");
     if (hint) hint.textContent = t("agent.hint.send", "Enter to send · Shift+Enter for newline");
   }
-
   function displaySession(session) {
     if (!session) return;
+    // Before first ownership, enabled composition belongs to the first selected
+    // or created session, including edits made while list/create was pending.
+    if (!composerConversationId) session.draft = (byId("agent-chat-input") || {}).value || "";
+    // Capture same-owner edits before a read/recovery repaint; never A as B.
+    if (isActiveSession(session) && composerConversationId === session.conversationId) captureActiveDraft();
     state.agentActiveConvId = session.conversationId;
     state.agentMessages = session.messagesRef;
+    composerConversationId = session.conversationId;
     var title = byId("agent-chat-title");
-    if (title) title.textContent = session.title || t("agent.chat-title", "New Chat");
+    if (title) title.textContent = convTitle(session.loaded || session.titleReady ? session : null);
     var input = byId("agent-chat-input");
-    if (input && !session.run) { input.value = session.draft || ""; resizeComposer(); }
+    if (input) { input.value = session.run && session.run.submitted ? "" : session.draft || ""; resizeComposer(); }
     renderComposerHint();
     agentBrowser.agentRenderMessages();
     renderRunUi(session);
@@ -287,17 +280,24 @@
     registerRun(session, run);
   }
 
-  function restoreActiveRun(session) {
+  function restoreActiveRun(session, expectedRunId) {
     if (!R.agent.activeRun) return Promise.resolve(null);
+    var seq = ++session.recoverySeq;
+    var observedRun = session.run, observedEvents = observedRun && observedRun.eventSeq;
     return readCall("agent.activeRun:" + session.conversationId, function() {
       return R.agent.activeRun(session.conversationId);
     }).then(function(snapshot) {
-      if (snapshot) hydrateSnapshot(session, snapshot);
+      if (sessions[session.conversationId] !== session || seq !== session.recoverySeq) return null;
+      if (expectedRunId && (!snapshot || snapshot.runId !== expectedRunId)) return null;
+      if (isActiveSession(session)) captureActiveDraft();
+      // Same-stream events observed since this read are newer than its snapshot.
+      // Other/new streams and genuinely fresh recovery reads remain admissible.
+      if (snapshot && !(session.run && session.run.streamId === snapshot.streamId &&
+        (session.run !== observedRun || session.run.eventSeq !== observedEvents))) hydrateSnapshot(session, snapshot);
       if (isActiveSession(session)) displaySession(session);
       return snapshot;
     }).catch(function(error) {
-      // Conversation history is still usable if the recovery probe fails. This
-      // is a read failure, not proof that no run exists, so keep local state.
+      // Recovery failure is not proof of no run; keep local history/state.
       console.warn("[agent] active run recovery failed:", error);
       return null;
     });
@@ -305,6 +305,8 @@
 
   // ── Agent sub-views ──
   agentBrowser.switchAgentSub = function(view) {
+    captureActiveDraft();
+    ++viewIntent;
     var chat = byId("agent-view-chat");
     var config = byId("agent-view-config");
     var accounts = byId("agent-view-accounts");
@@ -329,32 +331,43 @@
 
   // ── Conversation list ──
   agentBrowser.agentLoadConversations = function() {
+    var seq = ++conversationListSeq, intent = viewIntent, titleRevision = agentBrowser.chatTitleRevision || 0;
+    conversationListState = "pending";
+    agentBrowser.agentRenderConvs();
     return R.agent.conversations.list().then(function(list) {
-      state.agentConvList = list || [];
+      if (seq !== conversationListSeq) return state.agentConvList;
+      state.agentConvList = agentBrowser.chatAdoptListTitles ? agentBrowser.chatAdoptListTitles(list || [], titleRevision) : list || [];
+      conversationListState = "loaded";
       agentBrowser.agentRenderConvs();
+      // Only a loaded list may initialize a chat; repaints stay read-only.
+      var chat = byId("agent-view-chat");
+      if (intent === viewIntent && (!state.currentTab || state.currentTab === "agent") && (!chat || chat.style.display !== "none") && !state.agentActiveConvId) {
+        if (state.agentConvList.length) agentBrowser.agentSelectConv(state.agentConvList[0].id);
+        else if (!_autoCreateConvTried) {
+          _autoCreateConvTried = true;
+          agentBrowser.agentNewConv();
+        }
+      }
       return state.agentConvList;
     }).catch(function(error) {
+      if (seq !== conversationListSeq) return state.agentConvList;
+      conversationListState = "failed";
       console.error("Load conversations:", error);
-      var listEl = byId("agent-conv-list");
-      if (listEl) {
-        listEl.innerHTML = '<div class="agent-inline-error">' + esc(t("agent.load-failed", "Failed to load conversations")) + '<br><button class="btn btn-xs btn-primary" data-role="cmd" data-cmd="agentLoadConversations">' + esc(t("agent.retry", "Retry")) + "</button></div>";
-      }
+      agentBrowser.agentRenderConvs();
       return [];
     });
   };
-
   agentBrowser.agentFilterConvs = function() { agentBrowser.agentRenderConvs(); };
-
   agentBrowser.agentRenderConvs = function() {
     var el = byId("agent-conv-list");
     if (!el) return;
     var list = state.agentConvList || [];
+    if (conversationListState === "failed") {
+      el.innerHTML = '<div class="agent-inline-error">' + esc(t("agent.load-failed", "Failed to load conversations")) + '<br><button class="btn btn-xs btn-primary" data-role="cmd" data-cmd="agentLoadConversations">' + esc(t("agent.retry", "Retry")) + "</button></div>";
+      return;
+    }
     if (list.length === 0) {
-      el.innerHTML = '<div class="agent-conv-empty">' + esc(t("agent.no-chats", "No chats yet")) + "</div>";
-      if (!_autoCreateConvTried) {
-        _autoCreateConvTried = true;
-        agentBrowser.agentNewConv();
-      }
+      el.innerHTML = '<div class="agent-conv-empty">' + esc(conversationListState === "loaded" ? t("agent.no-chats", "No chats yet") : t("common.loading", "Loading…")) + "</div>";
       return;
     }
     _autoCreateConvTried = false;
@@ -378,12 +391,12 @@
       html += "</div>";
     });
     el.innerHTML = html;
-    if (!state.agentActiveConvId && list.length > 0) agentBrowser.agentSelectConv(list[0].id);
   };
 
   function activateNewConversation(conv, intent) {
     var session = ensureSession(conv.id);
-    session.title = convTitle(conv);
+    session.title = conv.title;
+    session.titleKind = conv.titleKind;
     session.loaded = true;
     session.messagesRef = conv.messages || [];
     if (intent !== viewIntent) return session;
@@ -411,30 +424,25 @@
     captureActiveDraft();
     var intent = ++viewIntent;
     var session = ensureSession(conversationId);
+    var seq = ++session.historySeq, titleRevision = session.titleRevision;
     state.agentActiveConvId = conversationId;
-    if (session.loaded || session.run) displaySession(session);
+    displaySession(session);
 
     var conversationPromise = R.agent.conversations.get(conversationId).then(function(conv) {
-      if (!conv) {
-        if (intent === viewIntent && state.agentActiveConvId === conversationId) {
-          toast(t("agent.conv-missing", "Conversation not found — it may have been deleted"), "error");
-          state.agentActiveConvId = null;
-          state.agentMessages = [];
-          var messages = byId("agent-chat-messages");
-          if (messages) messages.innerHTML = noConvHtml();
-          renderRunUi(null);
-        }
-        return null;
-      }
-      adoptConversation(session, conv);
+      if (sessions[conversationId] !== session || seq !== session.historySeq) return null;
+      if (!conv) throw new Error(t("agent.conv-missing", "Conversation not found — it may have been deleted"));
+      adoptConversation(session, conv, titleRevision);
       if (intent === viewIntent && state.agentActiveConvId === conversationId) displaySession(session);
       return conv;
     }).catch(function(error) {
+      if (sessions[conversationId] !== session || seq !== session.historySeq) return null;
       console.error("Load conversation:", error);
       if (intent === viewIntent && state.agentActiveConvId === conversationId) {
         toast((error && error.message) || t("agent.conv-load-failed", "Failed to load conversation"), "error");
+        captureActiveDraft();
         state.agentActiveConvId = null;
         state.agentMessages = [];
+        if (agentBrowser.chatRenderTitle) agentBrowser.chatRenderTitle();
         var messages = byId("agent-chat-messages");
         if (messages) messages.innerHTML = noConvHtml();
         renderRunUi(null);
@@ -449,25 +457,7 @@
 
   agentBrowser.agentDeleteConv = function() {
     if (!state.agentActiveConvId) return;
-    var conversationId = state.agentActiveConvId;
-    var session = sessions[conversationId];
-    if (session && session.run) {
-      toast(t("agent.run.delete-busy", "Stop the current task before deleting this conversation"), "info");
-      return;
-    }
-    agentBrowser.confirm(t("agent.delete-confirm", "Delete this conversation? All messages will be lost."), function() {
-      R.agent.conversations.delete(conversationId).then(function() {
-        delete sessions[conversationId];
-        if (state.agentActiveConvId === conversationId) {
-          state.agentActiveConvId = null;
-          state.agentMessages = [];
-          var messages = byId("agent-chat-messages");
-          if (messages) messages.innerHTML = noConvHtml();
-          renderRunUi(null);
-        }
-        agentBrowser.agentLoadConversations();
-      });
-    });
+    return agentBrowser.agentDeleteConvItem(state.agentActiveConvId);
   };
 
   agentBrowser.agentDeleteConvItem = function(conversationId) {
@@ -486,12 +476,14 @@
           var title = byId("agent-chat-title");
           var messages = byId("agent-chat-messages");
           var status = byId("agent-chat-status");
-          if (title) title.textContent = t("agent.chat-title", "New Chat");
+          if (title) title.textContent = convTitle(null);
           if (messages) messages.innerHTML = noConvHtml();
           if (status) status.textContent = "";
           renderRunUi(null);
         }
         agentBrowser.agentLoadConversations();
+      }).catch(function(error) {
+        toast(t("agent.conv.delete-failed", "Could not delete the conversation: ") + explainError(error), "error");
       });
     });
   };
@@ -570,6 +562,7 @@
     if (!session || !select || session.run) return;
     session.selectedProfileDirId = select.value || "";
     renderEnvironmentUi(session);
+    if (!session.messagesRef.length) agentBrowser.agentRenderMessages({ preserveScroll: true });
   };
 
   agentBrowser.agentRefreshEnvironments = function() {
@@ -798,6 +791,8 @@
       var input = byId("agent-chat-input");
       if (input) {
         input.disabled = false;
+        input.value = session.draft || "";
+        resizeComposer();
         if (reason !== "user_cancelled") input.focus();
       }
     }
@@ -812,13 +807,13 @@
     var select = byId("agent-env-select");
     var selectedProfileDirId = select ? select.value || "" : session.selectedProfileDirId || "";
     session.selectedProfileDirId = selectedProfileDirId;
-    session.draft = message;
+    var input = byId("agent-chat-input");
+    session.draft = isActiveSession(session) && input && input.value.trim() === message ? input.value : message;
 
     var requestId = newId("request");
     var run = {
       conversationId: session.conversationId,
-      // Main treats streamId/requestId as one idempotency identity. Keeping one
-      // value also lets persisted messages reconnect to this exact request.
+      // Shared stream/request identity reconnects persisted turns idempotently.
       requestId: requestId,
       streamId: requestId,
       runId: null,
@@ -935,7 +930,6 @@
     var message = input ? input.value.trim() : "";
     if (!message) return Promise.resolve(null);
     var current = activeSession();
-    if (current && current.run) return beginSend(current, message);
     if (current) return beginSend(current, message);
 
     var intent = ++viewIntent;
@@ -987,6 +981,7 @@
     assistant.requestId = run.requestId;
   }
 
+  function observeRun(run) { run.eventSeq = (run.eventSeq || 0) + 1; return run; }
   function handleStart(payload) {
     var session = findSessionForPayload(payload);
     if (!session) {
@@ -998,6 +993,7 @@
       if (session.lastRun && (session.lastRun.streamId === payload.streamId ||
         (payload.runId && session.lastRun.runId === payload.runId) ||
         (payload.startedAt && session.lastRun.finishedAt && payload.startedAt <= session.lastRun.finishedAt))) return;
+      if (isActiveSession(session)) captureActiveDraft();
       var restored = {
         conversationId: payload.conversationId,
         requestId: payload.streamId,
@@ -1021,6 +1017,7 @@
     }
     var run = session.run;
     if (run.terminal) return;
+    observeRun(run);
     run.runId = payload.runId || run.runId;
     run.profileDirId = payload.profileDirId || run.profileDirId || "";
     run.profileName = payload.profileName || run.profileName || "";
@@ -1075,7 +1072,7 @@
   function handleChunk(payload) {
     var session = findSessionForPayload(payload);
     if (!session || session.run.terminal) return;
-    var run = session.run;
+    var run = observeRun(session.run);
     var text = payload && payload.text != null ? String(payload.text) : "";
     run.reply += text;
     var assistant = ensureAssistantMessage(session, run);
@@ -1086,7 +1083,7 @@
   function handleToolCall(payload) {
     var session = findSessionForPayload(payload);
     if (!session || session.run.terminal) return;
-    var run = session.run;
+    var run = observeRun(session.run);
     var name = String(payload.name || "tool");
     run.currentTool = name;
     run.toolCalls.push({ name: name, redacted: true });
@@ -1104,7 +1101,7 @@
     if (!payload || !payload.runId || !payload.step) return;
     var session = sessionsByRun[payload.runId];
     if (!session || !session.run || session.run.terminal) return;
-    var run = session.run;
+    var run = observeRun(session.run);
     var actual = normalizeStep(payload.step);
     var pendingIndex = -1;
     for (var i = 0; i < run.steps.length; i++) {
@@ -1130,11 +1127,13 @@
   }
 
   function syncConversationAfterTerminal(session) {
+    var seq = ++session.historySeq, titleRevision = session.titleRevision;
     R.agent.conversations.get(session.conversationId).then(function(conv) {
-      if (!conv) return;
-      adoptConversation(session, conv);
+      if (sessions[session.conversationId] !== session || seq !== session.historySeq || !conv) return;
+      adoptConversation(session, conv, titleRevision);
       if (isActiveSession(session)) displaySession(session);
     }).catch(function(error) {
+      if (sessions[session.conversationId] !== session || seq !== session.historySeq) return;
       // A failed read is not evidence that persistence was cleared; retain the
       // in-memory terminal result and let a later selection retry the read.
       console.warn("[agent] terminal conversation refresh failed:", error);
@@ -1149,6 +1148,7 @@
     if (!session && payload && payload.conversationId && payload.streamId) {
       session = sessions[payload.conversationId];
       if (session && !session.run && !session.lastRun) {
+        if (isActiveSession(session)) captureActiveDraft();
         var linkedUser = findMessage(session, "user", payload.streamId, payload.runId);
         var recoveredTerminal = {
           conversationId: payload.conversationId,
@@ -1223,6 +1223,7 @@
       renderEnvironmentUi(session);
       var input = byId("agent-chat-input");
       if (input) {
+        input.value = session.draft || ""; resizeComposer();
         input.disabled = false;
         input.focus();
       }
@@ -1242,6 +1243,7 @@
     if (run.terminal) return Promise.resolve({ accepted: false, state: "finished", endReason: run.endReason });
     if (run.stopPromise) return run.stopPromise;
 
+    observeRun(run);
     run.cancelRequested = true;
     run.state = "cancelling";
     if (isActiveSession(session)) renderRunUi(session);
@@ -1268,6 +1270,7 @@
     }).catch(function(error) {
       run.stopPromise = null;
       if (session.run === run && !run.terminal) {
+        observeRun(run);
         run.state = "running";
         run.cancelRequested = false;
         if (isActiveSession(session)) renderRunUi(session);
@@ -1302,12 +1305,8 @@
     }).then(function(record) {
       var conversationId = record && record.source && record.source.type === "chat" ? record.source.conversationId : "";
       if (!conversationId) return null;
-      return readCall("agent.activeRun:approval:" + conversationId, function() {
-        return R.agent.activeRun(conversationId);
-      }).then(function(snapshot) {
-        if (!snapshot || snapshot.runId !== req.runId) return null;
-        var session = ensureSession(conversationId);
-        hydrateSnapshot(session, snapshot);
+      var session = ensureSession(conversationId);
+      return restoreActiveRun(session, req.runId).then(function() {
         return findOwnedRun(req.runId);
       });
     }).catch(function() { return null; });
@@ -1338,6 +1337,8 @@
     api.on("profile:updated", function() { agentBrowser.agentRefreshEnvironments(); });
   }
   bindLifecycleEvents();
+  var composer = byId("agent-chat-input");
+  if (composer) composer.addEventListener("input", captureActiveDraft);
   document.addEventListener("agent-browser-language-change", renderComposerHint);
 
   setInterval(function() {

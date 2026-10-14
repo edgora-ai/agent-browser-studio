@@ -4,10 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { CHROMIUM_CACHE_DIR_NAME } from "../branding.js";
 import {
+  FIREFOX_NATIVE_CONFIG_CAPABILITIES,
   readFirefoxNativeCapabilityReport,
+  readFirefoxNativeCapabilityReportAsync,
   supportsFirefoxNativeConfig,
   type FirefoxNativeCapabilityReport,
 } from "./firefox-native-capabilities.js";
+import { runBrowserCommand } from "./browser-command.js";
 
 export interface ManagedFirefoxBinary {
   version: string;
@@ -92,6 +95,53 @@ export function findManagedFirefoxBinary(
 ): ManagedFirefoxBinary | null {
   const version = normalizeManagedFirefoxVersion(requestedVersion);
   const candidates = listManagedFirefoxBinaries(root, platform);
+  return version
+    ? candidates.find((candidate) => candidate.version === version) ?? null
+    : candidates[0] ?? null;
+}
+
+export async function listManagedFirefoxBinariesAsync(
+  root = getManagedFirefoxRoot(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ManagedFirefoxBinary[]> {
+  let entries: string[];
+  try {
+    entries = await fs.promises.readdir(root);
+  } catch {
+    return [];
+  }
+  const candidates: ManagedFirefoxBinary[] = [];
+  for (const entry of entries) {
+    const match = entry.match(/^firefox-(\d+\.\d+(?:\.\d+)?)$/);
+    if (!match) continue;
+    const installDir = path.join(root, entry);
+    const binaryPath = binaryForInstall(installDir, platform);
+    try {
+      const capabilityReport = await readFirefoxNativeCapabilityReportAsync(binaryPath, platform);
+      if (!capabilityReport || !FIREFOX_NATIVE_CONFIG_CAPABILITIES.every((capability) =>
+        capabilityReport.capabilities.includes(capability)
+      )) continue;
+      const result = await runBrowserCommand(binaryPath, ["--version"], { timeout: 5_000 });
+      const raw = String(result?.stdout || result?.stderr || "").trim();
+      const version = raw.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)/i)?.[1] ?? null;
+      if (!version || version !== match[1] || capabilityReport.browserVersion !== version) continue;
+      // Recheck XUL as well as the executable after the separate version probe.
+      if (await readFirefoxNativeCapabilityReportAsync(binaryPath, platform) !== capabilityReport) continue;
+      candidates.push({ version, binaryPath, installDir, capabilityReport });
+    } catch {
+      // Ignore one incomplete or tampered install without hiding healthy builds.
+    }
+  }
+  return candidates.sort((a, b) => compareFirefoxVersions(b.version, a.version));
+}
+
+export async function findManagedFirefoxBinaryAsync(
+  requestedVersion?: string | null,
+  root = getManagedFirefoxRoot(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ManagedFirefoxBinary | null> {
+  const version = normalizeManagedFirefoxVersion(requestedVersion);
+  const candidates = await listManagedFirefoxBinariesAsync(root, platform);
   return version
     ? candidates.find((candidate) => candidate.version === version) ?? null
     : candidates[0] ?? null;

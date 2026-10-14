@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const mocks = vi.hoisted(() => ({
   manifests: new Map<string, any>(),
-  reloadCalls: 0,
+  refreshCalls: 0,
 }));
 
 vi.mock("../../src/main/services/run-result-store.js", () => ({
@@ -26,16 +26,18 @@ import {
   recoverInterruptedJobs, getJob, listJobs,
 } from "../../src/main/services/job-store.js";
 import {
-  reconcileAutomationState, handleSystemResume, setReloadSchedule,
+  reconcileAutomationState, handleSystemResume, setRefreshScheduleTimers,
   _resetOffsetMemoForTesting,
 } from "../../src/main/services/automation-reconcile.js";
 
+let conn: DatabaseSync;
 beforeEach(() => {
-  _setDbForTesting(new DatabaseSync(":memory:"));
+  conn = new DatabaseSync(":memory:");
+  _setDbForTesting(conn);
   mocks.manifests = new Map();
-  mocks.reloadCalls = 0;
+  mocks.refreshCalls = 0;
   _resetOffsetMemoForTesting();
-  setReloadSchedule(() => { mocks.reloadCalls++; });
+  setRefreshScheduleTimers(() => { mocks.refreshCalls++; return 2; });
 });
 
 describe("reconcileAutomationState", () => {
@@ -181,23 +183,31 @@ describe("reconcileAutomationState job ↔ run convergence", () => {
   });
 });
 
-describe("handleSystemResume", () => {
-  it("reconciles and re-reads the schedule, and starts nothing", () => {
-    const before = listJobs().length;
-    const report = handleSystemResume("resume");
-    expect(report.reason).toBe("resume");
-    expect(report.rearmed).toBe(false);
-    expect(mocks.reloadCalls).toBe(1);
-    // The load-bearing assertion: no job was created by a resume.
-    expect(listJobs().length).toBe(before);
-  });
-
-  it("converges orphaned state on resume, not only at startup", () => {
-    const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
-    markRunning(j.id, 0);
-    const report = handleSystemResume("resume");
-    expect(report.interruptedJobs).toBe(1);
-    expect(getJob(j.id)!.status).toBe("failed");
+describe("handleSystemResume — live timer refresh", () => {
+  it.each(["resume", "unlock", "focus", "manual"])("preserves active jobs on %s while reporting timer-only refresh", (reason) => {
+    const running = enqueueJob({ ruleId: "run", ruleName: "running", source: "once" });
+    markRunning(running.id, 0);
+    const queued = enqueueJob({ ruleId: "queue", ruleName: "queued", source: "cron" });
+    const retry = enqueueJob({ ruleId: "retry", ruleName: "retry", source: "once" });
+    markRunning(retry.id, 0);
+    const retryAt = Date.now() + 30_000;
+    markRetryWaiting(retry.id, retryAt);
+    // Direct database snapshot, independent of the service readback.
+    const before = conn.prepare("SELECT id, status, attempt, started_at, retry_at, finished_at, error FROM jobs ORDER BY id").all();
+    const report = handleSystemResume(reason);
+    expect(report).toMatchObject({
+      reason, timersRefreshed: 2, rearmed: true, workStarted: false,
+      interruptedJobs: 0, orphanedQueued: 0, orphanedRetryWaiting: 0,
+      jobsReplayedFromRun: 0, notificationsReplayed: 0,
+    });
+    expect(mocks.refreshCalls).toBe(1);
+    expect(conn.prepare("SELECT id, status, attempt, started_at, retry_at, finished_at, error FROM jobs ORDER BY id").all()).toEqual(before);
+    expect(getJob(running.id)?.status).toBe("running");
+    expect(listJobs({ status: "queued", ruleId: "queue" }).map((j) => j.id)).toEqual([queued.id]);
+    expect(getJob(retry.id)).toMatchObject({ status: "retry-waiting", attempt: 0, retryAt });
+    expect(listJobs({ ruleId: "retry" }).map((j) => j.id)).toEqual([retry.id]);
+    markDone(running.id, "finished");
+    expect(getJob(running.id)).toMatchObject({ status: "done", result: "finished" });
   });
 
   it("reports the offset unchanged when the timezone has not moved", () => {
@@ -205,13 +215,13 @@ describe("handleSystemResume", () => {
     expect(handleSystemResume("second").offsetChanged).toBe(false);
   });
 
-  it("survives a reload failure without throwing", () => {
-    setReloadSchedule(() => { throw new Error("boom"); });
-    expect(() => handleSystemResume("resume")).not.toThrow();
+  it("does not claim success if the timer refresh fails", () => {
+    setRefreshScheduleTimers(() => { throw new Error("boom"); });
+    expect(() => handleSystemResume("resume")).toThrow("boom");
   });
 
-  it("works with no reload function wired", () => {
-    setReloadSchedule(null);
-    expect(() => handleSystemResume("resume")).not.toThrow();
+  it("reports no timers rearmed when no scheduler is wired", () => {
+    setRefreshScheduleTimers(null);
+    expect(handleSystemResume("resume")).toMatchObject({ rearmed: false, timersRefreshed: 0, workStarted: false });
   });
 });
