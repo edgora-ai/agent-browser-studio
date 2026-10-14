@@ -4,7 +4,7 @@
 //
 // Write protocol (per payload file):
 //   serialize in memory → open tmp (O_EXCL, 0600) → write → fsync → rename
-//   → fsync the directory → re-open and verify (lstat rejects symlinks,
+//   → fsync the directory where supported → re-open and verify (lstat rejects symlinks,
 //   size + SHA-256 must match, dataset payloads are re-parsed and checked
 //   against the claimed runId/columns/rows).
 // manifest.json is written LAST with the same protocol and is the only
@@ -151,7 +151,7 @@ export class RunResultStore {
   // ── Low-level atomic write + verify ──
 
   /** Atomic write: unique O_EXCL tmp in the SAME directory, 0600, fsync,
-   *  rename, directory fsync. Tmp is always cleaned up. */
+   *  rename, directory fsync where supported. Tmp is always cleaned up. */
   private atomicWrite(targetPath: string, data: Buffer): void {
     const dir = path.dirname(targetPath);
     const tmp = path.join(dir, `${TMP_PREFIX}${process.pid}-${randomUUID()}`);
@@ -167,6 +167,11 @@ export class RunResultStore {
       try {
         dfd = fs.openSync(dir, fs.constants.O_RDONLY);
         fs.fsyncSync(dfd);
+      } catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        // Windows reports EPERM for directory fsync. This is not a directory
+        // durability guarantee: the file fsync and atomic rename remain required.
+        if (dfd === null || process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
       } finally {
         if (dfd !== null) try { fs.closeSync(dfd); } catch { /* best effort */ }
       }

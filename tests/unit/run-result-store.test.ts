@@ -11,7 +11,8 @@ const TEST_ROOT = path.join(os.tmpdir(), `agent-browser-m2-result-store-test-${p
 
 const h = vi.hoisted(() => ({
   /** Armed fs fault: which syscall fails and with which errno code. */
-  fault: null as null | { syscall: "renameSync" | "writeSync" | "fsyncSync"; code: string },
+  fault: null as null | { syscall: "renameSync" | "writeSync" | "fsyncSync"; code: string; target?: "file" | "directory"; systemCall?: string },
+  fsyncTargets: [] as Array<"file" | "directory">,
 }));
 
 vi.mock("electron", () => ({
@@ -22,10 +23,11 @@ vi.mock("electron", () => ({
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const maybeFail = (syscall: "renameSync" | "writeSync" | "fsyncSync") => {
-    if (h.fault && h.fault.syscall === syscall) {
+  const maybeFail = (syscall: "renameSync" | "writeSync" | "fsyncSync", fd?: number) => {
+    if (h.fault && h.fault.syscall === syscall && (!h.fault.target || (fd !== undefined && actual.fstatSync(fd).isDirectory() === (h.fault.target === "directory")))) {
       const err: any = new Error(`${h.fault.code}: injected ${syscall} failure`);
       err.code = h.fault.code;
+      err.syscall = h.fault.systemCall ?? (syscall === "fsyncSync" ? "fsync" : syscall);
       throw err;
     }
   };
@@ -33,7 +35,7 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     renameSync: (from: any, to: any) => { maybeFail("renameSync"); return (actual.renameSync as any)(from, to); },
     writeSync: (fd: any, data: any, ...rest: any[]) => { maybeFail("writeSync"); return (actual.writeSync as any)(fd, data, ...rest); },
-    fsyncSync: (fd: any) => { maybeFail("fsyncSync"); return actual.fsyncSync(fd); },
+    fsyncSync: (fd: any) => { h.fsyncTargets.push(actual.fstatSync(fd).isDirectory() ? "directory" : "file"); maybeFail("fsyncSync", fd); return actual.fsyncSync(fd); },
   };
 });
 
@@ -51,6 +53,16 @@ const VERIFICATION: AgentRunVerification = {
   issues: [],
   issuesTruncated: false,
 };
+
+// Isolate only the platform branch under controlled syscalls; never fake UIDs.
+function onPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  if (!original?.configurable) throw new Error("Platform control must be restorable");
+  try {
+    Object.defineProperty(process, "platform", { value: platform });
+    return run();
+  } finally { Object.defineProperty(process, "platform", original); }
+}
 
 function makeDataset(rows: DatasetSnapshot["rows"]): DatasetSnapshot {
   return {
@@ -85,12 +97,14 @@ let store: RunResultStore;
 
 beforeEach(() => {
   h.fault = null;
+  h.fsyncTargets = [];
   realFs.rmSync(TEST_ROOT, { recursive: true, force: true });
   store = new RunResultStore({ rootProvider: () => TEST_ROOT, now: () => 1700000000000 });
 });
 
 afterEach(() => {
   h.fault = null;
+  h.fsyncTargets = [];
   realFs.rmSync(TEST_ROOT, { recursive: true, force: true });
 });
 
@@ -234,6 +248,68 @@ describe("fault injection", () => {
     const res = store.commitRunResult(makeArgs(ROWS));
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reasonCode).toBe("write_failed");
+  });
+
+
+  it("accepts only unsupported Windows directory fsync after real file sync and rename", () => {
+    h.fault = { syscall: "fsyncSync", code: "EPERM", target: "directory" };
+    const result = onPlatform("win32", () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(true);
+    expect(h.fsyncTargets).toEqual(["file", "directory", "file", "directory"]);
+    const runDir = path.join(TEST_ROOT, "agent-results", RUN);
+    const manifest = JSON.parse(realFs.readFileSync(path.join(runDir, "manifest.json"), "utf8"));
+    const dataset = JSON.parse(realFs.readFileSync(path.join(runDir, "artifacts", "dataset.json"), "utf8"));
+    expect(manifest.runId).toBe(RUN);
+    expect(dataset.rows).toEqual(ROWS_MAJOR);
+    const preview = store.readDatasetPreview(RUN, "dataset", 0, 100);
+    expect(preview.ok).toBe(true);
+    if (preview.ok) {
+      expect(preview.value.rows).toEqual(ROWS_MAJOR);
+      expect(preview.value.rows.filter(row => row[0] === "Title B")).toHaveLength(1);
+    }
+    expect(store.listStoredRunIds()).toEqual([RUN]);
+  });
+
+  it.each(["darwin", "linux"] as const)("preserves %s directory fsync EPERM as a genuine failure", platform => {
+    h.fault = { syscall: "fsyncSync", code: "EPERM", target: "directory" };
+    const result = onPlatform(platform, () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe("write_failed");
+    expect(store.hasManifest(RUN)).toBe(false);
+  });
+
+  it.each(["EIO", "EINVAL", "EACCES"])("does not swallow genuine Windows directory fsync %s", code => {
+    h.fault = { syscall: "fsyncSync", code, target: "directory" };
+    const result = onPlatform("win32", () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe("write_failed");
+    expect(store.hasManifest(RUN)).toBe(false);
+  });
+
+  it("never swallows Windows file fsync EPERM", () => {
+    h.fault = { syscall: "fsyncSync", code: "EPERM", target: "file" };
+    const result = onPlatform("win32", () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe("write_failed");
+    expect(h.fsyncTargets).toEqual(["file"]);
+    expect(store.hasManifest(RUN)).toBe(false);
+  });
+
+  it("requires the exact fsync syscall for unsupported Windows directory EPERM", () => {
+    h.fault = { syscall: "fsyncSync", code: "EPERM", target: "directory", systemCall: "open" };
+    const result = onPlatform("win32", () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe("write_failed");
+    expect(store.hasManifest(RUN)).toBe(false);
+  });
+
+  it("never swallows Windows atomic rename EPERM", () => {
+    h.fault = { syscall: "renameSync", code: "EPERM" };
+    const result = onPlatform("win32", () => store.commitRunResult(makeArgs(ROWS)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe("write_failed");
+    expect(h.fsyncTargets).toEqual(["file"]);
+    expect(store.hasManifest(RUN)).toBe(false);
   });
 });
 

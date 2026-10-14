@@ -33,6 +33,12 @@ import {
   readBundledBrowsersManifestAsync,
 } from "../../src/main/services/bundled-native-browsers.js";
 
+// macOS archive protocol fixtures use POSIX directory descriptors and real
+// getuid/inode ownership. Windows runs portable manifest/direct-discovery
+// cases below, not simulated Darwin extraction or invented UID checks.
+const posixArchive = describe.skipIf(process.platform === "win32");
+const posixArchiveIt = it.skipIf(process.platform === "win32");
+
 type Kind = "chromium" | "firefox";
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter();
@@ -202,7 +208,7 @@ afterEach(async () => {
   }
 });
 
-describe.each(browsers)("$kind asynchronous archive discovery", (browser) => {
+posixArchive.each(browsers)("$kind asynchronous archive discovery", (browser) => {
   it("defers both real async subprocess entry points, keeps timers responsive, and publishes only after strict verification", async () => {
     const item = fixture(browser.kind);
     let settled = false;
@@ -282,7 +288,7 @@ describe.each(browsers)("$kind asynchronous archive discovery", (browser) => {
   });
 });
 
-describe("bounded subprocess failure and ownership", () => {
+posixArchive("bounded subprocess failure and ownership", () => {
   it.each([
     { command: "ditto", timeout: 300000, index: 0 },
     { command: "codesign", timeout: 30000, index: 1 },
@@ -366,7 +372,7 @@ describe("bounded subprocess failure and ownership", () => {
   });
 });
 
-describe("shared sync / async / cross-main destination lock", () => {
+posixArchive("shared sync / async / cross-main destination lock", () => {
   it("sync explicitly reports busy during async extraction rather than deleting or advertising its work", async () => {
     const item = fixture();
     const result = watch(bundledChromiumBinaryPathAsync("darwin", item.resources));
@@ -511,7 +517,7 @@ function deadOwner(): Error {
   });
 }
 
-describe("review regressions", () => {
+posixArchive("review regressions", () => {
   it("uses no synchronous filesystem operations throughout cold async discovery and publication", async () => {
     const item = fixture();
     filesystemGate.checking = true;
@@ -609,7 +615,7 @@ function deferred(): { promise: Promise<void>; release: () => void } {
   return { promise, release };
 }
 
-describe("directory lock review regressions", () => {
+posixArchive("directory lock review regressions", () => {
   it.each(["empty directory", "legacy file", "dangling symlink"])("preserves a pre-existing unknown %s without querying any owner", async (kind) => {
     const { lstatSync, symlinkSync, readlinkSync } = await import("node:fs");
     const item = fixture();
@@ -827,7 +833,7 @@ describe("directory lock review regressions", () => {
   });
 });
 
-describe("protocol-owner recovery safety", () => {
+posixArchive("protocol-owner recovery safety", () => {
   it.each(["unknown PID 54280", "wrong UID", "wrong destination", "wrong inode", "wrong protocol", "invalid operation UUID"])("does not even query %s", (invalid) => {
     const item = fixture();
     const lock = protocolLock(item);
@@ -952,7 +958,7 @@ function alignArchiveKey(item: Fixture): void {
 }
 
 describe("strong archive identity and bounded async manifest", () => {
-  it.each(["same inode changed ctime", "replacement inode"])("rejects %s even with identical size and mtime", async (scenario) => {
+  posixArchiveIt.each(["same inode changed ctime", "replacement inode"])("rejects %s even with identical size and mtime", async (scenario) => {
     const item = fixture();
     alignArchiveKey(item);
     const before = statSync(item.zip);
@@ -978,7 +984,7 @@ describe("strong archive identity and bounded async manifest", () => {
     assertNoOwnedWork(item);
   });
 
-  it("rechecks source identity before launching extraction after lock waiting", async () => {
+  posixArchiveIt("rechecks source identity before launching extraction after lock waiting", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const item = fixture();
     const lock = `${item.cache}.lock`;
@@ -994,7 +1000,7 @@ describe("strong archive identity and bounded async manifest", () => {
     assertNoOwnedWork(item);
   });
 
-  it("rechecks source identity after strict verification, before publication", async () => {
+  posixArchiveIt("rechecks source identity after strict verification, before publication", async () => {
     const item = fixture();
     const result = watch(bundledChromiumBinaryPathAsync("darwin", item.resources));
     const unpack = await invocation(0, "ditto");
@@ -1008,7 +1014,7 @@ describe("strong archive identity and bounded async manifest", () => {
     assertNoOwnedWork(item);
   });
 
-  it("does not share an old epoch's rejected promise with a new epoch at the same source/cache path", async () => {
+  posixArchiveIt("does not share an old epoch's rejected promise with a new epoch at the same source/cache path", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const item = fixture();
     alignArchiveKey(item);
@@ -1027,7 +1033,7 @@ describe("strong archive identity and bounded async manifest", () => {
     assertNoOwnedWork(item);
   });
 
-  it("revalidates a legacy unbound ready marker and preserves the displaced final", async () => {
+  posixArchiveIt("revalidates a legacy unbound ready marker and preserves the displaced final", async () => {
     const item = fixture();
     put(item.binary, "legacy unbound cache");
     put(path.join(item.cache, ".ready"), "legacy marker\n");
@@ -1081,7 +1087,7 @@ describe("strong archive identity and bounded async manifest", () => {
 });
 
 describe("entry-time resource, archive, and cache identity", () => {
-  it("captures resource and cache overrides before a deferred child can observe later env changes", async () => {
+  posixArchiveIt("captures resource and cache overrides before a deferred child can observe later env changes", async () => {
     const firstItem = fixture("chromium", "first");
     vi.stubEnv("AGENT_BROWSER_BUNDLED_RESOURCES", firstItem.resources);
     const first = watch(bundledChromiumBinaryPathAsync("darwin", null));
@@ -1104,7 +1110,7 @@ describe("entry-time resource, archive, and cache identity", () => {
     assertNoOwnedWork(secondItem);
   });
 
-  it("does not coalesce distinct archives sharing the same version-size-mtime destination", async () => {
+  posixArchiveIt("does not coalesce distinct archives sharing the same version-size-mtime destination", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const firstItem = fixture("chromium", "first");
     const secondItem = fixture("chromium", "second");
@@ -1129,7 +1135,7 @@ describe("entry-time resource, archive, and cache identity", () => {
     assertNoOwnedWork(secondItem);
   });
 
-  it.each(["150.0+fixture", "invalid/version"])("retains cache naming for declared version %s but rejects publishing a mutated zip under the captured key", async (version) => {
+  posixArchiveIt.each(["150.0+fixture", "invalid/version"])("retains cache naming for declared version %s but rejects publishing a mutated zip under the captured key", async (version) => {
     const item = fixture("chromium", "identity", version);
     const first = watch(bundledChromiumBinaryPathAsync("darwin", item.resources));
     const original = await invocation(0, "ditto");
@@ -1167,6 +1173,22 @@ describe("entry-time resource, archive, and cache identity", () => {
     vi.stubEnv("AGENT_BROWSER_BUNDLED_RESOURCES", resources);
     await expect(bundledChromiumBinaryPathAsync(platform, null)).resolves.toBe(chromium);
     await expect(bundledFirefoxBinaryPathAsync(platform, path.join(owned, "missing"))).resolves.toBe(firefox);
+    expect(children.spawn).not.toHaveBeenCalled();
+    expect(children.spawnSync).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform === "win32")("uses native Windows default discovery without archive subprocesses", async () => {
+    const resources = path.join(owned, "native-windows");
+    const root = path.join(resources, "native-browsers", "win");
+    const chromium = path.join(root, "chromium", "chrome.exe");
+    const firefox = path.join(root, "firefox", "firefox.exe");
+    put(chromium);
+    put(firefox);
+    setResources(resources);
+    await expect(bundledChromiumBinaryPathAsync()).resolves.toBe(chromium);
+    await expect(bundledFirefoxBinaryPathAsync()).resolves.toBe(firefox);
+    expect(bundledChromiumBinaryPath()).toBe(chromium);
+    expect(bundledFirefoxBinaryPath()).toBe(firefox);
     expect(children.spawn).not.toHaveBeenCalled();
     expect(children.spawnSync).not.toHaveBeenCalled();
   });

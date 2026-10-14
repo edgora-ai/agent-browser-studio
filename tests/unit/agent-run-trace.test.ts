@@ -365,6 +365,7 @@ describe("RunRecorder write atomicity", () => {
   beforeEach(() => {
     h.renameFault = null;
     h.windows = [];
+    closeAgentDb(); // Both handles belong to this mocked TEST_USER_DATA fixture.
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
     // Settle device identity before any fault is armed: getConfig() assigns a
@@ -375,6 +376,7 @@ describe("RunRecorder write atomicity", () => {
   afterEach(() => {
     h.renameFault = null;
     h.windows = [];
+    closeAgentDb(); // Release the owned reader/writer before Windows cleanup.
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
   });
