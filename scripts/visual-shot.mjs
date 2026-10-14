@@ -95,6 +95,41 @@ const ONLY = flag("only", "");
 // A renderer call that is NOT in here is a dead call site: it silently does
 // nothing at runtime and no test notices, because the mock's Proxy answers it
 // with an empty array.
+
+// A computed selector prefix is not a literal ID. Keep static lookups intact:
+// '#wizard-step' + step is dynamic, but '#wizard-steps' is a real container.
+function literalSelectorSource(source) {
+  const ts = require("typescript");
+  const file = ts.createSourceFile("visual-selector-source.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const spans = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.arguments.length) {
+      const expr = node.expression;
+      const name = ts.isPropertyAccessExpression(expr) ? expr.name.text : ts.isIdentifier(expr) ? expr.text : "";
+      const arg = node.arguments[0];
+      if (["getElementById", "querySelector", "querySelectorAll", "$"].includes(name) &&
+          !ts.isStringLiteral(arg) && !ts.isNoSubstitutionTemplateLiteral(arg)) {
+        // Only literal fragments of computed arguments confuse the regex probe.
+        // Preserve newlines so its reported source locations remain accurate.
+        function mask(part) {
+          if (ts.isStringLiteral(part) || ts.isNoSubstitutionTemplateLiteral(part) || part.kind === ts.SyntaxKind.TemplateHead) {
+            spans.push([part.getStart(file), part.end]);
+          } else ts.forEachChild(part, mask);
+        }
+        mask(arg);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  let result = source;
+  for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) {
+    const blank = result.slice(start, end).replace(/[^\r\n]/g, " ");
+    result = result.slice(0, start) + '""' + blank.slice(2) + result.slice(end);
+  }
+  return result;
+}
+
 function realApiSurface() {
   const src = readFileSync(path.join(ROOT, "src", "main", "preload.cjs"), "utf-8");
   const paths = new Set();
@@ -155,6 +190,8 @@ function resolveChromium() {
 }
 
 const MOCK = readFileSync(path.join(ROOT, "scripts", "visual-mock.js"), "utf-8");
+// preload app.version() invokes app:get-version, whose result is app.getVersion().
+const MOCK_APP_VERSION = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")).version;
 const PAGE_URL = "file://" + path.join(ROOT, "src", "renderer", "index.html");
 
 // ── Page bootstrap ──────────────────────────────────────────────────────────
@@ -167,6 +204,7 @@ async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpt
   const page = await ctx.newPage();
   await page.addInitScript(`
     ${MOCK}
+    window.agentBrowserAPI.app.version = async () => ${JSON.stringify(MOCK_APP_VERSION)};
     try {
       if (${JSON.stringify(teamEmpty)}) window.__visualHarness.teamMode = 'empty';
       localStorage.setItem('agent-browser-studio-theme', ${JSON.stringify(theme)});
@@ -1136,7 +1174,7 @@ function auditSelectors() {
     path.join(ROOT, "src/renderer/index.html"),
     ...(existsSync(appDir) ? readdirSync(appDir).filter((f) => f.endsWith(".js")).map((f) => path.join(appDir, f)) : []),
   ].filter((f) => existsSync(f));
-  const sources = files.map((f) => ({ f, src: readFileSync(f, "utf-8") }));
+  const sources = files.map((f) => ({ f, src: literalSelectorSource(readFileSync(f, "utf-8")) }));
 
   // Producers. A class attribute is usually split across a concatenation
   // (`class="profile-card' + (x ? ' running' : '')`), so take the first token

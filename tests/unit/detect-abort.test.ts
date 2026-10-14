@@ -1,6 +1,7 @@
 // R13 P3-2: detectors honor the caller's AbortSignal so a withTimeout
 // actually stops the work instead of relying on inner curl timers.
 import { EventEmitter } from "node:events";
+import * as path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // No real child, config file, app config, or network operation is allowed here.
@@ -48,7 +49,8 @@ beforeEach(() => {
   inertChild = makeInertChild();
   effects.spawn.mockImplementation(() => inertChild);
   effects.write.mockImplementation((file: string, contents: string) => {
-    expect(file.startsWith("/offline-proxy-fixture/agent-browser-proxy-")).toBe(true);
+    expect(path.dirname(file)).toBe(path.normalize("/offline-proxy-fixture"));
+    expect(path.basename(file).startsWith("agent-browser-proxy-")).toBe(true);
     effects.files.set(file, contents);
   });
   effects.unlink.mockImplementation((file: string) => {

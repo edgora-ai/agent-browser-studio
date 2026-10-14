@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   faults: [] as Array<{ op: string; path: string; code: string; skip?: number; remaining?: number }>,
   fdPaths: new Map<number, string>(),
   onIndexError: null as null | (() => void),
+  findBrowserByProfileSync: vi.fn(),
 }));
 
 // Only synthetic paths under ROOT are affected. The wrapper deliberately acts
@@ -77,6 +78,13 @@ vi.mock("electron", () => ({
   screen: { getPrimaryDisplay: () => ({ scaleFactor: 1 }) },
 }));
 
+// Only process discovery is isolated: real files, config/index commits,
+// deletion, compensation and durable readback remain the production paths.
+vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/main/services/process-discovery.js")>(),
+  findBrowserByProfileSync: h.findBrowserByProfileSync,
+}));
+
 import { getConfig, getConfigPath, getProfileMeta, reloadConfig } from "../../src/main/services/config-manager.js";
 import { transact } from "../../src/main/services/config/store.js";
 import { listBrowserProfiles, listTrashedProfiles, purgeExpiredTrash, purgeTrashedProfile, restoreTrashedProfile, trashBrowserProfile } from "../../src/main/services/browser-manager.js";
@@ -125,6 +133,8 @@ function state(id: string, expected: { live?: string; trashed?: string; config: 
 }
 
 beforeEach(() => {
+  h.findBrowserByProfileSync.mockReset();
+  h.findBrowserByProfileSync.mockReturnValue(null);
   h.faults = [];
   h.onIndexError = null;
   fs.rmSync(ROOT, { recursive: true, force: true });
@@ -229,6 +239,24 @@ describe("F09 trash/restore/purge and expiration", () => {
     expect(purgeTrashedProfile(ID)).toBe(true);
     state(ID, { config: false, indexed: false });
     expect(getConfig().browserProfiles[OTHER]).toBeDefined();
+  });
+
+  it("refuses trashing an injected running browser without changing files or config/index", () => {
+    seed();
+    const configBefore = fs.readFileSync(CONFIG);
+    const liveBefore = fs.readFileSync(liveFile(ID));
+    h.findBrowserByProfileSync.mockReturnValue({
+      pid: 424242, dirId: ID, engine: "chromium",
+      args: `fixture --user-data-dir="${path.join(LIVE, ID)}"`,
+    });
+    expect(() => trashBrowserProfile(ID)).toThrow(/running|close|stop/i);
+    expect(h.findBrowserByProfileSync).toHaveBeenCalled();
+    expect(fs.readFileSync(CONFIG)).toEqual(configBefore);
+    expect(fs.readFileSync(liveFile(ID))).toEqual(liveBefore);
+    expect(fs.existsSync(INDEX)).toBe(false);
+    expect(fs.existsSync(path.join(TRASH, ID))).toBe(false);
+    h.findBrowserByProfileSync.mockReturnValue(null);
+    state(ID, { live: `live:${ID}`, config: true, indexed: false });
   });
 
   it("rejects a non-string profile name before moving files or changing config/index", () => {

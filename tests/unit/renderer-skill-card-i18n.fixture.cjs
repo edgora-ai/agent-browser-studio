@@ -170,9 +170,9 @@ function skill(source, enabled, shared, tools = true) {
   return { ...structuredClone(payload), id: payload.name, title: payload.name, source, enabled, shared, tags: ['built-in', 'management'], tools: tools ? payload.tools : [] };
 }
 function bundles(dictionary) {
-  const marker = '  // Expose\n'; assert.equal(dictionary.split(marker).length, 2);
+  const marker = /^  \/\/ Expose\r?\n/gm; assert.equal([...dictionary.matchAll(marker)].length, 1);
   // Introspection only; execute all three actual merges before exposing the result.
-  return load({ dictionary: dictionary.replace(marker, '  window.__bundles = dict;\n' + marker) }).window.__bundles;
+  return load({ dictionary: dictionary.replace(marker, match => '  window.__bundles = dict;' + (match.endsWith('\r\n') ? '\r\n' : '\n') + match) }).window.__bundles;
 }
 function validateBundles(dictionary) {
   const effective = bundles(dictionary);

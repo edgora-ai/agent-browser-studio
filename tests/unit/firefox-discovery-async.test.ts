@@ -195,7 +195,10 @@ describe("asynchronous Firefox discovery and status", () => {
 
   it.each([false, true])("rejects CMD expansion, escape, and quote syntax in Windows shim paths (async=%s)", async (asynchronous) => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    for (const name of ["firefox%PAYLOAD%.cmd", "firefox^.cmd", 'firefox".cmd', "firefox'.cmd"]) {
+    // A double quote is not a legal Windows filename; keep a real on-disk
+    // CMD metacharacter there and retain the quote case on hosts that support it.
+    const quoteOrOperator = originalPlatform.value === "win32" ? "firefox&.cmd" : 'firefox".cmd';
+    for (const name of ["firefox%PAYLOAD%.cmd", "firefox^.cmd", quoteOrOperator, "firefox'.cmd"]) {
       const file = makeBinary(path.join(root, name.replace(/[^a-z]/g, "_")), report(), false, "154.0", name);
       expect(await (asynchronous ? detectFirefoxVersionAsync(file) : detectFirefoxVersion(file))).toBeNull();
     }

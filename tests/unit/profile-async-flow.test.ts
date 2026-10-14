@@ -3,6 +3,33 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
+// Synthetic stopped profiles have no owned running browser. Keep discovery and
+// SQLite execution at controlled boundaries; no host command is needed here.
+const subprocess = vi.hoisted(() => ({
+  sqlite: vi.fn(),
+  diskSpace: vi.fn((command: string, _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
+    expect(command).toBe(process.platform === "win32" ? "wmic logicaldisk get size,freespace,deviceid" : "df -k .");
+    callback(null, process.platform === "win32"
+      ? "FreeSpace Size DeviceID\n10485760 20971520 C:\n"
+      : "Filesystem 1K-blocks Used Available Use% Mounted on\nowned 20971520 10485760 10485760 50% /\n");
+  }),
+  forbidden: vi.fn(() => { throw new Error("Unexpected subprocess execution"); }),
+}));
+vi.mock("node:child_process", () => ({
+  exec: subprocess.diskSpace,
+  execFileSync: subprocess.sqlite, execFile: subprocess.forbidden,
+  execSync: subprocess.forbidden, spawn: subprocess.forbidden, spawnSync: subprocess.forbidden,
+}));
+vi.mock("../../src/main/services/process-discovery.js", () => ({
+  // Loading the real dependency from a hoisted factory can re-enter the
+  // profile/browser import graph before this fixture is initialized.
+  parseBrowserProcessLine: subprocess.forbidden,
+  getRunningProcessesAsync: async () => [],
+  getRunningProcessesSync: () => [],
+  findBrowserByProfileSync: () => null,
+  findBrowserByProfileAsync: async () => null,
+}));
+
 // 1. Mock Electron app before importing managers
 vi.mock("electron", () => {
   const path = require("node:path");
@@ -38,6 +65,10 @@ import { getProfilesDir } from "../../src/main/services/config-manager.js";
 
 describe("Asynchronous Profile & Storage Monitor Operations", () => {
   beforeEach(async () => {
+    subprocess.sqlite.mockReset();
+    subprocess.sqlite.mockImplementation(() => { throw new Error("Unexpected SQLite execution"); });
+    subprocess.diskSpace.mockClear();
+    subprocess.forbidden.mockClear();
     // Clear and create directories
     if (fs.existsSync(TEST_HOME)) {
       fs.rmSync(TEST_HOME, { recursive: true, force: true });
@@ -46,8 +77,12 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
   });
 
   afterEach(async () => {
-    if (fs.existsSync(TEST_HOME)) {
-      fs.rmSync(TEST_HOME, { recursive: true, force: true });
+    try {
+      expect(subprocess.forbidden).not.toHaveBeenCalled();
+    } finally {
+      if (fs.existsSync(TEST_HOME)) {
+        fs.rmSync(TEST_HOME, { recursive: true, force: true });
+      }
     }
   });
 
@@ -90,9 +125,24 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
     const { dirId } = createBrowserProfile({ name: "CookieSearchProfile" });
     const cookieDb = path.join(getProfilesDir(), dirId, "Default", "Cookies");
     fs.writeFileSync(cookieDb, "not a real sqlite database");
+    // This case requires an available SQLite command that rejects the corrupt
+    // database, not the intentional missing-executable ENOENT fallback to [].
+    subprocess.sqlite.mockImplementation(() => {
+      throw Object.assign(new Error("Error: file is not a database"), { code: 1 });
+    });
 
-    await expect(listCookies(dirId, "g")).rejects.not.toThrow(/ESCAPE expression/);
-    await expect(listCookies(dirId, "_")).rejects.not.toThrow(/ESCAPE expression/);
+    for (const filter of ["g", "_"]) {
+      const search = listCookies(dirId, filter);
+      await expect(search).rejects.not.toThrow(/ESCAPE expression/);
+      await expect(search).rejects.toMatchObject({ message: "Error: file is not a database", code: 1 });
+    }
+    expect(subprocess.sqlite).toHaveBeenCalledTimes(2);
+    // Keep argument assertions outside the production error/rejection path.
+    for (const [index, filter] of ["g", "~_"].entries()) {
+      expect(subprocess.sqlite).toHaveBeenNthCalledWith(index + 1, "sqlite3",
+        expect.arrayContaining([cookieDb, `.parameter set :filter ${JSON.stringify(filter)}`]),
+        { encoding: "utf-8", timeout: 5000 });
+    }
   });
 
   it("storageMonitor should query info and clear cache asynchronously", async () => {
@@ -111,6 +161,7 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
     const info = await storageMonitor.getInfo();
     expect(info).toBeDefined();
     expect(info.totalProfileBytes).toBeGreaterThanOrEqual(0);
+    expect(subprocess.diskSpace).toHaveBeenCalledTimes(2); // Available and total disk queries.
 
     // 3. Clear cache
     const clearResult = await storageMonitor.clearCache(dirId);

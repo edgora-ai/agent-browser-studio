@@ -6,7 +6,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import ts from 'typescript';
@@ -41,12 +41,14 @@ eval(fs.readFileSync(path.join(__dirname,'handlers.cjs'),'utf8'));
 (async()=>{
  const request=JSON.parse(process.argv[2]);let out;
  if(request.seed){
+  console.error("jobs-cap-seed:ready");
   const ids=[];for(let i=0;i<201;i++){
    // A deterministic clock gives an observable newest/oldest ordering.
    Date.now=()=>1700000000000+i;
    const job=jobs.enqueueJob({ruleId:'fixture_rule',ruleName:'Cancelled fixture '+i,source:'test'});
    assert.equal(jobs.markCancelled(job.id),true);ids.push(job.id);
    audit.recordAudit({category:i===0?'profile':'automation',action:'create',target:'fixture_target_'+i,detail:'fixture detail '+i,actor:'user'});
+   if((i+1)%25===0||i===200)console.error('jobs-cap-seed:'+(i+1));
   }
   assert.deepEqual(db.agentDbExecScript('CREATE TABLE fixture_rows (id INTEGER PRIMARY KEY, title TEXT);'+Array.from({length:101},(_,i)=>'INSERT INTO fixture_rows VALUES ('+(i+1)+',\\'fixture title '+(i+1)+'\\');').join('')),{ok:true});
   out={oldestId:ids[0],newestId:ids[200]};
@@ -56,20 +58,74 @@ eval(fs.readFileSync(path.join(__dirname,'handlers.cjs'),'utf8'));
 `;
 function worker(request: unknown): any {
   const result = spawnSync(process.execPath, [path.join(fixture, 'worker.cjs'), JSON.stringify(request)], {
-    cwd: fixture, encoding: 'utf8', timeout: 15_000,
-    env: { PATH: process.env.PATH, HOME: path.join(fixture, 'home'), TMPDIR: path.join(fixture, 'tmp'), TMP: path.join(fixture, 'tmp'), TEMP: path.join(fixture, 'tmp'),
-      XDG_CONFIG_HOME: path.join(fixture, 'xdg'), XDG_DATA_HOME: path.join(fixture, 'xdg'), XDG_STATE_HOME: path.join(fixture, 'xdg'), XDG_CACHE_HOME: path.join(fixture, 'cache'),
-      M1_DATA_DIR: path.join(fixture, 'm1'), M1_HOME: path.join(fixture, 'm1'), npm_config_cache: path.join(fixture, 'cache'), CI: '1', TZ: 'UTC' },
+    cwd: fixture, encoding: 'utf8', timeout: 3_000,
+    env: workerEnvironment(),
   });
   assert.ifError(result.error); assert.equal(result.signal, null);
   assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
 }
-beforeAll(() => {
+function workerEnvironment(): NodeJS.ProcessEnv {
+  return { PATH: process.env.PATH, HOME: path.join(fixture, 'home'), TMPDIR: path.join(fixture, 'tmp'), TMP: path.join(fixture, 'tmp'), TEMP: path.join(fixture, 'tmp'),
+      XDG_CONFIG_HOME: path.join(fixture, 'xdg'), XDG_DATA_HOME: path.join(fixture, 'xdg'), XDG_STATE_HOME: path.join(fixture, 'xdg'), XDG_CACHE_HOME: path.join(fixture, 'cache'),
+      M1_DATA_DIR: path.join(fixture, 'm1'), M1_HOME: path.join(fixture, 'm1'), npm_config_cache: path.join(fixture, 'cache'), CI: '1', TZ: 'UTC' };
+}
+
+const compiledSources = new Map<string, string>();
+function transpileOnce(code: string, compilerOptions: ts.CompilerOptions): string {
+  const key = createHash('sha256').update(code).update(JSON.stringify(compilerOptions)).digest('hex');
+  let output = compiledSources.get(key);
+  if (output === undefined) {
+    output = ts.transpileModule(code, { compilerOptions }).outputText;
+    compiledSources.set(key, output);
+  }
+  return output;
+}
+const SEED_DEADLINE_MS = 20_000;
+const SEED_IDLE_MS = 8_000;
+function seedWorker(): Promise<{ oldestId: string; newestId: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(fixture, 'worker.cjs'), JSON.stringify({ seed: true })], {
+      cwd: fixture, env: workerEnvironment(), stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '', lastProgress = 'starting', pending = '', settled = false;
+    let idle: ReturnType<typeof setTimeout>;
+    const deadline = setTimeout(() => fail('20s total deadline'), SEED_DEADLINE_MS);
+    function clearTimers() { clearTimeout(deadline); clearTimeout(idle); }
+    function fail(reason: string) {
+      if (settled) return;
+      settled = true; clearTimers(); child.kill();
+      reject(new Error('Jobs cap seed failed (' + reason + '), progress=' + lastProgress + '\n' + stderr));
+    }
+    function resetIdle() { clearTimeout(idle); idle = setTimeout(() => fail('8s without seed progress'), SEED_IDLE_MS); }
+    resetIdle();
+    child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 16_384) fail('unexpected stdout size'); });
+    child.stderr.on('data', chunk => {
+      stderr = (stderr + chunk).slice(-16_384); pending += chunk;
+      const lines = pending.split(/\r?\n/); pending = lines.pop()!;
+      for (const line of lines) if (/^jobs-cap-seed:(ready|[0-9]+)$/.test(line)) {
+        lastProgress = line; resetIdle(); console.info('[jobs-cap setup] ' + line);
+      }
+    });
+    child.on('error', error => fail(error.message));
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true; clearTimers();
+      if (code !== 0 || signal) { reject(new Error('Jobs cap seed exit=' + code + ', signal=' + signal + ', progress=' + lastProgress + '\n' + stderr)); return; }
+      try { assert.equal(lastProgress, 'jobs-cap-seed:201'); resolve(JSON.parse(stdout)); }
+      catch (error) { reject(error); }
+    });
+  });
+}
+let fixtureSetup: Promise<void> | undefined;
+function setupFixture(): Promise<void> {
+  // All callers share the same compile/seed; no test case reseeds the stores.
+  return fixtureSetup ??= (async () => {
   const parent = process.env.UI_GOAL_JOBS_STORAGE || os.tmpdir();
   fs.mkdirSync(parent, { recursive: true }); fixture = fs.mkdtempSync(path.join(parent, 'jobs-cap-'));
   for (const dir of ['data', 'home', 'tmp', 'xdg', 'cache', 'm1']) fs.mkdirSync(path.join(fixture, dir));
+  const compileStarted = Date.now();
   for (const name of ['job-store', 'agent-db', 'audit-log', 'observability']) {
-    const code = ts.transpileModule(source(`src/main/services/${name}.ts`), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    const code = transpileOnce(source(`src/main/services/${name}.ts`), { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 });
     fs.writeFileSync(path.join(fixture, name + '.cjs'), code.replace(/require\("\.\/([\w-]+)\.js"\)/g, 'require("./$1.cjs")'));
   }
   fs.writeFileSync(path.join(fixture, 'config-manager.cjs'), 'exports.getAppDataDir=()=>require("node:path").join(__dirname,"data");');
@@ -84,11 +140,17 @@ beforeAll(() => {
     visit(file);
   }
   assert.equal(registrations.length, wanted.size);
-  fs.writeFileSync(path.join(fixture, 'handlers.cjs'), ts.transpileModule(registrations.join(';\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText);
+  fs.writeFileSync(path.join(fixture, 'handlers.cjs'), transpileOnce(registrations.join(';\n'), { target: ts.ScriptTarget.ES2022 }));
   fs.writeFileSync(path.join(fixture, 'worker.cjs'), workerSource);
-  ({ oldestId, newestId } = worker({ seed: true }));
+  assert.ok(Date.now() - compileStarted < 5_000, 'owned fixture compile exceeded 5s');
+  console.info('[jobs-cap compile] cached outputs=' + compiledSources.size + ', elapsedMs=' + (Date.now() - compileStarted));
+  ({ oldestId, newestId } = await seedWorker());
   storedHashes = Object.fromEntries(STORE_FILES.map(file => [file, hash(path.join(fixture, 'data', file))]));
-});
+  })();
+}
+// Only this real persistence fixture has a budget: <=5s compile + <=20s seed.
+// The runner's global hook/test timeouts and every assertion stay unchanged.
+beforeAll(() => setupFixture(), 30_000);
 afterAll(() => {
   if (!process.env.UI_GOAL_JOBS_STORAGE && fixture) fs.rmSync(fixture, { recursive: true, force: true });
 });
@@ -346,8 +408,9 @@ describe('Jobs cap — actual persisted rows and whole renderer', () => {
   it.each(LOCALES)('new keys resolve from own effective final-merge dictionaries in %s and preserve 15 actual icon cohosts', locale => {
     const h = harness(locale); const dict = source('src/renderer/js/i18n.js');
     const ctx = vm.createContext({ window: {}, document: { addEventListener() {} }, navigator: { language: locale }, localStorage: { getItem: () => locale } });
-    assert.equal(dict.split('  // Expose\n').length, 2);
-    vm.runInContext(dict.replace('  // Expose\n', '  window.bundles = dict;\n  // Expose\n'), ctx);
+    const expose = /^  \/\/ Expose\r?$/gm;
+    assert.equal([...dict.matchAll(expose)].length, 1);
+    vm.runInContext(dict.replace(expose, '  window.bundles = dict;\n  // Expose'), ctx);
     const bundles = (ctx as any).window.bundles;
     for (const key of ['auto.jobs-list-limit', 'toast.account.reference-conflict']) {
       expect(Object.hasOwn(bundles[locale], key)).toBe(true);

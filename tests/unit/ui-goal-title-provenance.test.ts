@@ -100,6 +100,19 @@ const record = (id: string, title: string, marker: any = undefined) => ({
   ...(marker !== undefined ? { titleKind: marker } : {}),
 });
 const caught = (fn: () => any) => { try { fn(); } catch (e) { return e as Error; } throw new Error("Expected rejection"); };
+function expectRestrictedStoreFile(file: string): void {
+  expect(path.resolve(file).startsWith(ROOT + path.sep)).toBe(true);
+  const stat = fs.lstatSync(file);
+  expect(stat.isFile()).toBe(true);
+  expect(stat.isSymbolicLink()).toBe(false);
+  // Windows stat mode/uid is not ACL ownership or privacy proof. The file,
+  // content, committed readback and search assertions still run on Windows.
+  if (process.platform === "win32") return;
+  expect(stat.mode & 0o777).toBe(0o600);
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error("POSIX file owner proof unavailable on this host");
+  expect(stat.uid).toBe(uid);
+}
 function proof(f: ReturnType<typeof fixture>, id: string, title: string) {
   const before = f.bytes(), direct = f.rows().find((c: any) => c.id === id);
   expect(direct.title).toBe(title);
@@ -112,6 +125,7 @@ function proof(f: ReturnType<typeof fixture>, id: string, title: string) {
 }
 afterAll(() => {
   expect(forbidden).toEqual([]);
+  if (process.platform === "win32") console.info("F18_PERMISSION_PROOF: Windows ACL ownership/privacy UNVERIFIED; POSIX mode/uid unsupported, real file/content/readback/search assertions retained.");
   if (process.env.TITLE_PROOF_RETAIN) fs.writeFileSync(path.join(ROOT, "manifest.json"), JSON.stringify({
     storeSource: path.join(SOURCE, "agent/conversation-store.ts"),
     storeSha256: crypto.createHash("sha256").update(storeSource).digest("hex"),
@@ -239,7 +253,7 @@ describe("F18 identity ambiguity and content-free non-destructive faults", () =>
     expect(error.cause && String(error.cause)).not.toContain("SYNTHETIC_PRIVATE_VALUE");
     expect(f.logs.join("\n")).not.toContain("SYNTHETIC_PRIVATE_VALUE"); expect(f.bytes()).toEqual(before);
     f.faults[fault] = false; proof(f, "target", "New Chat");
-    if (fs.existsSync(f.file + ".tmp")) expect(fs.statSync(f.file + ".tmp").mode & 0o777).toBe(0o600);
+    if (fs.existsSync(f.file + ".tmp")) expectRestrictedStoreFile(f.file + ".tmp");
   });
   for (const fault of ["read", "write", "rename"] as const) it(`arbitrary injected ${fault} error code cannot disclose private values`, () => {
     const f = fixture(); f.seed([record("target", "New Chat", "default")]); const before = f.bytes();
@@ -253,10 +267,10 @@ describe("F18 identity ambiguity and content-free non-destructive faults", () =>
     const f = fixture(); fs.writeFileSync(f.file, '{"private":"SYNTHETIC_PRIVATE_VALUE"', { mode: 0o600 }); const before = f.bytes(); f.faults.backup = backup;
     const error = caught(() => f.store.createConversation()); expect(error.message).not.toContain("SYNTHETIC_PRIVATE_VALUE"); expect(f.bytes()).toEqual(before);
     const backups = fs.readdirSync(f.dir).filter((s) => s.endsWith(".corrupt")); expect(backups).toHaveLength(backup ? 0 : 1);
-    for (const name of backups) { expect(fs.readFileSync(path.join(f.dir, name))).toEqual(before); expect(fs.statSync(path.join(f.dir, name)).mode & 0o777).toBe(0o600); }
+    for (const name of backups) { expect(fs.readFileSync(path.join(f.dir, name))).toEqual(before); expectRestrictedStoreFile(path.join(f.dir, name)); }
   });
   it("ordinary default commits and detached reads keep restricted store permissions", () => {
-    const f = fixture(), c = f.store.createConversation(); expect(fs.statSync(f.file).mode & 0o777).toBe(0o600);
+    const f = fixture(), c = f.store.createConversation(); expectRestrictedStoreFile(f.file);
     const dto = f.store.getConversation(c.id); dto.title = "alias"; dto.messages.push({ role: "user", content: "alias" });
     expect(proof(f, c.id, "New Chat").messages).toEqual([]);
   });
