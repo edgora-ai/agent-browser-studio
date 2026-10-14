@@ -71,7 +71,7 @@ function fixture(reuse?: string) {
     if (cached) return cached.exports;
     const module = { exports: {} as any };
     modules.set(full, module);
-    loaded.add(path.relative(SOURCE, full));
+    loaded.add(path.relative(SOURCE, full).replace(/\\/g, "/"));
     const source = fs.readFileSync(full, "utf8");
     // Test-only exposure of existing private dispatcher/schema, not a replacement
     // implementation, server startup or production export/API modification.
@@ -89,7 +89,8 @@ function fixture(reuse?: string) {
       if (name === "node:net") return { isIP: net.isIP, isIPv4: net.isIPv4, isIPv6: net.isIPv6 };
       if (name.startsWith("node:")) return denied(name);
       if (name === "electron") return { app: { getPath: () => dir }, safeStorage: denied("native storage"), clipboard: denied("clipboard") };
-      const rel = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts")));
+      // Module IDs and denied-call labels use / even on Windows; file paths do not.
+      const rel = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"))).replace(/\\/g, "/");
       if (real.has(rel)) return load(rel);
       if (rel === "services/utils.ts") return { validateDirId: (value: string) => {
         if (!/^[\w-]+$/.test(value)) throw new Error("Invalid synthetic dirId");

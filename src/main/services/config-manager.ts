@@ -1229,7 +1229,7 @@ export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
   };
   if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
   validateGeolocationMeta(profile);
-  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
+  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile, engine);
   return profile;
 }
 
@@ -1318,7 +1318,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
 
   next.updatedAt = Date.now();
   validateGeolocationMeta(next);
-  if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next);
+  if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next, sanitizeBrowserEngine(next.engine));
 
   cp[dirId] = next;
   cfg.browserProfiles = cp;

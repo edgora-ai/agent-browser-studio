@@ -104,7 +104,8 @@ function fixture() {
         },
       };
       if (name.startsWith("node:")) return opaque(name);
-      const relative = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts")));
+      // Normalize only logical module IDs; keep actual filesystem paths native.
+      const relative = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"))).replace(/\\/g, "/");
       if (allow.has(relative)) return load(relative);
       if (relative === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("bad dirId"); } };
       if (relative === "services/main-i18n.ts") return { tMain: (key: string) => key };

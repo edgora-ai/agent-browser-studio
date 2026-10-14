@@ -38,7 +38,6 @@ import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
   LEGACY_FINGERPRINT_SWITCH,
-  MANAGED_SECURE_DNS_TEMPLATES,
   buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
   validateBrowserHardwareProfile,
@@ -92,6 +91,8 @@ import { runBrowserCommand } from "./browser-command.js";
 import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
 import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
 import { runningProcesses } from "./browser/runtime-table.js";
+import { buildRemoteDnsRule, resolveChromiumDnsPolicy } from "./browser-dns-policy.js";
+export { buildRemoteDnsRule } from "./browser-dns-policy.js";
 import { launchBrowserPipeline } from "./browser/launch-pipeline.js";
 
 export interface BrowserProfile {
@@ -517,7 +518,7 @@ export function createBrowserProfile(opts: {
     preset: opts.preset || null,
     updatedAt: Date.now(),
   };
-  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile);
+  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile, engine);
   cfg.browserProfiles[dirId] = profile;
 
   const profileDir = path.join(getProfilesDir(), dirId);
@@ -1168,6 +1169,7 @@ export async function launchBrowser(
   const envBin = getChromiumBinaryOverride();
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const passThrough = fingerprintMode === "off";
+  if (!passThrough) validateBrowserHardwareProfile(meta, "chromium");
   const requestedVersion = normalizeManagedChromiumVersion(meta.browserVersion);
   const managedBin = (await findManagedChromiumBinaryAsync(requestedVersion))?.binaryPath || null;
   if (configuredBin && !fs.existsSync(configuredBin)) {
@@ -1226,6 +1228,17 @@ export async function launchBrowser(
     });
   }
   const activeProxy = resolvedProxy.config;
+  let dnsPolicy: ReturnType<typeof resolveChromiumDnsPolicy>;
+  try {
+    dnsPolicy = resolveChromiumDnsPolicy(activeProxy, cfg.managedSecureDnsUrl);
+    if (passThrough && dnsPolicy.route === "doh") {
+      throw new Error("Explicit proxy DoH requires managed Chromium identity mode in this engine; fingerprint-off profiles use proxy-side DNS without identity overrides");
+    }
+  } catch (error) {
+    recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+      detail: "failed: proxy DNS configuration is invalid or unsupported; browser was not spawned" });
+    throw error;
+  }
   const requestedWebRtcMode = passThrough ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
   const shouldResolveWebRtc = requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered";
   console.log(`[agent-browser] Preparing profile ${dirId.slice(0, 8)} mode=${fingerprintMode} browser=${requestedVersion || "auto"}`);
@@ -1329,13 +1342,9 @@ export async function launchBrowser(
       webrtcMode: effectiveWebRtcMode,
       webrtcIp,
     };
-    // Managed profiles with a proxy resolve DNS over HTTPS through that same
-    // proxy (secure-only, no host-resolver fallback) so the resolver and DNS
-    // queries stay consistent with the exit identity. Without a proxy the
-    // browser keeps its stock DNS behavior.
-    const managedSecureDns = activeProxy
-      ? { enabled: true, templates: [...MANAGED_SECURE_DNS_TEMPLATES] }
-      : null;
+    // Fixed proxies resolve origin hostnames at egress by default. Only an
+    // explicit, validated provider selects the engine's strict proxy DoH path.
+    const managedSecureDns = dnsPolicy.secureDns;
     const nativeFingerprint = buildBrowserFingerprintConfig(
       nativeFingerprintMeta,
       nativeChromiumVersion,
@@ -1352,17 +1361,6 @@ export async function launchBrowser(
       managedSecureDns,
       "chromium",
     ));
-    // DNS routing audit: managed profiles behind a proxy route every DNS query
-    // (including the DoH probe) through that same proxy with no host-resolver
-    // fallback, so the resolver stays coherent with the exit identity. Record
-    // per-launch evidence so profile logs prove proxy-coherent DNS.
-    if (managedSecureDns) {
-      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
-        detail: "proxy DNS active: DoH routed through the exit proxy (no host-resolver fallback)" });
-    } else if (!passThrough && resolvedProxy.mode !== "none") {
-      recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
-        detail: "warning: profile expects a proxy but no managed secure DNS is active — check proxy resolution" });
-    }
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
     // Raster scale: `native` renders at the host's real scale factor (crisp on
     // HiDPI/Retina) while the fork still reports the persona's devicePixelRatio
@@ -1380,6 +1378,17 @@ export async function launchBrowser(
       `--force-device-scale-factor=${renderScaleFactor}`,
     ]);
     args = applyManagedNativeRefreshRate(args);
+  }
+
+  if (activeProxy) {
+    recordAudit({ category: "profile", action: "dns-route", target: dirId, actor: "auto",
+      detail: dnsPolicy.route === "doh"
+        ? "configured: strict proxy DoH; successful DNS transactions have not yet been verified"
+        : "configured: proxy-side hostname resolution; successful DNS transactions have not yet been verified" });
+  }
+  if (!passThrough && platform !== (process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : null)) {
+    recordAudit({ category: "profile", action: "gpu-compatibility", target: dirId, actor: "auto",
+      detail: "unsupported cross-OS GPU persona: this engine exposes the native host GPU; foreign OS hardware compatibility is not verified" });
   }
 
   // RoxyBrowser-style taskbar/window title: show the profile name at the OS
@@ -1402,7 +1411,7 @@ export async function launchBrowser(
   if (activeProxy) {
     let chromiumProxy = activeProxy;
     const isSocks = activeProxy.type === "socks5" || activeProxy.type === "socks5h";
-    if (isSocks && supportsNativeQuicProxy(bin)) {
+    if (isSocks && supportsNativeQuicProxy(bin) && dnsPolicy.route === "doh") {
       const masqueBridge = await startMasqueSocksBridge(activeProxy);
       pendingProxyBridge = masqueBridge;
       const proxyOrigin = `${masqueBridge.proxyHost}:${masqueBridge.port}`;
@@ -1434,7 +1443,7 @@ export async function launchBrowser(
       args = dedupeChromeArgs([
         ...args,
         `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
-        ...(activeProxy.type === "socks5h"
+        ...(dnsPolicy.route === "proxy"
           ? [`--host-resolver-rules=${buildRemoteDnsRule(proxyConnectHost, getLaunchArgValue(args, "--host-resolver-rules"))}`]
           : []),
         "--disable-quic",
@@ -2138,22 +2147,6 @@ function mergeCommaSeparatedValue(value: string, existing: string | null): strin
   return [...new Set(entries)].join(",");
 }
 
-/**
- * Build the --host-resolver-rules value that makes Chromium resolve target
- * hostnames through a SOCKS5 proxy (socks5h semantics) instead of locally.
- * Chromium always resolves DNS locally for --proxy-server=socks5://; mapping
- * every hostname to ~NOTFOUND forces it to hand the hostname to the proxy,
- * which resolves at egress. The proxy connect host (and localhost) must stay
- * resolvable, so they are excluded. Existing rules (e.g. a MASQUE bridge map)
- * are preserved and merged.
- */
-export function buildRemoteDnsRule(proxyConnectHost: string, existing: string | null): string {
-  const host = String(proxyConnectHost || "").trim();
-  const excludes = Array.from(new Set(["localhost", "127.0.0.1", host].filter((v) => v && v !== "*")));
-  const rule = `MAP * ~NOTFOUND${excludes.map((entry) => `, EXCLUDE ${entry}`).join("")}`;
-  return mergeCommaSeparatedValue(rule, existing);
-}
-
 const THROTTLE_MAIN_FRAME_TO_60HZ_FEATURE = "ThrottleMainFrameTo60Hz";
 
 function featureEntryName(entry: string): string {
@@ -2201,8 +2194,8 @@ function addDrmArgs(args: string[], dirId: string): void {
 
 function addHardwareFingerprintArgs(args: string[], meta: any): void {
   const normalized = normalizeHardwareFingerprintMeta(meta);
-  if (normalized.gpuVendor) args.push(`--fingerprint-gpu-vendor=${normalized.gpuVendor}`);
-  if (normalized.gpuRenderer) args.push(`--fingerprint-gpu-renderer=${normalized.gpuRenderer}`);
+  // Chromium keeps native GPU strings/capabilities; explicit overrides are
+  // rejected before launch rather than reintroduced through legacy switches.
   if (Number.isInteger(normalized.hardwareConcurrency)) args.push(`--fingerprint-hardware-concurrency=${normalized.hardwareConcurrency}`);
   if (Number.isInteger(normalized.deviceMemory)) args.push(`--fingerprint-device-memory=${normalized.deviceMemory}`);
   if (Number.isInteger(normalized.screenWidth)) args.push(`--fingerprint-screen-width=${normalized.screenWidth}`);

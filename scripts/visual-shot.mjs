@@ -120,11 +120,13 @@ function realApiSurface() {
 const REAL_API = realApiSurface();
 
 // ── Locate Playwright's bundled Chromium ────────────────────────────────────
-// The package cache lives in different places per platform and the revision
-// number changes on every install, so match any chromium-<rev> directory.
+// Prefer the installed Playwright revision and its platform-specific layout;
+// retain cache scanning for older installs and explicit binary overrides.
 function resolveChromium() {
   const explicit = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.CHROME_PATH;
   if (explicit && existsSync(explicit)) return explicit;
+  const installed = chromium.executablePath();
+  if (installed && existsSync(installed)) return installed;
   const roots = [
     path.join(os.homedir(), "Library", "Caches", "ms-playwright"),
     path.join(os.homedir(), ".cache", "ms-playwright"),
@@ -136,7 +138,7 @@ function resolveChromium() {
     ? ["chrome-mac-arm64", "chrome-mac-x64"].map((v) => [v, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"])
     : process.platform === "win32"
       ? [["chrome-win", "chrome.exe"]]
-      : [["chrome-linux", "chrome"]];
+      : [["chrome-linux64", "chrome"], ["chrome-linux", "chrome"]];
   const hits = [];
   for (const root of roots) {
     if (!existsSync(root)) continue;

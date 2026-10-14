@@ -9,7 +9,8 @@ import { createRequire } from "node:module";
 import ts from "typescript";
 
 const ROOT = path.resolve(__dirname, "../..");
-const MAIN = fs.readFileSync(path.join(ROOT, "src/main/services/main-i18n.ts"), "utf8");
+// Reader mutations use logical LF text on both LF and CRLF checkouts.
+const MAIN = fs.readFileSync(path.join(ROOT, "src/main/services/main-i18n.ts"), "utf8").replace(/\r\n/g, "\n");
 const RENDERER = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8");
 const LOCALES = ["en-US", "zh-CN"] as const;
 type Locale = typeof LOCALES[number];
@@ -60,19 +61,19 @@ function appendEntry(source: string, locale: Locale, entry: string) {
   return source.slice(0, at) + entry + ",\n" + source.slice(at);
 }
 
-// Each child receives a physically copied parser, inert renderer runtime, private
-// main source and filtered environment. No Electron/provider/config imports.
+// Each child uses the existing parser through a directory link, an inert renderer
+// runtime, private main source and filtered environment. No dependency copies or
+// Electron/provider/config imports.
 function check(source: string | null, strict: boolean) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-main-i18n-parity-"));
   try {
-    for (const dir of ["scripts", "src/renderer/js", "src/main/services", "node_modules/typescript/lib", "home", "tmp", "xdg", "m1", "cache"]) {
+    for (const dir of ["scripts", "src/renderer/js", "src/main/services", "node_modules", "home", "tmp", "xdg", "m1", "cache"]) {
       fs.mkdirSync(path.join(fixture, dir), { recursive: true });
     }
     fs.copyFileSync(path.join(ROOT, "scripts/check-i18n.mjs"), path.join(fixture, "scripts/check-i18n.mjs"));
     const require = createRequire(path.join(ROOT, "package.json"));
     const parser = require.resolve("typescript");
-    fs.copyFileSync(parser, path.join(fixture, "node_modules/typescript/lib/typescript.js"));
-    fs.copyFileSync(path.resolve(path.dirname(parser), "../package.json"), path.join(fixture, "node_modules/typescript/package.json"));
+    fs.symlinkSync(path.resolve(path.dirname(parser), ".."), path.join(fixture, "node_modules/typescript"), "junction");
     fs.writeFileSync(path.join(fixture, "src/renderer/js/i18n.js"), RENDERER);
     if (source !== null) fs.writeFileSync(path.join(fixture, "src/main/services/main-i18n.ts"), source);
     const result = spawnSync(process.execPath, [path.join(fixture, "scripts/check-i18n.mjs"), ...(strict ? ["--strict"] : [])], {

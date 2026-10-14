@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 const ROOT = path.resolve(__dirname, "../..");
-const SOURCE = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8");
+// Normalize only the in-memory mutation fixture, not either shipped mirror.
+const SOURCE = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8").replace(/\r\n/g, "\n");
 const LOCALES = ["en-US", "zh-CN"] as const;
 type Locale = typeof LOCALES[number];
 const TRANSLATIONS = [
@@ -78,10 +79,11 @@ function loadRuntime(source: string, locale: Locale, elements: Element[] = []) {
   return { i18n: window.i18n, window, storage, listeners, events, document, setMainLanguage };
 }
 function effectiveBundles(source: string) {
-  const marker = "  // Expose\n";
-  assert.equal(source.split(marker).length, 2, "private dictionary exposure anchor must be unique");
+  const marker = /^  \/\/ Expose(\r?\n)/gm;
+  assert.equal([...source.matchAll(marker)].length, 1, "private dictionary exposure anchor must be unique");
   // Introspection only: capture the private dict after all real merges; no reimplementation.
-  return loadRuntime(source.replace(marker, "  window.__uiGoalBundles = dict;\n" + marker), "en-US").window.__uiGoalBundles!;
+  const exposed = source.replace(marker, (anchor, eol) => "  window.__uiGoalBundles = dict;" + eol + anchor);
+  return loadRuntime(exposed, "en-US").window.__uiGoalBundles!;
 }
 function validateTranslations(source: string) {
   const bundles = effectiveBundles(source);
@@ -102,6 +104,13 @@ describe("UI goal effective i18n", () => {
 
   it("keeps root and renderer dictionary mirrors byte-identical", () => {
     expect(fs.readFileSync(path.join(ROOT, "i18n.js")).equals(fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js")))).toBe(true);
+  });
+
+  it.each(["\n", "\r\n"])("exposes the effective dictionary with %j line endings without weakening the unique anchor", eol => {
+    const source = SOURCE.replace(/\n/g, eol);
+    validateTranslations(source);
+    expect(() => effectiveBundles(source + "  // Expose" + eol)).toThrow(/exposure anchor must be unique/);
+    expect(() => effectiveBundles(source.replace(/^  \/\/ Expose\r?\n/m, ""))).toThrow(/exposure anchor must be unique/);
   });
 
   it.each(TRANSLATIONS)("resolves %s from each locale after every merge", (key, en, zh) => {
@@ -204,16 +213,15 @@ const BACKUP_COPY = {
 } as const;
 
 // Run the actual shipped guard against a private quoted dictionary fixture.
-// Only the existing offline TypeScript parser is copied, never all node_modules.
+// Link the existing offline parser read-only; do not copy dependencies.
 function checkParityFixture(source: string, strict = true) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-i18n-parity-"));
   try {
-    for (const dir of ["scripts", "src/renderer/js", "node_modules/typescript/lib"]) fs.mkdirSync(path.join(fixture, dir), { recursive: true });
+    for (const dir of ["scripts", "src/renderer/js", "node_modules"]) fs.mkdirSync(path.join(fixture, dir), { recursive: true });
     fs.copyFileSync(path.join(ROOT, "scripts/check-i18n.mjs"), path.join(fixture, "scripts/check-i18n.mjs"));
     const require = createRequire(path.join(ROOT, "package.json"));
     const parser = require.resolve("typescript");
-    fs.copyFileSync(parser, path.join(fixture, "node_modules/typescript/lib/typescript.js"));
-    fs.copyFileSync(path.resolve(path.dirname(parser), "../package.json"), path.join(fixture, "node_modules/typescript/package.json"));
+    fs.symlinkSync(path.resolve(path.dirname(parser), ".."), path.join(fixture, "node_modules/typescript"), "junction");
     fs.writeFileSync(path.join(fixture, "src/renderer/js/i18n.js"), source);
     const result = spawnSync(process.execPath, [path.join(fixture, "scripts/check-i18n.mjs"), ...(strict ? ["--strict"] : [])], {
       cwd: fixture, encoding: "utf8", timeout: 15_000,

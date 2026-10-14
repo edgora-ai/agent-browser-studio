@@ -79,6 +79,14 @@ Deleted profiles go to a **trash area for 7 days** — the success toast has an 
 
 🔒 **Lock to device** marks a profile as checked out by this machine. Other devices' pushes are refused (force-push still possible after confirmation). The lock syncs with the profile.
 
+### Native GPU and proxy DNS
+
+- Chromium keeps the host GPU's real WebGL/WebGPU identity and capabilities. Seeds still isolate the managed privacy surfaces; they do not turn Metal hardware into a Windows D3D GPU. A foreign-OS persona is an unsupported GPU-compatibility diagnostic, not a verified physical device.
+- Leave `gpuVendor` and `gpuRenderer` empty for managed Chromium. Explicit GPU overrides are rejected rather than silently ignored. Existing profile metadata is preserved; clear those two advanced fields explicitly before relaunching a legacy overridden profile. Firefox's existing tuple policy is unchanged.
+- Fixed HTTP/SOCKS proxies resolve origin hostnames at egress by default, including when fingerprint identity is off. A validated HTTPS `managedSecureDnsUrl` explicitly selects strict proxy DoH; this engine requires managed identity mode for that option. Proxy-side DNS uses TCP transport; native QUIC/MASQUE is only selected with explicit strict DoH. No direct fallback is added when the proxy fails.
+- A launch log saying **configured** is not proof of a completed DNS transaction. A third-party `resolver_count=0` alone proves neither fake-IP nor total DNS failure. Inspect successful requests and actual resolver/route evidence; no fixed third-party score is guaranteed.
+- Old GPU baselines can change after this repair. Review the actual drift; the application does not automatically delete baselines, reset licensing, or rewrite existing profiles.
+
 ### Fingerprint trust loop
 
 - **🧬 Drift** compares the live fingerprint against the stored baseline; risky drift can block launch (toggle in Browser Engine → Launch safety gates).

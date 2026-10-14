@@ -2,10 +2,101 @@ import { describe, expect, it } from "vitest";
 import {
   buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
+  composeGpuRenderer,
+  validateBrowserHardwareProfile,
   AGENT_BROWSER_FINGERPRINT_SWITCH,
 } from "../../src/main/services/browser-fingerprint-config.js";
+import type { BrowserFingerprintMeta } from "../../src/main/types.js";
+
+const NATIVE_WEBGPU_CONFIG = {
+  mode: "native",
+  vendor: "",
+  architecture: "",
+  device: "",
+  description: "",
+  subgroupMinSize: 0,
+  subgroupMaxSize: 0,
+} as const;
 
 describe("Agent Browser fingerprint config", () => {
+  it.each(["windows", "macos", "android"] as const)("keeps Chromium GPU identity native for the %s persona", (platform) => {
+    const config = buildBrowserFingerprintConfig({ fingerprintSeed: 424242, platform }, "152.0.7977.72");
+    expect(config.schemaVersion).toBe(1);
+    expect(config.seed).toBe(424242);
+    expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+  });
+
+  it("rejects explicit Chromium GPU overrides without treating plausible identities as physical matches", () => {
+    for (const overrides of [
+      { gpuVendor: "Google Inc. (Apple)" },
+      { gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)" },
+      { gpuVendor: "Google Inc. (Apple)", gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)" },
+      { gpuVendor: " ", gpuRenderer: " " },
+    ]) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: 424242, platform: "macos", ...overrides };
+      expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72"))
+        .toThrow(/Unsupported GPU overrides for Chromium.*gpu(Vendor|Renderer)/);
+      expect(() => buildBrowserFingerprintArg(meta, "152.0.7977.72"))
+        .toThrow(/native host GPU; clear gpuVendor and gpuRenderer/);
+      expect(() => validateBrowserHardwareProfile(meta)).toThrow(/Unsupported GPU overrides for Chromium/);
+    }
+  });
+
+  it("intentionally migrates full Chromium GPU override tuples while preserving Firefox support", () => {
+    const meta: BrowserFingerprintMeta = {
+      fingerprintSeed: 4242,
+      platform: "windows",
+      hardwareConcurrency: 12,
+      deviceMemory: 16,
+      screenWidth: 1920,
+      screenHeight: 1080,
+      taskbarHeight: 48,
+      gpuVendor: "Google Inc. (NVIDIA)",
+      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    };
+    expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72")).toThrow(/Unsupported GPU overrides for Chromium/);
+    expect(() => validateBrowserHardwareProfile(meta, "chromium")).toThrow(/Unsupported GPU overrides for Chromium/);
+    expect(() => validateBrowserHardwareProfile(meta, "firefox")).not.toThrow();
+    const firefox = buildBrowserFingerprintConfig(meta, "154.0", null, "firefox");
+    expect(firefox).toEqual(buildBrowserFingerprintConfig(meta, "154.0", null, "firefox"));
+    expect(firefox.hardwareProfile).toMatchObject({ id: "win-nvidia-rtx3060-12c-16gb-1080p", source: "validated-override" });
+    expect(firefox.webgl).toEqual({ vendor: meta.gpuVendor, renderer: meta.gpuRenderer });
+    expect(firefox.webgpu).toMatchObject({ mode: "webgl", vendor: "NVIDIA", architecture: "Ampere", subgroupMinSize: 32, subgroupMaxSize: 32 });
+  });
+
+  it("allows absent or empty GPU override fields as native Chromium fall-through sentinels", () => {
+    for (const overrides of [{}, { gpuVendor: null, gpuRenderer: null }, { gpuVendor: "", gpuRenderer: "" }]) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: 424242, platform: "windows", ...overrides };
+      expect(() => validateBrowserHardwareProfile(meta, "chromium")).not.toThrow();
+      const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72");
+      expect(config.hardwareProfile.source).toBe("seeded");
+      expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+      expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+    }
+  });
+
+  it("preserves schema-1 non-GPU fields and privacy noise across engine GPU policies", () => {
+    const engineSpecificFields = new Set(["userAgent", "appVersion", "vendor", "webgl", "webgpu"]);
+    for (const platform of ["windows", "macos", "android"] as const) {
+      const meta = { fingerprintSeed: 424242, platform, locale: "zh-CN", timezone: "Asia/Shanghai", webrtcMode: "disable" as const };
+      const chromium = buildBrowserFingerprintConfig(meta, "152.0.7977.72");
+      const firefox = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "firefox");
+      const nonGpuFields = (config: typeof chromium) => Object.fromEntries(
+        Object.entries(config).filter(([key]) => !engineSpecificFields.has(key)),
+      );
+      expect(nonGpuFields(chromium)).toEqual(nonGpuFields(firefox));
+      expect(chromium.canvas).toMatchObject({ enabled: true, seed: expect.stringMatching(/^[0-9a-f]{16}$/) });
+      expect(chromium.audio).toMatchObject({ enabled: true, seed: expect.stringMatching(/^[0-9a-f]{16}$/), amplitude: 0.0000001 });
+      expect(chromium.canvas.seed).not.toBe(chromium.audio.seed);
+      const nextSeed = buildBrowserFingerprintConfig({ ...meta, fingerprintSeed: 424243 }, "152.0.7977.72");
+      expect(nextSeed.canvas.seed).not.toBe(chromium.canvas.seed);
+      expect(nextSeed.audio.seed).not.toBe(chromium.audio.seed);
+      expect(nextSeed.webgl).toEqual(chromium.webgl);
+      expect(nextSeed.webgpu).toEqual(chromium.webgpu);
+    }
+  });
+
   it("produces a deterministic Chromium 149+ identity", () => {
     const meta = {
       fingerprintSeed: 4242,
@@ -18,8 +109,8 @@ describe("Agent Browser fingerprint config", () => {
       storageQuota: 120000,
       hardwareConcurrency: 12,
       deviceMemory: 16,
-      gpuVendor: "Google Inc. (NVIDIA)",
-      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      // Legacy Chromium full-GPU tuples migrate to non-GPU constraints. GPU
+      // overrides are tested separately as unsupported, not silently ignored.
       webrtcIp: "203.0.113.9",
       geolocationMode: "custom" as const,
       geolocationLatitude: 31.2304,
@@ -58,15 +149,8 @@ describe("Agent Browser fingerprint config", () => {
     expect(first.fonts).toContain("Tahoma");
     expect(first.fonts.some((font) => /Calibri|Segoe UI|PingFang/.test(font))).toBe(false);
     expect(first.webrtc).toEqual({ mode: "altered", publicIp: "203.0.113.9" });
-    expect(first.webgpu).toEqual({
-      mode: "webgl",
-      vendor: "NVIDIA",
-      architecture: "Ampere",
-      device: "NVIDIA GeForce RTX 3060",
-      description: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-      subgroupMinSize: 32,
-      subgroupMaxSize: 32,
-    });
+    expect(first.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(first.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
     expect(first.webauthn).toEqual({
       enabled: true,
       conditionalGet: true,
@@ -112,15 +196,8 @@ describe("Agent Browser fingerprint config", () => {
     expect(decoded.platform).toBe("MacIntel");
     expect(decoded.userAgent).toContain("Chrome/150.0.7871.114");
     expect(decoded.screen).toMatchObject({ availLeft: 0, availTop: 25, windowX: 32, windowY: 57, outerWidth: 1280, outerHeight: 800 });
-    expect(decoded.webgpu).toEqual({
-      mode: "webgl",
-      vendor: "Apple",
-      architecture: "metal-3",
-      device: "Apple M2 Pro",
-      description: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)",
-      subgroupMinSize: 32,
-      subgroupMaxSize: 32,
-    });
+    expect(decoded.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(decoded.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
     expect(decoded.speechSynthesis.voices.map((voice: { name: string }) => voice.name))
       .toEqual(["Samantha", "Alex"]);
     expect(decoded.pluginProfile.plugins[0]).toMatchObject({
@@ -140,13 +217,13 @@ describe("Agent Browser fingerprint config", () => {
       cpu: config.hardwareConcurrency,
       memory: config.deviceMemory,
       screen: `${config.screen.width}x${config.screen.height}@${config.screen.devicePixelRatio}`,
-      gpu: config.webgpu.vendor,
+      id: config.hardwareProfile.id,
     }))).toEqual([
-      { cpu: 8, memory: 16, screen: "1920x1080@1", gpu: "Intel" },
-      { cpu: 12, memory: 16, screen: "1920x1080@1", gpu: "NVIDIA" },
-      { cpu: 16, memory: 16, screen: "2560x1440@1", gpu: "NVIDIA" },
-      { cpu: 16, memory: 16, screen: "1920x1080@1", gpu: "AMD" },
-      { cpu: 8, memory: 8, screen: "1920x1080@1", gpu: "Intel" },
+      { cpu: 8, memory: 16, screen: "1920x1080@1", id: "win-intel-irisxe-8c-16gb-1080p" },
+      { cpu: 12, memory: 16, screen: "1920x1080@1", id: "win-nvidia-rtx3060-12c-16gb-1080p" },
+      { cpu: 16, memory: 16, screen: "2560x1440@1", id: "win-nvidia-rtx4060-16c-16gb-1440p" },
+      { cpu: 16, memory: 16, screen: "1920x1080@1", id: "win-amd-radeon-16c-16gb-1080p" },
+      { cpu: 8, memory: 8, screen: "1920x1080@1", id: "win-intel-uhd620-8c-8gb-1080p" },
     ]);
 
     const mac = [1, 2, 3, 4].map((fingerprintSeed) =>
@@ -155,32 +232,46 @@ describe("Agent Browser fingerprint config", () => {
       cpu: config.hardwareConcurrency,
       memory: config.deviceMemory,
       screen: `${config.screen.width}x${config.screen.height}@${config.screen.devicePixelRatio}`,
-      renderer: config.webgl.renderer,
+      id: config.hardwareProfile.id,
     }))).toEqual([
-      { cpu: 8, memory: 16, screen: "1512x982@2", renderer: expect.stringContaining("Apple M2,") },
-      { cpu: 8, memory: 16, screen: "1710x1107@2", renderer: expect.stringContaining("Apple M3,") },
-      { cpu: 12, memory: 16, screen: "1728x1117@2", renderer: expect.stringContaining("Apple M2 Pro,") },
-      { cpu: 8, memory: 8, screen: "1440x900@2", renderer: expect.stringContaining("Apple M1,") },
+      { cpu: 8, memory: 16, screen: "1512x982@2", id: "mac-apple-m2-8c-16gb-1512x982" },
+      { cpu: 8, memory: 16, screen: "1710x1107@2", id: "mac-apple-m3-8c-16gb-1710x1107" },
+      { cpu: 12, memory: 16, screen: "1728x1117@2", id: "mac-apple-m2pro-12c-16gb-1728x1117" },
+      { cpu: 8, memory: 8, screen: "1440x900@2", id: "mac-apple-m1-8c-8gb-1440x900" },
     ]);
+    for (const config of [...windows, ...mac]) {
+      expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+      expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+    }
 
     expect(buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"))
       .toEqual(buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114"));
   });
 
-  it("composes the Windows renderer per engine: Chrome embeds the PCI device id, Firefox strips it", () => {
+  it("keeps the legacy renderer composer and Firefox Windows GPU shape without spoofing Chromium", () => {
     const chromium = buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114", null, "chromium");
     const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 2, platform: "windows" }, "150.0.7871.114", null, "firefox");
-    expect(chromium.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    expect(chromium.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(chromium.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
     expect(firefox.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    expect(firefox.webgpu).toEqual({
+      mode: "webgl",
+      vendor: "NVIDIA",
+      architecture: "Ampere",
+      device: "NVIDIA GeForce RTX 3060",
+      description: firefox.webgl.renderer,
+      subgroupMinSize: 32,
+      subgroupMaxSize: 32,
+    });
     expect(firefox.userAgent).toBe("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0");
     expect(firefox.appVersion).toBe("5.0 (Windows)");
     expect(firefox.vendor).toBe("");
     expect(chromium.vendor).toBe("Google Inc.");
     expect(chromium.userAgent).toContain("Chrome/150.0.7871.114");
-    // Chrome's device-id form must be a strict refinement of the persona base string.
-    expect(chromium.webgl.renderer.startsWith(firefox.webgl.renderer.split(" Direct3D11")[0])).toBe(true);
-    // WebGPU identity derivation is unaffected by the embedded device id.
-    expect(chromium.webgpu).toEqual(firefox.webgpu);
+    const legacyChromeRenderer = "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)";
+    expect(composeGpuRenderer(firefox.webgl.renderer, "0x00002504", "chromium")).toBe(legacyChromeRenderer);
+    expect(composeGpuRenderer(firefox.webgl.renderer, "0x00002504", "firefox")).toBe(firefox.webgl.renderer);
+    expect(composeGpuRenderer(legacyChromeRenderer, "0x00002504", "chromium")).toBe(legacyChromeRenderer);
   });
 
   it("aligns Firefox Android UA with the seeded Android platform version", () => {
@@ -190,29 +281,46 @@ describe("Agent Browser fingerprint config", () => {
     expect(firefox.appVersion).toBe("5.0 (Android)");
   });
 
-  it("keeps Metal and Android renderer forms shared across engines (no device id exists there)", () => {
+  it("preserves legacy Firefox Metal and Android renderer forms without spoofing Chromium", () => {
     for (const platform of ["macos", "android"] as const) {
       const chromium = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "chromium");
       const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "firefox");
-      expect(chromium.webgl.renderer).toBe(firefox.webgl.renderer);
-      expect(chromium.webgl.renderer).not.toContain("(0x");
+      expect(chromium.webgl).toEqual({ vendor: "", renderer: "" });
+      expect(firefox.webgl.renderer).toContain(platform === "macos" ? "Apple M2 Pro" : "Adreno (TM) 740");
+      expect(firefox.webgl.renderer).not.toContain("(0x");
+      expect(composeGpuRenderer(firefox.webgl.renderer, null, "chromium")).toBe(firefox.webgl.renderer);
+      expect(firefox.webgpu).toEqual({
+        mode: "webgl",
+        vendor: platform === "macos" ? "Apple" : "Qualcomm",
+        architecture: platform === "macos" ? "metal-3" : "Adreno 7xx",
+        device: platform === "macos" ? "Apple M2 Pro" : "Adreno (TM) 740",
+        description: firefox.webgl.renderer,
+        subgroupMinSize: 32,
+        subgroupMaxSize: 32,
+      });
     }
   });
 
-  it("composes an explicit gpuRenderer override with the Chrome device id too", () => {
-    const config = buildBrowserFingerprintConfig({
+  it("rejects the former Chromium GPU override but preserves its Firefox tuple constraint", () => {
+    const meta: BrowserFingerprintMeta = {
       fingerprintSeed: 99,
       platform: "windows",
       gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-    }, "150.0.7871.114");
-    expect(config.webgl.renderer).toBe("ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x00002882) Direct3D11 vs_5_0 ps_5_0, D3D11)");
+    };
+    expect(() => buildBrowserFingerprintConfig(meta, "150.0.7871.114")).toThrow(/Unsupported GPU overrides for Chromium.*gpuRenderer/);
+    const firefox = buildBrowserFingerprintConfig(meta, "154.0", null, "firefox");
+    expect(firefox.webgl.renderer).toBe(meta.gpuRenderer);
+    expect(firefox.hardwareProfile).toMatchObject({ id: "win-nvidia-rtx4060-16c-16gb-1440p", source: "validated-override" });
+    expect(firefox.webgpu).toMatchObject({ vendor: "NVIDIA", architecture: "Lovelace" });
   });
 
-  it("treats advanced hardware fields as constraints on a complete persona", () => {
+  it("treats advanced non-GPU hardware fields as constraints on a complete persona", () => {
     const config = buildBrowserFingerprintConfig({
       fingerprintSeed: 99,
       platform: "windows",
-      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      hardwareConcurrency: 16,
+      screenWidth: 2560,
+      screenHeight: 1440,
     }, "150.0.7871.114");
     expect(config.hardwareProfile).toEqual({
       id: "win-nvidia-rtx4060-16c-16gb-1440p",
@@ -224,23 +332,36 @@ describe("Agent Browser fingerprint config", () => {
       hardwareConcurrency: 16,
       deviceMemory: 16,
       screen: { width: 2560, height: 1440, devicePixelRatio: 1 },
-      webgl: { vendor: "Google Inc. (NVIDIA)" },
-      webgpu: { vendor: "NVIDIA", architecture: "Lovelace" },
+      webgl: { vendor: "", renderer: "" },
+      webgpu: NATIVE_WEBGPU_CONFIG,
     });
   });
 
-  it("rejects advanced overrides that cannot belong to one supported persona", () => {
-    expect(() => buildBrowserFingerprintConfig({
-      fingerprintSeed: 100,
-      platform: "windows",
-      hardwareConcurrency: 8,
-      gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
-    }, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
-    expect(() => buildBrowserFingerprintConfig({
-      fingerprintSeed: 101,
-      platform: "macos",
-      gpuVendor: "Google Inc. (NVIDIA)",
-    }, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
+  it("rejects non-GPU advanced overrides that cannot belong to one supported persona", () => {
+    for (const meta of [
+      { fingerprintSeed: 100, platform: "windows", hardwareConcurrency: 8, screenWidth: 2560 },
+      { fingerprintSeed: 101, platform: "macos", hardwareConcurrency: 12, screenWidth: 1710 },
+      { fingerprintSeed: 102, platform: "windows", deviceMemory: 24 },
+      { fingerprintSeed: 103, platform: "windows", hardwareConcurrency: 8.5 },
+    ] as const) {
+      expect(() => buildBrowserFingerprintConfig(meta, "150.0.7871.114")).toThrow(/Incoherent advanced hardware overrides/);
+      expect(() => validateBrowserHardwareProfile(meta)).toThrow(/Incoherent advanced hardware overrides/);
+    }
+  });
+
+  it("retains Firefox rejection of incoherent legacy GPU tuple overrides", () => {
+    for (const meta of [
+      {
+        fingerprintSeed: 100,
+        platform: "windows",
+        hardwareConcurrency: 8,
+        gpuRenderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      },
+      { fingerprintSeed: 101, platform: "macos", gpuVendor: "Google Inc. (NVIDIA)" },
+    ] as const) {
+      expect(() => buildBrowserFingerprintConfig(meta, "154.0", null, "firefox")).toThrow(/Incoherent advanced hardware overrides/);
+      expect(() => validateBrowserHardwareProfile(meta, "firefox")).toThrow(/Incoherent advanced hardware overrides/);
+    }
   });
 
   it("keeps a large seed corpus inside the versioned joint-profile catalog", () => {
@@ -253,9 +374,17 @@ describe("Agent Browser fingerprint config", () => {
       macIds.add(mac.hardwareProfile.id);
       expect(windows.hardwareProfile).toMatchObject({ source: "seeded", fontProfile: "windows-portable", audioProfile: "chromium-desktop" });
       expect(mac.hardwareProfile).toMatchObject({ source: "seeded", fontProfile: "macos-system", audioProfile: "chromium-desktop" });
-      expect(windows.webgl.renderer).toContain(windows.webgpu.vendor);
-      expect(mac.webgl.renderer).toContain("Apple");
-      expect(mac.webgpu.vendor).toBe("Apple");
+      expect(windows.webgl).toEqual({ vendor: "", renderer: "" });
+      expect(mac.webgl).toEqual({ vendor: "", renderer: "" });
+      expect(windows.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+      expect(mac.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+      const firefoxWindows = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "windows" }, "154.0", null, "firefox");
+      const firefoxMac = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "macos" }, "154.0", null, "firefox");
+      expect(firefoxWindows.hardwareProfile).toEqual(windows.hardwareProfile);
+      expect(firefoxMac.hardwareProfile).toEqual(mac.hardwareProfile);
+      expect(firefoxWindows.webgl.renderer).toContain(firefoxWindows.webgpu.vendor);
+      expect(firefoxMac.webgl.renderer).toContain("Apple");
+      expect(firefoxMac.webgpu.vendor).toBe("Apple");
       expect(windows.screen.devicePixelRatio).toBe(1);
       expect(mac.screen.devicePixelRatio).toBe(2);
       expect(windows.audio).toMatchObject({ enabled: true, amplitude: 0.0000001 });
@@ -327,7 +456,8 @@ describe("Agent Browser fingerprint config", () => {
     expect(config.fonts.some((font) => /^Noto Sans (SC|CJK) SC|Noto Serif CJK SC$/.test(font))).toBe(true);
     expect(config.fonts).toEqual([...config.fonts].sort());
     expect(config.fonts.length).toBeGreaterThanOrEqual(4);
-    expect(config.webgpu).toMatchObject({ mode: "webgl" });
+    expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
     expect(config.pluginProfile).toEqual({
       pdfViewerEnabled: true,
       plugins: [],
@@ -354,21 +484,22 @@ describe("Agent Browser fingerprint config", () => {
       .toEqual(buildBrowserFingerprintConfig({ fingerprintSeed: 7, platform: "android" }, "150.0.7871.114"));
   });
 
-  it("keeps every Android GPU coherent with its WebGL/WebGPU vendor", () => {
+  it("keeps legacy Firefox Android GPUs coherent with their WebGL/WebGPU vendor", () => {
     for (let fingerprintSeed = 1; fingerprintSeed <= 40; fingerprintSeed++) {
-      const config = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "android" }, "150.0.7871.114");
+      const config = buildBrowserFingerprintConfig({ fingerprintSeed, platform: "android" }, "154.0", null, "firefox");
       expect(config.webgl.vendor).toContain("Google Inc. (");
+      expect(config.webgpu.mode).toBe("webgl");
       if (config.webgpu.vendor === "Qualcomm") expect(config.webgl.renderer).toContain("Adreno");
       if (config.webgpu.vendor === "ARM") expect(config.webgl.renderer).toMatch(/Mali|Immortalis/);
     }
   });
 
-  it("applies Android as a constraint on a complete mobile persona", () => {
+  it("applies legacy Firefox Android GPU constraints to a complete mobile persona", () => {
     const config = buildBrowserFingerprintConfig({
       fingerprintSeed: 99,
       platform: "android",
       gpuRenderer: "ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2 ANGLE (Google, Vulkan 1.3.0 (Adreno (TM) 740)))",
-    }, "150.0.7871.114");
+    }, "154.0", null, "firefox");
     expect(config.hardwareProfile.source).toBe("validated-override");
     expect(config.hardwareProfile.id).toMatch(/^android-/);
     expect(config.webgpu.vendor).toBe("Qualcomm");

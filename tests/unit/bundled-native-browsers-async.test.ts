@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { promises as fsPromises, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { promises as fsPromises, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const children = vi.hoisted(() => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
@@ -61,6 +62,8 @@ const originalResources = Object.getOwnPropertyDescriptor(process, "resourcesPat
 let owned: string;
 let calls: Invocation[];
 let promises: Promise<unknown>[];
+let releases: Array<() => void>;
+let tearingDown: boolean;
 const browsers = [
   { kind: "chromium" as const, async: bundledChromiumBinaryPathAsync, sync: bundledChromiumBinaryPath },
   { kind: "firefox" as const, async: bundledFirefoxBinaryPathAsync, sync: bundledFirefoxBinaryPath },
@@ -78,11 +81,13 @@ function watch<T>(promise: Promise<T>): Promise<T> {
 }
 
 async function until(predicate: () => boolean): Promise<void> {
-  for (let i = 0; i < 5000; i++) {
-    if (predicate()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+  const deadline = performance.now() + 1000;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("Mock subprocess / private filesystem operation did not progress");
+    // Event-loop turns can outrun queued libuv I/O. Await real fixture I/O,
+    // without advancing the production fake clock or extending Vitest timeouts.
+    await fsPromises.stat(owned);
   }
-  throw new Error("Mock subprocess / private filesystem operation did not progress");
 }
 
 async function invocation(index: number, command: string): Promise<Invocation> {
@@ -156,6 +161,8 @@ beforeEach(() => {
   owned = mkdtempSync(path.join(tmpdir(), "bundled-native-async-"));
   calls = [];
   promises = [];
+  releases = [];
+  tearingDown = false;
   setResources(undefined);
   vi.stubEnv("AGENT_BROWSER_BUNDLED_RESOURCES", undefined);
   vi.stubEnv("AGENT_BROWSER_BUNDLED_CACHE_DIR", path.join(owned, "cache"));
@@ -163,6 +170,8 @@ beforeEach(() => {
     if (command !== "ditto" && command !== "codesign") throw new Error(`Unexpected mock command ${command}`);
     const child = new FakeChild();
     calls.push({ command, args, child });
+    // Failed assertions can leave discovery before spawn; drain late children too.
+    if (tearingDown) queueMicrotask(() => child.finish(1));
     return child;
   });
   children.spawnSync.mockReset().mockImplementation(() => {
@@ -172,15 +181,25 @@ beforeEach(() => {
 
 afterEach(async () => {
   filesystemGate.checking = false;
+  tearingDown = true;
+  for (const release of releases) release();
   for (const call of calls) if (!call.child.closed) call.child.finish(1);
-  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(350000);
-  await Promise.allSettled(promises);
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllEnvs();
-  if (originalResources) Object.defineProperty(process, "resourcesPath", originalResources);
-  else Reflect.deleteProperty(process, "resourcesPath");
-  rmSync(owned, { recursive: true, force: true });
+  let settled = false;
+  void Promise.allSettled(promises).then(() => { settled = true; });
+  try {
+    await until(() => {
+      // A lock poll may be scheduled only after queued filesystem work returns.
+      if (vi.isFakeTimers()) vi.advanceTimersByTime(350000);
+      return settled;
+    });
+  } finally {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    if (originalResources) Object.defineProperty(process, "resourcesPath", originalResources);
+    else Reflect.deleteProperty(process, "resourcesPath");
+    if (settled && !process.env.BUNDLED_NATIVE_ASYNC_RETAIN) rmSync(owned, { recursive: true, force: true });
+  }
 });
 
 describe.each(browsers)("$kind asynchronous archive discovery", (browser) => {
@@ -188,7 +207,7 @@ describe.each(browsers)("$kind asynchronous archive discovery", (browser) => {
     const item = fixture(browser.kind);
     let settled = false;
     const result = watch(browser.async("darwin", item.resources));
-    void result.then(() => { settled = true; });
+    void result.then(() => { settled = true; }, () => { settled = true; });
     const unpack = await invocation(0, "ditto");
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(settled).toBe(false);
@@ -586,6 +605,7 @@ function abandonedPath(lock: string): string {
 function deferred(): { promise: Promise<void>; release: () => void } {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => { release = resolve; });
+  releases.push(release);
   return { promise, release };
 }
 
@@ -842,10 +862,13 @@ describe("protocol-owner recovery safety", () => {
   it.each(["changed bytes", "replacement inode"])("does not recover stale snapshots after %s", (scenario) => {
     const item = fixture();
     const lock = protocolLock(item);
+    const inode = statSync(lock).ino;
     priorities.getPriority.mockImplementationOnce(() => {
       if (scenario === "replacement inode") {
-        rmSync(lock, { recursive: true });
+        renameSync(lock, `${lock}.original`);
         mkdirSync(lock);
+        expect(statSync(`${lock}.original`).ino).toBe(inode);
+        expect(statSync(lock).ino).not.toBe(inode);
       }
       put(path.join(lock, "owner.json"), "unknown replacement owns this lock");
       throw deadOwner();
@@ -936,14 +959,18 @@ describe("strong archive identity and bounded async manifest", () => {
     const result = watch(bundledChromiumBinaryPathAsync("darwin", item.resources));
     const unpack = await invocation(0, "ditto");
     extract(unpack, item);
-    if (scenario === "replacement inode") unlinkSync(item.zip);
+    // Keep A's inode allocated: unlink+create can reuse it on APFS/Linux.
+    if (scenario === "replacement inode") renameSync(item.zip, `${item.zip}.original`);
     writeFileSync(item.zip, Buffer.alloc(before.size, "B"));
     utimesSync(item.zip, new Date(1700000000000), new Date(1700000000000));
     const after = statSync(item.zip);
     expect(after.size).toBe(before.size);
     expect(after.mtimeMs).toBe(before.mtimeMs);
     if (scenario.startsWith("same")) expect(after.ctimeMs).not.toBe(before.ctimeMs);
-    else expect(after.ino).not.toBe(before.ino);
+    else {
+      expect(statSync(`${item.zip}.original`).ino).toBe(before.ino);
+      expect(after.ino).not.toBe(before.ino);
+    }
     unpack.child.finish();
     await expect(result).rejects.toThrow(/archive.*changed/i);
     expect(calls).toHaveLength(1);

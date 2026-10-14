@@ -79,6 +79,14 @@ Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服�
 
 🔒 **锁定到本机**表示该 profile 被本机签出。其他设备的 push 会被硬拦截（确认后仍可强制覆盖）。锁随同步传播。
 
+### 原生 GPU 与代理 DNS
+
+- Chromium 保持宿主 GPU 的真实 WebGL/WebGPU 身份和能力。种子仍隔离托管隐私表面，但不会把 Metal 硬件变成 Windows D3D GPU。跨系统 persona 只是未支持的 GPU 兼容性诊断，不等于真实设备已验证。
+- 托管 Chromium 的 `gpuVendor`、`gpuRenderer` 应留空。显式 GPU 覆盖会报错，不会被悄悄忽略；已有配置元数据保留。旧配置设置过 GPU 时，需明确清空这两个高级字段后重新启动。Firefox 原有 tuple 策略不变。
+- 固定 HTTP/SOCKS 代理默认在出口解析目标域名，关闭指纹身份时也一样。经过验证的 HTTPS `managedSecureDnsUrl` 才显式选择严格代理 DoH；该引擎使用此选项需要托管身份模式。代理侧 DNS 走 TCP；显式严格 DoH 才选择原生 QUIC/MASQUE。代理失败时不新增直连回退。
+- 启动日志里的 **configured（已配置）** 不是 DNS 事务成功证据。第三方 `resolver_count=0` 本身既不能证明 fake-IP，也不能证明所有 DNS 均失败；应结合成功请求与真实解析、路由证据，不保证任意第三方固定评分。
+- 修复后，旧 GPU 基线可能发生漂移，请审查实际变化。应用不会自动删除基线、重置授权或改写已有配置。
+
 ### 指纹信任闭环
 
 - **🧬 Drift**：把实时指纹与基线对比；高风险漂移可阻断启动（在「浏览器引擎 → 启动安全门」开关）。

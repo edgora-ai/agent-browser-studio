@@ -81,7 +81,8 @@ export function fixture(reuse?: string) {
       if (name.startsWith("node:")) return denied(name);
       if (name === "electron") return { app: { getPath: () => dir }, safeStorage: denied("native storage"), clipboard: denied("clipboard") };
       const resolved = path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"));
-      const rel = path.relative(SOURCE, resolved);
+      // Module IDs are logical slash-delimited names, not native file paths.
+      const rel = path.relative(SOURCE, resolved).replace(/\\/g, "/");
       if (["services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts", "services/secrets.ts", "services/local-agent.ts", "services/sync-service.ts", "services/sync/limits.ts", "branding.ts", "services/browser-engine.ts"].includes(rel)) return load(rel);
       if (rel === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("invalid synthetic dirId"); } };
       if (rel === "services/main-i18n.ts") return { tMain: (key: string) => key };
