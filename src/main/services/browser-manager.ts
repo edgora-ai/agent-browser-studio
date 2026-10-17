@@ -36,7 +36,7 @@ import {
   startAuthenticatedSocksBridge,
 } from "./authenticated-socks-bridge.js";
 import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
-import { buildChromiumProxyUrl, proxyDetector, probeProxyPort, type ProxyDetectionResult } from "./proxy-detector.js";
+import { buildChromiumProxyUrl, proxyDetector, proxyDetectionObservedAt, probeProxyPort, type ProxyDetectionResult } from "./proxy-detector.js";
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
@@ -71,7 +71,7 @@ import {
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
 } from "./native-proxy-auth.js";
-import type { FingerprintMode, GeolocationMode, ProxyConfig, WebRtcMode, ProfileLock, BrowserProfileMeta, BrowserEngine, RenderScaleMode } from "../types.js";
+import type { FingerprintMode, GeolocationMode, ProxyConfig, ResolvedProfileProxy, WebRtcMode, ProfileLock, BrowserProfileMeta, BrowserEngine, RenderScaleMode } from "../types.js";
 import { PROFILE_ID_PREFIX, isManagedProfileId } from "../branding.js";
 import {
   buildFirefoxLaunchArgs,
@@ -102,10 +102,11 @@ import { runBrowserCommand } from "./browser-command.js";
 import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
 import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
 import { runningProcesses, type RunningEntry } from "./browser/runtime-table.js";
-import { firefoxLaunchDigest, firefoxLaunchRequestHash } from "./browser/firefox-launch-provenance.js";
+import { firefoxEffectiveLaunchHash, firefoxLaunchDigest, firefoxLaunchRequestHash } from "./browser/firefox-launch-provenance.js";
 
 interface OwnedFirefoxLaunch {
   requestHash: string;
+  effectiveHash: string;
   executablePath: string;
   binaryIdentity: string;
   profileDir: string;
@@ -1297,13 +1298,26 @@ export async function launchBrowser(
         const tree = await connection.send("browsingContext.getTree", {}, 1500);
         if (!Array.isArray(tree?.contexts) || !tree.contexts.length) throw new Error("no live browser context");
       } catch { throw restartRequired("the Firefox BiDi session could not be verified"); }
+      const assertOwnedSession = () => {
+        if (runningProcesses.get(dirId) !== existing || existing.stopping || connection.closed ||
+            getRegisteredFirefoxSession(existing.port) !== connection || existing.bidiConn !== connection ||
+            child.killed || child.exitCode !== null || child.signalCode !== null) {
+          throw restartRequired("the Firefox process changed during reuse verification");
+        }
+      };
       await assertOwnedFiles();
-      if (runningProcesses.get(dirId) !== existing || existing.stopping || connection.closed ||
-          getRegisteredFirefoxSession(existing.port) !== connection || existing.bidiConn !== connection ||
-          child.killed || child.exitCode !== null || child.signalCode !== null) {
-        throw restartRequired("the Firefox process changed during reuse verification");
+      assertOwnedSession();
+      const resolvedProxy = resolveFirefoxProxy(dirId, meta, cfg);
+      assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
+      const effective = await resolveFirefoxLaunchIdentity(meta, resolvedProxy, assertFirefoxRequest);
+      assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
+      if (firefoxEffectiveLaunchHash(effective.meta, resolvedProxy) !== owned.effectiveHash) {
+        throw restartRequired("Firefox effective timezone, locale or proxy route changed");
       }
+      await assertOwnedFiles();
+      assertOwnedSession();
       assertReusableProcessAlive(existing.pid);
+      assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
       existing.lastActivityAt = Date.now();
       return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false }, envCheck: { checked: false } };
     }
@@ -1910,6 +1924,66 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   }
 }
 
+function resolveFirefoxProxy(dirId: string, meta: BrowserProfileMeta, cfg: any): ResolvedProfileProxy {
+  // A direct profile needs no secret resolution, including during cheap reuse.
+  const resolved = meta.proxyMode === "none" || (meta.proxyMode === undefined && !meta.proxyName)
+    ? { mode: "none" as const, name: null, config: null }
+    : resolveProfileProxySecret(dirId, cfg);
+  assertProxyResolvable(meta, cfg, resolved);
+  return resolved;
+}
+
+function assertFirefoxProxyCurrent(dirId: string, meta: BrowserProfileMeta, proxy: ResolvedProfileProxy): void {
+  const current = structuredClone(getConfig());
+  const requested = current.browserProfiles?.[dirId];
+  if (!requested || firefoxEffectiveLaunchHash(meta, resolveFirefoxProxy(dirId, requested, current)) !== firefoxEffectiveLaunchHash(meta, proxy)) {
+    throw restartRequired("Firefox effective proxy route changed during preparation");
+  }
+}
+
+function normalizeFirefoxTimezone(value: unknown): string | null {
+  const timezone = normalizeOptionalTimezone(value);
+  if (!timezone) return null;
+  if (/^[+-]/.test(timezone)) throw new Error(`Invalid IANA timezone: ${JSON.stringify(value)}`);
+  return new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone;
+}
+
+async function resolveFirefoxLaunchIdentity(
+  meta: BrowserProfileMeta,
+  proxy: ResolvedProfileProxy,
+  assertCurrentRequest: () => void,
+) {
+  if (meta.fingerprintMode === "off") {
+    return { meta: { ...meta, timezone: null, locale: null }, geo: null, observedAt: null, timezoneSource: "off", localeSource: "off" };
+  }
+  let timezone = normalizeFirefoxTimezone(meta.timezone);
+  let locale = normalizeOptionalLocale(meta.locale);
+  let timezoneSource = timezone ? "explicit" : "host";
+  let localeSource = locale ? "explicit" : "host";
+  let geo: ProxyDetectionResult | null = null;
+  let observedAt: number | null = null;
+  if (proxy.config && (!timezone || !locale)) {
+    const resolved = await resolveGeoFromProxy(proxy.config);
+    assertCurrentRequest();
+    let proxyTimezone: string | null = null;
+    try { proxyTimezone = normalizeFirefoxTimezone(resolved.timezone); }
+    catch (error) { console.warn("[agent-browser] Firefox ignored an invalid proxy IANA timezone:", error); }
+    geo = resolved.detection ? { ...resolved.detection, timezone: proxyTimezone } : null;
+    observedAt = resolved.detection ? proxyDetectionObservedAt(resolved.detection) : null;
+    if (!timezone && proxyTimezone) { timezone = proxyTimezone; timezoneSource = "proxy"; }
+    if (!locale && resolved.locale) { locale = normalizeOptionalLocale(resolved.locale); localeSource = "proxy"; }
+  }
+  // Auto remains null in stored meta. A missing/failed proxy observation uses
+  // validated host defaults, not persisted geo or a country-to-timezone guess.
+  if (!timezone || !locale) {
+    const host = Intl.DateTimeFormat().resolvedOptions();
+    if (!timezone) timezone = normalizeFirefoxTimezone(host.timeZone);
+    if (!locale) locale = normalizeOptionalLocale(host.locale);
+  }
+  if (!timezone || !locale) throw new Error("Firefox Auto timezone or locale could not be resolved from the proxy or host");
+  return { meta: { ...meta, timezone, locale }, geo, observedAt, timezoneSource, localeSource };
+}
+
 /**
  * Firefox engine launch (Slice 77/78/79), aligned with RoxyBrowser's real
  * RoxyFirefox engine AND with the managed Chromium capability set:
@@ -1948,6 +2022,7 @@ async function launchFirefoxProfile(
   const binaryIdentity = await getFirefoxNativeSelectionIdentityAsync(bin);
   opts.assertCurrentRequest();
   if (!binaryIdentity) throw new Error("Cannot verify the selected Firefox executable identity");
+  let preparedProxy: ResolvedProfileProxy | null = null;
   const assertPrepared = async () => {
     opts.assertCurrentRequest();
     const selected = await findFirefoxBinaryAsync();
@@ -1956,6 +2031,7 @@ async function launchFirefoxProfile(
       throw restartRequired("Firefox binary selection changed during preparation");
     }
     opts.assertCurrentRequest();
+    if (preparedProxy) assertFirefoxProxyCurrent(dirId, meta, preparedProxy);
   };
   const firefoxVersion = await detectFirefoxVersionAsync(bin);
   opts.assertCurrentRequest();
@@ -1970,47 +2046,62 @@ async function launchFirefoxProfile(
 
   const profileDir = path.join(getProfilesDir(), dirId);
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
-  const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
   const nativeRequested = firefoxNativeModeRequested();
   const capabilityReport = await readFirefoxNativeCapabilityReportAsync(bin);
   await assertPrepared();
   const capabilities = new Set(capabilityReport?.capabilities || []);
   const nativeConfig = FIREFOX_NATIVE_CONFIG_CAPABILITIES.every(capability => capabilities.has(capability));
   const nativeParity = FIREFOX_NATIVE_PARITY_CAPABILITIES.every(capability => capabilities.has(capability));
-  if (managedIdentity && nativeRequested && !nativeConfig) {
+  if (fingerprintMode !== "off" && nativeRequested && !nativeConfig) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(
       "Firefox native-only A/B mode was requested, but the selected binary lacks the binary-attested config-v1, native-required-v1, and snapshot-v1 capabilities.",
     );
   }
-  const nativeMode = managedIdentity !== null && nativeConfig && (nativeParity || nativeRequested);
-  const resolvedProxy = resolveProfileProxySecret(dirId, cfg);
-  // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
-  // unresolvable proxy must refuse — never write a direct user.js.
-  assertProxyResolvable(meta, cfg, resolvedProxy);
+  const nativeMode = fingerprintMode !== "off" && nativeConfig && (nativeParity || nativeRequested);
+  const resolvedProxy = resolveFirefoxProxy(dirId, meta, cfg);
+  preparedProxy = resolvedProxy;
+  assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
   // R10/R12: liveness gate — history warns by default (opt-in block via
   // blockOnUnhealthyProxy), the TCP probe refuses dead ports.
   await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts.forceDeadProxy === true });
   await assertPrepared();
+  const effective = await resolveFirefoxLaunchIdentity(meta, resolvedProxy, opts.assertCurrentRequest);
+  await assertPrepared();
+  const effectiveMeta = effective.meta;
+  const effectiveHash = firefoxEffectiveLaunchHash(effectiveMeta, resolvedProxy);
+  const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(effectiveMeta, firefoxVersion, null);
+  assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
+  if (effective.geo && effective.observedAt !== null && resolvedProxy.name && resolvedProxy.config) {
+    persistLaunchDetection(resolvedProxy.name, resolvedProxy.config, effective.geo, effective.observedAt);
+  }
+  if (managedIdentity) recordAudit({
+    category: "profile", action: "firefox-identity", target: dirId, actor: "auto",
+    detail: `timezone=${effectiveMeta.timezone} source=${effective.timezoneSource}; locale=${effectiveMeta.locale} source=${effective.localeSource}` +
+      (effective.timezoneSource === "host" || effective.localeSource === "host" ? "; host fallback, proxy alignment unverified" : ""),
+  });
   // R11 P1-4 item 3: same consistency warnings as Chromium (warn by default).
   // R12 P2-1: normalize like the Chromium path — real/disable modes carry no
   // effective IP at runtime, so a stale meta.webrtcIp must not trigger
   // webrtc-no-proxy on Firefox while Chromium stays silent.
+  const requestedWebRtcMode = fingerprintMode === "off" ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
   runConsistencyGate(dirId, cfg, {
     passThrough: fingerprintMode === "off",
-    timezone: meta.timezone, locale: meta.locale,
-    webrtcIp: normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp) === "auto" || normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp) === "altered" ? meta.webrtcIp : null,
+    timezone: effectiveMeta.timezone, locale: effectiveMeta.locale,
+    webrtcIp: requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered" ? meta.webrtcIp : null,
     platform: meta.platform,
     proxyMode: resolvedProxy.mode,
-    proxyGeo: resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null,
+    proxyGeo: effective.geo ?? (effective.timezoneSource === "explicit" && effective.localeSource === "explicit" && resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null),
   });
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
+  opts.assertCurrentRequest();
+  assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
   writeFirefoxUserJs(profileDir, {
     fingerprintMode,
     proxy: resolvedProxy.config,
     dohUrl,
-    locale: managedIdentity ? meta.locale || undefined : undefined,
+    locale: managedIdentity ? effectiveMeta.locale || undefined : undefined,
     // R12 P1-2: honor the same opt-in flag as Chromium (default off).
     allowThirdPartyCookies: normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility", false),
     useGpu: true,
@@ -2052,10 +2143,13 @@ async function launchFirefoxProfile(
   // but `Date.getTimezoneOffset` / `Date` parsing read the OS clock and still
   // leak `+08:00`-style host offsets. Firefox honors the `TZ` env var natively,
   // so the managed timezone rides on the child environment (engine-level).
-  const spawnEnv = managedIdentity && meta.timezone ? { ...process.env, TZ: meta.timezone } : undefined;
+  const spawnEnv = managedIdentity && effectiveMeta.timezone ? { ...process.env, TZ: effectiveMeta.timezone } : undefined;
   let spawned: Awaited<ReturnType<typeof spawnFirefoxWithDebugInfo>>;
-  try { spawned = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv }); }
-  catch (error) {
+  try {
+    opts.assertCurrentRequest();
+    assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
+    spawned = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv });
+  } catch (error) {
     if (logFd !== null) { try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] Firefox launch log close failed:", closeError); } }
     throw error;
   }
@@ -2146,7 +2240,7 @@ async function launchFirefoxProfile(
         // R12 P2-2: same persona cross-check as the read-only drift check —
         // platform/timezone vs live fingerprint mismatches are risky too.
         const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
-          { platform: meta.platform || "windows", timezone: meta.timezone },
+          { platform: meta.platform || "windows", timezone: effectiveMeta.timezone },
           current,
         ));
         const combined = [...drift, ...personaDrift];
@@ -2234,7 +2328,7 @@ async function launchFirefoxProfile(
     if (managedIdentity) {
       try {
         const envResult = await checkEnvironmentRiskRuntime(
-          { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
+          { timezone: effectiveMeta.timezone, locale: effectiveMeta.locale, platform: meta.platform },
           actualPort,
           { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
           "firefox",
@@ -2267,8 +2361,9 @@ async function launchFirefoxProfile(
       throw restartRequired("Firefox preferences changed during launch verification");
     }
     if (child.killed || child.exitCode !== null || child.signalCode !== null) throw restartRequired("Firefox exited during launch verification");
+    assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
     ownedFirefoxLaunches.set(child, {
-      requestHash: opts.requestHash, executablePath: bin, binaryIdentity, profileDir,
+      requestHash: opts.requestHash, effectiveHash, executablePath: bin, binaryIdentity, profileDir,
       argvHash: firefoxLaunchDigest(JSON.stringify(child.spawnargs)), userJsHash, connection,
     });
   } catch (e: any) {
@@ -2762,10 +2857,10 @@ async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: stri
  * even when the user never clicked Detect. Only touches the detection cache,
  * not the health history (which is owned by the manual Detect flow).
  */
-function persistLaunchDetection(proxyName: string, proxy: ProxyConfig, detection: ProxyDetectionResult): void {
+function persistLaunchDetection(proxyName: string, proxy: ProxyConfig, detection: ProxyDetectionResult, detectedAt = Date.now()): void {
   try {
     setProxyDetectionIfCurrent(proxyName, proxy, {
-      detectedAt: Date.now(),
+      detectedAt,
       success: true,
       exitIp: detection.exitIp,
       country: detection.country || detection.countryCode || null,

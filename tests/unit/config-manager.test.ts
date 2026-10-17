@@ -566,6 +566,37 @@ describe("Config Manager (real functions)", () => {
     expect(readBack.screenWidth).toBe(2560);
     expect(readBack.tags).toEqual(["ecommerce", "ai"]);
   });
+
+  it("keeps Firefox Auto fields and the original geo observation time through disk readback and reload", () => {
+    const proxy = { type: "http" as const, host: "proxy.example.test", port: 8080 };
+    addProxy("firefox-auto", proxy);
+    setProfileMeta("cb_firefox_auto", {
+      name: "Firefox Auto", engine: "firefox", fingerprintMode: "managed",
+      timezone: null, locale: null, proxyMode: "named", proxyName: "firefox-auto",
+    });
+    setProfileMeta("cb_firefox_explicit", {
+      name: "Firefox Explicit", engine: "firefox", fingerprintMode: "managed",
+      timezone: "Europe/Berlin", locale: "de-DE", proxyMode: "named", proxyName: "firefox-auto",
+    });
+    const detectedAt = Date.now() - 9 * 60 * 1000;
+    expect(setProxyDetectionIfCurrent("firefox-auto", proxy, {
+      detectedAt, success: true, exitIp: "203.0.113.27", country: "United States", countryCode: "US",
+      timezone: "America/Los_Angeles", provider: "unit", latencyMs: 12, error: null,
+    })).toBe(true);
+
+    const stored = JSON.parse(fs.readFileSync(getConfigPath(), "utf-8"));
+    expect(stored.browserProfiles.cb_firefox_auto).toMatchObject({ engine: "firefox", timezone: null, locale: null });
+    expect(stored.browserProfiles.cb_firefox_explicit).toMatchObject({ timezone: "Europe/Berlin", locale: "de-DE" });
+    expect(stored.proxyDetections["firefox-auto"].detectedAt).toBe(detectedAt);
+
+    reloadConfig();
+    expect(getProfileMeta("cb_firefox_auto")).toMatchObject({ engine: "firefox", timezone: null, locale: null });
+    expect(getProfileMeta("cb_firefox_explicit")).toMatchObject({ timezone: "Europe/Berlin", locale: "de-DE" });
+    expect(getProxyDetection("firefox-auto")).toMatchObject({ detectedAt, timezone: "America/Los_Angeles" });
+    expect(Object.entries(getConfig().browserProfiles)
+      .filter(([, profile]) => profile.engine === "firefox" && profile.timezone === null && profile.locale === null)
+      .map(([id]) => id)).toEqual(["cb_firefox_auto"]);
+  });
 });
 
 describe("Agent Run normalization", () => {

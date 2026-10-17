@@ -107,6 +107,7 @@
   var profilesLoadSeq = 0;
   var newProfileProxySeq = 0;
   var newProfileFormSeq = 0;
+  var consistencyPreviewSeq = 0;
   var newProfilePlatformEdited = false;
 
   function setNewProfilePlatformNote(key, fallback) {
@@ -161,6 +162,30 @@
     }).catch(function() {
       select.value = selected;
     });
+  }
+
+  // Keep one common identity form. Disabled hidden controls also stay out of
+  // native form validation; their draft values survive an engine switch.
+  function setProfileEngineOptions(dialogId, isFirefox) {
+    var dialog = document.getElementById(dialogId);
+    if (!dialog) return;
+    dialog.querySelectorAll('[data-profile-engine="chromium"]').forEach(function (section) {
+      section.style.display = isFirefox ? "none" : "";
+      ["input", "select", "button"].forEach(function (tag) {
+        section.querySelectorAll(tag).forEach(function (field) { field.disabled = isFirefox; });
+      });
+    });
+  }
+
+  // Imported profiles can contain a valid explicit TZ/locale outside the short
+  // option lists. A native select would otherwise turn that value into Auto.
+  function writeIdentitySelect(id, value) {
+    var select = document.getElementById(id);
+    var selected = value || "";
+    if (!Array.prototype.some.call(select.querySelectorAll("option"), function (option) { return option.value === selected; })) {
+      select.appendChild(new Option(selected, selected));
+    }
+    select.value = selected;
   }
 
   // R8 P2-3: refuse launch early when the engine is known-missing, with a
@@ -325,22 +350,27 @@
             proxyMode: p.proxyMode || (p.proxyName ? "named" : "none"),
             proxyName: p.proxyName || null
           };
+          var isFirefox = p.engine === "firefox";
           document.getElementById("agent-browser-meta-dir-id").value = dirId;
+          document.getElementById("agent-browser-meta-engine").value = isFirefox ? "firefox" : "chromium";
+          setProfileEngineOptions("dlg-agent-browser-seed", isFirefox);
+          document.getElementById("agent-browser-meta-firefox-note").style.display = isFirefox ? "" : "none";
           document.getElementById("agent-browser-meta-fingerprint-mode").value = metaData.fingerprintMode;
-          populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion);
+          // A hidden Chromium build selector must never replace a Firefox pin.
+          if (!isFirefox) populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion);
           document.getElementById("agent-browser-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
           document.getElementById("agent-browser-meta-drm").checked = metaData.drm;
           document.getElementById("agent-browser-meta-name").value = metaData.name;
           document.getElementById("agent-browser-meta-seed").value = metaData.seed;
-          document.getElementById("agent-browser-meta-platform").value = metaData.platform;
-          document.getElementById("agent-browser-meta-timezone").value = metaData.timezone;
-          document.getElementById("agent-browser-meta-locale").value = metaData.locale;
+          writeIdentitySelect("agent-browser-meta-platform", metaData.platform);
+          writeIdentitySelect("agent-browser-meta-timezone", metaData.timezone);
+          writeIdentitySelect("agent-browser-meta-locale", metaData.locale);
           document.getElementById("agent-browser-meta-webrtc-mode").value = metaData.webrtcMode;
           document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
           document.getElementById("agent-browser-meta-render-scale-mode").value = p.renderScaleMode === "strict" ? "strict" : "native";
           writeGeolocationFields("agent-browser-meta-", metaData);
           writeHardwareFields("agent-browser-meta-", metaData);
-          bindHardwareFieldValidation("agent-browser-meta-");
+          if (!isFirefox) bindHardwareFieldValidation("agent-browser-meta-");
           var wtPrefixMeta = metaData.windowTitlePrefix;
           var wtEnabled = wtPrefixMeta !== null;
           var wtPrefix = (wtPrefixMeta && wtPrefixMeta !== "") ? wtPrefixMeta : "";
@@ -432,6 +462,8 @@
 
   resetNewProfileForm: function (browser) {
         var formSeq = ++newProfileFormSeq;
+        ++consistencyPreviewSeq;
+        if (agentBrowser._consistencyPreviewTimer) clearTimeout(agentBrowser._consistencyPreviewTimer);
         newProfilePlatformEdited = false;
         ++newProfileProxySeq;
         document.getElementById("new-profile-proxy").innerHTML = renderProxyOptions([], "default", false);
@@ -507,24 +539,22 @@
           if (businessPresetCatalog[i].id === id) { preset = businessPresetCatalog[i]; break; }
         }
         if (!preset) return;
-        // Coherent identity prefill (advanced section fields).
+        // A selected regional preset fills common identity on either engine;
+        // it never resets mode, seed or an explicit OS choice.
         var nameEl = document.getElementById("new-profile-name");
         if (nameEl && !nameEl.value.trim()) nameEl.value = preset.nameSuffix;
-        // Region presets never replace the host default or an explicit OS choice.
-        var tzEl = document.getElementById("new-agent-browser-timezone");
-        if (tzEl) tzEl.value = preset.profile.timezone;
-        var locEl = document.getElementById("new-agent-browser-locale");
-        if (locEl) locEl.value = preset.profile.locale;
-        var webrtcModeEl = document.getElementById("new-agent-browser-webrtc-mode");
-        if (webrtcModeEl) webrtcModeEl.value = preset.profile.webrtcMode;
-        try {
+        writeIdentitySelect("new-agent-browser-timezone", preset.profile.timezone);
+        writeIdentitySelect("new-agent-browser-locale", preset.profile.locale);
+        if (document.getElementById("new-profile-browser").value !== "firefox") {
+          document.getElementById("new-agent-browser-webrtc-mode").value = preset.profile.webrtcMode;
           writeGeolocationFields("new-agent-browser-", {
             geolocationMode: preset.profile.geolocationMode,
             geolocationLatitude: preset.profile.geolocationLatitude,
             geolocationLongitude: preset.profile.geolocationLongitude,
             geolocationAccuracy: preset.profile.geolocationAccuracy,
           });
-        } catch (e) { /* ignore */ }
+        }
+        agentBrowser.scheduleConsistencyPreview();
         if (info) {
           var zh = window.i18n && window.i18n.locale && window.i18n.locale.indexOf("zh") === 0;
           var gates = [];
@@ -544,43 +574,53 @@
   // State lives on agentBrowser (this block is inside Object.assign, so no
   // bare var/function declarations allowed here).
   scheduleConsistencyPreview: function () {
+    ++consistencyPreviewSeq; // Invalidate the previous reply at change intent.
     if (agentBrowser._consistencyPreviewTimer) clearTimeout(agentBrowser._consistencyPreviewTimer);
     agentBrowser._consistencyPreviewTimer = setTimeout(function () { agentBrowser.runConsistencyPreview(); }, 350);
   },
   runConsistencyPreview: function () {
     var host = document.getElementById("new-profile-consistency");
-    if (!host) return;
-    var proxyEl = document.getElementById("new-profile-proxy");
-    var selection = { mode: "default", name: null };
-    try {
-      if (proxyEl && typeof parseProxySelection === "function") {
-        selection = parseProxySelection(proxyEl.value, "default");
-      }
-    } catch (e) { /* keep default */ }
+    var dialog = document.getElementById("dlg-profile");
+    if (!host || !dialog.open) return;
+    var seq = ++consistencyPreviewSeq;
+    var formSeq = newProfileFormSeq;
+    function current() { return seq === consistencyPreviewSeq && formSeq === newProfileFormSeq && dialog.open; }
+    function note(text) { return '<p class="field-note-tight">' + esc(text) + '</p>'; }
+    host.style.display = "";
+    if (document.getElementById("new-agent-browser-fingerprint-mode").value === "off") {
+      host.innerHTML = note(t("profile.new.mode.help", "Off disables managed identity overrides and retains the stored values. It is not an unmodified-browser or scheduling baseline."));
+      return;
+    }
+    var selection = parseProxySelection(document.getElementById("new-profile-proxy").value, "default");
     var params = {
-      timezone: (document.getElementById("new-agent-browser-timezone") || {}).value || null,
-      locale: (document.getElementById("new-agent-browser-locale") || {}).value || null,
-      platform: (document.getElementById("new-agent-browser-platform") || {}).value || undefined,
+      timezone: document.getElementById("new-agent-browser-timezone").value || null,
+      locale: document.getElementById("new-agent-browser-locale").value || null,
+      platform: document.getElementById("new-agent-browser-platform").value || undefined,
       proxyMode: selection.mode || "default",
       proxyName: selection.name || null,
     };
-    // Do not preview a fabricated Windows identity while the host read is pending.
-    if ((!params.timezone && !params.locale) || !params.platform) { host.style.display = "none"; host.innerHTML = ""; return; }
+    var intro = note(t("profile.consistency.cached-help", "Draft checks use stored fields and any cached proxy candidate, not a fresh exit observation. Live alignment has not been checked."));
+    if (!params.timezone || !params.locale) {
+      intro = note(t("profile.identity.auto-help", "Auto timezone / locale resolve at launch in Managed mode; not yet checked. Explicit values are kept. Cached proxy data is only a candidate, not proof of live alignment.")) + intro;
+    }
+    host.innerHTML = intro;
+    // Null is Auto, not an identity to certify. Do not fabricate an OS while
+    // host metadata is pending or turn an empty cached-only result into green.
+    if ((!params.timezone && !params.locale) || !params.platform) return;
+    function unavailable() {
+      if (current()) host.innerHTML = intro + note(t("profile.consistency.unavailable", "Preview unavailable; live alignment is still not checked."));
+    }
     api.browser.consistencyPreview(params).then(function (r) {
+      if (!current()) return;
+      if (!r || r.error || r.ok === false && !(r.blockers || []).length) { unavailable(); return; }
       var items = [];
-      if (r) {
-        (r.warnings || []).forEach(function (w) { items.push({ level: "warn", text: w.message || w.code }); });
-        (r.blockers || []).forEach(function (b) { items.push({ level: "block", text: b.message || b.code }); });
-      }
-      if (!items.length) { host.style.display = "none"; host.innerHTML = ""; return; }
-      host.innerHTML = items.map(function (it) {
-        var color = it.level === "block" ? "var(--danger)" : "var(--warning)";
-        var bg = it.level === "block" ? "var(--danger-bg)" : "var(--warning-bg)";
-        return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:6px;padding:6px 8px;margin-top:4px;font-size:11px;">' +
-          (it.level === "block" ? icon("close", 12) : icon("alert", 12)) + " " + esc(it.text) + '</div>';
+      (r.warnings || []).forEach(function (w) { items.push({ level: "warn", text: w.message || w.code }); });
+      (r.blockers || []).forEach(function (b) { items.push({ level: "block", text: b.message || b.code }); });
+      host.innerHTML = intro + items.map(function (it) {
+        return '<p class="field-note-tight ' + (it.level === "block" ? "health-text-poor" : "health-text-watch") + '">' +
+          (it.level === "block" ? icon("close", 12) : icon("alert", 12)) + " " + esc(it.text) + '</p>';
       }).join("");
-      host.style.display = "";
-    }).catch(function () { /* preview is best effort */ });
+    }).catch(unavailable);
   },
 
   newProfile: function () {
@@ -591,7 +631,7 @@
         if (adv && adv.open) adv.open = false; // RoxyBrowser 4.0.3-style: basic fields first, advanced collapsed
         var host = document.getElementById("new-profile-consistency");
         if (host) { host.style.display = "none"; host.innerHTML = ""; }
-        ["new-profile-proxy", "new-agent-browser-timezone", "new-agent-browser-locale", "new-agent-browser-platform"].forEach(function (id) {
+        ["new-profile-proxy", "new-agent-browser-timezone", "new-agent-browser-locale", "new-agent-browser-platform", "new-agent-browser-fingerprint-mode"].forEach(function (id) {
           var el = document.getElementById(id);
           if (el && !el.dataset.consistencyBound) {
             el.dataset.consistencyBound = "1";
@@ -599,6 +639,7 @@
           }
         });
         document.getElementById("dlg-profile").showModal();
+        agentBrowser.runConsistencyPreview();
       },
 
   quickCreateProfile: function () {
@@ -616,20 +657,17 @@
 
   profileBrowserChanged: function() {
         var browser = (document.getElementById("new-profile-browser") || {}).value || "chromium";
-        // R143: the "chrome options" panel was replaced by
-        // #new-profile-agent-browser-opts; the guarded lookup left behind here
-        // was a no-op that only made the function look like it still had two
-        // panels to toggle.
-        var browserOptions = document.getElementById("new-profile-agent-browser-opts");
         var firefoxOpts = document.getElementById("new-profile-firefox-opts");
         var isFirefox = browser === "firefox";
-        if (browserOptions) browserOptions.style.display = isFirefox ? "none" : "block";
+        setProfileEngineOptions("dlg-profile", isFirefox);
+        if (isFirefox && typeof clearFieldErrors === "function") clearFieldErrors("new-agent-browser-");
         if (firefoxOpts) firefoxOpts.style.display = isFirefox ? "block" : "none";
         var browserRow = document.getElementById("new-profile-browser-row");
         if (browserRow) browserRow.style.display = "block";
         var proxyRow = document.getElementById("new-profile-proxy-row");
         if (proxyRow) proxyRow.style.display = "block";
         agentBrowser.loadNewProfileProxies();
+        agentBrowser.scheduleConsistencyPreview();
       },
 
   createProfile: function () {
@@ -639,60 +677,54 @@
 
         if (!name) { toast((window.i18n ? window.i18n.t("toast.profile.name-prompt", "Please enter a name") : "Please enter a name"), "error"); return; }
 
-        var browserPlatform = document.getElementById("new-agent-browser-platform").value || undefined;
-        var fingerprintMode = document.getElementById("new-agent-browser-fingerprint-mode").value || "managed";
-        var browserVersion = document.getElementById("new-agent-browser-browser-version").value || null;
-        var allowThirdPartyCookies = document.getElementById("new-agent-browser-allow-third-party-cookies").checked;
-        var drm = document.getElementById("new-agent-browser-drm").checked;
+        var isFirefox = document.getElementById("new-profile-browser").value === "firefox";
         var seedRaw = document.getElementById("new-agent-browser-seed").value.trim();
         var seed = seedRaw ? Number(seedRaw) : undefined;
-        if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
-        var tz = document.getElementById("new-agent-browser-timezone").value || undefined;
-        var loc = document.getElementById("new-agent-browser-locale").value || undefined;
-        var webrtcMode = document.getElementById("new-agent-browser-webrtc-mode").value || "auto";
-        var webrtcIp = document.getElementById("new-agent-browser-webrtc").value.trim() || undefined;
-        var renderScaleMode = document.getElementById("new-agent-browser-render-scale-mode").value || "native";
-        var windowTitlePrefix = document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null;
-        if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = undefined;
-        var hardware, geolocation;
-        // UE-04: validate on submit and point at the offending field instead of
-        // surfacing a technical field name in a toast.
-        var newErrors = validateHardwareFields("new-agent-browser-");
-        if (newErrors.length) {
-          clearFieldErrors("new-agent-browser-");
-          showFieldErrors(newErrors);
-          toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
-          return;
-        }
-        try { hardware = readHardwareFields("new-agent-browser-"); geolocation = readGeolocationFields("new-agent-browser-"); }
-        catch (e) { toast(e.message || String(e), "error"); return; }
-
-        var engine = (document.getElementById("new-profile-browser").value === "firefox") ? "firefox" : undefined;
-        wcall("browser.create", function () { return api.browser.create(Object.assign({
+        if (seed !== undefined && (!Number.isInteger(seed) || seed < 1 || seed > 999999)) { toast(t("toast.invalid-seed", "Invalid seed"), "error"); return; }
+        var options = {
           name: name,
-          engine: engine,
-          fingerprintMode: fingerprintMode,
-          browserVersion: browserVersion,
-          allowThirdPartyCookies: allowThirdPartyCookies,
-          drm: drm,
+          engine: isFirefox ? "firefox" : undefined,
+          fingerprintMode: document.getElementById("new-agent-browser-fingerprint-mode").value || "managed",
           fingerprintSeed: seed,
-          platform: browserPlatform,
-          timezone: tz,
-          locale: loc,
-          webrtcMode: webrtcMode,
-          webrtcIp: webrtcIp,
-          renderScaleMode: renderScaleMode,
+          platform: document.getElementById("new-agent-browser-platform").value || undefined,
+          timezone: document.getElementById("new-agent-browser-timezone").value || null,
+          locale: document.getElementById("new-agent-browser-locale").value || null,
           proxyMode: proxySelection.mode,
-          windowTitlePrefix: windowTitlePrefix,
           proxyName: proxySelection.name,
-          businessPresetId: businessPresetId,
-        }, geolocation, hardware)); }).then(function(r) {
+        };
+        if (!isFirefox) {
+          // Hidden Chromium controls are neither validated nor read for Firefox.
+          var newErrors = validateHardwareFields("new-agent-browser-");
+          if (newErrors.length) {
+            clearFieldErrors("new-agent-browser-");
+            showFieldErrors(newErrors);
+            toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
+            return;
+          }
+          var webrtcMode = document.getElementById("new-agent-browser-webrtc-mode").value || "auto";
+          try {
+            Object.assign(options, readHardwareFields("new-agent-browser-"), readGeolocationFields("new-agent-browser-"), {
+              browserVersion: document.getElementById("new-agent-browser-browser-version").value || null,
+              allowThirdPartyCookies: document.getElementById("new-agent-browser-allow-third-party-cookies").checked,
+              drm: document.getElementById("new-agent-browser-drm").checked,
+              webrtcMode: webrtcMode,
+              webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? undefined : document.getElementById("new-agent-browser-webrtc").value.trim() || undefined,
+              renderScaleMode: document.getElementById("new-agent-browser-render-scale-mode").value || "native",
+              windowTitlePrefix: document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null,
+              // Firefox takes only the supported common preset prefill. The
+              // current server-side preset expansion would reintroduce hidden
+              // geo/WebRTC fields and replace intentional null Auto values.
+              businessPresetId: businessPresetId,
+            });
+          } catch (e) { toast(e.message || String(e), "error"); return; }
+        }
+        wcall("browser.create", function () { return api.browser.create(options); }).then(function(r) {
           // Sale-90/92: trial expiry / profile cap opens the paywall dialog
           // instead of closing the form with a misleading success toast.
           if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
           if (!r || r.success === false || !r.dirId) { toast(profileErrorMessage((r && r.error) || t("toast.profile.create-failed", "Profile creation failed")), "error"); return; }
           document.getElementById("dlg-profile").close();
-          toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
+          toast(t("toast.profile.created", "Browser profile created!"), "success");
           // UI R3: after create, land on the new card (scroll + highlight)
           // instead of leaving the user to hunt for it in a long list.
           var newId = r && r.dirId;
@@ -1326,6 +1358,18 @@
     return t("profile.health.days-ago", "{n}d ago").replace("{n}", Math.floor(hours / 24));
   }
 
+  function healthVerdict(entry) {
+    if (entry.verdict === "unknown" || entry.kind === "consistency" && entry.verdict === "pass") {
+      // Older cached-only checks also lack live alignment evidence.
+      return { key: "profile.health.verdict-unknown", fb: "Not verified", color: "var(--text-muted)" };
+    }
+    return entry.verdict === "risk"
+      ? { key: "profile.health.verdict-risk", fb: "Risk", color: "var(--danger-text)" }
+      : entry.verdict === "warn"
+        ? { key: "profile.health.verdict-warn", fb: "Watch", color: "var(--warning-text)" }
+        : { key: "profile.health.verdict-pass", fb: "Pass", color: "var(--success-text)" };
+  }
+
   // PL-05 (part 2): let the user read back what was checked and when, instead
   // of only seeing the latest verdict on the card.
   function showHealthHistory(dirId) {
@@ -1335,17 +1379,12 @@
       return;
     }
     var rows = list.map(function (entry) {
-      var verdict = entry.verdict === "risk"
-        ? t("profile.health.verdict-risk", "Risk")
-        : entry.verdict === "warn"
-          ? t("profile.health.verdict-warn", "Watch")
-          : t("profile.health.verdict-pass", "Pass");
-      var color = entry.verdict === "risk" ? "var(--danger)" : entry.verdict === "warn" ? "var(--warning)" : "var(--success)";
+      var verdict = healthVerdict(entry);
       var kindLabel = t("profile.health.kind." + entry.kind, entry.kind);
       return '<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:5px 0;">' +
         '<b style="min-width:110px;">' + esc(kindLabel) + "</b>" +
         '<span style="min-width:82px;color:var(--text-muted);">' + esc(relativeTime(entry.at)) + "</span>" +
-        '<b style="min-width:56px;color:' + color + ';">' + esc(verdict) + "</b>" +
+        '<b style="min-width:56px;color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b>" +
         '<span style="color:var(--text-muted);word-break:break-word;">' + esc(entry.detail || "") + "</span>" +
         "</div>";
     }).join("");
@@ -1366,11 +1405,7 @@
          covered the verdict branch — J205 dark shot caught this wrapping). */
       return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);">' + esc(t("profile.health.never", "Not checked yet")) + "</span>";
     }
-    var verdict = last.verdict === "risk"
-      ? { key: "profile.health.verdict-risk", fb: "Risk", color: "var(--danger)" }
-      : last.verdict === "warn"
-        ? { key: "profile.health.verdict-warn", fb: "Watch", color: "var(--warning)" }
-        : { key: "profile.health.verdict-pass", fb: "Pass", color: "var(--success)" };
+    var verdict = healthVerdict(last);
     return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last.detail || "") + '">' +
       esc(t("profile.health.last", "Last check: {when}").replace("{when}", relativeTime(last.at))) +
       ' · <b style="color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b></span>";
@@ -1595,51 +1630,48 @@
   agentBrowser.saveBrowserMeta = function() {
     var dirId = document.getElementById("agent-browser-meta-dir-id").value;
     var name = document.getElementById("agent-browser-meta-name").value.trim();
-    var fingerprintMode = document.getElementById("agent-browser-meta-fingerprint-mode").value || "managed";
-    var browserVersion = document.getElementById("agent-browser-meta-browser-version").value || null;
-    var allowThirdPartyCookies = document.getElementById("agent-browser-meta-allow-third-party-cookies").checked;
-    var drm = document.getElementById("agent-browser-meta-drm").checked;
+    var isFirefox = document.getElementById("agent-browser-meta-engine").value === "firefox";
     var seed = Number(document.getElementById("agent-browser-meta-seed").value);
-    var platform = document.getElementById("agent-browser-meta-platform").value;
-    var timezone = document.getElementById("agent-browser-meta-timezone").value || null;
-    var locale = document.getElementById("agent-browser-meta-locale").value || null;
-    var webrtcMode = document.getElementById("agent-browser-meta-webrtc-mode").value || "auto";
-    var webrtcIp = document.getElementById("agent-browser-meta-webrtc").value.trim() || null;
-    var appUrl = document.getElementById("agent-browser-meta-app-url").value.trim() || null;
-    var windowTitlePrefix;
-    if (document.getElementById("agent-browser-meta-window-title-enabled").checked) {
-      windowTitlePrefix = document.getElementById("agent-browser-meta-window-title-prefix").value.trim() || "";
-    } else {
-      windowTitlePrefix = null;
-    }
-    if (webrtcMode === "real" || webrtcMode === "disable") webrtcIp = null;
+    if (!Number.isInteger(seed) || seed < 1 || seed > 999999) { toast(t("toast.invalid-seed", "Invalid seed"), "error"); return; }
+    if (!name) { toast(t("toast.name-required", "Name required"), "error"); return; }
     var proxySelection = parseProxySelection(document.getElementById("agent-browser-meta-proxy").value, "none");
-    var hardware, geolocation;
-    // UE-04: field-level validation on the edit form too.
-    var metaErrors = validateHardwareFields("agent-browser-meta-");
-    if (metaErrors.length) {
-      clearFieldErrors("agent-browser-meta-");
-      showFieldErrors(metaErrors);
-      toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
-      return;
+    var meta = {
+      name: name,
+      fingerprintMode: document.getElementById("agent-browser-meta-fingerprint-mode").value || "managed",
+      fingerprintSeed: seed,
+      platform: document.getElementById("agent-browser-meta-platform").value,
+      timezone: document.getElementById("agent-browser-meta-timezone").value || null,
+      locale: document.getElementById("agent-browser-meta-locale").value || null,
+      proxyMode: proxySelection.mode,
+      proxyName: proxySelection.name,
+    };
+    if (!isFirefox) {
+      var metaErrors = validateHardwareFields("agent-browser-meta-");
+      if (metaErrors.length) {
+        clearFieldErrors("agent-browser-meta-");
+        showFieldErrors(metaErrors);
+        toast(t("toast.form.invalid", "Please fix the highlighted fields"), "error");
+        return;
+      }
+      var webrtcMode = document.getElementById("agent-browser-meta-webrtc-mode").value || "auto";
+      try {
+        Object.assign(meta, readHardwareFields("agent-browser-meta-"), readGeolocationFields("agent-browser-meta-"), {
+          browserVersion: document.getElementById("agent-browser-meta-browser-version").value || null,
+          allowThirdPartyCookies: document.getElementById("agent-browser-meta-allow-third-party-cookies").checked,
+          drm: document.getElementById("agent-browser-meta-drm").checked,
+          webrtcMode: webrtcMode,
+          webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : document.getElementById("agent-browser-meta-webrtc").value.trim() || null,
+          renderScaleMode: document.getElementById("agent-browser-meta-render-scale-mode").value === "strict" ? "strict" : "native",
+          appUrl: document.getElementById("agent-browser-meta-app-url").value.trim() || null,
+          windowTitlePrefix: document.getElementById("agent-browser-meta-window-title-enabled").checked ? document.getElementById("agent-browser-meta-window-title-prefix").value.trim() || "" : null,
+        });
+      } catch (e) { toast(e.message || String(e), "error"); return; }
     }
-    try { hardware = readHardwareFields("agent-browser-meta-"); geolocation = readGeolocationFields("agent-browser-meta-"); }
-    catch (e) { toast(e.message || String(e), "error"); return; }
+    // Firefox's existing version pin and other explicit identity metadata are
+    // deliberately omitted from this patch, not cleared by hidden controls.
     document.getElementById("dlg-agent-browser-seed").close();
-    if (!Number.isInteger(seed) || seed < 1 || seed > 999999) { toast((window.i18n ? window.i18n.t("toast.invalid-seed", "Invalid seed") : "Invalid seed"), "error"); return; }
-    if (!name) { toast((window.i18n ? window.i18n.t("toast.name-required", "Name required") : "Name required"), "error"); return; }
     var promises = [];
-    promises.push(wcall("browser.setMeta", function () { return api.browser.setMeta(dirId, Object.assign({
-      name: name, fingerprintMode: fingerprintMode, browserVersion: browserVersion,
-      allowThirdPartyCookies: allowThirdPartyCookies,
-      drm: drm,
-      fingerprintSeed: seed, platform: platform,
-      timezone: timezone, locale: locale, webrtcMode: webrtcMode, webrtcIp: webrtcIp,
-      renderScaleMode: document.getElementById("agent-browser-meta-render-scale-mode").value === "strict" ? "strict" : "native",
-      proxyMode: proxySelection.mode, proxyName: proxySelection.name,
-      appUrl: appUrl,
-      windowTitlePrefix: windowTitlePrefix
-    }, geolocation, hardware)); }));
+    promises.push(wcall("browser.setMeta", function () { return api.browser.setMeta(dirId, meta); }));
     Promise.all(promises).then(function(r) {
       if (r[0] && r[0].success) { toast((window.i18n ? window.i18n.t("toast.profile.saved", "Profile saved") : "Profile saved"), "success"); loadProfiles(); }
       else toast(profileErrorMessage((r[0] && r[0].error) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save")), "error");
@@ -1723,7 +1755,7 @@
           proxyName: cp.proxyName || null,
           syncedAt: cp.syncedAt || null,
           syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
-          fingerprint: { browser: cp.engine || "chromium", version: cp.version, mode: cp.engine === "firefox" ? "off" : (cp.fingerprintMode || "managed"), browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
+          fingerprint: { browser: cp.engine || "chromium", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
           hardwareConcurrency: cp.hardwareConcurrency || null,
@@ -1838,20 +1870,24 @@
 
         var isFirefox = fp.browser === "firefox" || p.engine === "firefox";
         var browserIcon = icon(isFirefox ? "firefox" : "browser", 12);
-        var browserName = isFirefox ? t("profile.card.firefox-stock", "Firefox (stock)") : t("profile.card.chromium", "Managed Chromium");
-        var fingerprintLabel = (isFirefox || fp.mode === "off")
-          ? (isFirefox ? t("profile.card.firefox-passthrough", "Firefox pass-through") : t("profile.card.passthrough", "Pass-through"))
-          // R12: 🎲 rendered as tofu under CJK font fallback — plain # is stable.
-          : platformIcon(platform) + " #" + (fp.seed || "?");
+        var browserName = isFirefox ? "Firefox" : t("profile.card.chromium", "Managed Chromium");
+        var fingerprintLabel = fp.mode === "off"
+          ? t("profile.card.passthrough", "Off")
+          : (isFirefox ? t("profile.new.mode.managed", "Managed identity") : platformIcon(platform)) + " #" + (fp.seed || "?");
         var hardware = { gpuRenderer: p.gpuRenderer, hardwareConcurrency: p.hardwareConcurrency, deviceMemory: p.deviceMemory, screenWidth: p.screenWidth, screenHeight: p.screenHeight };
         var fpCompleteness = fingerprintCompleteness(p);
-        var identityStr = (isFirefox || fp.mode === "off")
-          ? (isFirefox ? t("profile.card.firefox-host-identity", "Native Firefox host identity") : t("profile.card.host-identity", "Native host identity"))
-          // R146: webrtcMode is a stored enum (auto/altered/real/disable) and was
-          // interpolated raw, so the zh card read "RTC auto". Name each value.
-          : (fp.timezone || t("profile.card.auto-tz", "auto tz")) + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · RTC " + esc(webrtcModeLabel(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto")));
-        if (fp.mode !== "off" && !isFirefox && fp.webrtcIp) identityStr += " · " + esc(fp.webrtcIp);
-        var fingerprintTitle = (fp.mode === "off" ? t("profile.card.real-machine", "Real machine pass-through (Firefox: stock identity)") : t("profile.card.seed-title", "Seed ") + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || t("profile.card.auto-locale", "auto locale")) + " · " + (fp.timezone || t("profile.card.auto-timezone", "auto timezone")) + " · " + hardwareSummary(hardware) + " · " + t("profile.card.completeness", "completeness ") + fpCompleteness + "%") + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
+        var identityStr = fp.mode === "off"
+          ? t("profile.card.identity-off", "Managed identity disabled")
+          : (fp.timezone || t("profile.card.auto-tz", "Auto TZ (at launch)")) + " · " + (fp.locale || t("profile.card.auto-locale", "Auto locale (at launch)"));
+        if (fp.mode !== "off" && !isFirefox) {
+          identityStr += " · RTC " + webrtcModeLabel(fp.webrtcMode || (fp.webrtcIp ? "altered" : "auto"));
+          if (fp.webrtcIp) identityStr += " · " + fp.webrtcIp;
+        }
+        var managedTitle = t("profile.card.seed-title", "Seed ") + (fp.seed || "?") + " · " + osName + " · " + (fp.locale || t("profile.card.auto-locale", "Auto locale (at launch)")) + " · " + (fp.timezone || t("profile.card.auto-timezone", "Auto timezone (at launch)"));
+        managedTitle += isFirefox
+          ? " · " + t("profile.card.firefox-managed", "Supported identity settings; native/preload coverage depends on the installed engine, not full capability parity")
+          : " · " + hardwareSummary(hardware) + " · " + t("profile.card.completeness", "completeness ") + fpCompleteness + "%";
+        var fingerprintTitle = (fp.mode === "off" ? t("profile.card.real-machine", "Managed identity disabled; browser startup policies still apply") : managedTitle) + " · " + (isFirefox ? "Firefox " : "Chromium ") + (fp.browserVersion || fp.version || "auto");
         // ── Review item UE-01: four 9px check buttons made the card
         // unreadable. They collapse into one labelled control; every check is
         // local except the last one, which is an explicit opt-in (TE-04).
@@ -1868,9 +1904,9 @@
           '</select>';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color: var(--warning-text);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">' + icon("lock", 11) + ' ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
-        var drmBadge = p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">' + icon("play", 11) + ' DRM</span>' : '';
+        var drmBadge = !isFirefox && p.drm ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.drm', 'Capability: Widevine/DRM enabled')) + '">' + icon("play", 11) + ' DRM</span>' : '';
         var appBadge = p.appUrl ? '<span class="status-badge badge-capability" title="' + escAttr(t('profile.badge.app', 'Capability: Web App {url}').replace('{url}', p.appUrl)) + '">' + icon("monitor", 11) + ' App</span>' : '';
-        var engineBadge = isFirefox ? '<span class="status-badge badge-capability chip-firefox" title="' + escAttr(t('profile.badge.firefox', 'Capability: Firefox engine (pass-through identity)')) + '">' + icon("firefox", 11) + ' Firefox</span>' : '';
+        var engineBadge = isFirefox ? '<span class="status-badge badge-capability chip-firefox" title="' + escAttr(t('profile.badge.firefox', 'Firefox engine; identity mode is shown separately')) + '">' + icon("firefox", 11) + ' Firefox</span>' : '';
         // ── Review item UE-06: sync moves into the governance tier so the
         // three status tiers are visually distinct (lifecycle / governance /
         // capability) instead of five equal-weight badges.
@@ -1922,7 +1958,7 @@
           '<div class="info-row"><span>' + esc(t('profile.row.modified', 'Modified')) + '</span><span class="num profile-modified-time" data-modified-at="' + escAttr(p.lastModified || "") + '" title="' + escAttr(absDate) + '">' + esc(absDate || "?") + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.fingerprint', 'Fingerprint')) + '</span><span title="' + escAttr(fingerprintTitle) + '">' + esc(fingerprintLabel) + '</span></div>' +
           '<div class="info-row"><span>' + esc(t('profile.row.identity', 'Identity')) + '</span><span title="' + escAttr(identityStr) + '">' + esc(identityStr) + '</span></div>' +
-          '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' +
+          (!isFirefox ? '<div class="info-row"><span>' + esc(t('profile.row.hardware', 'Hardware')) + '</span><span title="' + escAttr(hardwareSummary(hardware)) + '">' + esc(hardwareSummary(hardware)) + '</span></div>' : '') +
           '<div class="info-row info-row-health"><span>' + esc(t('profile.row.health', 'Health')) + '</span><span>' + healthSelect + ' ' + lastHealthHtml(p.dirId) + '</span></div>' +
           ((p.tags || []).length ? '<div class="info-row info-row-tags"><span>' + esc(t('profile.row.tags', 'Tags')) + '</span><span class="tag-list">' + tagHtml + '</span></div>' : '') +
           '</div>' +
@@ -2280,15 +2316,19 @@
       return api.browser.consistencyCheck(dirId);
     }, { kind: "detect" }).then(function (r) {
       releaseDetectSlot(dirId);
-      if (!r) { toast(t("toast.fp.consistency-failed", "Alignment check failed"), "error"); return; }
+      if (!r || r.error || r.ok === false && !(r.blockers || []).length) { toast(t("toast.fp.consistency-failed", "Alignment check failed"), "error"); return; }
       var blockers = r.blockers || [];
       var warnings = r.warnings || [];
+      // This endpoint checks saved fields and cached proxy metadata, not the
+      // effective launched identity. Empty findings (including Auto/null or
+      // Off) cannot certify live alignment or earn a green health PASS.
+      var unverified = t("toast.fp.consistency-unverified", "No conflicts found in stored/cached fields; live alignment is not verified.");
       recordHealthResult(dirId, "consistency", {
-        verdict: blockers.length ? "risk" : warnings.length ? "warn" : "pass",
-        detail: blockers.concat(warnings).map(function (f) { return f.code || f.message; }).slice(0, 6).join(", "),
+        verdict: blockers.length ? "risk" : warnings.length ? "warn" : "unknown",
+        detail: blockers.concat(warnings).map(function (f) { return f.code || f.message; }).slice(0, 6).join(", ") || unverified,
       });
       if (!blockers.length && !warnings.length) {
-        toast(t("toast.fp.consistency-pass", "4-field alignment looks good (IP · timezone · locale · ASN)"), "success");
+        toast(unverified, "info");
       } else {
         var lines = blockers.concat(warnings).map(function (f) {
           return (f.severity === "blocker" ? icon("close", 12) : icon("alert", 12)) + " " + (f.message || f.code);

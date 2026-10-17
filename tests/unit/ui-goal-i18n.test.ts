@@ -44,6 +44,28 @@ const TRANSLATIONS = [
   ["profile.gpu.scope", "Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.", "Intel、Rosetta、架构未知及其他 Chromium 平台保留原生 GPU 身份，显式覆盖会被拒绝启动。关闭指纹身份时保持原生；Firefox 不变。WebGPU、GPU 能力和实际绘制仍原生。可编辑不代表可生效，由主进程在启动时权威校验。"],
   ["launch.gpu-unsupported", "This explicit WebGL request is unsupported. Managed overrides require a native ARM64 macOS main process, selected ARM64 Chromium and a matching platform persona. Use a supported tuple or clear gpuVendor/gpuRenderer to keep native GPU identity. Saved metadata is unchanged; WebGPU and GPU capabilities remain native.", "此显式 WebGL 请求不受支持。托管覆盖要求 macOS 原生 ARM64 主进程、所选 ARM64 Chromium 及匹配的平台画像；请改为受支持组合，或清空 gpuVendor/gpuRenderer，保留原生 GPU 身份。已存元数据未被改写；WebGPU 与 GPU 能力仍原生。"],
   ["profile.meta.flag-rule", "The same seed and settings do not guarantee an identical whole fingerprint.", "相同种子与设置不保证整个指纹完全一致。"],
+  ["profile.meta.title", "Browser Profile", "浏览器配置"],
+  ["profile.new.hint", "Only Name is required. Common identity settings are below; Chromium-only options are under “Advanced configuration”. You can edit saved settings later.", "只需填写名称。下方提供共用身份设置；Chromium 专属选项位于「高级设置」，保存后仍可编辑。"],
+  ["profile.new.firefox-note", "Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.", "Firefox 托管模式应用受支持的身份设置；原生／预载覆盖范围取决于已安装的引擎，不代表完整能力对等。关闭模式停用托管身份覆盖；启动与调度策略仍会生效。"],
+  ["profile.new.tz.auto", "Auto (resolved at launch)", "自动（启动时解析）"],
+  ["profile.new.locale.auto", "Auto (resolved at launch)", "自动（启动时解析）"],
+  ["profile.new.mode.passthrough", "Off (no managed identity)", "关闭（不注入托管身份）"],
+  ["profile.new.mode.help", "Off disables managed identity overrides and retains the stored values. It is not an unmodified-browser or scheduling baseline.", "关闭模式会停用托管身份覆盖并保留已存字段；它不等于未经修改的浏览器或调度基线。"],
+  ["profile.new.mode.help.edit", "Off disables managed identity overrides; saved fields are retained for switching back. It does not restore unmodified browser startup or scheduling policies.", "关闭模式会停用托管身份覆盖，保留已存字段以便切回；不会恢复原版浏览器的启动或调度策略。"],
+  ["profile.identity.auto-help", "Auto timezone / locale resolve at launch in Managed mode; not yet checked. Explicit values are kept. Cached proxy data is only a candidate, not proof of live alignment.", "自动时区／语言在托管模式启动时解析，目前尚未检查。显式值会保留；代理缓存仅是候选，不证明实时出口已对齐。"],
+  ["profile.consistency.cached-help", "Draft checks use stored fields and any cached proxy candidate, not a fresh exit observation. Live alignment has not been checked.", "草稿检查仅使用已存字段及可能存在的代理缓存候选，不会获取新鲜出口观测。尚未检查实时对齐。"],
+  ["profile.consistency.unavailable", "Preview unavailable; live alignment is still not checked.", "预览暂不可用；实时对齐仍未检查。"],
+  ["profile.health.verdict-unknown", "Not verified", "尚未验证"],
+  ["profile.badge.firefox", "Firefox engine; identity mode is shown separately", "Firefox 引擎；身份模式另行显示"],
+  ["profile.card.firefox-managed", "Supported identity settings; native/preload coverage depends on the installed engine, not full capability parity", "受支持的身份设置；原生／预载覆盖取决于已安装引擎，非完整能力对等"],
+  ["profile.card.passthrough", "Off", "关闭"],
+  ["profile.card.identity-off", "Managed identity disabled", "托管身份已关闭"],
+  ["profile.card.auto-tz", "Auto TZ (at launch)", "自动时区（启动时解析）"],
+  ["profile.card.auto-timezone", "Auto timezone (at launch)", "自动时区（启动时解析）"],
+  ["profile.card.auto-locale", "Auto locale (at launch)", "自动语言（启动时解析）"],
+  ["profile.card.real-machine", "Managed identity disabled; browser startup policies still apply", "托管身份已关闭；浏览器启动策略仍会生效"],
+  ["toast.fp.consistency-unverified", "No conflicts found in stored/cached fields; live alignment is not verified.", "已存／缓存字段未发现冲突；尚未验证实时出口对齐。"],
+  ["toast.profile.created", "Browser profile created!", "已创建浏览器配置！"],
 ] as const;
 
 type TextNode = { nodeType: 3; textContent: string };
@@ -165,6 +187,28 @@ describe("UI goal effective i18n", () => {
     expect(profiles).toContain(`t("launch.gpu-unsupported", ${JSON.stringify(unsupported[1])})`);
     const mutant = injectAfterMerges(SOURCE, '  dict["zh-CN"]["profile.gpu.scope"] = ' + JSON.stringify(bundles["en-US"]["profile.gpu.scope"]) + ';');
     expect(() => validateTranslations(mutant)).toThrow(/zh-CN: effective value for profile.gpu.scope/);
+  });
+
+  it("keeps Firefox/common identity copy unique after all merges and preserves icon-host spans", () => {
+    const keys = ["profile.new.firefox-note", "profile.new.tz.auto", "profile.new.locale.auto", "profile.new.mode.passthrough", "profile.new.mode.help", "profile.new.mode.help.edit", "profile.identity.auto-help", "profile.consistency.cached-help", "profile.consistency.unavailable", "profile.health.verdict-unknown", "profile.card.firefox-managed", "profile.card.identity-off", "toast.fp.consistency-unverified"];
+    const literals = [...SOURCE.matchAll(/"([\w.-]+)"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
+    for (const key of keys) {
+      const entry = TRANSLATIONS.find(([candidate]) => candidate === key)!;
+      expect(literals.filter(match => match[1] === key).map(match => JSON.parse(match[2])).sort(), key).toEqual([entry[1], entry[2]].sort());
+    }
+    for (const key of ["profile.new.firefox-note", "profile.new.mode.help", "profile.new.mode.help.edit", "profile.identity.auto-help"]) {
+      expect(html).toContain(`data-i18n="${key}">${TRANSLATIONS.find(([candidate]) => candidate === key)![1]}<`);
+    }
+    for (const id of ["new-profile-firefox-opts", "agent-browser-meta-firefox-note"]) {
+      expect(html).toMatch(new RegExp(`id="${id}"[^>]*data-icon="firefox"><span data-i18n="profile.new.firefox-note">`));
+    }
+    expect(html).not.toContain("Auto (match proxy exit IP)");
+    const profiles = fs.readFileSync(path.join(ROOT, "src/renderer/js/app/profiles.js"), "utf8");
+    const firefoxCardCopy = TRANSLATIONS.find(([key]) => key === "profile.card.firefox-managed")![1];
+    expect(profiles).toContain(`t("profile.card.firefox-managed", ${JSON.stringify(firefoxCardCopy)})`);
+    const mutant = injectAfterMerges(SOURCE, '  dict["zh-CN"]["profile.new.firefox-note"] = ' + JSON.stringify(bundles["en-US"]["profile.new.firefox-note"]) + ';');
+    expect(() => validateTranslations(mutant)).toThrow(/zh-CN: effective value for profile.new.firefox-note/);
   });
 
   it.each(["wizard", "license"])("has own EN/ZH translations for every literal %s call site", module => {

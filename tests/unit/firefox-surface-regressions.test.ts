@@ -2,6 +2,7 @@ import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { buildBrowserFingerprintConfig, type BrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
 import { buildFirefoxFingerprintPreloadScript, buildFirefoxManagedIdentity } from "../../src/main/services/firefox-fingerprint.js";
+import { FIREFOX_NATIVE_CONFIG_PREF } from "../../src/main/services/firefox-native-capabilities.js";
 
 const bootstrap = `
 class Navigator {}
@@ -104,6 +105,76 @@ function worker(settings = config()) {
 function values(context: vm.Context, expression: string) {
   return JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, context));
 }
+
+describe("Firefox resolved geographic identity consumers", () => {
+  for (const [realm, create] of [["Window", world], ["Worker", worker]] as const) {
+    it(`${realm} offset validates native Date receivers before parsing even a zero offset`, () => {
+      const context = create({ ...config(), timezone: "UTC" });
+      const observed = values(context, `(() => {
+        let conversions = 0;
+        const receivers = [0, true, "0", null, undefined,
+          { valueOf() { conversions++; return 0; } },
+          Object.create(Date.prototype), new Proxy(new Date(0), {})];
+        const errors = receivers.map(receiver => {
+          try { return "returned:" + Date.prototype.getTimezoneOffset.call(receiver); }
+          catch (error) { return error.name; }
+        });
+        return { errors, conversions };
+      })()`);
+      expect(observed.errors).toEqual(Array(8).fill("TypeError"));
+      expect(observed.conversions).toBe(0);
+    });
+
+    it(`${realm} offset preserves invalid and cross-realm genuine Dates without valueOf coercion`, () => {
+      const context = create({ ...config(), timezone: "America/Toronto" });
+      context.foreignWinter = vm.runInNewContext("new Date(Date.UTC(2026, 0, 15, 12))");
+      context.foreignSummer = vm.runInNewContext(`(() => {
+        const date = new Date(Date.UTC(2026, 6, 15, 12));
+        date.valueOf = () => { throw new Error("Date offset must not coerce valueOf"); };
+        return date;
+      })()`);
+      context.foreignInvalid = vm.runInNewContext("new Date(NaN)");
+      const observed = values(context, `({
+        localInvalid: Number.isNaN(new Date(NaN).getTimezoneOffset()),
+        foreignInvalid: Number.isNaN(Date.prototype.getTimezoneOffset.call(foreignInvalid)),
+        offsets: [foreignWinter, foreignSummer].map(date => Date.prototype.getTimezoneOffset.call(date))
+      })`);
+      expect(observed).toEqual({ localInvalid: true, foreignInvalid: true, offsets: [300, 240] });
+    });
+  }
+
+  it.each([
+    ["America/Toronto", "en-CA", [300, 240]],
+    ["Europe/Berlin", "de-DE", [-60, -120]],
+    ["Asia/Tokyo", "ja-JP", [-540, -540]],
+    ["Asia/Kathmandu", "ne-NP", [-345, -345]],
+    ["UTC", "en-GB", [0, 0]],
+  ] as const)("carries %s/%s through native prefs and isolated Window, iframe and Worker fixtures", (timezone, locale, offsets) => {
+    const stored = { fingerprintSeed: 25516, platform: "macos" as const, timezone: null, locale: null };
+    const effective = { ...stored, timezone, locale };
+    const bundle = buildFirefoxManagedIdentity(effective, "154.0");
+    const native = JSON.parse(Buffer.from(String(bundle.nativePrefs[FIREFOX_NATIVE_CONFIG_PREF]), "base64url").toString("utf8"));
+    expect(native.timezone).toBe(timezone);
+    expect(native.languages).toEqual(bundle.config.languages);
+    expect(bundle.prefs["intl.accept_languages"]).toBe(bundle.config.languages.join(","));
+    expect(stored).toMatchObject({ timezone: null, locale: null });
+    // These are separate VM realms, not live browser contexts. The exported
+    // launch tests independently verify the child TZ that native Date needs.
+    for (const [realm, context] of [["Window", world(bundle.config)], ["iframe", world(bundle.config)], ["Worker", worker(bundle.config)]] as const) {
+      const observed = values(context, `({
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        languages: Array.from(navigator.languages),
+        offsets: [Date.UTC(2026, 0, 15, 12), Date.UTC(2026, 6, 15, 12)].map(time => new Date(time).getTimezoneOffset()),
+        offsetNames: [Date.UTC(2026, 0, 15, 12), Date.UTC(2026, 6, 15, 12)].map(time => new Intl.DateTimeFormat("ia", { timeZone: ${JSON.stringify(timezone)}, timeZoneName: "shortOffset" }).formatToParts(new Date(time)).find(part => part.type === "timeZoneName").value),
+        epochs: [Date.UTC(2026, 0, 15, 12), Date.UTC(2026, 6, 15, 12)].map(time => new Date(time).getTime())
+      })`);
+      expect(observed.timezone).toBe(timezone);
+      expect(observed.languages).toEqual(native.languages);
+      expect(observed.offsets, `${realm}: ${observed.offsetNames.join(", ")}`).toEqual(offsets);
+      expect(observed.epochs).toEqual([Date.UTC(2026, 0, 15, 12), Date.UTC(2026, 6, 15, 12)]);
+    }
+  });
+});
 
 describe("Firefox default surface regressions from production r6", () => {
   for (const [realm, create] of [["Window", world], ["Worker", worker]] as const) {

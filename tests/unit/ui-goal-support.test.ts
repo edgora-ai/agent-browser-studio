@@ -56,6 +56,7 @@ class El {
   contains(c: El | null): boolean { return this === c || this.children.some(n => n.contains(c)); }
   getAttribute(k: string) { return this.attrs[k] ?? null; }
   setAttribute(k: string, v: unknown) { this.attrs[k] = String(v); }
+  removeAttribute(k: string) { delete this.attrs[k]; }
   listeners: Record<string, Array<(e: any) => void>> = {};
   addEventListener(name: string, fn: (e: any) => void) { (this.listeners[name] ||= []).push(fn); }
   dispatch(name: string) { for (const fn of this.listeners[name] || []) fn({ target: this }); }
@@ -137,7 +138,7 @@ function harness(modules: string[], fullCore = false) {
   };
   const helpers: any = {
     toast: vi.fn(), esc: escape, escAttr: escape, icon: (n: string) => '<svg data-icon="' + n + '"></svg>', fmt: (n: number) => n + ' bytes', shortPath: (s: string) => s,
-    renderBrowserBinaryCard: () => '<div>Fixture binary</div>', updateBrowserStatus: vi.fn(),
+    renderBrowserBinaryCard: () => '<div>Fixture binary</div>', updateBrowserStatus: vi.fn(), scheduleProfilesRefresh: vi.fn(),
     readHardwareFields: () => ({}), writeHardwareFields: vi.fn(), validateHardwareFields: () => [], bindHardwareFieldValidation: vi.fn(),
     parseProxySelection: (s: string) => ({ mode: s || 'default', name: null }), renderProxyOptions: () => '<option value="default">Default</option>', profileProxySelectionValue: () => 'default', proxyDisplayLabel: () => 'Default',
     hardwareSummary: () => 'Fixture hardware', fingerprintCompleteness: () => 100, platformIcon: () => '', getSyncStatus: () => 'never',
@@ -274,6 +275,225 @@ describe('host-aware profile defaults — whole renderer entrypoints', () => {
     expect(message).not.toContain('low-level English refusal');
     if (code === 'host-platform-mismatch') expect(message).toContain('Edit the profile OS');
     expect(h.api.browser.create).not.toHaveBeenCalled(); expect(h.api.browser.setMeta).not.toHaveBeenCalled();
+  });
+});
+
+// These are real renderer entrypoints over parsed production markup, not native
+// Firefox acceptance. Visibility includes hidden ancestors, not only the input.
+function fieldShown(el: El): boolean {
+  for (let node: El | null = el; node; node = node.parentElement) {
+    if (node.style.display === 'none' || 'hidden' in node.attrs) return false;
+    if ((node.tagName === 'DETAILS' || node.tagName === 'DIALOG') && !node.open) return false;
+  }
+  return true;
+}
+
+describe('Firefox managed identity UI', () => {
+  it('shows common managed fields without exposing the Chromium advanced panel', async () => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.el('new-profile-advanced').open = true;
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    for (const suffix of ['fingerprint-mode', 'timezone', 'locale', 'seed']) {
+      expect.soft(fieldShown(h.el('new-agent-browser-' + suffix)), suffix + ' must be reachable for Firefox').toBe(true);
+    }
+    for (const suffix of ['browser-version', 'drm', 'render-scale-mode', 'gpu-renderer', 'device-memory']) {
+      expect.soft(fieldShown(h.el('new-agent-browser-' + suffix)), suffix + ' is Chromium-only').toBe(false);
+    }
+  });
+
+  it('creates Firefox from common values only, not hidden Chromium draft values', async () => {
+    const h = harness(['ipc', 'profiles'], true); h.agent.newProfile(); await flush();
+    const version = h.doc.createElement('option'); version.value = '152.0.1.2';
+    h.el('new-agent-browser-browser-version').appendChild(version);
+    h.el('new-agent-browser-browser-version').value = version.value;
+    h.el('new-agent-browser-drm').checked = true;
+    h.el('new-agent-browser-allow-third-party-cookies').checked = true;
+    h.el('new-agent-browser-render-scale-mode').value = 'strict';
+    h.el('new-agent-browser-gpu-renderer').value = 'CHROMIUM-ONLY-DRAFT';
+    h.el('new-agent-browser-device-memory').value = '16';
+    h.el('new-agent-browser-geolocation-mode').value = 'custom';
+    h.el('new-agent-browser-geolocation-latitude').value = '12';
+    h.el('new-agent-browser-geolocation-longitude').value = '34';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-name').value = 'Firefox common identity';
+    h.el('new-agent-browser-seed').value = '43210';
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles';
+    h.el('new-agent-browser-locale').value = 'en-US';
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary; no real profile' });
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    const payload = h.api.browser.create.mock.calls[0][0];
+    expect(payload).toMatchObject({ name: 'Firefox common identity', engine: 'firefox', fingerprintMode: 'managed', fingerprintSeed: 43210, timezone: 'America/Los_Angeles', locale: 'en-US' });
+    for (const key of ['browserVersion', 'drm', 'allowThirdPartyCookies', 'renderScaleMode', 'gpuVendor', 'gpuRenderer', 'deviceMemory', 'hardwareConcurrency', 'screenWidth', 'screenHeight', 'storageQuota', 'taskbarHeight', 'fontsDir', 'geolocationMode', 'geolocationLatitude', 'geolocationLongitude', 'geolocationAccuracy', 'webrtcMode', 'webrtcIp', 'windowTitlePrefix']) {
+      expect.soft(Object.hasOwn(payload, key), 'hidden field leaked: ' + key).toBe(false);
+    }
+  });
+
+  it('renders actual managed/off mode on Firefox and Chromium cards', async () => {
+    const h = harness(['tabs', 'profiles']);
+    h.api.browser.list.mockResolvedValue(['firefox', 'chromium'].flatMap(engine => ['managed', 'off'].map(fingerprintMode => ({
+      dirId: engine + '-' + fingerprintMode, name: engine + '-' + fingerprintMode, engine, fingerprintMode,
+      fingerprintSeed: 43210, timezone: 'America/Los_Angeles', locale: 'en-US', lastModified: 1,
+    }))));
+    h.agent.loadProfiles(); await flush();
+    for (const engine of ['firefox', 'chromium']) {
+      for (const mode of ['managed', 'off']) {
+        const card = h.el('profile-list').querySelector('[data-dir-id="' + engine + '-' + mode + '"]')!;
+        expect(card, engine + '/' + mode).not.toBeNull();
+        const rows = card.querySelectorAll('.info-row');
+        const fingerprint = rows.find(row => row.children[0].textContent === 'Fingerprint')!.children[1];
+        if (mode === 'managed') {
+          expect.soft(fingerprint.textContent, engine).toContain('#43210');
+          expect.soft(fingerprint.textContent, engine).not.toMatch(/pass-through|stock/i);
+          const identity = rows.find(row => row.children[0].textContent === 'Identity')!.children[1].textContent;
+          expect.soft(identity, engine).toContain('America/Los_Angeles'); expect.soft(identity, engine).toContain('en-US');
+        } else {
+          expect.soft(fingerprint.textContent, engine).toMatch(/Off/i);
+          expect.soft(fingerprint.textContent, engine).not.toContain('#43210');
+        }
+      }
+    }
+  });
+});
+
+describe('Firefox identity form lifecycle and unknown preview', () => {
+  it('ignores invalid hidden Chromium constraints but still validates the common seed', async () => {
+    const h = harness(['ipc', 'profiles'], true); h.agent.newProfile(); await flush();
+    h.el('new-profile-name').value = 'Firefox validation';
+    h.el('new-agent-browser-hardware-concurrency').value = '0';
+    h.el('new-agent-browser-geolocation-mode').value = 'custom';
+    h.el('new-agent-browser-geolocation-latitude').value = '999';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-hardware-concurrency').disabled).toBe(true);
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary' });
+    h.agent.createProfile(); await flush(); expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    h.el('new-agent-browser-seed').value = '1000000'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    expect(h.helpers.toast.mock.calls.at(-1)![1]).toBe('error');
+    h.el('new-profile-browser').value = 'chromium'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-hardware-concurrency').disabled).toBe(false);
+    expect(h.el('new-agent-browser-hardware-concurrency').value).toBe('0');
+  });
+
+  it('switches engines and presets without resetting common intent or submitting hidden preset defaults', async () => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.browser.presets.mockResolvedValue([fixtureBusinessPreset('regional')]); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-seed').value = '43210'; h.el('new-agent-browser-fingerprint-mode').value = 'off';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-preset').value = 'regional'; h.agent.presetChanged();
+    expect(h.el('new-agent-browser-timezone').value).toBe('Europe/London'); expect(h.el('new-agent-browser-locale').value).toBe('en-GB');
+    h.el('new-profile-browser').value = 'chromium'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-seed').value).toBe('43210'); expect(h.el('new-agent-browser-fingerprint-mode').value).toBe('off');
+    h.el('new-agent-browser-timezone').value = ''; h.el('new-agent-browser-locale').value = '';
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary' });
+    h.agent.createProfile(); await flush();
+    const payload = h.api.browser.create.mock.calls[0][0];
+    expect(payload).toMatchObject({ engine: 'firefox', fingerprintMode: 'off', fingerprintSeed: 43210, timezone: null, locale: null });
+    // The current preset IPC fills omitted geo/WebRTC and replaces null Auto.
+    // Firefox uses only the supported common prefill, not that server expansion.
+    expect(payload.businessPresetId).toBeUndefined();
+    h.el('dlg-profile').close(); h.agent.newProfile(); await flush();
+    expect(h.el('new-profile-browser').value).toBe('chromium'); expect(h.el('new-profile-preset').value).toBe('');
+    expect(h.el('new-agent-browser-timezone').value).toBe(''); expect(h.el('new-agent-browser-locale').value).toBe('');
+    expect(h.el('new-agent-browser-seed').value).toBe(''); expect(h.el('new-agent-browser-fingerprint-mode').value).toBe('managed');
+  });
+
+  it.each([
+    { timezone: null, locale: null },
+    { timezone: 'America/Toronto', locale: 'en-CA' },
+  ])('edits/saves/reopens Firefox with $timezone / $locale without erasing hidden persisted identity', async identity => {
+    const h = harness(['tabs', 'ipc', 'profiles'], true);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'firefox-ui-roundtrip-'));
+    const rootIdentity = fs.lstatSync(dir); const file = path.join(dir, 'config.json');
+    const original = { dirId: 'fixture-firefox', name: 'Firefox saved identity', engine: 'firefox', fingerprintMode: 'managed', fingerprintSeed: 43210, platform: 'macos', ...identity,
+      browserVersion: '154.0', drm: true, renderScaleMode: 'strict', deviceMemory: 16, gpuRenderer: 'Persisted explicit identity', webrtcMode: 'altered', webrtcIp: '203.0.113.9', windowTitlePrefix: 'kept-prefix', lastModified: 1 };
+    try {
+      fs.writeFileSync(file, JSON.stringify([original]), { flag: 'wx', mode: 0o600 });
+      const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+      h.api.browser.list.mockImplementation(async () => read());
+      h.api.browser.setMeta = vi.fn(async (id: string, patch: any) => {
+        fs.writeFileSync(file, JSON.stringify(read().map((p: any) => p.dirId === id ? { ...p, ...patch } : p)));
+        return { success: true };
+      });
+      // Native selects reject values missing from their option list. Do not let
+      // this VM fixture hide the unlisted persisted timezone/locale regression.
+      for (const suffix of ['timezone', 'locale']) {
+        const el = h.el('agent-browser-meta-' + suffix); let selected = el.value;
+        Object.defineProperty(el, 'value', { get: () => el.querySelectorAll('option').some(o => o.value === selected) ? selected : '', set: v => { selected = String(v); } });
+      }
+      h.agent.editProfile(original.dirId); await flush();
+      expect(h.api.browser.binary).not.toHaveBeenCalled(); // No Chromium build list for a Firefox pin.
+      for (const suffix of ['fingerprint-mode', 'seed', 'timezone', 'locale']) expect(fieldShown(h.el('agent-browser-meta-' + suffix))).toBe(true);
+      for (const suffix of ['browser-version', 'drm', 'render-scale-mode', 'gpu-renderer']) expect(fieldShown(h.el('agent-browser-meta-' + suffix))).toBe(false);
+      expect(h.el('agent-browser-meta-timezone').value).toBe(identity.timezone || ''); expect(h.el('agent-browser-meta-locale').value).toBe(identity.locale || '');
+      // Hidden draft contamination must not overwrite the saved Firefox pin or hardware.
+      h.el('agent-browser-meta-browser-version').value = '152.0.1.2'; h.el('agent-browser-meta-drm').checked = false;
+      h.el('agent-browser-meta-device-memory').value = '0'; h.el('agent-browser-meta-gpu-renderer').value = 'Hidden stale draft';
+      for (const mode of ['off', 'managed']) {
+        h.el('agent-browser-meta-fingerprint-mode').value = mode; h.agent.saveBrowserMeta(); await flush();
+        const saved = read().find((p: any) => p.dirId === original.dirId);
+        expect(saved).toMatchObject({ ...original, fingerprintMode: mode });
+        const patch = h.api.browser.setMeta.mock.calls.at(-1)![1];
+        for (const key of ['browserVersion', 'drm', 'renderScaleMode', 'deviceMemory', 'gpuRenderer', 'webrtcIp', 'windowTitlePrefix']) expect(Object.hasOwn(patch, key), key).toBe(false);
+        h.agent.editProfile(original.dirId); await flush();
+        expect(h.el('agent-browser-meta-fingerprint-mode').value).toBe(mode);
+        expect(h.el('agent-browser-meta-timezone').value).toBe(identity.timezone || ''); expect(h.el('agent-browser-meta-locale').value).toBe(identity.locale || '');
+        expect(read().filter((p: any) => p.name.includes('Firefox saved'))).toHaveLength(1);
+        expect(h.el('profile-list').querySelector('[data-dir-id="fixture-firefox"]')).not.toBeNull();
+      }
+    } finally {
+      const current = fs.lstatSync(dir);
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino) throw new Error('Lost owned Firefox UI fixture');
+      fs.unlinkSync(file); fs.rmdirSync(dir);
+    }
+  });
+
+  it.each([{}, { ok: true, warnings: [], blockers: [] }, { ok: false, warnings: [], blockers: [], error: 'Synthetic unavailable' }])('Auto/no-findings preview is visible and neutral, never verified alignment: %j', async response => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.api.browser.consistencyPreview = vi.fn(async () => response);
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.agent.runConsistencyPreview(); await flush();
+    const preview = h.el('new-profile-consistency'); expect(fieldShown(preview)).toBe(true);
+    expect(preview.textContent).toContain('launch'); expect(preview.textContent).toMatch(/not.*checked/i);
+    expect(preview.querySelector('.health-text-good')).toBeNull();
+    expect(preview.textContent).not.toMatch(/looks good|verified alignment/i);
+    expect(h.el('new-agent-browser-timezone').value).toBe(''); expect(h.el('new-agent-browser-locale').value).toBe('');
+    expect(h.api.browser.consistencyPreview).not.toHaveBeenCalled(); // Null Auto is not an observed identity.
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles'; h.el('new-agent-browser-locale').value = 'en-US';
+    h.agent.runConsistencyPreview(); await flush();
+    expect(h.api.browser.consistencyPreview).toHaveBeenCalledTimes(1);
+    expect(fieldShown(preview)).toBe(true); expect(preview.textContent).toMatch(/cached/i);
+    expect(preview.textContent).toMatch(/not.*checked/i); expect(preview.querySelector('.health-text-good')).toBeNull();
+  });
+
+  it('labels cached-only explicit preview, keeps warnings, and ignores a closed form stale reply', async () => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles'; h.el('new-agent-browser-locale').value = 'en-US';
+    h.api.browser.consistencyPreview = vi.fn(async () => ({ ok: true, warnings: [{ message: 'Cached mismatch <literal>', code: 'proxy-tz' }], blockers: [] }));
+    h.agent.runConsistencyPreview(); await flush();
+    expect(h.el('new-profile-consistency').textContent).toMatch(/cached/i);
+    expect(h.el('new-profile-consistency').textContent).toContain('Cached mismatch <literal>'); expect(h.el('new-profile-consistency').querySelector('literal')).toBeNull();
+    const old = deferred<any>(); h.api.browser.consistencyPreview.mockReturnValueOnce(old.promise); h.agent.runConsistencyPreview();
+    h.el('dlg-profile').close(); h.agent.newProfile(); await flush();
+    old.resolve({ warnings: [{ message: 'OBSOLETE WARNING' }], blockers: [] }); await flush();
+    expect(h.el('new-profile-consistency').textContent).not.toContain('OBSOLETE WARNING');
+  });
+
+  it('empty/null alignment data never records or renders green health PASS', async () => {
+    const h = harness(['tabs', 'profiles']); const storage = new Map<string, string>();
+    h.context.localStorage = { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value) };
+    h.api.browser.list.mockResolvedValue([{ dirId: 'fixture-firefox', name: 'Auto Firefox', engine: 'firefox', fingerprintMode: 'managed', timezone: null, locale: null }]);
+    h.api.browser.consistencyCheck = vi.fn(async () => ({ ok: true, warnings: [], blockers: [] }));
+    storage.set('agent-browser-health-history-v1', JSON.stringify({ 'fixture-firefox': [{ kind: 'consistency', verdict: 'pass', at: 1, detail: 'Legacy cached-only result' }] }));
+    h.agent.loadProfiles(); await flush();
+    expect(h.el('profile-list').querySelector('.health-verdict')!.textContent).not.toContain('Pass');
+    h.agent.runConsistencyCheck('fixture-firefox'); await flush(); h.agent.loadProfiles(); await flush();
+    expect(h.helpers.toast.mock.calls.some((call: any[]) => call[1] === 'success' || call[1] === 'error')).toBe(false);
+    const records = JSON.parse(storage.get('agent-browser-health-history-v1')!);
+    expect(records['fixture-firefox'][0]).toMatchObject({ kind: 'consistency', verdict: 'unknown' });
+    const card = h.el('profile-list').querySelector('[data-dir-id="fixture-firefox"]')!;
+    expect(card.querySelector('.health-verdict')!.textContent).not.toContain('Pass');
   });
 });
 

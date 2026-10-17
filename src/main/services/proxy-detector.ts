@@ -1,4 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
+import { createHmac, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -463,9 +464,19 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
 // launches skip the network round-trip (profile launch speed optimization).
 const DETECT_CACHE_TTL_MS = 10 * 60 * 1000;
 const detectCache = new Map<string, { at: number; result: ProxyDetectionResult }>();
+const detectCacheSecret = randomBytes(32);
+const detectionObservedAt = new WeakMap<ProxyDetectionResult, number>();
 
 function detectCacheKey(config: ProxyConfig): string {
-  return [config.type, String(config.host || ""), String(config.port || ""), String(config.username || "")].join("|");
+  // Credentials can select a different exit; keep neither plaintext nor a
+  // stable, offline-testable credential digest in the cache key.
+  const identity = [config.type, String(config.host || ""), String(config.port || ""), String(config.username || ""), String(config.password || "")];
+  return createHmac("sha256", detectCacheSecret).update(JSON.stringify(identity)).digest("hex");
+}
+
+/** Original successful observation time; reading a cached result never renews it. */
+export function proxyDetectionObservedAt(result: ProxyDetectionResult): number | null {
+  return detectionObservedAt.get(result) ?? null;
 }
 
 function cachedDetection(config: ProxyConfig): ProxyDetectionResult | null {
@@ -480,7 +491,9 @@ function cachedDetection(config: ProxyConfig): ProxyDetectionResult | null {
 
 function rememberDetection(config: ProxyConfig, result: ProxyDetectionResult): void {
   if (!result.success || !result.exitIp) return;
-  detectCache.set(detectCacheKey(config), { at: Date.now(), result });
+  const at = Date.now();
+  detectionObservedAt.set(result, at);
+  detectCache.set(detectCacheKey(config), { at, result });
 }
 
 /** Test-only hooks for the geo-IP detection cache. */

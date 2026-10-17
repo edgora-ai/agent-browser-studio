@@ -7,7 +7,7 @@ const f = vi.hoisted(() => ({
   cfg: {} as any, host: "macos" as "macos" | "windows" | null, lines: [] as string[],
   inspect: vi.fn(), legacy: vi.fn(), proxy: vi.fn(), audit: vi.fn(), release: vi.fn(), lock: vi.fn(),
   spawn: vi.fn(), version: vi.fn(), managedBinary: vi.fn(), fetch: vi.fn(), netCreate: vi.fn(), kill: vi.fn(),
-  proxyProbe: vi.fn(), proxyUrl: vi.fn(), diagnostics: vi.fn(), gpuContext: vi.fn(),
+  proxyProbe: vi.fn(), proxyUrl: vi.fn(), geoDetect: vi.fn(), geoObservedAt: vi.fn(), persistDetection: vi.fn(), diagnostics: vi.fn(), gpuContext: vi.fn(),
   secrets: vi.fn(() => { throw new Error("No secret access allowed"); }), saveConfig: vi.fn(), transact: vi.fn(),
   fs: {
     existsSync: vi.fn(), mkdirSync: vi.fn(), readFileSync: vi.fn(), writeFileSync: vi.fn(),
@@ -15,7 +15,8 @@ const f = vi.hoisted(() => ({
     rmSync: vi.fn(), realpathSync: vi.fn(), lstatSync: vi.fn(), statSync: vi.fn(),
   },
   firefoxBinary: vi.fn(), firefoxSpawn: vi.fn(), firefoxPrefs: vi.fn(),
-  firefoxIdentity: vi.fn(), firefoxManaged: vi.fn(), bidiConnect: vi.fn(), bidiSessions: new Map<number, any>(),
+  firefoxIdentity: vi.fn(), firefoxManaged: vi.fn(), bidiConnect: vi.fn(), bidiPreload: vi.fn(), bidiSessions: new Map<number, any>(),
+  nativeRequested: false, firefoxCapabilities: vi.fn(), consistency: vi.fn(), persona: vi.fn(), captureFingerprint: vi.fn(), cachedDetection: vi.fn(),
   deadPids: new Set<number>(), envRisk: vi.fn(),
 }));
 
@@ -32,8 +33,8 @@ vi.mock("../../src/main/services/browser-platform-policy.js", () => ({ getHostBr
 vi.mock("../../src/main/services/config-manager.js", () => ({
   getConfig: () => f.cfg, getProfilesDir: () => "/virtual/profiles", getAppDataDir: () => "/virtual/state",
   saveConfig: f.saveConfig,
-  resolveProfileProxy: vi.fn(), resolveProfileProxySecret: f.proxy, getProxyDetection: vi.fn(() => null),
-  setProxyDetectionIfCurrent: vi.fn(() => { throw new Error("No proxy cache writes allowed"); }),
+  resolveProfileProxy: vi.fn(), resolveProfileProxySecret: f.proxy, getProxyDetection: f.cachedDetection,
+  setProxyDetectionIfCurrent: f.persistDetection,
   sanitizeAppUrl: (value: unknown) => value || null, getProxyHealthEntry: vi.fn(() => null), assertProfileWritable: vi.fn(),
 }));
 vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) => ({
@@ -53,7 +54,7 @@ vi.mock("../../src/main/services/browser/launch-pipeline.js", () => ({ launchBro
 vi.mock("../../src/main/services/profile-restore-lock.js", () => ({ acquireRestoreLock: f.lock }));
 vi.mock("../../src/main/services/secrets.js", () => ({ decryptSecretOr: f.secrets }));
 vi.mock("../../src/main/services/audit-log.js", () => ({ recordAudit: f.audit }));
-vi.mock("../../src/main/services/consistency-check.js", () => ({ checkProfileConsistency: () => ({ ok: true, warnings: [], blockers: [] }) }));
+vi.mock("../../src/main/services/consistency-check.js", () => ({ checkProfileConsistency: f.consistency }));
 vi.mock("../../src/main/services/drm.js", () => ({ drmLaunchArgs: () => [] }));
 vi.mock("../../src/main/services/extension-repository.js", () => ({ getEnabledRepositoryExtensionPaths: () => [] }));
 vi.mock("../../src/main/services/team.js", () => ({ requireProfileMutation: () => ({ ok: true }) }));
@@ -62,8 +63,8 @@ vi.mock("../../src/main/services/event-bus.js", () => ({ emitEvent: vi.fn() }));
 vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({ cdpCookieService: { applyQueuedImports: vi.fn(async () => 0) } }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: { applyQueuedImports: vi.fn(async () => 0) } }));
 vi.mock("../../src/main/services/fingerprint-baseline.js", () => ({
-  captureFingerprint: vi.fn(), diffFingerprints: () => [], hasRiskyDrift: () => false,
-  summarizeDrift: () => "", checkPersonaConsistency: () => ({ ok: true, mismatches: [] }), mismatchesAsDrift: () => [],
+  captureFingerprint: f.captureFingerprint, diffFingerprints: () => [], hasRiskyDrift: () => false,
+  summarizeDrift: () => "", checkPersonaConsistency: f.persona, mismatchesAsDrift: () => [],
 }));
 vi.mock("../../src/main/services/environment-risk.js", () => ({
   checkEnvironmentRisk: () => ({ ok: true, findings: [] }), checkEnvironmentRiskRuntime: f.envRisk,
@@ -72,8 +73,8 @@ vi.mock("../../src/main/services/environment-risk.js", () => ({
 vi.mock("../../src/main/services/authenticated-socks-bridge.js", () => ({ startAuthenticatedSocksBridge: vi.fn(() => { throw new Error("No bridge allowed"); }) }));
 vi.mock("../../src/main/services/masque-socks-bridge.js", () => ({ startMasqueSocksBridge: vi.fn(() => { throw new Error("No bridge allowed"); }) }));
 vi.mock("../../src/main/services/proxy-detector.js", () => ({
-  buildChromiumProxyUrl: f.proxyUrl, probeProxyPort: f.proxyProbe,
-  proxyDetector: { detect: vi.fn(() => { throw new Error("No proxy/network probe allowed"); }) },
+  buildChromiumProxyUrl: f.proxyUrl, probeProxyPort: f.proxyProbe, proxyDetectionObservedAt: f.geoObservedAt,
+  proxyDetector: { detect: f.geoDetect },
 }));
 vi.mock("../../src/main/services/proxy-health.js", () => ({ recordProxyRotation: vi.fn() }));
 vi.mock("../../src/main/services/native-chromium-manager.js", () => ({
@@ -110,13 +111,14 @@ vi.mock("../../src/main/services/firefox-fingerprint.js", () => ({
   judgeInjectionProbe: () => ({ checked: true, confirmed: true, ambiguous: false, mismatches: [] }), normalizeFirefoxVersion: (value: unknown) => value, shouldBlockInjectionProbe: () => false,
 }));
 vi.mock("../../src/main/services/firefox-native-capabilities.js", () => ({
-  firefoxNativeModeRequested: () => false, readFirefoxNativeCapabilityReportAsync: async () => null,
+  firefoxNativeModeRequested: () => f.nativeRequested, readFirefoxNativeCapabilityReportAsync: f.firefoxCapabilities,
+  FIREFOX_NATIVE_CONFIG_PREF: "agent.browser.fingerprint.config", FIREFOX_NATIVE_REQUIRED_SWITCH: "--agent-browser-native-required",
   getFirefoxNativeSelectionIdentityAsync: f.firefoxIdentity,
   FIREFOX_NATIVE_CONFIG_CAPABILITIES: ["config-v1"], FIREFOX_NATIVE_PARITY_CAPABILITIES: ["parity-v1"],
 }));
 vi.mock("../../src/main/services/bidi-client.js", () => ({
   connectBidi: f.bidiConnect,
-  bidiAddPreloadScript: async () => "unit-preload", bidiCreateContext: async () => "unit-context", bidiCloseContext: vi.fn(), bidiEvaluateInContext: async () => ({}),
+  bidiAddPreloadScript: f.bidiPreload, bidiCreateContext: async () => "unit-context", bidiCloseContext: vi.fn(), bidiEvaluateInContext: async () => ({}),
   registerFirefoxSession: (port: number, conn: any) => f.bidiSessions.set(port, conn),
   dropFirefoxSession: (port: number) => f.bidiSessions.delete(port),
   getRegisteredFirefoxSession: (port: number) => f.bidiSessions.get(port),
@@ -155,6 +157,7 @@ function launchedFixture(profile: BrowserProfileMeta = currentMeta(), gpuContext
 
 function noLaunchEffects() {
   expect(f.proxy).not.toHaveBeenCalled();
+  expect(f.geoDetect).not.toHaveBeenCalled();
   expect(f.secrets).not.toHaveBeenCalled();
   expect(f.spawn).not.toHaveBeenCalled();
   expect(f.firefoxSpawn).not.toHaveBeenCalled();
@@ -201,6 +204,12 @@ beforeEach(() => {
   vi.stubEnv("FIREFOX_BINARY_PATH", "");
   vi.stubEnv("MOZ_DISABLE_CONTENT_SANDBOX", undefined);
   f.envRisk.mockReset().mockResolvedValue({ ok: true, findings: [] });
+  f.consistency.mockReset().mockReturnValue({ ok: true, warnings: [], blockers: [] });
+  f.persona.mockReset().mockReturnValue({ ok: true, mismatches: [] });
+  f.captureFingerprint.mockReset().mockResolvedValue({ timezone: "UTC" });
+  f.nativeRequested = false;
+  f.firefoxCapabilities.mockReset().mockResolvedValue(null);
+  f.bidiPreload.mockReset().mockResolvedValue("unit-preload");
   vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", undefined);
   vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE", undefined);
   vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_MODE", undefined);
@@ -208,6 +217,10 @@ beforeEach(() => {
   f.gpuContext.mockReset().mockReturnValue({ hostPlatform: "darwin", hostArchitecture: "arm64", kernelArchitecture: null });
   f.proxy.mockReturnValue({ mode: "none", name: null, config: null });
   f.proxyProbe.mockImplementation(() => { throw new Error("No proxy/network probe allowed"); });
+  f.geoDetect.mockReset().mockImplementation(() => { throw new Error("No proxy/network probe allowed"); });
+  f.geoObservedAt.mockReset().mockReturnValue(null);
+  f.persistDetection.mockReset().mockImplementation(() => { throw new Error("No proxy cache writes allowed"); });
+  f.cachedDetection.mockReset().mockReturnValue(null);
   f.proxyUrl.mockImplementation((proxy: ProxyConfig) => `${proxy.type}://${proxy.host}:${proxy.port}`);
   f.fs.existsSync.mockImplementation((file) => file === bin || file === "/virtual/firefox-bin");
   f.fs.readFileSync.mockReturnValue("{}");
@@ -813,6 +826,433 @@ describe("spawn binding and retained off/Firefox routes", () => {
     expect(runningProcesses.get(dirId)?.launchProvenance).toBeUndefined();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.secrets).not.toHaveBeenCalled();
+  });
+});
+
+describe("Firefox effective Auto launch identity", () => {
+  const proxy: ProxyConfig = { type: "http", host: "auto-proxy.example.test", port: 8080 };
+  const geo = (timezone = "America/Toronto", countryCode = "CA") => ({
+    success: true, exitIp: "192.0.2.40", country: countryCode, countryCode, timezone,
+    provider: "mock-geo", latencyMs: 2,
+  });
+
+  function autoProxy() {
+    Object.assign(currentMeta(), { engine: "firefox", timezone: null, locale: null, proxyMode: "named", proxyName: "primary" });
+    f.cfg.proxies = { primary: proxy };
+    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.proxy.mockReturnValue({ mode: "named", name: "primary", config: proxy });
+    f.proxyProbe.mockResolvedValue(true);
+    f.geoDetect.mockResolvedValue(geo());
+    f.geoObservedAt.mockReturnValue(1_800_000_000_000);
+    f.persistDetection.mockReturnValue(true);
+  }
+
+  function healthRouting() {
+    autoProxy();
+    f.cfg.proxies = {
+      primary: { ...proxy, fallbacks: ["backup"] },
+      backup: { ...proxy, host: "fallback.example.test" },
+    };
+    f.cfg.proxyHealth = {
+      primary: { risk: "good", consecutiveFailures: 0, lastCheckedAt: 100 },
+      backup: { risk: "good", consecutiveFailures: 0, lastCheckedAt: 100 },
+    };
+    f.proxy.mockImplementation((profileId, snapshot) => {
+      if (!snapshot) throw new Error("This route fixture requires an explicit config snapshot");
+      const meta = snapshot.browserProfiles[profileId];
+      const requested = meta.proxyMode === "default" ? snapshot.defaultProxy : meta.proxyName;
+      const primary = snapshot.proxies[requested];
+      const backup = primary.fallbacks?.find(name => snapshot.proxyHealth[name]?.risk !== "poor");
+      const name = snapshot.proxyHealth[requested]?.risk === "poor" && backup ? backup : requested;
+      return { mode: meta.proxyMode, name, config: { ...snapshot.proxies[name] },
+        rotatedFrom: name === requested ? null : requested };
+    });
+  }
+
+  function pause<T>() {
+    let entered!: () => void, complete!: (value: T) => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    return { ready, wait: () => { entered(); return new Promise<T>(resolve => { complete = resolve; }); },
+      resume: (value: T) => complete(value) };
+  }
+
+  function hostDefaults(timeZone = "Europe/Berlin", locale = "de-DE") {
+    const host = { timeZone, locale };
+    const RealFormatter = Intl.DateTimeFormat;
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation((function(locales, options) {
+      const formatter = new RealFormatter(locales, options);
+      if (locales === undefined && options === undefined) {
+        const actual = formatter.resolvedOptions();
+        formatter.resolvedOptions = () => ({ ...actual, ...host });
+      }
+      return formatter;
+    }) as typeof Intl.DateTimeFormat);
+    return host;
+  }
+
+  async function realIdentity() {
+    const actual = await vi.importActual<typeof import("../../src/main/services/firefox-fingerprint.js")>("../../src/main/services/firefox-fingerprint.js");
+    f.firefoxManaged.mockImplementation(actual.buildFirefoxManagedIdentity);
+  }
+
+  async function launchOwned() {
+    const response = await launchBrowser(dirId);
+    const entry = runningProcesses.get(dirId)!;
+    f.lines = [`${response.pid} /virtual/firefox-bin ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
+    const effects = [f.firefoxSpawn, f.firefoxPrefs, f.bidiConnect, f.bidiPreload, f.persistDetection,
+      f.fs.mkdirSync, f.fs.writeFileSync, f.fs.openSync, f.fs.writeSync, f.fs.renameSync, f.fs.unlinkSync, f.fs.rmSync];
+    const counts = effects.map(effect => effect.mock.calls.length);
+    return { response, entry, unchanged: () => {
+      effects.forEach((effect, index) => expect(effect).toHaveBeenCalledTimes(counts[index]));
+      expect(entry.process.kill).not.toHaveBeenCalled();
+      expect(f.kill.mock.calls.every(call => call[1] === 0)).toBe(true);
+      expect(f.secrets).not.toHaveBeenCalled();
+    } };
+  }
+
+  it("resolves Auto through the actual proxy before constructing Firefox identity and native TZ", async () => {
+    autoProxy();
+    const before = structuredClone(currentMeta());
+    await launchBrowser(dirId);
+    expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA" });
+    expect(f.geoDetect).toHaveBeenCalledExactlyOnceWith(proxy);
+    expect(f.firefoxPrefs.mock.calls[0][1].locale).toBe("en-CA");
+    expect(f.firefoxSpawn.mock.calls[0][2].env.TZ).toBe("America/Toronto");
+    expect(f.envRisk.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA" });
+    expect(currentMeta()).toEqual(before);
+    expect(f.saveConfig).not.toHaveBeenCalled();
+    expect(f.transact).not.toHaveBeenCalled();
+  });
+
+  it("requires restart when unchanged raw Auto intent resolves to a different effective identity", async () => {
+    autoProxy();
+    const response = await launchBrowser(dirId);
+    const entry = runningProcesses.get(dirId)!;
+    f.lines = [`${response.pid} /virtual/firefox-bin ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
+    f.geoDetect.mockResolvedValue(geo("Asia/Tokyo", "JP"));
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    expect(runningProcesses.get(dirId)).toBe(entry);
+    expect(entry.process.kill).not.toHaveBeenCalled();
+    expect(f.firefoxSpawn).toHaveBeenCalledOnce();
+    expect(f.firefoxPrefs).toHaveBeenCalledOnce();
+    expect(f.bidiConnect).toHaveBeenCalledOnce();
+  });
+
+  it.each(["fallback", "native"] as const)("feeds one effective identity to %s config, prefs, child TZ and verification expectations", async route => {
+    autoProxy();
+    await realIdentity();
+    if (route === "native") {
+      f.nativeRequested = true;
+      f.firefoxCapabilities.mockResolvedValue({ capabilities: ["config-v1", "parity-v1"] });
+    }
+    currentMeta().fingerprintBaseline = { timezone: "America/Toronto" } as any;
+    await launchBrowser(dirId);
+    const identity = f.firefoxManaged.mock.results[0].value;
+    const prefs = f.firefoxPrefs.mock.calls[0][1];
+    expect(identity.config).toMatchObject({ timezone: "America/Toronto", languages: ["en-CA", "en"] });
+    expect(identity.nativeConfig).toMatchObject({ timezone: "America/Toronto", languages: ["en-CA", "en"] });
+    expect(prefs.locale).toBe("en-CA");
+    expect(prefs.extraPrefs["intl.accept_languages"]).toBe("en-CA,en");
+    expect(f.firefoxSpawn.mock.calls[0][2].env.TZ).toBe(identity.config.timezone);
+    expect(f.consistency.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA", proxyGeo: { timezone: "America/Toronto", countryCode: "CA" } });
+    expect(f.persona.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto" });
+    expect(f.envRisk.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA" });
+    if (route === "native") {
+      expect(JSON.parse(Buffer.from(prefs.extraPrefs["agent.browser.fingerprint.config"], "base64url").toString("utf8"))).toEqual(identity.nativeConfig);
+      expect(f.bidiPreload).not.toHaveBeenCalled();
+    } else {
+      expect(f.bidiPreload.mock.calls[0][1]).toBe(identity.preloadScript);
+      expect(identity.preloadScript).toContain('"timezone":"America/Toronto"');
+      expect(identity.preloadScript).toContain('"languages":["en-CA","en"]');
+    }
+    expect(currentMeta()).toMatchObject({ timezone: null, locale: null });
+    expect(f.geoDetect).toHaveBeenCalledExactlyOnceWith(proxy);
+  });
+
+  it.each([
+    ["Europe/Paris", null, "Europe/Paris", "en-CA", 1],
+    [null, "fr-FR", "America/Toronto", "fr-FR", 1],
+    ["Europe/Paris", "fr-FR", "Europe/Paris", "fr-FR", 0],
+  ] as const)("keeps explicit timezone %s and locale %s ahead of Auto proxy values", async (timezone, locale, expectedTimezone, expectedLocale, lookups) => {
+    autoProxy();
+    Object.assign(currentMeta(), { timezone, locale });
+    await launchBrowser(dirId);
+    expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: expectedTimezone, locale: expectedLocale });
+    expect(f.firefoxSpawn.mock.calls[0][2].env.TZ).toBe(expectedTimezone);
+    expect(f.firefoxPrefs.mock.calls[0][1].locale).toBe(expectedLocale);
+    expect(f.geoDetect).toHaveBeenCalledTimes(lookups);
+    expect(currentMeta()).toMatchObject({ timezone, locale });
+  });
+
+  it.each([["Mars/Invalid", "en-US"], ["+05:30", "en-US"], ["UTC", "not_a_locale"]])("refuses invalid explicit managed identity %s/%s before Geo or prefs", async (timezone, locale) => {
+    autoProxy();
+    Object.assign(currentMeta(), { timezone, locale });
+    await expect(launchBrowser(dirId)).rejects.toThrow(/Invalid (?:IANA )?(?:timezone|locale)/);
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    expect(f.firefoxPrefs).not.toHaveBeenCalled();
+    expect(f.firefoxSpawn).not.toHaveBeenCalled();
+  });
+
+  it.each(["named", "none"] as const)("keeps off fields dormant with a %s route, on fresh launch and reuse", async route => {
+    autoProxy();
+    Object.assign(currentMeta(), { fingerprintMode: "off", timezone: "inactive/invalid", locale: "inactive_invalid", webrtcMode: "inactive", webrtcIp: "inactive", proxyMode: route });
+    const before = structuredClone(currentMeta());
+    const owned = await launchOwned();
+    expect(f.firefoxManaged).not.toHaveBeenCalled();
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    expect(f.firefoxSpawn.mock.calls[0][2].env).toBeUndefined();
+    expect(f.firefoxPrefs.mock.calls[0][1]).toMatchObject({ fingerprintMode: "off", locale: undefined });
+    expect(f.firefoxPrefs.mock.calls[0][1].extraPrefs).toBeUndefined();
+    expect(f.bidiPreload).not.toHaveBeenCalled();
+    expect(currentMeta()).toEqual(before);
+    Object.assign(currentMeta(), { timezone: "another/invalid", locale: "another_invalid" });
+    expect(await launchBrowser(dirId)).toMatchObject({ pid: owned.response.pid });
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    owned.unchanged();
+  });
+
+  it.each(["none", "unconfigured-default"])("uses documented host defaults without Geo for a %s route", async route => {
+    autoProxy();
+    const host = hostDefaults();
+    currentMeta().proxyMode = route === "none" ? "none" : "default";
+    f.proxy.mockReturnValue({ mode: "none", name: null, config: null });
+    await launchBrowser(dirId);
+    expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: host.timeZone, locale: host.locale });
+    expect(f.firefoxSpawn.mock.calls[0][2].env.TZ).toBe(host.timeZone);
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    expect(f.persistDetection).not.toHaveBeenCalled();
+    expect(f.audit.mock.calls.some(([event]) => event.action === "firefox-identity" && /source=host.*host fallback, proxy alignment unverified/.test(event.detail))).toBe(true);
+    expect(currentMeta()).toMatchObject({ timezone: null, locale: null });
+  });
+
+  it.each(["failed", "throw", "invalid-zone", "offset-zone", "country-without-zone", "invalid-country"])("handles %s Geo per field without using persisted geo or claiming proxy alignment", async failure => {
+    autoProxy();
+    hostDefaults();
+    f.cachedDetection.mockReturnValue({ success: true, timezone: "Pacific/Honolulu", countryCode: "US", detectedAt: 1 });
+    let expectedTimezone = "Europe/Berlin", expectedLocale = "de-DE";
+    if (failure === "failed") f.geoDetect.mockResolvedValue({ ...geo(), success: false, error: "controlled lookup failure" });
+    if (failure === "throw") f.geoDetect.mockRejectedValue(new Error("controlled network failure"));
+    if (failure === "invalid-zone" || failure === "offset-zone") {
+      f.geoDetect.mockResolvedValue(geo(failure === "invalid-zone" ? "Mars/Invalid" : "+05:30", "JP"));
+      expectedLocale = "ja-JP";
+    }
+    if (failure === "country-without-zone") { f.geoDetect.mockResolvedValue(geo("", "US")); expectedLocale = "en-US"; }
+    if (failure === "invalid-country") { f.geoDetect.mockResolvedValue(geo("America/Toronto", "??")); expectedTimezone = "America/Toronto"; }
+    await launchBrowser(dirId);
+    expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: expectedTimezone, locale: expectedLocale });
+    expect(f.firefoxSpawn.mock.calls[0][2].env.TZ).toBe(expectedTimezone);
+    expect(f.firefoxPrefs.mock.calls[0][1].locale).toBe(expectedLocale);
+    expect(f.cachedDetection).not.toHaveBeenCalled();
+    expect(f.audit.mock.calls.some(([event]) => event.action === "firefox-identity" && event.detail.includes("host fallback, proxy alignment unverified"))).toBe(true);
+    expect(currentMeta()).toMatchObject({ timezone: null, locale: null });
+    if (failure === "failed" || failure === "throw") {
+      expect(f.persistDetection).not.toHaveBeenCalled();
+      expect(f.consistency.mock.calls[0][0].proxyGeo).toBeNull();
+    } else if (failure !== "invalid-country") {
+      expect(f.persistDetection.mock.calls[0][2].timezone).toBeNull();
+    }
+  });
+
+  it("uses the health-selected fallback proxy, not the requested primary, for both routing and Geo", async () => {
+    healthRouting();
+    const fallback = { ...proxy, host: "fallback.example.test", port: 8181 };
+    f.cfg.proxies.backup = fallback;
+    f.cfg.proxyHealth.primary = { risk: "poor", consecutiveFailures: 1 };
+    await launchBrowser(dirId);
+    expect(f.proxy.mock.calls.length).toBeGreaterThan(1);
+    for (const [requestedId, snapshot] of f.proxy.mock.calls) {
+      expect(requestedId).toBe(dirId);
+      expect(snapshot).not.toBe(f.cfg);
+      expect(snapshot.proxies.backup).toEqual(fallback);
+    }
+    expect(f.geoDetect).toHaveBeenCalledExactlyOnceWith(fallback);
+    expect(f.firefoxPrefs.mock.calls[0][1].proxy).toEqual(fallback);
+    expect(f.persistDetection.mock.calls[0].slice(0, 2)).toEqual(["backup", fallback]);
+  });
+
+  it("persists the original cached observation time rather than renewing its age at launch", async () => {
+    autoProxy();
+    const result = geo();
+    const observedAt = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(observedAt + 5 * 60_000);
+    f.geoDetect.mockResolvedValue(result);
+    f.geoObservedAt.mockImplementation(value => value === result ? observedAt : null);
+    const owned = await launchOwned();
+    expect(f.geoObservedAt).toHaveBeenCalledExactlyOnceWith(result);
+    expect(f.persistDetection.mock.calls[0][2].detectedAt).toBe(observedAt);
+    expect(f.persistDetection.mock.calls[0][2].detectedAt).not.toBe(Date.now());
+    expect(await launchBrowser(dirId)).toMatchObject({ pid: owned.response.pid });
+    owned.unchanged();
+  });
+
+  it("uses an unobserved success as identity input without inventing a fresh persistence timestamp", async () => {
+    autoProxy();
+    f.geoObservedAt.mockReturnValue(null);
+    await launchBrowser(dirId);
+    expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA" });
+    expect(f.persistDetection).not.toHaveBeenCalled();
+  });
+
+  it("reuses the same semantic Auto result despite changed detection timing and diagnostics", async () => {
+    autoProxy();
+    const owned = await launchOwned();
+    f.geoDetect.mockResolvedValue({ ...geo(), detectedAt: Date.now() + 60000, latencyMs: 99, provider: "other-mock", exitIp: "192.0.2.41" });
+    expect(await launchBrowser(dirId)).toMatchObject({ pid: owned.response.pid });
+    expect(f.geoDetect).toHaveBeenCalledTimes(2);
+    owned.unchanged();
+  });
+
+  it.each(["timezone", "locale"] as const)("refuses changed effective %s without respawn, preference writes or preload replacement", async field => {
+    autoProxy();
+    const owned = await launchOwned();
+    f.geoDetect.mockResolvedValue(field === "timezone" ? geo("America/Vancouver", "CA") : geo("America/Toronto", "US"));
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    expect(runningProcesses.get(dirId)).toBe(owned.entry);
+    owned.unchanged();
+  });
+
+  it.each(["timezone", "locale"] as const)("refuses a changed direct host Auto %s without changing the running instance", async field => {
+    autoProxy();
+    currentMeta().proxyMode = "none";
+    const host = hostDefaults();
+    const owned = await launchOwned();
+    if (field === "timezone") host.timeZone = "Europe/Paris";
+    else host.locale = "fr-FR";
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    owned.unchanged();
+  });
+
+  it.each(["managed", "off"] as const)("binds the actual fallback route even with all %s fields manual or dormant", async mode => {
+    autoProxy();
+    Object.assign(currentMeta(), { fingerprintMode: mode, timezone: "UTC", locale: "en-US" });
+    const fallback = { ...proxy, host: "fallback.example.test" };
+    f.cfg.proxies.primary = { ...proxy, fallbacks: ["backup"] };
+    f.cfg.proxies.backup = fallback;
+    const owned = await launchOwned();
+    f.proxy.mockReturnValue({ mode: "named", name: "backup", config: fallback, rotatedFrom: "primary", rotationReason: "new fixture health" });
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    owned.unchanged();
+  });
+
+  it("rejects a changed default proxy with the cheap request hash before resolving Geo", async () => {
+    autoProxy();
+    currentMeta().proxyMode = "default";
+    f.cfg.defaultProxy = "primary";
+    f.cfg.proxies.backup = { ...proxy, host: "backup.example.test" };
+    const owned = await launchOwned();
+    f.cfg.defaultProxy = "backup";
+    f.geoDetect.mockClear(); f.proxy.mockClear();
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    expect(f.proxy).not.toHaveBeenCalled();
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    owned.unchanged();
+  });
+
+  it.each(["seed", "binary", "prefs", "closed", "unregistered", "sandbox"])("preserves cheap %s refusal before Auto resolution on reuse", async refusal => {
+    autoProxy();
+    const owned = await launchOwned();
+    if (refusal === "seed") currentMeta().fingerprintSeed++;
+    if (refusal === "binary") f.firefoxIdentity.mockResolvedValue("changed-binary");
+    if (refusal === "prefs") f.fs.readFileSync.mockReturnValue("changed prefs");
+    if (refusal === "closed") owned.entry.bidiConn!.closed = true;
+    if (refusal === "unregistered") f.bidiSessions.delete(port);
+    if (refusal === "sandbox") vi.stubEnv("MOZ_DISABLE_CONTENT_SANDBOX", "0");
+    f.geoDetect.mockClear(); f.proxy.mockClear();
+    await expect(launchBrowser(dirId)).rejects.toThrow(refusal === "sandbox" ? /MOZ_DISABLE_CONTENT_SANDBOX/ : /restart/i);
+    expect(f.proxy).not.toHaveBeenCalled();
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    owned.unchanged();
+  });
+
+  it("refuses unsupported native-only mode before resolving a proxy or Auto identity", async () => {
+    autoProxy();
+    f.nativeRequested = true;
+    await expect(launchBrowser(dirId)).rejects.toThrow(/lacks the binary-attested/);
+    expect(f.proxy).not.toHaveBeenCalled();
+    expect(f.geoDetect).not.toHaveBeenCalled();
+    expect(f.firefoxPrefs).not.toHaveBeenCalled();
+    expect(f.firefoxSpawn).not.toHaveBeenCalled();
+  });
+
+  it.each(["fresh", "reuse"] as const)("rejects a request changed while awaiting %s Auto Geo without a new spawn or preference writes", async route => {
+    autoProxy();
+    const owned = route === "reuse" ? await launchOwned() : null;
+    let resume!: (value: ReturnType<typeof geo>) => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    f.geoDetect.mockImplementation(() => { entered(); return new Promise(resolve => { resume = resolve; }); });
+    const launching = launchBrowser(dirId).then(() => null, error => error);
+    await ready;
+    currentMeta().locale = "fr-FR";
+    resume(geo());
+    expect(await launching).toMatchObject({ code: "restart-required" });
+    if (owned) owned.unchanged();
+    else {
+      expect(f.firefoxPrefs).not.toHaveBeenCalled();
+      expect(f.firefoxSpawn).not.toHaveBeenCalled();
+      expect(f.persistDetection).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each((["fresh-probe", "fresh-geo", "fresh-final-files", "reuse-bidi", "reuse-geo", "reuse-final-files"] as const)
+    .flatMap(boundary => [[boundary, "route"], [boundary, "metadata"]] as const))(
+    "revalidates health-selected route after %s during a %s update", async (boundary, change) => {
+      healthRouting();
+      const owned = boundary.startsWith("reuse") ? await launchOwned() : null;
+      const gate = pause<any>();
+      f.geoDetect.mockClear();
+      if (boundary === "fresh-probe") f.proxyProbe.mockImplementation(() => gate.wait());
+      if (boundary === "reuse-bidi") owned!.entry.bidiConn!.send = vi.fn(() => gate.wait());
+      if (boundary.endsWith("-geo")) f.geoDetect.mockImplementation(() => gate.wait());
+      if (boundary.endsWith("-final-files")) {
+        let suspendFiles = false;
+        f.geoDetect.mockImplementation(async () => { suspendFiles = true; return geo(); });
+        f.firefoxIdentity.mockImplementation(async () => {
+          if (suspendFiles) { suspendFiles = false; return gate.wait(); }
+          return "unit-launcher-and-XUL-identity";
+        });
+      }
+      const launching = launchBrowser(dirId).then(result => ({ result, error: null }), error => ({ result: null, error }));
+      await gate.ready;
+      f.cfg.proxyHealth.primary = { ...f.cfg.proxyHealth.primary,
+        risk: change === "route" ? "poor" : "good", consecutiveFailures: change === "route" ? 1 : 0,
+        lastCheckedAt: 200, checks: 99 };
+      gate.resume(boundary === "fresh-probe" ? true : boundary === "reuse-bidi" ? { contexts: [{ context: "unit-context" }] }
+        : boundary.endsWith("-final-files") ? "unit-launcher-and-XUL-identity" : geo());
+      const outcome = await launching;
+      if (change === "route") {
+        expect(outcome.error).toMatchObject({ code: "restart-required" });
+        expect(runningProcesses.get(dirId)).toBe(owned?.entry);
+        if (!owned) {
+          expect(f.firefoxPrefs).not.toHaveBeenCalled();
+          expect(f.firefoxSpawn).not.toHaveBeenCalled();
+          expect(f.persistDetection).not.toHaveBeenCalled();
+          for (const writer of [f.fs.mkdirSync, f.fs.writeFileSync, f.fs.openSync, f.fs.writeSync, f.fs.renameSync]) expect(writer).not.toHaveBeenCalled();
+        }
+        if (boundary === "fresh-probe" || boundary === "reuse-bidi") expect(f.geoDetect).not.toHaveBeenCalled();
+      } else {
+        expect(outcome.error).toBeNull();
+        expect(outcome.result).toMatchObject({ pid: 5101, cdpPort: port });
+      }
+      if (change === "route") expect(f.proxy.mock.calls.some(([, snapshot]) => snapshot.proxyHealth.primary.lastCheckedAt === 200)).toBe(true);
+      if (owned) owned.unchanged();
+    },
+  );
+
+  it.each(["closed", "unregistered", "prefs", "binary"])("rejects %s drift during Auto resolution without touching the owned instance", async change => {
+    autoProxy();
+    const owned = await launchOwned();
+    f.geoDetect.mockImplementation(async () => {
+      if (change === "closed") owned.entry.bidiConn!.closed = true;
+      if (change === "unregistered") f.bidiSessions.delete(port);
+      if (change === "prefs") f.fs.readFileSync.mockReturnValue("changed during Geo");
+      if (change === "binary") f.firefoxIdentity.mockResolvedValue("changed during Geo");
+      return geo();
+    });
+    await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
+    owned.unchanged();
   });
 });
 

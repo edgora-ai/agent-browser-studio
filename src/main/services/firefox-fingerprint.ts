@@ -333,17 +333,21 @@ if (cfg.timezone) {
         var parts = new Intl.DateTimeFormat("ia", { timeZone: tz, timeZoneName: "shortOffset" }).formatToParts(date);
         var name = "";
         for (var i = 0; i < parts.length; i++) if (parts[i].type === "timeZoneName") { name = parts[i].value; break; }
-        var m = /GMT([+-])(\\d{2})(?::?(\\d{2}))?/.exec(name);
+        var m = /^(?:GMT|UTC)(?:([+-])([0-9]{1,2})(?::?([0-9]{2}))?)?$/.exec(name);
         if (!m) return null;
+        if (!m[1]) return 0;
         var sign = m[1] === "-" ? -1 : 1;
         var mins = parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0);
-        return -(sign * mins);
+        return mins === 0 ? 0 : -(sign * mins);
       } catch (e) { return null; }
     };
     var RealOffset = Date.prototype.getTimezoneOffset;
+    var RealTime = Date.prototype.getTime;
     defValue(Date.prototype, "getTimezoneOffset", function(){
-      var v = offsetOf(this);
-      return v === null ? RealOffset.call(this) : v;
+      var nativeOffset = RealOffset.call(this);
+      if (nativeOffset !== nativeOffset) return nativeOffset;
+      var v = offsetOf(RealTime.call(this));
+      return v === null ? nativeOffset : v;
     });
     // Date.prototype.toString() renders the HOST timezone's region name in
     // parentheses (e.g. "GMT+0800 (中国标准时间)") — a scanner comparing the
@@ -1142,9 +1146,9 @@ if (cfg.audio.enabled) {
         'if(wcfg.timezone){' +
         'var rrs=Intl.DateTimeFormat.prototype.resolvedOptions;' +
         'Intl.DateTimeFormat.prototype.resolvedOptions=function(){var r=rrs.call(this);try{r=Object.assign({},r,{timeZone:wcfg.timezone});}catch(e){}return r;};' +
-        'var woff=function(date){try{var p=new Intl.DateTimeFormat("ia",{timeZone:wcfg.timezone,timeZoneName:"shortOffset"}).formatToParts(date);var n="";for(var i=0;i<p.length;i++)if(p[i].type==="timeZoneName"){n=p[i].value;break;}var m=/GMT([+-])(\\d{2})(?::?(\\d{2}))?/.exec(n);if(!m)return null;var s=m[1]==="-"?-1:1;return -(s*(parseInt(m[2],10)*60+(m[3]?parseInt(m[3],10):0)));}catch(e){return null;}};' +
-        'var rod=Date.prototype.getTimezoneOffset;' +
-        'Date.prototype.getTimezoneOffset=function(){var v=woff(this);return v===null?rod.call(this):v;};' +
+        'var woff=function(date){try{var p=new Intl.DateTimeFormat("ia",{timeZone:wcfg.timezone,timeZoneName:"shortOffset"}).formatToParts(date);var n="";for(var i=0;i<p.length;i++)if(p[i].type==="timeZoneName"){n=p[i].value;break;}var m=/^(?:GMT|UTC)(?:([+-])([0-9]{1,2})(?::?([0-9]{2}))?)?$/.exec(n);if(!m)return null;if(!m[1])return 0;var s=m[1]==="-"?-1:1;var minutes=parseInt(m[2],10)*60+(m[3]?parseInt(m[3],10):0);return minutes===0?0:-(s*minutes);}catch(e){return null;}};' +
+        'var rod=Date.prototype.getTimezoneOffset,rtm=Date.prototype.getTime;' +
+        'Date.prototype.getTimezoneOffset=function(){var nativeOffset=rod.call(this);if(nativeOffset!==nativeOffset)return nativeOffset;var v=woff(rtm.call(this));return v===null?nativeOffset:v;};' +
         '}' +
         '}catch(e){}}' +
         // Mirror the window realm's deterministic canvas noise so Offscreen

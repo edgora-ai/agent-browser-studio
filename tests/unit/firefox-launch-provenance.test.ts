@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserProfileMeta } from "../../src/main/types.js";
-import { firefoxLaunchRequestHash, type FirefoxRequestOptions } from "../../src/main/services/browser/firefox-launch-provenance.js";
+import { firefoxEffectiveLaunchHash, firefoxLaunchRequestHash, type FirefoxRequestOptions } from "../../src/main/services/browser/firefox-launch-provenance.js";
 
 const options: FirefoxRequestOptions = {
   managedRoot: "/fixture/managed-firefox", binaryOverride: "/fixture/firefox", nativeRequested: false,
@@ -8,6 +8,53 @@ const options: FirefoxRequestOptions = {
 const profile = (): BrowserProfileMeta => ({
   name: "Owned fixture", engine: "firefox", fingerprintMode: "managed", platform: "macos",
   fingerprintSeed: 25516, locale: "en-US", timezone: "America/Los_Angeles", proxyMode: "none",
+});
+
+describe("Firefox session-owned effective identity", () => {
+  const proxy = () => ({ mode: "named" as const, name: "actual-fallback", config: {
+    type: "http" as const, host: "proxy.example.test", port: 8080,
+    username: "fixture-user", password: "synthetic-only-A", bypassList: ["*.example.test"],
+  } });
+
+  it("binds resolved Auto timezone and locale separately from unchanged raw intent", () => {
+    const auto = { ...profile(), timezone: null, locale: null };
+    const resolved = { ...auto, timezone: "America/Toronto", locale: "en-CA" };
+    const original = firefoxEffectiveLaunchHash(resolved, proxy());
+    expect(firefoxLaunchRequestHash(auto, {}, options)).toBe(firefoxLaunchRequestHash({ ...auto }, {}, options));
+    expect(firefoxEffectiveLaunchHash({ ...resolved, timezone: "America/Vancouver" }, proxy())).not.toBe(original);
+    expect(firefoxEffectiveLaunchHash({ ...resolved, locale: "fr-CA" }, proxy())).not.toBe(original);
+  });
+
+  it.each(["name", "type", "host", "port", "username", "password", "bypass"])("binds actual selected proxy %s even when the requested primary did not change", field => {
+    const before = proxy(), after = structuredClone(before);
+    if (field === "name") after.name = "other-fallback";
+    if (field === "type") (after.config as any).type = "socks5h";
+    if (field === "host") after.config.host = "other.example.test";
+    if (field === "port") after.config.port++;
+    if (field === "username") after.config.username = "other-fixture-user";
+    if (field === "password") after.config.password = "synthetic-only-B";
+    if (field === "bypass") after.config.bypassList = ["*.other.example.test"];
+    const original = firefoxEffectiveLaunchHash(profile(), before);
+    expect(firefoxEffectiveLaunchHash(profile(), after)).not.toBe(original);
+    expect(original).toMatch(/^[a-f0-9]{64}$/);
+    expect(original).not.toContain("synthetic-only");
+  });
+
+  it("excludes observations, route-decision prose and proxy edit times from semantic identity", () => {
+    const before = proxy();
+    const observed = { ...before, rotatedFrom: "primary", rotationReason: "fixture cooldown", detectedAt: 123456,
+      config: { ...before.config, updatedAt: 789012 } };
+    expect(firefoxEffectiveLaunchHash(profile(), observed)).toBe(firefoxEffectiveLaunchHash(profile(), before));
+  });
+
+  it("keeps stored off fields dormant but still binds its actual proxy", () => {
+    const off = { ...profile(), fingerprintMode: "off" as const };
+    const changed = { ...off, timezone: "inactive/invalid", locale: "inactive_invalid" };
+    expect(firefoxEffectiveLaunchHash(changed, proxy())).toBe(firefoxEffectiveLaunchHash(off, proxy()));
+    const other = proxy(); other.config.port++;
+    expect(firefoxEffectiveLaunchHash(changed, other)).not.toBe(firefoxEffectiveLaunchHash(off, proxy()));
+    expect(firefoxEffectiveLaunchHash(off, { mode: "none", name: null, config: null })).not.toBe(firefoxEffectiveLaunchHash(off, proxy()));
+  });
 });
 
 describe("Firefox session-owned startup intent", () => {

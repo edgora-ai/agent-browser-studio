@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
-import type { BrowserProfileMeta, ProxyConfig } from "../../types.js";
+import type { BrowserProfileMeta, ProxyConfig, ResolvedProfileProxy } from "../../types.js";
 
 // Firefox has no native launch-stamp switch. Evidence belongs only to this
 // Studio process; an app restart must not adopt an unverifiable old session.
@@ -35,6 +35,20 @@ function proxyIntent(proxy: ProxyConfig | null | undefined): unknown {
 
 export function firefoxLaunchDigest(value: string | Uint8Array): string {
   return createHmac("sha256", intentKey).update(value).digest("hex");
+}
+
+/** Session-owned resolved inputs; observation times and inactive off fields are not identity. */
+export function firefoxEffectiveLaunchHash(
+  meta: Pick<BrowserProfileMeta, "fingerprintMode" | "timezone" | "locale">,
+  proxy: Pick<ResolvedProfileProxy, "mode" | "name" | "config">,
+): string {
+  return firefoxLaunchDigest(JSON.stringify({
+    policy: "firefox-effective-launch-v1",
+    identity: meta.fingerprintMode === "off" ? null : {
+      timezone: meta.timezone ?? null, locale: meta.locale ?? null,
+    },
+    proxyMode: proxy.mode, proxyName: proxy.name, proxy: proxyIntent(proxy.config),
+  }));
 }
 
 /** Pure cached intent, before any binary/version/proxy or profile-file I/O. */

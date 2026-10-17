@@ -712,7 +712,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="createProfile">
  <h3 id="dlg-profile-title" data-icon="profile"><span data-i18n="profile.new.title">Create New Profile</span></h3>
  <div class="form-row"><label for="new-profile-name" data-i18n="profile.new.field.name">Name *</label><input id="new-profile-name" data-i18n-placeholder="profile.new.field.name.placeholder" placeholder="My Profile" required></div>
- <p style="font-size:var(--fs-micro);color:var(--text-muted);margin:2px 0 6px;" data-i18n="profile.new.hint">Only Name is required — everything else uses defaults. More identity and fingerprint options live under “Advanced configuration”, and you can change them any time from the profile editor.</p>
+ <p style="font-size:var(--fs-micro);color:var(--text-muted);margin:2px 0 6px;" data-i18n="profile.new.hint">Only Name is required. Common identity settings are below; Chromium-only options are under “Advanced configuration”. You can edit saved settings later.</p>
  <div class="form-row"><label for="new-profile-preset" data-icon="target"><span data-i18n="profile.new.preset">Business Preset</span></label>
  <select id="new-profile-preset" data-role="change" data-change-cmd="presetChanged">
  <option value="" data-i18n="profiles.preset.none">None — manual setup</option>
@@ -726,7 +726,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="firefox" data-i18n="profile.new.browser.firefox">Firefox (installed)</option>
  </select>
  </div>
- <div id="new-profile-firefox-opts" style="display:none;font-size:11px;color:var(--text-muted);margin:2px 0 8px;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox engine — launches the installed Firefox with a remote debugging port. Managed fingerprint injection parity is a known follow-up; Firefox profiles currently run in pass-through mode.</span></div>
+ <div id="new-profile-firefox-opts" class="field-note-tight" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-platform" data-i18n="profile.new.field.platform">Platform</label>
@@ -738,38 +738,28 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <div class="form-row" id="new-profile-proxy-row"><label for="new-profile-proxy" data-i18n="profile.new.field.proxy">Proxy</label><select id="new-profile-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
  </div>
- <p id="new-profile-platform-note" class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
- <div id="new-profile-consistency" style="display:none;margin:6px 0;"></div>
- <!-- Managed Chromium-specific options -->
- <details id="new-profile-advanced">
- <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;" data-icon="settings"><span data-i18n="profile.new.advanced-config">Advanced configuration</span></summary>
- <div id="new-profile-agent-browser-opts" style="display:block;">
+ <p id="new-profile-platform-note" class="field-note-tight" data-profile-engine="chromium" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
+ <!-- Common managed identity controls for both engines. -->
+ <div id="new-profile-managed-identity">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-fingerprint-mode" data-i18n="profile.new.field.fingerprint-mode">Fingerprint Mode</label>
  <select id="new-agent-browser-fingerprint-mode">
  <option value="managed" data-i18n="profile.new.mode.managed">Managed identity</option>
- <option value="off" data-i18n="profile.new.mode.passthrough">Pass-through (real machine)</option>
+ <option value="off" data-i18n="profile.new.mode.passthrough">Off (no managed identity)</option>
  </select>
  </div>
- <div class="form-row"><label for="new-agent-browser-browser-version" data-i18n="profile.new.field.version">Chromium Build</label>
- <select id="new-agent-browser-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
- </div>
- </div>
- <p class="field-note-tight" data-i18n="profile.new.mode.help">Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.</p>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies">Allow third-party cookies for embedded auth/payment/challenge compatibility</span></label>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm">Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</span></label>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title">Show profile name in taskbar / window title (RoxyBrowser-style)</span></label>
 <div class="form-row"><label for="new-agent-browser-seed" data-i18n="profile.new.field.seed">Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="new-agent-browser-seed" type="number" data-i18n-placeholder="profile.new.field.seed.placeholder" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed" data-icon="wand"><span data-i18n="profile.new.random">Random</span></button>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces, not the whole physical device. Supported macOS ARM64 managed setups also select a WebGL persona; GPU capabilities stay native.</p>
  </div>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.mode.help">Off disables managed identity overrides and retains the stored values. It is not an unmodified-browser or scheduling baseline.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-timezone" data-i18n="profile.new.field.timezone">Timezone</label>
  <select id="new-agent-browser-timezone">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
  <option value="Asia/Seoul">Asia/Seoul (UTC+9)</option>
@@ -792,11 +782,9 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="Australia/Sydney">Australia/Sydney (UTC+10)</option>
  </select>
  </div>
- </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-locale" data-i18n="profile.new.field.locale">Language / Locale</label>
  <select id="new-agent-browser-locale">
- <option value="" data-i18n-option="profile.new.locale.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.locale.auto">Auto (resolved at launch)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
@@ -816,6 +804,21 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="vi-VN">vi-VN (Vietnamese)</option>
  </select>
  </div>
+ </div>
+ </div>
+ <div id="new-profile-consistency" style="display:none;margin:6px 0;"></div>
+ <!-- Chromium-only advanced controls; hidden values are never Firefox input. -->
+ <details id="new-profile-advanced" data-profile-engine="chromium">
+ <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;" data-icon="settings"><span data-i18n="profile.new.advanced-config">Advanced configuration</span></summary>
+ <div id="new-profile-agent-browser-opts">
+ <div class="form-row"><label for="new-agent-browser-browser-version" data-i18n="profile.new.field.version">Chromium Build</label>
+ <select id="new-agent-browser-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces, not the whole physical device. Supported macOS ARM64 managed setups also select a WebGL persona; GPU capabilities stay native.</p>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies">Allow third-party cookies for embedded auth/payment/challenge compatibility</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm">Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title">Show profile name in taskbar / window title (RoxyBrowser-style)</span></label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-webrtc-mode" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
  <select id="new-agent-browser-webrtc-mode">
  <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
@@ -1288,35 +1291,39 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </details>
 </dialog>
 
-<!-- Managed Chromium fingerprint edit dialog -->
+<!-- Shared profile identity editor; engine-specific options stay scoped. -->
 <dialog id="dlg-agent-browser-seed">
  <form method="dialog" data-role="submit" data-submit-cmd="saveBrowserMeta">
- <h3 data-icon="browser"><span data-i18n="profile.meta.title">Managed Chromium Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <h3 data-icon="browser"><span data-i18n="profile.meta.title">Browser Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <p id="agent-browser-meta-firefox-note" class="dialog-note" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></p>
  <!-- R146: --fingerprint=<seed> is a literal CLI flag, so it stays English; only
       the prose around it is translated. Split so the code span keeps its
       formatting instead of being folded into one data-i18n blob. -->
- <p class="dialog-note">
+ <p class="dialog-note" data-profile-engine="chromium">
  <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">varies managed privacy surfaces and, on supported macOS ARM64 setups, the WebGL persona; GPU capabilities stay native.</span><br>
  <span data-i18n="profile.meta.flag-rule">The same seed and settings do not guarantee an identical whole fingerprint.</span>
  </p>
  <input type="hidden" id="agent-browser-meta-dir-id">
+ <input type="hidden" id="agent-browser-meta-engine">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.fingerprint-mode" for="agent-browser-meta-fingerprint-mode">Fingerprint Mode</label>
  <select id="agent-browser-meta-fingerprint-mode">
  <option value="managed" data-i18n="profile.new.mode.managed">Managed identity</option>
- <option value="off" data-i18n="profile.new.mode.passthrough">Pass-through (real machine)</option>
+ <option value="off" data-i18n="profile.new.mode.passthrough">Off (no managed identity)</option>
  </select>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.version" for="agent-browser-meta-browser-version">Chromium Build</label>
+ <div class="form-row" data-profile-engine="chromium"><label data-i18n="profile.new.field.version" for="agent-browser-meta-browser-version">Chromium Build</label>
  <select id="agent-browser-meta-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
  </div>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.mode.help.edit">Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.</p>
+ <p class="field-note-tight" data-i18n="profile.new.mode.help.edit">Off disables managed identity overrides; saved fields are retained for switching back. It does not restore unmodified browser startup or scheduling policies.</p>
+<div data-profile-engine="chromium">
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies.edit">Allow third-party cookies for embedded compatibility</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm.edit">Enable Widevine/DRM (streaming sites)</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title.edit">Show profile name in taskbar / window title (RoxyBrowser-style, document.title untouched)</span></label>
 <div class="form-row"><label for="agent-browser-meta-window-title-prefix" data-i18n="profile.new.field.title-prefix">Custom Title Prefix</label><input id="agent-browser-meta-window-title-prefix" data-i18n-placeholder="profile.new.field.title-prefix.placeholder" placeholder="Default: profile name"></div>
 <div class="form-row"><label for="agent-browser-meta-app-url" data-i18n="profile.new.field.app-url">Web App URL (PWA / Sub-apps)</label><input id="agent-browser-meta-app-url" data-i18n-placeholder="profile.new.field.app-url.placeholder" placeholder="https://example.com — profile launches as a standalone app window (empty = normal browser)"></div>
+ </div>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
  <div class="form-row"><label for="agent-browser-meta-name" data-i18n="profile.edit.field.name">Profile Name *</label><input id="agent-browser-meta-name" data-i18n-placeholder="profile.new.field.name.placeholder" placeholder="My Profile" required></div>
@@ -1337,13 +1344,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  </div>
- <p class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
+ <p class="field-note-tight" data-profile-engine="chromium" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
  <p class="field-note-tight" data-i18n="profile.platform.restart-help">After saving identity changes, explicitly stop and restart the browser. Saving or restarting Studio does not update a running browser.</p>
  <!-- Timezone + Locale -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.timezone" for="agent-browser-meta-timezone">Timezone</label>
  <select id="agent-browser-meta-timezone">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
  <option value="Asia/Seoul">Asia/Seoul (UTC+9)</option>
@@ -1367,7 +1374,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <div class="form-row"><label data-i18n="profile.new.field.locale" for="agent-browser-meta-locale">Language / Locale</label>
  <select id="agent-browser-meta-locale">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
@@ -1388,6 +1395,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-i18n="profile.identity.auto-help">Auto timezone / locale resolve at launch in Managed mode; not yet checked. Explicit values are kept. Cached proxy data is only a candidate, not proof of live alignment.</p>
+ <div data-profile-engine="chromium">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.webrtc-mode" for="agent-browser-meta-webrtc-mode">WebRTC Mode</label>
  <select id="agent-browser-meta-webrtc-mode">
@@ -1437,6 +1446,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="agent-browser-meta-fonts-dir">Fonts Directory</label><input id="agent-browser-meta-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
  </details>
+ </div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
