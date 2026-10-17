@@ -2,7 +2,7 @@
 
 ## 边界与状态
 
-**最新结论：本机 Developer ID 签名候选已实际安装，原永久授权经原始 IPC 确认；真实项目 Firefox 的 Ping0 检测完成，但仍为 39 分、6 项异常，整站 FAIL。安装边界数据一致性通过；运行后只读调查已定位应用回收站和原会话字节的两份备份，8 项文件差异已归类，但调用来源和逻辑 Cookie 状态仍未知，不能宣称运行后数据全部保持。未公证；安装包 release 仍为草稿。旧 DMG 当前校验失败，不能上传；源 App 当前严格签名通过、ZIP 摘要仍匹配，新的独立 publication DMG 已完成本地独立核验，远端上传／回读验证尚未完成。**
+**最新结论：本机 Developer ID 签名候选已实际安装，原永久授权经原始 IPC 确认；真实项目 Firefox 的 Ping0 仍为 39 分、6 项异常，整站 FAIL。安装边界数据一致性通过；运行后已定位应用回收站和原会话字节的两份备份，但调用来源和逻辑 Cookie 状态仍未知，不能宣称运行后数据全部保持。旧坏 DMG 未上传；新独立 DMG、原 ZIP 和新校验单已公开为非 Latest 预发布，三个公开链接均完成匿名 HTTP 200 全量回读、大小和 SHA-256 匹配。未进行 Apple 公证；上传交付通过不等于实站验收通过。**
 
 本轮基于 `4c6c13b` 修复源码。本节以下起始记录截至源码验收阶段，当时旧安装版及工作中的 Firefox / Chromium 尚未被替换或关闭；之后获批本机安装与实站执行的结果见本文末尾追加记录。源码、单测、构建的通过不能替代 Studio → 原始 preload IPC → BrowserManager → 项目 Firefox → Ping0 的实站验收。
 
@@ -203,4 +203,20 @@
 - 严格 pinned Developer ID 签名、`hdiutil` 校验、只读挂载后的 App 签名，以及 **554 条（含根）的 content / mode / link 比对**均通过；映像已正常 detach。Python 与 `shasum` 两种方法得到相同的签名后摘要。
 - ZIP 仍为 **414,035,052 bytes**，SHA-256 `e06f5e7c5602e6c693ae906000a2d49eb8afacee097f749e6648721db238c70d`，摘要与原资产记录匹配。新 DMG 的成功不改变旧 DMG 的摘要差异、无效签名、HFS 内部 CRC 失败及原因未知结论；旧文件和旧记录继续保留，旧坏 DMG 未上传。
 - 15 个源码／测试文件的提交 `044a3d4` 已推至公开 preview 分支。**本次追加时，GitHub 新 release 仍为草稿，ZIP 上传尚在进行**；尚无远端资产完整回读及摘要核验成功结论，不能写成“已发布”或“远端验证通过”。
-- 上述仅为本地资产核验及发布准备状态，不把 39 分／6 项异常、严格 no-mock 不满足、Worker／DST 未知或运行后数据状态未闭环改写为通过。
+- 上述仅为当时的本地资产核验及发布准备状态，不把 39 分／6 项异常、严格 no-mock 不满足、Worker／DST 未知或运行后数据状态未闭环改写为通过。
+
+### 公开预发布与完整远端回读：上传交付通过
+
+- 预发布已公开：[preview-macos-arm64-1.0.1-20261018](https://github.com/edgora-ai/agent-browser-studio/releases/tag/preview-macos-arm64-1.0.1-20261018)。状态为 prerelease、非 draft、非 Latest；原稳定 Latest `v0.1.0` 未变，未覆盖旧发行或旧资产。
+- 发行 tag 经 GitHub ref 直接读回指向源码提交 `044a3d4d9e1005c8b8ce4d6baf5d4f5571f81c68`。四份脱敏检测文档另以 `2a942aa` 推至同一 preview 分支；真实报告标识、stamp、完整挑战域和内部存储定位未公开。
+- 三个远端资产的 `state=uploaded`、大小及服务端 SHA-256 均与本地新校验单一致；发行说明经直接读回与本地版本匹配。只上传下列明确文件，没有上传失败旧 DMG、运行日志、用户配置、Cookie、vault 或激活数据。
+
+| 公开资产 | bytes | SHA-256 |
+| --- | ---: | --- |
+| `Agent-Browser-Studio-1.0.1-preview-20261018-mac-arm64.dmg` | 415,839,685 | `c42c5eb74baec3bc80801e057e006373b0c4bdeb82d1b7acd4dac537acf11333` |
+| `Agent-Browser-Studio-1.0.1-local-auto-20261018-mac-arm64.zip` | 414,035,052 | `e06f5e7c5602e6c693ae906000a2d49eb8afacee097f749e6648721db238c70d` |
+| `SHA256SUMS` | 251 | `58c9cc38d1303c2e36f136e7918cb543091d3b62218e79a920d903b1ad8d811e` |
+
+- 对上述三个**公开下载 URL** 分别执行匿名 HTTPS 完整流式下载，不传 GitHub 认证、不关闭 TLS 校验；均返回 **HTTP 200 / curl exit 0**，完整字节数和 SHA-256 与上表一致。不是仅 HEAD、API 元数据、部分 Range 或退出码验证；下载二进制未再落盘堆积。
+- 代码和文档已提交、推送，但保留其它来源未确认的未跟踪内容，不纳入本轮提交。worktree 最终清点仍仅当前主工作区，无额外或 stale 注册工作树，删除数量为 0，未强删或删除分支。
+- **这一节只关闭本次代码提交和预览安装包上传／回读流程**。原始 Ping0 失败、严格 no-mock、Worker／DST、数据操作归属和逻辑 Cookie 状态未升级为通过；未公证，也未为上传再次退出或重启正常用户应用。
