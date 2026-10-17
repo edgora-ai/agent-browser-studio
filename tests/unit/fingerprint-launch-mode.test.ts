@@ -64,6 +64,8 @@ describe("fingerprint pass-through launch mode", () => {
       "--fingerprint-platform=windows",
       "--fingerprint-timezone=Asia/Shanghai",
       "--agent-browser-fingerprint-config=encoded",
+      "--agent-browser-local-dns-policy=proxy-local-dns-deny",
+      "--agent-browser-proxy-bootstrap-host=127.0.0.1",
       "--roxy-fingerprint-config=legacy-encoded",
       "--user-agent=spoofed",
       "--lang=zh-CN",
@@ -74,22 +76,24 @@ describe("fingerprint pass-through launch mode", () => {
     ])).toEqual([
       "--user-data-dir=/tmp/profile",
       "--remote-debugging-port=9222",
+      "--agent-browser-local-dns-policy=proxy-local-dns-deny",
+      "--agent-browser-proxy-bootstrap-host=127.0.0.1",
       "--proxy-server=socks5://127.0.0.1:1080",
     ]);
   });
 
   it("forces remote DNS for socks5h proxies (socks5h semantics in Chromium)", () => {
     expect(buildRemoteDnsRule("proxy.example.com", null)).toBe(
-      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE proxy.example.com");
+      "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE proxy.example.com");
     // Local bridge (authenticated SOCKS) — 127.0.0.1 appears once.
     expect(buildRemoteDnsRule("127.0.0.1", null)).toBe(
-      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
+      "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
     // Existing rules (e.g. a MASQUE bridge map) are preserved, not clobbered.
     expect(buildRemoteDnsRule("127.0.0.1", "MAP bridge 127.0.0.1")).toBe(
-      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1,MAP bridge 127.0.0.1");
+      "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1,MAP bridge 127.0.0.1");
     // Empty connect host (defensive) still yields the base rule.
     expect(buildRemoteDnsRule("", null)).toBe(
-      "MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
+      "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1");
   });
 
   it("uses stock Chromium cookie preferences and restores the exact prior values", () => {

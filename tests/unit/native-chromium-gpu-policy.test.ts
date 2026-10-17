@@ -29,7 +29,7 @@ const ARTIFACTS = path.resolve("owned-gpu-fixtures");
 // These tiny fixtures live under the test runner's owned TMPDIR. They never
 // inspect user profiles or follow symlinks into pre-existing application data.
 function ownedFixture(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "gpu-owned-root-unit-"));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gpu-owned-root-unit-")));
 }
 
 describe("native Chromium GPU verifier boundary", () => {

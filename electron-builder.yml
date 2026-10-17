@@ -79,6 +79,12 @@ files:
 extraResources:
   - from: dist/native
     to: native
+  # The license reader resolves this outside app.asar. The filter remains empty
+  # for intentional trial-only builds that have no injected issuer public key.
+  - from: dist/resources
+    to: .
+    filter:
+      - license-pubkey.txt
 
 asar: true
 compression: maximum

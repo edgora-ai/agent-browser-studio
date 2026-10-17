@@ -4,6 +4,8 @@ import {
 } from "../fingerprint-baseline.js";
 import { checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "../environment-risk.js";
 import type { FingerprintDrift } from "../fingerprint-baseline.js";
+import { getHostBrowserPlatform } from "../browser-platform-policy.js";
+import type { BrowserProfileMeta } from "../../types.js";
 
 export interface LaunchDriftCheck {
   checked: boolean;
@@ -19,6 +21,24 @@ export class LaunchBlockedError extends Error {
     this.name = "LaunchBlockedError";
     this.code = code;
   }
+}
+
+/** Native GPU identity cannot make a foreign OS persona truthful. Storage stays portable. */
+export function assertHostPlatformCompatible(
+  meta: Pick<BrowserProfileMeta, "engine" | "fingerprintMode" | "platform">,
+  host: string = process.platform,
+): void {
+  if (meta.engine === "firefox" || meta.fingerprintMode === "off") return;
+  const hostPlatform = getHostBrowserPlatform(host);
+  const requestedPlatform = meta.platform || "windows";
+  if (hostPlatform !== null && requestedPlatform === hostPlatform) return;
+  const remedy = hostPlatform
+    ? `Use a ${hostPlatform} profile on this host, or run this portable profile on a matching host.`
+    : "Run managed Chromium on a supported macOS or Windows host.";
+  throw new LaunchBlockedError(
+    "host-platform-mismatch",
+    `Managed Chromium launch blocked: profile platform ${requestedPlatform} does not match the native GPU host ${hostPlatform || host}. ${remedy} Alternatively, explicitly select fingerprint-off or Firefox. The saved profile has not been changed; GPU compatibility is not verified by renaming GPU strings.`,
+  );
 }
 
 export interface DriftGuardDeps {

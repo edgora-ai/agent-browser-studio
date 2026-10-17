@@ -46,7 +46,8 @@ describe("archive-path-guard", () => {
   it("rejects export destinations outside the allowlist (e.g. /etc/hosts, ~/.zshrc)", () => {
     expect(() => assertSafeArchiveExportPath("/etc/hosts.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
     expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc"))).toThrow(/must be a \.zip/i);
-    expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc.zip"))).toThrow(/not in allowed directory/i);
+    // Exercise the allowlist, not an unrelated symlink in the runner's HOME path.
+    expect(() => assertSafeArchiveExportPath(path.join(fs.realpathSync(os.homedir()), ".zshrc.zip"))).toThrow(/not in allowed directory/i);
     expect(() => assertSafeArchiveExportPath("/tmp/../etc/passwd.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
   });
 

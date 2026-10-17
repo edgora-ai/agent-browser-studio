@@ -731,12 +731,14 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-platform" data-i18n="profile.new.field.platform">Platform</label>
  <select id="new-agent-browser-platform">
+ <option value="" selected data-i18n="profile.new.platform.auto">Auto (host OS)</option>
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
  </select>
  </div>
  <div class="form-row" id="new-profile-proxy-row"><label for="new-profile-proxy" data-i18n="profile.new.field.proxy">Proxy</label><select id="new-profile-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
  </div>
+ <p id="new-profile-platform-note" class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
  <div id="new-profile-consistency" style="display:none;margin:6px 0;"></div>
  <!-- Managed Chromium-specific options -->
  <details id="new-profile-advanced">
@@ -762,7 +764,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <input id="new-agent-browser-seed" type="number" data-i18n-placeholder="profile.new.field.seed.placeholder" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed" data-icon="wand"><span data-i18n="profile.new.random">Random</span></button>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces; it does not guarantee an identical whole fingerprint. Chromium exposes the host GPU. Choose the host OS; cross-OS GPU compatibility is unverified.</p>
+ <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces, not the whole physical device. Supported macOS ARM64 managed setups also select a WebGL persona; GPU capabilities stay native.</p>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-timezone" data-i18n="profile.new.field.timezone">Timezone</label>
@@ -847,10 +849,12 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
- <p class="field-note-tight seed-note" data-i18n="profile.new.advanced.help">Leave empty to let the seed generate coherent hardware. Override only when a risk checker reports a specific mismatch.</p>
+ <p class="field-note-tight seed-note" data-i18n="profile.new.advanced.help">Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.</p>
+ <p id="new-profile-gpu-help" class="field-note-tight" data-i18n="profile.gpu.help">WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.</p>
+ <p id="new-profile-gpu-scope" class="field-note-tight" data-i18n="profile.gpu.scope">Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="new-agent-browser-gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="new-agent-browser-gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="new-agent-browser-gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. (Apple)" aria-describedby="new-profile-gpu-help new-profile-gpu-scope" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="new-agent-browser-gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="Apple M2" aria-describedby="new-profile-gpu-help new-profile-gpu-scope" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.cpu" for="new-agent-browser-hardware-concurrency">CPU Cores</label><input id="new-agent-browser-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="new-agent-browser-device-memory">Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="new-agent-browser-screen-width">Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
@@ -1085,7 +1089,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <input type="checkbox" id="acct-import-create-profiles"> <span data-i18n="acct.import.create-profile">Also create a bound profile for each account</span>
  </label>
  <div id="acct-import-create-options" style="display:none;font-size:12px;color:var(--text-muted);margin-bottom:6px;">
- <span data-i18n="acct.import.platform">Platform: </span><select id="acct-import-platform" style="font-size:var(--fs-xs);"><option value="windows">Windows</option><option value="macos">macOS</option></select> <span data-i18n="acct.import.naming">— profiles are named <code>host · username</code> and auto-bound to the account.</span>
+ <span data-i18n="acct.import.platform">Platform: </span><select id="acct-import-platform" style="font-size:var(--fs-xs);"><option value="" selected data-i18n="profile.new.platform.auto">Auto (host OS)</option><option value="windows">Windows</option><option value="macos">macOS</option></select> <span data-i18n="acct.import.naming">— profiles are named <code>host · username</code> and auto-bound to the account.</span>
+ <p class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
  </div>
 
  <div id="acct-import-status" style="font-size:12px;margin:6px 0;"></div>
@@ -1291,8 +1296,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
       the prose around it is translated. Split so the code span keeps its
       formatting instead of being folded into one data-i18n blob. -->
  <p class="dialog-note">
- <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">deterministically generates GPU, screen, hardware, canvas, audio and fonts.</span><br>
- <span data-i18n="profile.meta.flag-rule">Same seed + platform + timezone + locale = 100% identical fingerprint.</span>
+ <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">varies managed privacy surfaces and, on supported macOS ARM64 setups, the WebGL persona; GPU capabilities stay native.</span><br>
+ <span data-i18n="profile.meta.flag-rule">The same seed and settings do not guarantee an identical whole fingerprint.</span>
  </p>
  <input type="hidden" id="agent-browser-meta-dir-id">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -1332,6 +1337,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
+ <p class="field-note-tight" data-i18n="profile.platform.restart-help">After saving identity changes, explicitly stop and restart the browser. Saving or restarting Studio does not update a running browser.</p>
  <!-- Timezone + Locale -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.timezone" for="agent-browser-meta-timezone">Timezone</label>
@@ -1415,10 +1422,12 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
- <p class="field-note-tight seed-note" data-i18n="profile.edit.advanced.help">Leave empty to use seed-generated hardware. Explicit values are passed to managed Chromium launch flags and help tune ping0.cc/env risk items.</p>
+ <p class="field-note-tight seed-note" data-i18n="profile.edit.advanced.help">Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.</p>
+ <p id="edit-profile-gpu-help" class="field-note-tight" data-i18n="profile.gpu.help">WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.</p>
+ <p id="edit-profile-gpu-scope" class="field-note-tight" data-i18n="profile.gpu.scope">Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="agent-browser-meta-gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="agent-browser-meta-gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="agent-browser-meta-gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. (Apple)" aria-describedby="edit-profile-gpu-help edit-profile-gpu-scope" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="agent-browser-meta-gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="Apple M2" aria-describedby="edit-profile-gpu-help edit-profile-gpu-scope" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.cpu" for="agent-browser-meta-hardware-concurrency">CPU Cores</label><input id="agent-browser-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="agent-browser-meta-device-memory">Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="agent-browser-meta-screen-width">Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>

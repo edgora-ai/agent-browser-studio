@@ -1,11 +1,15 @@
 import type { BidiConnection } from "../bidi-client.js";
 import type { InjectionProbeCheck } from "../firefox-fingerprint.js";
+import type { ChromiumLaunchProvenance } from "./launch-provenance.js";
 
 export interface RunningEntry {
   pid: number;
   process: any;
   port: number;
   lastActivityAt: number;
+  engine?: "chromium" | "firefox";
+  /** Opaque startup-input hashes only; never credentials or GPU attestation. */
+  launchProvenance?: ChromiumLaunchProvenance;
   killTimer?: ReturnType<typeof setTimeout>;
   stopping?: boolean;
   proxyBridge?: { close: () => Promise<void> };

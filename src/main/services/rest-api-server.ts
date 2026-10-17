@@ -349,7 +349,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
       return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } } };
     } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      const code = ["host-platform-mismatch", "restart-required"].includes(e?.code) ? e.code : undefined;
+      return { status: 400, body: { error: e.message || String(e), ...(code ? { code } : {}) } };
     }
   }
   const mStop = p.match(/^\/api\/profiles\/([^/]+)\/stop$/);
@@ -820,7 +821,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const parsed = parseAccountsBulkText(body.text);
       if (body.createProfiles) {
         const platform = body.platform === "windows" || body.platform === "macos" || body.platform === "android"
-          ? body.platform : "windows";
+          ? body.platform : undefined;
         const r = bulkCreateProfilesWithAccounts(parsed, { platform });
         recordAudit({ category: "account", action: "bulk-create-profiles", target: "", actor: "api", detail: "added=" + r.added + " created=" + r.created + " skipped=" + r.skipped });
         return { status: 200, body: { success: true, report: r } };

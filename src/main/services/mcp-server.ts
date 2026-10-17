@@ -242,7 +242,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           hint: "Managed Chromium launched. Use the MCP or Agent CDP tools to automate.",
         };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        const code = ["host-platform-mismatch", "restart-required"].includes(e?.code) ? e.code : undefined;
+        return { success: false, error: e.message, ...(code ? { code } : {}) };
       }
     }
     case "agent_browser_stop_profile": {

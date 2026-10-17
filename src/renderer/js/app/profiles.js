@@ -77,6 +77,16 @@
     return agentBrowser.ipc.call(key, fn, { kind: "list" });
   }
 
+  function profileErrorMessage(error) {
+    var message = error && error.message ? error.message : String(error || "");
+    // IPC may wrap the stable backend prefix. Do not infer host/kernel support
+    // from renderer UA or app.paths; only main can validate the selected tuple.
+    if (message.indexOf("Unsupported GPU overrides for Chromium:") !== -1) {
+      return t("launch.gpu-unsupported", "This explicit WebGL request is unsupported. Managed overrides require a native ARM64 macOS main process, selected ARM64 Chromium and a matching platform persona. Use a supported tuple or clear gpuVendor/gpuRenderer to keep native GPU identity. Saved metadata is unchanged; WebGPU and GPU capabilities remain native.");
+    }
+    return message;
+  }
+
   function readGeolocationFields(prefix) {
     var mode = document.getElementById(prefix + "geolocation-mode").value;
     if (mode !== "custom") {
@@ -93,8 +103,38 @@
   }
 
   var businessPresetCatalog = [];
+  var businessPresetsLoadSeq = 0;
   var profilesLoadSeq = 0;
   var newProfileProxySeq = 0;
+  var newProfileFormSeq = 0;
+  var newProfilePlatformEdited = false;
+
+  function setNewProfilePlatformNote(key, fallback) {
+    var note = document.getElementById("new-profile-platform-note");
+    if (!note) return;
+    note.setAttribute("data-i18n", key);
+    note.textContent = t(key, fallback);
+  }
+
+  function loadNewProfileHostPlatform(seq) {
+    var dialog = document.getElementById("dlg-profile");
+    var select = document.getElementById("new-agent-browser-platform");
+    return lcall("app.paths", function () { return api.app.paths(); }).then(function (paths) {
+      if (seq !== newProfileFormSeq || !dialog.open) return;
+      if (!paths || typeof paths.platform !== "string") throw new Error("Host platform unavailable");
+      // Only main-process host metadata is trusted; never infer this from the UA.
+      var platform = paths.platform === "darwin" ? "macos" : paths.platform === "win32" ? "windows" : null;
+      if (!newProfilePlatformEdited && !select.value) select.value = platform || "";
+      if (platform === null) {
+        setNewProfilePlatformNote("profile.platform.unsupported-host", "This host does not support native managed Chromium. Portable profiles can still be stored; selecting Windows or macOS does not make this host supported.");
+      }
+    }).catch(function () {
+      if (seq !== newProfileFormSeq || !dialog.open) return;
+      // Auto remains unset so the common creation path still owns the default.
+      setNewProfilePlatformNote("profile.platform.host-unavailable", "Host OS unavailable. Auto defers to the main-process creation default; native managed Chromium still requires a supported macOS or Windows host.");
+    });
+  }
+
   function writeGeolocationFields(prefix, meta) {
     document.getElementById(prefix + "geolocation-mode").value = meta.geolocationMode || "real";
     document.getElementById(prefix + "geolocation-latitude").value = meta.geolocationLatitude == null ? "" : meta.geolocationLatitude;
@@ -215,13 +255,18 @@
               setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
               scheduleProfilesRefresh();
             } else {
-              // PL-04: proxy failures are fail-closed, so the reason matters.
-              // UX-3: the friendly-error layer already renders localized,
-              // actionable copy for proxy failures — no extra hint needed.
-              toast(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"), "error");
+              // Stable main-process codes carry localized recovery guidance;
+              // saving metadata or restarting Studio never applies identity live.
+              var launchError = profileErrorMessage(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"));
+              if (r.code === "host-platform-mismatch") {
+                launchError = t("launch.host-platform-mismatch", "This managed profile uses a different OS from this computer. Edit the profile OS to match the host, save, then stop the browser if it is running and start it again. Restarting Studio is not enough.");
+              } else if (r.code === "restart-required") {
+                launchError = t("launch.restart-required", "Saved identity changes are not active in this running browser. Explicitly stop the browser, then start it again. Saving or restarting Studio does not apply them live.");
+              }
+              toast(launchError, "error");
             }
           })
-          .catch(function (e) { toast(e.message, "error"); })
+          .catch(function (e) { toast(profileErrorMessage(e), "error"); })
           .then(function () { setCardBusy(dirId, false); });
   }
 
@@ -386,6 +431,8 @@
       },
 
   resetNewProfileForm: function (browser) {
+        var formSeq = ++newProfileFormSeq;
+        newProfilePlatformEdited = false;
         ++newProfileProxySeq;
         document.getElementById("new-profile-proxy").innerHTML = renderProxyOptions([], "default", false);
         document.getElementById("new-profile-name").value = "";
@@ -398,7 +445,13 @@
         document.getElementById("new-agent-browser-allow-third-party-cookies").checked = false;
         document.getElementById("new-agent-browser-drm").checked = false;
         document.getElementById("new-agent-browser-seed").value = "";
-        document.getElementById("new-agent-browser-platform").value = "windows";
+        var platformSelect = document.getElementById("new-agent-browser-platform");
+        platformSelect.value = "";
+        if (!platformSelect.dataset.hostPlatformBound) {
+          platformSelect.dataset.hostPlatformBound = "1";
+          platformSelect.addEventListener("change", function () { newProfilePlatformEdited = true; });
+        }
+        setNewProfilePlatformNote("profile.platform.host-help", "Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.");
         document.getElementById("new-agent-browser-timezone").value = "";
         document.getElementById("new-agent-browser-locale").value = "";
         document.getElementById("new-agent-browser-webrtc").value = "";
@@ -412,12 +465,17 @@
         if (presetSelect) presetSelect.value = "";
         var presetInfo = document.getElementById("new-profile-preset-info");
         if (presetInfo) { presetInfo.style.display = "none"; presetInfo.innerHTML = ""; }
+        loadNewProfileHostPlatform(formSeq);
       },
 
   loadBusinessPresets: function () {
         var select = document.getElementById("new-profile-preset");
         if (!select) return Promise.resolve([]);
+        var seq = ++businessPresetsLoadSeq;
+        var formSeq = newProfileFormSeq;
         return api.browser.presets().then(function(list) {
+          if (seq !== businessPresetsLoadSeq || formSeq !== newProfileFormSeq || !document.getElementById("dlg-profile").open) return [];
+          var selected = select.value;
           businessPresetCatalog = list || [];
           var zh = window.i18n && window.i18n.locale && window.i18n.locale.indexOf("zh") === 0;
           select.innerHTML = "";
@@ -431,6 +489,7 @@
             opt.textContent = p.icon + " " + (zh ? p.nameZh : p.name);
             select.appendChild(opt);
           });
+          select.value = businessPresetCatalog.some(function(p) { return p.id === selected; }) ? selected : "";
           return businessPresetCatalog;
         }).catch(function() { return []; });
       },
@@ -451,8 +510,7 @@
         // Coherent identity prefill (advanced section fields).
         var nameEl = document.getElementById("new-profile-name");
         if (nameEl && !nameEl.value.trim()) nameEl.value = preset.nameSuffix;
-        var platformEl = document.getElementById("new-agent-browser-platform");
-        if (platformEl) platformEl.value = preset.profile.platform;
+        // Region presets never replace the host default or an explicit OS choice.
         var tzEl = document.getElementById("new-agent-browser-timezone");
         if (tzEl) tzEl.value = preset.profile.timezone;
         var locEl = document.getElementById("new-agent-browser-locale");
@@ -502,12 +560,12 @@
     var params = {
       timezone: (document.getElementById("new-agent-browser-timezone") || {}).value || null,
       locale: (document.getElementById("new-agent-browser-locale") || {}).value || null,
-      platform: (document.getElementById("new-agent-browser-platform") || {}).value || "windows",
+      platform: (document.getElementById("new-agent-browser-platform") || {}).value || undefined,
       proxyMode: selection.mode || "default",
       proxyName: selection.name || null,
     };
-    // Auto everywhere = nothing to warn about; skip the IPC round trip.
-    if (!params.timezone && !params.locale) { host.style.display = "none"; host.innerHTML = ""; return; }
+    // Do not preview a fabricated Windows identity while the host read is pending.
+    if ((!params.timezone && !params.locale) || !params.platform) { host.style.display = "none"; host.innerHTML = ""; return; }
     api.browser.consistencyPreview(params).then(function (r) {
       var items = [];
       if (r) {
@@ -581,7 +639,7 @@
 
         if (!name) { toast((window.i18n ? window.i18n.t("toast.profile.name-prompt", "Please enter a name") : "Please enter a name"), "error"); return; }
 
-        var browserPlatform = document.getElementById("new-agent-browser-platform").value;
+        var browserPlatform = document.getElementById("new-agent-browser-platform").value || undefined;
         var fingerprintMode = document.getElementById("new-agent-browser-fingerprint-mode").value || "managed";
         var browserVersion = document.getElementById("new-agent-browser-browser-version").value || null;
         var allowThirdPartyCookies = document.getElementById("new-agent-browser-allow-third-party-cookies").checked;
@@ -632,7 +690,7 @@
           // Sale-90/92: trial expiry / profile cap opens the paywall dialog
           // instead of closing the form with a misleading success toast.
           if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
-          if (!r || r.success === false || !r.dirId) { toast((r && r.error) || t("toast.profile.create-failed", "Profile creation failed"), "error"); return; }
+          if (!r || r.success === false || !r.dirId) { toast(profileErrorMessage((r && r.error) || t("toast.profile.create-failed", "Profile creation failed")), "error"); return; }
           document.getElementById("dlg-profile").close();
           toast((window.i18n ? window.i18n.t("toast.profile.created", "Managed Chromium profile created!") : "Managed Chromium profile created!"), "success");
           // UI R3: after create, land on the new card (scroll + highlight)
@@ -647,7 +705,7 @@
               } catch (e) { /* best effort */ }
             }, 400);
           }
-        }).catch(function(e) { toast(e.message, "error"); });
+        }).catch(function(e) { toast(profileErrorMessage(e), "error"); });
       },
 
   refresh: function () { agentBrowser.loadTab(state.currentTab); },
@@ -697,7 +755,7 @@
         var proxyName = s.proxyName || fallbackProxy.name;
         wcall("browser.create", function () { return api.browser.create({
           name: s.name,
-          platform: s.platform || "windows",
+          platform: s.platform,
           locale: s.locale,
           timezone: s.timezone,
           fingerprintSeed: s.fingerprintSeed,
@@ -1584,8 +1642,8 @@
     }, geolocation, hardware)); }));
     Promise.all(promises).then(function(r) {
       if (r[0] && r[0].success) { toast((window.i18n ? window.i18n.t("toast.profile.saved", "Profile saved") : "Profile saved"), "success"); loadProfiles(); }
-      else toast((r[0] && r[0].error) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save"), "error");
-    }).catch(function (e) { toast(e.message || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save"), "error"); });
+      else toast(profileErrorMessage((r[0] && r[0].error) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save")), "error");
+    }).catch(function (e) { toast(profileErrorMessage(e) || (window.i18n ? window.i18n.t("toast.save-failed", "Failed to save") : "Failed to save"), "error"); });
   };
 
   // ══════ Profiles ══════

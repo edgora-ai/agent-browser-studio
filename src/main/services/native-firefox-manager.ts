@@ -11,6 +11,7 @@ import {
   type FirefoxNativeCapabilityReport,
 } from "./firefox-native-capabilities.js";
 import { runBrowserCommand } from "./browser-command.js";
+import { assertFirefoxRuntimePackage, assertFirefoxRuntimePackageAsync } from "./firefox-runtime-package.js";
 
 export interface ManagedFirefoxBinary {
   version: string;
@@ -54,7 +55,7 @@ function detectBinaryVersion(binaryPath: string): string | null {
     });
     if (result.error || (typeof result.status === "number" && result.status !== 0)) return null;
     const raw = String(result.stdout || result.stderr || "").trim();
-    return raw.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)/i)?.[1] ?? null;
+    return raw.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)(?=\s|$)/i)?.[1] ?? null;
   } catch {
     return null;
   }
@@ -73,10 +74,12 @@ export function listManagedFirefoxBinaries(
       const installDir = path.join(root, entry);
       const binaryPath = binaryForInstall(installDir, platform);
       try {
+        assertFirefoxRuntimePackage(binaryPath, platform, match[1]);
         if (!fs.statSync(binaryPath).isFile() || !supportsFirefoxNativeConfig(binaryPath, platform)) continue;
         const capabilityReport = readFirefoxNativeCapabilityReport(binaryPath, platform);
         const version = detectBinaryVersion(binaryPath);
         if (!capabilityReport || !version || version !== match[1] || capabilityReport.browserVersion !== version) continue;
+        assertFirefoxRuntimePackage(binaryPath, platform, version);
         candidates.push({ version, binaryPath, installDir, capabilityReport });
       } catch {
         // Ignore one incomplete or tampered install without hiding healthy builds.
@@ -117,16 +120,18 @@ export async function listManagedFirefoxBinariesAsync(
     const installDir = path.join(root, entry);
     const binaryPath = binaryForInstall(installDir, platform);
     try {
+      await assertFirefoxRuntimePackageAsync(binaryPath, platform, match[1]);
       const capabilityReport = await readFirefoxNativeCapabilityReportAsync(binaryPath, platform);
       if (!capabilityReport || !FIREFOX_NATIVE_CONFIG_CAPABILITIES.every((capability) =>
         capabilityReport.capabilities.includes(capability)
       )) continue;
       const result = await runBrowserCommand(binaryPath, ["--version"], { timeout: 5_000 });
       const raw = String(result?.stdout || result?.stderr || "").trim();
-      const version = raw.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)/i)?.[1] ?? null;
+      const version = raw.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)(?=\s|$)/i)?.[1] ?? null;
       if (!version || version !== match[1] || capabilityReport.browserVersion !== version) continue;
       // Recheck XUL as well as the executable after the separate version probe.
       if (await readFirefoxNativeCapabilityReportAsync(binaryPath, platform) !== capabilityReport) continue;
+      await assertFirefoxRuntimePackageAsync(binaryPath, platform, version);
       candidates.push({ version, binaryPath, installDir, capabilityReport });
     } catch {
       // Ignore one incomplete or tampered install without hiding healthy builds.

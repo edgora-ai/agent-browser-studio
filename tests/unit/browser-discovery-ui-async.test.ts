@@ -149,15 +149,23 @@ vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({
   bundledFirefoxBinaryPathAsync: mocks.forbidden("unexpected Firefox extraction"),
   readBundledBrowsersManifest: mocks.forbidden("unexpected bundled manifest read"),
 }));
-vi.mock("../../src/main/services/firefox-native-capabilities.js", () => ({
-  FIREFOX_NATIVE_REQUIRED_SWITCH: "--agent-browser-native-required",
-  FIREFOX_NATIVE_CONFIG_PREF: "agent_browser.fingerprint.config",
-  FIREFOX_NATIVE_CONFIG_CAPABILITIES: ["config-v1", "native-required-v1", "snapshot-v1"],
-  FIREFOX_NATIVE_PARITY_CAPABILITIES: ["fixture-parity-v1"],
-  firefoxNativeModeRequested: () => false,
-  readFirefoxNativeCapabilityReport: mocks.syncCapabilities,
-  readFirefoxNativeCapabilityReportAsync: mocks.capabilities,
-}));
+vi.mock("../../src/main/services/firefox-native-capabilities.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/main/services/firefox-native-capabilities.js")>();
+  return {
+    FIREFOX_NATIVE_REQUIRED_SWITCH: "--agent-browser-native-required",
+    FIREFOX_NATIVE_CONFIG_PREF: "agent_browser.fingerprint.config",
+    FIREFOX_NATIVE_CONFIG_CAPABILITIES: ["config-v1", "native-required-v1", "snapshot-v1"],
+    FIREFOX_NATIVE_PARITY_CAPABILITIES: ["fixture-parity-v1"],
+    firefoxNativeModeRequested: () => false,
+    readFirefoxNativeCapabilityReport: mocks.syncCapabilities,
+    readFirefoxNativeCapabilityReportAsync: mocks.capabilities,
+    getFirefoxNativeSelectionIdentityAsync: async (binary: string) => {
+      fixture.assertFile(binary);
+      fixture.assertFile(path.join(path.dirname(binary), process.platform === "darwin" ? "XUL" : process.platform === "win32" ? "xul.dll" : "libxul.so"));
+      return actual.getFirefoxNativeSelectionIdentityAsync(binary);
+    },
+  };
+});
 vi.mock("../../src/main/services/browser-engine.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../../src/main/services/browser-engine.js")>();
   return {
@@ -176,6 +184,12 @@ vi.mock("../../src/main/services/browser-engine.js", async importOriginal => {
 vi.mock("../../src/main/services/browser-command.js", () => ({ runBrowserCommand: mocks.command }));
 vi.mock("../../src/main/services/process-discovery.js", () => ({
   findBrowserByProfileSync: mocks.processDiscovery,
+  inspectBrowserLaunchesSync: (profileDir: string) => {
+    if (!path.resolve(profileDir).startsWith(path.join(fixture.caseRoot, "profiles") + path.sep)) {
+      throw new Error("Refusing process discovery outside the owned profile fixture");
+    }
+    return { available: true, candidates: [], tracked: null };
+  },
   parseBrowserProcessLine: mocks.forbidden("unexpected process parsing"),
 }));
 vi.mock("../../src/main/services/profile-restore-lock.js", () => ({ acquireRestoreLock: mocks.acquireRestoreLock }));
@@ -193,7 +207,8 @@ vi.mock("../../src/main/services/fingerprint-baseline.js", () => ({
 vi.mock("../../src/main/services/environment-risk.js", () => ({
   checkEnvironmentRiskRuntime: mocks.forbidden("environment network probe"), shouldBlockEnvironmentRisk: vi.fn(), summarizeEnvFindings: vi.fn(),
 }));
-vi.mock("../../src/main/services/browser/launch-guards.js", () => ({
+vi.mock("../../src/main/services/browser/launch-guards.js", async importOriginal => ({
+  assertHostPlatformCompatible: (await importOriginal<typeof import("../../src/main/services/browser/launch-guards.js")>()).assertHostPlatformCompatible,
   runFingerprintDriftGuard: mocks.forbidden("launch drift guard"), runEnvironmentRiskGuard: mocks.forbidden("launch risk guard"),
   LaunchBlockedError: class LaunchBlockedError extends Error {},
 }));
@@ -733,7 +748,10 @@ describe("browser-manager metadata-only UI discovery", () => {
     mocks.firefoxVersion.mockReturnValueOnce(versionPending.promise);
     expectedFirefoxVersionCalls = 1;
     const launched = watch(launchBrowser("ab_firefox_pinned"));
-    await turn();
+    await Promise.race([
+      launched,
+      vi.waitFor(() => expect(mocks.firefoxVersion).toHaveBeenCalledExactlyOnceWith(firefox)),
+    ]);
     expect(mocks.acquireRestoreLock).toHaveBeenCalledExactlyOnceWith("ab_firefox_pinned");
     expect(mocks.firefoxFind).toHaveBeenCalledTimes(1);
     expect(mocks.firefoxVersion).toHaveBeenCalledExactlyOnceWith(firefox);
@@ -743,7 +761,7 @@ describe("browser-manager metadata-only UI discovery", () => {
     expect(mocks.firefoxPrefs).not.toHaveBeenCalled();
     expect(mocks.firefoxSpawn).not.toHaveBeenCalled();
     versionPending.resolve(null);
-    await expect(launched).rejects.toThrow(/Cannot verify the installed Firefox version required by profile: 153\.0/);
+    await expect(launched).rejects.toThrow(/Cannot verify the selected Firefox runtime version/);
     expect(mocks.lockHeld).toBe(false);
     expect(mocks.releaseRestoreLock).toHaveBeenCalledTimes(1);
     await turn();

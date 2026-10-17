@@ -42,6 +42,13 @@ function normalizeTags(value: string): string[] {
   return [...new Set(value.split(/[;|]/).map((t) => t.trim()).filter(Boolean).map((t) => t.slice(0, 40)))].slice(0, 20);
 }
 
+function parseCsvPlatform(value: string | undefined): ProfileSpec["platform"] {
+  // Omission belongs to common creation defaults, not an explicit Windows choice.
+  if (!value) return undefined;
+  const platform = value.toLowerCase();
+  return platform === "macos" || platform === "android" ? platform : "windows";
+}
+
 export function parseBulkCsv(text: string): ProfileSpec[] {
   if (!text || !text.trim()) return [];
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -71,7 +78,7 @@ export function parseBulkCsv(text: string): ProfileSpec[] {
         } else if (key === "tags") {
           spec.tags = normalizeTags(cell);
         } else if (key === "platform") {
-          spec.platform = cell.toLowerCase() === "macos" ? "macos" : "windows";
+          spec.platform = parseCsvPlatform(cell);
         } else {
           (spec as any)[key] = cell;
         }
@@ -86,7 +93,7 @@ export function parseBulkCsv(text: string): ProfileSpec[] {
     const seed = Number(p[4]);
     return {
       name: p[0] || "",
-      platform: (p[1] || "windows").toLowerCase() === "macos" ? "macos" : "windows",
+      platform: parseCsvPlatform(p[1]),
       locale: p[2] || undefined,
       timezone: p[3] || undefined,
       fingerprintSeed: Number.isInteger(seed) && seed > 0 ? seed : undefined,

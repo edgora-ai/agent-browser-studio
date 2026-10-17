@@ -522,7 +522,7 @@ export function bulkCreateProfilesWithAccounts(
       const name = deriveProfileName(it.url, it.username, existingNames);
       const r = createBrowserProfile({
         name,
-        platform: options.platform || "windows",
+        platform: options.platform,
         ...(Array.isArray(it.tags) && it.tags.length ? { tags: it.tags } : {}),
       });
       dirId = r.dirId;

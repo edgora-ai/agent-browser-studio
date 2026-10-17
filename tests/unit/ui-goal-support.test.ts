@@ -19,7 +19,9 @@ class El {
   checked = false;
   disabled = false;
   open = false;
-  value = '';
+  private inputValue = '';
+  get value() { return this.inputValue; }
+  set value(value: string | number) { this.inputValue = String(value); } // Native form controls coerce numeric writes.
   scrollTop = 0;
   onclick: ((e: any) => void) | null = null;
   onchange: ((e: any) => void) | null = null;
@@ -123,6 +125,7 @@ function deferred<T>() { let resolve!: (v: T) => void; let reject!: (e: Error) =
 function harness(modules: string[], fullCore = false) {
   const doc = new Doc();
   const api: any = {
+    app: { paths: vi.fn(async () => ({ platform: 'win32' })) },
     browser: { binary: vi.fn(async () => ({ installed: true, installedVersions: [] })), list: vi.fn(async () => [{ dirId: 'fixture-profile', name: 'Fixture profile', lastModified: 1 }]), presets: vi.fn(async () => []), create: vi.fn(async () => ({ dirId: 'fixture-created' })) },
     profile: { get: vi.fn(async (id: string) => ({ name: 'Fixture ' + id })) },
     proxy: { list: vi.fn(async () => []) },
@@ -151,11 +154,224 @@ function harness(modules: string[], fullCore = false) {
     window.agentBrowser.helpers.toast = helpers.toast;
   }
   for (const m of modules) vm.runInContext(fs.readFileSync(path.join(ROOT, 'src/renderer/js/app', m + '.js'), 'utf8'), context, { filename: m + '.js' });
-  return { doc, api, window, agent: window.agentBrowser, helpers: window.agentBrowser.helpers, timers, el: (id: string) => doc.getElementById(id)! };
+  return { doc, api, window, context, agent: window.agentBrowser, helpers: window.agentBrowser.helpers, timers, el: (id: string) => doc.getElementById(id)! };
 }
 function adapter(id: string) { return { id, name: id, category: 'generic', selectorVersion: 1, lastVerifiedAt: '', domains: [], notes: '' }; }
 
+function fixtureBusinessPreset(id: string) {
+  return { id, icon: '', name: id, nameZh: id, nameSuffix: id, description: 'Synthetic regional preset', descriptionZh: '测试地区预设', region: 'United Kingdom', regionZh: '英国', proxyHint: 'UK exit', proxyHintZh: '英国出口', recommendedGates: {},
+    profile: { platform: 'macos', timezone: 'Europe/London', locale: 'en-GB', webrtcMode: 'auto', geolocationMode: 'custom', geolocationLatitude: 51.5074, geolocationLongitude: -0.1278, geolocationAccuracy: 100, tags: ['uk'] } };
+}
+
 // All provider data in this suite is synthetic, not real IPC/native proof.
+describe('host-aware profile defaults — whole renderer entrypoints', () => {
+  it.each([['darwin', 'macos'], ['win32', 'windows']])('newProfile/createProfile use trusted %s host metadata, not navigator', async (host, platform) => {
+    const h = harness(['profiles']);
+    Object.defineProperty(h.context.navigator, 'platform', { get() { throw new Error('untrusted navigator platform read'); } });
+    h.api.app.paths.mockResolvedValue({ platform: host });
+    h.agent.newProfile(); await flush();
+    expect(h.api.app.paths).toHaveBeenCalledTimes(1);
+    expect(h.el('new-agent-browser-platform').value).toBe(platform);
+    h.el('new-profile-name').value = 'Host default'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Host default', platform }));
+  });
+
+  it.each(['windows', ''])('late host metadata never overwrites an explicit user OS choice %j', async choice => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('new-profile-name').value = 'KEEP DRAFT';
+    const select = h.el('new-agent-browser-platform'); select.value = 'windows'; select.dispatch('change');
+    select.value = choice; select.dispatch('change'); pending.resolve({ platform: 'darwin' }); await flush();
+    expect(select.value).toBe(choice); expect(h.el('new-profile-name').value).toBe('KEEP DRAFT');
+    expect(h.api.browser.create).not.toHaveBeenCalled();
+  });
+
+  it('a closed form host reply cannot populate the next form while its own reply is pending', async () => {
+    const h = harness(['profiles']); const old = deferred<any>(); const current = deferred<any>();
+    h.api.app.paths.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close(); h.agent.newProfile();
+    old.resolve({ platform: 'darwin' }); await flush();
+    expect(h.el('new-agent-browser-platform').value).toBe('');
+    current.resolve({ platform: 'win32' }); await flush();
+    expect(h.el('new-agent-browser-platform').value).toBe('windows');
+  });
+
+  it.each(['resolve', 'reject'])('a closed form ignores its late host %s without changing its fields or guidance', async mode => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close();
+    const note = h.el('new-profile-platform-note').textContent;
+    if (mode === 'resolve') pending.resolve({ platform: 'linux' }); else pending.reject(new Error('old host read failure'));
+    await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').textContent).toBe(note); expect(h.helpers.toast).not.toHaveBeenCalled();
+  });
+
+  it.each(['linux', 'freebsd'])('unsupported %s is not inferred as Windows or presented as native eligibility', async platform => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform });
+    h.agent.newProfile(); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').attrs['data-i18n']).toBe('profile.platform.unsupported-host');
+    expect(h.el('new-profile-platform-note').textContent).toContain('does not support native managed Chromium');
+    h.el('new-profile-name').value = 'Portable only'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create.mock.calls[0][0].platform).toBeUndefined();
+  });
+
+  it('a failed host read retains automatic creation and reports that the host is unavailable', async () => {
+    const h = harness(['profiles']); h.api.app.paths.mockRejectedValue(new Error('synthetic unavailable'));
+    h.agent.newProfile(); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').attrs['data-i18n']).toBe('profile.platform.host-unavailable');
+  });
+
+  it('create while host metadata is pending omits platform and late metadata cannot change the closed form', async () => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('new-profile-name').value = 'Fast submit'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create.mock.calls[0][0].platform).toBeUndefined(); expect(h.el('dlg-profile').open).toBe(false);
+    pending.resolve({ platform: 'darwin' }); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+  });
+
+  it('preset selection and catalog refresh preserve an explicit foreign OS while applying regional fields', async () => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform: 'darwin' });
+    h.api.browser.presets.mockResolvedValue([fixtureBusinessPreset('regional')]); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-platform').value = 'windows'; h.el('new-agent-browser-platform').dispatch('change');
+    h.el('new-profile-preset').value = 'regional'; h.agent.presetChanged();
+    expect(h.el('new-agent-browser-platform').value).toBe('windows');
+    expect(h.el('new-agent-browser-timezone').value).toBe('Europe/London'); expect(h.el('new-agent-browser-locale').value).toBe('en-GB');
+    expect(h.el('new-agent-browser-geolocation-accuracy').value).toBe('100');
+    await h.agent.loadBusinessPresets(); expect(h.el('new-profile-preset').value).toBe('regional');
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ platform: 'windows', businessPresetId: 'regional', timezone: 'Europe/London', locale: 'en-GB', geolocationMode: 'custom', geolocationLatitude: 51.5074, geolocationLongitude: -0.1278, geolocationAccuracy: 100 }));
+  });
+
+  it('an obsolete preset catalog cannot replace the next form catalog or its selected preset', async () => {
+    const h = harness(['profiles']); const old = deferred<any>(); const current = deferred<any>();
+    h.api.browser.presets.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close(); h.agent.newProfile();
+    current.resolve([fixtureBusinessPreset('current')]); await flush(); h.el('new-profile-preset').value = 'current';
+    old.resolve([fixtureBusinessPreset('obsolete')]); await flush();
+    expect(h.el('new-profile-preset').value).toBe('current');
+    expect(h.el('new-profile-preset').querySelector('option[value="obsolete"]')).toBeNull();
+    h.agent.presetChanged(); expect(h.el('new-profile-name').value).toBe('current');
+  });
+
+  it('renderer CSV creation forwards omitted and explicit OS values unchanged', async () => {
+    const h = harness(['profiles']);
+    h.api.browser.parseBulkCsv = vi.fn(async () => ({ ok: true, specs: [{ name: 'Automatic' }, ...['windows', 'macos', 'android'].map(platform => ({ name: platform, platform }))] }));
+    h.el('bulk-import-text').value = 'synthetic CSV'; h.el('bulk-import-proxy').value = 'default';
+    h.agent.doBulkImport(); await flush(); expect(h.api.browser.create).toHaveBeenCalledTimes(4);
+    expect(h.api.browser.create.mock.calls.map((call: any[]) => call[0].platform)).toEqual([undefined, 'windows', 'macos', 'android']);
+  });
+
+  it.each([['firefox', 'managed', 'firefox'], ['chromium', 'off', undefined]])('host defaults preserve %s / %s contracts and explicit OS', async (browser, fingerprintMode, engine) => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform: 'darwin' }); h.agent.newProfile(); await flush();
+    h.el('new-profile-browser').value = browser!; h.el('new-agent-browser-fingerprint-mode').value = fingerprintMode!;
+    h.el('new-agent-browser-platform').value = 'windows'; h.el('new-agent-browser-platform').dispatch('change'); h.el('new-profile-name').value = 'Unchanged contract';
+    h.agent.createProfile(); await flush(); expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ platform: 'windows', fingerprintMode, engine }));
+  });
+
+  it.each(['host-platform-mismatch', 'restart-required'])('launch refusal %s explains the browser restart boundary without changing metadata', async code => {
+    const h = harness(['profiles']); h.api.browser.launch = vi.fn(async () => ({ success: false, code, error: 'low-level English refusal' }));
+    h.api.browser.setMeta = vi.fn(async () => ({ success: true }));
+    h.agent.launch('fixture-profile'); await flush();
+    const [message, level] = h.helpers.toast.mock.calls.at(-1)!;
+    expect(level).toBe('error'); expect(message).toContain('stop'); expect(message).toContain('browser'); expect(message).toContain('Studio');
+    expect(message).not.toContain('low-level English refusal');
+    if (code === 'host-platform-mismatch') expect(message).toContain('Edit the profile OS');
+    expect(h.api.browser.create).not.toHaveBeenCalled(); expect(h.api.browser.setMeta).not.toHaveBeenCalled();
+  });
+});
+
+describe('WebGL profile editing — metadata transport, not native GPU acceptance', () => {
+  it.each([
+    { platform: 'darwin', arch: 'arm64' },
+    { platform: 'darwin', arch: 'x64' },
+    { platform: 'darwin' },
+    { platform: 'win32', arch: 'x64' },
+  ])('keeps macOS GPU fields editable without claiming capability from $platform / $arch', async paths => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.app.paths.mockResolvedValue(paths);
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic storage refusal' });
+    h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-platform').value = 'macos';
+    h.el('new-profile-name').value = 'GPU metadata draft';
+    for (const suffix of ['gpu-vendor', 'gpu-renderer']) {
+      const field = h.el('new-agent-browser-' + suffix);
+      expect(field.disabled).toBe(false); expect(field.attrs.readonly).toBeUndefined();
+      expect((field as any).readOnly).not.toBe(true);
+      expect(field.attrs['aria-describedby']).toBe('new-profile-gpu-help new-profile-gpu-scope');
+    }
+    expect(h.el('new-profile-gpu-help').textContent).toContain('native ARM64 macOS main process and selected ARM64 Chromium');
+    expect(h.el('new-profile-gpu-scope').textContent).toContain('Editing is not proof of support');
+    h.el('new-agent-browser-gpu-vendor').value = 'Google Inc. (Apple)';
+    // A single explicit field remains a partial tuple constraint, not an invented renderer.
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: null,
+    }));
+    expect(h.el('dlg-profile').open).toBe(true);
+    expect(h.el('new-agent-browser-gpu-vendor').value).toBe('Google Inc. (Apple)');
+    expect(h.el('new-agent-browser-gpu-renderer').value).toBe('');
+  });
+
+  it.each(['Apple M2', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)'])('edits and forwards %s unchanged to authoritative main validation', async renderer => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.browser.list.mockResolvedValue([{ dirId: 'fixture-profile', name: 'Saved GPU draft', platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: renderer }]);
+    h.api.browser.setMeta = vi.fn(async () => ({ success: false, error: 'Synthetic storage refusal' }));
+    h.agent.editProfile('fixture-profile'); await flush();
+    expect(h.el('agent-browser-meta-gpu-renderer').value).toBe(renderer);
+    expect(h.el('agent-browser-meta-gpu-vendor').disabled).toBe(false);
+    expect(h.el('agent-browser-meta-gpu-renderer').disabled).toBe(false);
+    expect(h.el('agent-browser-meta-gpu-renderer').attrs['aria-describedby']).toBe('edit-profile-gpu-help edit-profile-gpu-scope');
+    h.agent.saveBrowserMeta(); await flush();
+    expect(h.api.browser.setMeta).toHaveBeenCalledWith('fixture-profile', expect.objectContaining({ platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: renderer }));
+    expect(h.el('agent-browser-meta-gpu-renderer').value).toBe(renderer);
+    // Clearing is explicit and sent as null, not a renderer-side auto-migration.
+    h.el('agent-browser-meta-gpu-vendor').value = ''; h.el('agent-browser-meta-gpu-renderer').value = '';
+    h.agent.saveBrowserMeta(); await flush();
+    expect(h.api.browser.setMeta).toHaveBeenLastCalledWith('fixture-profile', expect.objectContaining({ gpuVendor: null, gpuRenderer: null }));
+  });
+
+  for (const locale of ['en-US', 'zh-CN']) {
+    for (const entrypoint of ['launch', 'create', 'save']) {
+      it.each(['response', 'throw'])(`${locale} localizes only the stable GPU backend refusal in ${entrypoint} (%s)`, async delivery => {
+        const h = harness(['ipc', 'profiles'], true);
+        // Load the shipped dictionary, all three merge layers included. The DOM
+        // fixture is not a browser/native-capability or persistence proof.
+        (h.doc as any).addEventListener = vi.fn();
+        h.context.localStorage = { getItem: () => null, setItem: vi.fn() };
+        h.context.navigator.language = locale;
+        vm.runInContext(fs.readFileSync(path.join(ROOT, 'src/renderer/js/i18n.js'), 'utf8'), h.context, { filename: 'i18n.js' });
+        expect(h.window.i18n.get()).toBe(locale);
+        const raw = "Error invoking remote method 'browser:launch': Error: Unsupported GPU overrides for Chromium: synthetic unsupported tuple";
+        const refuse = vi.fn(async () => {
+          if (delivery === 'throw') throw new Error(raw);
+          return { success: false, error: raw };
+        });
+        if (entrypoint === 'launch') {
+          h.api.browser.launch = refuse; h.agent.launch('fixture-profile');
+        } else if (entrypoint === 'create') {
+          h.api.browser.create = refuse; h.agent.newProfile(); await flush();
+          h.el('new-profile-name').value = 'GPU draft'; h.agent.createProfile();
+        } else {
+          h.api.browser.setMeta = refuse; h.agent.editProfile('fixture-profile'); await flush();
+          h.agent.saveBrowserMeta();
+        }
+        await flush();
+        expect(refuse).toHaveBeenCalledTimes(1);
+        const [message, level] = h.helpers.toast.mock.calls.at(-1)!;
+        expect(level).toBe('error');
+        expect(message).toBe(h.window.i18n.t('launch.gpu-unsupported'));
+        expect(message).toContain(locale === 'zh-CN' ? '主进程' : 'main process');
+        expect(message).not.toContain('synthetic unsupported tuple');
+        if (entrypoint === 'launch') expect(h.api.browser.create).not.toHaveBeenCalled();
+      });
+    }
+  }
+
+  it('does not replace an unrelated backend error with GPU guidance', async () => {
+    const h = harness(['profiles']);
+    h.api.browser.launch = vi.fn(async () => ({ success: false, error: 'Synthetic unrelated launch refusal' }));
+    h.agent.launch('fixture-profile'); await flush();
+    expect(h.helpers.toast.mock.calls.at(-1)).toEqual(['Synthetic unrelated launch refusal', 'error']);
+  });
+});
+
 describe('UI goal support — whole modules and production ID contracts', () => {
   it.each(['pending', 'missing', 'rejected', 'success'])('first full adapter detail is visible: %s', async mode => {
     const h = harness(['agent-adapters']); h.agent.agentLoadAdapters(); await flush(); h.agent.adapterToggle('fixture-adapter');

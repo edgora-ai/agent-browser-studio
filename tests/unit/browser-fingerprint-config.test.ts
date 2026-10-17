@@ -3,8 +3,11 @@ import {
   buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
   composeGpuRenderer,
+  getChromiumManagedGpuIdentity,
   validateBrowserHardwareProfile,
   AGENT_BROWSER_FINGERPRINT_SWITCH,
+  LEGACY_FINGERPRINT_SWITCH,
+  type ChromiumGpuContext,
 } from "../../src/main/services/browser-fingerprint-config.js";
 import type { BrowserFingerprintMeta } from "../../src/main/types.js";
 
@@ -18,6 +21,20 @@ const NATIVE_WEBGPU_CONFIG = {
   subgroupMaxSize: 0,
 } as const;
 
+const MAC_ARM64_GPU_CONTEXT: ChromiumGpuContext = Object.freeze({
+  hostPlatform: "darwin",
+  hostArchitecture: "arm64",
+  kernelArchitecture: "arm64",
+});
+const MAC_GPU_PERSONAS = [
+  { id: "mac-apple-m1-8c-8gb-1440x900", renderer: "Apple M1", cpu: 8, memory: 8, width: 1440, height: 900 },
+  { id: "mac-apple-m2-8c-16gb-1512x982", renderer: "Apple M2", cpu: 8, memory: 16, width: 1512, height: 982 },
+  { id: "mac-apple-m3-8c-16gb-1710x1107", renderer: "Apple M3", cpu: 8, memory: 16, width: 1710, height: 1107 },
+  { id: "mac-apple-m2pro-12c-16gb-1728x1117", renderer: "Apple M2 Pro", cpu: 12, memory: 16, width: 1728, height: 1117 },
+] as const;
+const legacyMacRenderer = (model: string): string => `ANGLE (Apple, ANGLE Metal Renderer: ${model}, Unspecified Version)`;
+const GPU_SUPPORT_ERROR = /Unsupported GPU overrides for Chromium:.*macos.*darwin.*arm64.*kernelArchitecture.*arm64.*off/;
+
 describe("Agent Browser fingerprint config", () => {
   it.each(["windows", "macos", "android"] as const)("keeps Chromium GPU identity native for the %s persona", (platform) => {
     const config = buildBrowserFingerprintConfig({ fingerprintSeed: 424242, platform }, "152.0.7977.72");
@@ -27,19 +44,24 @@ describe("Agent Browser fingerprint config", () => {
     expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
   });
 
-  it("rejects explicit Chromium GPU overrides without treating plausible identities as physical matches", () => {
+  it("requires a runtime GPU context for Chromium overrides but allows coherent Mac fields to be saved", () => {
     for (const overrides of [
       { gpuVendor: "Google Inc. (Apple)" },
-      { gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)" },
-      { gpuVendor: "Google Inc. (Apple)", gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)" },
+      { gpuRenderer: "Apple M1" },
+      { gpuVendor: "Google Inc. (Apple)", gpuRenderer: legacyMacRenderer("Apple M3") },
+    ]) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: 424242, platform: "macos", ...overrides };
+      expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72")).toThrow(GPU_SUPPORT_ERROR);
+      expect(() => buildBrowserFingerprintArg(meta, "152.0.7977.72")).toThrow(GPU_SUPPORT_ERROR);
+      expect(() => validateBrowserHardwareProfile(meta)).not.toThrow();
+    }
+    for (const overrides of [
+      { gpuRenderer: legacyMacRenderer("Apple M1 Pro") },
       { gpuVendor: " ", gpuRenderer: " " },
     ]) {
       const meta: BrowserFingerprintMeta = { fingerprintSeed: 424242, platform: "macos", ...overrides };
-      expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72"))
-        .toThrow(/Unsupported GPU overrides for Chromium.*gpu(Vendor|Renderer)/);
-      expect(() => buildBrowserFingerprintArg(meta, "152.0.7977.72"))
-        .toThrow(/native host GPU; clear gpuVendor and gpuRenderer/);
-      expect(() => validateBrowserHardwareProfile(meta)).toThrow(/Unsupported GPU overrides for Chromium/);
+      expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72")).toThrow(GPU_SUPPORT_ERROR);
+      expect(() => validateBrowserHardwareProfile(meta)).toThrow(/Incoherent advanced hardware overrides/);
     }
   });
 
@@ -281,12 +303,12 @@ describe("Agent Browser fingerprint config", () => {
     expect(firefox.appVersion).toBe("5.0 (Android)");
   });
 
-  it("preserves legacy Firefox Metal and Android renderer forms without spoofing Chromium", () => {
+  it("uses Gecko's Apple privacy bucket and retains Android/native-WebGPU intents without spoofing Chromium", () => {
     for (const platform of ["macos", "android"] as const) {
       const chromium = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "chromium");
       const firefox = buildBrowserFingerprintConfig({ fingerprintSeed: 3, platform }, "150.0.7871.114", null, "firefox");
       expect(chromium.webgl).toEqual({ vendor: "", renderer: "" });
-      expect(firefox.webgl.renderer).toContain(platform === "macos" ? "Apple M2 Pro" : "Adreno (TM) 740");
+      expect(firefox.webgl.renderer).toContain(platform === "macos" ? "Apple M1, or similar" : "Adreno (TM) 740");
       expect(firefox.webgl.renderer).not.toContain("(0x");
       expect(composeGpuRenderer(firefox.webgl.renderer, null, "chromium")).toBe(firefox.webgl.renderer);
       expect(firefox.webgpu).toEqual({
@@ -294,7 +316,7 @@ describe("Agent Browser fingerprint config", () => {
         vendor: platform === "macos" ? "Apple" : "Qualcomm",
         architecture: platform === "macos" ? "metal-3" : "Adreno 7xx",
         device: platform === "macos" ? "Apple M2 Pro" : "Adreno (TM) 740",
-        description: firefox.webgl.renderer,
+        description: platform === "macos" ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)" : firefox.webgl.renderer,
         subgroupMinSize: 32,
         subgroupMaxSize: 32,
       });
@@ -552,3 +574,239 @@ describe("Agent Browser fingerprint config", () => {
     expect(decoded.secureDns).toEqual(secureDns);
   });
 });
+
+describe("Chromium managed macOS Apple-model GPU policy", () => {
+  it.each(MAC_GPU_PERSONAS)("projects $renderer without changing its original hardware tuple", (persona) => {
+    const meta: BrowserFingerprintMeta = {
+      fingerprintSeed: MAC_GPU_PERSONAS.indexOf(persona) || 4,
+      platform: "macos",
+      fingerprintMode: "managed",
+    };
+    const native = buildBrowserFingerprintConfig(meta, "152.0.7977.72");
+    const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+    expect(config).toEqual({ ...native, webgl: { vendor: "Google Inc. (Apple)", renderer: persona.renderer } });
+    expect(config).toMatchObject({
+      hardwareConcurrency: persona.cpu,
+      deviceMemory: persona.memory,
+      hardwareProfile: { id: persona.id, source: "seeded" },
+      screen: { width: persona.width, height: persona.height, availTop: 25, devicePixelRatio: 2 },
+      webgpu: NATIVE_WEBGPU_CONFIG,
+    });
+  });
+
+  it("preserves every non-GPU field and the four-entry seed mapping across a 500-seed corpus", () => {
+    for (let fingerprintSeed = 1; fingerprintSeed <= 500; fingerprintSeed++) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed, platform: "macos", locale: "zh-CN", timezone: "Asia/Shanghai", webrtcMode: "disable" };
+      const native = buildBrowserFingerprintConfig(meta, "152.0.7977.72");
+      const managed = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+      const persona = MAC_GPU_PERSONAS[fingerprintSeed % 4];
+      expect(managed).toEqual({ ...native, webgl: { vendor: "Google Inc. (Apple)", renderer: persona.renderer } });
+      expect(managed.hardwareProfile.id).toBe(persona.id);
+      expect(managed.hardwareConcurrency).toBe(persona.cpu);
+      expect(managed.deviceMemory).toBe(persona.memory);
+      expect(managed.screen).toMatchObject({ width: persona.width, height: persona.height, availHeight: persona.height - 25, devicePixelRatio: 2 });
+    }
+  });
+
+  it.each(MAC_GPU_PERSONAS)("accepts only the exact bare/legacy $renderer aliases as partial tuple constraints", (persona) => {
+    const seed = 11;
+    for (const overrides of [
+      { gpuRenderer: persona.renderer },
+      { gpuRenderer: legacyMacRenderer(persona.renderer) },
+      { gpuVendor: "Google Inc. (Apple)", gpuRenderer: persona.renderer },
+      { gpuVendor: "Google Inc. (Apple)", gpuRenderer: legacyMacRenderer(persona.renderer) },
+      { hardwareConcurrency: persona.cpu, deviceMemory: persona.memory, screenWidth: persona.width, screenHeight: persona.height, taskbarHeight: 25, gpuRenderer: persona.renderer },
+    ]) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: seed, platform: "macos", ...overrides };
+      expect(() => validateBrowserHardwareProfile(meta)).not.toThrow();
+      expect(() => validateBrowserHardwareProfile(meta, "chromium", MAC_ARM64_GPU_CONTEXT)).not.toThrow();
+      const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+      expect(config.hardwareProfile).toMatchObject({ id: persona.id, source: "validated-override" });
+      expect(config.webgl).toEqual({ vendor: "Google Inc. (Apple)", renderer: persona.renderer });
+      expect(getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT)?.webgl).toEqual(config.webgl);
+    }
+  });
+
+  it("keeps vendor-only and numeric partial constraints on the original joint catalog", () => {
+    for (const overrides of [
+      { gpuVendor: "Google Inc. (Apple)" },
+      { hardwareConcurrency: 8, gpuVendor: "Google Inc. (Apple)" },
+      { deviceMemory: 16, gpuVendor: "Google Inc. (Apple)" },
+      { screenWidth: 1728, gpuVendor: "Google Inc. (Apple)" },
+    ]) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: 99, platform: "macos", ...overrides };
+      const baseline = buildBrowserFingerprintConfig({ ...meta, gpuVendor: undefined }, "152.0.7977.72");
+      const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+      expect(config).toEqual({
+        ...baseline,
+        hardwareProfile: { ...baseline.hardwareProfile, source: "validated-override" },
+        webgl: { vendor: "Google Inc. (Apple)", renderer: legacyModel(baseline.hardwareProfile.id) },
+      });
+    }
+  });
+
+  it("rejects unknown models, loose aliases, mixed tuples and invalid field types instead of coercing them", () => {
+    const invalidOverrides: Record<string, unknown>[] = [
+      { gpuRenderer: "Apple M1 Pro" },
+      { gpuRenderer: "Apple M1Pro" },
+      { gpuRenderer: legacyMacRenderer("Apple M1 Pro") },
+      { gpuRenderer: legacyMacRenderer("Apple M4") },
+      { gpuRenderer: "Apple M4" },
+      { gpuRenderer: "apple m1" },
+      { gpuRenderer: " Apple M1" },
+      { gpuRenderer: "Apple M1 " },
+      { gpuRenderer: legacyMacRenderer("Apple M1").replace("Unspecified Version", "Other Version") },
+      { gpuRenderer: "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)" },
+      { gpuRenderer: " " },
+      { gpuVendor: "Apple" },
+      { gpuVendor: "Google Inc. (NVIDIA)", gpuRenderer: "Apple M1" },
+      { gpuVendor: " Google Inc. (Apple)" },
+      { gpuRenderer: "Apple M1", hardwareConcurrency: 12 },
+      { gpuRenderer: "Apple M1", deviceMemory: 16 },
+      { gpuRenderer: "Apple M2", screenWidth: 1710 },
+      { gpuRenderer: "Apple M3", screenHeight: 982 },
+      { gpuRenderer: "Apple M2 Pro", taskbarHeight: 48 },
+      { hardwareConcurrency: "8" },
+      { deviceMemory: 8.5 },
+      { screenWidth: Number.NaN },
+      { screenHeight: Number.POSITIVE_INFINITY },
+      { gpuRenderer: 1 },
+      { gpuVendor: false },
+      { gpuRenderer: ["Apple M1"] },
+      { gpuRenderer: { toString: () => "Apple M1" } },
+      { gpuRenderer: { toString: () => legacyMacRenderer("Apple M1") } },
+      { gpuVendor: { toString: () => "Google Inc. (Apple)" } },
+      { gpuRenderer: new String("Apple M1") },
+    ];
+    for (const overrides of invalidOverrides) {
+      const meta = { fingerprintSeed: 99, platform: "macos", ...overrides } as BrowserFingerprintMeta;
+      expect(() => validateBrowserHardwareProfile(meta), JSON.stringify(overrides)).toThrow(/Incoherent advanced hardware overrides/);
+      expect(() => validateBrowserHardwareProfile(meta, "chromium", MAC_ARM64_GPU_CONTEXT)).toThrow(/Incoherent advanced hardware overrides/);
+      expect(() => buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT))
+        .toThrow(/Incoherent advanced hardware overrides/);
+      expect(() => getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT)).toThrow(/Incoherent advanced hardware overrides/);
+    }
+  });
+
+  it.each([
+    { name: "missing context", context: undefined },
+    { name: "null context", context: null as unknown as ChromiumGpuContext },
+    { name: "incomplete context", context: {} as ChromiumGpuContext },
+    { name: "unknown kernel architecture", context: { ...MAC_ARM64_GPU_CONTEXT, kernelArchitecture: null } },
+    { name: "x64 main process / Rosetta", context: { ...MAC_ARM64_GPU_CONTEXT, hostArchitecture: "x64" } },
+    { name: "x64 kernel", context: { ...MAC_ARM64_GPU_CONTEXT, kernelArchitecture: "x64" } },
+    { name: "Windows host", context: { ...MAC_ARM64_GPU_CONTEXT, hostPlatform: "win32" } },
+    { name: "Linux host", context: { ...MAC_ARM64_GPU_CONTEXT, hostPlatform: "linux" } },
+    { name: "unrecognized platform casing", context: { ...MAC_ARM64_GPU_CONTEXT, hostPlatform: "Darwin" } },
+    { name: "unrecognized architecture casing", context: { ...MAC_ARM64_GPU_CONTEXT, kernelArchitecture: "ARM64" } },
+  ])("keeps native GPU and rejects runtime overrides for $name", ({ context }) => {
+    const meta: BrowserFingerprintMeta = { fingerprintSeed: 3, platform: "macos" };
+    const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", context);
+    expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(config.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+    expect(() => validateBrowserHardwareProfile(meta, "chromium", context)).not.toThrow();
+    const explicit = { ...meta, gpuRenderer: "Apple M2 Pro" };
+    expect(() => buildBrowserFingerprintConfig(explicit, "152.0.7977.72", null, "chromium", context)).toThrow(GPU_SUPPORT_ERROR);
+    expect(() => buildBrowserFingerprintArg(explicit, "152.0.7977.72", AGENT_BROWSER_FINGERPRINT_SWITCH, null, "chromium", context))
+      .toThrow(GPU_SUPPORT_ERROR);
+    if (context === undefined) {
+      expect(() => validateBrowserHardwareProfile(explicit, "chromium", context)).not.toThrow();
+    } else {
+      expect(() => validateBrowserHardwareProfile(explicit, "chromium", context)).toThrow(GPU_SUPPORT_ERROR);
+    }
+    expect(getChromiumManagedGpuIdentity(meta, context)).toBeNull();
+  });
+
+  it.each(["windows", "android"] as const)("does not change native Chromium GPU or permit explicit GPU fields for %s", (platform) => {
+    const meta: BrowserFingerprintMeta = { fingerprintSeed: 3, platform };
+    expect(buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT))
+      .toEqual(buildBrowserFingerprintConfig(meta, "152.0.7977.72"));
+    expect(getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT)).toBeNull();
+    for (const overrides of [{ gpuVendor: "Google Inc. (Apple)" }, { gpuRenderer: "Apple M1" }]) {
+      const explicit = { ...meta, ...overrides };
+      expect(() => validateBrowserHardwareProfile(explicit)).toThrow(/Unsupported GPU overrides for Chromium:/);
+      expect(() => validateBrowserHardwareProfile(explicit, "chromium", MAC_ARM64_GPU_CONTEXT)).toThrow(GPU_SUPPORT_ERROR);
+      expect(() => buildBrowserFingerprintConfig(explicit, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT)).toThrow(GPU_SUPPORT_ERROR);
+    }
+  });
+
+  it("keeps off mode native and rejects active GPU constraints only at runtime validation", () => {
+    const meta: BrowserFingerprintMeta = { fingerprintSeed: 3, platform: "macos", fingerprintMode: "off" };
+    const config = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+    expect(config).toEqual(buildBrowserFingerprintConfig(meta, "152.0.7977.72"));
+    expect(config.webgl).toEqual({ vendor: "", renderer: "" });
+    expect(getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT)).toBeNull();
+    const explicit = { ...meta, gpuRenderer: "Apple M1" };
+    expect(() => validateBrowserHardwareProfile(explicit)).not.toThrow();
+    expect(() => validateBrowserHardwareProfile(explicit, "chromium", MAC_ARM64_GPU_CONTEXT)).toThrow(GPU_SUPPORT_ERROR);
+    expect(() => buildBrowserFingerprintConfig(explicit, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT)).toThrow(GPU_SUPPORT_ERROR);
+  });
+
+  it("treats undefined, null and empty GPU fields as absent constraints even on supported Mac contexts", () => {
+    const meta: BrowserFingerprintMeta = { fingerprintSeed: 4, platform: "macos" };
+    const seeded = buildBrowserFingerprintConfig(meta, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT);
+    for (const overrides of [{ gpuVendor: undefined, gpuRenderer: undefined }, { gpuVendor: null, gpuRenderer: null }, { gpuVendor: "", gpuRenderer: "" }]) {
+      const explicit = { ...meta, ...overrides };
+      expect(() => validateBrowserHardwareProfile(explicit, "chromium", MAC_ARM64_GPU_CONTEXT)).not.toThrow();
+      expect(buildBrowserFingerprintConfig(explicit, "152.0.7977.72", null, "chromium", MAC_ARM64_GPU_CONTEXT)).toEqual(seeded);
+      expect(getChromiumManagedGpuIdentity(explicit, MAC_ARM64_GPU_CONTEXT)?.webgl).toEqual(seeded.webgl);
+    }
+    expect(seeded.hardwareProfile.source).toBe("seeded");
+    expect(seeded.webgl).toEqual({ vendor: "Google Inc. (Apple)", renderer: "Apple M1" });
+  });
+
+  it("returns a deterministic detached policy projection for request hashing without mutating its inputs", () => {
+    const meta = Object.freeze({ fingerprintSeed: 99, platform: "macos" as const, gpuRenderer: legacyMacRenderer("Apple M2 Pro") });
+    const expected = {
+      policy: "macos-arm64-apple-model-v1",
+      hostPlatform: "darwin",
+      hostArchitecture: "arm64",
+      kernelArchitecture: "arm64",
+      webgl: { vendor: "Google Inc. (Apple)", renderer: "Apple M2 Pro" },
+    };
+    const first = getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT);
+    expect(first).toEqual(expected);
+    expect(getChromiumManagedGpuIdentity({ ...meta, gpuRenderer: "Apple M2 Pro" }, MAC_ARM64_GPU_CONTEXT)).toEqual(expected);
+    first!.webgl.renderer = "mutated result";
+    expect(getChromiumManagedGpuIdentity(meta, MAC_ARM64_GPU_CONTEXT)).toEqual(expected);
+    for (const platform of [undefined, "ios", "linux", null] as const) {
+      expect(getChromiumManagedGpuIdentity({ fingerprintSeed: 4, platform } as BrowserFingerprintMeta, MAC_ARM64_GPU_CONTEXT)).toBeNull();
+    }
+  });
+
+  it("threads the sixth argument into both supported fingerprint switches without changing secure DNS", () => {
+    const meta: BrowserFingerprintMeta = { fingerprintSeed: 4, platform: "macos", gpuRenderer: "Apple M2" };
+    const secureDns = { enabled: true, templates: ["https://dns.google/dns-query{?dns}"] };
+    const expected = buildBrowserFingerprintConfig(meta, "152.0.7977.72", secureDns, "chromium", MAC_ARM64_GPU_CONTEXT);
+    for (const prefix of [AGENT_BROWSER_FINGERPRINT_SWITCH, LEGACY_FINGERPRINT_SWITCH]) {
+      const arg = buildBrowserFingerprintArg(meta, "152.0.7977.72", prefix, secureDns, "chromium", MAC_ARM64_GPU_CONTEXT);
+      const decoded = JSON.parse(Buffer.from(arg.slice(prefix.length), "base64url").toString("utf8"));
+      expect(arg.startsWith(prefix)).toBe(true);
+      expect(decoded).toEqual(expected);
+      expect(decoded.webgl).toEqual({ vendor: "Google Inc. (Apple)", renderer: "Apple M2" });
+      expect(decoded.webgpu).toEqual(NATIVE_WEBGPU_CONFIG);
+    }
+  });
+
+  it("projects Firefox Apple WebGL independently of Chromium while preserving native-WebGPU and catalog selection", () => {
+    for (const persona of MAC_GPU_PERSONAS) {
+      const meta: BrowserFingerprintMeta = { fingerprintSeed: 99, platform: "macos", gpuRenderer: legacyMacRenderer(persona.renderer) };
+      const baseline = buildBrowserFingerprintConfig(meta, "154.0", null, "firefox");
+      expect(buildBrowserFingerprintConfig(meta, "154.0", null, "firefox", MAC_ARM64_GPU_CONTEXT)).toEqual(baseline);
+      expect(() => validateBrowserHardwareProfile(meta, "firefox", { ...MAC_ARM64_GPU_CONTEXT, kernelArchitecture: null })).not.toThrow();
+      expect(baseline.webgl).toEqual({ vendor: "Apple", renderer: "Apple M1, or similar" });
+      expect(baseline.webgpu).toEqual({
+        mode: "webgl", vendor: "Apple", architecture: "metal-3", device: persona.renderer,
+        description: legacyMacRenderer(persona.renderer), subgroupMinSize: 32, subgroupMaxSize: 32,
+      });
+      expect(buildBrowserFingerprintConfig({ ...meta, gpuRenderer: ` ${meta.gpuRenderer} ` }, "154.0", null, "firefox")).toEqual(baseline);
+      expect(() => validateBrowserHardwareProfile({ ...meta, gpuRenderer: persona.renderer }, "firefox")).toThrow(/Incoherent advanced hardware overrides/);
+    }
+  });
+});
+
+function legacyModel(id: string): string {
+  const persona = MAC_GPU_PERSONAS.find((item) => item.id === id);
+  expect(persona, `Unknown original Mac persona ${id}`).toBeDefined();
+  return persona!.renderer;
+}

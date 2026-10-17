@@ -60,7 +60,7 @@ Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服�
 
 ### 创建
 
-- **+ 新建配置**：**只需填名字**——平台默认 Windows，身份字段由指纹种子自动派生，其余都在「⚙️ 高级配置」里（种子、时区、语言、WebRTC、地理位置、硬件覆盖、DRM、窗口标题、Web App URL）。
+- **+ 新建配置**：**只需填名字**——在受支持的主机上，平台默认跟随宿主系统（Mac 使用 macOS，Windows 主机使用 Windows），身份字段由指纹种子自动派生，其余都在「⚙️ 高级配置」里（种子、时区、语言、WebRTC、地理位置、硬件覆盖、DRM、窗口标题、Web App URL）。
 - **🎯 业务预设**：一键预填一整套自洽身份（TikTok Shop US、Amazon 卖家 US、eBay UK、欧盟电商 DE、加密交易所 SG 等）。
 - **⚡ 快速创建**：免表单一键建号。
 - **📥 批量导入**：每行一个（`name, platform, locale, timezone, seed, webrtcIp`），也支持带表头 CSV。
@@ -79,12 +79,19 @@ Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服�
 
 🔒 **锁定到本机**表示该 profile 被本机签出。其他设备的 push 会被硬拦截（确认后仍可强制覆盖）。锁随同步传播。
 
-### 原生 GPU 与代理 DNS
+### WebGL 画像、原生 GPU 能力与代理 DNS
 
-- Chromium 保持宿主 GPU 的真实 WebGL/WebGPU 身份和能力。种子仍隔离托管隐私表面，但不会把 Metal 硬件变成 Windows D3D GPU。跨系统 persona 只是未支持的 GPU 兼容性诊断，不等于真实设备已验证。
-- 托管 Chromium 的 `gpuVendor`、`gpuRenderer` 应留空。显式 GPU 覆盖会报错，不会被悄悄忽略；已有配置元数据保留。旧配置设置过 GPU 时，需明确清空这两个高级字段后重新启动。Firefox 原有 tuple 策略不变。
+以下是配置与启动规则，不代表已经通过 Ping0 实站或交付包验收。
+
+- 托管 Chromium 要求受支持且匹配的宿主系统：Mac 使用 macOS，Windows 主机使用 Windows。新建、预设和未指定平台的批量导入统一使用该宿主默认值。显式指定的外来系统配置仍可便携保存，不会被后台改写，但本机不兼容的启动会被拒绝。WebGL 画像不能把 Metal 硬件变成 Windows D3D GPU。
+- **仅 macOS 原生 ARM64 主进程＋所选 ARM64 Chromium＋托管模式**使用 Apple WebGL 画像。现有四个 Apple 画像的厂商均为 `Google Inc. (Apple)`，渲染器分别为裸字符串 `Apple M1`、`Apple M2`、`Apple M3`、`Apple M2 Pro`。这是模拟身份，不是物理显卡型号证明；**WebGPU、实际 GPU 能力及绘制仍原生**。
+- 新建或编辑配置时，可在「高级硬件指纹」填写 `gpuVendor` / `gpuRenderer`，或留空由种子选画像。显式值是平台画像组合的部分约束，必须与 CPU、内存、屏幕等共同匹配同一受支持组合，不能随意拼接；受支持的旧 ANGLE／裸型号精确别名仍兼容，输出按上述身份规范化，不支持模糊型号猜测。
+- **Intel、Rosetta、架构未知及其他 Chromium 平台仍用原生 GPU 身份**；显式 GPU 覆盖请求不受支持时拒绝启动，不会悄悄忽略或删除元数据。请纠正为受支持组合，或手动清空这两个字段。界面可编辑只表示可保存元数据，不证明宿主或所选内核有能力；由主进程在启动时权威校验，不从网页 UA 推测。Firefox 保留原画像组合的选择约束，但使用 Gecko 独立呈现：Apple WebGL 画像输出 `Apple` / `Apple M1, or similar`，这是 Gecko 的粗粒度隐私分组，不是物理型号或 Chromium ANGLE 名称。默认 prefs＋BiDi 路线通过引擎偏好设置 WebGL，WebGPU 保持原生，不再用仅改页面的 GPU shim。媒体设备枚举也保持原生，以保留权限策略拒绝、授权前标签隐藏和可用于选择设备的 ID；该 fallback 不承诺合成设备列表。
+- Mac 上的旧 Windows 配置需要明确编辑为 **macOS**，然后在 **Studio 中停止该浏览器，再重新启动**。改种子不会改变操作系统；刷新网页或重启 Studio 可能仍复用旧浏览器。启动身份、模式或 DNS 设置改变后需明确重启；证据不足或已变化时返回 `restart-required`，不会自动杀掉或替换运行进程。
+- 关闭指纹身份（直通／`off`）时 GPU 身份保持原生，不生效的已存身份字段会被忽略，但代理 DNS 隐私仍保留。原生 GPU 或系统家族一致，不等于所有高熵 CPU 与系统版本字段都已匹配物理主机；这些值会另行记录并核对跨表面一致性。
 - 固定 HTTP/SOCKS 代理默认在出口解析目标域名，关闭指纹身份时也一样。经过验证的 HTTPS `managedSecureDnsUrl` 才显式选择严格代理 DoH；该引擎使用此选项需要托管身份模式。代理侧 DNS 走 TCP；显式严格 DoH 才选择原生 QUIC/MASQUE。代理失败时不新增直连回退。
-- 启动日志里的 **configured（已配置）** 不是 DNS 事务成功证据。第三方 `resolver_count=0` 本身既不能证明 fake-IP，也不能证明所有 DNS 均失败；应结合成功请求与真实解析、路由证据，不保证任意第三方固定评分。
+- 仅触发 DNS 的提示与真实资源请求走不同路径，默认代理侧 DNS 和显式严格 DoH 的预解析策略也有区别；本地解析拒绝保护不等于代理出口无法解析。Ping0 包含 DNS-prefetch、CSS、Image 和 STUN 四路探测，不能只用预取路径解释计数。
+- 启动日志里的 **configured（已配置）** 不是 DNS 事务成功证据。第三方 `resolver_count=0` 本身既不能证明 fake-IP，也不能证明所有 DNS 均失败。普通代理网页请求成功，也不等于检测站探针或严格 DoH 事务通过；须关联真实解析与路由证据。不保证任意第三方固定评分。算法、返回字段与分层排错见 [Ping0 检测机制](PING0_DETECTION.md)。
 - 修复后，旧 GPU 基线可能发生漂移，请审查实际变化。应用不会自动删除基线、重置授权或改写已有配置。
 
 ### 指纹信任闭环

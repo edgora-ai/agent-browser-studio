@@ -15,7 +15,7 @@ import ts from "typescript";
 
 const SOURCE = path.resolve(__dirname, "../../src/main");
 const PROJECT = path.resolve(SOURCE, "../..");
-const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "account-transport-proof-"));
+const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "account-transport-proof-")));
 const prohibited: string[] = [];
 const compiled = new Map<string, string>();
 function fail(name: string): (...args: any[]) => never {
@@ -53,7 +53,7 @@ function realm(globals: any): vm.Context {
   };`, context);
   return context;
 }
-function fixture() {
+function fixture(transport: "rest" | "mcp" = "rest") {
   const dir = fs.mkdtempSync(path.join(ROOT, "data-"));
   const faults = { rename: false };
   const modules = new Map<string, any>();
@@ -61,11 +61,16 @@ function fixture() {
   const audits: any[] = [];
   const clipboardAttempts: string[] = [];
   const calls: any[] = [];
+  // Controlled browser-manager boundary only; native/common-create behavior is
+  // tested separately. Record creation options or inject refusals, never launch success.
+  const createdProfileOpts: any[] = [];
+  const browserLaunch = { error: undefined as Error | undefined, calls: [] as any[], activityCalls: [] as string[] };
   let callback: ((req: any, res: any) => Promise<void>) | undefined;
   const context = realm({
     process: { platform: process.platform, argv: ["node", "synthetic-entry"], execPath: process.execPath, env: {
       HOME: dir, NODE_ENV: "test", AGENT_BROWSER_SECRET_BACKEND: "file",
       AGENT_BROWSER_API_TOKEN: "synthetic-transport-token", AGENT_BROWSER_API_PORT: "0",
+      AGENT_BROWSER_MCP_TOKEN: "synthetic-transport-token", AGENT_BROWSER_MCP_PORT: "0",
     }, uptime: () => 1 },
     console: { log() {}, error() {}, warn() {} },
     setTimeout: fail("unexpected timer"), clearTimeout: fail("unexpected timer"),
@@ -74,7 +79,7 @@ function fixture() {
   const allow = new Set([
     "services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts",
     "services/secrets.ts", "services/local-agent.ts", "services/team.ts", "services/browser-engine.ts",
-    "services/rest-api-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/server-mode.ts", "branding.ts", "ipc/agent.ts",
+    "services/rest-api-server.ts", "services/mcp-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/server-mode.ts", "branding.ts", "ipc/agent.ts",
   ]);
   function load(relative: string): any {
     const full = path.resolve(SOURCE, relative.replace(/\.js$/, ".ts"));
@@ -107,6 +112,19 @@ function fixture() {
       // Normalize only logical module IDs; keep actual filesystem paths native.
       const relative = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"))).replace(/\\/g, "/");
       if (allow.has(relative)) return load(relative);
+      if (relative === "services/browser-manager.ts") return new Proxy({
+        listBrowserProfiles: () => createdProfileOpts.map((opts, index) => ({ ...opts, dirId: `synthetic_created_${index}` })),
+        createBrowserProfile: (opts: any) => {
+          const index = createdProfileOpts.push(structuredClone(opts)) - 1;
+          return { dirId: `synthetic_created_${index}` };
+        },
+        launchBrowser: async (dirId: string, opts?: any) => {
+          browserLaunch.calls.push({ dirId, opts: structuredClone(opts) });
+          if (!browserLaunch.error) return fail("unconfigured browser launch")();
+          throw browserLaunch.error;
+        },
+        touchProfileActivity: (dirId: string) => { browserLaunch.activityCalls.push(dirId); },
+      } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque(relative)[key] });
       if (relative === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("bad dirId"); } };
       if (relative === "services/main-i18n.ts") return { tMain: (key: string) => key };
       if (relative === "services/browser-fingerprint-config.ts") return { validateBrowserHardwareProfile: (value: any) => value };
@@ -146,8 +164,10 @@ function fixture() {
       }
     } },
   }) }));
-  const rest = load("services/rest-api-server.ts");
-  rest.startRestApiServer();
+  const rest = transport === "rest" ? load("services/rest-api-server.ts") : undefined;
+  const mcp = transport === "mcp" ? load("services/mcp-server.ts") : undefined;
+  if (mcp) mcp.startMcpServer();
+  else rest.startRestApiServer();
   function request(method: string, route: string, body?: any, headers: any = {}, queued = false) {
     const req: any = new EventEmitter();
     req.method = method; req.url = route; req.headers = { host: "127.0.0.1", authorization: "Bearer synthetic-transport-token", ...headers };
@@ -172,7 +192,7 @@ function fixture() {
       enabled, members: [{ deviceId: draft.deviceId, name: "synthetic", role: value, addedAt: 1 }],
     }; });
   }
-  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls };
+  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls, createdProfileOpts, browserLaunch };
 }
 async function rejection(pending: Promise<any>, code: string) {
   let error: any;
@@ -276,6 +296,70 @@ describe("whole preload/IPC account targeting", () => {
     f.faults.rename = true;
     await expect(f.api.bind(1, ["other"], ref)).rejects.toThrow("synthetic rename rejected");
     expect(f.bytes()).toEqual(before); expect(f.ref(1)).toEqual(ref); expect(f.audits).toEqual([]);
+  });
+});
+
+describe("stable launch refusals through whole REST/MCP modules", () => {
+  it.each(["host-platform-mismatch", "restart-required"])("REST launch retains structured %s and the original error detail", async code => {
+    const f = fixture();
+    const error = "Synthetic launch recovery detail";
+    f.browserLaunch.error = Object.assign(new Error(error), { code });
+    const response = await f.request("POST", "/api/profiles/ab_synthetic_launch/launch", { headless: true }).pending;
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error, code });
+    expect(f.browserLaunch.calls).toEqual([{ dirId: "ab_synthetic_launch", opts: { headless: true } }]);
+    expect(f.audits).toEqual([]);
+  });
+
+  it.each(["host-platform-mismatch", "restart-required"])("MCP launch tool retains structured %s and error inside its text result", async code => {
+    const f = fixture("mcp");
+    const error = "Synthetic launch recovery detail";
+    f.browserLaunch.error = Object.assign(new Error(error), { code });
+    const response = await f.request("POST", "/mcp", {
+      jsonrpc: "2.0", id: "synthetic-launch-refusal", method: "tools/call",
+      params: { name: "agent_browser_launch_profile", arguments: { dirId: "ab_synthetic_launch" } },
+    }).pending;
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ jsonrpc: "2.0", id: "synthetic-launch-refusal", result: { isError: true } });
+    expect(response.body.error).toBeUndefined();
+    expect(response.body.result.content).toHaveLength(1);
+    expect(response.body.result.content[0].type).toBe("text");
+    expect(JSON.parse(response.body.result.content[0].text)).toEqual({ success: false, error, code });
+    expect(f.browserLaunch.calls).toEqual([{ dirId: "ab_synthetic_launch", opts: undefined }]);
+    expect(f.browserLaunch.activityCalls).toEqual([]);
+  });
+});
+
+describe("bulk account profile creation-default forwarding (whole entrypoints)", () => {
+  it.each([undefined, "windows", "macos", "android"])("local-agent preserves %s, including omission, at the common-create boundary", platform => {
+    const f = fixture();
+    const items = [{ url: "https://defaults.synthetic.invalid", username: "local-default", tags: ["keep-region"] }];
+    const result = f.agent.bulkCreateProfilesWithAccounts(items, platform === undefined ? undefined : { platform });
+    expect(result).toEqual({ added: 1, skipped: 0, created: 1, errors: [] });
+    expect(f.createdProfileOpts).toHaveLength(1);
+    expect(f.createdProfileOpts[0]).toEqual({ name: "defaults.synthetic.invalid · local-default", platform, tags: ["keep-region"] });
+    const stored = f.rows().find((row: any) => row.platformUserName === "local-default");
+    expect(stored.profileIds).toEqual(["synthetic_created_0"]);
+    f.config.reloadConfig();
+    expect(f.agent.getProfileAccounts("synthetic_created_0").find((row: any) => row.platformUserName === "local-default").profileIds).toEqual(stored.profileIds);
+  });
+
+  it.each([undefined, "windows", "macos", "android"])("REST account bulk preserves %s, including omission, through the real dispatcher", async platform => {
+    const f = fixture();
+    const body = { text: "https://defaults.synthetic.invalid,rest-default,,keep-region", createProfiles: true, ...(platform === undefined ? {} : { platform }) };
+    const denied = await f.request("POST", "/api/accounts/bulk", body, { authorization: undefined }).pending;
+    expect(denied.status).toBe(401);
+    expect(f.createdProfileOpts).toEqual([]);
+    const result = await f.request("POST", "/api/accounts/bulk", body).pending;
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ success: true, report: { added: 1, skipped: 0, created: 1, errors: [] } });
+    expect(f.createdProfileOpts).toEqual([{ name: "defaults.synthetic.invalid · rest-default", platform, tags: ["keep-region"] }]);
+    const disk = f.rows();
+    expect(disk.find((row: any) => row.platformUserName === "rest-default").profileIds).toEqual(["synthetic_created_0"]);
+    f.config.reloadConfig();
+    expect(f.rows()).toEqual(disk);
+    const list = await f.request("GET", "/api/accounts").pending;
+    expect(list.body.accounts.filter((row: any) => row.username.includes("rest-default"))).toHaveLength(1);
   });
 });
 

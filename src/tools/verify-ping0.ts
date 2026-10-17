@@ -2,12 +2,15 @@
 
 // Reusable ping0.cc environment-consistency verifier for the managed engine.
 //
-// Spawns the managed engine the exact way the app does (managed fingerprint
-// injection, proxy, geo-consistent timezone/locale), loads https://ping0.cc/env,
-// waits for the Vue app to actually FINISH (finished === true) — not just for
-// the DOM to load — then settles for a configurable period before capturing the
-// full report. This is the "don't close the page before the results are out"
-// guarantee.
+// The standalone runner uses managed fingerprint injection and the shared
+// Chromium proxy/DNS policy, but is not a substitute for the production launcher.
+// collectPing0OnPage accepts a Page already owned by that launcher, and
+// collectPing0OnBidi observes an explicit context on its existing BiDi connection.
+// Neither collector launches a browser or closes caller-owned resources.
+// Collection requires explicit site-access authorization. Only an observed
+// finished === true followed by a settled capture can be reported as completed.
+// Both engines separately assess site findings; completed collection is not PASS.
+// This site-findings-only assessment does not verify browser identity or DNS transactions.
 //
 // Engines:
 //  - chromium (default): the independent patched build with --fingerprint-*
@@ -30,15 +33,18 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as http from "node:http";
 import * as net from "node:net";
+import { fileURLToPath } from "node:url";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Page, type Request } from "playwright";
+import type { BrowserFingerprintMeta } from "../main/types.js";
+import { assessPing0Findings, type Ping0FindingsAssessment } from "./ping0-acceptance.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
   MANAGED_SECURE_DNS_TEMPLATES,
   buildBrowserFingerprintArg,
 } from "../main/services/browser-fingerprint-config.js";
-import { buildFirefoxLaunchArgs, writeFirefoxUserJs, findFirefoxBinary, detectFirefoxVersion } from "../main/services/browser-engine.js";
-import { buildFirefoxManagedIdentity } from "../main/services/firefox-fingerprint.js";
+import { buildProxyDnsArgs, resolveChromiumDnsPolicy, type ChromiumDnsPolicy } from "../main/services/browser-dns-policy.js";
+import { supportsNativeLocalDnsPolicy } from "../main/services/native-proxy-auth.js";
 import {
   connectBidi,
   bidiAddPreloadScript,
@@ -85,7 +91,60 @@ interface GeoInfo {
   provider: string;
 }
 
-interface Ping0State {
+export interface Ping0ChromiumPolicyOptions {
+  upstreamHost: string;
+  upstreamPort: number;
+  proxyType: "http" | "socks5";
+  dohUrl?: string | null;
+  nativeLocalDnsPolicy?: boolean;
+}
+
+export interface Ping0DnsRouteEvidence {
+  route: ChromiumDnsPolicy["route"];
+  evidence: "configured";
+  transactionsVerified: false;
+}
+
+export interface Ping0CollectionOptions {
+  /** Permission must be established by the caller; this flag does not grant it. */
+  siteAccessAuthorized: boolean;
+  /** Default true; false only reads an already-navigated https://ping0.cc/env Page. */
+  navigate?: boolean;
+  /** 1..60000, default 60000. */
+  navigationTimeoutMs?: number;
+  /** 1..600000, default 360000; includes evaluation/polling time. */
+  waitTimeoutMs?: number;
+  /** 0..300000, default 15000; only applied after observed completion. */
+  settleMs?: number;
+  observeDns?: boolean;
+  /** 0..100, default 40. Observations are heuristic, not DNS transaction proof. */
+  maxDnsObservations?: number;
+}
+
+/** Read-only observation of an already-navigated, caller-owned Firefox context. */
+export type Ping0BidiCollectionOptions = Pick<Ping0CollectionOptions,
+  "siteAccessAuthorized" | "waitTimeoutMs" | "settleMs">;
+
+export interface Ping0DnsObservation {
+  event: "request" | "requestfailed";
+  target: "doh-url" | "dns-related-url" | "dns-error";
+  /** Allowlisted network code, never a raw error message. */
+  errorCode?: string;
+}
+
+export interface Ping0CollectionResult {
+  outcome: "completed" | "inconclusive" | "failed";
+  reason: "site-access-not-authorized" | "invalid-options" | "unexpected-page" |
+    "navigation-timeout" | "navigation-failed" | "wait-timeout" | "wait-failed" |
+    "capture-timeout" | "capture-failed" | "state-not-finished" | null;
+  state: Ping0State | null;
+  dnsObservations: Ping0DnsObservation[];
+  dnsTransactionsVerified: false;
+}
+
+export interface Ping0State {
+  /** Raw completion evidence; missing or non-boolean values never imply completion. */
+  finished?: boolean;
   startedAt: string;
   finishedAt: string;
   settledAt: string;
@@ -96,7 +155,7 @@ interface Ping0State {
   findings: unknown[];
   rows: Record<string, unknown>;
   quickProbes: unknown;
-  status: string;
+  status: string | null;
   raf: unknown;
   fontsDiag?: unknown;
   probeFocus: { visibility: string; hasFocus: boolean } | null;
@@ -117,8 +176,38 @@ interface RunReport {
     browserVersion: string;
     browserPath: string;
     headless: boolean;
+    dns?: Ping0DnsRouteEvidence;
   };
-  state: Ping0State;
+  state: Ping0State | null;
+  collection?: Omit<Ping0CollectionResult, "state">;
+  assessment?: Ping0FindingsAssessment;
+}
+
+export type Ping0RunExitCode = 0 | 1 | 2;
+
+export interface Ping0RunEvidence {
+  collection?: Pick<Ping0CollectionResult, "outcome" | "reason">;
+  state?: unknown;
+}
+
+/** Collection completion is not site acceptance, regardless of browser engine. */
+export function assessPing0Run(report: Ping0RunEvidence): {
+  assessment: Ping0FindingsAssessment; exitCode: Ping0RunExitCode;
+} {
+  const assessment = assessPing0Findings({ ...report.collection, state: report.state });
+  const exitCode = report.collection?.outcome === "failed" || assessment.status === "FAIL"
+    ? 1 : assessment.status === "INCONCLUSIVE" ? 2 : 0;
+  return { assessment, exitCode };
+}
+
+/** Compatibility entry point for existing Chromium consumers. */
+export function assessPing0ChromiumRun(report: Ping0RunEvidence): ReturnType<typeof assessPing0Run> {
+  return assessPing0Run(report);
+}
+
+/** Explicit Firefox entry point; boundary labels confer no acceptance exemption. */
+export function assessPing0FirefoxRun(report: Ping0RunEvidence): ReturnType<typeof assessPing0Run> {
+  return assessPing0Run(report);
 }
 
 function resolveExecutable(input: string): string {
@@ -132,7 +221,7 @@ function resolveExecutable(input: string): string {
   throw new Error("browser executable not found: " + input);
 }
 
-function parseOptions(argv: string[]): Options {
+async function parseOptions(argv: string[]): Promise<Options> {
   let engine: Engine = "chromium";
   let browser = "";
   let upstreamHost = "127.0.0.1";
@@ -148,10 +237,9 @@ function parseOptions(argv: string[]): Options {
   let webrtcIp: string | null = null;
   let diagProbe = false;
   let platform: Options["platform"] = "windows";
-  // Firefox with an HTTP proxy still resolves DNS client-side (SOCKS does
-  // remote DNS); managed DoH keeps resolvers out of the host's CN pool, the
-  // same isolation Chromium gets from its secure-DNS templates.
-  let dohUrl: string | null = MANAGED_SECURE_DNS_TEMPLATES[0];
+  // Chromium follows production's proxy-side DNS default. Preserve Firefox's
+  // existing default provider, distinguishing omission from --doh-url=none.
+  let dohUrl: string | null | undefined;
   for (const arg of argv) {
     if (arg.startsWith("--browser=")) browser = arg.slice("--browser=".length);
     else if (arg.startsWith("--engine=")) engine = arg.slice("--engine=".length) as Engine;
@@ -199,7 +287,14 @@ function parseOptions(argv: string[]): Options {
     else if (arg.startsWith("--")) throw new Error("unknown option: " + arg);
     else browser = arg;
   }
+  if (engine !== "chromium" && engine !== "firefox") throw new Error("--engine must be chromium or firefox");
+  if (dohUrl === undefined) dohUrl = engine === "firefox" ? MANAGED_SECURE_DNS_TEMPLATES[0] : null;
+  if (engine === "chromium") {
+    // Fail before geo requests or spawning; never silently ignore an invalid provider.
+    resolveChromiumDnsPolicy({ type: proxyType, host: upstreamHost, port: upstreamPort }, dohUrl);
+  }
   if (!browser && engine === "firefox") {
+    const { findFirefoxBinary } = await import("../main/services/browser-engine.js");
     const detected = findFirefoxBinary();
     if (detected) browser = detected;
   }
@@ -297,47 +392,84 @@ async function detectGeo(opts: Options): Promise<GeoInfo> {
   };
 }
 
-function proxyArgs(opts: Options): string[] {
-  if (opts.proxyType === "http") {
-    return ["--proxy-server=http://" + opts.upstreamHost + ":" + opts.upstreamPort, "--disable-quic"];
+function proxyArgs(opts: Ping0ChromiumPolicyOptions, dnsPolicy: ChromiumDnsPolicy): string[] {
+  return [
+    "--proxy-server=" + opts.proxyType + "://" + opts.upstreamHost + ":" + opts.upstreamPort,
+    ...(dnsPolicy.route === "proxy"
+      ? buildProxyDnsArgs(opts.upstreamHost, opts.nativeLocalDnsPolicy === true)
+      : []),
+    // This standalone runner does not own production's capability-gated MASQUE
+    // bridge. Never enable raw SOCKS QUIC or imply that its UDP route is verified.
+    "--disable-quic",
+  ];
+}
+
+/** Pure launch policy; browserVersion must come from the selected runtime, not a fallback. */
+export function buildPing0ChromiumPolicy(
+  opts: Ping0ChromiumPolicyOptions,
+  fingerprint: BrowserFingerprintMeta,
+  browserVersion: string,
+): { args: string[]; dns: Ping0DnsRouteEvidence } {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(browserVersion)) {
+    throw new Error("A detected four-component Chromium runtime version is required");
   }
-  return ["--proxy-server=socks5://" + opts.upstreamHost + ":" + opts.upstreamPort, "--enable-quic"];
+  const dnsPolicy = resolveChromiumDnsPolicy(
+    { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
+    opts.dohUrl,
+  );
+  return {
+    args: [
+      ...proxyArgs(opts, dnsPolicy),
+      buildBrowserFingerprintArg(fingerprint, browserVersion, AGENT_BROWSER_FINGERPRINT_SWITCH, dnsPolicy.secureDns),
+    ],
+    dns: { route: dnsPolicy.route, evidence: "configured", transactionsVerified: false },
+  };
+}
+
+class Ping0TimeoutError extends Error {}
+class Ping0UnexpectedPageError extends Error {}
+
+async function withPing0Timeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Ping0TimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function requirePing0Url(value: unknown): void {
+  if (typeof value !== "string") throw new Ping0UnexpectedPageError();
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Ping0UnexpectedPageError(); }
+  if (url.origin !== "https://ping0.cc" || url.username || url.password || !/^\/env\/?$/.test(url.pathname)) {
+    throw new Ping0UnexpectedPageError();
+  }
+}
+
+function requirePing0Page(page: Page): void {
+  requirePing0Url(page.url());
 }
 
 async function waitForPing0Finished(page: Page, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let lastState = "";
-  let stuckSince = 0;
   while (Date.now() < deadline) {
-    const probe = await page.evaluate(() => {
+    requirePing0Page(page);
+    const finished = await withPing0Timeout(page.evaluate(() => {
       const el = document.querySelector("#envdetect-app") as any;
       const data = el && el.__vue__ ? el.__vue__.$data : null;
-      const rows = data ? data.rows || {} : {};
-      const pending = Object.keys(rows).filter((k) => rows[k] && rows[k].pending).slice(0, 40);
-      return {
-        finished: !!(data && data.finished),
-        phase: data ? data.phase : null,
-        score: data ? data.score : null,
-        progressDone: data ? data.progressDone : null,
-        progressTotal: data ? data.progressTotal : null,
-        pending,
-        body: (document.body.innerText || "").slice(0, 400),
-      };
-    }).catch(() => ({ finished: false, phase: null, score: null, progressDone: null, progressTotal: null, pending: [], body: "" }));
-    if (probe.finished) return;
-    const state = probe.phase + "|" + probe.score + "|" + probe.progressDone + "/" + probe.progressTotal;
-    if (state !== lastState) {
-      const pendingText = probe.pending.length ? " pending=" + probe.pending.join(",") : "";
-      process.stderr.write("[verify-ping0] waiting… phase=" + probe.phase + " progress=" + probe.progressDone + "/" + probe.progressTotal + pendingText + " body=\"" + probe.body.replace(/\s+/g, " ").slice(0, 70) + "\"\n");
-      lastState = state;
-      stuckSince = Date.now();
-    } else if (Date.now() - stuckSince > 20000) {
-      process.stderr.write("[verify-ping0] still stuck at " + state + " pending=" + probe.pending.join(",") + "\n");
-      stuckSince = Date.now();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+      return data?.finished === true;
+    }), Math.max(1, deadline - Date.now()));
+    if (finished === true && Date.now() < deadline) return;
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
   }
-  throw new Error("ping0 did not finish within " + Math.round(timeoutMs / 1000) + "s (last phase=" + lastState + ")");
+  throw new Ping0TimeoutError();
 }
 
 async function captureState(page: Page, settledAt: string): Promise<Ping0State> {
@@ -345,76 +477,319 @@ async function captureState(page: Page, settledAt: string): Promise<Ping0State> 
     const el = document.querySelector("#envdetect-app") as any;
     const data = el && el.__vue__ ? el.__vue__.$data : null;
     return {
+      finished: data?.finished === true,
       score: data && typeof data.score === "number" ? data.score : null,
       level: data ? data.level : null,
-      reportId: data ? data.reportId : "",
-      findings: data ? (data.finalFindings || data.findings || []) : [],
-      rows: data ? (data.rows || {}) : {},
+      reportId: data ? data.reportId : undefined,
+      findings: data ? (data.finalFindings !== undefined ? data.finalFindings : data.findings) : undefined,
+      rows: data ? data.rows : undefined,
       quickProbes: data ? (data.quickProbes || null) : null,
       status: data ? data.status : null,
       raf: data ? (data.raf || null) : null,
-      bodyText: document.body.innerText || "",
     };
   });
   const focus = await page.evaluate(() => ({
     visibility: document.visibilityState,
     hasFocus: document.hasFocus(),
   })).catch(() => null);
-  const now = new Date().toISOString();
   return {
+    finished: captured.finished,
     startedAt: "",
     finishedAt: "",
     settledAt,
-    endedAt: now,
+    endedAt: new Date().toISOString(),
     score: captured.score,
     level: captured.level,
-    reportId: String(captured.reportId || ""),
+    reportId: captured.reportId,
     findings: captured.findings,
     rows: captured.rows,
     quickProbes: captured.quickProbes,
     status: captured.status,
     raf: captured.raf,
     probeFocus: focus,
-    bodyText: captured.bodyText,
+    // Retain the legacy field without collecting an arbitrary document body.
+    bodyText: "",
   };
 }
 
-// ── ping0 Vue app probes, shared between the Chromium (Playwright) and
-// Firefox (BiDi) paths so both measure the exact same state machine ──
+const DNS_ERROR_CODES = [
+  "ERR_NAME_NOT_RESOLVED", "ERR_DNS_TIMED_OUT", "ERR_DNS_SERVER_FAILED",
+  "ERR_DNS_MALFORMED_RESPONSE", "ERR_DNS_SECURE_RESOLVER_HOSTNAME_RESOLUTION_FAILED",
+  "ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_CONNECTION_TIMED_OUT", "ERR_ABORTED",
+] as const;
 
+function dnsTargetOf(rawUrl: string): Ping0DnsObservation["target"] | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    if (/\/dns-query(?:\/|$)/i.test(url.pathname)) return "doh-url";
+    return /dns|resolver/i.test(url.hostname + url.pathname) ? "dns-related-url" : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collect on a caller-owned Page, optionally navigating only to the fixed env URL.
+ * No launch/attach/close/profile operations occur here. Authorization is checked
+ * before any Page access or listeners. Event records contain no URLs, hostnames,
+ * credentials, headers, bodies, or raw errors, and cannot verify a DNS transaction.
+ * "completed" means site execution finished, not that its findings or DNS passed.
+ */
+export async function collectPing0OnPage(page: Page, options: Ping0CollectionOptions): Promise<Ping0CollectionResult> {
+  const result: Ping0CollectionResult = {
+    outcome: "inconclusive", reason: "site-access-not-authorized", state: null,
+    dnsObservations: [], dnsTransactionsVerified: false,
+  };
+  if (options?.siteAccessAuthorized !== true) return result;
+  const navigationTimeoutMs = options.navigationTimeoutMs ?? 60000;
+  const waitTimeoutMs = options.waitTimeoutMs ?? 360000;
+  const settleMs = options.settleMs ?? 15000;
+  const maxDnsObservations = options.maxDnsObservations ?? 40;
+  if (!Number.isInteger(navigationTimeoutMs) || navigationTimeoutMs < 1 || navigationTimeoutMs > 60000 ||
+      !Number.isInteger(waitTimeoutMs) || waitTimeoutMs < 1 || waitTimeoutMs > 600000 ||
+      !Number.isInteger(settleMs) || settleMs < 0 || settleMs > 300000 ||
+      !Number.isInteger(maxDnsObservations) || maxDnsObservations < 0 || maxDnsObservations > 100 ||
+      (options.navigate !== undefined && typeof options.navigate !== "boolean") ||
+      (options.observeDns !== undefined && typeof options.observeDns !== "boolean")) {
+    result.reason = "invalid-options";
+    return result;
+  }
+  const observe = options.observeDns === true && maxDnsObservations > 0;
+  const onRequest = (request: Request) => {
+    if (result.dnsObservations.length >= maxDnsObservations) return;
+    const target = dnsTargetOf(request.url());
+    if (target) result.dnsObservations.push({ event: "request", target });
+  };
+  const onRequestFailed = (request: Request) => {
+    if (result.dnsObservations.length >= maxDnsObservations) return;
+    const failure = request.failure()?.errorText || "";
+    const errorCode = DNS_ERROR_CODES.find((code) => failure.includes("net::" + code)) || "other";
+    const target = dnsTargetOf(request.url()) ||
+      (errorCode === "ERR_NAME_NOT_RESOLVED" || errorCode.startsWith("ERR_DNS_") ? "dns-error" : null);
+    if (target) result.dnsObservations.push({ event: "requestfailed", target, errorCode });
+  };
+  const startedAt = new Date().toISOString();
+  let phase: "navigation" | "wait" | "capture" = "navigation";
+  try {
+    if (observe) {
+      page.on("request", onRequest);
+      page.on("requestfailed", onRequestFailed);
+    }
+    if (options.navigate !== false) {
+      await withPing0Timeout(page.goto("https://ping0.cc/env", {
+        waitUntil: "domcontentloaded", timeout: navigationTimeoutMs,
+      }), navigationTimeoutMs);
+    }
+    requirePing0Page(page);
+    // Focus is best-effort, not a completion signal; do not hang an owned Page.
+    await withPing0Timeout(page.bringToFront(), 1000).catch(() => undefined);
+    phase = "wait";
+    result.outcome = "completed";
+    result.reason = null;
+    try {
+      await waitForPing0Finished(page, waitTimeoutMs);
+    } catch (error) {
+      if (!(error instanceof Ping0TimeoutError) && !(error instanceof Error && error.name === "TimeoutError")) throw error;
+      result.outcome = "inconclusive";
+      result.reason = "wait-timeout";
+    }
+    const finishedAt = result.outcome === "completed" ? new Date().toISOString() : "";
+    let settledAt = "";
+    if (result.outcome === "completed") {
+      if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs));
+      settledAt = new Date().toISOString();
+    }
+    phase = "capture";
+    requirePing0Page(page);
+    const state = await withPing0Timeout(captureState(page, settledAt), 15000);
+    requirePing0Page(page);
+    state.startedAt = startedAt;
+    state.finishedAt = finishedAt;
+    if (result.outcome === "inconclusive") {
+      // A late finished flag in the partial capture must not erase the timeout.
+      state.status = "timeout";
+    } else if (state.finished !== true) {
+      result.outcome = "inconclusive";
+      result.reason = "state-not-finished";
+      state.finishedAt = "";
+      state.settledAt = "";
+    }
+    result.state = state;
+  } catch (error) {
+    result.state = null;
+    if (error instanceof Ping0UnexpectedPageError) {
+      result.outcome = "failed";
+      result.reason = "unexpected-page";
+    } else {
+      const timeout = error instanceof Ping0TimeoutError || (error instanceof Error && error.name === "TimeoutError");
+      result.outcome = timeout ? "inconclusive" : "failed";
+      result.reason = timeout ? `${phase}-timeout` : `${phase}-failed`;
+    }
+  } finally {
+    if (observe) {
+      page.off("request", onRequest);
+      page.off("requestfailed", onRequestFailed);
+    }
+  }
+  return result;
+}
+
+// Read-only Vue probes: retain missing/malformed evidence for the assessor.
 const PING0_WAIT_PROBE = `(function(){
   var el = document.querySelector('#envdetect-app');
   var data = el && el.__vue__ ? el.__vue__.$data : null;
-  var rows = data ? data.rows || {} : {};
-  var pending = Object.keys(rows).filter(function(k){ return rows[k] && rows[k].pending; }).slice(0, 40);
-  return {
-    finished: !!(data && data.finished),
-    phase: data ? data.phase : null,
-    score: data ? data.score : null,
-    progressDone: data ? data.progressDone : null,
-    progressTotal: data ? data.progressTotal : null,
-    pending: pending,
-    body: (document.body.innerText || '').slice(0, 400)
-  };
+  return { finished: data ? data.finished : undefined };
 })()`;
 
 const PING0_CAPTURE_PROBE = `(function(){
   var el = document.querySelector('#envdetect-app');
   var data = el && el.__vue__ ? el.__vue__.$data : null;
   return {
+    finished: data ? data.finished : undefined,
     score: data && typeof data.score === 'number' ? data.score : null,
     level: data ? data.level : null,
-    reportId: data ? data.reportId : '',
-    findings: data ? (data.finalFindings || data.findings || []) : [],
-    rows: data ? (data.rows || {}) : {},
-    quickProbes: data ? (data.quickProbes || null) : null,
+    reportId: data ? data.reportId : undefined,
+    findings: data ? (data.finalFindings !== undefined ? data.finalFindings : data.findings) : undefined,
+    rows: data ? data.rows : undefined,
+    quickProbes: data ? data.quickProbes : null,
     status: data ? data.status : null,
-    raf: data ? (data.raf || null) : null,
-    bodyText: document.body.innerText || '',
+    raf: data ? data.raf : null,
     visibility: document.visibilityState,
     hasFocus: document.hasFocus()
   };
 })()`;
+
+function isBidiCollectionTimeout(error: unknown): boolean {
+  return error instanceof Ping0TimeoutError || (error instanceof Error && (
+    error.name === "TimeoutError" || /^BiDi command (?:script\.evaluate|browsingContext\.getTree) timed out$/.test(error.message)
+  ));
+}
+
+async function requirePing0BidiContext(conn: BidiConnection, contextId: string, timeoutMs: number): Promise<void> {
+  const tree = await conn.send("browsingContext.getTree", { root: contextId, maxDepth: 0 }, timeoutMs);
+  if (!Array.isArray(tree?.contexts) || tree.contexts.length !== 1 || tree.contexts[0]?.context !== contextId) {
+    throw new Ping0UnexpectedPageError();
+  }
+  requirePing0Url(tree.contexts[0].url);
+}
+
+function remainingPing0Time(deadline: number): number {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Ping0TimeoutError();
+  return remaining;
+}
+
+async function waitForPing0BidiFinished(conn: BidiConnection, contextId: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const probe = await withPing0Timeout((async () => {
+      await requirePing0BidiContext(conn, contextId, remaining);
+      return bidiEvaluateInContext(conn, PING0_WAIT_PROBE, contextId, remainingPing0Time(deadline));
+    })(), remaining);
+    if (probe?.finished === true && Date.now() < deadline) return;
+    const delay = deadline - Date.now();
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(1000, delay)));
+  }
+  throw new Ping0TimeoutError();
+}
+
+async function readBidiState(conn: BidiConnection, contextId: string, settledAt: string, deadline: number): Promise<Ping0State> {
+  await requirePing0BidiContext(conn, contextId, remainingPing0Time(deadline));
+  const captured = await bidiEvaluateInContext(conn, PING0_CAPTURE_PROBE, contextId, remainingPing0Time(deadline));
+  await requirePing0BidiContext(conn, contextId, remainingPing0Time(deadline));
+  if (captured === null || typeof captured !== "object" || Array.isArray(captured)) {
+    throw new Error("Invalid Ping0 capture");
+  }
+  return {
+    finished: captured.finished,
+    startedAt: "",
+    finishedAt: "",
+    settledAt,
+    endedAt: new Date().toISOString(),
+    score: captured.score,
+    level: captured.level,
+    reportId: captured.reportId,
+    findings: captured.findings,
+    rows: captured.rows,
+    quickProbes: captured.quickProbes,
+    status: captured.status,
+    raf: captured.raf,
+    probeFocus: typeof captured.visibility === "string" && typeof captured.hasFocus === "boolean"
+      ? { visibility: captured.visibility, hasFocus: captured.hasFocus } : null,
+    bodyText: "",
+  };
+}
+
+/**
+ * Observe an already-navigated context on the production launcher's BiDi session.
+ * Only scoped getTree and read-only script.evaluate commands are sent. No new
+ * session, preload, context, navigation, focus, network subscription, or close is
+ * performed. The caller retains ownership even on error/timeout. Completion is
+ * not PASS; assessPing0FirefoxRun applies the site-findings-only acceptance gate.
+ */
+export async function collectPing0OnBidi(
+  conn: BidiConnection,
+  contextId: string,
+  options: Ping0BidiCollectionOptions,
+): Promise<Ping0CollectionResult> {
+  const result: Ping0CollectionResult = {
+    outcome: "inconclusive", reason: "site-access-not-authorized", state: null,
+    dnsObservations: [], dnsTransactionsVerified: false,
+  };
+  if (options?.siteAccessAuthorized !== true) return result;
+  const waitTimeoutMs = options.waitTimeoutMs ?? 360000;
+  const settleMs = options.settleMs ?? 15000;
+  if (!Number.isInteger(waitTimeoutMs) || waitTimeoutMs < 1 || waitTimeoutMs > 600000 ||
+      !Number.isInteger(settleMs) || settleMs < 0 || settleMs > 300000 ||
+      typeof contextId !== "string" || contextId.trim().length === 0) {
+    result.reason = "invalid-options";
+    return result;
+  }
+  const startedAt = new Date().toISOString();
+  let phase: "wait" | "capture" = "wait";
+  try {
+    try {
+      await waitForPing0BidiFinished(conn, contextId, waitTimeoutMs);
+      result.outcome = "completed";
+      result.reason = null;
+    } catch (error) {
+      if (!isBidiCollectionTimeout(error)) throw error;
+      result.reason = "wait-timeout";
+    }
+    const finishedAt = result.outcome === "completed" ? new Date().toISOString() : "";
+    let settledAt = "";
+    if (result.outcome === "completed") {
+      if (settleMs > 0) await new Promise((resolve) => setTimeout(resolve, settleMs));
+      settledAt = new Date().toISOString();
+    }
+    phase = "capture";
+    const state = await withPing0Timeout(readBidiState(conn, contextId, settledAt, Date.now() + 15000), 15000);
+    state.startedAt = startedAt;
+    state.finishedAt = finishedAt;
+    if (result.outcome !== "completed") {
+      // A late finished flag must not turn an expired observation into success.
+      state.status = "timeout";
+    } else if (state.finished !== true) {
+      result.outcome = "inconclusive";
+      result.reason = "state-not-finished";
+      state.finishedAt = "";
+      state.settledAt = "";
+    }
+    result.state = state;
+  } catch (error) {
+    if (error instanceof Ping0UnexpectedPageError) {
+      result.outcome = "failed";
+      result.reason = "unexpected-page";
+    } else {
+      const timeout = isBidiCollectionTimeout(error);
+      result.outcome = timeout ? "inconclusive" : "failed";
+      result.reason = timeout ? `${phase}-timeout` : `${phase}-failed`;
+    }
+  }
+  return result;
+}
 
 const PING0_DIAG_PROBE = `(function(){
   var out = {};
@@ -450,15 +825,7 @@ const PING0_DIAG_PROBE = `(function(){
   try { out.c2dOurs = !!(CanvasRenderingContext2D.prototype.__roxyFontsInstalled); } catch (e) {}
   try { out.fontsProtoName = document.fonts && document.fonts.constructor && document.fonts.constructor.name; } catch (e) {}
   try { out.checkOnProto = typeof document.fonts.constructor.prototype.check; } catch (e) {}
-  // Attempt install with error capture
-  try {
-    var ffs = document.fonts.constructor.prototype;
-    var real = ffs.check;
-    out.realCheckProto = typeof real;
-    ffs.check = function(font){ return false; };
-    out.tryInstall = chk("16px SimSun");
-    ffs.check = real;
-  } catch (e) { out.installErr = e.message; }
+  // Diagnostics observe installed descriptors; never replace page methods.
   // check what preload set
   try { var d = Object.getOwnPropertyDescriptor(document.fonts.constructor.prototype, "check"); out.checkDesc = d ? (d.get ? "getter" : "data:" + String(d.value).slice(0,50)) : "none"; } catch (e) { out.descErr = e.message; }
   // Which channel leaks host fonts? Probe fonts a scanner would use:
@@ -732,7 +1099,10 @@ async function waitForBidi(port: number, timeoutMs: number): Promise<BidiConnect
 }
 
 /** The managed-identity config + prefs/preload the app itself would use. */
-function buildFirefoxLaunchPlan(opts: Options, index: number, geo: GeoInfo, profileDir: string, firefoxVersion: string) {
+async function buildFirefoxLaunchPlan(opts: Options, index: number, geo: GeoInfo, profileDir: string, firefoxVersion: string) {
+  // Do not load app/Firefox launch dependencies when importing the Page collector.
+  const { writeFirefoxUserJs } = await import("../main/services/browser-engine.js");
+  const { buildFirefoxManagedIdentity } = await import("../main/services/firefox-fingerprint.js");
   const seed = opts.seedBase + index;
   const locale = localeFromCountry(geo.countryCode);
   const timezone = geo.timezone;
@@ -772,9 +1142,9 @@ async function runOnceFirefox(
 ): Promise<RunReport> {
   const profileDir = fs.mkdtempSync(path.join(temporaryRoot, "ping0-ff-profile-" + index + "-"));
   const runId = opts.tag + "-" + index;
-  const plan = buildFirefoxLaunchPlan(opts, index, geo, profileDir, firefoxVersion);
+  const plan = await buildFirefoxLaunchPlan(opts, index, geo, profileDir, firefoxVersion);
+  const { buildFirefoxLaunchArgs } = await import("../main/services/browser-engine.js");
   const remotePort = await getFreePort();
-  const startedAt = new Date().toISOString();
   const spawnEnv = plan.timezone ? { ...process.env, TZ: plan.timezone } : undefined;
   const child: ChildProcess = spawn(
     opts.browser,
@@ -788,40 +1158,14 @@ async function runOnceFirefox(
     const context = await bidiCreateContext(conn, 15000);
     await bidiNavigate(conn, "https://ping0.cc/env", context, 60000);
     try { await bidiActivateContext(conn, context, 8000); } catch { /* tab activation is best-effort */ }
-    let timedOut = false;
-    try {
-      const deadline = Date.now() + opts.waitTimeoutMs;
-      let lastState = "";
-      let stuckSince = 0;
-      while (Date.now() < deadline) {
-        const probe = await bidiEvaluateInContext(conn, PING0_WAIT_PROBE, context, 15000);
-        if (probe && probe.finished) break;
-        const state = String(probe?.phase || "") + "|" + String(probe?.score ?? "") + "|" + String(probe?.progressDone ?? "") + "/" + String(probe?.progressTotal ?? "");
-        if (state !== lastState) {
-          const pendingText = (probe?.pending || []).length ? " pending=" + (probe.pending as string[]).join(",") : "";
-          process.stderr.write("[verify-ping0] waiting… phase=" + state + pendingText + " body=\"" + String(probe?.body || "").replace(/\s+/g, " ").slice(0, 70) + "\"\n");
-          lastState = state;
-          stuckSince = Date.now();
-        } else if (Date.now() - stuckSince > 20000) {
-          process.stderr.write("[verify-ping0] still stuck at " + state + "\n");
-          stuckSince = Date.now();
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      if (Date.now() >= deadline) throw new Error("ping0 did not finish in time (phase=" + lastState + ")");
-    } catch (error) {
-      timedOut = true;
-      process.stderr.write("[verify-ping0] warning: " + (error instanceof Error ? error.message : String(error)) + " — capturing partial state\n");
-    }
-    const finishedAt = new Date().toISOString();
-    if (!timedOut && opts.settleMs > 0) {
-      process.stderr.write("[verify-ping0] finished, settling " + opts.settleMs + "ms before capture…\n");
-      await new Promise((resolve) => setTimeout(resolve, opts.settleMs));
-    }
-    const settledAt = new Date().toISOString();
-    const captured = await bidiEvaluateInContext(conn, PING0_CAPTURE_PROBE, context, 15000);
+    const { state, ...collection } = await collectPing0OnBidi(conn, context, {
+      // This path is only entered by an explicit standalone CLI invocation.
+      siteAccessAuthorized: true,
+      waitTimeoutMs: opts.waitTimeoutMs,
+      settleMs: opts.settleMs,
+    });
     let fontsDiag = null;
-    if (opts.diagProbe) {
+    if (opts.diagProbe && state) {
       try {
         fontsDiag = await bidiEvaluateInContext(conn, PING0_DIAG_PROBE, context, 15000);
         process.stderr.write("[verify-ping0] diag-probe returned " + JSON.stringify(fontsDiag)?.slice(0, 200) + "\n");
@@ -845,24 +1189,7 @@ async function runOnceFirefox(
         process.stderr.write("[verify-ping0] diag-probe failed: " + String((e as Error)?.message || e) + "\n");
       }
     }
-    const state: Ping0State = {
-      startedAt,
-      finishedAt,
-      settledAt,
-      endedAt: new Date().toISOString(),
-      score: typeof captured?.score === "number" ? captured.score : null,
-      level: captured?.level ?? null,
-      reportId: String(captured?.reportId || ""),
-      findings: captured?.findings ?? [],
-      rows: captured?.rows ?? {},
-      quickProbes: captured?.quickProbes ?? null,
-      status: captured?.status ?? null,
-      raf: captured?.raf ?? null,
-      fontsDiag,
-      probeFocus: { visibility: String(captured?.visibility || ""), hasFocus: captured?.hasFocus === true },
-      bodyText: String(captured?.bodyText || ""),
-    };
-    if (timedOut) state.status = "timeout";
+    if (state) state.fontsDiag = fontsDiag;
     return {
       launch: {
         engine: "firefox",
@@ -879,6 +1206,7 @@ async function runOnceFirefox(
         headless: opts.headless,
       },
       state,
+      collection,
     };
   } finally {
     conn?.close();
@@ -931,13 +1259,12 @@ function buildLaunchArgs(
   opts: Options,
   userDataDir: string,
   cdpPort: number,
-  fingerprintArg: string,
+  policyArgs: string[],
 ): string[] {
   return [
     "--user-data-dir=" + userDataDir,
     "--remote-debugging-port=" + cdpPort,
-    ...proxyArgs(opts),
-    fingerprintArg,
+    ...policyArgs,
     "--use-mock-keychain",
     "--no-first-run",
     "--no-default-browser-check",
@@ -956,87 +1283,65 @@ async function runOnce(
   const seed = opts.seedBase + index;
   const locale = localeFromCountry(geo.countryCode);
   const timezone = geo.timezone;
+  const policy = buildPing0ChromiumPolicy({ ...opts, nativeLocalDnsPolicy: supportsNativeLocalDnsPolicy(opts.browser) }, {
+    fingerprintSeed: seed,
+    platform: opts.platform,
+    locale,
+    timezone,
+    webrtcMode: opts.webrtcIp ? "altered" : "auto",
+    webrtcIp: opts.webrtcIp,
+  }, browserVersion);
   const userDataDir = fs.mkdtempSync(path.join(temporaryRoot, "ping0-profile-" + index + "-"));
   const runId = opts.tag + "-" + index;
-  const fingerprintArg = buildBrowserFingerprintArg(
-    {
-      fingerprintSeed: seed,
-      platform: opts.platform,
-      locale,
-      timezone,
-      webrtcMode: opts.webrtcIp ? "altered" : "auto",
-      webrtcIp: opts.webrtcIp,
-    },
-    browserVersion,
-    AGENT_BROWSER_FINGERPRINT_SWITCH,
-    { enabled: true, templates: [...MANAGED_SECURE_DNS_TEMPLATES] },
- );
-const startedAt = new Date().toISOString();
-const cdpPort = await getFreePort();
-const child: ChildProcess = spawn(
-  opts.browser,
-  buildLaunchArgs(opts, userDataDir, cdpPort, fingerprintArg),
-  { stdio: "ignore" },
-);
-let browser: Browser | null = null;
-try {
-  await waitForCdp(cdpPort, opts.waitTimeoutMs);
-  browser = await chromium.connectOverCDP("http://127.0.0.1:" + cdpPort);
-  const context = browser.contexts()[0];
-  const page = context.pages()[0] || (await context.newPage());
-   await page.goto("https://ping0.cc/env", { waitUntil: "domcontentloaded", timeout: 60000 });
-   // Best-effort foreground the window so ping0's stealth/rAF probes measure
-   // a visible, focused window — an occluded/background tab throttles rAF to
-   // ~100ms and false-flags stealth.raf_timing even on a clean engine.
-   try { await page.bringToFront(); } catch { /* ignore */ }
-   await new Promise((resolve) => setTimeout(resolve, 400));
-   let timedOut = false;
-   try {
-     await waitForPing0Finished(page, opts.waitTimeoutMs);
-   } catch (error) {
-     timedOut = true;
-     process.stderr.write("[verify-ping0] warning: " + (error instanceof Error ? error.message : String(error)) + " — capturing partial state\n");
-   }
-   const finishedAt = new Date().toISOString();
-   try { await page.bringToFront(); } catch { /* ignore */ }
-   if (!timedOut && opts.settleMs > 0) {
-     process.stderr.write("[verify-ping0] finished, settling " + opts.settleMs + "ms before capture…\n");
-     await new Promise((resolve) => setTimeout(resolve, opts.settleMs));
-   }
-   const settledAt = new Date().toISOString();
-   const state = await captureState(page, settledAt);
-   state.startedAt = startedAt;
-   state.finishedAt = finishedAt;
-   if (timedOut) state.status = "timeout";
-return {
+  const cdpPort = await getFreePort();
+  const child: ChildProcess = spawn(
+    opts.browser,
+    buildLaunchArgs(opts, userDataDir, cdpPort, policy.args),
+    { stdio: "ignore" },
+  );
+  let browser: Browser | null = null;
+  try {
+    await waitForCdp(cdpPort, opts.waitTimeoutMs);
+    browser = await chromium.connectOverCDP("http://127.0.0.1:" + cdpPort);
+    const context = browser.contexts()[0];
+    const page = context.pages()[0] || (await context.newPage());
+    const { state, ...collection } = await collectPing0OnPage(page, {
+      // This path is only entered by an explicit standalone CLI invocation.
+      siteAccessAuthorized: true,
+      waitTimeoutMs: opts.waitTimeoutMs,
+      settleMs: opts.settleMs,
+    });
+    return {
       launch: {
         engine: "chromium",
         runId,
         seed,
         platform: opts.platform,
-       proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
-       geo,
-       timezone,
-       locale,
-       webrtcIp: opts.webrtcIp,
-       browserVersion,
-       browserPath: opts.browser,
-       headless: opts.headless,
-     },
-     state,
-   };
-} finally {
+        proxy: { type: opts.proxyType, host: opts.upstreamHost, port: opts.upstreamPort },
+        geo,
+        timezone,
+        locale,
+        webrtcIp: opts.webrtcIp,
+        browserVersion,
+        browserPath: opts.browser,
+        headless: opts.headless,
+        dns: policy.dns,
+      },
+      state,
+      collection,
+    };
+  } finally {
     await browser?.close().catch(() => undefined);
     try { child.kill("SIGKILL"); } catch { /* ignore */ }
-   if (userDataDir.startsWith(temporaryRoot)) {
+    if (userDataDir.startsWith(temporaryRoot)) {
       // Give the killed Chromium a beat to release the profile dir (macOS
       // can still hold files briefly after SIGKILL); retry instead of failing.
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try { fs.rmSync(userDataDir, { recursive: true, force: true }); break; }
         catch { await new Promise((resolve) => setTimeout(resolve, 200)); }
       }
-   }
- }
+    }
+  }
 }
 
 /**
@@ -1059,15 +1364,14 @@ const SITE_INFRA_OR_BOUNDARY = new Set([
   "xc.ip_lang",
   "xc.ip_fonts_cn",
   "xc.multi_geo_ip",
-  // Proxy-path DNS (gateway-owned; DoH already removed the native-CN path).
-  "xc.dns_ip_country",
-  "xc.dns_blackhole",
+  // DNS failures are not exempted: a configured proxy/DoH route does not
+  // establish resolver ownership, successful transactions, or a site root cause.
   // Environment/overlay boundaries (framing at Slice 79.5/79.6).
   "stealth.raf_timing",
   "stealth.descriptor_modified",
 ]);
 
-/** Split a run's findings into (identity failures) vs (site-infra/boundary). */
+/** Legacy labels: primary/unattributed failures vs known boundaries, not a root-cause diagnosis. */
 export function categorizeFindings(findings: Array<any>): {
   identityFails: Array<any>;
   boundaryFails: Array<any>;
@@ -1099,7 +1403,7 @@ function browserVersionOf(browserPath: string): string {
 }
 
 async function main(): Promise<void> {
-  const opts = parseOptions(process.argv.slice(2));
+  const opts = await parseOptions(process.argv.slice(2));
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "verify-ping0-"));
   try {
     fs.mkdirSync(opts.outDir, { recursive: true });
@@ -1108,39 +1412,45 @@ async function main(): Promise<void> {
     process.stderr.write("[verify-ping0] exit=" + geo.exitIp + " country=" + geo.countryCode + " tz=" + geo.timezone + "\n");
     if (!opts.webrtcIp) opts.webrtcIp = geo.exitIp;
     const browserVersion = opts.engine === "firefox"
-      ? detectFirefoxVersion(opts.browser) || "unknown"
+      ? (await import("../main/services/browser-engine.js")).detectFirefoxVersion(opts.browser) || "unknown"
       : browserVersionOf(opts.browser);
     const reports: RunReport[] = [];
     for (let index = 1; index <= opts.runs; index += 1) {
       process.stderr.write("[verify-ping0] run " + index + "/" + opts.runs + " starting\n");
-      const report = opts.engine === "firefox"
+      const report: RunReport = opts.engine === "firefox"
         ? await runOnceFirefox(opts, index, geo, temporaryRoot, browserVersion)
         : await runOnce(opts, index, geo, temporaryRoot, browserVersion);
+      report.assessment = assessPing0Run(report).assessment;
       const file = path.join(opts.outDir, "ping0-" + report.launch.runId + ".json");
       fs.writeFileSync(file, JSON.stringify(report, null, 2), "utf8");
       reports.push(report);
-      process.stderr.write("[verify-ping0] run " + index + " → score=" + report.state.score + " level=" + report.state.level + " findings=" + report.state.findings.length + " report=" + file + "\n");
+      process.stderr.write("[verify-ping0] run " + index + " → score=" + (report.state?.score ?? null) + " level=" + (report.state?.level ?? null) + " findings=" + (Array.isArray(report.state?.findings) ? report.state.findings.length : "unknown") + (report.assessment ? " site-findings-only=" + report.assessment.status : "") + " report=" + file + "\n");
     }
-    process.stdout.write("\n| run | engine | score | identity-fails | site-infra/boundary | level |\n");
-    process.stdout.write("| --- | --- | --- | --- | --- | --- |\n");
+    process.stdout.write("\n| run | engine | collection | site-findings-only | resolver-count | failed-findings | score | level |\n");
+    process.stdout.write("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for (const report of reports) {
-      const { identityFails, boundaryFails } = categorizeFindings(report.state.findings);
+      const assessment = report.assessment ?? assessPing0Run(report).assessment;
       process.stdout.write(
-        "| " + report.launch.runId + " | " + report.launch.engine +
-        " | " + report.state.score + " | " + identityFails.length + " | " + boundaryFails.length +
-        " | " + report.state.level + " |\n",
+        "| " + report.launch.runId + " | " + report.launch.engine + " | " + (report.collection?.outcome ?? "inconclusive") +
+        " | " + assessment.status + " | " + assessment.resolverCount + " | " + assessment.failedFindingIds.length +
+        " | " + (report.state?.score ?? null) + " | " + (report.state?.level ?? null) + " |\n",
       );
-      const identityIds = identityFails.length
-        ? "identity: " + identityFails.map((f) => f.id).join(", ") + "\n"
-        : "identity: none — managed identity fully consistent\n";
-      const boundaryIds = boundaryFails.length
-        ? "site-infra/boundary: " + boundaryFails.map((f) => f.id).join(", ") + "\n"
-        : "";
-      process.stdout.write("  " + identityIds + (boundaryIds ? "  " + boundaryIds : ""));
+      process.stdout.write("  site-findings-only: " + assessment.status +
+        "; failed=" + assessment.failedFindingIds.join(", ") + "; pending=" + assessment.pendingRowIds.join(", ") +
+        "; reasons=" + assessment.reasons.join(", ") + "\n");
     }
-    if (reports.some((r) => r.state.status === "timeout")) {
-      process.stderr.write("[verify-ping0] one or more runs timed out (partial capture)\n");
+    const exitCodes = reports.map((r) => assessPing0Run(r).exitCode);
+    if (reports.some((r) => r.collection?.outcome === "failed")) {
+      process.stderr.write("[verify-ping0] one or more collections failed; no completion claim\n");
+      process.exitCode = 1;
+    } else if (exitCodes.includes(1)) {
+      process.stderr.write("[verify-ping0] one or more site-findings-only assessments FAIL\n");
+      process.exitCode = 1;
+    } else if (exitCodes.includes(2)) {
+      process.stderr.write("[verify-ping0] collection or site-findings-only assessment INCONCLUSIVE (partial, absent, or inconsistent evidence)\n");
       process.exitCode = 2;
+    } else {
+      process.exitCode = 0;
     }
   } finally {
     if (temporaryRoot.startsWith(os.tmpdir())) {
@@ -1149,7 +1459,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write("[verify-ping0] error: " + (error instanceof Error ? error.message : String(error)) + "\n");
-  process.exitCode = 1;
-});
+// Importing the collector must never run the standalone launcher or contact a site.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write("[verify-ping0] error: " + (error instanceof Error ? error.message : String(error)) + "\n");
+    process.exitCode = 1;
+  });
+}

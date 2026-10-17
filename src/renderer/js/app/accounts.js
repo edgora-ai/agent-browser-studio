@@ -470,6 +470,8 @@
       document.getElementById('acct-import-status').innerHTML = '';
       var cb = document.getElementById('acct-import-create-profiles');
       if (cb) { cb.checked = false; document.getElementById('acct-import-create-options').style.display = 'none'; }
+      var platformSelect = document.getElementById('acct-import-platform');
+      if (platformSelect) platformSelect.value = '';
       document.getElementById('dlg-account-import').showModal();
     });
   };
@@ -479,7 +481,8 @@
       var text = document.getElementById('acct-import-text').value || '';
       var statusEl = document.getElementById('acct-import-status');
       var createProfiles = document.getElementById('acct-import-create-profiles') ? document.getElementById('acct-import-create-profiles').checked : false;
-      var platform = document.getElementById('acct-import-platform') ? document.getElementById('acct-import-platform').value : 'windows';
+      var platformSelect = document.getElementById('acct-import-platform');
+      var platform = platformSelect ? platformSelect.value || undefined : undefined;
       statusEl.innerHTML = '<span style="color:var(--text-muted);">' + esc(t('acct.importing', 'Importing...')) + '</span>';
       var p = createProfiles
         ? R.agent.accounts.bulkCreate(text, { platform: platform })

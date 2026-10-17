@@ -28,6 +28,22 @@ const TRANSLATIONS = [
   ["agent.conv.delete-failed", "Could not delete the conversation: ", "无法删除会话："],
   ["auto.schedule-load-failed", "Could not load schedule: ", "加载计划状态失败："],
   ["auto.schedule-unavailable", "Schedule unavailable", "计划状态不可用"],
+  ["profile.new.platform.auto", "Auto (host OS)", "自动（宿主系统）"],
+  ["profile.platform.host-help", "Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.", "托管 Chromium 要求受支持且匹配的宿主系统（Mac 上选 macOS，Windows 上选 Windows）。WebGL 画像不提供跨系统启动能力；其他系统身份仅用于便携存储。"],
+  ["profile.platform.unsupported-host", "This host does not support native managed Chromium. Portable profiles can still be stored; selecting Windows or macOS does not make this host supported.", "此宿主不支持原生托管 Chromium。仍可保存便携配置；选择 Windows 或 macOS 不会让此宿主获得本机启动支持。"],
+  ["profile.platform.host-unavailable", "Host OS unavailable. Auto defers to the main-process creation default; native managed Chromium still requires a supported macOS or Windows host.", "无法读取宿主系统。自动选项沿用主进程的创建默认值；原生托管 Chromium 仍要求受支持的 macOS 或 Windows 宿主。"],
+  ["profile.platform.restart-help", "After saving identity changes, explicitly stop and restart the browser. Saving or restarting Studio does not update a running browser.", "保存身份变更后，请明确停止并重新启动浏览器。仅保存或重启 Studio 不会更新正在运行的浏览器。"],
+  ["launch.host-platform-mismatch", "This managed profile uses a different OS from this computer. Edit the profile OS to match the host, save, then stop the browser if it is running and start it again. Restarting Studio is not enough.", "此托管配置的系统与本机不同。请编辑配置，将系统改为宿主系统并保存；如浏览器正在运行，请先停止，再重新启动。仅重启 Studio 不足以生效。"],
+  ["launch.restart-required", "Saved identity changes are not active in this running browser. Explicitly stop the browser, then start it again. Saving or restarting Studio does not apply them live.", "已保存的身份变更尚未应用到此运行中的浏览器。请明确停止浏览器后再启动；仅保存或重启 Studio 不会实时应用这些变更。"],
+  ["profile.new.field.seed.help", "Seed varies managed privacy surfaces, not the whole physical device. Supported macOS ARM64 managed setups also select a WebGL persona; GPU capabilities stay native.", "种子用于变化托管隐私特征，不代表整台物理设备。受支持的 macOS ARM64 托管环境还会选择 WebGL 画像；GPU 能力仍原生。"],
+  ["profile.meta.flag-desc", "varies managed privacy surfaces and, on supported macOS ARM64 setups, the WebGL persona; GPU capabilities stay native.", "用于变化托管隐私特征，并在受支持的 macOS ARM64 环境中选择 WebGL 画像；GPU 能力仍原生。"],
+  ["profile.new.advanced.help", "Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.", "留空由种子选择连贯画像。显式 CPU、内存、屏幕及 GPU 值是平台画像组合的部分约束，必须共同匹配受支持画像，不能各自任意覆盖。"],
+  ["profile.edit.advanced.help", "Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.", "留空由种子选择连贯画像。显式 CPU、内存、屏幕及 GPU 值是平台画像组合的部分约束，必须共同匹配受支持画像，不能各自任意覆盖。"],
+  ["profile.edit.help", "<strong>Fingerprint seed</strong> varies managed privacy surfaces; it is not a whole-device match.<br>Use the host OS. Supported macOS ARM64 managed setups can select a WebGL persona; WebGPU and GPU capabilities stay native.", "<strong>指纹种子</strong> 用于变化托管隐私特征，不代表整台物理设备。<br>请选择宿主系统；受支持的 macOS ARM64 托管环境可选择 WebGL 画像，WebGPU 与 GPU 能力仍原生。"],
+  ["profile.gpu.help", "WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.", "仅模拟 WebGL 身份，不改变物理显卡：托管模式要求 macOS 原生 ARM64 主进程及所选 ARM64 Chromium。厂商为 Google Inc. (Apple)；渲染器为 Apple M1、Apple M2、Apple M3 或 Apple M2 Pro。受支持的旧 ANGLE／裸型号别名必须精确匹配同一画像。"],
+  ["profile.gpu.scope", "Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.", "Intel、Rosetta、架构未知及其他 Chromium 平台保留原生 GPU 身份，显式覆盖会被拒绝启动。关闭指纹身份时保持原生；Firefox 不变。WebGPU、GPU 能力和实际绘制仍原生。可编辑不代表可生效，由主进程在启动时权威校验。"],
+  ["launch.gpu-unsupported", "This explicit WebGL request is unsupported. Managed overrides require a native ARM64 macOS main process, selected ARM64 Chromium and a matching platform persona. Use a supported tuple or clear gpuVendor/gpuRenderer to keep native GPU identity. Saved metadata is unchanged; WebGPU and GPU capabilities remain native.", "此显式 WebGL 请求不受支持。托管覆盖要求 macOS 原生 ARM64 主进程、所选 ARM64 Chromium 及匹配的平台画像；请改为受支持组合，或清空 gpuVendor/gpuRenderer，保留原生 GPU 身份。已存元数据未被改写；WebGPU 与 GPU 能力仍原生。"],
+  ["profile.meta.flag-rule", "The same seed and settings do not guarantee an identical whole fingerprint.", "相同种子与设置不保证整个指纹完全一致。"],
 ] as const;
 
 type TextNode = { nodeType: 3; textContent: string };
@@ -123,6 +139,32 @@ describe("UI goal effective i18n", () => {
       expect(i18n.t(key)).toBe(expected);
       expect(i18n.t(key, "__FALSE_FALLBACK__")).toBe(expected);
     }
+  });
+
+  it("keeps host/restart guidance and truthful fingerprint HTML fallbacks equal to their effective English keys", () => {
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
+    for (const key of ["profile.new.platform.auto", "profile.platform.host-help", "profile.platform.restart-help", "profile.new.field.seed.help", "profile.meta.flag-desc", "profile.meta.flag-rule", "profile.new.advanced.help", "profile.edit.advanced.help", "profile.gpu.help", "profile.gpu.scope"]) {
+      const entry = TRANSLATIONS.find(([candidate]) => candidate === key)!;
+      expect(html).toContain(`data-i18n="${key}">${entry[1]}<`);
+      for (const locale of LOCALES) {
+        const el = new Element({ "data-i18n": key }); const { i18n } = loadRuntime(SOURCE, locale, [el]);
+        i18n.apply(); expect(el.textContent).toBe(locale === "en-US" ? entry[1] : entry[2]);
+      }
+    }
+  });
+
+  it("keeps scoped GPU guidance unique across all dictionary layers and rejects a late English shadow", () => {
+    const keys = ["profile.platform.host-help", "profile.new.field.seed.help", "profile.meta.flag-desc", "profile.new.advanced.help", "profile.edit.advanced.help", "profile.edit.help", "profile.gpu.help", "profile.gpu.scope", "launch.gpu-unsupported"];
+    const literals = [...SOURCE.matchAll(/"([\w.-]+)"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+    for (const key of keys) {
+      const entry = TRANSLATIONS.find(([candidate]) => candidate === key)!;
+      expect(literals.filter(match => match[1] === key).map(match => JSON.parse(match[2])).sort(), key).toEqual([entry[1], entry[2]].sort());
+    }
+    const profiles = fs.readFileSync(path.join(ROOT, "src/renderer/js/app/profiles.js"), "utf8");
+    const unsupported = TRANSLATIONS.find(([key]) => key === "launch.gpu-unsupported")!;
+    expect(profiles).toContain(`t("launch.gpu-unsupported", ${JSON.stringify(unsupported[1])})`);
+    const mutant = injectAfterMerges(SOURCE, '  dict["zh-CN"]["profile.gpu.scope"] = ' + JSON.stringify(bundles["en-US"]["profile.gpu.scope"]) + ';');
+    expect(() => validateTranslations(mutant)).toThrow(/zh-CN: effective value for profile.gpu.scope/);
   });
 
   it.each(["wizard", "license"])("has own EN/ZH translations for every literal %s call site", module => {

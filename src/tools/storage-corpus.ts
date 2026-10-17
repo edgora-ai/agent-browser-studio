@@ -32,6 +32,7 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
     const nav = navigator as Navigator & {
       storage: StorageManager & { getDirectory?: () => Promise<any> };
       storageBuckets?: {
+        keys(): Promise<string[]>;
         open(name: string): Promise<any>;
         delete(name: string): Promise<void>;
       };
@@ -103,6 +104,9 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
       modern.error = error instanceof Error ? error.message : String(error);
     }
 
+    const probeId = crypto.randomUUID();
+    const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+    const appendError = (previous: string | null, error: unknown): string => previous ? `${previous}; ${errorText(error)}` : errorText(error);
     const bucket: StorageContextCorpus["bucket"] = {
       available: Boolean(nav.storageBuckets),
       quota: null,
@@ -114,9 +118,12 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
       error: null,
     };
     if (nav.storageBuckets) {
-      const bucketName = "agent-browser-storage-corpus";
+      const bucketName = `agent-browser-storage-corpus-${probeId}`;
+      let created = false;
       try {
+        if ((await nav.storageBuckets.keys()).includes(bucketName)) throw new Error("Storage probe bucket already exists");
         const handle = await nav.storageBuckets.open(bucketName);
+        created = true;
         const estimate = await handle.estimate();
         bucket.quota = estimate.quota ?? null;
         bucket.usageDetailKeys = Object.keys(estimate.usageDetails || {}).sort();
@@ -124,27 +131,59 @@ export async function captureStorageCorpusInPage(requestedQuotaBytes: number): P
         bucket.durability = handle.durability ? await handle.durability() : null;
         bucket.directoryAvailable = Boolean(handle.getDirectory && await handle.getDirectory());
       } catch (error) {
-        bucket.error = error instanceof Error ? error.message : String(error);
+        bucket.error = errorText(error);
       } finally {
-        try { await nav.storageBuckets.delete(bucketName); } catch { /* best effort */ }
+        if (created) {
+          try { await nav.storageBuckets.delete(bucketName); }
+          catch (error) { bucket.error = appendError(bucket.error, error); }
+        }
       }
     }
 
     const opfs: StorageContextCorpus["opfs"] = { available: false, roundTrip: false, error: null };
     if (nav.storage?.getDirectory) {
       opfs.available = true;
-      const fileName = "agent-browser-storage-corpus.bin";
+      const fileName = `agent-browser-storage-corpus-${probeId}.bin`;
+      const expected = new Uint8Array([82, 79, 88, 89]);
+      let root: any;
+      let created = false;
+      let writable: FileSystemWritableFileStream | null = null;
       try {
-        const root = await nav.storage.getDirectory();
+        root = await nav.storage.getDirectory();
+        let exists = false;
+        try { await root.getFileHandle(fileName); exists = true; }
+        catch (error) { if (!(error instanceof DOMException) || error.name !== "NotFoundError") throw error; }
+        if (exists) throw new Error("Storage probe file already exists");
         const handle = await root.getFileHandle(fileName, { create: true });
-        const writable = await handle.createWritable();
-        await writable.write(new Uint8Array([82, 79, 88, 89]));
-        await writable.close();
-        const file = await handle.getFile();
-        opfs.roundTrip = file.size === 4;
-        await root.removeEntry(fileName);
+        created = true;
+        writable = await handle.createWritable();
+        await writable!.write(expected);
+        await writable!.close();
+        writable = null;
+        let found = false;
+        let scanned = 0;
+        for await (const name of root.keys()) {
+          if (name === fileName) { found = true; break; }
+          if (++scanned >= 256) throw new Error("Storage probe lookup exceeded its entry bound");
+        }
+        if (!found) throw new Error("Storage probe file was not retrievable by name");
+        const file = await (await root.getFileHandle(fileName)).getFile();
+        if (file.size !== expected.length) throw new Error("Storage probe readback size differs");
+        const actual = new Uint8Array(await file.arrayBuffer());
+        if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) throw new Error("Storage probe readback bytes differ");
+        opfs.roundTrip = true;
       } catch (error) {
-        opfs.error = error instanceof Error ? error.message : String(error);
+        opfs.error = errorText(error);
+      } finally {
+        if (writable) {
+          try { await writable.abort(); }
+          catch (error) { opfs.error = appendError(opfs.error, error); }
+        }
+        if (created) {
+          try { await root.removeEntry(fileName); }
+          catch (error) { opfs.error = appendError(opfs.error, error); }
+        }
+        if (opfs.error) opfs.roundTrip = false;
       }
     }
 

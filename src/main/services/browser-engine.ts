@@ -13,8 +13,8 @@
 //    * parse `WebDriver BiDi listening on ws://...` from stderr to discover the
 //      automation WebSocket, and `Marionette INFO Listening on port N` from
 //      stdout for the legacy Marionette port — exactly like Roxy's launcher;
-//    * write the same managed `user.js` family (automation-friendly prefs, GPU,
-//      sandbox, color-scheme/theme) plus proxy/DoH/locale prefs.
+//    * manage automation/GPU/theme and proxy/DoH/locale prefs reversibly, while
+//      preserving Gecko's platform/build sandbox defaults.
 //  - an engine-status surface used by IPC / REST / MCP / UI.
 //
 // Honest scope note: full managed fingerprint-injection parity for Firefox
@@ -26,13 +26,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import type { ProxyConfig } from "../types.js";
 import { bundledFirefoxBinaryPath, bundledFirefoxBinaryPathAsync } from "./bundled-native-browsers.js";
 import { runBrowserCommand } from "./browser-command.js";
+import { assertFirefoxRuntimePackage, assertFirefoxRuntimePackageAsync } from "./firefox-runtime-package.js";
 import {
   findManagedFirefoxBinary,
   findManagedFirefoxBinaryAsync,
   getManagedFirefoxRoot,
+  compareFirefoxVersions,
 } from "./native-firefox-manager.js";
 import {
   FIREFOX_NATIVE_REQUIRED_SWITCH,
@@ -97,16 +98,37 @@ export function defaultFirefoxBinaryPaths(platform: NodeJS.Platform = process.pl
   }
 }
 
-/** Find Firefox: explicit override, managed native cache, bundled copy, then system stock. */
+function usableFirefoxRuntimePackage(candidate: string): boolean {
+  try { assertFirefoxRuntimePackage(candidate); return true; }
+  catch { return false; } // Skip one incomplete default candidate, not explicit overrides.
+}
+
+async function usableFirefoxRuntimePackageAsync(candidate: string): Promise<boolean> {
+  try { await assertFirefoxRuntimePackageAsync(candidate); return true; }
+  catch { return false; }
+}
+
+function bundledFirefoxVersionWins(version: string | null, managedVersion: string): boolean {
+  return !!version && /^\d+\.\d+(?:\.\d+)?$/.test(version)
+    && compareFirefoxVersions(version, managedVersion) >= 0;
+}
+
+/** Find Firefox: explicit override, newest auto candidate (bundled wins ties), then system stock. */
 export function findFirefoxBinary(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = getFirefoxBinaryOverride(env);
-  if (override) return fs.existsSync(override) ? override : null;
+  if (override) {
+    // An invalid explicit macOS package is an actionable error, never fallback.
+    assertFirefoxRuntimePackage(override);
+    return fs.existsSync(override) ? override : null;
+  }
   const managed = findManagedFirefoxBinary(null, getManagedFirefoxRoot(env));
-  if (managed) return managed.binaryPath;
   const bundled = bundledFirefoxBinaryPath();
-  if (bundled) return bundled;
+  if (bundled && usableFirefoxRuntimePackage(bundled)) {
+    if (!managed || bundledFirefoxVersionWins(detectFirefoxVersion(bundled), managed.version)) return bundled;
+  }
+  if (managed) return managed.binaryPath;
   for (const candidate of defaultFirefoxBinaryPaths()) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate) && usableFirefoxRuntimePackage(candidate)) return candidate;
   }
   return null;
 }
@@ -123,13 +145,18 @@ async function firefoxPathExists(candidate: string): Promise<boolean> {
 /** Async discovery preserves explicit-override fail-closed precedence. */
 export async function findFirefoxBinaryAsync(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
   const override = getFirefoxBinaryOverride(env);
-  if (override) return await firefoxPathExists(override) ? override : null;
+  if (override) {
+    await assertFirefoxRuntimePackageAsync(override);
+    return await firefoxPathExists(override) ? override : null;
+  }
   const managed = await findManagedFirefoxBinaryAsync(null, getManagedFirefoxRoot(env));
-  if (managed) return managed.binaryPath;
   const bundled = await bundledFirefoxBinaryPathAsync();
-  if (bundled) return bundled;
+  if (bundled && await usableFirefoxRuntimePackageAsync(bundled)) {
+    if (!managed || bundledFirefoxVersionWins(await detectFirefoxVersionAsync(bundled), managed.version)) return bundled;
+  }
+  if (managed) return managed.binaryPath;
   for (const candidate of defaultFirefoxBinaryPaths()) {
-    if (await firefoxPathExists(candidate)) return candidate;
+    if (await firefoxPathExists(candidate) && await usableFirefoxRuntimePackageAsync(candidate)) return candidate;
   }
   return null;
 }
@@ -437,161 +464,7 @@ export function spawnFirefoxWithDebugInfo(
 // Firefox user.js preferences (proxy / DoH / locale)
 // ═══════════════════════════════════════════════════════════
 
-export interface FirefoxUserJsOpts {
-  proxy?: ProxyConfig | null;
-  /** DoH endpoint URI; when set, Firefox uses TRR as the DNS resolver. */
-  dohUrl?: string | null;
-  locale?: string | null;
-  /** Third-party cookie compatibility (R12 P1-2): true writes cookieBehavior=0
-   * (accept all, incl. third-party). Mirrors the Chromium Preferences patch. */
-  allowThirdPartyCookies?: boolean;
-  /** Extra managed prefs (Slice 79 fingerprint parity: UA / concurrency / DNT). */
-  extraPrefs?: Record<string, string | number | boolean> | null;
-  /** Hardware acceleration enabled (Roxy maps this to layers/webrender prefs). */
-  useGpu?: boolean;
-  /** Content sandbox level: true = 0 (enabled), false = -1 (disabled). */
-  sandboxPermission?: boolean;
-  /** Color scheme: "system" | "dark" | "light" (Roxy's color-scheme family). */
-  colorScheme?: "system" | "dark" | "light";
-}
-
-function prefString(key: string, value: string): string {
-  return `user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`;
-}
-
-function prefNumber(key: string, value: number): string {
-  return `user_pref(${JSON.stringify(key)}, ${value});`;
-}
-
-function prefBoolean(key: string, value: boolean): string {
-  return `user_pref(${JSON.stringify(key)}, ${value});`;
-}
-
-/**
- * Build the managed `user.js` prefs file for a Firefox profile, modeled on
- * RoxyBrowser's RoxyFirefox `prepareFirefoxProfile` (Slice 78 reference):
- * Firefox does not expose proxy / DoH on the command line like Chromium does,
- * so the standard, reversible way to steer a launched profile is a `user.js`
- * in the profile directory. We keep Roxy's family (automation-friendly prefs,
- * GPU / sandbox, color-scheme + active theme) and layer our proxy / DoH /
- * locale prefs on top. The file lives inside the (already sealed) profile dir
- * and is never logged.
- */
-export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string {
-  const lines: string[] = [];
-  lines.push("// Agent Browser Studio managed Firefox preferences (RoxyFirefox-aligned, regenerated at launch).");
-
-  // Extra managed prefs (Slice 79 fingerprint parity family), laid down before
-  // the Roxy base family so a conflict always resolves in Roxy's favor.
-  if (opts.extraPrefs) {
-    for (const [key, value] of Object.entries(opts.extraPrefs)) {
-      if (typeof value === "boolean") lines.push(prefBoolean(key, value));
-      else if (typeof value === "number") lines.push(prefNumber(key, value));
-      else lines.push(prefString(key, String(value)));
-    }
-  }
-
-  // Roxy's automation-friendly base prefs (keeps WebDriver/Marionette sessions
-  // and background tabs stable for unattended runs).
-  lines.push(prefBoolean("focusmanager.testmode", true));
-  lines.push(prefBoolean("layout.testing.top-level-always-active", true));
-  lines.push(prefNumber("dom.min_background_timeout_value", 0));
-  lines.push(prefNumber("dom.min_background_timeout_value_without_budget_throttling", 0));
-  lines.push(prefBoolean("dom.timeout.enable_budget_timer_throttling", false));
-  lines.push(prefString("browser.startup.homepage", "about:home"));
-  lines.push(prefBoolean("browser.newtabpage.enabled", true));
-
-  // GPU (hardware acceleration) — Roxy maps `useGpu` to these two prefs.
-  if (opts.useGpu) {
-    lines.push(prefBoolean("layers.acceleration.disabled", false));
-    lines.push(prefBoolean("gfx.webrender.disabled", false));
-  } else {
-    lines.push(prefBoolean("layers.acceleration.disabled", true));
-    lines.push(prefBoolean("gfx.webrender.disabled", true));
-  }
-
-  // Content sandbox — Roxy: true = level 0 (enabled), false = -1 (disabled).
-  lines.push(prefNumber("security.sandbox.content.level", opts.sandboxPermission ? 0 : -1));
-
-  // Third-party cookies (R12 P1-2): 0 = accept all incl. third-party.
-  // Default Firefox behavior (4/5 = partitioned/reject-tracker) is untouched
-  // unless the profile opts in — same opt-in shape as Chromium.
-  if (opts.allowThirdPartyCookies === true) {
-    lines.push(prefNumber("network.cookie.cookieBehavior", 0));
-  }
-
-  // Color scheme + active theme (Roxy's `browserColorScheme` family).
-  const scheme = opts.colorScheme ?? "system";
-  if (scheme === "system") {
-    lines.push(prefNumber("layout.css.prefers-color-scheme.content-override", 2));
-  } else {
-    const dark = scheme === "dark";
-    lines.push(prefNumber("layout.css.prefers-color-scheme.content-override", dark ? 0 : 1));
-    lines.push(prefBoolean("ui.systemUsesDarkTheme", dark));
-  }
-  const theme = scheme === "dark"
-    ? "firefox-compact-dark@mozilla.org"
-    : scheme === "light"
-      ? "firefox-compact-light@mozilla.org"
-      : "default-theme@mozilla.org";
-  lines.push(prefString("extensions.activeThemeID", theme));
-
-  // Proxy — HTTP or SOCKS (socks5h → remote DNS) via the standard prefs.
-  const proxy = opts.proxy;
-  const isSocks = proxy?.type === "socks5" || proxy?.type === "socks5h";
-  if (proxy && proxy.port) {
-    lines.push(prefNumber("network.proxy.type", 1)); // manual
-    if (isSocks) {
-      lines.push(prefString("network.proxy.socks", proxy.host));
-      lines.push(prefNumber("network.proxy.socks_port", proxy.port));
-      // Firefox SOCKS always performs remote DNS; socks5h semantics map to TRUE.
-      lines.push(prefBoolean("network.proxy.socks_remote_dns", true));
-    } else {
-      lines.push(prefString("network.proxy.http", proxy.host));
-      lines.push(prefNumber("network.proxy.http_port", proxy.port));
-      lines.push(prefString("network.proxy.ssl", proxy.host));
-      lines.push(prefNumber("network.proxy.ssl_port", proxy.port));
-      // Keep the stock "no proxy for these hosts" behavior isolated to loopback.
-      lines.push(prefString("network.proxy.no_proxies_on", "localhost, 127.0.0.1, ::1"));
-    }
-    if (proxy.username || proxy.password) {
-      lines.push(prefString("network.proxy.username", proxy.username || ""));
-      lines.push(prefString("network.proxy.password", proxy.password || ""));
-    }
-  } else {
-    lines.push(prefNumber("network.proxy.type", 0)); // direct
-  }
-
-  if (opts.dohUrl) {
-    // TRR mode 3 = DoH ONLY (no native-DNS fallback). The fingerprint goal is
-    // a coherent DNS view: a fallback path would let instrumented pages see
-    // two resolver populations (native + DoH) at once, which careers as a
-    // proxy/DNS tell. Mode 2 is what an interactive user wants; a managed,
-    // deployment-guaranteed DoH endpoint is what the platform wants.
-    lines.push(prefNumber("network.trr.mode", 3));
-    lines.push(prefString("network.trr.uri", opts.dohUrl));
-  } else {
-    // Explicit native-DNS default so a previous managed profile never lingers.
-    lines.push(prefNumber("network.trr.mode", 5));
-  }
-
-  if (opts.locale) {
-    lines.push(prefString("intl.locale.requested", opts.locale));
-  }
-
-  // Quiet first-run / UX noise that could flag automation.
-  lines.push(prefBoolean("app.update.auto", false));
-  lines.push(prefBoolean("browser.shell.checkDefaultBrowser", false));
-  lines.push(prefNumber("browser.startup.page", 0));
-
-  return lines.join("\n") + "\n";
-}
-
-/** Ensure a Firefox profile dir exists and (re)write managed prefs into it.
- * The file carries the proxy password in plaintext (Gecko has no sealed-pref
- * channel), so it is written owner-only (0600) like the Chromium-side secrets. */
-export function writeFirefoxUserJs(profileDir: string, opts: FirefoxUserJsOpts, file = "user.js"): void {
-  fs.mkdirSync(profileDir, { recursive: true });
-  fs.writeFileSync(path.join(profileDir, file), buildFirefoxUserJs(opts), { encoding: "utf8", mode: 0o600 });
-  try { fs.chmodSync(path.join(profileDir, file), 0o600); } catch { /* best effort on non-POSIX */ }
-}
+// Keep the public engine API stable; preference ownership and data-only
+// migration live separately from binary discovery / process launch.
+export { buildFirefoxUserJs, writeFirefoxUserJs } from "./firefox-prefs.js";
+export type { FirefoxUserJsOpts, FirefoxUserJsWriteResult } from "./firefox-prefs.js";

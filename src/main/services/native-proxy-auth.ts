@@ -7,6 +7,9 @@ export const NATIVE_PROXY_AUTH_CAPABILITY = "agent-browser-proxy-auth-file-v1";
 export const NATIVE_QUIC_PROXY_CAPABILITY = "agent-browser-quic-proxy-v1";
 export const NATIVE_FINGERPRINT_CONFIG_CAPABILITY = "agent-browser-fingerprint-config-v1";
 export const NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY = "agent-browser-google-api-key-infobar-v1";
+export const NATIVE_LOCAL_DNS_POLICY_CAPABILITY = "agent-browser-local-dns-policy-v1";
+export const NATIVE_LOCAL_DNS_POLICY_SWITCH = "--agent-browser-local-dns-policy";
+export const NATIVE_PROXY_BOOTSTRAP_HOST_SWITCH = "--agent-browser-proxy-bootstrap-host";
 export const NATIVE_PROXY_AUTH_SWITCH = "--agent-browser-proxy-auth-file";
 export const NATIVE_CAPABILITIES_SWITCH = "--agent-browser-capabilities";
 export const NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH = "--agent-browser-suppress-missing-google-api-key-infobar";
@@ -17,8 +20,7 @@ export const LEGACY_NATIVE_PROXY_AUTH_SWITCH = "--roxy-proxy-auth-file";
 export const LEGACY_NATIVE_CAPABILITIES_SWITCH = "--roxy-capabilities";
 
 interface CapabilityCacheEntry {
-  mtimeMs: number;
-  size: number;
+  identity: string;
   capabilities: ReadonlySet<string>;
 }
 
@@ -47,26 +49,49 @@ export function supportsGoogleApiKeyInfoBarSuppression(binaryPath: string): bool
   return readNativeChromiumCapabilities(binaryPath).has(NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY);
 }
 
+export function supportsNativeLocalDnsPolicy(binaryPath: string): boolean {
+  return readNativeChromiumCapabilities(binaryPath).has(NATIVE_LOCAL_DNS_POLICY_CAPABILITY);
+}
+
 export function nativeProxyAuthSwitch(binaryPath: string): string {
   return readNativeChromiumCapabilities(binaryPath).has(NATIVE_PROXY_AUTH_CAPABILITY)
     ? NATIVE_PROXY_AUTH_SWITCH
     : LEGACY_NATIVE_PROXY_AUTH_SWITCH;
 }
 
+function capabilityInputIdentity(binaryPath: string, binaryStat: fs.Stats): string | null {
+  const statIdentity = (stat: fs.Stats) => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+  const parts = [binaryPath, statIdentity(binaryStat)];
+  const binaryDirectory = path.dirname(binaryPath);
+  if (path.basename(binaryDirectory) === "MacOS" && path.basename(path.dirname(binaryDirectory)) === "Contents") {
+    const framework = path.join(binaryDirectory, "..", "Frameworks", "Chromium Framework.framework", "Versions", "Current", "Chromium Framework");
+    try {
+      const stat = fs.statSync(framework);
+      if (!stat.isFile()) return null;
+      parts.push(fs.realpathSync(framework), statIdentity(stat));
+    } catch {
+      // A missing/inaccessible Framework cannot justify reusing a capability.
+      return null;
+    }
+  }
+  return parts.join("\0");
+}
+
 export function readNativeChromiumCapabilities(binaryPath: string): ReadonlySet<string> {
+  let resolved: string;
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(binaryPath);
+    resolved = fs.realpathSync(path.resolve(binaryPath));
+    stat = fs.statSync(resolved);
     if (!stat.isFile()) return new Set();
   } catch {
     return new Set();
   }
 
-  const resolved = path.resolve(binaryPath);
+  const identity = capabilityInputIdentity(resolved, stat);
+  if (identity === null) return new Set();
   const cached = capabilityCache.get(resolved);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.capabilities;
-  }
+  if (cached?.identity === identity) return cached.capabilities;
 
   let capabilities: ReadonlySet<string> = new Set();
   for (const capabilitySwitch of [NATIVE_CAPABILITIES_SWITCH, LEGACY_NATIVE_CAPABILITIES_SWITCH]) {
@@ -87,7 +112,7 @@ export function readNativeChromiumCapabilities(binaryPath: string): ReadonlySet<
       // Older builds do not understand the new query; try the legacy alias.
     }
   }
-  capabilityCache.set(resolved, { mtimeMs: stat.mtimeMs, size: stat.size, capabilities });
+  capabilityCache.set(resolved, { identity, capabilities });
   return capabilities;
 }
 

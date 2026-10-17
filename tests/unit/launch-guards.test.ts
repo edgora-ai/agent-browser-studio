@@ -1,5 +1,39 @@
 import { describe, it, expect, vi } from "vitest";
-import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError } from "../../src/main/services/browser/launch-guards.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible } from "../../src/main/services/browser/launch-guards.js";
+import type { BrowserPlatform } from "../../src/main/types.js";
+
+describe("native-GPU host launch guard", () => {
+  it.each([
+    ["darwin", "windows"], ["win32", "macos"],
+    ["darwin", "android"], ["win32", "android"],
+    ["linux", "windows"], ["freebsd", "macos"],
+  ])("blocks managed %s/%s without rewriting the portable profile", (host, platform) => {
+    const meta = { platform: platform as BrowserPlatform, fingerprintMode: "managed" as const };
+    const before = structuredClone(meta);
+    let blocked: unknown;
+    try { assertHostPlatformCompatible(meta, host); } catch (error) { blocked = error; }
+    expect(blocked).toBeInstanceOf(LaunchBlockedError);
+    expect(blocked).toMatchObject({ code: "host-platform-mismatch" });
+    expect((blocked as Error).message).toContain("saved profile has not been changed");
+    expect((blocked as Error).message).toContain("fingerprint-off or Firefox");
+    expect(meta).toEqual(before);
+  });
+
+  it.each([["darwin", "macos"], ["win32", "windows"]])("permits supported matching %s/%s", (host, platform) => {
+    expect(() => assertHostPlatformCompatible({ platform: platform as BrowserPlatform }, host)).not.toThrow();
+  });
+
+  it.each(["darwin", "win32", "linux"])("leaves fingerprint-off and Firefox OS fields inactive on %s", (host) => {
+    expect(() => assertHostPlatformCompatible({ platform: "android", fingerprintMode: "off" }, host)).not.toThrow();
+    expect(() => assertHostPlatformCompatible({ engine: "firefox", platform: "android", fingerprintMode: "managed" }, host)).not.toThrow();
+  });
+
+  it("does not interpret an unsupported host as Windows, including legacy missing platform", () => {
+    expect(() => assertHostPlatformCompatible({}, "win32")).not.toThrow();
+    expect(() => assertHostPlatformCompatible({}, "linux")).toThrow(LaunchBlockedError);
+    expect(() => assertHostPlatformCompatible({}, "darwin")).toThrow(LaunchBlockedError);
+  });
+});
 
 describe("launch-guards", () => {
   it("drift: blocks on risky drift", async () => {

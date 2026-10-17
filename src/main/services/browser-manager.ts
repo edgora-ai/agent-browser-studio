@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
-import { parseBrowserProcessLine, findBrowserByProfileSync } from "./process-discovery.js";
+import { parseBrowserProcessLine, findBrowserByProfileSync, inspectBrowserLaunchesSync, browserLaunchProcessFromArgv, normalizeBrowserProcessPath, type BrowserLaunchProcess } from "./process-discovery.js";
 import { BrowserWindow, screen as electronScreen } from "electron";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
 import { cdpCookieService } from "./cdp-cookie-service.js";
@@ -22,7 +22,14 @@ import {
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
 import { checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
-import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError } from "./browser/launch-guards.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible } from "./browser/launch-guards.js";
+import { getHostBrowserPlatform } from "./browser-platform-policy.js";
+import {
+  assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence,
+  chromiumLaunchRequestHash, chromiumLaunchStampArg, restartRequired, stampChromiumLaunch,
+} from "./browser/launch-provenance.js";
+import { prepareChromiumDiagnosticNetLogArgs } from "./browser/launch-diagnostics.js";
+import { readChromiumGpuContext } from "./browser/chromium-gpu-context.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import {
@@ -38,9 +45,10 @@ import { emitEvent } from "./event-bus.js";
 import {
   AGENT_BROWSER_FINGERPRINT_SWITCH,
   LEGACY_FINGERPRINT_SWITCH,
-  buildBrowserFingerprintArg,
   buildBrowserFingerprintConfig,
+  encodeBrowserFingerprintConfig,
   validateBrowserHardwareProfile,
+  type ChromiumGpuContext,
 } from "./browser-fingerprint-config.js";
 import {
   findManagedChromiumBinary,
@@ -58,6 +66,7 @@ import {
   type NativeProxyAuthFile,
   supportsAgentBrowserFingerprintConfig,
   supportsGoogleApiKeyInfoBarSuppression,
+  supportsNativeLocalDnsPolicy,
   supportsNativeProxyAuth,
   supportsNativeQuicProxy,
   writeNativeProxyAuthFile,
@@ -68,6 +77,7 @@ import {
   buildFirefoxLaunchArgs,
   detectFirefoxVersionAsync,
   findFirefoxBinaryAsync,
+  getFirefoxBinaryOverride,
   getFirefoxStatus,
   getFirefoxStatusAsync,
   defaultFirefoxBinaryPaths,
@@ -81,6 +91,7 @@ import { buildFirefoxManagedIdentity, buildInjectionProbeExpression, buildInject
 import {
   firefoxNativeModeRequested,
   readFirefoxNativeCapabilityReportAsync,
+  getFirefoxNativeSelectionIdentityAsync,
   FIREFOX_NATIVE_CONFIG_CAPABILITIES,
   FIREFOX_NATIVE_PARITY_CAPABILITIES,
 } from "./firefox-native-capabilities.js";
@@ -90,8 +101,20 @@ import { firefoxCookieService } from "./bidi-cookie-service.js";
 import { runBrowserCommand } from "./browser-command.js";
 import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
 import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
-import { runningProcesses } from "./browser/runtime-table.js";
-import { buildRemoteDnsRule, resolveChromiumDnsPolicy } from "./browser-dns-policy.js";
+import { runningProcesses, type RunningEntry } from "./browser/runtime-table.js";
+import { firefoxLaunchDigest, firefoxLaunchRequestHash } from "./browser/firefox-launch-provenance.js";
+
+interface OwnedFirefoxLaunch {
+  requestHash: string;
+  executablePath: string;
+  binaryIdentity: string;
+  profileDir: string;
+  argvHash: string;
+  userJsHash: string;
+  connection: BidiConnection;
+}
+const ownedFirefoxLaunches = new WeakMap<object, OwnedFirefoxLaunch>();
+import { buildProxyDnsArgs, resolveChromiumDnsPolicy } from "./browser-dns-policy.js";
 export { buildRemoteDnsRule } from "./browser-dns-policy.js";
 import { launchBrowserPipeline } from "./browser/launch-pipeline.js";
 
@@ -500,7 +523,9 @@ export function createBrowserProfile(opts: {
       : normalizeManagedChromiumVersion(opts.browserVersion),
     allowThirdPartyCookies: normalizeBoolean(opts.allowThirdPartyCookies, "third-party cookie compatibility"),
     fingerprintSeed: normalizeFingerprintSeed(opts.fingerprintSeed || Math.floor(Math.random() * 90000) + 10000),
-    platform: normalizePlatform(opts.platform || (process.platform === "darwin" ? "macos" : "windows")),
+    // Explicit foreign platforms remain portable. Unsupported hosts retain the
+    // legacy storage default, not a claim of native-GPU Windows support.
+    platform: normalizePlatform(opts.platform || getHostBrowserPlatform() || "windows"),
     timezone: normalizeOptionalTimezone(opts.timezone),
     locale: normalizeOptionalLocale(opts.locale),
     webrtcMode,
@@ -1141,37 +1166,208 @@ export async function launchBrowser(
   }
 
   try {
-  const cfg = getConfig() as any;
+  // Keep startup identity intent stable across the asynchronous preparation.
+  const cfg = structuredClone(getConfig()) as any;
   const meta = cfg.browserProfiles?.[dirId];
   if (!meta) throw new Error(`Managed Chromium profile not found: ${dirId}`);
 
-  // Memory-map check with alive test
-  const existing = runningProcesses.get(dirId);
-  if (existing) {
-    try { process.kill(existing.pid, 0); return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false }, envCheck: { checked: false } }; }
-    catch { runningProcesses.delete(dirId); }
-  }
-
-  // ps fallback: survive app restarts
-  const psFallback = findBrowserByProfile(dirId);
-  if (psFallback) {
-    runningProcesses.set(dirId, { pid: psFallback.pid, process: null, port: psFallback.cdpPort, lastActivityAt: Date.now() });
-    return { pid: psFallback.pid, cdpPort: psFallback.cdpPort, driftCheck: { checked: false }, envCheck: { checked: false } };
-  }
-
-  // Firefox engine path (Slice 77): stock Firefox with remote debugging.
-  if (sanitizeBrowserEngine(meta.engine) === "firefox") {
-    // This outer finally owns the launch lock across asynchronous discovery.
-    return await launchFirefoxProfile(dirId, meta, cfg, opts?.headless, null, { forceDeadProxy: opts?.forceDeadProxy === true });
-  }
-
-  const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
-  const envBin = getChromiumBinaryOverride();
+  // Authoritative even for already-running profiles. This is deliberately
+  // before reuse/discovery, proxy resolution, profile writes, or any spawn.
+  assertHostPlatformCompatible(meta);
+  const engine = sanitizeBrowserEngine(meta.engine);
   const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
   const passThrough = fingerprintMode === "off";
+  const profileDir = path.join(getProfilesDir(), dirId);
+  const configuredBin = cfg.chromiumBin && cfg.chromiumBin !== "auto" ? cfg.chromiumBin : null;
+  const envBin = getChromiumBinaryOverride();
+  const diagnosticNetLogRequest = {
+    appDataDir: process.env.AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR,
+    filePath: process.env.AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE,
+    ...(process.env.AGENT_BROWSER_DIAGNOSTIC_NETLOG_MODE !== undefined
+      ? { mode: process.env.AGENT_BROWSER_DIAGNOSTIC_NETLOG_MODE } : {}),
+  };
+  if (engine !== "chromium" && diagnosticNetLogRequest.mode !== undefined) {
+    throw new Error("Invalid Chromium diagnostic NetLog: mode requires a Chromium profile");
+  }
+  if (engine === "chromium") assertChromiumReuseDnsCompatible(meta, cfg);
+  let gpuContext: ChromiumGpuContext | undefined;
+  let gpuContextBinary: string | null = null;
+  let requestHash = engine === "chromium"
+    ? chromiumLaunchRequestHash(meta, cfg, { headless: opts?.headless, binaryOverride: envBin })
+    : null;
+  const assertCurrentRequest = () => {
+    if (gpuContextBinary && readChromiumGpuContext(gpuContextBinary).kernelArchitecture !== gpuContext?.kernelArchitecture) {
+      throw restartRequired("Chromium GPU policy eligibility changed during preparation");
+    }
+    const current = getConfig();
+    const currentMeta = current.browserProfiles?.[dirId];
+    let matches = false;
+    try {
+      matches = Boolean(currentMeta) && chromiumLaunchRequestHash(currentMeta!, current, {
+        headless: opts?.headless, binaryOverride: getChromiumBinaryOverride(), gpuContext,
+      }) === requestHash;
+    } catch {
+      throw restartRequired("startup identity request became invalid during preparation");
+    }
+    if (!matches) throw restartRequired("startup identity request changed during preparation");
+  };
+  const bindGpuContext = (executablePath: string) => {
+    assertCurrentRequest();
+    gpuContextBinary = passThrough ? null : executablePath;
+    gpuContext = passThrough ? undefined : readChromiumGpuContext(executablePath);
+    requestHash = chromiumLaunchRequestHash(meta, cfg, {
+      headless: opts?.headless, binaryOverride: envBin, gpuContext,
+    });
+    assertCurrentRequest();
+  };
+
+  let existing = runningProcesses.get(dirId);
+  if (existing) {
+    // Only an actual dead-PID result clears a cached entry. Validation errors
+    // must never fall through this catch and spawn another live profile.
+    try { process.kill(existing.pid, 0); }
+    catch (error: any) {
+      if (error?.code !== "ESRCH") throw restartRequired("cached process liveness could not be verified");
+      runningProcesses.delete(dirId);
+      existing = undefined;
+    }
+  }
+
+  if (engine === "firefox") {
+    const requestOptions = () => ({ headless: opts?.headless, binaryOverride: getFirefoxBinaryOverride(),
+      managedRoot: getManagedFirefoxRoot(), nativeRequested: firefoxNativeModeRequested() });
+    const firefoxRequestHash = firefoxLaunchRequestHash(meta, cfg, requestOptions());
+    const assertFirefoxRequest = () => {
+      // Gecko treats presence (even "0" or an empty string) as disabling the
+      // content sandbox; prefs alone cannot restore its secure default.
+      if (process.env.MOZ_DISABLE_CONTENT_SANDBOX !== undefined) {
+        throw new Error("Firefox cannot launch with MOZ_DISABLE_CONTENT_SANDBOX set; remove it and restart Studio.");
+      }
+      const current = getConfig();
+      const requested = current.browserProfiles?.[dirId];
+      if (!requested || firefoxLaunchRequestHash(requested, current, requestOptions()) !== firefoxRequestHash) {
+        throw restartRequired("Firefox startup identity request changed during preparation");
+      }
+    };
+    assertFirefoxRequest();
+    if (existing?.stopping) throw restartRequired("the Firefox profile is still stopping");
+    if (existing?.engine === "chromium" || existing?.launchProvenance) throw restartRequired("profile engine changed from Chromium to Firefox");
+    const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid);
+    if (!observed.available) throw restartRequired("Firefox process discovery is unavailable");
+    if (observed.candidates.length > 1) throw restartRequired("multiple processes claim this Firefox profile");
+    if (observed.tracked?.engine === "chromium" || observed.candidates.some((entry) => entry.engine === "chromium")) {
+      throw restartRequired("profile engine changed while a Chromium browser is still running");
+    }
+    const candidate = observed.candidates[0];
+    if (existing) {
+      const child = existing.process;
+      const owned = child && ownedFirefoxLaunches.get(child);
+      if (!owned || owned.requestHash !== firefoxRequestHash) throw restartRequired("Firefox startup intent is changed or not owned by this Studio session");
+      if (existing.engine !== "firefox" || !candidate || candidate.malformed || candidate.engine !== "firefox" ||
+          candidate.pid !== existing.pid || observed.tracked?.pid !== existing.pid || child.pid !== existing.pid ||
+          child.exitCode !== null || child.signalCode !== null || child.killed ||
+          candidate.profileDirs.length !== 1 || candidate.cdpPorts.length !== 1 || candidate.cdpPorts[0] !== existing.port ||
+          normalizeBrowserProcessPath(candidate.profileDirs[0]) !== normalizeBrowserProcessPath(profileDir) ||
+          normalizeBrowserProcessPath(owned.profileDir) !== normalizeBrowserProcessPath(profileDir) ||
+          normalizeBrowserProcessPath(candidate.executablePath) !== normalizeBrowserProcessPath(owned.executablePath) ||
+          firefoxLaunchDigest(JSON.stringify(child.spawnargs)) !== owned.argvHash) {
+        throw restartRequired("Firefox PID, executable, profile, port or launch arguments no longer match");
+      }
+      const assertOwnedFiles = async () => {
+        const selectedBinary = await findFirefoxBinaryAsync();
+        if (!selectedBinary || normalizeBrowserProcessPath(selectedBinary) !== normalizeBrowserProcessPath(owned.executablePath) ||
+            await getFirefoxNativeSelectionIdentityAsync(selectedBinary) !== owned.binaryIdentity) {
+          throw restartRequired("the selected Firefox binary changed or cannot be verified");
+        }
+        assertFirefoxRequest();
+        try {
+          if (firefoxLaunchDigest(fs.readFileSync(path.join(profileDir, "user.js"))) !== owned.userJsHash) {
+            throw new Error("startup preferences changed");
+          }
+        } catch { throw restartRequired("Firefox startup preferences changed or cannot be read back"); }
+      };
+      await assertOwnedFiles();
+      const connection = getRegisteredFirefoxSession(existing.port);
+      if (!connection || connection !== owned.connection || connection !== existing.bidiConn || connection.closed) {
+        throw restartRequired("the Firefox preload/automation session is no longer live");
+      }
+      try {
+        const endpoint = new URL(connection.wsUrl);
+        if (endpoint.protocol !== "ws:" || !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) || Number(endpoint.port) !== existing.port) throw new Error("wrong endpoint");
+        const tree = await connection.send("browsingContext.getTree", {}, 1500);
+        if (!Array.isArray(tree?.contexts) || !tree.contexts.length) throw new Error("no live browser context");
+      } catch { throw restartRequired("the Firefox BiDi session could not be verified"); }
+      await assertOwnedFiles();
+      if (runningProcesses.get(dirId) !== existing || existing.stopping || connection.closed ||
+          getRegisteredFirefoxSession(existing.port) !== connection || existing.bidiConn !== connection ||
+          child.killed || child.exitCode !== null || child.signalCode !== null) {
+        throw restartRequired("the Firefox process changed during reuse verification");
+      }
+      assertReusableProcessAlive(existing.pid);
+      existing.lastActivityAt = Date.now();
+      return { pid: existing.pid, cdpPort: existing.port, driftCheck: { checked: false }, envCheck: { checked: false } };
+    }
+    // A persisted prefs file or a matching executable cannot prove which prefs
+    // a different process loaded or whether its session still owns a preload.
+    if (candidate || findBrowserByProfile(dirId)) throw restartRequired("the discovered Firefox process has no owned startup/session evidence");
+    return await launchFirefoxProfile(dirId, meta, cfg, opts?.headless, null, {
+      forceDeadProxy: opts?.forceDeadProxy === true, requestHash: firefoxRequestHash, assertCurrentRequest: assertFirefoxRequest,
+    });
+  }
+
+  if (existing?.stopping) throw restartRequired("the profile browser is still stopping");
+  if (existing?.engine === "firefox") throw restartRequired("profile engine changed from Firefox to Chromium");
+  const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid);
+  if (!observed.available) throw restartRequired("browser process discovery is unavailable");
+  if (observed.candidates.length > 1) throw restartRequired("multiple processes claim this profile directory");
+  let candidate = observed.candidates[0];
+  if (existing && (!candidate || candidate.pid !== existing.pid || observed.tracked?.pid !== candidate.pid)) {
+    throw restartRequired("cached PID no longer identifies this profile's browser");
+  }
+  const owned = ownedChromiumLaunchEvidence(existing);
+  if (owned && candidate) {
+    const processProfileArg = candidate.args.find((arg) => arg.startsWith("--user-data-dir="));
+    if (normalizeBrowserProcessPath(candidate.executablePath) !== normalizeBrowserProcessPath(owned.executablePath) ||
+        !processProfileArg || normalizeBrowserProcessPath(processProfileArg.slice("--user-data-dir=".length)) !== normalizeBrowserProcessPath(profileDir) ||
+        candidate.cdpPorts[0] !== existing?.port) throw restartRequired("owned process PID, executable, profile path, or port no longer matches");
+    // A live owned ChildProcess retains real argv boundaries even when ps has
+    // flattened a display-only name such as 'QA --lang=fr' into fake switches.
+    candidate = owned;
+  }
+  if (candidate) {
+    // Only bounded file headers are read here; no version subprocess or proxy
+    // activity is needed to reject an old, otherwise self-consistent payload.
+    bindGpuContext(configuredBin || envBin || candidate.executablePath);
+    if (existing?.launchProvenance && existing.launchProvenance.requestHash !== requestHash) throw restartRequired("startup identity request changed");
+    if (Object.values(diagnosticNetLogRequest).some((value) => value !== undefined)) {
+      throw restartRequired("scoped NetLog diagnostics require a fresh process and cannot be armed on a reused browser");
+    }
+    // Reject changed/legacy/ambiguous inputs before binary probing or proxy I/O.
+    assertChromiumLaunchProvenance(candidate.args, requestHash!, fingerprintMode);
+    const expectedBin = configuredBin || envBin || (await findManagedChromiumBinaryAsync(normalizeManagedChromiumVersion(meta.browserVersion)))?.binaryPath;
+    assertCurrentRequest();
+    if (!expectedBin || !fs.existsSync(expectedBin)) throw restartRequired("the expected Chromium executable is unavailable");
+    bindGpuContext(expectedBin);
+    const provenance = assertChromiumReuseEvidence(candidate, {
+      profileDir, executablePath: expectedBin, requestHash: requestHash!, mode: fingerprintMode,
+      ...(existing ? { pid: existing.pid, port: existing.port, provenance: existing.launchProvenance } : {}),
+    });
+    if (!passThrough) validateBrowserHardwareProfile(meta, "chromium", gpuContext);
+    assertReusableProcessAlive(candidate.pid);
+    await assertReusableChromiumPort(candidate.cdpPorts[0]);
+    assertCurrentRequest();
+    assertReusableProcessAlive(candidate.pid);
+    runningProcesses.set(dirId, {
+      ...existing, pid: candidate.pid, process: existing?.process || null, port: candidate.cdpPorts[0],
+      lastActivityAt: Date.now(), engine: "chromium", launchProvenance: provenance,
+    });
+    return { pid: candidate.pid, cdpPort: candidate.cdpPorts[0], driftCheck: { checked: false }, envCheck: { checked: false } };
+  }
+
   if (!passThrough) validateBrowserHardwareProfile(meta, "chromium");
   const requestedVersion = normalizeManagedChromiumVersion(meta.browserVersion);
   const managedBin = (await findManagedChromiumBinaryAsync(requestedVersion))?.binaryPath || null;
+  assertCurrentRequest();
   if (configuredBin && !fs.existsSync(configuredBin)) {
     throw new Error(`Configured Chromium binary does not exist: ${configuredBin}`);
   }
@@ -1181,6 +1377,7 @@ export async function launchBrowser(
   const overrideBin = configuredBin || envBin;
   if (requestedVersion && overrideBin) {
     const version = await detectBinaryVersionAsync(overrideBin);
+    assertCurrentRequest();
     if (version !== requestedVersion) throw new Error(`Profile requires Chromium ${requestedVersion}, but the configured binary is ${version || "unknown"}`);
   }
   if (requestedVersion && !overrideBin && !managedBin) {
@@ -1195,13 +1392,15 @@ export async function launchBrowser(
     );
   }
 
-  const profileDir = path.join(getProfilesDir(), dirId);
+  bindGpuContext(preferredBin);
+  if (!passThrough) validateBrowserHardwareProfile(meta, "chromium", gpuContext);
 
   // Find free CDP port (retry once if the port is stolen between allocation and spawn)
   let cdpPort = await findFreePortWithRetry(1);
+  assertCurrentRequest();
   const seed = normalizeFingerprintSeed(meta.fingerprintSeed || 12345);
   const platform = normalizePlatform(meta.platform || "windows");
-  const resolvedProxy = resolveProfileProxySecret(dirId);
+  const resolvedProxy = resolveProfileProxySecret(dirId, cfg);
   // ── Fail closed on proxy resolution (review item PL-04) ──
   // The proxy is the whole point of the profile identity: if the profile asked
   // for one and we cannot produce a usable config, launching would silently
@@ -1210,6 +1409,7 @@ export async function launchBrowser(
   // Shared with the Firefox path via assertProxyResolvable (R2 #46).
   assertProxyResolvable(meta, cfg, resolvedProxy);
   await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts?.forceDeadProxy === true });
+  assertCurrentRequest();
   // Health-based rotation: when the configured proxy was unhealthy and a
   // healthy fallback was selected, record it (health counters + audit) so the
   // rotation is visible and attributable.
@@ -1272,6 +1472,7 @@ export async function launchBrowser(
   if (!passThrough) {
     if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
       geoDetection = await resolveGeoFromProxy(activeProxy);
+      assertCurrentRequest();
       if (resolvedProxy.name && geoDetection?.detection?.success) {
         persistLaunchDetection(resolvedProxy.name, activeProxy, geoDetection.detection);
       }
@@ -1302,6 +1503,7 @@ export async function launchBrowser(
   const bin = launchPlan.executablePath;
   if (!fs.existsSync(bin)) throw new Error("Managed Chromium binary is unavailable after selection");
   const nativeChromiumVersion = await detectBinaryVersionAsync(bin);
+  assertCurrentRequest();
   if (requestedVersion && nativeChromiumVersion !== requestedVersion) {
     throw new Error(`Profile requires Chromium ${requestedVersion}, resolved ${nativeChromiumVersion || "unknown"}`);
   }
@@ -1321,6 +1523,7 @@ export async function launchBrowser(
     webrtcIp = normalizeOptionalIp(getLaunchArgValue(args, "--fingerprint-webrtc-ip"));
     if (!webrtcIp && activeProxy) {
       webrtcIp = geoDetection?.exitIp ?? (await resolveGeoFromProxy(activeProxy)).exitIp;
+      assertCurrentRequest();
     }
   }
   if (requestedWebRtcMode === "altered" && !webrtcIp) {
@@ -1350,17 +1553,12 @@ export async function launchBrowser(
       nativeChromiumVersion,
       managedSecureDns,
       "chromium",
+      gpuContext,
     );
     const fingerprintSwitch = supportsAgentBrowserFingerprintConfig(bin)
       ? AGENT_BROWSER_FINGERPRINT_SWITCH
       : LEGACY_FINGERPRINT_SWITCH;
-    args.push(buildBrowserFingerprintArg(
-      nativeFingerprintMeta,
-      nativeChromiumVersion,
-      fingerprintSwitch,
-      managedSecureDns,
-      "chromium",
-    ));
+    args.push(fingerprintSwitch + encodeBrowserFingerprintConfig(nativeFingerprint));
     args.push(`--user-agent=${nativeFingerprint.userAgent}`);
     // Raster scale: `native` renders at the host's real scale factor (crisp on
     // HiDPI/Retina) while the fork still reports the persona's devicePixelRatio
@@ -1386,21 +1584,13 @@ export async function launchBrowser(
         ? "configured: strict proxy DoH; successful DNS transactions have not yet been verified"
         : "configured: proxy-side hostname resolution; successful DNS transactions have not yet been verified" });
   }
-  if (!passThrough && platform !== (process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : null)) {
-    recordAudit({ category: "profile", action: "gpu-compatibility", target: dirId, actor: "auto",
-      detail: "unsupported cross-OS GPU persona: this engine exposes the native host GPU; foreign OS hardware compatibility is not verified" });
-  }
 
   // RoxyBrowser-style taskbar/window title: show the profile name at the OS
   // level without touching document.title (zero fingerprint surface). The
   // Chromium fork consumes an optional window-title prefix switch.
   const windowTitlePrefix = resolveWindowTitlePrefix(meta);
-  if (windowTitlePrefix) {
-    args = dedupeChromeArgs([
-      ...args,
-      `--agent-browser-window-title-prefix=${windowTitlePrefix}`,
-    ]);
-  }
+  // Append display-only text last, after the stamp. Flat ps output must not
+  // require guessing where a name ends and real startup switches begin.
 
   // Chromium 150 builds advertising the native QUIC-proxy capability route
   // SOCKS5 TCP and UDP through a profile-owned loopback MASQUE bridge. Older
@@ -1414,6 +1604,7 @@ export async function launchBrowser(
     if (isSocks && supportsNativeQuicProxy(bin) && dnsPolicy.route === "doh") {
       const masqueBridge = await startMasqueSocksBridge(activeProxy);
       pendingProxyBridge = masqueBridge;
+      assertCurrentRequest();
       const proxyOrigin = `${masqueBridge.proxyHost}:${masqueBridge.port}`;
       const resolverRule = `MAP ${masqueBridge.proxyHost} ${masqueBridge.listenHost}`;
       args = args.filter((arg) => arg !== "--disable-quic");
@@ -1430,6 +1621,7 @@ export async function launchBrowser(
       if (activeProxy.username && isSocks) {
         const socksBridge = await startAuthenticatedSocksBridge(activeProxy);
         pendingProxyBridge = socksBridge;
+        assertCurrentRequest();
         chromiumProxy = {
           ...activeProxy,
           type: "socks5",
@@ -1444,7 +1636,7 @@ export async function launchBrowser(
         ...args,
         `--proxy-server=${buildChromiumProxyUrl(chromiumProxy)}`,
         ...(dnsPolicy.route === "proxy"
-          ? [`--host-resolver-rules=${buildRemoteDnsRule(proxyConnectHost, getLaunchArgValue(args, "--host-resolver-rules"))}`]
+          ? buildProxyDnsArgs(proxyConnectHost, supportsNativeLocalDnsPolicy(bin), getLaunchArgValue(args, "--host-resolver-rules"))
           : []),
         "--disable-quic",
       ]);
@@ -1477,6 +1669,8 @@ export async function launchBrowser(
     args = dedupeChromeArgs([...args, `--app=${appUrl}`]);
   }
 
+  // No stale preparation may mutate profile preferences or mint a stamp.
+  assertCurrentRequest();
   // If bounded egress resolution is unavailable, use a deterministic locale
   // fallback instead of leaking the host UI language.
   if (!passThrough) {
@@ -1492,6 +1686,11 @@ export async function launchBrowser(
     !passThrough && normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility"),
   );
 
+  assertCurrentRequest();
+  args.push(...prepareChromiumDiagnosticNetLogArgs(getAppDataDir(), diagnosticNetLogRequest));
+  const launchProvenance = stampChromiumLaunch(args, requestHash!, fingerprintMode);
+  args.push(chromiumLaunchStampArg(launchProvenance));
+  if (windowTitlePrefix) args.push(`--agent-browser-window-title-prefix=${windowTitlePrefix}`);
   const logFile = getLaunchLogPath(dirId);
   const logFd = fs.openSync(logFile, "a");
   fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
@@ -1514,6 +1713,8 @@ export async function launchBrowser(
     process: child,
     port: cdpPort,
     lastActivityAt: Date.now(),
+    engine: "chromium",
+    launchProvenance,
     ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
   });
   pendingProxyBridge = null;
@@ -1628,6 +1829,37 @@ export async function launchBrowser(
 
 /** Wait for a spawned child to exit, escalating to SIGKILL so a "blocked"
  *  launch never leaves a live process behind. */
+function ownedChromiumLaunchEvidence(entry: RunningEntry | undefined): BrowserLaunchProcess | null {
+  const child = entry?.process;
+  if (entry?.engine !== "chromium" || !entry.launchProvenance || !child || child.pid !== entry.pid ||
+      child.exitCode !== null || child.signalCode !== null || child.killed === true ||
+      !Array.isArray(child.spawnargs) || child.spawnargs.length < 1 ||
+      !child.spawnargs.every((arg: unknown) => typeof arg === "string") ||
+      child.spawnargs.slice(1).some((arg: string) => /^--type(?:=|$)/.test(arg))) return null;
+  return browserLaunchProcessFromArgv(entry.pid, child.spawnargs[0], child.spawnargs.slice(1));
+}
+
+function assertReusableProcessAlive(pid: number): void {
+  try { process.kill(pid, 0); }
+  catch { throw restartRequired("the discovered process is not verifiably live"); }
+}
+
+async function assertReusableChromiumPort(port: number): Promise<void> {
+  try {
+    // This is the already-advertised, loopback-only CDP endpoint, not a proxy
+    // or website probe. A random listening HTTP port is not reuse evidence.
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1200) });
+    if (!response.ok) throw new Error("CDP endpoint unavailable");
+    const version = await response.json() as { Browser?: string; webSocketDebuggerUrl?: string };
+    const websocket = new URL(version.webSocketDebuggerUrl || "");
+    if (!/^(?:HeadlessChrome|Chrome|Chromium)\/\d/.test(version.Browser || "") ||
+        websocket.protocol !== "ws:" || websocket.hostname !== "127.0.0.1" || websocket.port !== String(port) ||
+        !websocket.pathname.startsWith("/devtools/browser/")) throw new Error("unexpected debugging endpoint");
+  } catch {
+    throw restartRequired("the Chromium debugging endpoint could not be verified");
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1703,16 +1935,31 @@ async function launchFirefoxProfile(
   cfg: any,
   headless: boolean | undefined,
   releaseLaunchLock: (() => void) | null,
-  opts?: { forceDeadProxy?: boolean },
+  opts: { forceDeadProxy?: boolean; requestHash: string; assertCurrentRequest: () => void },
 ): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck: LaunchCookieCheck }> {
   const bin = await findFirefoxBinaryAsync();
+  opts.assertCurrentRequest();
   if (!bin) {
     if (releaseLaunchLock) releaseLaunchLock();
     throw new Error(
       "Managed Firefox is required for this profile. Install Firefox or set AGENT_BROWSER_FIREFOX_BINARY_PATH.",
     );
   }
+  const binaryIdentity = await getFirefoxNativeSelectionIdentityAsync(bin);
+  opts.assertCurrentRequest();
+  if (!binaryIdentity) throw new Error("Cannot verify the selected Firefox executable identity");
+  const assertPrepared = async () => {
+    opts.assertCurrentRequest();
+    const selected = await findFirefoxBinaryAsync();
+    if (!selected || normalizeBrowserProcessPath(selected) !== normalizeBrowserProcessPath(bin) ||
+        await getFirefoxNativeSelectionIdentityAsync(bin) !== binaryIdentity) {
+      throw restartRequired("Firefox binary selection changed during preparation");
+    }
+    opts.assertCurrentRequest();
+  };
   const firefoxVersion = await detectFirefoxVersionAsync(bin);
+  opts.assertCurrentRequest();
+  if (!firefoxVersion || !/^\d+(?:\.\d+){1,2}$/.test(firefoxVersion)) throw new Error("Cannot verify the selected Firefox runtime version");
   // Compare major.minor (R4): a legal "154.0" pin must match a "154.0.1"
   // binary — strict string inequality would always block. Unknown is not a match.
   if (meta.browserVersion && !firefoxVersion) throw new Error(`Cannot verify the installed Firefox version required by profile: ${meta.browserVersion}`);
@@ -1726,6 +1973,7 @@ async function launchFirefoxProfile(
   const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(meta, firefoxVersion, null);
   const nativeRequested = firefoxNativeModeRequested();
   const capabilityReport = await readFirefoxNativeCapabilityReportAsync(bin);
+  await assertPrepared();
   const capabilities = new Set(capabilityReport?.capabilities || []);
   const nativeConfig = FIREFOX_NATIVE_CONFIG_CAPABILITIES.every(capability => capabilities.has(capability));
   const nativeParity = FIREFOX_NATIVE_PARITY_CAPABILITIES.every(capability => capabilities.has(capability));
@@ -1736,13 +1984,14 @@ async function launchFirefoxProfile(
     );
   }
   const nativeMode = managedIdentity !== null && nativeConfig && (nativeParity || nativeRequested);
-  const resolvedProxy = resolveProfileProxySecret(dirId);
+  const resolvedProxy = resolveProfileProxySecret(dirId, cfg);
   // Same fail-closed gate as the Chromium path (R2 #46): a requested-but-
   // unresolvable proxy must refuse — never write a direct user.js.
   assertProxyResolvable(meta, cfg, resolvedProxy);
   // R10/R12: liveness gate — history warns by default (opt-in block via
   // blockOnUnhealthyProxy), the TCP probe refuses dead ports.
-  await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts?.forceDeadProxy === true });
+  await assertProxyLaunchable(dirId, resolvedProxy, cfg, { forceDeadProxy: opts.forceDeadProxy === true });
+  await assertPrepared();
   // R11 P1-4 item 3: same consistency warnings as Chromium (warn by default).
   // R12 P2-1: normalize like the Chromium path — real/disable modes carry no
   // effective IP at runtime, so a stale meta.webrtcIp must not trigger
@@ -1758,9 +2007,10 @@ async function launchFirefoxProfile(
   const dohUrl = cfg.managedSecureDnsUrl && typeof cfg.managedSecureDnsUrl === "string" ? cfg.managedSecureDnsUrl : null;
 
   writeFirefoxUserJs(profileDir, {
+    fingerprintMode,
     proxy: resolvedProxy.config,
     dohUrl,
-    locale: meta.locale || undefined,
+    locale: managedIdentity ? meta.locale || undefined : undefined,
     // R12 P1-2: honor the same opt-in flag as Chromium (default off).
     allowThirdPartyCookies: normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility", false),
     useGpu: true,
@@ -1768,6 +2018,8 @@ async function launchFirefoxProfile(
     colorScheme: "system",
     ...(managedIdentity ? { extraPrefs: nativeMode ? managedIdentity.nativePrefs : managedIdentity.prefs } : {}),
   });
+
+  const userJsHash = firefoxLaunchDigest(fs.readFileSync(path.join(profileDir, "user.js")));
 
   // Explicit free port (not 0): the BiDi endpoint is deterministic and the
   // `ps`-based port rediscovery (statusBrowser after an app restart) works.
@@ -1782,6 +2034,7 @@ async function launchFirefoxProfile(
     appUrl: meta.appUrl || undefined,
     nativeRequired: nativeMode,
   });
+  await assertPrepared();
 
   const logFile = getLaunchLogPath(dirId);
   let logFd: number | null = null;
@@ -1799,8 +2052,14 @@ async function launchFirefoxProfile(
   // but `Date.getTimezoneOffset` / `Date` parsing read the OS clock and still
   // leak `+08:00`-style host offsets. Firefox honors the `TZ` env var natively,
   // so the managed timezone rides on the child environment (engine-level).
-  const spawnEnv = meta.timezone ? { ...process.env, TZ: meta.timezone } : undefined;
-  const { child, info } = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv });
+  const spawnEnv = managedIdentity && meta.timezone ? { ...process.env, TZ: meta.timezone } : undefined;
+  let spawned: Awaited<ReturnType<typeof spawnFirefoxWithDebugInfo>>;
+  try { spawned = await spawnFirefoxWithDebugInfo(bin, args, { timeoutMs: 60000, env: spawnEnv }); }
+  catch (error) {
+    if (logFd !== null) { try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] Firefox launch log close failed:", closeError); } }
+    throw error;
+  }
+  const { child, info } = spawned;
   const pid = child.pid;
   if (typeof pid !== "number" || !Number.isInteger(pid)) {
     try { child.kill(); } catch { /* ignore */ }
@@ -1813,7 +2072,7 @@ async function launchFirefoxProfile(
   // profile's debug port; agent CDP tooling remains Chromium-only for now
   // (documented follow-up), while the product's own tools went BiDi (Slice 79).
   const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
-  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now() });
+  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox" });
   child.on("exit", () => {
     const entry = runningProcesses.get(dirId);
     if (entry && entry.pid === pid) {
@@ -1834,6 +2093,7 @@ async function launchFirefoxProfile(
   let cookieCheck: LaunchCookieCheck = { checked: false };
 
   try {
+    await assertPrepared();
     // Long-lived BiDi session: the fingerprint preload script lives in the
     // session, so the connection stays open while the profile runs.
     if (info.bidiWebSocketUrl) {
@@ -1852,9 +2112,9 @@ async function launchFirefoxProfile(
     }
 
     const liveBidi = runningProcesses.get(dirId)?.bidiConn;
-    if (managedIdentity && !liveBidi) {
+    if (!liveBidi || liveBidi.closed) {
       throw new Error(
-        `Firefox managed identity requires a live BiDi session${bidiError ? `: ${bidiError}` : "."}`,
+        `Firefox ${managedIdentity ? "managed identity" : "launch"} requires a live BiDi session${bidiError ? `: ${bidiError}` : "."}`,
       );
     }
     if (managedIdentity && !nativeMode && !bidiInjected) {
@@ -1969,44 +2229,48 @@ async function launchFirefoxProfile(
       }
     }
 
-    // Host environment risk — for Firefox the runtime font-exposure and rAF
-    // probes run through BiDi (there is no engine-level font isolation).
-    try {
-      const envResult = await checkEnvironmentRiskRuntime(
-        { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
-        actualPort,
-        { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
-        "firefox",
-      );
-      envCheck = { checked: true, high: !envResult.ok, findings: envResult.findings };
-      if (!envResult.ok) {
-        recordAudit({
-          category: "profile", action: "env-risk-high", target: dirId, actor: "auto",
-          detail: "high: " + summarizeEnvFindings(envResult.findings, "high") + (envResult.findings.some((f) => f.severity === "medium") ? "; medium: " + summarizeEnvFindings(envResult.findings, "medium") : ""),
-        });
-      }
-      if (shouldBlockEnvironmentRisk(envResult, cfg.blockOnEnvironmentRisk)) {
-        const reason = "Environment risk blocked (" + summarizeEnvFindings(envResult.findings, "high") + "). Fix the host environment or set blockOnEnvironmentRisk=false to launch.";
-        recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail: reason });
-        throw new Error(reason);
-      }
-    } catch (e: any) {
-      if (e?.driftBlocked) throw e;
-      if (/Environment risk blocked/.test(String(e?.message || e))) {
-        const failedEntry = runningProcesses.get(dirId);
-        if (failedEntry?.bidiConn) {
-          dropFirefoxSession(failedEntry.port);
-          try { failedEntry.bidiConn.close(); } catch { /* ignore */ }
+    // Off mode makes no managed persona claim. Like Chromium, do not compare
+    // its real environment with inactive locale/platform fields.
+    if (managedIdentity) {
+      try {
+        const envResult = await checkEnvironmentRiskRuntime(
+          { timezone: meta.timezone, locale: meta.locale, platform: meta.platform },
+          actualPort,
+          { proxy: { mode: resolvedProxy.mode, config: resolvedProxy.config ? { type: resolvedProxy.config.type } : null } },
+          "firefox",
+        );
+        envCheck = { checked: true, high: !envResult.ok, findings: envResult.findings };
+        if (!envResult.ok) {
+          recordAudit({
+            category: "profile", action: "env-risk-high", target: dirId, actor: "auto",
+            detail: "high: " + summarizeEnvFindings(envResult.findings, "high") + (envResult.findings.some((f) => f.severity === "medium") ? "; medium: " + summarizeEnvFindings(envResult.findings, "medium") : ""),
+          });
         }
-        runningProcesses.delete(dirId);
-        try { child.kill(); } catch { /* ignore */ }
-        if (logFd !== null) { try { fs.closeSync(logFd); } catch { /* ignore */ } }
-        await waitForProcessExit(pid);
-        throw e;
+        if (shouldBlockEnvironmentRisk(envResult, cfg.blockOnEnvironmentRisk)) {
+          const reason = "Environment risk blocked (" + summarizeEnvFindings(envResult.findings, "high") + "). Fix the host environment or set blockOnEnvironmentRisk=false to launch.";
+          recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail: reason });
+          throw new Error(reason);
+        }
+      } catch (e: any) {
+        // The outer launch failure handler owns session/process cleanup.
+        if (e?.driftBlocked || /Environment risk blocked/.test(String(e?.message || e))) throw e;
+        console.warn("[agent-browser] environment risk check failed for " + dirId.slice(0, 8) + ":", e?.message || e);
+        envCheck = { checked: false, error: (e && e.message) || String(e) };
       }
-      console.warn("[agent-browser] environment risk check failed for " + dirId.slice(0, 8) + ":", e?.message || e);
-      envCheck = { checked: false, error: (e && e.message) || String(e) };
     }
+    await assertPrepared();
+    const connection = getRegisteredFirefoxSession(actualPort);
+    if (!connection || connection !== runningProcesses.get(dirId)?.bidiConn || connection.closed) {
+      throw restartRequired("Firefox BiDi session ended during launch verification");
+    }
+    if (firefoxLaunchDigest(fs.readFileSync(path.join(profileDir, "user.js"))) !== userJsHash) {
+      throw restartRequired("Firefox preferences changed during launch verification");
+    }
+    if (child.killed || child.exitCode !== null || child.signalCode !== null) throw restartRequired("Firefox exited during launch verification");
+    ownedFirefoxLaunches.set(child, {
+      requestHash: opts.requestHash, executablePath: bin, binaryIdentity, profileDir,
+      argvHash: firefoxLaunchDigest(JSON.stringify(child.spawnargs)), userJsHash, connection,
+    });
   } catch (e: any) {
     // Drift-blocked or fatal post-launch gate failure: terminate and clean up.
     const failedEntry = runningProcesses.get(dirId);
@@ -2194,8 +2458,8 @@ function addDrmArgs(args: string[], dirId: string): void {
 
 function addHardwareFingerprintArgs(args: string[], meta: any): void {
   const normalized = normalizeHardwareFingerprintMeta(meta);
-  // Chromium keeps native GPU strings/capabilities; explicit overrides are
-  // rejected before launch rather than reintroduced through legacy switches.
+  // Managed GPU identity is carried only by the validated versioned payload;
+  // never reintroduce it through unrelated legacy command-line switches.
   if (Number.isInteger(normalized.hardwareConcurrency)) args.push(`--fingerprint-hardware-concurrency=${normalized.hardwareConcurrency}`);
   if (Number.isInteger(normalized.deviceMemory)) args.push(`--fingerprint-device-memory=${normalized.deviceMemory}`);
   if (Number.isInteger(normalized.screenWidth)) args.push(`--fingerprint-screen-width=${normalized.screenWidth}`);

@@ -59,10 +59,19 @@ export function getRegisteredFirefoxSession(port: number): BidiConnection | null
   return conn;
 }
 
+export interface BidiEvent {
+  readonly method: string;
+  readonly params: Record<string, unknown>;
+}
+
+export type BidiEventListener = (event: BidiEvent) => void | Promise<void>;
+
 export interface BidiConnection {
   wsUrl: string;
   /** Send one BiDi command; resolves with `result`, rejects on protocol error. */
   send(method: string, params?: Record<string, any>, timeoutMs?: number): Promise<any>;
+  /** Observe received events only; does not send session.subscribe or retain history. */
+  onEvent?(listener: BidiEventListener): () => void;
   close(): void;
   /** True after the socket closed or errored (all in-flight commands rejected). */
   closed: boolean;
@@ -119,9 +128,11 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
   let nextId = 1;
   let initReject: (e: Error) => void = () => {};
   const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  const eventListeners = new Set<BidiEventListener>();
   let closedFlag = false;
   const rejectAll = (error: Error) => {
     closedFlag = true;
+    eventListeners.clear();
     for (const waiter of pending.values()) waiter.reject(error);
     pending.clear();
   };
@@ -154,13 +165,16 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
     }
 
     socket.on("error", (err: Error) => {
-      failInit(new Error("BiDi websocket error: " + err.message));
+      const error = new Error("BiDi websocket error: " + err.message);
+      if (!settled) failInit(error);
+      else rejectAll(error);
     });
-    socket.on("close", () => {
+    socket.on("close", (code: number, reason: Buffer) => {
+      const details = ` (code=${code ?? "unknown"}, reason=${reason?.toString() ?? ""})`;
       if (!settled) {
-        failInit(new Error("BiDi connection closed before session start"));
+        failInit(new Error("BiDi connection closed before session start" + details));
       } else {
-        rejectAll(new Error("BiDi connection closed"));
+        rejectAll(new Error("BiDi connection closed" + details));
       }
     });
 
@@ -196,12 +210,29 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
     socket.on("message", (data: any) => {
       let msg: any;
       try { msg = JSON.parse(data.toString()); } catch { return; }
-      if (!msg || typeof msg.id !== "number") return;
+      if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+      if (typeof msg.id !== "number") {
+        if (!closedFlag && msg.id === undefined && typeof msg.method === "string" &&
+            msg.params !== null && typeof msg.params === "object" && !Array.isArray(msg.params)) {
+          const event: BidiEvent = { method: msg.method, params: msg.params };
+          const listenerFailed = (error: unknown) => {
+            console.warn("[bidi] event listener failed:", error instanceof Error ? error.message : String(error));
+          };
+          for (const listener of eventListeners) {
+            if (closedFlag) break;
+            try { Promise.resolve(listener(event)).catch(listenerFailed); }
+            catch (error) { listenerFailed(error); }
+          }
+        }
+        return;
+      }
       const waiter = pending.get(msg.id);
       if (!waiter) return;
       pending.delete(msg.id);
       if (msg.error) {
-        waiter.reject(new Error(msg.error.message || "BiDi request failed"));
+        const details = [typeof msg.error === "string" ? msg.error : msg.error.error, msg.message, msg.error.message]
+          .filter((value): value is string => typeof value === "string" && value.length > 0);
+        waiter.reject(new Error("BiDi request failed" + (details.length ? ": " + [...new Set(details)].join(": ") : "")));
       } else {
         waiter.resolve(msg.result ?? {});
       }
@@ -212,7 +243,7 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
         const result = await send("session.new", {
           capabilities: {
             alwaysMatch: {
-              acceptInsecureCerts: true,
+              acceptInsecureCerts: false,
               unhandledPromptBehavior: { default: "dismiss" },
             },
           },
@@ -224,6 +255,10 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
         resolveInit({
           wsUrl: normalized,
           send,
+          onEvent: (listener) => {
+            if (!closedFlag) eventListeners.add(listener);
+            return () => { eventListeners.delete(listener); };
+          },
           close: () => {
             rejectAll(new Error("BiDi connection closed"));
             try { socket.close(); } catch { /* ignore */ }

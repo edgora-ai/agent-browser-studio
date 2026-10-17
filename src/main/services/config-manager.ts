@@ -372,8 +372,7 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   return true;
 }
 
-function isProxyUnhealthyForRotation(name: string): boolean {
-  const cfg = getConfig();
+function isProxyUnhealthyForRotation(name: string, cfg: MgmtConfig = getConfig()): boolean {
   const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
   if (!health) return false;
   const now = Date.now();
@@ -382,8 +381,7 @@ function isProxyUnhealthyForRotation(name: string): boolean {
   return false;
 }
 
-function rotationReasonFor(name: string): string | null {
-  const cfg = getConfig();
+function rotationReasonFor(name: string, cfg: MgmtConfig = getConfig()): string | null {
   const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
   if (!health) return null;
   const now = Date.now();
@@ -398,13 +396,12 @@ function rotationReasonFor(name: string): string | null {
   return null;
 }
 
-function pickRotationFallback(name: string): string | null {
-  const cfg = getConfig();
+function pickRotationFallback(name: string, cfg: MgmtConfig = getConfig()): string | null {
   const fallbacks = cfg.proxies[name]?.fallbacks || [];
   for (const fb of fallbacks) {
     if (!isValidProxyName(fb) || fb === name) continue;
     if (!Object.hasOwn(cfg.proxies, fb)) continue;
-    if (isProxyUnhealthyForRotation(fb)) continue;
+    if (isProxyUnhealthyForRotation(fb, cfg)) continue;
     return fb;
   }
   return null;
@@ -444,17 +441,17 @@ function removeFallbackReference(cfg: MgmtConfig, name: string): void {
   }
 }
 
-export function resolveProfileProxy(dirId: string): ResolvedProfileProxy {
-  return resolveProfileProxyInternal(dirId, true);
+export function resolveProfileProxy(dirId: string, snapshot?: MgmtConfig): ResolvedProfileProxy {
+  return resolveProfileProxyInternal(dirId, true, snapshot);
 }
 
-export function resolveProfileProxySecret(dirId: string): ResolvedProfileProxy {
-  return resolveProfileProxyInternal(dirId, false);
+export function resolveProfileProxySecret(dirId: string, snapshot?: MgmtConfig): ResolvedProfileProxy {
+  return resolveProfileProxyInternal(dirId, false, snapshot);
 }
 
-function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedProfileProxy {
+function resolveProfileProxyInternal(dirId: string, redact: boolean, snapshot?: MgmtConfig): ResolvedProfileProxy {
   validateDirId(dirId);
-  const cfg = getConfig();
+  const cfg = snapshot ?? getConfig();
   const meta = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
   const mode = normalizeProxyMode(meta?.proxyMode, meta?.proxyName ?? null);
 
@@ -477,9 +474,9 @@ function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedPr
   let effectiveName = proxyName;
   let rotatedFrom: string | null = null;
   let rotationReason: string | null = null;
-  if (isProxyUnhealthyForRotation(proxyName)) {
-    rotationReason = rotationReasonFor(proxyName);
-    const fallback = pickRotationFallback(proxyName);
+  if (isProxyUnhealthyForRotation(proxyName, cfg)) {
+    rotationReason = rotationReasonFor(proxyName, cfg);
+    const fallback = pickRotationFallback(proxyName, cfg);
     if (fallback) {
       effectiveName = fallback;
       rotatedFrom = proxyName;
