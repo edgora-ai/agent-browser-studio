@@ -1,7 +1,54 @@
 // Integration tests — cross-module consistency
-import { describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ts from "typescript";
+import { buildBrowserFingerprintConfig, encodeBrowserFingerprintConfig, validateBrowserHardwareProfile } from "../../src/main/services/browser-fingerprint-config.js";
+
+// Observe actual production registration, including permission wrappers and
+// compatibility aliases. No handler source is copied or evaluated as a script.
+const ipc = vi.hoisted(() => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR || require("node:os").tmpdir(), "ipc-smoke-"));
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const owners = new Map<string, string>();
+  const state = { module: "" };
+  const forbidden = vi.fn((...args: unknown[]) => { throw new Error(`Undeclared smoke capability: ${String(args[0])}`); });
+  const handle = (channel: string, handler: (...args: any[]) => unknown) => {
+    if (typeof channel !== "string" || typeof handler !== "function") throw new Error("Invalid IPC registration");
+    if (handlers.has(channel)) throw new Error(`Duplicate IPC channel: ${channel} (${owners.get(channel)}, ${state.module})`);
+    handlers.set(channel, handler);
+    owners.set(channel, state.module);
+  };
+  return { root, handlers, owners, state, handle, forbidden, modules: new Map<string, string>() };
+});
+vi.mock("electron", () => ({
+  ipcMain: { handle: ipc.handle },
+  app: { getPath: (name: string) => {
+    if (["userData", "home", "appData", "downloads", "documents", "desktop", "temp"].includes(name)) return ipc.root;
+    throw new Error(`Undeclared Electron path: ${name}`);
+  }, getAppPath: () => process.cwd(), getName: () => "IPC smoke fixture", getVersion: () => "1.0.1", isPackaged: false, quit: ipc.forbidden },
+  BrowserWindow: { getAllWindows: ipc.forbidden, getFocusedWindow: ipc.forbidden, fromWebContents: ipc.forbidden },
+  clipboard: { writeText: ipc.forbidden }, screen: { getPrimaryDisplay: ipc.forbidden },
+  dialog: { showOpenDialog: ipc.forbidden, showSaveDialog: ipc.forbidden, showMessageBox: ipc.forbidden },
+  shell: { openPath: ipc.forbidden, openExternal: ipc.forbidden },
+}));
+vi.mock("node:child_process", async (original) => ({
+  ...await original<typeof import("node:child_process")>(), exec: ipc.forbidden, execFile: ipc.forbidden,
+  execSync: ipc.forbidden, execFileSync: ipc.forbidden, spawn: ipc.forbidden, spawnSync: ipc.forbidden,
+}));
+vi.mock("node:http", async (original) => {
+  const actual = await original<typeof import("node:http")>();
+  const external = { request: ipc.forbidden, get: ipc.forbidden, createServer: ipc.forbidden };
+  return { ...actual, ...external, default: { ...actual, ...external } };
+});
+vi.mock("node:https", async (original) => {
+  const actual = await original<typeof import("node:https")>();
+  const external = { request: ipc.forbidden, get: ipc.forbidden, createServer: ipc.forbidden };
+  return { ...actual, ...external, default: { ...actual, ...external } };
+});
+vi.mock("ws", () => ({ default: ipc.forbidden, WebSocket: ipc.forbidden, WebSocketServer: ipc.forbidden }));
 
 const ROOT = path.resolve(__dirname, "../..");
 const RENDERER_MODULE_DIR = path.join(ROOT, "src/renderer/js/app");
@@ -11,17 +58,53 @@ const readRendererModules = (): string => fs.readdirSync(RENDERER_MODULE_DIR)
   .map((file) => readRendererModule(file))
   .join("\n");
 
-function registeredIpcChannels(): string[] {
-  const channels: string[] = [];
-  const ipcDir = path.join(ROOT, "src/main/ipc");
-  for (const file of fs.readdirSync(ipcDir).filter((name) => name.endsWith(".ts"))) {
-    const content = fs.readFileSync(path.join(ipcDir, file), "utf-8");
-    for (const match of content.matchAll(/ipcMain\.handle\("([^"]+)"/g)) channels.push(match[1]);
-    for (const match of content.matchAll(/handleBrowser\("([^"]+)"/g)) {
-      channels.push(`browser:${match[1]}`, `cloak:${match[1]}`);
-    }
+function syntax(source: string, kind = ts.ScriptKind.TS) {
+  return ts.createSourceFile("integration-contract.ts", source, ts.ScriptTarget.Latest, true, kind);
+}
+function nodes<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) => node is T): T[] {
+  const matches: T[] = [];
+  function visit(node: ts.Node) { if (predicate(node)) matches.push(node); ts.forEachChild(node, visit); }
+  visit(root);
+  return matches;
+}
+function calls(root: ts.Node, name: string) {
+  return nodes(root, ts.isCallExpression).filter(node => ts.isIdentifier(node.expression) && node.expression.text === name);
+}
+function stringProperty(node: ts.ObjectLiteralExpression, key: string): string | undefined {
+  const properties = node.properties.filter(ts.isPropertyAssignment).filter(property =>
+    (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === key);
+  if (properties.length !== 1 || !ts.isStringLiteralLike(properties[0].initializer)) return undefined;
+  return properties[0].initializer.text;
+}
+function translationKeys(source: string): Set<string> {
+  const keys = new Set<string>();
+  for (const call of nodes(syntax(source, ts.ScriptKind.JS), ts.isCallExpression)) {
+    const translator = (ts.isIdentifier(call.expression) && call.expression.text === "t") ||
+      (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "t");
+    if (translator && call.arguments[0] && ts.isStringLiteralLike(call.arguments[0])) keys.add(call.arguments[0].text);
   }
-  return channels;
+  return keys;
+}
+
+beforeAll(async () => {
+  vi.stubGlobal("fetch", ipc.forbidden);
+  const ipcDir = path.join(ROOT, "src/main/ipc");
+  for (const file of fs.readdirSync(ipcDir).filter((name) => name.endsWith(".ts")).sort()) {
+    const module = await import(path.join(ipcDir, file));
+    const registrations = Object.entries(module).filter(([name, value]) => /^register\w+Handlers$/.test(name) && typeof value === "function");
+    expect(registrations, `${file} must expose one actual IPC registrar`).toHaveLength(1);
+    const [name, register] = registrations[0];
+    ipc.modules.set(file, name);
+    ipc.state.module = file;
+    (register as () => void)();
+  }
+});
+afterAll(() => {
+  vi.unstubAllGlobals();
+  fs.rmSync(ipc.root, { recursive: true, force: true });
+});
+function registeredIpcChannels(): string[] {
+  return [...ipc.handlers.keys()];
 }
 
 describe("Integration — IPC System", () => {
@@ -50,37 +133,59 @@ describe("Integration — IPC System", () => {
       "settings:extensions",
       "settings:extension-repository",
       "settings:add-repository-extension",
+      "settings:update-repository-extension",
+      "settings:delete-repository-extension",
+      "settings:set-repository-extension-meta",
+      "settings:install-extension",
+      "settings:install-local-extension",
+      "settings:toggle-extension",
+      "settings:delete-extension",
+      "settings:set-profile-extensions",
+      "settings:agent-fs-set",
+      "browser:health-history",
+      "browser:health-cancel",
+      "browser:capture-baseline",
+      "cloak:launch",
+      "webrtc:diag",
       "detect:webrtc-leak",
     ];
     for (const ch of expected) expect(channels, `missing ${ch}`).toContain(ch);
   });
 
   it("no duplicate IPC channel names", () => {
-    const ipcFiles = fs.readdirSync(path.join(ROOT, "src/main/ipc")).filter(f => f.endsWith(".ts"));
-    const chMap = new Map<string, string[]>();
-    for (const f of ipcFiles) {
-      for (const m of fs.readFileSync(path.join(ROOT, "src/main/ipc", f), "utf-8").matchAll(/ipcMain\.handle\("([^"]+)"/g)) {
-        if (!chMap.has(m[1])) chMap.set(m[1], []);
-        chMap.get(m[1])!.push(f);
-      }
-    }
-    const dupes = [...chMap].filter(([, files]) => files.length > 1);
-    expect(dupes, "Duplicate IPC channels").toHaveLength(0);
+    // The capture rejects duplicates during the real registration itself,
+    // including dynamically constructed channels; prove that guard is active.
+    const existing = registeredIpcChannels()[0];
+    expect(existing).toBeDefined();
+    expect(() => ipc.handle(existing, () => undefined)).toThrow(`Duplicate IPC channel: ${existing}`);
+    expect(ipc.owners.size).toBe(ipc.handlers.size);
+    for (const file of ipc.modules.keys()) expect([...ipc.owners.values()], `${file} registered no handlers`).toContain(file);
+  });
+
+  it("every browser compatibility alias shares the same production handler", () => {
+    const browserChannels = registeredIpcChannels().filter(channel => channel.startsWith("browser:"));
+    expect(browserChannels.length).toBeGreaterThan(20);
+    for (const channel of browserChannels) expect(ipc.handlers.get(channel.replace(/^browser:/, "cloak:")), channel).toBe(ipc.handlers.get(channel));
+    expect(ipc.forbidden).not.toHaveBeenCalled();
   });
 
   it("preload invocations map to existing IPC channels", () => {
     const ipcChannels = new Set(registeredIpcChannels());
     const preload = fs.readFileSync(path.join(ROOT, "src/main/preload.cjs"), "utf-8");
-    for (const m of preload.matchAll(/ipcRenderer\.invoke\("([^"]+)"/g)) {
-      expect(ipcChannels.has(m[1]), `preload invokes non-existent: ${m[1]}`).toBe(true);
-    }
+    const tree = syntax(preload, ts.ScriptKind.JS);
+    const invocations = nodes(tree, ts.isCallExpression).filter(call =>
+      ts.isPropertyAccessExpression(call.expression) && ts.isIdentifier(call.expression.expression) &&
+      call.expression.expression.text === "ipcRenderer" && call.expression.name.text === "invoke" ||
+      ts.isIdentifier(call.expression) && call.expression.text === "invokeAccount");
+    const literalChannels = invocations.flatMap(call => call.arguments[0] && ts.isStringLiteralLike(call.arguments[0]) ? [call.arguments[0].text] : []);
+    expect(literalChannels.length).toBeGreaterThan(100);
+    for (const channel of literalChannels) expect(ipcChannels.has(channel), `preload invokes non-existent: ${channel}`).toBe(true);
   });
 
   it("all IPC modules are registered in index.ts", () => {
     const idx = fs.readFileSync(path.join(ROOT, "src/main/index.ts"), "utf-8");
-    for (const h of ["Profile", "Proxy", "Storage", "Sync", "App", "Detect", "Settings", "Agent", "Mcp", "Browser"]) {
-      expect(idx).toContain("register" + h + "Handlers");
-    }
+    const tree = syntax(idx);
+    for (const [file, name] of ipc.modules) expect(calls(tree, name), `${file} must be invoked by startup`).toHaveLength(1);
   });
 });
 
@@ -340,15 +445,20 @@ describe("Integration — Fingerprint UX", () => {
 });
 
 describe("Integration — i18n dynamic coverage", () => {
+  it("recognizes translator calls independently of quote style without counting comments or unused strings", () => {
+    const keys = translationKeys('// t("toast.decoy.comment")\nconst unused = "toast.decoy.string"; t(\'toast.single\'); window.i18n.t("toast.double"); t(`toast.template`);');
+    expect([...keys].sort()).toEqual(["toast.double", "toast.single", "toast.template"]);
+  });
+
   it("most common toast strings are i18n-wrapped", () => {
-    const app = readRendererModules();
+    const keys = translationKeys(readRendererModules());
     const expectedKeys = [
       "toast.profile.started", "toast.profile.stopped", "toast.profile.created",
       "toast.sync.saved", "toast.cookie.saved", "toast.proxy.updated",
       "toast.skill.saved", "toast.llm.saved", "toast.account.deleted",
     ];
     for (const k of expectedKeys) {
-      expect(app, `missing i18n call for ${k}`).toContain(`"${k}"`);
+      expect(keys.has(k), `missing translator call for ${k}`).toBe(true);
     }
   });
 
@@ -648,7 +758,7 @@ describe("Integration — Hardware fingerprint controls", () => {
     }
   });
 
-  it("launch path preserves non-GPU hardware flags while rejecting Chromium GPU overrides", () => {
+  it("launch path preserves non-GPU flags and validates engine-specific Chromium GPU support", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
     const emitters = [...manager.matchAll(/^function addHardwareFingerprintArgs\([\s\S]*?^\}/gm)];
     expect(emitters, "unique Chromium hardware argument emitter").toHaveLength(1);
@@ -671,9 +781,20 @@ describe("Integration — Hardware fingerprint controls", () => {
     const hardwareArgs = "addHardwareFingerprintArgs(requestedArgs, meta)";
     expect(manager.includes(validation), "Chromium GPU overrides must be rejected before launch").toBe(true);
     expect(manager.indexOf(validation)).toBeLessThan(manager.indexOf(hardwareArgs));
-    const fingerprintConfig = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
-    expect(fingerprintConfig.includes('engine === "chromium" && gpuOverrides.length > 0'), "GPU rejection must remain engine-specific").toBe(true);
-    expect(fingerprintConfig.includes("Unsupported GPU overrides for Chromium"), "GPU overrides must fail closed").toBe(true);
+    // The current policy allows validated Mac/arm64 model tuples; it does not
+    // reject every Chromium override. Exercise the pure policy without a browser.
+    const meta = { platform: "macos" as const, fingerprintSeed: 12345 };
+    const context = { hostPlatform: "darwin", hostArchitecture: "arm64", kernelArchitecture: "arm64" };
+    const chromium = buildBrowserFingerprintConfig(meta, "149.0.7827.22", null, "chromium", context);
+    expect(chromium.webgl.vendor.length).toBeGreaterThan(0);
+    expect(chromium.webgl.renderer.length).toBeGreaterThan(0);
+    const overrides = { ...meta, gpuVendor: chromium.webgl.vendor, gpuRenderer: chromium.webgl.renderer };
+    expect(() => validateBrowserHardwareProfile(overrides, "chromium", context)).not.toThrow();
+    expect(() => validateBrowserHardwareProfile(overrides, "chromium", { ...context, hostPlatform: "linux" })).toThrow("Unsupported GPU overrides for Chromium");
+    // Firefox accepts legacy catalog inputs, not its coarsened observable
+    // WebGL privacy bucket (which is deliberately not a catalog tuple).
+    const firefoxOverrides = { ...meta, gpuVendor: "Google Inc. (Apple)", gpuRenderer: "ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)" };
+    expect(() => validateBrowserHardwareProfile(firefoxOverrides, "firefox", { ...context, hostPlatform: "linux" })).not.toThrow();
     expect(manager).toContain(hardwareArgs);
     expect(manager).toContain("--window-size=${nativeFingerprint.screen.outerWidth},${nativeFingerprint.screen.outerHeight}");
     expect(manager).toContain("--window-position=${nativeFingerprint.screen.windowX},${nativeFingerprint.screen.windowY}");
@@ -704,7 +825,31 @@ describe("Integration — Hardware fingerprint controls", () => {
   it("passes a versioned identity to the self-built Chromium 149+ renderer", () => {
     const manager = fs.readFileSync(path.join(ROOT, "src/main/services/browser-manager.ts"), "utf-8");
     const config = fs.readFileSync(path.join(ROOT, "src/main/services/browser-fingerprint-config.ts"), "utf-8");
-    expect(manager).toContain("buildBrowserFingerprintArg(");
+    const managerTree = syntax(manager);
+    const identities = nodes(managerTree, ts.isVariableDeclaration).filter(node =>
+      ts.isIdentifier(node.name) && node.name.text === "nativeFingerprint" && node.initializer &&
+      ts.isCallExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "buildBrowserFingerprintConfig");
+    expect(identities, "one actual native identity construction, not a comment or obsolete wrapper name").toHaveLength(1);
+    const identity = identities[0].initializer as ts.CallExpression;
+    expect(identity.arguments.map(argument => ts.isStringLiteralLike(argument) ? argument.text : argument.getText(managerTree)))
+      .toEqual(["nativeFingerprintMeta", "nativeChromiumVersion", "managedSecureDns", "chromium", "gpuContext"]);
+    const switches = nodes(managerTree, ts.isVariableDeclaration).filter(node => ts.isIdentifier(node.name) && node.name.text === "fingerprintSwitch");
+    expect(switches).toHaveLength(1);
+    const selection = switches[0].initializer!;
+    expect(ts.isConditionalExpression(selection)).toBe(true);
+    if (!ts.isConditionalExpression(selection)) throw new Error("Missing native switch capability selection");
+    expect(selection.condition.getText(managerTree)).toBe("supportsAgentBrowserFingerprintConfig(bin)");
+    expect(selection.whenTrue.getText(managerTree)).toBe("AGENT_BROWSER_FINGERPRINT_SWITCH");
+    expect(selection.whenFalse.getText(managerTree)).toBe("LEGACY_FINGERPRINT_SWITCH");
+    const publications = nodes(managerTree, ts.isCallExpression).filter(call =>
+      ts.isPropertyAccessExpression(call.expression) && call.expression.expression.getText(managerTree) === "args" && call.expression.name.text === "push" &&
+      call.arguments.length === 1 && ts.isBinaryExpression(call.arguments[0]) && call.arguments[0].operatorToken.kind === ts.SyntaxKind.PlusToken &&
+      call.arguments[0].left.getText(managerTree) === "fingerprintSwitch" && calls(call.arguments[0].right, "encodeBrowserFingerprintConfig")
+        .some(encode => encode.arguments.length === 1 && encode.arguments[0].getText(managerTree) === "nativeFingerprint"));
+    expect(publications, "the constructed identity must reach the selected native switch").toHaveLength(1);
+    const payload = buildBrowserFingerprintConfig({ platform: "macos", fingerprintSeed: 12345 }, "149.0.7827.22");
+    expect(JSON.parse(Buffer.from(encodeBrowserFingerprintConfig(payload), "base64url").toString("utf8"))).toEqual(payload);
+    expect(payload.schemaVersion).toBe(1);
     expect(manager).toContain("managedSecureDns");
     expect(manager).toContain("detectBinaryVersion(bin)");
     expect(manager).not.toContain("--time-zone-for-testing=");
@@ -877,10 +1022,38 @@ describe("Integration — Sync restore hardening", () => {
     const sync = fs.readFileSync(path.join(ROOT, "src/main/services/sync-service.ts"), "utf-8");
     expect(sync).toContain("isProfileRunningForRestore(dirId)");
     expect(sync).toContain("statusBrowser(dirId).running");
-    expect(sync).toContain("skipped localStorage for running profile");
-    expect(sync).toContain("skipped preferences for running profile");
-    expect(sync).toContain("validatePreferencesJson(rawPrefs)");
-    expect(sync).toContain("writeFileAtomic(prefPath, rawPrefs)");
+    const tree = syntax(sync);
+    const pulls = nodes(tree, ts.isMethodDeclaration).filter(node =>
+      (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) && node.name.text === "pull");
+    expect(pulls, "inspect the real Pull method, not Push or diagnostic text").toHaveLength(1);
+    const pull = pulls[0];
+    const runningChecks = nodes(pull, ts.isVariableDeclaration).filter(node => ts.isIdentifier(node.name) && node.name.text === "running" &&
+      node.initializer && ts.isCallExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "isProfileRunningForRestore");
+    expect(runningChecks).toHaveLength(1);
+    const branches = nodes(pull, ts.isIfStatement).filter(node => ts.isIdentifier(node.expression) && node.expression.text === "running");
+    const skipBranches = ["localStorage", "preferences"].map(scope => {
+      const matched = branches.filter(branch => nodes(branch.thenStatement, ts.isCallExpression).some(call =>
+        ts.isPropertyAccessExpression(call.expression) && call.expression.expression.getText(tree) === "operation" && call.expression.name.text === "add" &&
+        call.arguments.length === 1 && ts.isObjectLiteralExpression(call.arguments[0]) && stringProperty(call.arguments[0], "scope") === scope &&
+        stringProperty(call.arguments[0], "state") === "skipped" && stringProperty(call.arguments[0], "code") === "PROFILE_RUNNING"));
+      expect(matched, `${scope} must report a typed running-profile skip`).toHaveLength(1);
+      expect(matched[0].elseStatement, `${scope} restore must be behind the stopped-profile branch`).toBeDefined();
+      return matched[0];
+    });
+    expect(calls(skipBranches[0].thenStatement, "importLocalStorage")).toHaveLength(0);
+    expect(calls(skipBranches[0].elseStatement!, "importLocalStorage")).toHaveLength(1);
+    expect(calls(skipBranches[1].thenStatement, "writeFileAtomic")).toHaveLength(0);
+    const writes = calls(skipBranches[1].elseStatement!, "writeFileAtomic");
+    expect(writes).toHaveLength(1);
+    const write = writes[0];
+    expect(ts.isCallExpression(write.arguments[0])).toBe(true);
+    const destination = write.arguments[0] as ts.CallExpression;
+    expect(destination.expression.getText(tree)).toBe("resolveProfileFile");
+    expect(destination.arguments.map(argument => ts.isStringLiteralLike(argument) ? argument.text : argument.getText(tree))).toEqual(["dirId", "Default", "Preferences"]);
+    expect(write.arguments[1].getText(tree)).toBe("artifacts.preferences");
+    const validations = calls(pull, "validatePreferencesJson");
+    expect(validations.length, "remote Preferences must be validated before publication").toBeGreaterThan(0);
+    expect(Math.min(...validations.map(call => call.getStart(tree)))).toBeLessThan(write.getStart(tree));
     expect(sync).toContain("extractSafeLocalStorageArchive");
     expect(sync).toContain("LocalStorage archive contains non-regular entries");
   });

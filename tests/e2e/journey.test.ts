@@ -78,13 +78,19 @@ describe("E2E — Agent Browser Studio user journey", () => {
       try { localStorage.setItem("agent-browser-studio-wizard-dismissed", "1"); } catch (_) {}
     });
 
-    // Terms are mandatory; accept through their UI, never generic dialog cleanup.
+    // This is a fresh owned fixture, so mandatory terms must appear. A one-shot
+    // isVisible() races the async status load and leaves the modal over all tabs.
+    // Wait for the actual UI and accept it; never force-close or bypass terms.
     const terms = page.locator("#dlg-terms");
-    if (await terms.isVisible()) {
-      await page.locator("#terms-ack").check();
-      await page.locator("#terms-accept-btn").click();
-      await terms.waitFor({ state: "hidden", timeout: 5000 });
-    }
+    await terms.waitFor({ state: "visible", timeout: 20000 });
+    await page.locator("#terms-ack").check();
+    await page.locator("#terms-accept-btn").click();
+    await terms.waitFor({ state: "hidden", timeout: 5000 });
+    expect(await page.evaluate(() => ({
+      stored: localStorage.getItem("agent-browser-studio-terms-accepted-v1"),
+      accepted: (window as any).agentBrowser.termsAccepted(),
+      open: (document.getElementById("dlg-terms") as HTMLDialogElement).open,
+    }))).toEqual({ stored: "1", accepted: true, open: false });
 
     // First-run wizard may auto-open — dismiss it so it doesn't intercept clicks
     try {

@@ -132,10 +132,15 @@
       },
 
   clearHealth: function (name) {
+        var seq = proxyListSeq, epoch = proxyHealthEpoch[name] = (proxyHealthEpoch[name] || 0) + 1;
         wcall("proxy.healthClear", function () { return api.proxy.healthClear(name); }).then(function (r) {
-          if (r && r.success) { toast((window.i18n ? window.i18n.t("toast.proxy.health-cleared", "Health cleared") : "Health cleared"), "success"); agentBrowser.refresh(); }
-          else toast((r && r.error) || "Failed", "error");
-        }).catch(function (e) { toast(e.message, "error"); });
+          if (seq !== proxyListSeq || epoch !== proxyHealthEpoch[name]) return null;
+          if (!r || !r.success) throw new Error(r && r.error || t("health.clear-failed", "History was not cleared."));
+          var card = document.querySelector('#proxy-list .profile-card[data-proxy-name="' + String(name).replace(/"/g, "") + '"]');
+          return refreshHealthInCard(name, card);
+        }).then(function (health) {
+          if (health) toast(t("toast.proxy.health-cleared", "Health cleared"), "success");
+        }).catch(function (e) { toast(e.message || String(e), "error"); });
       },
 
   rotateProxy: function (name) {
@@ -328,7 +333,9 @@
         }).catch(function (e) { if (cap) cap.textContent = e.message; });
       }
   });
+  var proxyHealthEpoch = Object.create(null);
   function healthBadgeHtml(entry) {
+    if (window.__proxyHealthError) return '<span class="proxy-health-badge health-none" title="' + escAttr(window.__proxyHealthError) + '">' + esc(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.')) + '</span>';
     if (!entry) return '<span class="proxy-health-badge health-none">' + esc(t('proxy.health.not-checked', 'Not checked')) + '</span>';
     var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
     var label = entry.risk === "good" ? t('proxy.health.good', 'Good') : entry.risk === "watch" ? t('proxy.health.watch', 'Watch') : t('proxy.health.poor', 'Poor');
@@ -352,6 +359,7 @@
   }
 
   function renderHealthSummary(health) {
+    if (window.__proxyHealthError) return '<div class="hint-line" role="status" style="color:var(--warning-text);">' + esc(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.')) + '</div>';
     var summary = (health && health.summary) || null;
     if (!summary || !summary.total) return "";
     /* R78: health summary colors converge to semantic classes. */
@@ -435,12 +443,12 @@
     return html;
   }
 
-  function loadRotationInfo(container) {
+  function loadRotationInfo(container, currentView) {
     var cards = container.querySelectorAll('.profile-card');
     Array.prototype.forEach.call(cards, function (card) {
       var name = card.dataset.proxyName;
       api.proxy.rotationInfo(name).then(function (r) {
-        if (!r || !r.info) return;
+        if ((currentView && !currentView()) || !r || !r.info) return;
         var row = card.querySelector('.proxy-rotation-row');
         var txt = card.querySelector('.proxy-rotation-text');
         if (!row || !txt || !r.info.active) return;
@@ -462,19 +470,31 @@
     // Standalone renderer harnesses can omit the delegation module.
     Array.prototype.forEach.call(container.querySelectorAll(".card-menu[open]"), function (menu) { menu.removeAttribute("open"); });
   }
+  var proxyListSeq = 0;
+  agentBrowser.invalidateProxiesForSync = function() {
+    proxyListSeq++;
+    var container = document.getElementById('proxy-list');
+    if (container) container.onclick = null;
+    // Invalidate read ownership only; editor inputs and selection stay intact.
+  };
   function loadProxyTab() {
     var container = document.getElementById("proxy-list");
+    if (!container) return Promise.resolve(null);
+    var seq = ++proxyListSeq;
+    function currentProxyView() { return seq === proxyListSeq; }
     closeProxyCardMenus(container);
     // UI R2: skeleton instead of bare text so the list doesn't flash empty.
     // R170: the aria-label on the loading skeleton was a bare EN string.
     agentBrowser.renderViewState(container, { skeleton: 3, loading: t("proxy.loading", "Loading proxies...") });
-    api.proxy.healthGet().then(function (health) {
-      window.__proxyHealth = health || { entries: [], summary: null };
-    }).catch(function () {
-      window.__proxyHealth = { entries: [], summary: null };
+    return api.proxy.healthGet().then(function (health) {
+      if (!health || !Array.isArray(health.entries)) throw new Error(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.'));
+      if (currentProxyView()) { window.__proxyHealth = health; window.__proxyHealthError = null; }
+    }).catch(function (error) {
+      if (currentProxyView()) window.__proxyHealthError = error.message || String(error);
     }).then(function () {
-      return api.proxy.list();
+      return currentProxyView() ? api.proxy.list() : null;
     }).then(function (proxies) {
+      if (!currentProxyView()) return;
       var health = window.__proxyHealth || { entries: [], summary: null };
       if (!proxies || proxies.length === 0) {
         closeProxyCardMenus(container);
@@ -493,7 +513,7 @@
          ⋯ overflow menu the profile card v2 established — one action row,
          labels where they matter, every utility named in the menu. */
       closeProxyCardMenus(container);
-      container.innerHTML = renderHealthSummary(health) + proxies.map(function (p) {
+      container.innerHTML = '<div class="proxy-health-summary-host">' + renderHealthSummary(health) + '</div>' + proxies.map(function (p) {
         var cfg = p.config || {};
         var label = cfg.type + '://' + cfg.host + ':' + cfg.port;
         var entry = findHealth(health.entries, p.name);
@@ -532,8 +552,11 @@
         '</div>';
       }).join("");
       attachProxyHandlers(container);
-      loadRotationInfo(container);
+      var handleClick = container.onclick;
+      container.onclick = function(event) { if (currentProxyView() && handleClick) handleClick(event); };
+      loadRotationInfo(container, currentProxyView);
     }).catch(function (e) {
+      if (!currentProxyView()) return;
       closeProxyCardMenus(container);
       agentBrowser.renderViewState(container, { error: e.message || String(e), retry: { cmd: "loadProxies" } });
     });
@@ -571,8 +594,15 @@
   }
 
   function refreshHealthInCard(name, card) {
-    api.proxy.healthGet().then(function (health) {
-      var entry = findHealth((health && health.entries) || [], name);
+    var seq = proxyListSeq, epoch = proxyHealthEpoch[name] || 0;
+    function current() { return seq === proxyListSeq && epoch === (proxyHealthEpoch[name] || 0); }
+    return api.proxy.healthGet().then(function (health) {
+      if (!current()) return null;
+      if (!health || !Array.isArray(health.entries)) throw new Error(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.'));
+      window.__proxyHealth = health;
+      window.__proxyHealthError = null;
+      if (!card || !document.getElementById("proxy-list").contains(card)) return health;
+      var entry = findHealth(health.entries, name);
       var row = card.querySelector(".proxy-health-row");
       if (row) row.innerHTML = healthBadgeHtml(entry);
       var sugRow = card.querySelector(".proxy-health-suggestion-row");
@@ -586,24 +616,39 @@
           sugRow.style.display = "none";
         }
       }
-      var summaryEl = document.querySelector(".proxy-health-summary");
-      if (summaryEl) summaryEl.outerHTML = renderHealthSummary(health);
+      var summaryEl = document.querySelector(".proxy-health-summary-host");
+      if (summaryEl) summaryEl.innerHTML = renderHealthSummary(health);
       var histRow = card.querySelector(".proxy-history-row");
       var histTxt = card.querySelector(".proxy-history-text");
       if (histRow && histRow.style.display !== "none" && histTxt) {
         renderHistoryIntoRow(entry, histRow, histTxt);
       }
-    }).catch(function () {});
+      return health;
+    }).catch(function (error) {
+      if (!current()) return null;
+      window.__proxyHealthError = error.message || String(error);
+      if (card && document.getElementById("proxy-list").contains(card)) {
+        var row = card.querySelector(".proxy-health-row");
+        if (row) row.innerHTML = healthBadgeHtml(null);
+      }
+      var summary = document.querySelector(".proxy-health-summary-host");
+      if (summary) summary.innerHTML = renderHealthSummary(window.__proxyHealth);
+      toast(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.') + " " + (error.message || String(error)), "error");
+      return null;
+    });
   }
 
   function detectProxyIntoCard(name, card) {
+    var seq = proxyListSeq, epoch = proxyHealthEpoch[name] = (proxyHealthEpoch[name] || 0) + 1;
+    function current() { return seq === proxyListSeq && epoch === proxyHealthEpoch[name] && document.getElementById("proxy-list").contains(card); }
     var el = card.querySelector(".proxy-detect-result");
     if (el) el.innerHTML = '<span class="icon-text">' + icon("loader", 13) + esc(t("proxy.detect.detecting", "Detecting…")) + '</span>';
-    api.proxy.get(name).then(function (cfg) {
+    return api.proxy.get(name).then(function (cfg) {
+      if (!current()) return null;
       if (!cfg) { if (el) el.textContent = t("proxy.detect.not-found", "Not found"); return null; }
       return api.detect.proxyByName(name);
     }).then(function (r) {
-      if (!r) return;
+      if (!r || !current()) return;
       if (r.success) {
         var parts = [];
         if (r.exitIp) parts.push("IP:" + r.exitIp);
@@ -616,8 +661,8 @@
       } else if (el) {
         el.textContent = (r.error || t("proxy.detect.failed", "Failed"));
       }
-      refreshHealthInCard(name, card);
-    }).catch(function (e) { if (el) el.textContent = e.message; });
+      return refreshHealthInCard(name, card);
+    }).catch(function (e) { if (el && current()) el.textContent = e.message || String(e); });
   }
   agentBrowser.loadProxies = loadProxyTab;
   agentBrowser.detectProxyIntoCard = detectProxyIntoCard;

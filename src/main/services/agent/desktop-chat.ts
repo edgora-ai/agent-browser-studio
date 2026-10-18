@@ -11,6 +11,7 @@ import { listBrowserProfiles } from "../browser-manager.js";
 import { agentRunRecorder } from "../agent-run-trace.js";
 import { captureChatBrowserScope, filterChatTools } from "./run-scope.js";
 import { desktopChatRuns, type ChatRunContext, type ChatTerminal } from "./chat-runs.js";
+import { classifyAgentToolOutcome } from "./tool-outcome.js";
 
 export interface DesktopChatRequest {
   conversationId: string;
@@ -74,14 +75,6 @@ function reasonMessage(reason: AgentRunEndReason): string {
     case "execution_error": return "Task failed during execution.";
     case "completed": return "";
   }
-}
-
-function toolError(result: any): string | undefined {
-  if (!result || typeof result !== "object") return undefined;
-  if (result.error) return typeof result.error === "string" ? result.error : "Tool returned an error.";
-  if (result.skipped === true) return typeof result.reason === "string" ? result.reason : "Tool operation was skipped.";
-  if (result.ok === false || result.success === false) return typeof result.message === "string" ? result.message : "Tool reported an unsuccessful operation.";
-  return undefined;
 }
 
 /** Both desktop tool-chat IPC methods use this lifecycle; service/REST callers do not. */
@@ -222,7 +215,7 @@ async function execute(context: ChatRunContext, message: string, streaming: bool
           result = await executeToolCall(name, args, allowedNames, {
             runId: run.id, webContents: context.owner, signal: context.controller.signal, browserScope: scope,
           });
-          stepError = toolError(result);
+          stepError = classifyAgentToolOutcome(name, result).error;
         } catch (cause) {
           stepError = errorText(cause);
           result = { error: stepError };

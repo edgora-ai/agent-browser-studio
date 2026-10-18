@@ -113,7 +113,7 @@
   </div>
  <div id="backup-hint" class="card backup-hint" style="display:none;">
   <div style="flex:1;">
-   <b data-icon="lock"><span data-i18n="backup.hint.title">Your data lives only on this machine</span></b>
+   <b data-icon="lock"><span data-i18n="backup.hint.title">Keep an independent backup of your profile data</span></b>
    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles contain real account data. Keep export backups on a separate disk or independently stored cloud/S3 backup. The local 7-day trash only protects against accidental deletion, not disk failure. Encrypted cookies and sessions may require signing in again on another machine.</div>
   </div>
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dismissBackupHint" data-i18n="backup.hint.dismiss">Don't remind me again</button>
@@ -173,7 +173,7 @@
  <p><span data-i18n="sync.status.label">Sync is</span> <strong id="sync-enabled-text" data-i18n="sync.status.disabled">disabled</strong></p>
  <p><span data-i18n="sync.endpoint">Endpoint</span>: <span id="sync-endpoint">--</span></p>
  <p><span data-i18n="sync.bucket">Bucket</span>: <span id="sync-bucket">--</span></p>
- <p class="hint-line" data-i18n="sync.synced-scope">Synced: config · cookies (CDP) · localStorage · bookmarks · preferences</p>
+ <p class="hint-line" data-i18n="sync.synced-scope">Supported sync data: configuration and Preferences; Cookies and LocalStorage depend on capture. Check the operation result for commits and skipped items.</p>
  </div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncPush" data-i18n="sync.push" data-icon="upload">Push</button>
@@ -205,7 +205,7 @@
  <h3 data-i18n="sync.diff.title">Team Diff preview (changes before push/pull)</h3>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff" data-i18n="sync.diff.compare" data-icon="sync">Compare with remote</button>
  </div>
- <p id="sync-diff-message" class="section-desc" data-i18n="sync.diff.desc">Shows the profiles, proxies, accounts and extensions that exist only locally or only remotely, and what a push would overwrite or remove. This also runs automatically before every push.</p>
+ <p id="sync-diff-message" class="section-desc" data-i18n="sync.diff.desc">Compares portable profile settings and Preferences, proxy/account metadata and extension inventory only; not live Cookies, LocalStorage databases or full profile files. Push checks automatically; Pull uses the comparison and per-item choices actually shown here. Compare again after changes.</p>
  <div id="sync-diff"><div class="empty-state" data-i18n="sync.diff.empty">Not compared yet — click "Compare with remote"</div></div>
  </div>
  <div class="card">
@@ -219,7 +219,7 @@
  <!-- sale-93: data-custody consent is SEPARATE from the enable checkbox. -->
  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
   <input type="checkbox" id="sync-custody-consent" style="margin-top:2px;">
-  <span data-i18n="sync.custody">I agree that enabling sync uploads my profile data (cookies, sessions, localStorage, bookmarks) to my own bucket above, for as long as sync stays enabled. I can delete it by disabling sync and deleting the remote objects.</span>
+  <span data-i18n="sync.custody">I agree to upload portable settings and Preferences, plus Cookies, LocalStorage and extension packages available for this capture, to my bucket. This may include login-session Cookies. Consent remains active while sync is enabled; to remove remote data, disable sync and delete the remote objects.</span>
  </label>
  <div id="sync-custody-state" class="status-note"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
@@ -651,9 +651,11 @@
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
   <h3 id="dlg-env-risk-title" data-icon="monitor"><span data-i18n="env.risk.title">Host environment risk check</span></h3>
-  <div id="env-risk-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
+  <div id="env-risk-body" style="max-height:52vh;overflow:auto;" role="status" aria-live="polite"><span data-i18n="common.loading">Loading...</span></div>
   <div id="env-risk-history"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+  <div class="hint-line" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="env-risk-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelEnvRisk" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskExport" data-icon="download"><span data-i18n="env.risk.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskClear" data-icon="trash"><span data-i18n="env.risk.clear">Clear history</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
@@ -665,9 +667,11 @@
 <dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
   <h3 id="dlg-webrtc-diag-title" data-icon="globe"><span data-i18n="webrtc.diag.title">浏览器内 WebRTC 诊断</span></h3>
-  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
+  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" role="status" aria-live="polite"><span data-i18n="common.loading">Loading...</span></div>
   <div id="webrtc-diag-history"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+  <div class="hint-line" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="webrtc-diag-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelWebRtcDiag" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagExport" data-icon="download"><span data-i18n="webrtc.diag.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear" data-icon="trash"><span data-i18n="webrtc.diag.clear">Clear history</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>

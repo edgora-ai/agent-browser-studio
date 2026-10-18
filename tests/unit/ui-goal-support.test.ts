@@ -144,7 +144,13 @@ function harness(modules: string[], fullCore = false) {
     hardwareSummary: () => 'Fixture hardware', fingerprintCompleteness: () => 100, platformIcon: () => '', getSyncStatus: () => 'never',
     renderSkillCard: (s: any) => '<div data-skill-id="' + escape(s.id) + '">' + escape(s.title) + '</div>', bindSkillCardActions: vi.fn(),
   };
-  const agent: any = { api, R: api, helpers, state: { currentTab: 'profiles' }, ipc: { call: (_k: string, f: () => unknown) => f() }, switchTab: vi.fn(), interceptLicenseGate: vi.fn(() => false), closeCardMenus: vi.fn() };
+  // Explicit synthetic IPC identity boundary for tests which do not load ipc.js.
+  // Tests that include the real module below replace this entire adapter.
+  let traceSeq = 0;
+  const agent: any = { api, R: api, helpers, state: { currentTab: 'profiles' }, ipc: {
+    call: (_k: string, f: () => unknown) => f(),
+    newTraceId: vi.fn(() => 'support-synthetic-' + (++traceSeq)),
+  }, switchTab: vi.fn(), interceptLicenseGate: vi.fn(() => false), closeCardMenus: vi.fn() };
   const timers: Array<() => void> = [];
   const window: any = { agentBrowser: agent, agentBrowserAPI: api, i18n: { t: (_k: string, f: string) => f }, localStorage: { getItem: () => null } };
   const context = vm.createContext({ window, document: doc, console, navigator: {}, setTimeout: (f: () => void) => { timers.push(f); return timers.length; }, clearTimeout() {}, Option: function(text: string, value: string) { const el = doc.createElement('option'); el.textContent = text; el.value = value; return el; } });
@@ -485,13 +491,18 @@ describe('Firefox identity form lifecycle and unknown preview', () => {
     h.context.localStorage = { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value) };
     h.api.browser.list.mockResolvedValue([{ dirId: 'fixture-firefox', name: 'Auto Firefox', engine: 'firefox', fingerprintMode: 'managed', timezone: null, locale: null }]);
     h.api.browser.consistencyCheck = vi.fn(async () => ({ ok: true, warnings: [], blockers: [] }));
+    // Main history is a declared empty fixture, not real persisted/native proof.
+    h.api.browser.healthHistory = vi.fn(async () => ({ entries: [] }));
     storage.set('agent-browser-health-history-v1', JSON.stringify({ 'fixture-firefox': [{ kind: 'consistency', verdict: 'pass', at: 1, detail: 'Legacy cached-only result' }] }));
     h.agent.loadProfiles(); await flush();
     expect(h.el('profile-list').querySelector('.health-verdict')!.textContent).not.toContain('Pass');
     h.agent.runConsistencyCheck('fixture-firefox'); await flush(); h.agent.loadProfiles(); await flush();
     expect(h.helpers.toast.mock.calls.some((call: any[]) => call[1] === 'success' || call[1] === 'error')).toBe(false);
     const records = JSON.parse(storage.get('agent-browser-health-history-v1')!);
-    expect(records['fixture-firefox'][0]).toMatchObject({ kind: 'consistency', verdict: 'unknown' });
+    expect(records['fixture-firefox'][0]).toMatchObject({ kind: 'consistency', verdict: 'inconclusive', outcome: 'inconclusive', source: 'cached' });
+    expect(h.agent.ipc.newTraceId).toHaveBeenCalledTimes(1);
+    expect(h.api.browser.consistencyCheck).toHaveBeenCalledExactlyOnceWith('fixture-firefox');
+    expect(h.api.browser.healthHistory).toHaveBeenCalledWith('fixture-firefox');
     const card = h.el('profile-list').querySelector('[data-dir-id="fixture-firefox"]')!;
     expect(card.querySelector('.health-verdict')!.textContent).not.toContain('Pass');
   });

@@ -1,26 +1,29 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { createHmac, createHash } from "node:crypto";
 
-vi.mock("electron", () => {
-  return {
-    app: {
-      getPath: (name: string) => {
-        if (name === "home") return path.join(os.tmpdir(), "agent-browser-sync-test-home");
-        return os.tmpdir();
-      },
-    },
-  };
+const fixture = vi.hoisted(() => ({ root: "" }));
+vi.mock("electron", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  fixture.root = mkdtempSync(join(tmpdir(), "studio-sync-unit-"));
+  return { app: { getPath: (name: string) => name === "home" ? join(fixture.root, "home") : fixture.root } };
 });
 
 import { __syncTestHooks, signV2, signS3Request } from "../../src/main/services/sync-service.js";
 import { getProfilesDir, getConfig } from "../../src/main/services/config-manager.js";
 import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 
-const TEST_HOME = path.join(os.tmpdir(), "agent-browser-sync-test-home");
+const TEST_HOME = path.join(fixture.root, "home");
+afterAll(() => {
+  expect(path.dirname(fixture.root)).toBe(os.tmpdir());
+  expect(path.basename(fixture.root)).toMatch(/^studio-sync-unit-/);
+  fs.rmSync(fixture.root, { recursive: true, force: true });
+});
 
 function tarHeader(name: string, typeFlag: string, size: number): Buffer {
   const header = Buffer.alloc(512);
@@ -349,11 +352,11 @@ describe("Sync service hardening", () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ls-test-"));
     try {
       const archive = tgz([
-        tarEntry("CURRENT", "MANIFEST-000001"),
+        tarEntry("CURRENT", "MANIFEST-000001\n"),
         tarEntry("000003.log", "log"),
         tarEntry("MANIFEST-000001", "manifest"),
       ]);
-      expect(__syncTestHooks.extractSafeLocalStorageArchive(archive, outDir)).toEqual({ files: 3, bytesWritten: 26 });
+      expect(__syncTestHooks.extractSafeLocalStorageArchive(archive, outDir)).toEqual({ files: 3, bytesWritten: 27 });
       expect(fs.existsSync(path.join(outDir, "CURRENT"))).toBe(true);
       expect(fs.existsSync(path.join(outDir, "000003.log"))).toBe(true);
       expect(fs.existsSync(path.join(outDir, "MANIFEST-000001"))).toBe(true);

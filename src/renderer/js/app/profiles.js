@@ -69,6 +69,25 @@
     return agentBrowser.ipc.call(key, fn, opts || { kind: "write" });
   }
 
+  // Archive I/O and native pickers have no cancellation contract. A waiting
+  // notice must not discard a later commit or permit a second import. Dedupe
+  // the UI completion too, so repeated clicks produce only one final toast.
+  var archiveCalls = Object.create(null);
+  function archiveCall(key, fn, completed, failed) {
+    if (archiveCalls[key]) return archiveCalls[key];
+    var pending = agentBrowser.ipc.call(key, fn, {
+      kind: "write", timeoutMs: 0, dedupe: true, slowNoticeMs: 15000,
+      onSlow: function () {
+        toast(t("archive.pending", "Still processing the backup operation. Keep this window open; it has not been cancelled."), "warning");
+      },
+    }).then(completed).catch(failed);
+    archiveCalls[key] = pending.then(function (value) { delete archiveCalls[key]; return value; }, function (error) { delete archiveCalls[key]; throw error; });
+    return archiveCalls[key];
+  }
+  function archiveWasCancelled(result) {
+    return result && (result.cancelled === true || result.outcome === "cancelled" || result.code === "ARCHIVE_CANCELLED" || result.error === "cancelled");
+  }
+
   // R189: reads were bare `api.*.then()` — no timeout. When the main process
   // hung, the list stayed on "Loading..." forever with no error and no retry
   // (measured: unchanged after 12s). ipc.call has had a per-kind budget all
@@ -143,14 +162,22 @@
     document.getElementById(prefix + "geolocation-accuracy").value = meta.geolocationAccuracy == null ? "" : meta.geolocationAccuracy;
   }
 
-  function populateChromiumVersionSelect(id, selectedVersion) {
+  function populateChromiumVersionSelect(id, selectedVersion, stillCurrent) {
     var select = document.getElementById(id);
     if (!select) return Promise.resolve();
+    var seq = (select._profileVersionSeq || 0) + 1;
+    select._profileVersionSeq = seq;
+    function current() { return seq === select._profileVersionSeq && (!stillCurrent || stillCurrent()); }
     var selected = selectedVersion || "";
+    select.innerHTML = "";
+    select.appendChild(new Option(t("profile.new.field.version.auto", "Auto (newest installed)"), ""));
+    if (selected) select.appendChild(new Option(selected, selected));
+    select.value = selected;
     return api.browser.binary().then(function(info) {
+      if (!current()) return;
+      selected = select.value; // Keep input made while the optional list loads.
       var versions = (info && info.installedVersions) || [];
       select.innerHTML = "";
-      // R160: was hardcoded EN — key existed in both dicts.
       select.appendChild(new Option(t("profile.new.field.version.auto", "Auto (newest installed)"), ""));
       versions.forEach(function(item) {
         select.appendChild(new Option(item.version, item.version));
@@ -160,7 +187,9 @@
       }
       select.value = selected;
     }).catch(function() {
-      select.value = selected;
+      // Optional catalog failure retains the existing draft/placeholder, not
+      // the saved value captured before the user started editing.
+      if (current()) return select.value;
     });
   }
 
@@ -268,8 +297,11 @@
             if (r.success) {
               // UI R3: success toast carries the next step (health check) as
               // an action instead of a bare port number.
-              toast(t("toast.profile.started", "Managed Chromium started") + " (CDP port " + r.cdpPort + ")", "success", {
-                detail: t("toast.profile.started-next", "Next: run a health check from the card's health menu"),
+              var cookieWarning = !!(r.cookieCheck && r.cookieCheck.checked && r.cookieCheck.error);
+              toast(t("toast.profile.started", "Managed Chromium started") + " (CDP port " + r.cdpPort + ")", cookieWarning ? "warning" : "success", {
+                detail: cookieWarning
+                  ? t("toast.profile.cookies-pending", "Browser started, but queued cookies were not confirmed applied. Review the import result before using this session.")
+                  : t("toast.profile.started-next", "Next: run a health check from the card's health menu"),
                 action: { label: t("toast.profile.check-now", "Check now"), onClick: (function (id) { return function () { agentBrowser.openEnvRisk(id); }; })(dirId) },
               });
               if (r.envCheck && r.envCheck.high) {
@@ -304,10 +336,9 @@
         setCardBusy(dirId, true);
         agentBrowser.ipc.call("browser.stop:" + dirId, function () { return api.browser.stop(dirId); }, { kind: "stop", dedupe: true })
           .then(function (r) {
-            if (r && r.success === false) { toast(r.error || t("toast.profile.stop-failed", "Stop failed"), "error"); scheduleProfilesRefresh(); return; }
-            toast(t("toast.profile.stopped", "Browser stopped"), "success");
-            var seq = markProfileRuntime(dirId, false, null);
-            setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
+            if (!r || r.success !== true) { toast((r && r.error) || t("toast.profile.stop-failed", "Stop failed"), "error"); scheduleProfilesRefresh(); return; }
+            toast(t("toast.profile.stopped", "Stop request accepted. Waiting for browser exit."), "success");
+            clearProfileRuntime(dirId);
             scheduleProfilesRefresh();
           })
           .catch(function (e) { toast(e.message, "error"); })
@@ -315,7 +346,11 @@
       },
 
   editProfile: function (dirId) {
-        api.browser.list().then(function(profiles) {
+        var seq = ++profileEditSeq;
+        var dialog = document.getElementById("dlg-agent-browser-seed");
+        bindProfileEditLifecycle(dialog);
+        return api.browser.list().then(function(profiles) {
+          if (seq !== profileEditSeq) return;
           var p = (profiles || []).find(function(x) { return x.dirId === dirId; });
           if (!p) { toast((window.i18n ? window.i18n.t("toast.profile.not-found", "Profile not found") : "Profile not found"), "error"); return; }
           var metaData = {
@@ -357,7 +392,9 @@
           document.getElementById("agent-browser-meta-firefox-note").style.display = isFirefox ? "" : "none";
           document.getElementById("agent-browser-meta-fingerprint-mode").value = metaData.fingerprintMode;
           // A hidden Chromium build selector must never replace a Firefox pin.
-          if (!isFirefox) populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion);
+          if (!isFirefox) populateChromiumVersionSelect("agent-browser-meta-browser-version", metaData.browserVersion, function() {
+            return seq === profileEditSeq && dialog.open && document.getElementById("agent-browser-meta-dir-id").value === dirId;
+          });
           document.getElementById("agent-browser-meta-allow-third-party-cookies").checked = metaData.allowThirdPartyCookies;
           document.getElementById("agent-browser-meta-drm").checked = metaData.drm;
           document.getElementById("agent-browser-meta-name").value = metaData.name;
@@ -377,12 +414,28 @@
           document.getElementById("agent-browser-meta-window-title-enabled").checked = wtEnabled;
           document.getElementById("agent-browser-meta-window-title-prefix").value = wtPrefix;
           document.getElementById("agent-browser-meta-app-url").value = metaData.appUrl;
+          var proxySelect = document.getElementById("agent-browser-meta-proxy");
+          var initialProxy = proxySelectionValue(metaData.proxyMode, metaData.proxyName);
+          proxySelect.innerHTML = renderProxyOptions([], initialProxy, false);
+          if (initialProxy.indexOf("named:") === 0) proxySelect.appendChild(new Option(metaData.proxyName, initialProxy));
+          proxySelect.value = initialProxy;
           api.proxy.list().then(function(proxies) {
-            var sel = document.getElementById("agent-browser-meta-proxy");
-            sel.innerHTML = renderProxyOptions(proxies, proxySelectionValue(metaData.proxyMode, metaData.proxyName), false);
+            if (seq !== profileEditSeq || !dialog.open || document.getElementById("agent-browser-meta-dir-id").value !== dirId) return;
+            var selected = proxySelect.value;
+            proxySelect.innerHTML = renderProxyOptions(proxies, selected, false);
+            // A removed named proxy must not silently turn an unsaved choice
+            // into a direct connection. Keep the value for main to validate.
+            if (!Array.prototype.some.call(proxySelect.querySelectorAll("option"), function(option) { return option.value === selected; })) {
+              proxySelect.appendChild(new Option(selected, selected));
+            }
+            proxySelect.value = selected;
+          }).catch(function(e) {
+            if (seq !== profileEditSeq || !dialog.open) return;
+            toast(t("toast.proxy.load-failed", "Failed to load proxies") + ": " + (e.message || String(e)), "error");
           });
-          document.getElementById("dlg-agent-browser-seed").showModal();
-        }).catch(function (e) { toast(e.message, "error"); });
+          profileEditBaseline = { dirId: dirId, signature: profileEditSignature(p) };
+          if (!dialog.open) dialog.showModal();
+        }).catch(function (e) { if (seq === profileEditSeq) toast(e.message, "error"); });
       },
 
   openDir: function (dirId) {
@@ -847,35 +900,45 @@
   };
 
   agentBrowser.exportProfileArchive = function(dirId) {
-    wcall("profile.exportArchive", function () { return api.profile.exportArchive(dirId); }).then(function(r) {
+    return archiveCall("profile.exportArchive:" + dirId, function () { return api.profile.exportArchive(dirId); }, function(r) {
+      if (archiveWasCancelled(r)) return r;
       if (!r || !r.success) {
         toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
-        return;
+        return r;
       }
-      toast(t("toast.profile.exported", "Exported backup: ") + esc(r.filePath), "success");
-    }).catch(function(e) {
+      var warnings = Array.isArray(r.warnings) ? r.warnings : [];
+      var msg = t("toast.profile.exported", "Exported backup: ") + esc(r.filePath);
+      if (warnings.length) msg += t("archive.export.warning-count", ". {n} warning(s): {details}").replace("{n}", warnings.length).replace("{details}", esc(warnings.join("; ")));
+      toast(msg, warnings.length ? "warning" : "success");
+      return r;
+    }, function(e) {
       toast(t("toast.profile.export-failed", "Export failed: ") + (e.message || String(e)), "error");
+      return { success: false, error: e.message || String(e), code: e.code };
     });
   };
 
   agentBrowser.importProfileArchive = function() {
-    wcall("profile.importArchives", function () { return api.profile.importArchives(); }).then(function(r) {
-      if (!r || !r.success) {
+    return archiveCall("profile.importArchives", function () { return api.profile.importArchives(); }, function(r) {
+      if (archiveWasCancelled(r)) return r;
+      // Partial/failed batches still have authoritative item tallies. Do not
+      // hide their committed imports behind the top-level success boolean.
+      if (!r || !r.report) {
         toast(t("toast.profile.import-failed", "Import failed: ") + ((r && r.error) || "unknown"), "error");
-        return;
+        return r;
       }
-      var rep = (r && r.report) || {};
+      var rep = r.report;
       var imported = (rep.imported || []).length;
       var failed = (rep.failed || []).length;
-      if (imported === 0 && failed === 0) return;
       var warnings = (rep.imported || []).reduce(function(n, item) { return n + ((item.warnings || []).length); }, 0);
       var msg = t("toast.profile.imported", "Imported {n} profiles").replace("{n}", imported);
       if (failed) msg += t("toast.profile.import-failed-count", ", {n} failed").replace("{n}", failed);
       if (warnings) msg += t("toast.profile.import-dependencies", ". {n} dependency warnings: check named proxies/credentials, install missing extensions, and configure local fonts if needed before launch.").replace("{n}", warnings);
-      toast(msg, failed ? "error" : (warnings ? "warning" : "success"));
-      loadProfiles();
-    }).catch(function(e) {
+      toast(msg, imported === 0 && failed > 0 ? "error" : (failed || warnings || imported === 0 ? "warning" : "success"));
+      if (imported > 0) loadProfiles();
+      return r;
+    }, function(e) {
       toast(t("toast.profile.import-failed", "Import failed: ") + (e.message || String(e)), "error");
+      return { success: false, error: e.message || String(e), code: e.code };
     });
   };
 
@@ -1292,23 +1355,27 @@
 
   agentBrowser.batchExportSelected = function() {
     var sel = selectedProfileIds();
-    if (!sel.length) return;
-    var t = function(k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
-    api.profile.exportArchives(sel).then(function(r) {
-      if (!r || !r.success) {
+    if (!sel.length) return Promise.resolve();
+    return archiveCall("profile.exportArchives:" + sel.slice().sort().join(","), function () { return api.profile.exportArchives(sel); }, function(r) {
+      if (archiveWasCancelled(r)) return r;
+      if (!r || !r.report) {
         toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
-        return;
+        return r;
       }
-      var rep = (r && r.report) || {};
+      var rep = r.report;
       var exported = (rep.exported || []).length;
       var skipped = (rep.skipped || []).length;
       var failed = (rep.failed || []).length;
+      var warnings = (rep.exported || []).reduce(function(n, item) { return n + ((item.warnings || []).length); }, 0);
       var msg = t("toast.profile.exported-batch", "Exported {n} profiles").replace("{n}", exported);
       if (skipped) msg += t("toast.batch.export-skipped", ", skipped {n} (running)").replace("{n}", skipped);
       if (failed) msg += t("toast.batch.export-failed", ", {n} failed").replace("{n}", failed);
-      toast(msg, failed ? "error" : "success");
-    }).catch(function(e) {
+      if (warnings) msg += t("archive.batch.warning-count", ", {n} warnings").replace("{n}", warnings);
+      toast(msg, exported === 0 && failed > 0 ? "error" : (skipped || failed || warnings || exported === 0 ? "warning" : "success"));
+      return r;
+    }, function(e) {
       toast(t("toast.profile.export-failed", "Export failed: ") + (e.message || String(e)), "error");
+      return { success: false, error: e.message || String(e), code: e.code };
     });
   };
 
@@ -1321,34 +1388,108 @@
   //  3. clicking repeatedly fired overlapping checks (TE-09).
   var EXTERNAL_CONSENT_KEY = "agent-browser-external-risk-check-consent";
 
-  // ── Health check history (review item PL-05) ──
-  // A check result used to exist only inside the open dialog: close it and the
-  // finding was gone, so risk management could never become a loop. Each
-  // profile now keeps its latest few results locally (nothing is uploaded).
+  // Main-process history is authoritative. This local key is only a display
+  // cache; older summaries contain no positive evidence and never earn PASS.
   var HEALTH_HISTORY_KEY = "agent-browser-health-history-v1";
   var HEALTH_HISTORY_LIMIT = 5;
+  var healthHistoryByProfile = Object.create(null);
+  var healthReadSeq = Object.create(null);
+  var healthEpoch = Object.create(null);
+  var healthHistoryViewSeq = 0;
+  var HEALTH_OUTCOMES = ["pass", "warn", "risk", "error", "unavailable", "inconclusive", "cancelled", "baseline-established"];
 
   function readHealthHistory() {
-    try { return JSON.parse(localStorage.getItem(HEALTH_HISTORY_KEY) || "{}") || {}; }
-    catch (e) { return {}; }
+    try {
+      var value = JSON.parse(localStorage.getItem(HEALTH_HISTORY_KEY) || "{}");
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch (e) { return {}; }
   }
-
-  function recordHealthResult(dirId, kind, summary) {
+  function knownHealthOutcome(value) { return HEALTH_OUTCOMES.indexOf(value) !== -1; }
+  function healthEntryOutcome(entry) {
+    if (!entry) return "inconclusive";
+    var outcome = knownHealthOutcome(entry.outcome) ? entry.outcome : "inconclusive";
+    if (outcome === "pass" && (entry.source === "legacy" || entry.kind === "consistency" || entry.unverified)) return "inconclusive";
+    return outcome;
+  }
+  function cachedHealthEntries(dirId) {
+    var value = readHealthHistory()[dirId];
+    return Array.isArray(value) ? value.filter(function (en) { return en && typeof en === "object"; }).map(function (en) {
+      // Preserve the stored original, including old detail, but not its authority.
+      return Object.assign({}, en, { outcome: "inconclusive", source: "legacy", unverified: true });
+    }) : [];
+  }
+  function healthEntriesFor(dirId) {
+    var snapshot = healthHistoryByProfile[dirId];
+    var list = snapshot && snapshot.entries && snapshot.entries.length ? snapshot.entries : cachedHealthEntries(dirId);
+    return list.slice().sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+  }
+  function recordHealthResult(dirId, kind, summary, requestId) {
     if (!dirId || !summary) return;
+    var outcome = knownHealthOutcome(summary.outcome || summary.verdict) ? (summary.outcome || summary.verdict) : "inconclusive";
+    var entry = { kind: kind, at: Date.now(), outcome: outcome, verdict: outcome, detail: summary.detail || "", summary: summary.detail || "", requestId: requestId, source: "cached" };
     var all = readHealthHistory();
-    var list = (all[dirId] || []).filter(function (entry) { return entry.kind !== kind; });
-    list.push({ kind: kind, at: Date.now(), verdict: summary.verdict || "pass", detail: summary.detail || "" });
-    list.sort(function (a, b) { return b.at - a.at; });
+    var list = Array.isArray(all[dirId]) ? all[dirId].filter(function (en) { return en && en.kind !== kind; }) : [];
+    list.push(entry);
+    list.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
     all[dirId] = list.slice(0, HEALTH_HISTORY_LIMIT);
-    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); } catch (e) { /* storage disabled */ }
+    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); }
+    catch (e) { console.warn("Health display cache could not be saved", e); }
+    // A just-returned main result can be shown while its authoritative history
+    // is queried. History read failures retain it as unverified, not empty.
+    var current = healthHistoryByProfile[dirId];
+    healthHistoryByProfile[dirId] = { entries: [entry].concat(current ? current.entries.filter(function (en) { return en.kind !== kind; }) : []), pending: true };
+    healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
+    updateHealthCard(dirId);
+    refreshHealthSummary(dirId).catch(function () { /* The retained summary is marked unverified by the reader. */ });
   }
-
+  function removeCachedHealthKind(dirId, kind) {
+    var all = readHealthHistory();
+    if (!Array.isArray(all[dirId])) return;
+    all[dirId] = all[dirId].filter(function (en) { return en && en.kind !== kind; });
+    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); }
+    catch (e) { console.warn("Cleared health display cache could not be saved", e); }
+  }
+  function queryHealthHistory(dirId) {
+    return lcall("browser.healthHistory:" + dirId, function () {
+      if (typeof api.browser.healthHistory !== "function") throw new Error(t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
+      return api.browser.healthHistory(dirId);
+    }).then(function (h) {
+      if (!h || h.ok === false || h.success === false || !Array.isArray(h.entries) || h.entries.some(function (en) {
+        return !en || ["env", "webrtc", "drift", "consistency"].indexOf(en.kind) === -1 || !knownHealthOutcome(en.outcome) ||
+          ["runtime", "host", "baseline", "cached", "legacy"].indexOf(en.source) === -1 || typeof en.at !== "number" || !Number.isFinite(en.at);
+      })) throw new Error(h && h.error || t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
+      return h.entries;
+    });
+  }
+  function refreshHealthSummary(dirId) {
+    var seq = healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
+    return queryHealthHistory(dirId).then(function (entries) {
+      if (seq !== healthReadSeq[dirId]) return null;
+      var previous = healthHistoryByProfile[dirId];
+      var unpersisted = previous ? previous.entries.filter(function (en) {
+        return en.source === "cached" && !entries.some(function (stored) {
+          return stored.kind === en.kind && (stored.requestId && stored.requestId === en.requestId || stored.at >= en.at);
+        });
+      }).map(function (en) { return Object.assign({}, en, { unverified: true }); }) : [];
+      healthHistoryByProfile[dirId] = { entries: entries.concat(unpersisted) };
+      updateHealthCard(dirId);
+      return entries;
+    }).catch(function (error) {
+      if (seq === healthReadSeq[dirId]) {
+        var previous = healthHistoryByProfile[dirId];
+        var entries = previous ? previous.entries : cachedHealthEntries(dirId);
+        healthHistoryByProfile[dirId] = { entries: entries.map(function (en) { return Object.assign({}, en, { unverified: true }); }), error: error.message || String(error) };
+        updateHealthCard(dirId);
+      }
+      throw error;
+    });
+  }
   function lastHealthFor(dirId) {
-    var list = readHealthHistory()[dirId] || [];
+    var list = healthEntriesFor(dirId);
     return list.length ? list[0] : null;
   }
-
   function relativeTime(ts) {
+    if (typeof ts !== "number" || !Number.isFinite(ts)) return t("common.unknown", "Unknown");
     var diff = Date.now() - ts;
     if (diff < 60000) return t("profile.health.just-now", "just now");
     var mins = Math.floor(diff / 60000);
@@ -1357,71 +1498,75 @@
     if (hours < 24) return t("profile.health.hours-ago", "{n}h ago").replace("{n}", hours);
     return t("profile.health.days-ago", "{n}d ago").replace("{n}", Math.floor(hours / 24));
   }
-
   function healthVerdict(entry) {
-    if (entry.verdict === "unknown" || entry.kind === "consistency" && entry.verdict === "pass") {
-      // Older cached-only checks also lack live alignment evidence.
-      return { key: "profile.health.verdict-unknown", fb: "Not verified", color: "var(--text-muted)" };
-    }
-    return entry.verdict === "risk"
-      ? { key: "profile.health.verdict-risk", fb: "Risk", color: "var(--danger-text)" }
-      : entry.verdict === "warn"
-        ? { key: "profile.health.verdict-warn", fb: "Watch", color: "var(--warning-text)" }
-        : { key: "profile.health.verdict-pass", fb: "Pass", color: "var(--success-text)" };
+    var outcome = healthEntryOutcome(entry);
+    var colors = { pass: "var(--success-text)", risk: "var(--danger-text)", error: "var(--danger-text)", warn: "var(--warning-text)" };
+    var labels = { pass: "Pass", risk: "Risk", warn: "Watch", error: "Error", unavailable: "Unavailable", inconclusive: "Not verified", cancelled: "Cancelled", "baseline-established": "Baseline established" };
+    return { outcome: outcome, label: t("health.outcome." + outcome, labels[outcome]), color: colors[outcome] || "var(--text-muted)", icon: outcome === "pass" ? "check" : outcome === "risk" || outcome === "warn" || outcome === "error" ? "alert" : "info" };
   }
-
-  // PL-05 (part 2): let the user read back what was checked and when, instead
-  // of only seeing the latest verdict on the card.
+  function healthBadgeHtml(entry) {
+    var verdict = healthVerdict(entry);
+    return '<span class="status-badge" data-health-outcome="' + verdict.outcome + '" style="color:' + verdict.color + ';">' + icon(verdict.icon, 12) + ' ' + esc(verdict.label) + '</span>';
+  }
+  function healthSummaryHtml(last) {
+    if (!last) return esc(t("profile.health.never", "Not checked yet"));
+    var verdict = healthVerdict(last);
+    return esc(t("profile.health.last", "Last check: {when}").replace("{when}", relativeTime(last.at))) +
+      ' · <b style="color:' + verdict.color + ';">' + esc(verdict.label) + '</b>';
+  }
+  function updateHealthCard(dirId) {
+    var el = document.querySelector('#profile-list .profile-card[data-dir-id="' + String(dirId).replace(/"/g, "") + '"] .health-verdict');
+    if (!el) return;
+    var last = lastHealthFor(dirId);
+    var snapshot = healthHistoryByProfile[dirId];
+    el.innerHTML = !last && snapshot && snapshot.error ? esc(t("health.outcome.inconclusive", "Not verified")) : healthSummaryHtml(last);
+    el.setAttribute("data-health-outcome", last ? healthEntryOutcome(last) : "inconclusive");
+    el.setAttribute("title", snapshot && snapshot.error || last && (last.summary || last.detail) || "");
+  }
   function showHealthHistory(dirId) {
-    var list = readHealthHistory()[dirId] || [];
-    if (!list.length) {
-      toast(t("profile.health.no-history", "No health checks recorded for this profile yet"), "info");
-      return;
-    }
-    var rows = list.map(function (entry) {
-      var verdict = healthVerdict(entry);
-      var kindLabel = t("profile.health.kind." + entry.kind, entry.kind);
-      return '<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:5px 0;">' +
-        '<b style="min-width:110px;">' + esc(kindLabel) + "</b>" +
-        '<span style="min-width:82px;color:var(--text-muted);">' + esc(relativeTime(entry.at)) + "</span>" +
-        '<b style="min-width:56px;color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b>" +
-        '<span style="color:var(--text-muted);word-break:break-word;">' + esc(entry.detail || "") + "</span>" +
-        "</div>";
-    }).join("");
-    agentBrowser.confirmHtml(
-      esc(t("profile.health.history-title", "Health check history")),
-      function () { /* informational only */ },
-      {
-        title: esc(t("profile.health.history-heading", "Recent checks")),
-        detailHtml: '<div style="font-size:12px;">' + rows + "</div>",
-      },
-    );
+    var viewSeq = ++healthHistoryViewSeq;
+    refreshHealthSummary(dirId).then(function (list) {
+      if (viewSeq !== healthHistoryViewSeq || !list) return;
+      if (!list.length) list = healthEntriesFor(dirId).slice().reverse();
+      if (!list.length) { toast(t("profile.health.no-history", "No health checks recorded for this profile yet"), "info"); return; }
+      var rows = list.slice().reverse().map(function (entry) {
+        return '<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:5px 0;">' +
+          '<b style="min-width:110px;">' + esc(t("profile.health.kind." + entry.kind, entry.kind)) + '</b>' +
+          '<span style="min-width:82px;color:var(--text-muted);">' + esc(relativeTime(entry.at)) + '</span>' + healthBadgeHtml(entry) +
+          '<span style="color:var(--text-muted);word-break:break-word;">' + esc(entry.summary || entry.detail || "") + '</span></div>';
+      }).join("");
+      agentBrowser.confirmHtml(esc(t("profile.health.history-title", "Health check history")), function () {}, {
+        title: esc(t("profile.health.history-heading", "Recent checks")), detailHtml: '<div style="font-size:12px;">' + rows + '</div>',
+      });
+    }).catch(function (error) { if (viewSeq === healthHistoryViewSeq) toast(error.message || String(error), "error"); });
   }
-
   function lastHealthHtml(dirId) {
     var last = lastHealthFor(dirId);
-    if (!last) {
-      /* R52: never-checked branch joins the nowrap verdict class (R9 only
-         covered the verdict branch — J205 dark shot caught this wrapping). */
-      return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);">' + esc(t("profile.health.never", "Not checked yet")) + "</span>";
-    }
-    var verdict = healthVerdict(last);
-    return '<span class="health-verdict" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last.detail || "") + '">' +
-      esc(t("profile.health.last", "Last check: {when}").replace("{when}", relativeTime(last.at))) +
-      ' · <b style="color:' + verdict.color + ';">' + esc(t(verdict.key, verdict.fb)) + "</b></span>";
+    return '<span class="health-verdict" data-health-outcome="' + (last ? healthEntryOutcome(last) : "inconclusive") + '" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last && (last.summary || last.detail) || "") + '">' + healthSummaryHtml(last) + '</span>';
   }
-
   function summarizeEnvRisk(r) {
-    var findings = (r && r.result && r.result.findings) || [];
-    var high = findings.filter(function (f) { return f.severity === "high"; }).length;
-    var medium = findings.filter(function (f) { return f.severity === "medium"; }).length;
-    return { verdict: high ? "risk" : medium ? "warn" : "pass", detail: high + " high / " + medium + " medium finding(s)" };
+    var res = r && r.result;
+    var outcome = r && knownHealthOutcome(r.outcome) ? r.outcome : "inconclusive";
+    if (!r || !r.ok && (!knownHealthOutcome(r.outcome) || r.outcome === "pass")) outcome = "error";
+    else if (outcome === "pass" || !knownHealthOutcome(r.outcome)) {
+      if (!res || !Array.isArray(res.findings)) outcome = "inconclusive";
+      else if (res.findings.some(function (f) { return f.severity === "high"; })) outcome = "risk";
+      else if (res.findings.some(function (f) { return f.severity === "medium"; }) && outcome === "pass") outcome = "warn";
+    }
+    return { outcome: outcome, detail: r && r.error || res && res.summary || t("health.scope.host", "Host-environment observations only; not a complete profile fingerprint verdict.") };
   }
-
   function summarizeWebRtc(r) {
-    var res = (r && r.result) || {};
-    var leak = (res.hostIps || []).length > 0;
-    return { verdict: leak ? "risk" : "pass", detail: res.summary || (leak ? "local IP exposed" : "no local IP leak") };
+    var res = r && r.result;
+    var outcome = r && knownHealthOutcome(r.outcome) ? r.outcome : "inconclusive";
+    if (!r || !r.ok && (!knownHealthOutcome(r.outcome) || r.outcome === "pass")) outcome = "error";
+    else if (outcome === "pass" || !knownHealthOutcome(r.outcome)) {
+      if (!res) outcome = "inconclusive";
+      else if (Array.isArray(res.hostIps) && res.hostIps.length) outcome = "risk";
+      else if (res.error) outcome = "error";
+      else if (res.rtcAvailable === false) outcome = "unavailable";
+      else if (res.rtcAvailable !== true || !Array.isArray(res.hostIps) || !Array.isArray(res.candidates)) outcome = "inconclusive";
+    }
+    return { outcome: outcome, detail: r && r.error || res && (res.error || res.summary) || t("health.scope.rtc", "This diagnostic only reports the observed WebRTC probe; it is not an external-site score.") };
   }
 
   var DETECT_GLOBAL_MAX = 2;
@@ -1451,11 +1596,108 @@
     return true;
   }
 
-  function releaseDetectSlot(dirId) {
-    if (!detectInFlight[dirId]) return;
+  function releaseDetectSlot(dirId, request) {
+    if (!detectInFlight[dirId] || request && detectInFlight[dirId] !== request) return;
     delete detectInFlight[dirId];
     detectGlobalCount = Math.max(0, detectGlobalCount - 1);
   }
+
+  var healthDialogs = { env: { seq: 0, dirId: null, request: null }, webrtc: { seq: 0, dirId: null, request: null } };
+  function healthEpochKey(dirId, kind) { return dirId + ":" + kind; }
+  function invalidateHealthKind(dirId, kind) {
+    var key = healthEpochKey(dirId, kind);
+    healthEpoch[key] = (healthEpoch[key] || 0) + 1;
+    healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
+    healthHistoryViewSeq++;
+  }
+  function beginHealthRequest(dirId, kind) {
+    if (healthClearInFlight[dirId]) { toast(t("toast.detect.busy", "A check is already running for this profile"), "info"); return null; }
+    if (!acquireDetectSlot(dirId)) return null;
+    invalidateHealthKind(dirId, kind);
+    var request = { dirId: dirId, kind: kind, requestId: "health-" + kind + "-" + agentBrowser.ipc.newTraceId(), epoch: healthEpoch[healthEpochKey(dirId, kind)] || 0, settled: false };
+    detectInFlight[dirId] = request;
+    return request;
+  }
+  function healthRequestCurrent(request) {
+    if (!request || request.epoch !== (healthEpoch[healthEpochKey(request.dirId, request.kind)] || 0)) return false;
+    if (!request.view) return true;
+    var view = healthDialogs[request.kind];
+    var dlg = document.getElementById(request.kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
+    return view.seq === request.view && view.dirId === request.dirId && !!(dlg && dlg.open);
+  }
+  function healthResponseCurrent(request, result) {
+    // Only env/RTC accept the caller's requestId in the public contract.
+    // Drift/baseline/consistency may return a main-generated run identity.
+    var callerOwnsId = request.kind === "env" || request.kind === "webrtc";
+    return healthRequestCurrent(request) && (!callerOwnsId || !result || !result.requestId || result.requestId === request.requestId);
+  }
+  function healthCall(key, fn, request) {
+    // Health work has a main-process cancellation contract. A renderer timer
+    // cannot stop it or free its slot. Ordinary IPC timeout budgets stay intact.
+    return agentBrowser.ipc.call(key + ":" + request.dirId + ":" + request.requestId, fn, {
+      kind: "detect", timeoutMs: 0, traceId: request.requestId, slowNoticeMs: 20000,
+      onSlow: function () {
+        if (healthRequestCurrent(request)) toast(t("health.waiting", "Still waiting for the check. Work may continue in the background; closing this dialog does not stop it."), "warning");
+      },
+    });
+  }
+  function finishHealthRequest(request) {
+    request.settled = true;
+    releaseDetectSlot(request.dirId, request);
+    var view = healthDialogs[request.kind];
+    if (view && view.request === request) { view.request = null; updateHealthCancelButton(request.kind); }
+  }
+  function updateHealthCancelButton(kind) {
+    var button = document.getElementById(kind === "env" ? "env-risk-cancel" : "webrtc-diag-cancel");
+    var request = healthDialogs[kind].request;
+    if (button) button.disabled = !request || request.settled || request.cancelPending || request.cancelRequested;
+  }
+  function openHealthDialog(kind, dirId, request) {
+    var view = healthDialogs[kind];
+    view.seq++;
+    view.dirId = dirId;
+    view.request = request;
+    view.latestResult = null;
+    view.historyEntries = null;
+    request.view = view.seq;
+    var dlg = document.getElementById(kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
+    if (!dlg._healthLifecycleBound) {
+      dlg._healthLifecycleBound = true;
+      function invalidateView() {
+        view.seq++;
+        view.dirId = null;
+        view.request = null;
+        healthHistoryViewSeq++;
+        if (kind === "env") currentEnvRiskDirId = null;
+        else window.__webrtcDiagDirId = null;
+        updateHealthCancelButton(kind);
+      }
+      dlg.addEventListener("cancel", invalidateView);
+      dlg.addEventListener("close", function () { if (!dlg.open) invalidateView(); });
+    }
+    if (kind === "env") currentEnvRiskDirId = dirId;
+    else window.__webrtcDiagDirId = dirId;
+    if (!dlg.open) dlg.showModal();
+    updateHealthCancelButton(kind);
+  }
+  function cancelHealthDialog(kind) {
+    var view = healthDialogs[kind], request = view.request;
+    if (!request || request.settled || request.cancelPending || request.cancelRequested) return;
+    request.cancelPending = true;
+    updateHealthCancelButton(kind);
+    lcall("browser.healthCancel:" + request.requestId, function () {
+      return api.browser.healthCancel(request.dirId, { kind: kind, requestId: request.requestId });
+    }).then(function (r) {
+      if (!healthRequestCurrent(request) || request.settled) return;
+      request.cancelRequested = !!(r && r.success && r.cancelled);
+      toast(request.cancelRequested
+        ? t("health.cancel-requested", "Cancellation requested. Waiting for the check to settle; the browser is not stopped.")
+        : t("health.cancel-not-confirmed", "Cancellation was not confirmed. The check may still be running."), "warning");
+    }).catch(function (e) { if (healthRequestCurrent(request) && !request.settled) toast(t("health.cancel-not-confirmed", "Cancellation was not confirmed. The check may still be running.") + " " + (e.message || String(e)), "error");
+    }).then(function () { request.cancelPending = false; updateHealthCancelButton(kind); });
+  }
+  agentBrowser.cancelEnvRisk = function () { cancelHealthDialog("env"); };
+  agentBrowser.cancelWebRtcDiag = function () { cancelHealthDialog("webrtc"); };
 
   function askExternalConsent(dirId, onGranted) {
     var detail = '<div style="font-size:12px;line-height:1.6;">' +
@@ -1501,12 +1743,13 @@
   }
 
   function runRiskCheck(dirId, allowLaunch) {
-    if (!acquireDetectSlot(dirId)) return;
+    var request = beginHealthRequest(dirId, "risk");
+    if (!request) return;
     toast(allowLaunch ? t("toast.fp.launching", "Starting profile and opening risk check…") : t("toast.fp.opening", "Opening risk check…"), "info");
-    agentBrowser.ipc.call("browser.openRiskCheck", function () {
+    healthCall("browser.openRiskCheck", function () {
       return api.browser.openRiskCheck(dirId, { allowLaunch: !!allowLaunch });
-    }, { kind: "detect" }).then(function (r) {
-      releaseDetectSlot(dirId);
+    }, request).then(function (r) {
+      finishHealthRequest(request);
       if (r && r.success) {
         toast(t("toast.fp.opened", "Opened risk check in profile"), "success");
         if (allowLaunch) scheduleProfilesRefresh();
@@ -1520,7 +1763,7 @@
       if (r && typeof agentBrowser.interceptLicenseGate === "function" && agentBrowser.interceptLicenseGate(r)) return;
       toast((r && r.error) || t("toast.fp.nav-failed", "Failed to navigate to risk check"), "error");
     }).catch(function (e) {
-      releaseDetectSlot(dirId);
+      finishHealthRequest(request);
       toast(e && e.message ? e.message : String(e), "error");
     });
   }
@@ -1679,6 +1922,87 @@
   };
 
   // ══════ Profiles ══════
+  var profileEditSeq = 0;
+  var profileEditBaseline = null;
+
+  function bindProfileEditLifecycle(dialog) {
+    if (!dialog || dialog._profileEditBound) return;
+    dialog._profileEditBound = true;
+    function invalidateEdit() {
+      ++profileEditSeq;
+      profileEditBaseline = null;
+    }
+    dialog.addEventListener("cancel", invalidateEdit);
+    dialog.addEventListener("close", function() { if (!dialog.open) invalidateEdit(); });
+  }
+
+  // A UI change detector only, not a content hash/proof. Compare the saved
+  // fields exposed by browser.list, excluding runtime discovery and mtimes.
+  function profileEditSignature(profile) {
+    return JSON.stringify([
+      "name", "engine", "browserVersion", "fingerprintMode", "fingerprintSeed", "platform",
+      "allowThirdPartyCookies", "drm", "timezone", "locale", "webrtcMode", "webrtcIp",
+      "geolocationMode", "geolocationLatitude", "geolocationLongitude", "geolocationAccuracy",
+      "gpuVendor", "gpuRenderer", "hardwareConcurrency", "deviceMemory", "screenWidth", "screenHeight",
+      "storageQuota", "taskbarHeight", "fontsDir", "renderScaleMode", "windowTitlePrefix", "appUrl",
+      "proxyMode", "proxyName", "note", "tags", "preset", "syncedAt", "syncStatus", "syncScope", "syncReason",
+    ].map(function(key) { return profile[key] == null ? null : profile[key]; }));
+  }
+
+  function checkProfileEditBaseline(profiles) {
+    var dialog = document.getElementById("dlg-agent-browser-seed");
+    if (!dialog || !dialog.open || !profileEditBaseline) return;
+    var baseline = profileEditBaseline;
+    if (document.getElementById("agent-browser-meta-dir-id").value !== baseline.dirId) return;
+    var current = profiles.find(function(p) { return p.dirId === baseline.dirId; });
+    var signature = current ? profileEditSignature(current) : null;
+    if (signature === baseline.signature || signature === baseline.warned) return;
+    baseline.warned = signature;
+    toast(t("profile.edit.baseline-changed", "Saved profile data or its sync baseline changed while this editor was open. Your unsaved inputs were kept; close and reopen before saving to avoid overwriting newer data."), "info", { ttlMs: 0 });
+  }
+
+  agentBrowser.invalidateProfilesForSync = function() {
+    ++profilesLoadSeq;
+    ++profileEditSeq;
+    ++newProfileProxySeq;
+    ++businessPresetsLoadSeq;
+    ++consistencyPreviewSeq;
+    lastEngineInfo = null;
+    lastFirefoxInfo = null;
+    Object.keys(detectInFlight).forEach(function (dirId) {
+      var request = detectInFlight[dirId];
+      if (request && request.kind) invalidateHealthKind(dirId, request.kind);
+    });
+    Object.keys(healthHistoryByProfile).forEach(function (dirId) {
+      healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
+      healthHistoryByProfile[dirId].entries = healthHistoryByProfile[dirId].entries.map(function (en) { return Object.assign({}, en, { unverified: true }); });
+      updateHealthCard(dirId);
+    });
+    healthHistoryViewSeq++;
+    // Keep selection, filters, and the open editor's original baseline/draft.
+    // A later current-generation list can warn, but must never refill it.
+  };
+
+  function profileSyncTitle(profile) {
+    var reasons = {
+      "baseline-match": ["profile.sync.reason.match", "Matches the recorded sync baseline for the current storage target."],
+      "content-changed": ["profile.sync.reason.changed", "Saved locally; changes are not synchronized."],
+      "no-baseline": ["profile.sync.reason.none", "No sync baseline has been recorded."],
+      "legacy-marker": ["profile.sync.reason.legacy", "Legacy sync record has no usable content proof. Sync again to establish a baseline."],
+      "invalid-baseline": ["profile.sync.reason.invalid", "The recorded sync baseline is unusable; matching content cannot be verified."],
+      "target-mismatch": ["profile.sync.reason.target-changed", "Storage target changed; the recorded baseline belongs to a different endpoint or bucket."],
+      "target-unavailable": ["profile.sync.reason.target-unavailable", "Storage target unavailable; sync state cannot be verified."],
+      "preferences-unavailable": ["profile.sync.reason.preferences-unavailable", "Preferences could not be read safely; sync state is unknown."],
+      "content-unavailable": ["profile.sync.reason.content-unavailable", "Portable profile metadata could not be read; sync state is unknown."],
+    };
+    var reason = reasons[profile.syncReason] || ["profile.sync.reason.unknown", "No usable sync proof was returned; sync state is unknown."];
+    var title = t(reason[0], reason[1]);
+    if (profile.syncStatus === "synced" && typeof profile.syncedAt === "number" && Number.isFinite(profile.syncedAt) && profile.syncedAt >= 0) {
+      title += " " + t("profile.sync.baseline-at", "Baseline recorded: {when}").replace("{when}", new Date(profile.syncedAt).toLocaleString());
+    }
+    return title + " " + t("profile.sync.proof-scope", "Proof scope: portable profile metadata and Preferences only. Cookies, localStorage and other browser data are not verified by this badge.");
+  }
+
   function loadProfiles(soft) {
     var seq = ++profilesLoadSeq;
     var container = document.getElementById("profile-list");
@@ -1732,6 +2056,7 @@
       }
       var browserProfiles = results[0] || [];
       var proxies = results[1];
+      checkProfileEditBaseline(browserProfiles);
       // Sale-90/92: trial/paywall banner refreshes with every profile load.
       try { if (typeof agentBrowser.refreshLicense === "function") agentBrowser.refreshLicense(); } catch (e) { /* banner is best-effort */ }
 
@@ -1743,6 +2068,9 @@
       var profiles = browserProfiles.map(function(cp) {
         var proxyMode = cp.proxyMode || (cp.proxyName ? "named" : "none");
         var resolvedProxy = cp.proxy || (proxyMode === "default" ? proxyMap[defaultProxyName] : proxyMap[cp.proxyName]) || null;
+        var syncStatus = getSyncStatus(cp);
+        var syncReason = cp.syncReason || (cp.syncedAt != null ? "legacy-marker" : syncStatus === "never" ? "no-baseline" : null);
+        if (syncStatus === "unknown" && cp.syncStatus !== "unknown") syncReason = cp.syncedAt != null ? "legacy-marker" : null;
         return {
           dirId: cp.dirId,
           name: cp.name,
@@ -1753,8 +2081,10 @@
           proxy: resolvedProxy,
           proxyMode: proxyMode,
           proxyName: cp.proxyName || null,
-          syncedAt: cp.syncedAt || null,
-          syncStatus: cp.syncStatus || getSyncStatus(cp.syncedAt, cp.lastModified || 0),
+          syncedAt: cp.syncedAt == null ? null : cp.syncedAt,
+          syncStatus: syncStatus,
+          syncScope: cp.syncScope || null,
+          syncReason: syncReason,
           fingerprint: { browser: cp.engine || "chromium", version: cp.version, mode: cp.fingerprintMode || "managed", browserVersion: cp.browserVersion || null, platform: cp.platform || "windows", seed: cp.fingerprintSeed, timezone: cp.timezone, locale: cp.locale, webrtcMode: cp.webrtcMode || (cp.webrtcIp ? "altered" : "auto"), webrtcIp: cp.webrtcIp },
           gpuVendor: cp.gpuVendor || null,
           gpuRenderer: cp.gpuRenderer || null,
@@ -1851,10 +2181,12 @@
         var absDate = p.lastModified ? new Date(p.lastModified).toLocaleString() : "";
         var proxyStr = proxyDisplayLabel(p);
 
-        var syncIcon = "", syncTitle = "", syncCls = "";
-        if (p.syncStatus === "synced") { syncIcon = icon("sync", 12); syncCls = "sync-synced"; syncTitle = t("profile.card.synced-at", "Synced: ") + new Date(p.syncedAt).toLocaleString(); }
-        else if (p.syncStatus === "dirty") { syncIcon = icon("zap", 12); syncCls = "sync-dirty"; syncTitle = t("profile.card.unsaved", "Unsaved changes"); }
-        else { syncIcon = icon("sync", 12); syncCls = "sync-never"; syncTitle = t("profile.card.never-synced", "Never synced"); }
+        var syncIcon = "", syncCls = "", syncLabel = "";
+        var syncTitle = profileSyncTitle(p);
+        if (p.syncStatus === "synced") { syncIcon = icon("sync", 12); syncCls = "sync-synced"; syncLabel = t("profile.sync.synced", "Synced"); }
+        else if (p.syncStatus === "dirty") { syncIcon = icon("zap", 12); syncCls = "sync-dirty"; syncLabel = t("profile.sync.local-changes", "Local changes"); }
+        else if (p.syncStatus === "never") { syncIcon = icon("sync", 12); syncCls = "sync-never"; syncLabel = t("profile.sync.never", "Never"); }
+        else { syncIcon = icon("alert", 12); syncCls = "sync-unknown"; syncLabel = t("profile.sync.unknown", "Unknown"); }
 
         var fp = p.fingerprint || {};
         var platform = fp.platform || "windows";
@@ -1910,8 +2242,7 @@
         // ── Review item UE-06: sync moves into the governance tier so the
         // three status tiers are visually distinct (lifecycle / governance /
         // capability) instead of five equal-weight badges.
-        var syncBadge = '<span class="status-badge badge-governance ' + syncCls + '" title="' + escAttr(syncTitle) + '">' + syncIcon + ' ' +
-          esc(p.syncStatus === "synced" ? t('profile.sync.synced', 'Synced') : p.syncStatus === "dirty" ? t('profile.sync.dirty', 'Dirty') : t('profile.sync.never', 'Never')) + '</span>';
+        var syncBadge = '<span class="status-badge badge-governance ' + syncCls + '" title="' + escAttr(syncTitle) + '">' + syncIcon + ' ' + esc(syncLabel) + '</span>';
         var tagHtml = (p.tags || []).map(function(tag) {
           // S2-6: tags are metadata, not status — quiet .tag chip, not a
           // heavy uppercase status pill (see the CSS note).
@@ -1998,6 +2329,9 @@
       renderProfileList(container, profiles, cardHtmlFn);
       attachProfileCardHandlers(container);
       updateBatchBar(proxies);
+      if (typeof api.browser.healthHistory === "function") profiles.forEach(function (p) {
+        refreshHealthSummary(p.dirId).catch(function (error) { console.warn("Profile health history read failed", error); });
+      });
     }).catch(function (e) {
       if (seq !== profilesLoadSeq) return;
       closeAllCardMenus(container);
@@ -2284,39 +2618,84 @@
 
   // sale-96: one-click fingerprint lock — capture the live baseline now so
   // later drift blocks the launch. Requires a running profile (CDP read).
-  agentBrowser.lockBaseline = function(dirId) {
-    if (!acquireDetectSlot(dirId)) return;
-    api.browser.status(dirId).then(function (s) {
-      if (!s || !s.running) {
-        releaseDetectSlot(dirId);
+  var baselineConfirmations = Object.create(null);
+  function baselineReviewValue(value) {
+    var text = typeof value === "string" ? value : JSON.stringify(value);
+    if (text === undefined) return t("common.unknown", "Unknown");
+    return text.length > 240 ? text.slice(0, 240) + "…" : text;
+  }
+  function captureHealthBaseline(dirId, confirmationToken) {
+    var request = beginHealthRequest(dirId, "drift");
+    if (!request) return;
+    delete baselineConfirmations[dirId];
+    healthCall("browser.captureBaseline", function () {
+      return api.browser.status(dirId).then(function (s) {
+        if (!s || !s.running) return { ok: false, outcome: "unavailable", code: "PROFILE_NOT_RUNNING" };
+        return api.browser.captureBaseline(dirId, confirmationToken ? { confirmationToken: confirmationToken } : undefined);
+      });
+    }, request).then(function (r) {
+      finishHealthRequest(request);
+      if (!healthResponseCurrent(request, r)) return;
+      if (r && r.code === "PROFILE_NOT_RUNNING") {
         toast(t("toast.fp.lock-need-running", "Start the profile first, then lock — the baseline is read from the live browser"), "info");
         return;
       }
-      agentBrowser.ipc.call("browser.captureBaseline", function () {
-        return api.browser.captureBaseline(dirId);
-      }, { kind: "detect" }).then(function (r) {
-        releaseDetectSlot(dirId);
-        if (r && r.ok) {
-          recordHealthResult(dirId, "drift", { verdict: "pass", detail: t("toast.fp.locked", "baseline locked") });
-          toast(t("toast.fp.locked", "Fingerprint baseline locked ({n} fields) — future drift will block launch").replace("{n}", r.fields || "?"), "success");
-        } else {
-          toast((r && r.error) || t("toast.fp.lock-failed", "Failed to lock baseline"), "error");
-        }
+      if (r && r.code === "BASELINE_CONFIRMATION_REQUIRED") {
+        recordHealthResult(dirId, "drift", { outcome: "risk", detail: t("health.baseline.not-replaced", "Risk found. The previous baseline has not been replaced.") }, request.requestId);
+        if (!r.confirmationToken) { toast(t("toast.fp.lock-failed", "Failed to lock baseline"), "error"); return; }
+        baselineConfirmations[dirId] = r.confirmationToken;
+        var fields = (r.drift || []).map(function (d) {
+          return '<div style="margin-top:6px;"><b>' + esc(d.field || d.code || "") + '</b>' +
+            '<div>' + esc(t("health.baseline.previous", "Previous / expected")) + ': ' + esc(baselineReviewValue(d.baseline)) + '</div>' +
+            '<div>' + esc(t("health.baseline.current", "Current snapshot")) + ': ' + esc(baselineReviewValue(d.current)) + '</div></div>';
+        }).join("");
+        agentBrowser.confirm(t("health.baseline.confirm", "Replace the baseline with this risky snapshot?"), function () {
+          if (baselineConfirmations[dirId] !== r.confirmationToken || !healthRequestCurrent(request)) return;
+          var token = baselineConfirmations[dirId];
+          delete baselineConfirmations[dirId]; // A confirmation is single-use; never retry a stale token.
+          captureHealthBaseline(dirId, token);
+        }, { title: t("health.baseline.risk-title", "Confirm risky baseline replacement"),
+          detailHtml: '<div style="color:var(--danger-text);">' + esc(t("health.baseline.not-replaced", "Risk found. The previous baseline has not been replaced.")) + '</div>' +
+            '<div style="margin-top:8px;word-break:break-word;">' + fields + '</div>' +
+            '<div style="margin-top:8px;">' + esc(t("health.baseline.bound-confirmation", "This confirmation is bound to the reviewed baseline, configuration and live snapshot. If any changes, review and confirm again. Saving a risky baseline does not mean the profile passed a health check.")) + '</div>',
+        });
+        return;
+      }
+      if (r && r.code === "BASELINE_CONFIRMATION_STALE") {
+        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Lock baseline again and review the new risks.") }, request.requestId);
+        toast(t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Lock baseline again and review the new risks."), "warning");
+        return;
+      }
+      if (r && r.ok) {
+        var outcome = r.risky || r.outcome === "risk" ? "risk" : r.outcome === "warn" ? "warn" : "baseline-established";
+        var detail = outcome === "baseline-established" ? t("health.baseline.established", "Baseline recorded; this is not a fingerprint stability pass.") : t("health.baseline.risk-saved", "Baseline replaced after explicit risk confirmation. The observed risk remains.");
+        recordHealthResult(dirId, "drift", { outcome: outcome, detail: detail }, r.requestId || request.requestId);
+        toast(detail + (r.warning ? " " + r.warning : ""), outcome === "baseline-established" && !r.warning ? "info" : "warning");
         scheduleProfilesRefresh();
-      }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
-    }).catch(function (e) { releaseDetectSlot(dirId); toast(e.message || String(e), "error"); });
-  };
+      } else {
+        var error = r && r.error || t("toast.fp.lock-failed", "Failed to lock baseline");
+        recordHealthResult(dirId, "drift", { outcome: r && r.outcome === "cancelled" ? "cancelled" : "error", detail: error }, request.requestId);
+        toast(error, "error");
+      }
+    }).catch(function (e) { finishHealthRequest(request); toast(e.message || String(e), "error"); });
+  }
+  agentBrowser.lockBaseline = function(dirId) { captureHealthBaseline(dirId); };
 
   // B3 (#107): browser:consistency-check existed in main + preload with
   // zero renderer callers — the 4-field alignment check (IP/timezone/locale/
   // ASN) the SOP tells every new environment to run had no entry point.
   agentBrowser.runConsistencyCheck = function(dirId) {
-    if (!acquireDetectSlot(dirId)) return;
-    agentBrowser.ipc.call("browser.consistencyCheck", function () {
+    var request = beginHealthRequest(dirId, "consistency");
+    if (!request) return;
+    healthCall("browser.consistencyCheck", function () {
       return api.browser.consistencyCheck(dirId);
-    }, { kind: "detect" }).then(function (r) {
-      releaseDetectSlot(dirId);
-      if (!r || r.error || r.ok === false && !(r.blockers || []).length) { toast(t("toast.fp.consistency-failed", "Alignment check failed"), "error"); return; }
+    }, request).then(function (r) {
+      finishHealthRequest(request);
+      if (!healthResponseCurrent(request, r)) return;
+      if (!r || r.error || r.ok === false && !(r.blockers || []).length) {
+        recordHealthResult(dirId, "consistency", { outcome: r && r.outcome === "cancelled" ? "cancelled" : "error", detail: r && r.error || t("toast.fp.consistency-failed", "Alignment check failed") }, request.requestId);
+        toast(t("toast.fp.consistency-failed", "Alignment check failed"), "error"); return;
+      }
       var blockers = r.blockers || [];
       var warnings = r.warnings || [];
       // This endpoint checks saved fields and cached proxy metadata, not the
@@ -2324,9 +2703,9 @@
       // Off) cannot certify live alignment or earn a green health PASS.
       var unverified = t("toast.fp.consistency-unverified", "No conflicts found in stored/cached fields; live alignment is not verified.");
       recordHealthResult(dirId, "consistency", {
-        verdict: blockers.length ? "risk" : warnings.length ? "warn" : "unknown",
+        outcome: blockers.length ? "risk" : warnings.length ? "warn" : "inconclusive",
         detail: blockers.concat(warnings).map(function (f) { return f.code || f.message; }).slice(0, 6).join(", ") || unverified,
-      });
+      }, r.requestId || request.requestId);
       if (!blockers.length && !warnings.length) {
         toast(unverified, "info");
       } else {
@@ -2339,161 +2718,201 @@
       }
       scheduleProfilesRefresh();
     }).catch(function (e) {
-      releaseDetectSlot(dirId);
-      toast(e.message || String(e), "error");
+      finishHealthRequest(request);
+      if (healthRequestCurrent(request)) toast(e.message || String(e), "error");
     });
   };
 
   agentBrowser.checkDrift = function(dirId) {
-    // TE-09: one check per profile at a time, max 2 globally.
-    if (!acquireDetectSlot(dirId)) return;
-    agentBrowser.ipc.call("browser.checkDrift", function () {
+    var request = beginHealthRequest(dirId, "drift");
+    if (!request) return;
+    healthCall("browser.checkDrift", function () {
       return api.browser.checkDrift(dirId);
-    }, { kind: "detect" }).then(function(r) {
-      releaseDetectSlot(dirId);
-      if (!r || !r.ok) { toast((r && r.error) || t("toast.fp.drift-failed", "Fingerprint check failed"), "error"); return; }
+    }, request).then(function(r) {
+      finishHealthRequest(request);
+      if (!healthResponseCurrent(request, r)) return;
+      if (!r || !r.ok) {
+        var error = r && r.error || t("toast.fp.drift-failed", "Fingerprint check failed");
+        recordHealthResult(dirId, "drift", { outcome: r && (r.outcome === "cancelled" || r.outcome === "unavailable") ? r.outcome : "error", detail: error }, request.requestId);
+        toast(error, "error"); return;
+      }
       if (!r.hasBaseline) {
+        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: t("toast.fp.no-baseline", "No fingerprint baseline yet — launch the profile and capture a baseline first") }, request.requestId);
         toast(t("toast.fp.no-baseline", "No fingerprint baseline yet — launch the profile and capture a baseline first"), "info");
         return;
       }
       var driftFields = (r.drift || []).map(function(d) { return d.field; });
       // PL-05: keep the verdict so the card can show it later.
+      var outcome = r.risky ? "risk" : driftFields.length ? "warn" : knownHealthOutcome(r.outcome) ? r.outcome : "inconclusive";
       recordHealthResult(dirId, "drift", {
-        verdict: r.risky ? "risk" : driftFields.length ? "warn" : "pass",
+        outcome: outcome,
         detail: driftFields.slice(0, 6).join(", "),
-      });
-      if (!r.risky) {
-        toast(t("toast.fp.stable", "Fingerprint stable ({n} benign change(s))").replace("{n}", driftFields.length), "success");
-      } else {
+      }, r.requestId || request.requestId);
+      if (outcome === "pass" || outcome === "warn") {
+        toast(t("toast.fp.stable", "Fingerprint stable ({n} benign change(s))").replace("{n}", driftFields.length), outcome === "warn" ? "warning" : "success");
+      } else if (outcome === "risk") {
         toast(t("toast.fp.drift", "Risky fingerprint drift") + ": " + driftFields.slice(0, 6).join(", ") + (driftFields.length > 6 ? " (+" + (driftFields.length - 6) + ")" : ""), "error");
+      } else {
+        toast(healthVerdict({ outcome: outcome }).label, "info");
       }
       scheduleProfilesRefresh();
     }).catch(function(e) {
-      releaseDetectSlot(dirId);
-      toast(e.message || String(e), "error");
+      finishHealthRequest(request);
+      if (healthRequestCurrent(request)) toast(e.message || String(e), "error");
     });
   };
 
   function renderEnvRisk(r) {
+    healthDialogs.env.latestResult = r;
     var body = document.getElementById('env-risk-body');
     if (!body) return;
-    if (!r || !r.ok) {
-      body.innerHTML = '<div class="empty-state">' + esc((r && r.error) || 'Env check failed') + '</div>';
+    var summary = summarizeEnvRisk(r);
+    if (!r || !r.result) {
+      body.innerHTML = healthBadgeHtml(summary) + '<div class="empty-state">' + esc(summary.detail) + '</div>';
       return;
     }
-    var res = r.result || {};
-    var findings = res.findings || [];
-    var okBadge = res.ok ? '<span class="status-badge status-done">PASS</span>' : '<span class="status-badge" style="background:var(--danger-bg);color: var(--danger-text);">RISK</span>';
+    var res = r.result;
+    var findings = Array.isArray(res.findings) ? res.findings : [];
     var rows = [];
-    rows.push('<div class="card-header"><span class="name">Host</span><span>' + okBadge + '</span></div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform) + ' · locale ' + esc(res.hostLocale || '?') + '</div>');
+    rows.push('<div class="card-header"><span class="name">' + esc(t("health.host", "Host")) + '</span>' + healthBadgeHtml(summary) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(res.hostPlatform || t("common.unknown", "Unknown")) + ' · ' + esc(t("health.locale", "Locale")) + ' ' + esc(res.hostLocale || '?') + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("health.scope.host", "Host-environment observations only; not a complete profile fingerprint verdict.")) + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">DNS: ' + esc((res.resolvers || []).map(function(rr){ return rr.address + (rr.isCn ? ' (CN!)' : ''); }).join(', ') || 'n/a') + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.cn-fonts", "CN fonts")) + ': ' + esc((res.cnFonts || []).join(', ') || t("common.none", "none")) + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("env.proxy", "Proxy")) + ': ' + esc((res.proxy && res.proxy.mode) || '?') + ' · ' + esc((res.proxy && (res.proxy.type || '')) || '') + ' · DNS ' + esc((res.proxy && res.proxy.dnsLeakRisk) || '') + '</div>');
     if (res.raf && res.raf.samples > 0) {
-      rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(String(res.raf.medianMs)) + 'ms ≈ ' + esc(String(res.raf.refreshHz)) + 'Hz (' + esc(String(res.raf.samples)) + ' samples, ' + (res.raf.standard ? 'standard' : 'non-standard') + ')</div>');
+      rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">rAF: ' + esc(t("health.raf", "{samples} samples, median {ms}ms, approximately {hz}Hz ({standard})")
+        .replace("{samples}", res.raf.samples).replace("{ms}", res.raf.medianMs).replace("{hz}", res.raf.refreshHz)
+        .replace("{standard}", res.raf.standard ? t("health.standard", "standard") : t("health.non-standard", "non-standard"))) + '</div>');
     }
     body.innerHTML = rows.join('') +
       '<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">' +
-      findings.map(function(f) {
-        var color = f.severity === 'high' ? 'var(--danger-text)' : (f.severity === 'medium' ? 'var(--warning-text)' : 'var(--text-muted)');
-        var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
-        return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
-          '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(f.severity.toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
-          '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
-          '<div class="icon-text" style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + icon("info", 11) + esc(f.fix) + '</div>' +
-        '</div>';
-      }).join('') +
-      (!findings.length ? '<div class="empty-state">' + esc(t("env.no-risk", "No environment risk found")) + '</div>' : '') +
+      findings.map(findingCardHtml).join('') +
+      (!findings.length ? '<div class="empty-state">' + esc(summary.outcome === "pass" ? t("env.no-risk", "No environment risk found") : healthVerdict(summary).label) + '</div>' : '') +
       '</div>';
   }
 
   // R9 P1-4: persisted history with detail replay (mirrors webrtc diag).
   // R11 UX P2-2: rows expand to replay the full findings of that run.
   var currentEnvRiskDirId = null;
-  var envRiskHistoryCache = [];
+  function healthHistoryCurrent(kind, dirId, seq, epoch) {
+    var view = healthDialogs[kind];
+    var dlg = document.getElementById(kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
+    return !!(dlg && dlg.open) && view.dirId === dirId && view.seq === seq && epoch === (healthEpoch[healthEpochKey(dirId, kind)] || 0);
+  }
+  function queryDiagnosticHistory(kind, dirId) {
+    return lcall(kind + ".history:" + dirId, function () {
+      return kind === "env" ? api.browser.envRiskHistory(dirId) : api.webrtc.diagHistory(dirId);
+    }).then(function (h) {
+      if (!h || h.ok === false || h.success === false || !Array.isArray(h.entries)) throw new Error(h && h.error || t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
+      return h.entries;
+    });
+  }
+  function renderHealthHistoryFailure(kind, error) {
+    var host = document.getElementById(kind === "env" ? "env-risk-history" : "webrtc-diag-history");
+    if (!host) return;
+    var notice = host.querySelector(".health-history-error");
+    if (!notice) { notice = document.createElement("div"); notice.className = "health-history-error"; host.appendChild(notice); }
+    notice.innerHTML = '<span style="color:var(--danger-text);">' + esc(t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified.")) + '</span> ' +
+      '<button type="button" class="btn btn-secondary btn-sm">' + esc(t("common.retry", "Retry")) + '</button>';
+    notice.setAttribute("title", error && error.message || String(error || ""));
+    notice.querySelector("button").addEventListener("click", function () {
+      var view = healthDialogs[kind];
+      if (view.dirId) loadDiagnosticHistory(kind, view.dirId);
+    });
+  }
+  function diagnosticHistoryOutcome(kind, entry) {
+    if (entry.source === "legacy") return "inconclusive";
+    return (kind === "env" ? summarizeEnvRisk({ ok: true, result: entry, outcome: entry.outcome }) : summarizeWebRtc({ ok: true, result: entry, outcome: entry.outcome })).outcome;
+  }
+  function renderDiagnosticHistory(kind, entries) {
+    healthDialogs[kind].historyEntries = entries;
+    var histEl = document.getElementById(kind === "env" ? "env-risk-history" : "webrtc-diag-history");
+    if (!histEl) return;
+    if (!entries.length) {
+      histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("env.risk.no-history", "No history yet")) + '</div>';
+      return;
+    }
+    var attr = kind === "env" ? "env" : "webrtc";
+    var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("env.risk.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
+    entries.slice().reverse().forEach(function (en) {
+      var idx = entries.indexOf(en);
+      html += '<div class="' + attr + '-hist-row" data-' + attr + '-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + escAttr(t("env.risk.expand", "Click to replay details")) + '">' +
+        healthBadgeHtml({ outcome: diagnosticHistoryOutcome(kind, en) }) + ' ' + esc(en.at ? new Date(en.at).toLocaleString() : "?") + ' — ' + esc(en.summary || "") + ' ▸</div>' +
+        '<div data-' + attr + '-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;font-size:11px;color:var(--text-muted);"></div>';
+    });
+    histEl.innerHTML = html;
+    Array.prototype.forEach.call(histEl.querySelectorAll("[data-" + attr + "-hist]"), function (row) {
+      function toggle() {
+        var idx = Number(row.getAttribute("data-" + attr + "-hist"));
+        var detail = histEl.querySelector('[data-' + attr + '-hist-detail="' + idx + '"]');
+        if (!detail) return;
+        if (detail.style.display !== "none") { detail.style.display = "none"; return; }
+        var en = entries[idx] || {}, parts = [healthBadgeHtml({ outcome: diagnosticHistoryOutcome(kind, en) })];
+        if (kind === "env") {
+          var findings = Array.isArray(en.findings) ? en.findings : [];
+          parts.push(findings.length ? findings.map(findingCardHtml).join("") : '<div>' + esc(diagnosticHistoryOutcome(kind, en) === "pass" ? t("env.no-risk", "No environment risk found") : t("health.outcome.inconclusive", "Not verified")) + '</div>');
+        } else {
+          parts.push('<div>' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(en.connectionState || "?") + ' · RTT: ' + esc(rtcRttText(en)) + '</div>');
+          parts.push('<div>' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (en.candidates || []).length + '</div>');
+          if ((en.mdnsHosts || []).length) parts.push('<div>mDNS: ' + en.mdnsHosts.map(esc).join(", ") + '</div>');
+          if ((en.hostIps || []).length) parts.push('<div style="color:var(--danger-text);">' + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': ' + en.hostIps.map(esc).join(", ") + '</div>');
+          if ((en.srflxIps || []).length) parts.push('<div>STUN: ' + en.srflxIps.map(esc).join(", ") + '</div>');
+          if (en.error) parts.push('<div style="color:var(--danger-text);">' + esc(en.error) + '</div>');
+          parts.push('<div>' + esc(t("health.scope.rtc-peer", "Scope: ICE candidate exposure on the current page only. This probe does not establish a remote peer connection or verify all WebRTC routes or latency. An empty RTT means not measured; a connected peer is required.")) + '</div>');
+        }
+        detail.innerHTML = parts.join("");
+        detail.style.display = "block";
+      }
+      row.addEventListener("click", toggle);
+      row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+    });
+  }
+  function loadDiagnosticHistory(kind, dirId) {
+    var seq = healthDialogs[kind].seq, epoch = healthEpoch[healthEpochKey(dirId, kind)] || 0;
+    return queryDiagnosticHistory(kind, dirId).then(function (entries) {
+      if (healthHistoryCurrent(kind, dirId, seq, epoch)) renderDiagnosticHistory(kind, entries);
+      return entries;
+    }).catch(function (error) {
+      if (healthHistoryCurrent(kind, dirId, seq, epoch)) renderHealthHistoryFailure(kind, error);
+      throw error;
+    });
+  }
   function findingCardHtml(f) {
     var color = f.severity === 'high' ? 'var(--danger-text)' : (f.severity === 'medium' ? 'var(--warning-text)' : 'var(--text-muted)');
     var bg = f.severity === 'high' ? 'var(--danger-bg)' : (f.severity === 'medium' ? 'var(--warning-bg)' : 'transparent');
     return '<div style="border:1px solid ' + color + ';background:' + bg + ';border-radius:8px;padding:8px 10px;">' +
-      '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(String(f.severity || "").toUpperCase()) + ' · ' + esc(f.code) + '</div>' +
+      '<div style="font-size:12px;color:' + color + ';font-weight:600;">' + esc(t("health.severity." + f.severity, String(f.severity || ""))) + ' · ' + esc(f.code) + '</div>' +
       '<div style="font-size:12px;color:var(--text);margin-top:2px;">' + esc(f.message) + '</div>' +
       '<div class="icon-text" style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + icon("info", 11) + esc(f.fix) + '</div>' +
     '</div>';
   }
   function renderEnvRiskHistory(dirId) {
-    var histEl = document.getElementById("env-risk-history");
-    if (!histEl || !dirId) return;
-    api.browser.envRiskHistory(dirId).then(function (h) {
-      // R12 UX P3-1: h.entries===null (IPC error shape) gets a retry
-      // affordance instead of a silent blank.
-      if (!h || h.entries === null || h.entries === undefined) {
-        histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color: var(--danger-text);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
-          '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
-        var retryBtn = histEl.querySelector("[data-env-hist-retry]");
-        if (retryBtn) retryBtn.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
-        return;
-      }
-      var entries = h.entries || [];
-      envRiskHistoryCache = entries;
-      if (!entries.length) {
-        histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("env.risk.no-history", "No history yet")) + '</div>';
-        return;
-      }
-      var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("env.risk.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
-      entries.slice().reverse().forEach(function (en) {
-        var idx = entries.indexOf(en);
-        var ts = en.at ? new Date(en.at).toLocaleString() : "?";
-        var badge = en.ok ? icon("check", 12) : icon("alert", 12);
-        html += '<div class="env-hist-row" data-env-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
-          badge + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
-          '<div class="env-hist-detail" data-env-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;flex-direction:column;gap:6px;"></div>';
-      });
-      histEl.innerHTML = html;
-      Array.prototype.forEach.call(histEl.querySelectorAll("[data-env-hist]"), function (row) {
-        function toggle() {
-          var idx = Number(row.getAttribute("data-env-hist"));
-          var detail = histEl.querySelector('[data-env-hist-detail="' + idx + '"]');
-          if (!detail) return;
-          var open = detail.style.display !== "none";
-          if (open) { detail.style.display = "none"; detail.style.flexDirection = ""; return; }
-          var en = envRiskHistoryCache[idx] || {};
-          var findings = en.findings || [];
-          detail.innerHTML = findings.length
-            ? findings.map(findingCardHtml).join("")
-            : '<div style="font-size:11px;color:var(--text-muted);">' + esc(t("env.no-risk", "No environment risk found")) + '</div>';
-          detail.style.display = "flex";
-        }
-        row.addEventListener("click", toggle);
-        row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
-      });
-    }).catch(function () {
-      // R12 UX P3-1: transport failure also gets the retry affordance.
-      histEl.innerHTML = '<div style="font-size:11px;margin-top:8px;"><span style="color: var(--danger-text);">' + esc(t("env.risk.load-failed", "Failed to load history")) + '</span> ' +
-        '<button class="btn btn-secondary btn-sm" data-env-hist-retry="1">' + esc(t("common.retry", "Retry")) + '</button></div>';
-      var retryBtn2 = histEl.querySelector("[data-env-hist-retry]");
-      if (retryBtn2) retryBtn2.addEventListener("click", function () { renderEnvRiskHistory(dirId); });
-    });
+    return loadDiagnosticHistory("env", dirId).catch(function (error) { console.warn("Environment history read failed", error); });
   }
 
   agentBrowser.openEnvRisk = function(dirId) {
     var dlg = document.getElementById('dlg-env-risk');
     var body = document.getElementById('env-risk-body');
     if (!dlg) { toast(t('env.dialog.unavailable', 'Env check dialog unavailable'), 'error'); return; }
-    if (!acquireDetectSlot(dirId)) return;
-    currentEnvRiskDirId = dirId;
+    var request = beginHealthRequest(dirId, "env");
+    if (!request) return;
+    openHealthDialog("env", dirId, request);
     if (body) body.innerHTML = '<div class="loading">' + esc(t('env.checking', 'Checking host environment…')) + '</div>';
     var histEl = document.getElementById("env-risk-history");
     if (histEl) histEl.innerHTML = "";
-    dlg.showModal();
-    agentBrowser.ipc.call("browser.envRisk", function () { return api.browser.envRisk(dirId); }, { kind: "detect" })
+    healthCall("browser.envRisk", function () { return api.browser.envRisk(dirId, { requestId: request.requestId }); }, request)
       .then(function (r) {
-        releaseDetectSlot(dirId);
-        if (r && r.ok) recordHealthResult(dirId, "env", summarizeEnvRisk(r)); // PL-05
+        if (!healthResponseCurrent(request, r)) return;
+        recordHealthResult(dirId, "env", summarizeEnvRisk(r), request.requestId);
         renderEnvRisk(r);
         renderEnvRiskHistory(dirId);
-      })
-      .catch(function (e) { releaseDetectSlot(dirId); renderEnvRisk({ ok: false, error: e.message || String(e) }); });
+      }).catch(function (e) {
+        if (!healthRequestCurrent(request)) return;
+        var r = { ok: false, outcome: "error", error: e.message || String(e) };
+        recordHealthResult(dirId, "env", summarizeEnvRisk(r), request.requestId);
+        renderEnvRisk(r);
+      }).finally(function () { finishHealthRequest(request); });
   };
 
   // sale-97: one-click report export — the presale "ticket" (profile name +
@@ -2519,128 +2938,102 @@
     var card = document.querySelector('#profile-list .profile-card[data-dir-id="' + String(dirId).replace(/"/g, "") + '"] .name');
     return (card && card.textContent.trim()) || fallback || dirId.slice(0, 8);
   }
-  agentBrowser.envRiskExport = function() {
-    if (!currentEnvRiskDirId) return;
-    var dirId = currentEnvRiskDirId;
-    Promise.all([
-      api.browser.envRisk(dirId).catch(function (e) { return { ok: false, error: e.message }; }),
-      api.browser.envRiskHistory(dirId).catch(function () { return { ok: true, entries: [] }; }),
-      api.app.version().catch(function () { return "?"; }),
-    ]).then(function (rs) {
-      var payload = {
-        kind: "env-risk-report",
-        profile: { dirId: dirId, name: profileNameForReport(dirId) },
-        exportedAt: new Date().toISOString(),
-        appVersion: rs[2],
-        latest: (rs[0] && rs[0].result) || null,
-        history: ((rs[1] && rs[1].entries) || []).slice(-20),
-      };
-      if (downloadReportJson("env-risk-" + dirId.slice(0, 8) + ".json", payload)) {
-        toast(t("report.exported", "Report exported"), "success");
-      }
-    }).catch(function (e) { toast(e.message || String(e), "error"); });
-  };
-  agentBrowser.webRtcDiagExport = function() {
-    var dirId = window.__webrtcDiagDirId;
+  function exportHealthHistory(kind) {
+    var view = healthDialogs[kind], dirId = view.dirId;
     if (!dirId) return;
-    Promise.all([
-      api.webrtc.diagHistory(dirId).catch(function () { return { entries: [] }; }),
-      api.app.version().catch(function () { return "?"; }),
-    ]).then(function (rs) {
+    var seq = view.seq, epoch = healthEpoch[healthEpochKey(dirId, kind)] || 0;
+    Promise.all([queryDiagnosticHistory(kind, dirId), api.app.version()]).then(function (rs) {
+      if (!healthHistoryCurrent(kind, dirId, seq, epoch)) return;
+      var history = rs[0].slice(-20);
       var payload = {
-        kind: "webrtc-report",
+        kind: kind === "env" ? "env-risk-report" : "webrtc-report",
         profile: { dirId: dirId, name: profileNameForReport(dirId) },
-        exportedAt: new Date().toISOString(),
-        appVersion: rs[1],
-        history: ((rs[0] && rs[0].entries) || []).slice(-20),
+        exportedAt: new Date().toISOString(), appVersion: rs[1],
+        latest: history.length ? history[history.length - 1] : null, history: history,
       };
-      if (downloadReportJson("webrtc-" + dirId.slice(0, 8) + ".json", payload)) {
-        toast(t("report.exported", "Report exported"), "success");
-      }
-    }).catch(function (e) { toast(e.message || String(e), "error"); });
-  };
+      // Export the stored original; exporting must not run a new host probe or
+      // turn an unreadable history into an apparently successful empty report.
+      if (downloadReportJson((kind === "env" ? "env-risk-" : "webrtc-") + dirId.slice(0, 8) + ".json", payload)) toast(t("report.exported", "Report exported"), "success");
+    }).catch(function (e) { if (healthHistoryCurrent(kind, dirId, seq, epoch)) toast(e.message || String(e), "error"); });
+  }
+  agentBrowser.envRiskExport = function() { exportHealthHistory("env"); };
+  agentBrowser.webRtcDiagExport = function() { exportHealthHistory("webrtc"); };
 
-  // R12 UX P1-1: destructive clears need a confirm like purge does.
-  agentBrowser.envRiskClear = function() {
-    if (!currentEnvRiskDirId) return;
-    var dirId = currentEnvRiskDirId;
-    agentBrowser.confirm(
-      t("env.risk.clear-confirm", "Clear this profile's environment risk history? This cannot be undone."),
-      function () {
-        agentBrowser.ipc.call("browser.envRiskClear", function () { return api.browser.envRiskClear(dirId); }, { kind: "write" })
-          .then(function () {
-            toast(t("env.risk.cleared", "Environment risk history cleared"), "success");
-            renderEnvRiskHistory(dirId);
-          })
-          .catch(function (e) { toast(e.message || String(e), "error"); });
-      },
-      { title: t("env.risk.clear-title", "Clear history?") },
-    );
-  };
+  var healthClearInFlight = Object.create(null);
+  function clearHealthHistory(kind) {
+    var view = healthDialogs[kind], dirId = view.dirId, seq = view.seq;
+    if (!dirId || healthClearInFlight[dirId]) return;
+    agentBrowser.confirm(kind === "env"
+      ? t("env.risk.clear-confirm", "Clear this profile's environment risk history? This cannot be undone.")
+      : t("webrtc.diag.clear-confirm", "Clear this profile's WebRTC diagnostic history? This cannot be undone."), function () {
+      if (view.dirId !== dirId || view.seq !== seq || healthClearInFlight[dirId]) return;
+      invalidateHealthKind(dirId, kind); // Also fences an already-running check and earlier history reads.
+      var epoch = healthEpoch[healthEpochKey(dirId, kind)];
+      healthClearInFlight[dirId] = true;
+      var cleared = false;
+      agentBrowser.ipc.call(kind + ".clear:" + dirId, function () {
+        return kind === "env" ? api.browser.envRiskClear(dirId) : api.webrtc.diagClear(dirId);
+      }, { kind: "write", timeoutMs: 0, slowNoticeMs: 15000, onSlow: function () {
+        if (healthHistoryCurrent(kind, dirId, seq, epoch)) toast(t("health.waiting", "Still waiting for the check. Work may continue in the background; closing this dialog does not stop it."), "warning");
+      } }).then(function (r) {
+        if (!r || (kind === "env" ? r.ok !== true : r.success !== true)) throw new Error(r && r.error || t("health.clear-failed", "History was not cleared."));
+        cleared = true;
+        return Promise.all([queryHealthHistory(dirId), queryDiagnosticHistory(kind, dirId)]);
+      }).then(function (histories) {
+        if (epoch !== healthEpoch[healthEpochKey(dirId, kind)]) return;
+        removeCachedHealthKind(dirId, kind);
+        healthHistoryByProfile[dirId] = { entries: histories[0] };
+        healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
+        updateHealthCard(dirId);
+        if (!healthHistoryCurrent(kind, dirId, seq, epoch)) return;
+        renderDiagnosticHistory(kind, histories[1]);
+        view.latestResult = null;
+        var body = document.getElementById(kind === "env" ? "env-risk-body" : "webrtc-diag-body");
+        if (body) body.textContent = t("profile.health.never", "Not checked yet");
+        toast(kind === "env" ? t("env.risk.cleared", "Environment risk history cleared") : t("webrtc.diag.cleared", "WebRTC diagnostic history cleared"), "success");
+      }).catch(function (error) {
+        if (cleared) {
+          var previous = healthHistoryByProfile[dirId];
+          healthHistoryByProfile[dirId] = { entries: (previous ? previous.entries : cachedHealthEntries(dirId)).map(function (en) { return en.kind === kind ? Object.assign({}, en, { unverified: true }) : en; }), error: error.message || String(error) };
+          updateHealthCard(dirId);
+        }
+        if (!healthHistoryCurrent(kind, dirId, seq, epoch)) return;
+        if (cleared) renderHealthHistoryFailure(kind, error);
+        toast(cleared ? t("health.clear-unverified", "The clear request completed, but history could not be read back. Previous display is retained as unverified; retry the history read.") : error.message || String(error), "error");
+      }).finally(function () { delete healthClearInFlight[dirId]; });
+    }, { title: kind === "env" ? t("env.risk.clear-title", "Clear history?") : t("webrtc.diag.clear-title", "Clear history?") });
+  }
+  agentBrowser.envRiskClear = function() { clearHealthHistory("env"); };
 
 
+  function rtcRttText(result) {
+    return typeof result.rttMs === "number" && Number.isFinite(result.rttMs) ? result.rttMs + "ms" : t("health.rtt-unmeasured", "Not measured (requires a connected peer)");
+  }
   function renderWebRtcDiag(r, dirId) {
+    healthDialogs.webrtc.latestResult = r;
     var body = document.getElementById("webrtc-diag-body");
     if (!body) return;
-    if (!r || !r.ok) {
-      body.innerHTML = '<div class="empty-state">' + esc((r && r.error) || "WebRTC diagnostic failed") + '</div>';
+    var summary = summarizeWebRtc(r);
+    if (!r || !r.result) {
+      body.innerHTML = healthBadgeHtml(summary) + '<div class="empty-state">' + esc(summary.detail) + '</div>';
       return;
     }
-    var res = r.result || {};
+    var res = r.result;
     var hasLeak = (res.hostIps || []).length > 0;
-    var badge = !res.rtcAvailable
-      ? '<span class="status-badge" style="background:var(--surface2);color:var(--text-muted);">N/A</span>'
-      : hasLeak
-        ? '<span class="status-badge" style="background:var(--danger-bg);color: var(--danger-text);">RISK</span>'
-        : '<span class="status-badge status-done">PASS</span>';
+    var badge = healthBadgeHtml(summary);
     var when = res.at ? new Date(res.at).toLocaleString() : "";
     var rows = [];
     rows.push('<div class="card-header"><span class="name">WebRTC · ' + esc(when) + '</span><span>' + badge + '</span></div>');
     rows.push('<div style="font-size:12px;color:var(--text);margin-top:4px;">' + esc(res.summary || "") + '</div>');
-    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? t("webrtc.available", "available") : t("webrtc.unavailable", "unavailable")) + ' · ' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (res.candidates || []).length + ' · ' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(res.connectionState || "") + (typeof res.rttMs === "number" ? " · RTT: " + res.rttMs + "ms" : "") + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? t("webrtc.available", "available") : t("webrtc.unavailable", "unavailable")) + ' · ' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (res.candidates || []).length + ' · ' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(res.connectionState || "") + " · RTT: " + esc(rtcRttText(res)) + '</div>');
     if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.mdns", "mDNS hostnames")) + ': </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
     if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span class="icon-text" style="color: var(--danger-text);">' + icon("alert", 11) + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': </span>' + res.hostIps.map(esc).join(", ") + '</div>');
     if ((res.srflxIps || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.stun-ip", "STUN public IP")) + ': </span>' + res.srflxIps.map(esc).join(", ") + '</div>');
     if (res.error) rows.push('<div class="icon-text" style="font-size:11px;color: var(--warning-text);margin-top:4px;">' + icon("alert", 11) + esc(res.error) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">' + esc(t("health.scope.rtc", "This diagnostic only reports the observed WebRTC probe; it is not an external-site score.")) + '</div>');
+    rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + esc(t("health.scope.rtc-peer", "Scope: ICE candidate exposure on the current page only. This probe does not establish a remote peer connection or verify all WebRTC routes or latency. An empty RTT means not measured; a connected peer is required.")) + '</div>');
     body.innerHTML = rows.join("");
-    // R12: history rows expand to replay the stored run (mirrors env-risk).
-    var histEl = document.getElementById("webrtc-diag-history");
-    if (histEl && dirId) {
-      api.webrtc.diagHistory(dirId).then(function(h) {
-        var entries = (h && h.entries) || [];
-        if (!entries.length) { histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>'; return; }
-        var html = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">' + esc(t("webrtc.diag.history", "History ({n})").replace("{n}", entries.length)) + '</div>';
-        entries.slice().reverse().forEach(function (en) {
-          var idx = entries.indexOf(en);
-          var ts = en.at ? new Date(en.at).toLocaleString() : "?";
-          var leak = (en.hostIps || []).length > 0;
-          html += '<div class="webrtc-hist-row" data-webrtc-hist="' + idx + '" style="font-size:11px;margin-top:4px;cursor:pointer;" role="button" tabindex="0" title="' + esc(t("env.risk.expand", "Click to replay details")) + '">' +
-            (leak ? icon("alert", 12) : icon("check", 12)) + " " + esc(ts) + " — " + esc(en.summary || "") + ' ▸</div>' +
-            '<div class="webrtc-hist-detail" data-webrtc-hist-detail="' + idx + '" style="display:none;margin:4px 0 8px;font-size:11px;color:var(--text-muted);"></div>';
-        });
-        histEl.innerHTML = html;
-        Array.prototype.forEach.call(histEl.querySelectorAll("[data-webrtc-hist]"), function (row) {
-          function toggle() {
-            var idx = Number(row.getAttribute("data-webrtc-hist"));
-            var detail = histEl.querySelector('[data-webrtc-hist-detail="' + idx + '"]');
-            if (!detail) return;
-            var open = detail.style.display !== "none";
-            if (open) { detail.style.display = "none"; return; }
-            var en = entries[idx] || {};
-            var parts = [];
-            parts.push('<div>' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(en.connectionState || "?") + (typeof en.rttMs === "number" ? " · RTT: " + en.rttMs + "ms" : "") + '</div>');
-            parts.push('<div>' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (en.candidates || []).length + '</div>');
-            if ((en.mdnsHosts || []).length) parts.push('<div>mDNS: ' + en.mdnsHosts.map(esc).join(", ") + '</div>');
-            if ((en.hostIps || []).length) parts.push('<div class="icon-text" style="color: var(--danger-text);">' + icon("alert", 11) + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': ' + en.hostIps.map(esc).join(", ") + '</div>');
-            if ((en.srflxIps || []).length) parts.push('<div>STUN: ' + en.srflxIps.map(esc).join(", ") + '</div>');
-            detail.innerHTML = parts.join("");
-            detail.style.display = "";
-          }
-          row.addEventListener("click", toggle);
-          row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
-        });
-      }).catch(function() { histEl.innerHTML = ""; });
-    }
+    if (dirId) loadDiagnosticHistory("webrtc", dirId).catch(function (error) { console.warn("WebRTC history read failed", error); });
   }
 
   function runWebRtcDiag(dirId, allowLaunch) {
@@ -2648,69 +3041,60 @@
     var body = document.getElementById("webrtc-diag-body");
     var histEl = document.getElementById("webrtc-diag-history");
     if (!dlg) { toast(t("webrtc.diag.unavailable", "WebRTC diagnostic dialog unavailable"), "error"); return; }
-    if (!acquireDetectSlot(dirId)) return;
-    if (body) {
-      body.innerHTML = '<div class="loading">' +
-        esc(allowLaunch ? t("webrtc.diag.running-launch", "Starting profile and running the WebRTC diagnostic…") : t("webrtc.diag.running", "Running the WebRTC diagnostic…")) +
-        "</div>";
-    }
+    var request = beginHealthRequest(dirId, "webrtc");
+    if (!request) return;
+    openHealthDialog("webrtc", dirId, request);
+    if (body) body.innerHTML = '<div class="loading">' + esc(allowLaunch
+      ? t("webrtc.diag.running-launch", "Starting profile and running the WebRTC diagnostic…")
+      : t("webrtc.diag.running", "Running the WebRTC diagnostic…")) + '</div>';
     if (histEl) histEl.innerHTML = "";
-    dlg.showModal();
-    agentBrowser.ipc.call("webrtc.diag", function () {
-      return api.webrtc.diag(dirId, { allowLaunch: !!allowLaunch });
-    }, { kind: "detect"     }).then(function(r) {
-      releaseDetectSlot(dirId);
-      var payload = r || { ok: false, error: "unknown" };
-      if (!payload.ok && payload.code === "PROFILE_NOT_RUNNING") {
-        dlg.close();
-        confirmLaunchForWebRtc(dirId);
+    healthCall("webrtc.diag", function () {
+      var ready = allowLaunch ? Promise.resolve({ running: true }) : api.browser.status(dirId);
+      return ready.then(function (s) {
+        if (!healthRequestCurrent(request)) return null;
+        if (!s || !s.running) return { ok: false, outcome: "unavailable", code: "PROFILE_NOT_RUNNING" };
+        return api.webrtc.diag(dirId, { allowLaunch: !!allowLaunch, requestId: request.requestId });
+      });
+    }, request).then(function (payload) {
+      if (!healthResponseCurrent(request, payload)) return;
+      if (payload && !payload.ok && payload.code === "PROFILE_NOT_RUNNING") {
+        renderWebRtcDiag({ ok: false, outcome: "unavailable", error: t("risk.launch.msg", "This check needs a running browser. Start the profile now?") });
+        confirmLaunchForWebRtc(dirId, request);
         return;
       }
-      if (payload.ok) recordHealthResult(dirId, "webrtc", summarizeWebRtc(payload)); // PL-05
+      recordHealthResult(dirId, "webrtc", summarizeWebRtc(payload), request.requestId);
       renderWebRtcDiag(payload, dirId);
-    }).catch(function(e) {
-      releaseDetectSlot(dirId);
-      renderWebRtcDiag({ ok: false, error: e.message || String(e) }, dirId);
+    }).catch(function (e) {
+      if (!healthRequestCurrent(request)) return;
+      var payload = { ok: false, outcome: "error", error: e.message || String(e) };
+      recordHealthResult(dirId, "webrtc", summarizeWebRtc(payload), request.requestId);
+      renderWebRtcDiag(payload, dirId);
+    }).finally(function () { finishHealthRequest(request); });
+  }
+
+  function confirmLaunchForWebRtc(dirId, request) {
+    agentBrowser.confirm(t("risk.launch.msg", "This check needs a running browser. Start the profile now?"), function () {
+      if (!healthRequestCurrent(request)) return;
+      runWebRtcDiag(dirId, true);
+    }, { title: t("risk.launch.title", "Start profile for check"), detailHtml: '<div style="font-size:12px;">' +
+      esc(t("risk.launch.body", "The profile will be started and left running after the check.")) + '</div>' });
+  }
+  agentBrowser.openWebRtcDiag = function(dirId) { runWebRtcDiag(dirId, false); };
+
+  agentBrowser.webRtcDiagClear = function() { clearHealthHistory("webrtc"); };
+
+  if (typeof document.addEventListener === "function") document.addEventListener("agent-browser-language-change", function () {
+    Object.keys(healthHistoryByProfile).forEach(updateHealthCard);
+    ["env", "webrtc"].forEach(function (kind) {
+      var view = healthDialogs[kind];
+      if (!view.dirId) return;
+      if (view.latestResult) {
+        if (kind === "env") renderEnvRisk(view.latestResult);
+        else renderWebRtcDiag(view.latestResult);
+      }
+      if (view.historyEntries) renderDiagnosticHistory(kind, view.historyEntries);
     });
-  }
-
-  function confirmLaunchForWebRtc(dirId) {
-    agentBrowser.confirm(
-      t("risk.launch.msg", "This check needs a running browser. Start the profile now?"),
-      function () { runWebRtcDiag(dirId, true); },
-      {
-        title: t("risk.launch.title", "Start profile for check"),
-        detailHtml: '<div style="font-size:12px;">' +
-          esc(t("risk.launch.body", "The profile will be started and left running after the check.")) + "</div>",
-      },
-    );
-  }
-
-  agentBrowser.openWebRtcDiag = function(dirId) {
-    window.__webrtcDiagDirId = dirId;
-    api.browser.status(dirId).then(function(s) {
-      // PL-03: never start a browser as a side effect of a diagnostic.
-      if (s && s.running) { runWebRtcDiag(dirId, false); return; }
-      confirmLaunchForWebRtc(dirId);
-    }).catch(function(e) { toast(e.message || String(e), "error"); });
-  };
-
-  // R12 UX P1-1: same confirm gate as env-risk clear.
-  agentBrowser.webRtcDiagClear = function() {
-    var dirId = window.__webrtcDiagDirId;
-    if (!dirId) { return; }
-    agentBrowser.confirm(
-      t("webrtc.diag.clear-confirm", "Clear this profile's WebRTC diagnostic history? This cannot be undone."),
-      function () {
-        api.webrtc.diagClear(dirId).then(function(r) {
-          if (r && r.success) { toast(t("webrtc.diag.cleared", "WebRTC diagnostic history cleared"), "success"); }
-          var histEl = document.getElementById("webrtc-diag-history");
-          if (histEl) histEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-top:8px;">' + esc(t("webrtc.diag.no-history", "No history yet")) + '</div>';
-        }).catch(function(e) { toast(e.message || String(e), "error"); });
-      },
-      { title: t("webrtc.diag.clear-title", "Clear history?") },
-    );
-  };
+  });
 
   agentBrowser.openApp = function(dirId) {
     api.browser.list().then(function(profiles) {

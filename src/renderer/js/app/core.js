@@ -7,10 +7,19 @@
   var profileRefreshTimer = null;
   var profileRuntimeSeq = 0;
 
-  function getSyncStatus(syncedAt, lastModified) {
-    if (!syncedAt) return "never";
-    if (lastModified && lastModified > syncedAt) return "dirty";
-    return "synced";
+  function getSyncStatus(profileOrSyncedAt) {
+    // Only the main-process content comparison can establish a match/change.
+    // Directory mtimes and legacy timestamps (including zero) are not proof.
+    if (profileOrSyncedAt && typeof profileOrSyncedAt === "object") {
+      var p = profileOrSyncedAt;
+      if (p.syncStatus === "unknown") return "unknown";
+      if (p.syncScope === "portable-profile+preferences" &&
+          (p.syncStatus === "synced" || p.syncStatus === "dirty" || p.syncStatus === "never")) return p.syncStatus;
+      if (p.syncStatus && p.syncStatus !== "never") return "unknown";
+      if (p.syncedAt != null || p.syncedHash || p.syncBaseline) return "unknown";
+      return "never";
+    }
+    return profileOrSyncedAt == null ? "never" : "unknown";
   }
 
   function markProfileRuntime(dirId, running, pid) {

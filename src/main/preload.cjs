@@ -29,9 +29,9 @@ const api = {
     trashList: () => ipcRenderer.invoke("profile:trash-list"),
     trashPurge: (dirId) => ipcRenderer.invoke("profile:trash-purge", dirId),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
-    exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
+    exportArchive: (dirId, destPath, options) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath, ...(options && options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) }),
     importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),
-    exportArchives: (dirIds, destDir) => ipcRenderer.invoke("profile:export-archives", { dirIds, destDir }),
+    exportArchives: (dirIds, destDir, options) => ipcRenderer.invoke("profile:export-archives", { dirIds, destDir, ...(options && options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) }),
     importArchives: (zipPaths) => ipcRenderer.invoke("profile:import-archives", { zipPaths }),
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
@@ -168,9 +168,11 @@ const api = {
     status: (dirId) => ipcRenderer.invoke("browser:status", dirId),
     consistencyCheck: (dirId) => ipcRenderer.invoke("browser:consistency-check", dirId),
     consistencyPreview: (params) => ipcRenderer.invoke("browser:consistency-preview", params || {}),
-    captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
+    captureBaseline: (dirId, options) => ipcRenderer.invoke("browser:capture-baseline", options ? { ...options, dirId } : dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
-    envRisk: (dirId) => ipcRenderer.invoke("browser:env-risk", dirId),
+    envRisk: (dirId, options) => ipcRenderer.invoke("browser:env-risk", options ? { ...options, dirId } : dirId),
+    healthHistory: (dirId) => ipcRenderer.invoke("browser:health-history", dirId),
+    healthCancel: (dirId, options) => ipcRenderer.invoke("browser:health-cancel", dirId, options),
     envRiskHistory: (dirId) => ipcRenderer.invoke("browser:env-risk-history", dirId),
     envRiskClear: (dirId) => ipcRenderer.invoke("browser:env-risk-clear", dirId),
     // PL-07: pick a local Chromium build when no managed engine is installed.
@@ -328,17 +330,26 @@ const api = {
     // M3 adds the three below — automation:run-finished (terminal alert),
     // automation:open-run (system-notification click) and
     // automation:schedule-changed (state refresh).
-    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
-    if (validChannels.includes(channel)) {
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "sync:state-changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
+    if (validChannels.includes(channel) && typeof callback === "function") {
+      let channels = listenerMap.get(callback);
+      if (!channels) {
+        channels = new Map();
+        listenerMap.set(callback, channels);
+      }
+      if (channels.has(channel)) return;
       const wrapped = (_event, ...args) => callback(...args);
-      listenerMap.set(callback, wrapped);
       ipcRenderer.on(channel, wrapped);
+      channels.set(channel, wrapped);
     }
   },
   removeListener: (channel, callback) => {
-    const wrapped = listenerMap.get(callback);
-    ipcRenderer.removeListener(channel, wrapped || callback);
-    listenerMap.delete(callback);
+    const channels = listenerMap.get(callback);
+    const wrapped = channels && channels.get(channel);
+    if (!wrapped) return;
+    ipcRenderer.removeListener(channel, wrapped);
+    channels.delete(channel);
+    if (channels.size === 0) listenerMap.delete(callback);
   },
 };
 

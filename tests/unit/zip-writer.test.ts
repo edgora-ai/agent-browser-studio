@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { deflateRawSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import {
   crc32, writeZipArchive, readZipEntries, extractZipEntry, extractZipArchive, validateZipEntryName,
@@ -16,6 +17,31 @@ function tmpDir(): string {
 afterEach(() => {
   for (const d of tempDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
+
+// Independent standard deflate fixture, including the optional data descriptor.
+// Do not use the store-only writer to prove reader format compatibility.
+function deflatedZip(name: string, content: Buffer, descriptor: boolean): Buffer {
+  const nameBytes = Buffer.from(name, "utf8"), compressed = deflateRawSync(content), crc = crc32(content);
+  const flags = 0x0800 | (descriptor ? 8 : 0);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(flags, 6); local.writeUInt16LE(8, 8); local.writeUInt16LE(nameBytes.length, 26);
+  if (!descriptor) { local.writeUInt32LE(crc, 14); local.writeUInt32LE(compressed.length, 18); local.writeUInt32LE(content.length, 22); }
+  const trailer = Buffer.alloc(descriptor ? 16 : 0);
+  if (descriptor) {
+    trailer.writeUInt32LE(0x08074b50, 0); trailer.writeUInt32LE(crc, 4);
+    trailer.writeUInt32LE(compressed.length, 8); trailer.writeUInt32LE(content.length, 12);
+  }
+  const body = Buffer.concat([local, nameBytes, compressed, trailer]);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(0x0314, 4); central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(flags, 8); central.writeUInt16LE(8, 10); central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(content.length, 24); central.writeUInt16LE(nameBytes.length, 28);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length + nameBytes.length, 12); end.writeUInt32LE(body.length, 16);
+  return Buffer.concat([body, central, nameBytes, end]);
+}
 
 describe("zip-writer", () => {
   it("computes the standard CRC32 check value", () => {
@@ -77,8 +103,58 @@ describe("zip-writer", () => {
   it("rejects a crafted archive that tries to escape the destination", async () => {
     const dir = tmpDir();
     const zipPath = path.join(dir, "evil.zip");
-    await writeZipArchive(zipPath, [{ name: "../evil.txt", data: Buffer.from("x") }]);
+    await writeZipArchive(zipPath, [{ name: "ok/evil.txt", data: Buffer.from("x") }]);
+    // Craft a hostile archive independently of the writer's input validation.
+    const zip = fs.readFileSync(zipPath);
+    const safeName = Buffer.from("ok/evil.txt");
+    for (let at = zip.indexOf(safeName); at >= 0; at = zip.indexOf(safeName, at + safeName.length)) {
+      zip.write("../evil.txt", at, "utf8");
+    }
+    fs.writeFileSync(zipPath, zip);
     expect(() => extractZipArchive(zipPath, path.join(dir, "dest"))).toThrow();
+  });
+
+  it.each([false, true])("retains standard UTF-8 deflate compatibility (data descriptor=%s)", (descriptor) => {
+    const dir = tmpDir(), zipPath = path.join(dir, "deflate.zip");
+    const content = Buffer.from("portable UTF-8 data 数据\n".repeat(2000));
+    const zip = deflatedZip("nested/数据.txt", content, descriptor);
+    fs.writeFileSync(zipPath, zip);
+    const entry = readZipEntries(zip)[0];
+    expect(entry.method).toBe(8);
+    expect(extractZipEntry(zip, entry)).toEqual(content);
+    expect(extractZipArchive(zipPath, path.join(dir, "out"))).toEqual({ files: 1, bytes: content.length });
+    expect(fs.readFileSync(path.join(dir, "out", "nested", "数据.txt"))).toEqual(content);
+  });
+
+  it("rejects duplicate paths from independently tampered ZIP headers before creating output", async () => {
+    const dir = tmpDir(), zipPath = path.join(dir, "duplicates.zip");
+    await writeZipArchive(zipPath, [{ name: "left.txt", data: Buffer.from("a") }, { name: "rite.txt", data: Buffer.from("b") }]);
+    const zip = fs.readFileSync(zipPath), previous = Buffer.from("rite.txt");
+    for (let at = zip.indexOf(previous); at >= 0; at = zip.indexOf(previous, at + previous.length)) zip.write("left.txt", at, "utf8");
+    fs.writeFileSync(zipPath, zip);
+    const dest = path.join(dir, "out");
+    expect(() => extractZipArchive(zipPath, dest)).toThrow(/duplicate|conflict/i);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it("validates local/central flags and central bounds instead of accepting inconsistent headers", async () => {
+    const dir = tmpDir(), zipPath = path.join(dir, "headers.zip");
+    await writeZipArchive(zipPath, [{ name: "data", data: Buffer.from("value") }]);
+    const zip = fs.readFileSync(zipPath);
+    const flags = Buffer.from(zip); flags.writeUInt16LE(0x0808, 6);
+    expect(() => readZipEntries(flags)).toThrow(/flags|header/i);
+    const bounds = Buffer.from(zip); bounds.writeUInt32LE(0, bounds.length - 22 + 16);
+    expect(() => readZipEntries(bounds)).toThrow(/bounds|directory/i);
+  });
+
+  it("applies tighter extraction budgets before touching the destination", async () => {
+    const dir = tmpDir(), zipPath = path.join(dir, "budget.zip");
+    await writeZipArchive(zipPath, [{ name: "a", data: Buffer.alloc(8) }, { name: "b", data: Buffer.alloc(8) }]);
+    for (const options of [{ maxEntryBytes: 7 }, { maxTotalBytes: 15 }]) {
+      const dest = path.join(dir, "out");
+      expect(() => extractZipArchive(zipPath, dest, options)).toThrow(/too large|size limit/i);
+      expect(fs.existsSync(dest)).toBe(false);
+    }
   });
 
   it("produces archives that the system unzip can list and verify (CRC ok)", async () => {

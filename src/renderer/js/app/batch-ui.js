@@ -195,7 +195,7 @@
   }
 
   function summaryText(result, kind) {
-    var verb = kind === "stop" ? t("batch.stopped", "stopped") : t("batch.started", "started");
+    var verb = kind === "stop" ? t("batch.stopped", "stop requests accepted; waiting for browser exit") : t("batch.started", "started");
     return t("batch.summary", "{ok} of {total} {verb}").replace("{ok}", result.succeeded).replace("{total}", result.total).replace("{verb}", verb);
   }
 

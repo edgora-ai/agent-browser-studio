@@ -1,5 +1,7 @@
 import { ipcMain, BrowserWindow } from "electron";
 import * as nodePath from "node:path";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   launchBrowser, stopBrowser, statusBrowser, listBrowserProfiles, checkFingerprintDrift,
   getRuntimeChromiumStatusAsync, verifyRuntimeChromiumAsync, getEngineStatusAsync,
@@ -9,42 +11,21 @@ import {
 } from "../services/browser-manager.js";
 import * as fs from "node:fs";
 import { listAudit } from "../services/audit-log.js";
-import { getConfig, saveConfig, setProfileMeta, resolveProfileProxy, getProxyDetection, getEnvRiskDiagnostics, setEnvRiskDiagnostics, clearEnvRiskDiagnostics } from "../services/config-manager.js";
-import { checkProfileConsistency } from "../services/consistency-check.js";
-import { captureFingerprint, diffFingerprints, hasRiskyDrift, checkPersonaConsistency, mismatchesAsDrift } from "../services/fingerprint-baseline.js";
-import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, summarizeEnvFindings, type EnvironmentRiskResult } from "../services/environment-risk.js";
-import type { EnvRiskDiagnosticsEntry } from "../types.js";
-
-/** Append one persisted env-risk snapshot (R9 P1-4). Findings capped so a pathological host cannot bloat config.json. */
-function persistEnvRiskSnapshot(dirId: string, result: EnvironmentRiskResult): void {
-  try {
-    const findings = Array.isArray(result?.findings) ? result.findings : [];
-    const entry: EnvRiskDiagnosticsEntry = {
-      at: Date.now(),
-      ok: result?.ok === true,
-      high: findings.filter((f) => f?.severity === "high").length,
-      medium: findings.filter((f) => f?.severity === "medium").length,
-      summary: summarizeEnvFindings(findings) || (result?.ok ? "no findings" : "check completed"),
-      findings: findings.slice(0, 20).map((f) => ({
-        severity: String(f?.severity || "info").slice(0, 16),
-        code: String(f?.code || "").slice(0, 80),
-        message: String(f?.message || "").slice(0, 500),
-        fix: String(f?.fix || "").slice(0, 500),
-      })),
-      resolvers: Array.isArray(result?.resolvers) ? result.resolvers.slice(0, 10).map((r: any) => String(r?.address || r || "").slice(0, 64)) : [],
-      cnFonts: Array.isArray(result?.cnFonts) ? result.cnFonts.slice(0, 20).map((f: any) => String(f || "").slice(0, 120)) : [],
-    };
-    const history = getEnvRiskDiagnostics(dirId);
-    setEnvRiskDiagnostics(dirId, [...history, entry]);
-  } catch {
-    /* persistence must never break the check itself */
-  }
-}
+import { getConfig, saveConfig, setProfileMeta, assertProfileWritable, resolveProfileProxy, getProxyDetection, getEnvRiskDiagnostics } from "../services/config-manager.js";
+import { checkProfileConsistency, type ConsistencyResult } from "../services/consistency-check.js";
+import { captureFingerprint, diffFingerprints, hasRiskyDrift, checkPersonaConsistency, mismatchesAsDrift, sanitizePortableFingerprintBaseline } from "../services/fingerprint-baseline.js";
+import {
+  beginProfileHealthRun, cancelProfileHealthRun, clearProfileHealthHistory, listProfileHealthHistory,
+  profileHealthFailure, recordProfileHealthResult, runProfileEnvironmentRisk,
+  type ProfileHealthOptions, type ProfileHealthRun,
+} from "../services/profile-health.js";
+import type { ProfileHealthKind, ProfileHealthOutcome } from "../types.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
 import { sanitizeBrowserEngine } from "../services/browser-engine.js";
+import { getProfileEngineByDirId } from "../services/page-eval.js";
 import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect, assertSafeNavigationUrl } from "../services/local-agent.js";
 import {
   runBatch,
@@ -54,24 +35,44 @@ import {
 } from "../services/batch-queue.js";
 import { newTraceId, logInfo } from "../services/observability.js";
 import { checkCreateAllowed, checkLaunchAllowed } from "../services/license.js";
-import type { BrowserEngine, BrowserPlatform, FingerprintMode, GeolocationMode, ProxyMode, RenderScaleMode, WebRtcMode } from "../types.js";
+import { requireProfileMutation } from "../services/team.js";
+import type { BrowserEngine, BrowserPlatform, BrowserProfileMeta, FingerprintMode, GeolocationMode, ProxyMode, RenderScaleMode, WebRtcMode } from "../types.js";
 
 type BrowserIpcHandler = Parameters<typeof ipcMain.handle>[1];
 
+export function ipcHealthOwner(event: Electron.IpcMainInvokeEvent): string {
+  if (!event?.sender || !Number.isSafeInteger(event.sender.id) || event.sender.isDestroyed()) {
+    throw new Error("Diagnostic owner is unavailable");
+  }
+  return `ipc:${event.sender.id}`;
+}
+
+/** Renderer teardown aborts work, but the service retains its lease until finally. */
+export async function withIpcHealthOwner<T>(event: Electron.IpcMainInvokeEvent, task: (options: ProfileHealthOptions) => Promise<T>): Promise<T> {
+  const owner = ipcHealthOwner(event);
+  const controller = new AbortController();
+  const destroyed = () => controller.abort();
+  event.sender.once("destroyed", destroyed);
+  try { return await task({ owner, signal: controller.signal }); }
+  finally { event.sender.removeListener("destroyed", destroyed); }
+}
+
 /**
- * Sale-90/92 license gate shared by four browser IPC routes:
- * browser:launch, browser:batch-launch, browser:open-risk-check and
- * browser:open-app. Refusals throw with a machine `code` (LICENSE_EXPIRED /
+ * Sale-90/92 license gate and existing team policy shared by browser:launch,
+ * browser:batch-launch, browser:open-risk-check, browser:open-app and the
+ * WebRTC diagnostic's explicit auto-launch. Refusals throw with a machine `code` (LICENSE_EXPIRED /
  * PROFILE_LIMIT) so these handlers surface the paywall through the same
  * `{ success: false, code }` shape. The launch gate checks validity/expiry,
  * not creation quota; all four IPC launch paths must keep using this helper.
  * Stopping, exporting and deleting are never gated. Other service callers
  * of launchBrowser are outside this IPC gate (pre-existing boundary).
  */
-async function gatedLaunch(
+export async function gatedLaunch(
   dirId: string,
   opts?: { forceDeadProxy?: boolean },
 ): Promise<Awaited<ReturnType<typeof launchBrowser>>> {
+  const role = requireProfileMutation();
+  if (!role.ok) throw Object.assign(new Error(role.error), { code: "TEAM_ROLE_DENIED" });
   const gate = checkLaunchAllowed();
   if (!gate.allowed) {
     const err = new Error(gate.error) as Error & { code?: string };
@@ -283,22 +284,12 @@ export function registerBrowserHandlers(): void {
   // Host environment risk check (DNS resolvers / CN fonts / proxy DNS / RAF).
   // R9 P1-4: every run is persisted (mirrors webrtc:diag-history) so the
   // report survives dialog close and supports detail replay + export.
-  handleBrowser("env-risk", async (_event, dirId: string) => {
+  handleBrowser("env-risk", async (event, params: string | { dirId: string; requestId?: string }) => {
+    const dirId = typeof params === "string" ? params : params?.dirId;
+    const requestId = typeof params === "string" ? undefined : params?.requestId;
     try {
-      validateDirId(dirId);
-      const cfg = getConfig() as any;
-      const meta = cfg.browserProfiles?.[dirId];
-      if (!meta) return { ok: false, error: "Profile not found" };
-      const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
-      const st = statusBrowser(dirId);
-      const result = st.running && st.cdpPort
-        ? await checkEnvironmentRiskRuntime(profile, st.cdpPort)
-        : checkEnvironmentRisk(profile);
-      persistEnvRiskSnapshot(dirId, result);
-      return { ok: true, result };
-    } catch (e: any) {
-      return { ok: false, error: e.message || String(e) };
-    }
+      return await withIpcHealthOwner(event, (options) => runProfileEnvironmentRisk(dirId, { ...options, requestId }));
+    } catch (error) { return profileHealthFailure(error, requestId); }
   });
 
   handleBrowser("env-risk-history", async (_event, dirId: string) => {
@@ -313,16 +304,38 @@ export function registerBrowserHandlers(): void {
   handleBrowser("env-risk-clear", async (_event, dirId: string) => {
     try {
       validateDirId(dirId);
-      clearEnvRiskDiagnostics(dirId);
+      clearProfileHealthHistory(dirId, "env");
       return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e.message || String(e) };
     }
   });
 
-  // Read-only fingerprint drift check against the stored baseline (no state change).
-  handleBrowser("check-drift", async (_event, dirId: string) => {
-    return checkFingerprintDrift(dirId);
+  handleBrowser("health-history", async (_event, dirId: string) => {
+    try { return { entries: listProfileHealthHistory(dirId) }; }
+    catch (error: any) { return { entries: [], error: error?.message || String(error) }; }
+  });
+  handleBrowser("health-cancel", async (event, dirId: string, options: { kind: ProfileHealthKind; requestId: string }) => {
+    try { return cancelProfileHealthRun(dirId, { kind: options?.kind, requestId: options?.requestId, owner: ipcHealthOwner(event) }); }
+    catch (error: any) { return { success: false, cancelled: false, code: "HEALTH_INVALID_REQUEST", error: error?.message || String(error) }; }
+  });
+
+  // A missing baseline is unavailable, not a passed live drift comparison.
+  handleBrowser("check-drift", async (event, dirId: string) => {
+    let run: ProfileHealthRun | undefined;
+    try {
+      return await withIpcHealthOwner(event, async (options) => {
+        run = beginProfileHealthRun(dirId, "drift", options);
+        const result = await checkFingerprintDrift(dirId);
+        run.assertCurrent();
+        const outcome: ProfileHealthOutcome = result.hasBaseline === false || result.error === "profile not running" ? "unavailable" : !result.ok ? "error"
+          : result.checked !== true ? "inconclusive" : result.risky ? "risk" : result.drift?.length ? "warn" : "pass";
+        recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), outcome, requestId: run.requestId,
+          source: result.checked ? "runtime" : "baseline", summary: result.error || (outcome === "unavailable" ? "No fingerprint baseline" : `Fingerprint drift: ${outcome}`) });
+        return { ...result, outcome, requestId: run.requestId };
+      });
+    } catch (error) { return profileHealthFailure(error, run?.requestId); }
+    finally { run?.finish(); }
   });
 
   // Team checkout lock: lock/unlock a profile to the current device so a
@@ -354,7 +367,8 @@ export function registerBrowserHandlers(): void {
   // ── Batch operations (review items PL-01 / PL-02) ──
   // Concurrency is bounded here as well as in the renderer, so automation
   // clients that bypass the UI cannot fan out unbounded Chromium launches.
-  const activeBatchJobs = new Map<string, { cancelled: boolean }>();
+  type ActiveBatchJob = { signal: { cancelled: boolean }; sender: Electron.WebContents; destroyed: () => void };
+  const activeBatchJobs = new Map<string, ActiveBatchJob>();
 
   function profileName(dirId: string): string {
     try {
@@ -376,75 +390,62 @@ export function registerBrowserHandlers(): void {
     }
   }
 
-  handleBrowser("batch-launch", async (event, params: { dirIds: string[]; concurrency?: number; jobId?: string }) => {
-    const dirIds = Array.isArray(params?.dirIds) ? params.dirIds.filter(Boolean) : [];
-    const jobId = params?.jobId || newTraceId();
+  type BatchParams = { dirIds: string[]; concurrency?: number; jobId?: string };
+  async function runBrowserBatch(kind: "launch" | "stop", event: Electron.IpcMainInvokeEvent, params: BatchParams) {
+    let jobId: string;
+    let dirIds: string[];
+    try {
+      if (!Array.isArray(params?.dirIds)) throw new Error("dirIds must be an array");
+      dirIds = [...params.dirIds];
+      for (const id of dirIds) validateDirId(id);
+      if (params.jobId !== undefined && (typeof params.jobId !== "string" || !/^[a-zA-Z0-9_.:-]{1,128}$/.test(params.jobId))) {
+        throw new Error("Invalid batch jobId");
+      }
+      jobId = params.jobId || newTraceId();
+    } catch (error: any) {
+      return { success: false, code: "BATCH_INVALID_ARGUMENT", error: error?.message || String(error) };
+    }
+    // Reserve once across both operations. An older finally can never delete
+    // another request's job, and guessing a renderer's ID grants no ownership.
+    if (activeBatchJobs.has(jobId)) return { success: false, code: "BATCH_JOB_CONFLICT", error: "Batch jobId is already active" };
     if (!dirIds.length) {
       return { total: 0, succeeded: 0, failed: 0, cancelled: false, durationMs: 0, concurrency: 0, traceId: jobId, jobId, results: [] } as BatchResult<string> & { jobId: string };
     }
-    for (const id of dirIds) validateDirId(id);
-    const concurrency = normalizeConcurrency(params?.concurrency);
+    const sender = event?.sender;
+    if (!sender || sender.isDestroyed()) return { success: false, code: "BATCH_OWNER_UNAVAILABLE", error: "Batch owner is unavailable" };
     const signal = { cancelled: false };
-    activeBatchJobs.set(jobId, signal);
-    logInfo("batch.launch.start", { jobId, traceId: jobId, total: dirIds.length, concurrency });
+    const job: ActiveBatchJob = { signal, sender, destroyed: () => { signal.cancelled = true; } };
+    activeBatchJobs.set(jobId, job);
     try {
+      sender.once("destroyed", job.destroyed);
+      const concurrency = normalizeConcurrency(params.concurrency);
+      logInfo(`batch.${kind}.start`, { jobId, traceId: jobId, total: dirIds.length, concurrency });
       const result = await runBatch<string>({
-        items: dirIds,
-        label: "launch",
-        concurrency,
-        signal,
-        traceId: jobId,
-        onProgress: (done, total) => emitProgress(event, { jobId, kind: "launch", done, total }),
+        items: dirIds, label: kind, concurrency, signal, traceId: jobId,
+        onProgress: (done, total) => emitProgress(event, { jobId, kind, done, total }),
         worker: async (dirId) => {
-          // Gated too: an expired trial fails every item with the paywall
-          // code instead of burning launch attempts. The thrown code lands
-          // in BatchItemResult.error via runBatch, and the UI opens the
-          // paywall dialog from the batch result.
-          const r = await gatedLaunch(dirId);
-          return { dirId, name: profileName(dirId), pid: r.pid, cdpPort: r.cdpPort };
-        },
-      });
-      return { ...result, jobId };
-    } finally {
-      activeBatchJobs.delete(jobId);
-    }
-  });
-
-  handleBrowser("batch-stop", async (event, params: { dirIds: string[]; concurrency?: number; jobId?: string }) => {
-    const dirIds = Array.isArray(params?.dirIds) ? params.dirIds.filter(Boolean) : [];
-    const jobId = params?.jobId || newTraceId();
-    if (!dirIds.length) {
-      return { total: 0, succeeded: 0, failed: 0, cancelled: false, durationMs: 0, concurrency: 0, traceId: jobId, jobId, results: [] } as BatchResult<string> & { jobId: string };
-    }
-    for (const id of dirIds) validateDirId(id);
-    const concurrency = normalizeConcurrency(params?.concurrency);
-    const signal = { cancelled: false };
-    activeBatchJobs.set(jobId, signal);
-    logInfo("batch.stop.start", { jobId, traceId: jobId, total: dirIds.length, concurrency });
-    try {
-      const result = await runBatch<string>({
-        items: dirIds,
-        label: "stop",
-        concurrency,
-        signal,
-        traceId: jobId,
-        onProgress: (done, total) => emitProgress(event, { jobId, kind: "stop", done, total }),
-        worker: async (dirId) => {
-          const ok = stopBrowser(dirId);
-          if (!ok) throw new Error("Stop failed");
+          if (kind === "launch") {
+            // Keep the same license/team/startup gates on every launch entry.
+            const r = await gatedLaunch(dirId);
+            return { dirId, name: profileName(dirId), pid: r.pid, cdpPort: r.cdpPort };
+          }
+          if (!stopBrowser(dirId)) throw new Error("Stop failed");
           return { dirId, name: profileName(dirId) };
         },
       });
       return { ...result, jobId };
     } finally {
-      activeBatchJobs.delete(jobId);
+      sender.removeListener("destroyed", job.destroyed);
+      if (activeBatchJobs.get(jobId) === job) activeBatchJobs.delete(jobId);
     }
-  });
+  }
+  handleBrowser("batch-launch", (event, params: BatchParams) => runBrowserBatch("launch", event, params));
+  handleBrowser("batch-stop", (event, params: BatchParams) => runBrowserBatch("stop", event, params));
 
-  handleBrowser("batch-cancel", async (_event, jobId: string) => {
-    const job = activeBatchJobs.get(String(jobId || ""));
-    if (!job) return { success: false, error: "Unknown or finished batch job" };
-    job.cancelled = true;
+  handleBrowser("batch-cancel", async (event, jobId: string) => {
+    const job = typeof jobId === "string" ? activeBatchJobs.get(jobId) : undefined;
+    if (!job || job.sender !== event?.sender) return { success: false, error: "Unknown or finished batch job" };
+    job.signal.cancelled = true;
     logInfo("batch.cancel", { jobId });
     return { success: true };
   });
@@ -475,63 +476,163 @@ export function registerBrowserHandlers(): void {
     }
   });
 
-  // Pre-launch consistency check (timezone / locale / WebRTC vs proxy) for the UI badge.
-  handleBrowser("consistency-check", async (_event, dirId: string) => {
-    validateDirId(dirId);
-    const cfg = getConfig() as any;
-    const meta = cfg.browserProfiles?.[dirId];
-    if (!meta) return { ok: false, warnings: [], blockers: [{ severity: "blocker", code: "no-profile", message: "Profile not found" }] };
-    if (meta.fingerprintMode === "off") return { ok: true, warnings: [], blockers: [] };
-    const resolved = resolveProfileProxy(dirId);
-    const proxyGeo = resolved.name ? getProxyDetection(resolved.name) : null;
-    return checkProfileConsistency({
-      timezone: meta.timezone, locale: meta.locale, webrtcIp: meta.webrtcIp, platform: meta.platform,
-      proxyMode: resolved.mode,
-      proxyGeo,
-    }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
+  // This is stored-field/cached-proxy alignment, not a fresh exit observation.
+  // Preserve the existing findings API, but persist its honest provenance in
+  // the same canonical history queried by every health UI entry point.
+  handleBrowser("consistency-check", async (event, dirId: string) => {
+    let run: ProfileHealthRun | undefined;
+    let result: ConsistencyResult = { ok: false, warnings: [], blockers: [] };
+    try {
+      validateDirId(dirId);
+      return await withIpcHealthOwner(event, async (options) => {
+        const cfg = getConfig();
+        const meta = Object.hasOwn(cfg.browserProfiles, dirId) ? cfg.browserProfiles[dirId] : undefined;
+        if (!meta) return { ok: false, outcome: "unavailable", source: "cached", warnings: [], blockers: [{ severity: "blocker", code: "no-profile", message: "Profile not found" }] };
+        // Diagnostic reads retain their original viewer permission. The lease
+        // still prevents publishing under another request's cancellation owner.
+        run = beginProfileHealthRun(dirId, "consistency", options);
+        if (meta.fingerprintMode === "off") result = { ok: true, warnings: [], blockers: [] };
+        else {
+          const resolved = resolveProfileProxy(dirId);
+          result = checkProfileConsistency({
+            timezone: meta.timezone, locale: meta.locale, webrtcIp: meta.webrtcIp, platform: meta.platform,
+            proxyMode: resolved.mode, proxyGeo: resolved.name ? getProxyDetection(resolved.name) : null,
+          }, { blockOnProxyRisk: cfg.blockOnProxyRisk === true });
+        }
+        const outcome: ProfileHealthOutcome = result.blockers.length ? "risk" : result.warnings.length ? "warn" : "inconclusive";
+        const summary = ["Cached consistency check; not a live measurement", ...result.blockers.map(finding => finding.message), ...result.warnings.map(finding => finding.message)].join("; ").slice(0, 2048);
+        run.assertCurrent();
+        recordProfileHealthResult(dirId, { kind: "consistency", at: Date.now(), outcome, source: "cached", requestId: run.requestId, summary });
+        return { ...result, outcome, source: "cached", requestId: run.requestId };
+      });
+    } catch (error) { return { ...result, ...profileHealthFailure(error, run?.requestId), source: "cached" }; }
+    finally { run?.finish(); }
   });
 
-  // Capture (or re-capture) the live fingerprint baseline; diff vs the prior one.
-  handleBrowser("capture-baseline", async (_event, dirId: string) => {
-    validateDirId(dirId);
-    const st = statusBrowser(dirId);
-    if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
+  // Risk acceptance is a short-lived, one-use capability, never a stored flag.
+  // Bind it to the reviewed old/new identities and the invoking window. Ignore
+  // presentation-only edits so a concurrent note is preserved by setProfileMeta.
+  type BaselineConfirmation = {
+    dirId: string; sender: Electron.WebContents; before: unknown; current: unknown;
+    identity: unknown; pid: number | null; port: number; expiresAt: number; destroyed: () => void; timer?: ReturnType<typeof setTimeout>;
+  };
+  const baselineConfirmations = new Map<string, BaselineConfirmation>();
+  function releaseBaselineConfirmation(token: string): void {
+    const pending = baselineConfirmations.get(token);
+    if (!pending) return;
+    pending.sender.removeListener("destroyed", pending.destroyed);
+    if (pending.timer) clearTimeout(pending.timer);
+    baselineConfirmations.delete(token);
+  }
+  function baselineIdentity(meta: BrowserProfileMeta): Record<string, unknown> {
+    const { name, note, tags, updatedAt, syncedAt, syncedHash, syncBaseline, lock, fingerprintBaseline, ...identity } = meta;
+    return identity;
+  }
+  const staleBaseline = () => ({ ok: false, code: "BASELINE_CONFIRMATION_STALE", outcome: "inconclusive", error: "The reviewed fingerprint or profile changed. Capture and review it again." });
+
+  handleBrowser("capture-baseline", async (event, params: string | { dirId: string; confirmationToken?: string }) => {
+    let run: ProfileHealthRun | undefined;
     try {
-      const cfg = getConfig() as any;
-      const engine = sanitizeBrowserEngine(cfg.browserProfiles?.[dirId]?.engine);
-      const current = await captureFingerprint(st.cdpPort, engine);
-      const meta = cfg.browserProfiles?.[dirId] || {};
-      const drift = diffFingerprints(meta.fingerprintBaseline, current);
-      const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
-        { platform: meta.platform || "windows", timezone: meta.timezone },
-        current,
-      ));
-      const combined = [...drift, ...personaDrift];
-      const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-      cfg.browserProfiles[dirId] = { ...meta, fingerprintBaseline: current };
-      saveConfig(cfg);
-      if (combined.length) {
-        recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId,
-          detail: `${combined.length} field(s) changed${risky ? " (risky)" : ""}: ${combined.map((d) => d.field).slice(0, 8).join(", ")}` });
-      } else {
-        recordAudit({ category: "profile", action: "fingerprint-baseline", target: dirId, detail: "baseline captured (stable)" });
-      }
-      return { ok: true, fields: Object.keys(current).length, drift: combined, risky, baseline: current };
-    } catch (e: any) {
-      return { ok: false, error: e.message || String(e) };
-    }
+      return await withIpcHealthOwner(event, async (options) => {
+        const dirId = typeof params === "string" ? params : params?.dirId;
+        validateDirId(dirId);
+        const role = requireProfileMutation();
+        if (!role.ok) return { ok: false, code: "TEAM_ROLE_DENIED", outcome: "error", error: role.error };
+        assertProfileWritable(dirId);
+        const meta = structuredClone(getConfig().browserProfiles?.[dirId]);
+        if (!meta) return { ok: false, outcome: "unavailable", error: "Profile not found" };
+        const st = statusBrowser(dirId);
+        if (!st.running || !st.cdpPort) return { ok: false, outcome: "unavailable", error: "profile not running" };
+        const sender = event.sender;
+        if (!sender || sender.isDestroyed()) return { ok: false, outcome: "cancelled", error: "Capture owner is unavailable" };
+        for (const [token, pending] of baselineConfirmations) {
+          if (pending.expiresAt <= Date.now()) releaseBaselineConfirmation(token);
+        }
+        const token = typeof params === "string" ? undefined : params.confirmationToken;
+        let confirmation: BaselineConfirmation | undefined;
+        if (token !== undefined) {
+          confirmation = typeof token === "string" ? baselineConfirmations.get(token) : undefined;
+          if (!confirmation || confirmation.dirId !== dirId || confirmation.sender !== sender) return staleBaseline();
+          releaseBaselineConfirmation(token!);
+          if (confirmation.expiresAt <= Date.now() || !isDeepStrictEqual(confirmation.before, meta.fingerprintBaseline) ||
+              !isDeepStrictEqual(confirmation.identity, baselineIdentity(meta)) || confirmation.pid !== st.pid || confirmation.port !== st.cdpPort) return staleBaseline();
+        }
+        const identity = baselineIdentity(meta);
+        run = beginProfileHealthRun(dirId, "drift", options);
+        const captured = await captureFingerprint(st.cdpPort, getProfileEngineByDirId(dirId));
+        const current = sanitizePortableFingerprintBaseline(captured);
+        // Async CDP must not grant permission to overwrite a lock or a baseline
+        // that arrived while it was running. Re-read immediately before commit.
+        assertProfileWritable(dirId);
+        run.assertCurrent();
+        if (!current) return { ok: false, outcome: "inconclusive", code: "BASELINE_EMPTY_SNAPSHOT", error: "The probe returned no fingerprint fields; the old baseline was preserved." };
+        const latest = getConfig().browserProfiles?.[dirId];
+        const live = statusBrowser(dirId);
+        if (sender.isDestroyed() || !latest || !live.running || live.pid !== st.pid || live.cdpPort !== st.cdpPort ||
+            !isDeepStrictEqual(meta.fingerprintBaseline, latest.fingerprintBaseline) ||
+            !isDeepStrictEqual(identity, baselineIdentity(latest))) return staleBaseline();
+        if (confirmation && (confirmation.expiresAt <= Date.now() || !isDeepStrictEqual(confirmation.current, current))) return staleBaseline();
+        const prior = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
+        const drift = diffFingerprints(prior, current);
+        const personaDrift = mismatchesAsDrift(checkPersonaConsistency({ platform: meta.platform || "windows", timezone: meta.timezone }, current));
+        const combined = [...drift, ...personaDrift];
+        const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
+        if (risky && !confirmation) {
+          // One pending review per window/profile; global bound prevents renderer
+          // spam from retaining unbounded full snapshots or destroyed listeners.
+          for (const [pendingToken, pending] of baselineConfirmations) {
+            if (pending.sender === sender && pending.dirId === dirId) releaseBaselineConfirmation(pendingToken);
+          }
+          while (baselineConfirmations.size >= 32) releaseBaselineConfirmation(baselineConfirmations.keys().next().value!);
+          const confirmationToken = randomUUID();
+          const pending: BaselineConfirmation = { dirId, sender, before: meta.fingerprintBaseline, current, identity,
+            pid: st.pid, port: st.cdpPort, expiresAt: Date.now() + 5 * 60 * 1000,
+            destroyed: () => releaseBaselineConfirmation(confirmationToken) };
+          baselineConfirmations.set(confirmationToken, pending);
+          sender.once("destroyed", pending.destroyed);
+          pending.timer = setTimeout(pending.destroyed, 5 * 60 * 1000);
+          pending.timer.unref?.();
+          return { ok: false, code: "BASELINE_CONFIRMATION_REQUIRED", outcome: "risk", confirmationToken, fields: Object.keys(current).length, drift: combined, risky, baseline: current };
+        }
+        run.assertCurrent();
+        setProfileMeta(dirId, { fingerprintBaseline: current });
+        const outcome = risky ? "risk" as const : "baseline-established" as const;
+        let historyWarning: string | undefined;
+        try {
+          recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), outcome, requestId: run.requestId, source: "baseline",
+            summary: risky ? "Risky fingerprint baseline explicitly accepted" : "Fingerprint baseline established; not a health pass" });
+        } catch (error: any) {
+          // The baseline transaction already committed. Do not report a rollback
+          // merely because the separate historical summary could not be saved.
+          historyWarning = `Baseline saved, but health history could not be saved: ${error?.message || String(error)}`;
+        }
+        if (combined.length) {
+          recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId,
+            detail: `${combined.length} field(s) changed${risky ? " (risky, explicitly accepted)" : ""}: ${combined.map((d) => d.field).slice(0, 8).join(", ")}` });
+        } else {
+          recordAudit({ category: "profile", action: "fingerprint-baseline", target: dirId, detail: "baseline established; not a health pass" });
+        }
+        return { ok: true, outcome, baselineCommitted: true, requestId: run.requestId, fields: Object.keys(current).length, drift: combined, risky, baseline: current,
+          ...(historyWarning ? { code: "HEALTH_HISTORY_WRITE_FAILED", warning: historyWarning } : {}) };
+      });
+    } catch (error) { return profileHealthFailure(error, run?.requestId); }
+    finally { run?.finish(); }
   });
 
   // Set fingerprint seed for a profile
   handleBrowser("set-seed", async (_event, params: {
     dirId: string; seed: number;
   }) => {
-    validateDirId(params.dirId);
-    const cfg = getConfig();
-    if (!Object.hasOwn(cfg.browserProfiles || {}, params.dirId)) return { success: false };
-    cfg.browserProfiles[params.dirId]!.fingerprintSeed = params.seed;
-    saveConfig(cfg);
-    return { success: true };
+    try {
+      validateDirId(params?.dirId);
+      if (!Object.hasOwn(getConfig().browserProfiles || {}, params.dirId)) return { success: false };
+      if (typeof params.seed !== "number") throw new Error("Fingerprint seed must be a number");
+      // Keep the checkout lock, validation and other concurrent metadata intact.
+      setProfileMeta(params.dirId, { fingerprintSeed: params.seed });
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || String(error) };
+    }
   });
 
   // Set managed Chromium fingerprint metadata (name, timezone, locale, WebRTC IP, platform, seed, note)

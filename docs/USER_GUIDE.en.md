@@ -67,9 +67,11 @@ Upgrading from CloakLite? The first launch copies old data and engine builds non
 
 ### Everyday operations
 
-- **▶ Launch / ⏹ Stop** start and stop the profile's browser. Launch runs safety checks first (see *Launch safety gates*).
+- **▶ Launch / ⏹ Stop** start and stop the profile's browser. Launch runs safety checks first (see *Launch safety gates*). A successful stop response means the request was accepted, not that the browser has already exited or that every write is durable. Wait for the actual stopped status before relaunching, importing, or backing up. Known Chromium instances are asked to close normally first; if that fails, bounded signal escalation remains a recovery path, not a persistence guarantee.
 - Per-profile tools: ✎ Edit, 🍪 Cookies, 🧩 Extensions, 📦 Export backup, ✏️ Rename, 📝 Note, 🔒 Lock to device, 📋 Logs, 🧬 Drift check, 🖥 Env check, 📡 WebRTC diagnostic, 🎬 DRM, 🖥 App mode.
 - **Filters & batch console**: filter by status (running/stopped) and tags, select all visible, then batch-launch, batch-stop, batch-assign a proxy, batch-export, or batch-delete. Bulk deletes above 10 items require an acknowledgement tick.
+
+> **Known data-integrity issue under investigation (2026-10-18):** In isolated acceptance with Chromium 152.0.7977.72, a newly written LocalStorage value was sometimes missing or stale after immediate Stop and relaunch, despite an observed exit code of 0 with no exit signal and a `Browser.close` acknowledgement. An experimental close-pages-before-exit sequence also reproduced the loss and was withdrawn; it is not a verified fix. Waiting for Stopped is necessary, but is not a persistence guarantee. Keep an independently verified copy of important data; a green test suite, a Synced badge or a successful export request does not prove that the latest browser write was saved. Do not overwrite the only known-good backup while this remains unresolved. See the [functional audit](review/ipc-api-health-functional-audit-2026-10-18.md) for the exact tested scope and failures.
 
 ### Trash (accident protection)
 
@@ -96,9 +98,12 @@ These are configuration and launch rules, not proof of Ping0 live-site or packag
 
 ### Fingerprint trust loop
 
-- **🧬 Drift** compares the live fingerprint against the stored baseline; risky drift can block launch (toggle in Browser Engine → Launch safety gates).
-- **🖥 Env** checks host-level leaks: DNS resolvers, Chinese system fonts (measured inside the profile, not guessed), proxy DNS behavior, and rAF timing, each with a suggested fix.
-- **📡 WebRTC** runs a real ICE probe inside the profile and shows whether host IPs leak.
+- **🧬 Drift** compares the live fingerprint against the stored baseline without changing it; risky drift can block launch when enabled in Browser Engine → Launch safety gates.
+- **Lock baseline** is a separate write. Establishing a baseline is not a health pass. A risky capture preserves the old baseline until you explicitly confirm the reviewed snapshot; a changed or expired confirmation requires a new review.
+- **🖥 Env** reports host DNS configuration, font inventory and, when the browser is running, measured font exposure and rAF timing. Failed or incomplete probes remain unverified. A local DNS stub/router does not establish upstream country, and a saved or launch-time proxy configuration is not proof of a completed browser DNS transaction. A running process without launch evidence stays unknown until restarted normally.
+- **📡 WebRTC** checks the current page's ICE candidates for exposed addresses, including related addresses. It does not establish a remote peer or certify a connection's latency; absent RTT is not a healthy latency measurement. Constructor/offer errors, unavailable WebRTC and empty/incomplete evidence are not passes. Starting a stopped profile requires confirmation and the normal launch permissions.
+- **Consistency** compares saved fields and cached proxy information, not a fresh exit measurement. No cached conflict means unverified, not a live health pass. **External risk check** opens an external detector after consent; opening its page does not import a score or prove health.
+- **History and cards** use the main process's saved outcome: pass, warning, risk, error, unavailable, unverified, cancelled or baseline established. Legacy records without completion evidence are not upgraded to pass. Clearing history removes both details and summaries; cancelled or cleared in-flight results cannot restore them. Cancellation is a request: the slot remains occupied until the underlying probe actually settles, and cancelling does not stop the browser.
 - **📋 Logs** shows the profile's recent audit activity plus the browser launch log tail.
 
 ## 4. Proxies
@@ -146,24 +151,35 @@ Rules combine triggers (cron, one-shot, profile launch/exit events) with actions
 
 1. **Configuration**: endpoint, bucket, access key, secret key (encrypted at rest).
 2. **Pre-flight preview** shows what a push/pull will touch; **Team Diff** compares local vs remote and warns before a push would *remove* remote data.
-3. **Team Workspace (RBAC)**: owner / admin / member / viewer roles propagate with sync. Viewers are read-only; admins manage members; the manifest is enforced on push.
-4. **Checkout locks** (see Profiles) prevent two devices from overwriting each other.
+3. **Team Workspace (RBAC)**: owner / admin / member / viewer roles propagate with sync. Viewers cannot push, pull, or change sync settings; force push requires admin or owner.
+4. **Checkout locks** (see Profiles) block cooperative clients from overwriting another device's checkout. They are not a cross-device atomic transaction or compare-and-swap guarantee.
 
-Treat the S3 bucket as sensitive storage: secrets are stripped from sync payloads, but cookies and profile state are real account data.
+**Understand the result before retrying:**
+- A profile's **Synced** badge proves only its portable configuration and `Preferences` match the published baseline for the selected endpoint/bucket. It does not prove Cookie, SQLite/WAL, LevelDB, or every profile file is unchanged. **Local changes** means saved locally but not in that baseline; **Unknown** includes legacy/unverifiable markers and changed targets. Reading a list does not upgrade old markers.
+- Compare checks configuration and covered Preferences, and lists unverified/uncompared data. If local or remote content changes after comparison, compare again before applying saved decisions. Only one push/pull runs in this application process; a busy response is not a queued request.
+- Cookie export distinguishes available-empty from unavailable. An unavailable source may preserve an older cloud copy with a warning. Pull merges Cookie imports: an empty snapshot does not clear existing Cookies, and **queued** means not yet imported by a browser. Running profiles skip on-disk Preferences and LocalStorage restore; Push does not capture their live LocalStorage database and may preserve a previous remote copy with a warning.
+- Stopped-profile LocalStorage sync supports Chromium's `Default/LocalStorage` with its optional `LocalStorage-wal`, or the legacy `Default/Local Storage/leveldb` layout. SQLite main/WAL files are captured as a group; SHM is not transferred. The SQLite group has a 64 MiB limit plus page, frame, schema and validation-time limits. Unsupported schemas, damaged groups, nonempty rollback journals, mixed layouts and cross-format replacement are rejected without treating the data as absent. This is not a SQLite format/browser-version migration tool, a SessionStorage sync feature, or a full Firefox DOM-storage backup. SQLite restore fails closed when required directory durability is unsupported, including the explicitly unsupported Windows directory-fsync path.
+- **Partial**, **commit unknown**, and **recovery required** are not rollbacks. Inspect item results and the last operation status; do not repeatedly retry or delete retained recovery copies. Successful LocalStorage replacement also retains the old database for separate runtime verification; it is not automatically deleted. Automation retries only a failed attempt with positive proof of no local or remote commit.
+- New snapshots publish content-addressed extension packages before the main manifest. New clients read legacy snapshots, but older clients are not guaranteed to understand the version-2 package layout or SQLite LocalStorage artifacts. Upgrade team clients together before sharing new-format snapshots.
+
+Treat the S3 bucket as sensitive storage: infrastructure/account credential fields are omitted, but exported Cookies and profile state are real account data, not anonymized or end-to-end-encrypted backups.
 
 ## 11. Data & backups — please read once
 
-- Everything lives on **this machine**: `<user-data>/profiles/…` (cookies, localStorage), plus the encrypted credential vault and audit logs.
+- The working profile data lives **locally** at `<user-data>/profiles/…` (cookies, localStorage), alongside the encrypted credential vault and audit logs. Separately configured Sync or exports may also hold copies; the application does not infer independent backup coverage merely from those settings.
 - **Disk failure can destroy local profile data.** Keep a **profile export backup on a separate disk or separately stored cloud backup**, or use **Sync to an independently stored S3 bucket**. An export left on the same disk does not protect against that disk failing. Check that your backup exists and rehearse restoration using a non-critical profile.
 - **The 7-day trash window protects against accidental deletion, not disk failure.** Trash stays in the local storage area on the same disk; it is not an independent backup and disappears on permanent purge or after its retention window.
 - Backups contain sensitive account data. Browser-encrypted cookies and sessions may be tied to the original OS/device; an export or sync does **not** guarantee that a logged-in session will work on another machine. Keep recovery credentials separately and be prepared to sign in again.
+- Stop a profile before exporting its ZIP. A verified archive is published only after integrity readback; an existing destination is replaced only with explicit permission. Waiting in the native file dialog is not a failed export. Cancelled, skipped, partial, and completed-with-warnings are distinct outcomes.
+- Backups refuse unresolved or unverifiable LocalStorage rescue transactions (`ARCHIVE_RECOVERY_REQUIRED`); keep their original material and resolve the reported recovery first. When a ZIP with completed SQLite rescue history is imported under a new ID, all rescue bytes and original receipts are retained under `.profile-archive-recovery/<original-ID>/Default/…` with a warning. This inactive history is not the new profile's commit proof or an automatically restored database; it is not silently deleted. Legacy rescue copies remain alongside the live LevelDB database where safe, without inventing a completion proof missing from an older ZIP.
+- A profile ZIP is not an application-wide backup of the agent database, credential vault, audit history, or all settings. A backup reminder is advice, not proof that a backup file exists.
 - The Storage tab shows per-profile disk usage and keeps data-safety reminders visible.
 
 ## 12. Integration surfaces (for developers)
 
 - **REST API** on `127.0.0.1:26582` — OpenAPI 3.0 at `/openapi.json`, bearer-token auth (`AGENT_BROWSER_API_TOKEN`). Covers profiles, proxies, accounts, automation, jobs, agent, DRM, team, updates.
 - **MCP server** on `127.0.0.1:26581` for Claude Code / Cursor & other MCP clients.
-- **Python & JS SDKs** (`sdk/python`, `sdk/js`) — including `connectPlaywright` / `connectPuppeteer` one-call adapters that return a real Playwright/Puppeteer browser bound to a managed profile.
+- **Python & JS SDKs** (`sdk/python`, `sdk/js`) — including `connectPlaywright` / `connectPuppeteer` one-call adapters that return a real Playwright/Puppeteer browser bound to a managed profile. Profile responses retain synchronization status/scope/reason. HTTP errors preserve `.status` and a bounded `.body`; inspect commit/outcome/recovery fields rather than parsing the message. Error bodies above 2 MiB are explicitly marked `bodyTruncated` (JS) / `body_truncated` (Python), with no complete body returned. A missing/truncated body or transport timeout does not prove that no write happened and must not trigger a blind retry.
 
 ## 13. Recommended operating checklist
 
@@ -193,7 +209,7 @@ Treat the S3 bucket as sensitive storage: secrets are stripped from sync payload
 2. **Timezone**: profile timezone = IP geolocation timezone (the 🩺 check flags mismatch in red).
 3. **Locale**: locale = geo language (e.g. en-US for a US IP).
 4. **ASN/geo**: IP-database geo matches the three above; keep a screenshot (support-dispute evidence).
-5. Click **🔒 Lock baseline**: after a successful warm-up, lock the fingerprint — later drift is blocked instead of silently killing the account.
+5. Click **🔒 Lock baseline** to review and save a fingerprint reference. A risky replacement requires explicit confirmation. Enable the corresponding launch gate if you want high-risk drift to block later launches; saving a baseline alone neither enables the gate nor guarantees account safety.
 
 ## 15. Troubleshooting
 

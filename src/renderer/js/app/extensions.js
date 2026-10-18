@@ -342,8 +342,14 @@
         }).catch(function (e) { toast(e.message, 'error'); });
       },
 
-  loadExtensionsTab: function () { loadExtensionsTab(); }
+  loadExtensionsTab: function () { return loadExtensionsTab(); }
   });
+  agentBrowser.invalidateExtensionsForSync = function() {
+    extRepositorySeq++;
+    var container = document.getElementById('extension-repo-list');
+    if (container) container.onclick = null;
+    // Do not reset the search, add-extension draft, or open dialog selection.
+  };
   function loadExtensionsTab() {
     var container = document.getElementById("extension-repo-list");
     var statusEl = document.getElementById("extension-repo-status");
@@ -359,7 +365,7 @@
         (searchEl ? searchEl.value.trim() : "") === filter;
     }
     container.innerHTML = '<div class="loading">' + esc(t('ext.loading', 'Loading extension repository...')) + '</div>';
-    lcall("settings.extensionRepository", function () { return api.settings.extensionRepository(filter); }).then(function (entries) {
+    return lcall("settings.extensionRepository", function () { return api.settings.extensionRepository(filter); }).then(function (entries) {
       if (!currentRepositoryView()) return;
       if (statusEl) statusEl.textContent = (entries || []).length + t('ext.col.count', ' extension(s) in private repository');
       if (!entries || entries.length === 0) {

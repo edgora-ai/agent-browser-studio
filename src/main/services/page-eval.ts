@@ -10,14 +10,17 @@
 import { getConfig } from "./config-manager.js";
 import type { BrowserEngine } from "./browser-engine.js";
 import { sanitizeBrowserEngine } from "./browser-engine.js";
+import { getEntry } from "./browser/runtime-table.js";
 
 export interface PageEvalOpts {
   timeoutMs?: number;
   signal?: AbortSignal;
 }
 
-/** Resolve the engine a profile was created with (defaults to chromium). */
+/** Running engine first; edited launch intent only applies after a restart. */
 export function getProfileEngineByDirId(dirId: string): BrowserEngine {
+  const running = getEntry(dirId);
+  if (running) return running.engine ?? "chromium";
   try {
     const cfg = getConfig() as any;
     return sanitizeBrowserEngine(cfg.browserProfiles?.[dirId]?.engine);
@@ -46,9 +49,11 @@ export async function evaluateInPage(
     const client = await cdpConnect(port);
     try {
       assertNotAborted(opts.signal);
-      return await cdpEvaluate(client, expression);
+      const value = await cdpEvaluate(client, expression, opts.timeoutMs);
+      assertNotAborted(opts.signal);
+      return value;
     } finally {
-      try { (client as any).ws?.close?.(); } catch { /* ignore */ }
+      try { (client as any).ws?.close?.(); } catch (error) { throw new Error("In-page connection cleanup failed", { cause: error }); }
     }
   }
 
@@ -64,13 +69,19 @@ export async function evaluateInPage(
     assertNotAborted(opts.signal);
     try {
       const context = await bidiGetTopContext(live, opts.timeoutMs ?? 8000);
-      return await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      const value = await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      return value;
     } catch (e: any) {
       if (opts.signal?.aborted) throw e;
       if (!/no browsing contexts/.test(String(e?.message || e))) throw e;
       await bidiNavigate(live, "about:blank", null, opts.timeoutMs ?? 15000);
       const context = await bidiGetTopContext(live, opts.timeoutMs ?? 8000);
-      return await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      const value = await bidiEvaluateInContext(live, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      return value;
     }
   }
 
@@ -79,13 +90,19 @@ export async function evaluateInPage(
     assertNotAborted(opts.signal);
     try {
       const context = await bidiGetTopContext(conn, opts.timeoutMs ?? 8000);
-      return await bidiEvaluateInContext(conn, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      const value = await bidiEvaluateInContext(conn, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      return value;
     } catch (e: any) {
       if (opts.signal?.aborted) throw e;
       if (!/no browsing contexts/.test(String(e?.message || e))) throw e;
       await bidiNavigate(conn, "about:blank", null, opts.timeoutMs ?? 15000);
       const context = await bidiGetTopContext(conn, opts.timeoutMs ?? 8000);
-      return await bidiEvaluateInContext(conn, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      const value = await bidiEvaluateInContext(conn, expression, context, opts.timeoutMs ?? 15000);
+      assertNotAborted(opts.signal);
+      return value;
     }
   } finally {
     conn.close();
@@ -94,11 +111,14 @@ export async function evaluateInPage(
 
 /** Navigate the profile's top-level page (Firefox: BiDi nothing; CDP: Runtime). */
 export async function navigateInPage(port: number, engine: BrowserEngine, url: string, opts: PageEvalOpts = {}): Promise<void> {
+  assertNotAborted(opts.signal);
   if (engine === "chromium") {
     const { cdpConnect, cdpNavigate, cdpDisconnect } = await import("./local-agent.js");
     const client = await cdpConnect(port);
     try {
+      assertNotAborted(opts.signal);
       await cdpNavigate(client, url);
+      assertNotAborted(opts.signal);
     } finally {
       cdpDisconnect(client);
     }
@@ -107,12 +127,16 @@ export async function navigateInPage(port: number, engine: BrowserEngine, url: s
   const { connectBidi, getRegisteredFirefoxSession, bidiNavigate } = await import("./bidi-client.js");
   const live = getRegisteredFirefoxSession(port);
   if (live) {
+    assertNotAborted(opts.signal);
     await bidiNavigate(live, url, null, opts.timeoutMs ?? 15000);
+    assertNotAborted(opts.signal);
     return;
   }
   const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: opts.timeoutMs ?? 15000 });
   try {
+    assertNotAborted(opts.signal);
     await bidiNavigate(conn, url, null, opts.timeoutMs ?? 15000);
+    assertNotAborted(opts.signal);
   } finally {
     conn.close();
   }

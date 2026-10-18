@@ -195,7 +195,7 @@ vi.mock("../../src/main/services/process-discovery.js", () => ({
 vi.mock("../../src/main/services/profile-restore-lock.js", () => ({ acquireRestoreLock: mocks.acquireRestoreLock }));
 // These are not part of discovery. Mock their modules, not the browser-manager
 // functions under test, so no global helper can open SQLite or contact a service.
-vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({ cdpCookieService: {} }));
+vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({ cdpCookieService: {}, readQueuedCookieImports: mocks.forbidden("Cookie queue access") }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: {} }));
 vi.mock("../../src/main/services/secrets.js", () => ({ decryptSecretOr: mocks.forbidden("secret store") }));
 vi.mock("../../src/main/services/audit-log.js", () => ({ recordAudit: mocks.forbidden("audit persistence") }));

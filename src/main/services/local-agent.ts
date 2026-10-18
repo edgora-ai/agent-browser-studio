@@ -139,6 +139,7 @@ export function saveLlmConfig(config: LlmConfig): void {
 import type { CdpClient } from "./agent/cdp-transport.js";
 import { cdpConnect as _cdpConnect, cdpSendRaw as _cdpSendRaw, cdpDisconnect as _cdpDisconnect, cdpNavigate as _cdpNavigate, cdpWaitForLoad as _cdpWaitForLoad, cdpGetContent as _cdpGetContent, cdpGetTitle as _cdpGetTitle, cdpGetUrl as _cdpGetUrl, cdpSnapshot as _cdpSnapshot, cdpTextSnapshot as _cdpTextSnapshot } from "./agent/cdp-transport.js";
 import { assertProtocolDispatchAllowed, runWithProtocolDispatchGuard, waitForProtocolDelay } from "./agent/dispatch-guard.js";
+import { classifyAgentToolOutcome } from "./agent/tool-outcome.js";
 import {
   assertCapturedChatBrowserScope,
   assertChatBrowserScopeBidiSession,
@@ -1437,12 +1438,12 @@ export async function cdpUploadFile(client: CdpClient, selector: string, filePat
 
 // ── Evaluate & Extract ──
 
-export async function cdpEvaluate(client: CdpClient, expression: string): Promise<any> {
+export async function cdpEvaluate(client: CdpClient, expression: string, timeoutMs?: number): Promise<any> {
   const result = await cdpSendRaw(client, "Runtime.evaluate", {
     expression,
     returnByValue: true,
     awaitPromise: true,
-  });
+  }, undefined, timeoutMs);
   // Surface page exceptions (R6 #74): without this a throwing page resolves
   // undefined — silent data loss, and inconsistent with the BiDi path which
   // rejects (bidi-client throws "BiDi evaluate failed in page:").
@@ -2708,6 +2709,10 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           name: p.name,
           running: p.running,
           proxy: p.proxy || "(default)",
+          syncedAt: p.syncedAt,
+          syncStatus: p.syncStatus,
+          syncScope: p.syncScope,
+          syncReason: p.syncReason,
         })),
       };
     }
@@ -2761,10 +2766,14 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           context.webContents,
           context.signal,
         );
+        // Approval cancellation and an explicit user refusal are different
+        // execution facts even though the gate denies both dispatches.
+        if (context.signal?.aborted) {
+          return { skipped: true, cancelled: true, reason: "HTTP 写入操作已取消", decision: appr.decision };
+        }
         if (!appr.allowed) {
           return { skipped: true, reason: "用户拒绝了该 HTTP 写入操作", decision: appr.decision };
         }
-        if (context.signal?.aborted) return { skipped: true, reason: "HTTP 写入操作已超时取消", decision: appr.decision };
       }
       return await agentHttpRequest(args, context.signal);
     }
@@ -2806,6 +2815,9 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           context.webContents,
           context.signal,
         );
+        if (context.signal?.aborted) {
+          return { skipped: true, cancelled: true, reason: "数据库操作已取消", decision: appr.decision };
+        }
         if (!appr.allowed) {
           return { skipped: true, reason: "用户拒绝了该操作", decision: appr.decision };
         }
@@ -3502,8 +3514,6 @@ export async function agentChat(
 
       let result: any;
       const stepStart = Date.now();
-      let stepOk = true;
-      let stepError: string | undefined;
       try {
         console.log(`[agent] Tool call: ${tc.function.name}`);
         result = await executeToolCall(tc.function.name, args, allowedToolNames, {
@@ -3512,11 +3522,12 @@ export async function agentChat(
           signal: options.signal,
           browserScope: options.browserScope,
         });
-      } catch (e: any) {
-        stepOk = false;
-        stepError = e.message;
-        result = { error: e.message };
+      } catch (error) {
+        result = { error: error instanceof Error ? error.message : String(error) };
       }
+      // A non-throwing denial/skip is still an unsuccessful operation. Model
+      // loop completion is independent of each tool's execution facts.
+      const outcome = classifyAgentToolOutcome(tc.function.name, result);
 
       // Record the step in the run trace (if a run is active).
       if (options.runId) {
@@ -3524,8 +3535,8 @@ export async function agentChat(
           tool: tc.function.name,
           args,
           result,
-          ok: stepOk,
-          error: stepError,
+          ok: outcome.ok,
+          error: outcome.error,
           durationMs: Date.now() - stepStart,
         });
       }

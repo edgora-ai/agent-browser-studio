@@ -5,11 +5,13 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { sanitizePortableFingerprintBaseline } from "./fingerprint-baseline.js";
+import { PORTABLE_PROFILE_FIELDS, parseProfileSyncBaseline, type PortableProfileContent } from "./profile-portability.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { tMain } from "./main-i18n.js";
 import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommittedConfig, adoptLoadedConfig, setNormalizer } from "./config/store.js";
 import { assertConfigSize } from "./config/limits.js";
+import { invalidateSyncSettings } from "./sync/operation-state.js";
 import {
   clearLegacySecretMigrationCache,
   decryptSecretOr,
@@ -32,7 +34,7 @@ function normalizeProfileBrowserVersion(profile: { engine?: unknown; browserVers
     : normalizeManagedChromiumVersion((profile as any)?.browserVersion);
 }
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
-import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry } from "../types.js";
+import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry, ProfileHealthEntry, ProfileHealthKind } from "../types.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
@@ -60,6 +62,7 @@ const DefaultConfig: MgmtConfig = {
   proxyHealth: {},
   webrtcDiagnostics: {},
   envRiskDiagnostics: {},
+  profileHealthHistory: {},
   sync: {
     enabled: false,
     endpoint: "",
@@ -179,49 +182,115 @@ export function setProxyHealth(name: string, entry: ProxyHealthEntry): void {
 }
 
 const MAX_WEBRTC_DIAG_HISTORY = 20;
+const MAX_ENV_RISK_DIAG_HISTORY = 20;
+const MAX_PROFILE_HEALTH_HISTORY = 20;
+const HEALTH_KINDS = new Set(["env", "webrtc", "drift", "consistency"]);
+const HEALTH_OUTCOMES = new Set(["pass", "warn", "risk", "error", "unavailable", "inconclusive", "cancelled", "baseline-established"]);
+const HEALTH_SOURCES = new Set(["runtime", "host", "baseline", "cached", "legacy"]);
+
+function normalizeProfileHealthEntry(raw: unknown): ProfileHealthEntry | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as ProfileHealthEntry;
+  if (!HEALTH_KINDS.has(value.kind) || !HEALTH_OUTCOMES.has(value.outcome) || !HEALTH_SOURCES.has(value.source)
+    || !Number.isSafeInteger(value.at) || value.at < 0 || typeof value.summary !== "string"
+    || value.requestId !== undefined && (typeof value.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(value.requestId))) return null;
+  return {
+    kind: value.kind, at: value.at,
+    outcome: value.source === "legacy" && value.outcome === "pass" ? "inconclusive" : value.outcome,
+    summary: value.summary.slice(0, 2048), source: value.source,
+    ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+  };
+}
+
+function appendProfileHealthDraft(draft: MgmtConfig, dirId: string, raw: ProfileHealthEntry): void {
+  const entry = normalizeProfileHealthEntry(raw);
+  if (!entry) throw new Error("Invalid profile health result");
+  if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("PROFILE_NOT_FOUND: Profile not found");
+  const previous = draft.profileHealthHistory && Object.hasOwn(draft.profileHealthHistory, dirId) ? draft.profileHealthHistory[dirId] : [];
+  draft.profileHealthHistory = { ...draft.profileHealthHistory,
+    [dirId]: [...(Array.isArray(previous) ? previous : []), entry].sort((a, b) => a.at - b.at).slice(-MAX_PROFILE_HEALTH_HISTORY) };
+}
+
+export function getProfileHealthHistory(dirId: string): ProfileHealthEntry[] {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  const list = cfg.profileHealthHistory && Object.hasOwn(cfg.profileHealthHistory, dirId) ? cfg.profileHealthHistory[dirId] : null;
+  return Array.isArray(list) ? structuredClone(list) : [];
+}
+
+export function appendProfileHealthResult(dirId: string, entry: ProfileHealthEntry): void {
+  validateDirId(dirId);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => appendProfileHealthDraft(draft, dirId, entry));
+}
+
+type HealthClearListener = (dirId: string, kind?: ProfileHealthKind) => void;
+const healthClearListeners = new Set<HealthClearListener>();
+
+/** Keep in-flight diagnostic invalidation independent of the storage module. */
+export function onProfileHealthRecordsCleared(listener: HealthClearListener): () => void {
+  healthClearListeners.add(listener);
+  return () => { healthClearListeners.delete(listener); };
+}
+
+/** Clear the canonical summary and its corresponding detailed facts together. */
+export function clearProfileHealthRecords(dirId: string, kind?: ProfileHealthKind): void {
+  validateDirId(dirId);
+  if (kind !== undefined && !HEALTH_KINDS.has(kind)) throw new Error("Invalid profile health kind");
+  getConfig();
+  for (const listener of healthClearListeners) listener(dirId, kind);
+  storeTransact((draft: MgmtConfig) => {
+    if (draft.profileHealthHistory && Object.hasOwn(draft.profileHealthHistory, dirId)) {
+      if (kind === undefined) delete draft.profileHealthHistory[dirId];
+      else draft.profileHealthHistory[dirId] = draft.profileHealthHistory[dirId].filter((entry) => entry.kind !== kind);
+    }
+    if (kind === undefined || kind === "webrtc") {
+      if (draft.webrtcDiagnostics) delete draft.webrtcDiagnostics[dirId];
+    }
+    if (kind === undefined || kind === "env") {
+      if (draft.envRiskDiagnostics) delete draft.envRiskDiagnostics[dirId];
+    }
+  });
+}
 
 export function getWebRtcDiagnostics(dirId: string): WebRtcDiagnosticsEntry[] {
   const cfg = getConfig();
   const list = cfg.webrtcDiagnostics && Object.hasOwn(cfg.webrtcDiagnostics, dirId) ? cfg.webrtcDiagnostics[dirId] : null;
-  return Array.isArray(list) ? list : [];
+  return Array.isArray(list) ? structuredClone(list) : [];
 }
 
-export function setWebRtcDiagnostics(dirId: string, entries: WebRtcDiagnosticsEntry[]): void {
+export function setWebRtcDiagnostics(dirId: string, entries: WebRtcDiagnosticsEntry[], health?: ProfileHealthEntry): void {
   validateDirId(dirId);
-  const cfg = getConfig();
-  cfg.webrtcDiagnostics = cfg.webrtcDiagnostics || {};
-  cfg.webrtcDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_WEBRTC_DIAG_HISTORY);
-  saveConfig(cfg);
+  getConfig();
+  const stored = structuredClone((Array.isArray(entries) ? entries : []).slice(-MAX_WEBRTC_DIAG_HISTORY));
+  storeTransact((draft: MgmtConfig) => {
+    draft.webrtcDiagnostics = { ...draft.webrtcDiagnostics, [dirId]: stored };
+    if (health) appendProfileHealthDraft(draft, dirId, health);
+  });
 }
 
 export function clearWebRtcDiagnostics(dirId: string): void {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  if (cfg.webrtcDiagnostics) delete cfg.webrtcDiagnostics[dirId];
-  saveConfig(cfg);
+  clearProfileHealthRecords(dirId, "webrtc");
 }
-
-const MAX_ENV_RISK_DIAG_HISTORY = 20;
 
 export function getEnvRiskDiagnostics(dirId: string): EnvRiskDiagnosticsEntry[] {
   const cfg = getConfig();
   const list = cfg.envRiskDiagnostics && Object.hasOwn(cfg.envRiskDiagnostics, dirId) ? cfg.envRiskDiagnostics[dirId] : null;
-  return Array.isArray(list) ? list : [];
+  return Array.isArray(list) ? structuredClone(list) : [];
 }
 
-export function setEnvRiskDiagnostics(dirId: string, entries: EnvRiskDiagnosticsEntry[]): void {
+export function setEnvRiskDiagnostics(dirId: string, entries: EnvRiskDiagnosticsEntry[], health?: ProfileHealthEntry): void {
   validateDirId(dirId);
-  const cfg = getConfig();
-  cfg.envRiskDiagnostics = cfg.envRiskDiagnostics || {};
-  cfg.envRiskDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_ENV_RISK_DIAG_HISTORY);
-  saveConfig(cfg);
+  getConfig();
+  const stored = structuredClone((Array.isArray(entries) ? entries : []).slice(-MAX_ENV_RISK_DIAG_HISTORY));
+  storeTransact((draft: MgmtConfig) => {
+    draft.envRiskDiagnostics = { ...draft.envRiskDiagnostics, [dirId]: stored };
+    if (health) appendProfileHealthDraft(draft, dirId, health);
+  });
 }
 
 export function clearEnvRiskDiagnostics(dirId: string): void {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  if (cfg.envRiskDiagnostics) delete cfg.envRiskDiagnostics[dirId];
-  saveConfig(cfg);
+  clearProfileHealthRecords(dirId, "env");
 }
 
 export function addProxy(name: string, config: ProxyConfig): void {
@@ -1120,34 +1189,38 @@ function isUnsafeBypassHost(host: string): boolean {
 
 // ── Profile metadata ──
 
-export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  const cp = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
-  if (!cp) return null;
-  return {
+/** Deterministic content projection shared by store/getters/archive/sync.
+ * Never use the import normalizer here: imported IDs/seeds/times are generated
+ * policy, not profile content. Local paths and markers are not even inspected. */
+export function portableProfileContent(raw: unknown): PortableProfileContent {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid portable profile metadata");
+  const cp = raw as BrowserProfileMeta;
+  const rawProxyName = typeof cp.proxyName === "string" ? cp.proxyName : null;
+  let proxyMode = normalizeProxyMode(cp.proxyMode, rawProxyName, true);
+  if (proxyMode === "named" && (!rawProxyName || !isValidProxyName(rawProxyName))) proxyMode = "none";
+  const webrtcMode = sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp);
+  const fingerprintBaseline = sanitizePortableFingerprintBaseline(cp.fingerprintBaseline);
+  const profile: PortableProfileContent = {
     name: cp.name,
     fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
     engine: sanitizeBrowserEngine(cp.engine),
     browserVersion: normalizeProfileBrowserVersion(cp),
     allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
-    proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
-    proxyName: cp.proxyName || null,
-    syncedAt: cp.syncedAt,
-    syncedHash: cp.syncedHash,
+    proxyMode,
+    proxyName: proxyMode === "named" ? rawProxyName : null,
     note: cp.note || null,
     tags: normalizeProfileTags(cp.tags),
     preset: sanitizeOptionalText(cp.preset, 64),
     drm: sanitizeBoolean(cp.drm, "drm"),
     appUrl: sanitizeAppUrl(cp.appUrl),
     renderScaleMode: sanitizeRenderScaleMode(cp.renderScaleMode),
-    windowTitlePrefix: cp.windowTitlePrefix === undefined ? undefined : sanitizeWindowTitlePrefix(cp.windowTitlePrefix),
-    fingerprintBaseline: sanitizePortableFingerprintBaseline(cp.fingerprintBaseline),
+    ...(cp.windowTitlePrefix === undefined ? {} : { windowTitlePrefix: sanitizeWindowTitlePrefix(cp.windowTitlePrefix) }),
+    ...(fingerprintBaseline ? { fingerprintBaseline: { ...fingerprintBaseline } } : {}),
     platform: cp.platform === "windows" || cp.platform === "macos" || cp.platform === "android" ? cp.platform : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
-    webrtcMode: sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp),
-    webrtcIp: sanitizeOptionalIp(cp.webrtcIp),
+    webrtcMode,
+    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : sanitizeOptionalIp(cp.webrtcIp),
     geolocationMode: sanitizeGeolocationMode(cp.geolocationMode),
     geolocationLatitude: sanitizeOptionalNumber(cp.geolocationLatitude, -90, 90),
     geolocationLongitude: sanitizeOptionalNumber(cp.geolocationLongitude, -180, 180),
@@ -1161,8 +1234,24 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     screenHeight: sanitizeOptionalInteger(cp.screenHeight, 240, 10000),
     storageQuota: sanitizeOptionalInteger(cp.storageQuota, 1, 1048576),
     taskbarHeight: sanitizeOptionalInteger(cp.taskbarHeight, 0, 500),
+    extensions: { ...normalizeExtensionMap(cp.extensions) },
+  };
+  validateGeolocationMeta(profile);
+  return profile;
+}
+
+export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  const cp = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
+  if (!cp) return null;
+  const syncBaseline = parseProfileSyncBaseline(cp.syncBaseline);
+  return {
+    ...portableProfileContent(cp),
+    syncedAt: cp.syncedAt,
+    syncedHash: cp.syncedHash,
+    ...(syncBaseline ? { syncBaseline } : {}),
     fontsDir: sanitizeOptionalFontsDir(cp.fontsDir),
-    extensions: normalizeExtensionMap(cp.extensions),
   };
 }
 
@@ -1278,6 +1367,10 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
+  // syncBaseline is trusted sync-commit evidence, not a public patch field.
+  // Preserve the current marker; only the store's sync transaction creates it.
+  if (meta.preset !== undefined) next.preset = sanitizeOptionalText(meta.preset, 64);
+  if (meta.fingerprintBaseline !== undefined) next.fingerprintBaseline = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
   if (meta.engine !== undefined) {
     const currentEngine = sanitizeBrowserEngine(current.engine);
     next.engine = sanitizeBrowserEngine(meta.engine);
@@ -1336,32 +1429,34 @@ export function getSyncConfig() {
 }
 
 export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean }): void {
-  const cfg = getConfig();
+  if (!sync || typeof sync !== "object" || Array.isArray(sync)) throw new Error("Sync settings must be an object");
+  for (const key of ["enabled", "custodyConsent"] as const) {
+    if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`Sync ${key} must be a boolean`);
+  }
+  for (const key of ["endpoint", "bucket", "accessKey", "secretKey"] as const) {
+    if (sync[key] !== undefined && typeof sync[key] !== "string") throw new Error(`Sync ${key} must be a string`);
+  }
   const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey"];
-  // Sale-93 custody consent: renderer passes custodyConsent: true from a
-  // SEPARATE checkbox; main stamps Date.now() itself so a compromised
-  // renderer cannot backdate consent. The raw timestamp field is never taken
-  // from the caller. Consent is append-only (disabling sync keeps the record
-  // for audit; re-enabling needs no re-consent).
-  if ((sync as any)?.custodyConsent === true) {
-    (cfg.sync as any).custodyConsentAt = Date.now();
-  }
-  const next = { ...cfg.sync };
-  for (const key of allowed) {
-    const value = sync[key];
-    if (value === undefined) continue;
-    if ((key === "accessKey" || key === "secretKey") && value === "") continue;
-    // Encrypt the secret key at rest.
-    if (key === "secretKey" && typeof value === "string" && value && !isEncrypted(value)) {
-      (next as any)[key] = encryptSecret(value);
-    } else {
-      (next as any)[key] = value;
+  storeTransact((cfg) => {
+    const next = { ...cfg.sync };
+    // Custody consent is stamped by main, but published only if validation and
+    // the configuration rename commit both succeed. Never mutate live state.
+    if (sync?.custodyConsent === true) next.custodyConsentAt = Date.now();
+    for (const key of allowed) {
+      const value = sync[key];
+      if (value === undefined) continue;
+      if ((key === "accessKey" || key === "secretKey") && value === "") continue;
+      if (key === "secretKey" && typeof value === "string" && value && !isEncrypted(value)) {
+        (next as any)[key] = encryptSecret(value);
+      } else {
+        (next as any)[key] = value;
+      }
     }
-  }
-  next.endpoint = normalizeSyncEndpoint(next.endpoint || "");
-  next.bucket = normalizeSyncBucket(next.bucket || "");
-  cfg.sync = next;
-  saveConfig(cfg);
+    next.endpoint = normalizeSyncEndpoint(next.endpoint || "");
+    next.bucket = normalizeSyncBucket(next.bucket || "");
+    cfg.sync = next;
+  });
+  invalidateSyncSettings();
 }
 
 function normalizeSyncEndpoint(value: string): string {
@@ -1511,6 +1606,16 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       merged.envRiskDiagnostics[dirId] = (entries as EnvRiskDiagnosticsEntry[]).slice(-MAX_ENV_RISK_DIAG_HISTORY);
     }
   }
+  if (parsed.profileHealthHistory && typeof parsed.profileHealthHistory === "object" && !Array.isArray(parsed.profileHealthHistory)) {
+    merged.profileHealthHistory = Object.create(null);
+    for (const [dirId, entries] of Object.entries(parsed.profileHealthHistory)) {
+      try { validateDirId(dirId); } catch { continue; }
+      if (!Array.isArray(entries)) continue;
+      merged.profileHealthHistory![dirId] = entries.map(normalizeProfileHealthEntry)
+        .filter((entry): entry is ProfileHealthEntry => entry !== null)
+        .sort((a, b) => a.at - b.at).slice(-MAX_PROFILE_HEALTH_HISTORY);
+    }
+  }
   if (parsed.sync) {
     merged.sync = { ...merged.sync, ...parsed.sync };
     try {
@@ -1551,45 +1656,15 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     for (const [dirId, rawProfile] of Object.entries(parsedProfiles)) {
       validateDirId(dirId);
       const profile = { ...(rawProfile as BrowserProfileMeta) };
-      profile.proxyMode = normalizeProxyMode(profile.proxyMode, profile.proxyName || null, true);
-      if (profile.proxyMode === "named") {
-        if (!profile.proxyName || !isValidProxyName(profile.proxyName)) {
-          profile.proxyMode = "none";
-          profile.proxyName = null;
-        }
-      } else {
-        profile.proxyName = null;
-      }
-      profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
-      profile.engine = sanitizeBrowserEngine(profile.engine);
-      profile.browserVersion = normalizeProfileBrowserVersion(profile);
-      profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
-      profile.platform = profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
-        ? profile.platform : "windows";
-      profile.fingerprintSeed = sanitizeFingerprintSeed(profile.fingerprintSeed || 12345);
-      profile.timezone = sanitizeOptionalTimezone(profile.timezone);
-      profile.locale = sanitizeOptionalLocale(profile.locale);
-      profile.webrtcMode = sanitizeWebRtcMode(profile.webrtcMode, profile.webrtcIp);
-      profile.webrtcIp = sanitizeOptionalIp(profile.webrtcIp);
-      if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
-      profile.geolocationMode = sanitizeGeolocationMode(profile.geolocationMode);
-      profile.geolocationLatitude = sanitizeOptionalNumber(profile.geolocationLatitude, -90, 90);
-      profile.geolocationLongitude = sanitizeOptionalNumber(profile.geolocationLongitude, -180, 180);
-      profile.geolocationAccuracy = sanitizeOptionalNumber(profile.geolocationAccuracy, 0, 100000);
-      validateGeolocationMeta(profile);
-      profile.gpuVendor = sanitizeOptionalText(profile.gpuVendor, 80);
-      profile.gpuRenderer = sanitizeOptionalText(profile.gpuRenderer, 160);
-      profile.hardwareConcurrency = sanitizeOptionalInteger(profile.hardwareConcurrency, 1, 64);
-      profile.deviceMemory = sanitizeOptionalInteger(profile.deviceMemory, 1, 128);
-      profile.screenWidth = sanitizeOptionalInteger(profile.screenWidth, 320, 10000);
-      profile.screenHeight = sanitizeOptionalInteger(profile.screenHeight, 240, 10000);
-      profile.storageQuota = sanitizeOptionalInteger(profile.storageQuota, 1, 1048576);
-      profile.taskbarHeight = sanitizeOptionalInteger(profile.taskbarHeight, 0, 500);
+      // Close the same portable representation across raw/store/get/JSON/reload.
+      // Keep local-only fields separately, never feed them into content hashing.
+      const portable = portableProfileContent(rawProfile);
+      for (const field of PORTABLE_PROFILE_FIELDS) delete (profile as any)[field];
+      Object.assign(profile, portable);
       profile.fontsDir = sanitizeOptionalFontsDir(profile.fontsDir);
-      profile.tags = normalizeProfileTags(profile.tags);
-      profile.preset = sanitizeOptionalText(profile.preset, 64);
-      profile.extensions = normalizeExtensionMap(profile.extensions);
-      profile.appUrl = sanitizeAppUrl(profile.appUrl);
+      const syncBaseline = parseProfileSyncBaseline(profile.syncBaseline);
+      if (syncBaseline) profile.syncBaseline = syncBaseline;
+      else delete profile.syncBaseline;
       merged.browserProfiles[dirId] = profile;
     }
   }

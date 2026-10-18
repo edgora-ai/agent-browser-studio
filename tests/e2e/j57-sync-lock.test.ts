@@ -3,13 +3,14 @@
 // locks; force push bypasses. Verifies the whole flow against a mock S3.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j57");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j57-sync-lock-"));
 const CONFIG_KEY = "agent-browser-studio-config.json";
 
 function startMockS3(): Promise<{ port: number; get: (key: string) => Buffer | undefined; put: (key: string, body: Buffer) => void; close: () => Promise<void> }> {
@@ -64,13 +65,15 @@ describe("J57 — team profile checkout locks", () => {
   beforeAll(async () => {
     s3 = await startMockS3();
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
+    const configured = await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
       enabled: true,
       endpoint: "http://127.0.0.1:" + s3.port,
       bucket: "bucket",
       accessKey: "testak",
       secretKey: "testsk",
+      custodyConsent: true,
     });
+    expect(configured.success).toBe(true);
     const r1 = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J57-A", platform: "windows", fingerprintSeed: 71717 }));
     const r2 = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J57-B", platform: "windows", fingerprintSeed: 81818 }));
     p1 = r1.dirId;
@@ -79,6 +82,8 @@ describe("J57 — team profile checkout locks", () => {
   afterAll(async () => {
     if (h) await closeApp(h);
     if (s3) await s3.close();
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j57-sync-lock-")) throw new Error("Unsafe J57 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("locks a profile to the current device", async () => {

@@ -219,7 +219,10 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
   }
 }
 
-export function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string): Promise<any> {
+export function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string, timeoutMs = 15_000): Promise<any> {
+  // Explicit per-command deadlines do not change the ordinary 15-second budget.
+  // A command timeout is not proof that page JavaScript stopped executing.
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error("Invalid CDP command timeout");
   // Check before allocating an id/timer so a rejected dispatch leaves no waiter.
   assertProtocolDispatchAllowed(client.port);
   return new Promise((resolve, reject) => {
@@ -229,7 +232,7 @@ export function cdpSendRaw(client: CdpClient, method: string, params?: any, sess
         client.callbacks.delete(id);
         reject(new Error(`CDP ${method} timeout`));
       }
-    }, 15000);
+    }, timeoutMs);
     client.callbacks.set(id, { resolve, reject, timer });
     try {
       // Re-check immediately before the actual wire write. If this throws after

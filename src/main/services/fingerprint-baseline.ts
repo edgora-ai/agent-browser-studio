@@ -87,7 +87,10 @@ export const CAPTURE_EXPRESSION = `(async function(){
     }
   } catch(e){}
   try {
-    var fontCorpus = await (${FONT_CORPUS_CAPTURE_SOURCE})();
+    // Local Font Access can wait for a permission prompt. The baseline hashes
+    // window/Worker metrics and rasters, not localAccess; do not request an
+    // unused permission or replace any of the captured font measurements.
+    var fontCorpus = await (${FONT_CORPUS_CAPTURE_SOURCE})({ includeLocalAccess: false });
     o.fontAvailability = Object.keys(fontCorpus.window.availability).sort().map(function(name){
       return name + "|" + fontCorpus.window.availability[name];
     }).join(";");

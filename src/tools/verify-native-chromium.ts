@@ -1100,7 +1100,7 @@ async function runOnce(
     );
     process.stderr.write(`[verify:chromium] ${label}: Font Window/Worker/DOM/Local Access corpus\n`);
     const fonts = await withTimeout(
-      page.evaluate(captureFontCorpusInPage),
+      page.evaluate(captureFontCorpusInPage, { includeLocalAccess: true }),
       90_000,
       `${label} Font corpus`,
     );

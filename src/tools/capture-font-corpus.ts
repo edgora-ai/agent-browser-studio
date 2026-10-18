@@ -142,7 +142,7 @@ async function captureOne(
     process.stderr.write(`[font-corpus] ${options.label} page ready\n`);
     let corpusTimer: NodeJS.Timeout | null = null;
     const corpus = await Promise.race([
-      page.evaluate(captureFontCorpusInPage),
+      page.evaluate(captureFontCorpusInPage, { includeLocalAccess: true }),
       new Promise<never>((_resolve, reject) => {
         corpusTimer = setTimeout(() => reject(new Error("Font corpus page evaluation timed out")), 90_000);
       }),

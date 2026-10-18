@@ -17,21 +17,26 @@ const cookie = (side: string) => ({ domain: "example.test", name: "f01", value: 
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(USERDATA, "config.json"), "utf8"));
 
 function localStorageArchive(side: string): string {
-  const data = Buffer.from(side);
-  const header = Buffer.alloc(512);
-  header.write("CURRENT", 0, "utf8");
-  header.write("0000600\0", 100, "ascii");
-  header.write("0000000\0", 108, "ascii");
-  header.write("0000000\0", 116, "ascii");
-  header.write(data.length.toString(8).padStart(11, "0") + "\0", 124, "ascii");
-  header.fill(0x20, 148, 156);
-  header.write("0", 156, "ascii");
-  header.write("ustar\0", 257, "ascii");
-  header.write("00", 263, "ascii");
-  let sum = 0;
-  for (const byte of header) sum += byte;
-  header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
-  return zlib.gzipSync(Buffer.concat([header, data, Buffer.alloc(Math.ceil(data.length / 512) * 512 - data.length + 1024)])).toString("base64");
+  // Structural selection fixture only; real LevelDB semantics are exercised
+  // by sync-state-acceptance with a production-launched managed browser.
+  const parts: Buffer[] = [];
+  for (const [name, text] of [["CURRENT", "MANIFEST-000001\n"], ["MANIFEST-000001", "synthetic manifest"], ["000001.log", side]]) {
+    const data = Buffer.from(text), header = Buffer.alloc(512);
+    header.write(name, 0, "utf8");
+    header.write("0000600\0", 100, "ascii");
+    header.write("0000000\0", 108, "ascii");
+    header.write("0000000\0", 116, "ascii");
+    header.write(data.length.toString(8).padStart(11, "0") + "\0", 124, "ascii");
+    header.fill(0x20, 148, 156);
+    header.write("0", 156, "ascii");
+    header.write("ustar\0", 257, "ascii");
+    header.write("00", 263, "ascii");
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+    parts.push(header, data, Buffer.alloc(Math.ceil(data.length / 512) * 512 - data.length));
+  }
+  return zlib.gzipSync(Buffer.concat([...parts, Buffer.alloc(1024)])).toString("base64");
 }
 
 async function mockS3() {
@@ -115,8 +120,10 @@ describe("F01 pull source selection and browser artifacts", () => {
       ...(options.remoteMarker ? { syncedAt: 1760000000000, syncedHash: "remote-marker" } : {}),
     };
     const localDefault = profileDir(id);
-    const localLs = path.join(localDefault, "Local Storage", "leveldb", "CURRENT");
+    const localLs = path.join(localDefault, "Local Storage", "leveldb", "000001.log");
     fs.mkdirSync(path.dirname(localLs), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(localLs), "CURRENT"), "MANIFEST-000001\n");
+    fs.writeFileSync(path.join(path.dirname(localLs), "MANIFEST-000001"), "synthetic local manifest");
     fs.writeFileSync(localLs, "local");
     fs.writeFileSync(path.join(localDefault, "Preferences"), prefs("local"));
     fs.mkdirSync(path.dirname(cookiePath(id)), { recursive: true });
@@ -134,7 +141,8 @@ describe("F01 pull source selection and browser artifacts", () => {
       strategy: options.strategy,
       resolutions: options.resolution ? { [`profiles:${id}`]: options.resolution } : undefined,
     });
-    expect(pull.success, pull.message).toBe(true);
+    expect(pull.success, pull.message).toBe(!options.locked);
+    if (options.locked) expect(pull.outcome).toBe("partial");
     const metadata = readConfig().browserProfiles[id];
     const fromApi = await h.page.evaluate((profileId) => (window as any).agentBrowser.api.profile.get(profileId), id);
     const fromQuery = (await h.page.evaluate(() => (window as any).agentBrowser.api.profile.list()) as any[]).filter((entry) => entry.dirId === id);
@@ -179,7 +187,7 @@ describe("F01 pull source selection and browser artifacts", () => {
     expect(result.success, result.message).toBe(true);
     expect(readConfig().browserProfiles[id].name).toBe(metadata.name);
     expect(JSON.parse(fs.readFileSync(path.join(profileDir(id), "Preferences"), "utf8")).profile.f01).toBe("remote");
-    expect(fs.readFileSync(path.join(profileDir(id), "Local Storage", "leveldb", "CURRENT"), "utf8")).toBe("remote");
+    expect(fs.readFileSync(path.join(profileDir(id), "Local Storage", "leveldb", "000001.log"), "utf8")).toBe("remote");
     expect(JSON.parse(fs.readFileSync(cookiePath(id), "utf8"))[0].value).toBe("remote");
     expect((await h.page.evaluate((profileId) => (window as any).agentBrowser.api.profile.get(profileId), id)).name).toBe(metadata.name);
   });
@@ -203,7 +211,7 @@ describe("F01 pull source selection and browser artifacts", () => {
     expect(JSON.stringify(config.browserProfiles[localOnlyId])).toBe(localOnlySnapshot);
     expect(config.browserProfiles[remoteOnlyId].name).toBe(remoteOnly.name);
     expect(JSON.parse(fs.readFileSync(path.join(profileDir(remoteOnlyId), "Preferences"), "utf8")).profile.f01).toBe("remote");
-    expect(fs.readFileSync(path.join(profileDir(remoteOnlyId), "Local Storage", "leveldb", "CURRENT"), "utf8")).toBe("remote");
+    expect(fs.readFileSync(path.join(profileDir(remoteOnlyId), "Local Storage", "leveldb", "000001.log"), "utf8")).toBe("remote");
     expect(JSON.parse(fs.readFileSync(cookiePath(remoteOnlyId), "utf8"))[0].value).toBe("remote");
     const profiles = await h.page.evaluate(() => (window as any).agentBrowser.api.profile.list()) as any[];
     expect(profiles.filter((p) => p.dirId === remoteOnlyId).map((p) => p.name)).toEqual([remoteOnly.name]);

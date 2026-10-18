@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import type { BrowserProfileMeta, ProxyConfig } from "../../src/main/types.js";
 
 // Every external effect is replaced before importing the ACTUAL exported
@@ -17,7 +18,9 @@ const f = vi.hoisted(() => ({
   firefoxBinary: vi.fn(), firefoxSpawn: vi.fn(), firefoxPrefs: vi.fn(),
   firefoxIdentity: vi.fn(), firefoxManaged: vi.fn(), bidiConnect: vi.fn(), bidiPreload: vi.fn(), bidiSessions: new Map<number, any>(),
   nativeRequested: false, firefoxCapabilities: vi.fn(), consistency: vi.fn(), persona: vi.fn(), captureFingerprint: vi.fn(), cachedDetection: vi.fn(),
-  deadPids: new Set<number>(), envRisk: vi.fn(),
+  fingerprintDiff: vi.fn(), riskyDrift: vi.fn(),
+  deadPids: new Set<number>(), envRisk: vi.fn(), windows: [] as any[],
+  queuedCookies: [] as any[], cookieApply: vi.fn(),
 }));
 
 vi.mock("node:fs", () => f.fs);
@@ -28,7 +31,7 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(() => { throw new Error("No real process enumeration"); }),
   exec: vi.fn(() => { throw new Error("No real process enumeration"); }),
 }));
-vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] }, screen: { getPrimaryDisplay: () => ({ scaleFactor: 2 }) } }));
+vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => f.windows }, screen: { getPrimaryDisplay: () => ({ scaleFactor: 2 }) } }));
 vi.mock("../../src/main/services/browser-platform-policy.js", () => ({ getHostBrowserPlatform: () => f.host }));
 vi.mock("../../src/main/services/config-manager.js", () => ({
   getConfig: () => f.cfg, getProfilesDir: () => "/virtual/profiles", getAppDataDir: () => "/virtual/state",
@@ -60,10 +63,13 @@ vi.mock("../../src/main/services/extension-repository.js", () => ({ getEnabledRe
 vi.mock("../../src/main/services/team.js", () => ({ requireProfileMutation: () => ({ ok: true }) }));
 vi.mock("../../src/main/services/config/store.js", () => ({ transact: f.transact }));
 vi.mock("../../src/main/services/event-bus.js", () => ({ emitEvent: vi.fn() }));
-vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({ cdpCookieService: { applyQueuedImports: vi.fn(async () => 0) } }));
+vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({
+  cdpCookieService: { applyQueuedImports: f.cookieApply },
+  readQueuedCookieImports: () => f.queuedCookies.map((cookie) => ({ ...cookie })),
+}));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: { applyQueuedImports: vi.fn(async () => 0) } }));
 vi.mock("../../src/main/services/fingerprint-baseline.js", () => ({
-  captureFingerprint: f.captureFingerprint, diffFingerprints: () => [], hasRiskyDrift: () => false,
+  captureFingerprint: f.captureFingerprint, diffFingerprints: f.fingerprintDiff, hasRiskyDrift: f.riskyDrift,
   summarizeDrift: () => "", checkPersonaConsistency: f.persona, mismatchesAsDrift: () => [],
 }));
 vi.mock("../../src/main/services/environment-risk.js", () => ({
@@ -127,6 +133,7 @@ vi.mock("../../src/main/services/bidi-client.js", () => ({
 import { createBrowserProfile, launchBrowser } from "../../src/main/services/browser-manager.js";
 import { LaunchBlockedError } from "../../src/main/services/browser/launch-guards.js";
 import { runningProcesses } from "../../src/main/services/browser/runtime-table.js";
+import { emitEvent } from "../../src/main/services/event-bus.js";
 import {
   assertChromiumLaunchProvenance, chromiumLaunchRequestHash, chromiumLaunchStampArg, stampChromiumLaunch,
   CHROMIUM_LAUNCH_STAMP_SWITCH,
@@ -192,7 +199,8 @@ beforeEach(() => {
   f.lock.mockImplementation(() => f.release);
   f.inspect.mockImplementation((_dir, trackedPid) => inspectBrowserLaunchLines(["9 /virtual/unrelated-process", ...f.lines], profileDir, trackedPid));
   f.legacy.mockReturnValue(null);
-  f.deadPids.clear(); f.bidiSessions.clear();
+  f.deadPids.clear(); f.bidiSessions.clear(); f.windows = [];
+  f.queuedCookies = []; f.cookieApply.mockReset().mockResolvedValue(0);
   f.kill.mockImplementation((target) => {
     if (f.deadPids.has(target)) throw Object.assign(new Error("fixture: exited"), { code: "ESRCH" });
     return true;
@@ -207,6 +215,8 @@ beforeEach(() => {
   f.consistency.mockReset().mockReturnValue({ ok: true, warnings: [], blockers: [] });
   f.persona.mockReset().mockReturnValue({ ok: true, mismatches: [] });
   f.captureFingerprint.mockReset().mockResolvedValue({ timezone: "UTC" });
+  f.fingerprintDiff.mockReset().mockReturnValue([]);
+  f.riskyDrift.mockReset().mockReturnValue(false);
   f.nativeRequested = false;
   f.firefoxCapabilities.mockReset().mockResolvedValue(null);
   f.bidiPreload.mockReset().mockResolvedValue("unit-preload");
@@ -303,6 +313,158 @@ describe("actual common-create entry with fake storage", () => {
 });
 
 describe("actual exported launch ordering", () => {
+  it("reports the checked empty Cookie queue without claiming any applied Cookie", async () => {
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ pid, cdpPort: port, cookieCheck: { checked: true, applied: 0, pending: 0 } });
+    expect((result as any).cookieCheck.error).toBeUndefined();
+  });
+
+  it.each([0, 1])("reports incomplete queued Cookie application after a successful launch: %i of 2", async (applied) => {
+    f.queuedCookies = ["first", "second"].map((name) => ({ domain: "example.test", name, value: "synthetic-unit-cookie", path: "/", secure: false, httpOnly: false, expires: null, sameSite: 1 }));
+    f.cookieApply.mockResolvedValue(applied);
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ pid, cdpPort: port, cookieCheck: { checked: true, applied, pending: 2, error: "COOKIE_IMPORT_INCOMPLETE" } });
+    expect(runningProcesses.get(dirId)?.process).toBe(f.spawn.mock.results[0].value);
+    expect(f.kill.mock.calls.every((call) => call[1] === 0)).toBe(true);
+    expect(f.cookieApply).toHaveBeenCalledExactlyOnceWith(dirId, expect.objectContaining({ port, isCurrent: expect.any(Function) }));
+    const target = f.cookieApply.mock.calls[0][1];
+    expect(target.isCurrent()).toBe(true);
+    const original = runningProcesses.get(dirId)!;
+    runningProcesses.set(dirId, { ...original });
+    expect(target.isCurrent()).toBe(true); // Verified warm reuse can retain this same native child.
+    runningProcesses.set(dirId, { ...original, process: {} });
+    expect(target.isCurrent()).toBe(false);
+    runningProcesses.set(dirId, { ...original, port: port + 1 });
+    expect(target.isCurrent()).toBe(false);
+  });
+
+  it.each(["exitCode", "signalCode", "killed", "pid"] as const)("invalidates queued Cookie native-owner liveness when the child changes %s without replacing its entry", async (field) => {
+    f.queuedCookies = [{ domain: "example.test", name: "session", value: "synthetic-unit-cookie", path: "/" }];
+    const observed: boolean[] = [];
+    f.cookieApply.mockImplementation(async (_id, target) => {
+      const entry = runningProcesses.get(dirId)!;
+      const child = f.spawn.mock.results[0].value;
+      observed.push(target.isCurrent());
+      child[field] = field === "exitCode" ? 0 : field === "signalCode" ? "SIGTERM" : field === "killed" ? true : pid + 1;
+      expect(runningProcesses.get(dirId)).toBe(entry);
+      observed.push(target.isCurrent());
+      return 0;
+    });
+    await launchBrowser(dirId);
+    expect(observed).toEqual([true, false]);
+  });
+
+  it("reports full queued Cookie application only after observing the consumed queue", async () => {
+    f.queuedCookies = [{ domain: "example.test", name: "session", value: "synthetic-unit-cookie", path: "/" }];
+    f.cookieApply.mockImplementation(async () => { f.queuedCookies = []; return 1; });
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ cookieCheck: { checked: true, applied: 1, pending: 0 } });
+    expect((result as any).cookieCheck.error).toBeUndefined();
+  });
+
+  it("keeps the launched browser and reports a redacted queued Cookie failure instead of pretending it was unchecked", async () => {
+    f.queuedCookies = [{ domain: "example.test", name: "session", value: "synthetic-unit-cookie", path: "/" }];
+    f.cookieApply.mockRejectedValue(new Error("synthetic-cookie-canary-must-not-be-logged"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ pid, cdpPort: port, cookieCheck: { checked: true, applied: 0, pending: 1, error: "COOKIE_IMPORT_UNAVAILABLE" } });
+    expect(runningProcesses.get(dirId)?.process).toBe(f.spawn.mock.results[0].value);
+    expect(f.kill.mock.calls.every((call) => call[1] === 0)).toBe(true);
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("synthetic-cookie-canary-must-not-be-logged");
+  });
+
+  it.each([0, 1, 2])("notifies actual Chromium exit after %i verified warm reuses of the same child", async (reuses) => {
+    const launched = await launchBrowser(dirId);
+    const original = runningProcesses.get(dirId)!;
+    const child = f.spawn.mock.results[0].value;
+    const [actualBin, args] = f.spawn.mock.calls[0] as [string, string[]];
+    const exited = child.on.mock.calls.find(([event]: [string]) => event === "exit")?.[1];
+    expect(exited).toBeTypeOf("function");
+    f.lines = [`${pid} ${actualBin} ${args.join(" ")}`];
+    for (let reuse = 0; reuse < reuses; reuse++) {
+      const previous = runningProcesses.get(dirId)!;
+      expect(await launchBrowser(dirId)).toMatchObject({ pid: launched.pid, cdpPort: launched.cdpPort });
+      expect(runningProcesses.get(dirId)).not.toBe(previous);
+      expect(runningProcesses.get(dirId)?.process).toBe(child);
+    }
+    expect(f.spawn).toHaveBeenCalledOnce();
+    const current = runningProcesses.get(dirId)!;
+    expect(current === original).toBe(reuses === 0);
+    const timer = setTimeout(() => { throw new Error("Owned stop timer was not cleared on real child exit"); }, 60_000);
+    const close = vi.fn(async () => undefined);
+    current.killTimer = timer;
+    current.stopping = true;
+    current.proxyBridge = { close } as any;
+    const send = vi.fn();
+    f.windows = [{ isDestroyed: () => false, webContents: { send } }];
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    vi.mocked(emitEvent).mockClear(); f.fs.closeSync.mockClear();
+    child.exitCode = 0; f.deadPids.add(pid);
+    try {
+      exited(0, null);
+      expect(runningProcesses.has(dirId)).toBe(false);
+      expect(cleared).toHaveBeenCalledWith(timer);
+      expect(close).toHaveBeenCalledOnce();
+      expect(f.fs.closeSync).toHaveBeenCalledWith(21);
+      expect(send.mock.calls).toEqual([
+        ["browser:exited", { dirId, pid, timestamp: expect.any(Number) }],
+        ["cloak:exited", { dirId, pid, timestamp: expect.any(Number) }],
+      ]);
+      expect(emitEvent).toHaveBeenCalledExactlyOnceWith("profile:exited", { dirId, pid });
+    } finally { clearTimeout(timer); }
+  });
+
+  it.each(["pid", "port", "child", "in-place-child"] as const)("does not adopt an old exit when the runtime changed its %s identity", async (changed) => {
+    await launchBrowser(dirId);
+    const original = runningProcesses.get(dirId)!;
+    const child = f.spawn.mock.results[0].value;
+    const exited = child.on.mock.calls.find(([event]: [string]) => event === "exit")?.[1];
+    expect(exited).toBeTypeOf("function");
+    const current = changed === "in-place-child" ? original : { ...original };
+    if (changed === "pid") current.pid++;
+    else if (changed === "port") current.port++;
+    else current.process = { ...child };
+    const timer = setTimeout(() => { throw new Error("Replacement timer must be cleaned by its own test owner"); }, 60_000);
+    const close = vi.fn(async () => undefined);
+    current.killTimer = timer; current.proxyBridge = { close } as any;
+    runningProcesses.set(dirId, current);
+    const send = vi.fn();
+    f.windows = [{ isDestroyed: () => false, webContents: { send } }];
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    vi.mocked(emitEvent).mockClear(); f.fs.closeSync.mockClear();
+    try {
+      exited(0, null);
+      expect(runningProcesses.get(dirId)).toBe(current);
+      expect(cleared).not.toHaveBeenCalledWith(timer);
+      expect(close).not.toHaveBeenCalled();
+      expect(f.fs.closeSync).toHaveBeenCalledWith(21);
+      expect(send).not.toHaveBeenCalled();
+      expect(emitEvent).not.toHaveBeenCalled();
+    } finally { clearTimeout(timer); }
+  });
+
+  it.each(["same PID and port", "different PID and port"] as const)("does not let an old Chromium exit clear a replacement runtime: %s", async (kind) => {
+    await launchBrowser(dirId);
+    const original = runningProcesses.get(dirId)!;
+    const child = f.spawn.mock.results[0].value;
+    const exited = child.on.mock.calls.find(([event]: [string]) => event === "exit")?.[1];
+    expect(exited).toBeTypeOf("function");
+    const timer = setTimeout(() => { throw new Error("Replacement timer must be cleaned by its own test owner"); }, 60_000);
+    const close = vi.fn(async () => undefined);
+    const replacement = { ...original, process: {}, proxyBridge: { close }, killTimer: timer,
+      ...(kind === "different PID and port" ? { pid: pid + 1, port: port + 1 } : {}) };
+    runningProcesses.set(dirId, replacement);
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    vi.mocked(emitEvent).mockClear();
+    try {
+      exited(0, null);
+      expect(runningProcesses.get(dirId)).toBe(replacement);
+      expect(cleared).not.toHaveBeenCalledWith(timer);
+      expect(close).not.toHaveBeenCalled();
+      expect(emitEvent).not.toHaveBeenCalled();
+    } finally { clearTimeout(timer); }
+  });
+
   it.each(["cached", "discovered", "fresh"])("blocks the Win32 persona/native Apple-host mismatch before %s reuse or spawn", async (route) => {
     currentMeta().platform = "windows";
     const fixture = launchedFixture();
@@ -326,6 +488,139 @@ describe("actual exported launch ordering", () => {
     await blocked("host-platform-mismatch");
     expect(f.inspect).not.toHaveBeenCalled();
   });
+});
+
+describe("late Chromium startup failures preserve a replacement owner", () => {
+  it.each(["readiness-rejection", "fingerprint-drift-block"] as const)(
+    "does not clean replacement B when stopped launch A resumes at %s", async (boundary) => {
+      if (boundary === "fingerprint-drift-block") {
+        // Keep the real guard, comparison and risk classification. Only its
+        // external fingerprint capture is delayed; do not manufacture a block
+        // by throwing from an audit mock or replacing the launcher/guard.
+        const actual = await vi.importActual<typeof import("../../src/main/services/fingerprint-baseline.js")>("../../src/main/services/fingerprint-baseline.js");
+        f.fingerprintDiff.mockImplementation(actual.diffFingerprints);
+        f.riskyDrift.mockImplementation(actual.hasRiskyDrift);
+        currentMeta().fingerprintBaseline = { tz: "UTC" };
+        f.cfg.blockOnFingerprintDrift = true;
+        f.captureFingerprint.mockResolvedValue({ tz: "UTC" });
+      }
+
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      let nextPid = pid, nextPort = port, nextLogFd = 21;
+      f.spawn.mockImplementation((file: string, args: string[]) => Object.assign(new EventEmitter(), {
+        pid: nextPid++, spawnargs: [file, ...args], exitCode: null as number | null,
+        signalCode: null as string | null, killed: false, unref: vi.fn(),
+      }));
+      f.fs.openSync.mockImplementation(() => nextLogFd++);
+      f.netCreate.mockImplementation(() => {
+        const assignedPort = nextPort++;
+        return { once: vi.fn(), listen: (_port: number, _host: string, ready: () => void) => ready(),
+          address: () => ({ port: assignedPort }), close: (closed: () => void) => closed() };
+      });
+      f.fetch.mockImplementation(async (url) => {
+        const endpoint = new URL(String(url));
+        return { ok: true, status: 200, json: async () => ({ Browser: "Chrome/150.0.7800.1",
+          webSocketDebuggerUrl: `ws://${endpoint.host}/devtools/browser/task525` }) };
+      });
+      let entered!: () => void, resume!: (value: any) => void, reject!: (error: Error) => void;
+      const reached = new Promise<void>((resolve) => { entered = resolve; });
+      const held = new Promise<any>((resolve, fail) => { resume = resolve; reject = fail; });
+      const wait = () => { entered(); return held; };
+      if (boundary === "readiness-rejection") f.fetch.mockImplementationOnce(wait);
+      else f.captureFingerprint.mockImplementationOnce(wait);
+      const launchingA = launchBrowser(dirId).then(result => ({ result, error: null }), error => ({ result: null, error }));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([reached, launchingA.then(() => { throw new Error("Launch A did not reach the selected external boundary"); })]);
+        const entryA = runningProcesses.get(dirId)!;
+        const childA = f.spawn.mock.results[0].value;
+        const capturedA = { child: childA, pid: entryA.pid, port: entryA.port };
+        expect(entryA.process).toBe(capturedA.child);
+        expect(capturedA).toMatchObject({ pid, port });
+        expect(f.release).toHaveBeenCalledOnce(); // The real launcher has released its startup lock.
+
+        // Supply the post-stop native exit boundary, not a copied stop routine.
+        // B must use the real launcher's ESRCH path if A has no exit listener yet.
+        entryA.stopping = true;
+        childA.exitCode = 0; f.deadPids.add(capturedA.pid);
+        childA.emit("exit", 0, null);
+        const resultB = await launchBrowser(dirId);
+        const entryB = runningProcesses.get(dirId)!;
+        const childB = f.spawn.mock.results[1].value;
+        expect(resultB).toMatchObject({ pid: pid + 1, cdpPort: port + 1 });
+        expect(entryB.process).toBe(childB);
+        expect(f.spawn).toHaveBeenCalledTimes(2);
+        expect(f.release).toHaveBeenCalledTimes(2);
+        expect(assertChromiumLaunchProvenance(f.spawn.mock.calls[1][1], chromiumLaunchRequestHash(currentMeta(), f.cfg), "managed"))
+          .toEqual(entryB.launchProvenance);
+        const closeB = vi.fn(async () => undefined);
+        const timerFired = vi.fn();
+        timer = setTimeout(timerFired, 60_000);
+        const bridgeB = { close: closeB };
+        entryB.killTimer = timer; entryB.stopping = true; entryB.proxyBridge = bridgeB as any;
+        const cleared = vi.spyOn(globalThis, "clearTimeout");
+        const send = vi.fn();
+        f.windows = [{ isDestroyed: () => false, webContents: { send } }];
+        const eventsBeforeFailure = vi.mocked(emitEvent).mock.calls.slice();
+        f.fs.closeSync.mockClear();
+
+        if (boundary === "readiness-rejection") {
+          // The actual readiness loop catches fetch rejection, sleeps 250 ms,
+          // then checks its original 15 s deadline. Advance only the fake clock.
+          await vi.advanceTimersByTimeAsync(15_001);
+          reject(new Error("controlled late A discovery rejection"));
+          await vi.advanceTimersByTimeAsync(250);
+        } else {
+          resume({ tz: "Asia/Tokyo" }); // Real diff/risk logic produces the block.
+        }
+        const outcome = await launchingA;
+        expect.soft(outcome.result).toBeNull();
+        expect.soft(outcome.error).toBeInstanceOf(Error);
+        if (boundary === "readiness-rejection") expect.soft(outcome.error?.message).toContain("CDP did not become ready");
+        else {
+          expect.soft(outcome.error?.message).toMatch(/^Fingerprint drift blocked \(/);
+          expect.soft(outcome.error).toMatchObject({ driftBlocked: true });
+        }
+
+        // A's failure may retire A's own resources, never B's ownership lease.
+        expect.soft(runningProcesses.get(dirId)).toBe(entryB);
+        expect.soft(entryB).toMatchObject({ pid: resultB.pid, port: resultB.cdpPort, stopping: true });
+        expect.soft(entryB.process).toBe(childB);
+        expect.soft(entryB.proxyBridge).toBe(bridgeB);
+        expect.soft(entryB.killTimer).toBe(timer);
+        expect.soft(cleared).not.toHaveBeenCalledWith(timer);
+        expect.soft(timerFired).not.toHaveBeenCalled();
+        expect.soft(closeB).not.toHaveBeenCalled();
+        expect.soft(f.fs.closeSync).not.toHaveBeenCalledWith(22);
+        expect.soft(send).not.toHaveBeenCalled();
+        expect.soft(vi.mocked(emitEvent).mock.calls).toEqual(eventsBeforeFailure);
+        expect.soft(f.kill.mock.calls.filter((call) => call[1] !== 0).every((call) => call[0] === capturedA.pid)).toBe(true);
+        expect.soft(f.secrets).not.toHaveBeenCalled();
+
+        // Positive arm: B's own registered exit still clears its own lease and
+        // emits its notifications exactly once; a blanket no-cleanup fix fails.
+        childB.exitCode = 0; f.deadPids.add(resultB.pid);
+        childB.emit("exit", 0, null);
+        expect(runningProcesses.has(dirId)).toBe(false);
+        expect(cleared).toHaveBeenCalledWith(timer);
+        expect(closeB).toHaveBeenCalledOnce();
+        expect(send.mock.calls).toEqual([
+          ["browser:exited", { dirId, pid: resultB.pid, timestamp: expect.any(Number) }],
+          ["cloak:exited", { dirId, pid: resultB.pid, timestamp: expect.any(Number) }],
+        ]);
+        expect(emitEvent).toHaveBeenLastCalledWith("profile:exited", { dirId, pid: resultB.pid });
+        expect(vi.mocked(emitEvent).mock.calls).toHaveLength(eventsBeforeFailure.length + 1);
+      } finally {
+        // Also settle A if a fixture/precondition assertion failed while held.
+        resume(boundary === "readiness-rejection" ? { ok: true } : { tz: "UTC" });
+        await vi.advanceTimersByTimeAsync(250);
+        await launchingA;
+        if (timer) clearTimeout(timer);
+        f.fetch.mockReset();
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 describe("explicit scoped NetLog launch wiring", () => {

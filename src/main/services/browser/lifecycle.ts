@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { runningProcesses, type RunningEntry } from "./runtime-table.js";
+import { requestChromiumClose } from "./graceful-close.js";
 import { findBrowserByProfileSync } from "../process-discovery.js";
 import { getProfilesDir } from "../config-manager.js";
 import { validateDirId } from "../utils.js";
@@ -17,9 +18,11 @@ function findBrowserByProfile(dirId: string): { pid: number; cdpPort: number } |
   }
 }
 
+const BROWSER_GRACEFUL_CLOSE_MS = 2_500;
 const BROWSER_FORCE_KILL_AFTER_MS = 3_000;
 const BROWSER_SHUTDOWN_POLL_MS = 25;
-export const BROWSER_SHUTDOWN_WAIT_MS = 5_000;
+// Covers native close, the existing TERM-to-KILL interval, and exit observation.
+export const BROWSER_SHUTDOWN_WAIT_MS = 6_000;
 export const BROWSER_SHUTDOWN_MAX_WAIT_MS = 15_000;
 
 export interface BrowserShutdownTarget {
@@ -41,39 +44,94 @@ function beginBrowserStop(
   pids: number[],
 ): boolean {
   if (!pids.length) return false;
+  const owned: RunningEntry = entry || { pid: pids[0], process: null, port: 0, lastActivityAt: Date.now() };
+  const pid = owned.pid;
+  const port = owned.port;
+  if (!entry) runningProcesses.set(dirId, owned);
+  if (owned.killTimer) clearTimeout(owned.killTimer);
+  owned.stopping = true;
+  console.info("[browser-stop]", JSON.stringify({ event: "requested", dirId, pid, port, engine: owned.engine || "unknown" }));
 
-  if (entry?.bidiConn) {
-    dropFirefoxSession(entry.port);
-    try { entry.bidiConn.close(); } catch { /* ignore */ }
-  }
-  if (entry) delete entry.bidiConn;
-
-  if (entry?.killTimer) clearTimeout(entry.killTimer);
-
-  for (const pid of pids) {
-    try { process.kill(pid, "SIGTERM"); } catch { /* liveness is verified below */ }
-  }
-  const killTimer = setTimeout(() => {
-    const current = runningProcesses.get(dirId);
-    if (current && current.pid === pids[0]) {
-      for (const pid of pids) {
-        try { process.kill(pid, "SIGKILL"); } catch { /* reported by awaited shutdown */ }
+  const isCurrent = () => runningProcesses.get(dirId) === owned && owned.pid === pid && owned.port === port;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let phase: "graceful" | "signal" | "finished" = "graceful";
+  let deadline = Date.now() + BROWSER_GRACEFUL_CLOSE_MS;
+  const clearTimer = () => {
+    if (timer) clearTimeout(timer);
+    if (owned.killTimer === timer) delete owned.killTimer;
+    timer = undefined;
+  };
+  const releaseExited = (): boolean => {
+    if (!isCurrent()) { clearTimer(); phase = "finished"; return true; }
+    if (pids.some(isLivePid)) return false;
+    clearTimer();
+    phase = "finished";
+    void owned.proxyBridge?.close().catch((error) => console.error("[browser-stop] proxy bridge cleanup failed:", error));
+    runningProcesses.delete(dirId);
+    return true;
+  };
+  const signal = (kind: "SIGTERM" | "SIGKILL") => {
+    for (const target of pids) {
+      if (!isCurrent() || !isLivePid(target)) continue;
+      try {
+        process.kill(target, kind);
+        console.info("[browser-stop]", JSON.stringify({ event: "signal-sent", dirId, pid: target, signal: kind }));
       }
-      void current.proxyBridge?.close().catch(() => undefined);
-      runningProcesses.delete(dirId);
+      catch (error: any) {
+        if (error?.code !== "ESRCH") console.error(`[browser-stop] ${kind} failed for ${dirId}:`, error);
+      }
     }
-  }, BROWSER_FORCE_KILL_AFTER_MS);
+  };
+  const poll = () => {
+    clearTimer();
+    if (phase === "finished" || releaseExited()) return;
+    if (Date.now() >= deadline) {
+      if (phase === "graceful") { fallback("timeout"); return; }
+      signal("SIGKILL");
+      // A sent signal is not an exit. Keep a still-live runtime owned/stopping;
+      // status and awaited shutdown must continue to report it as unfinished.
+      releaseExited();
+      phase = "finished";
+      return;
+    }
+    timer = setTimeout(poll, Math.min(BROWSER_SHUTDOWN_POLL_MS, deadline - Date.now()));
+    owned.killTimer = timer;
+  };
+  const fallback = (reason: string) => {
+    if (phase !== "graceful" || releaseExited()) return;
+    clearTimer();
+    phase = "signal";
+    deadline = Date.now() + BROWSER_FORCE_KILL_AFTER_MS;
+    if (owned.engine === "chromium") {
+      console.warn(`[browser-stop] native close ${reason}; falling back to signals for ${dirId}, persistence unverified`);
+    }
+    if (owned.bidiConn) {
+      dropFirefoxSession(port);
+      try { owned.bidiConn.close(); }
+      catch (error) { console.error("[browser-stop] BiDi disconnect failed:", error); }
+      delete owned.bidiConn;
+    }
+    signal("SIGTERM");
+    poll();
+  };
 
-  if (entry) {
-    entry.stopping = true;
-    entry.killTimer = killTimer;
+  if (owned.engine === "chromium" && Number.isInteger(port) && port > 0 && port <= 65535) {
+    poll();
+    if (isCurrent()) {
+      try {
+        void requestChromiumClose(port, isCurrent, BROWSER_GRACEFUL_CLOSE_MS).then((result) => {
+          console.info("[browser-stop]", JSON.stringify({ event: "native-close-result", dirId, pid, result }));
+          if (phase !== "graceful" || releaseExited()) return;
+          if (result !== "acknowledged" && result !== "disconnected") fallback(result);
+        }, () => fallback("failed"));
+      } catch { fallback("failed"); }
+    }
   } else {
-    runningProcesses.set(dirId, {
-      pid: pids[0], process: null, port: 0, lastActivityAt: Date.now(), killTimer,
-    });
+    fallback("unavailable");
   }
 
   recordAudit({ category: "profile", action: "stop", target: dirId, actor: "user" });
+  // Existing callers consume an accepted boolean, not a completion Promise.
   return true;
 }
 

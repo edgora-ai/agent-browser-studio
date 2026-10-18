@@ -1,12 +1,13 @@
 // Profile archive export/import round-trip: meta + browser data survive the
 // zip, cache/lock files are excluded, names dedupe on re-import, and corrupt /
 // foreign archives are rejected.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), `agent-browser-archive-test-${process.pid}`);
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-archive-test-"));
+const TEST_USER_DATA = path.join(TEST_ROOT, "user-data");
 vi.mock("electron", () => ({
   app: {
     getPath: (name: string) => (name === "userData" || name === "home" ? TEST_USER_DATA : "/tmp"),
@@ -27,7 +28,8 @@ import { exportProfileArchive, importProfileArchive, exportProfileArchives, impo
 import { getProfilesDir, getProfileMeta, getConfig, getConfigPath, reloadConfig, saveConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
 import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
 
-const ARCHIVES = path.join(os.tmpdir(), `agent-browser-archive-export-${process.pid}`);
+const ARCHIVES = path.join(TEST_ROOT, "exports");
+afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 function profileDir(dirId: string): string {
   return path.join(getProfilesDir(), dirId);
@@ -212,7 +214,7 @@ describe("profile archive export/import", () => {
       for (const note of ["before" + control + "after", control + "note", "note" + control, control, "n".repeat(2000) + control]) {
         setProfileMeta(created.dirId, { note });
         const zipPath = path.join(ARCHIVES, "rejected-note.zip");
-        await exportProfileArchive(created.dirId, zipPath);
+        await exportProfileArchive(created.dirId, zipPath, { overwrite: true });
         expect(archiveMeta(zipPath).profile.note).toBe(note);
         const beforeConfig = fs.readFileSync(getConfigPath(), "utf8");
         const beforeIds = fs.readdirSync(getProfilesDir()).sort();

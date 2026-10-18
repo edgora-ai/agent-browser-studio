@@ -10,17 +10,264 @@
 
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
 
-  function setButtonBusy(selector, busyText) {
-    var btn = document.querySelector(selector);
-    if (!btn) return null;
-    var old = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = busyText;
-    return function() {
-      btn.disabled = false;
-      btn.textContent = old;
-    };
+  // Reads belong to a view epoch, not just to their individual requests. A
+  // mutation's start AND completion revoke every earlier read, including errors.
+  var viewEpoch = 0;
+  var statusSeq = 0;
+  var previewSeq = 0;
+  var syncDiffSeq = 0;
+  var teamSeq = 0;
+  var serverGeneration = -1;
+  var serverPhase = 'idle';
+  var serverOperationId = null;
+  var activeOperation = null;
+  var localOperation = null;
+  var viewedComparison = null;
+  var lastResult = null;
+  var formBaseline = {};
+  var formTouched = {};
+  var formFields = ['sync-enabled', 'sync-endpoint-input', 'sync-bucket-input', 'sync-custody-consent', 'sync-ak-input', 'sync-sk-input'];
+  var checkboxFields = { 'sync-enabled': true, 'sync-custody-consent': true };
+  var controls = [
+    { cmd: 'syncPush', kind: 'push', key: 'sync.push', fallback: 'Push' },
+    { cmd: 'syncPull', kind: 'pull', key: 'sync.pull', fallback: 'Pull' },
+    { cmd: 'syncSave', kind: 'configure', key: 'common.save', fallback: 'Save' }
+  ];
+
+  function syncPanel(id) {
+    var el = document.getElementById(id);
+    var parent = document.getElementById('sync-status');
+    if (!el && parent && typeof document.createElement === 'function') {
+      el = document.createElement('div');
+      el.id = id;
+      el.style.marginTop = '8px';
+      el.style.wordBreak = 'break-word';
+      el.setAttribute('role', 'status');
+      el.setAttribute('aria-live', 'polite');
+      parent.appendChild(el);
+    }
+    return el;
   }
+
+  function setControlLabel(btn, text) {
+    // Preserve the hydrated SVG and any element label; never textContent an
+    // icon host. Old standalone control fixtures may expose only textContent.
+    if (!btn.childNodes || !btn.appendChild || !document.createTextNode) { btn.textContent = text; return; }
+    var icons = Array.prototype.filter.call(btn.childNodes, function(node) { return node.nodeType === 1 && String(node.tagName).toLowerCase() === 'svg'; });
+    btn.textContent = '';
+    icons.forEach(function(node) { btn.appendChild(node); });
+    btn.appendChild(document.createTextNode((icons.length ? ' ' : '') + text));
+  }
+
+  function operationKind(kind) {
+    return kind === 'push' ? t('sync.operation.push', 'Push') : kind === 'pull' ? t('sync.operation.pull', 'Pull') : t('sync.operation.configure', 'Save sync configuration');
+  }
+
+  function renderOperationState() {
+    var busy = !!(localOperation || activeOperation);
+    controls.forEach(function(control) {
+      var btn = document.querySelector('#tab-sync [data-cmd="' + control.cmd + '"]');
+      if (!btn) return;
+      if (busy && !control.owned) { control.wasDisabled = btn.disabled; control.owned = true; }
+      if (busy) btn.disabled = true;
+      else if (control.owned) { btn.disabled = !!control.wasDisabled; control.owned = false; }
+      var label = t(control.key, control.fallback);
+      if (localOperation && localOperation.kind === control.kind) {
+        label = localOperation.stage === 'checking' ? t('sync.operation.checking', 'Checking…') : t('sync.operation.in-progress', 'Sync operation in progress…');
+      }
+      setControlLabel(btn, label);
+    });
+    var tab = document.getElementById('tab-sync');
+    if (tab) tab.setAttribute('aria-busy', busy ? 'true' : 'false');
+    var panel = syncPanel('sync-operation-state');
+    if (!panel) return;
+    var operation = activeOperation || localOperation;
+    panel.className = busy ? 'health-text-watch' : '';
+    if (!operation) { panel.textContent = ''; return; }
+    var message = !activeOperation && localOperation && localOperation.serviceCompleted
+      ? t('sync.operation.waiting-result', 'Waiting for the operation result; it has not been cancelled.')
+      : localOperation && localOperation.stage === 'checking' && !activeOperation
+        ? t('sync.operation.checking', 'Checking…')
+        : t('sync.operation.in-progress', 'Sync operation in progress…');
+    panel.textContent = operationKind(operation.kind) + ' · ' + message + (operation.operationId ? ' · ' + shortId(operation.operationId) : '');
+  }
+
+  function clearComparison(message) {
+    viewedComparison = null;
+    var list = document.getElementById('sync-diff');
+    var label = document.getElementById('sync-diff-message');
+    if (list) list.innerHTML = '';
+    if (label) label.innerHTML = '<span class="health-text-watch">' + esc(message || t('sync.compare.required', 'Compare with remote before pulling; previous choices have been cleared.')) + '</span>';
+  }
+
+  function invalidateViews() {
+    viewEpoch++; statusSeq++; previewSeq++; syncDiffSeq++; teamSeq++;
+    clearComparison();
+    var preview = document.getElementById('sync-preview');
+    var label = document.getElementById('sync-preview-message');
+    if (preview) preview.innerHTML = '';
+    if (label) label.textContent = t('sync.operation.refreshing', 'Sync state changed; refreshing the preview…');
+  }
+
+  function invalidateSurfaceCaches() {
+    ['invalidateProfilesForSync', 'invalidateAccountsForSync', 'invalidateProxiesForSync', 'invalidateExtensionsForSync'].forEach(function(name) {
+      if (typeof agentBrowser[name] === 'function') agentBrowser[name]();
+    });
+  }
+
+  function refreshSurfaces() {
+    var epoch = viewEpoch;
+    var loaders = [['loadProfiles', true], [typeof agentBrowser.agentLoadAccounts === 'function' ? 'agentLoadAccounts' : 'loadAccountsTab'], ['loadProxies'], ['loadExtensionsTab']];
+    var extensionDialog = document.getElementById('dlg-extensions');
+    if (extensionDialog && extensionDialog.open) loaders.push(['_extRefreshList']);
+    return Promise.all(loaders.map(function(loader) {
+      if (typeof agentBrowser[loader[0]] !== 'function') return null;
+      return Promise.resolve().then(function() { return agentBrowser[loader[0]].apply(agentBrowser, loader.slice(1)); }).catch(function() {
+        if (epoch === viewEpoch) toast(t('sync.refresh.failed', 'Sync result was received, but a view could not be refreshed. Reload that view before acting on it.'), 'warning');
+      });
+    }));
+  }
+
+  function captureForm() {
+    var draft = {};
+    formFields.forEach(function(id) { var el = document.getElementById(id); if (el) draft[id] = checkboxFields[id] ? el.checked : el.value; });
+    return draft;
+  }
+
+  formFields.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && typeof el.addEventListener === 'function') {
+      var touch = function() { formTouched[id] = true; };
+      el.addEventListener('input', touch); el.addEventListener('change', touch);
+    }
+  });
+
+  function hydrateField(id, value, requestedDraft, savedDraft) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var current = checkboxFields[id] ? el.checked : el.value;
+    var ownSavedValue = savedDraft && current === savedDraft[id];
+    if (!ownSavedValue && (formTouched[id] || current !== requestedDraft[id] || (Object.prototype.hasOwnProperty.call(formBaseline, id) && current !== formBaseline[id]))) return;
+    if (checkboxFields[id]) el.checked = value; else el.value = value;
+    formBaseline[id] = value;
+    formTouched[id] = false;
+  }
+
+  function comparisonToken(diff) {
+    var token = diff && diff.comparisonToken;
+    if (!token || ['targetId', 'localHash', 'remoteHash'].some(function(key) { return typeof token[key] !== 'string' || !token[key]; })) return null;
+    return { targetId: token.targetId, localHash: token.localHash, remoteHash: token.remoteHash };
+  }
+
+  var OUTCOME = { complete: 'Complete in reported scope', partial: 'Partial completion', failed: 'Failed', cancelled: 'Cancelled', 'recovery-required': 'Recovery required' };
+  var COMMIT = { none: 'No commit reported', committed: 'Committed', partial: 'Partially committed', unknown: 'Unknown' };
+  var ITEM = { applied: 'Applied', uploaded: 'Uploaded', queued: 'Queued', preserved: 'Preserved', skipped: 'Skipped', failed: 'Failed', unknown: 'Unknown' };
+  var SCOPE = { config: 'Configuration', profiles: 'Profiles', cookies: 'Cookies', localStorage: 'LocalStorage', preferences: 'Preferences', extensions: 'Extensions', sidecar: 'Compatibility sidecars', baseline: 'Sync baseline' };
+  function resultLabel(prefix, labels, value) { return t(prefix + value, labels[value] || labels.unknown || value); }
+  function resultOutcome(r) { return OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
+  function limitedResult(r) {
+    return resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
+      r.localCommit === 'partial' || r.remoteCommit === 'partial' || !COMMIT[r.localCommit] || !COMMIT[r.remoteCommit] ||
+      r.localCommit === 'unknown' || r.remoteCommit === 'unknown' || (r.recovery || []).length ||
+      (r.items || []).some(function(item) { return ['queued', 'skipped', 'unknown', 'failed', 'preserved'].indexOf(item.state) >= 0; });
+  }
+
+  function renderResult(r) {
+    if (!r) return;
+    // Events intentionally contain only summary facts. Do not erase detail
+    // already returned by the matching IPC promise with a later summary.
+    if (lastResult && r.operationId && r.operationId === lastResult.operationId) r = Object.assign({}, lastResult, r);
+    lastResult = r;
+    var panel = syncPanel('sync-operation-result');
+    if (!panel) return;
+    var outcome = resultOutcome(r);
+    var limited = limitedResult(r);
+    var tone = limited ? 'health-text-watch' : 'health-text-good';
+    if (outcome === 'failed' || outcome === 'recovery-required') tone = 'health-text-poor';
+    var heading = outcome === 'complete' && limited ? t('sync.result.limited', 'Completed with limitations') : resultLabel('sync.result.outcome.', OUTCOME, outcome);
+    var local = COMMIT[r.localCommit] ? r.localCommit : 'unknown';
+    var remote = COMMIT[r.remoteCommit] ? r.remoteCommit : 'unknown';
+    var html = '<div class="' + tone + '"><strong>' + esc(t('sync.result.title', 'Last synchronization result')) + ' · ' + esc(heading) + '</strong></div>' +
+      '<div>' + esc(t('sync.result.local-commit', 'Local changes')) + ': ' + esc(resultLabel('sync.result.commit.', COMMIT, local)) + ' · ' + esc(t('sync.result.remote-commit', 'Remote publication')) + ': ' + esc(resultLabel('sync.result.commit.', COMMIT, remote)) + '</div>';
+    if (r.message) html += '<div>' + esc(r.message) + '</div>';
+    if (r.code) html += '<div><code>' + esc(r.code) + '</code></div>';
+    (r.items || []).forEach(function(item) {
+      html += '<div>' + esc(resultLabel('sync.result.scope.', SCOPE, item.scope)) + (item.id ? ' · ' + esc(item.id) : '') + ': <strong>' + esc(resultLabel('sync.result.item.', ITEM, item.state)) + '</strong>' +
+        (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (item.message ? ' · ' + esc(item.message) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
+    });
+    if ((r.warnings || []).length) html += '<div class="health-text-watch"><strong>' + esc(t('sync.result.warnings', 'Warnings')) + '</strong>' + (r.warnings || []).map(function(warning) { return '<div>' + esc(warning) + '</div>'; }).join('') + '</div>';
+    if ((r.recovery || []).length || outcome === 'recovery-required') {
+      html += '<div class="health-text-poor">' + esc(t('sync.result.recovery', 'Manual recovery is required. Inspect the retained paths before retrying.')) + '</div>';
+      (r.recovery || []).forEach(function(recovery) { html += '<div><code>' + esc(recovery.resource + ' · ' + recovery.id) + '</code>' + (recovery.paths || []).map(function(file) { return '<div><code>' + esc(file) + '</code></div>'; }).join('') + (recovery.receiptPath ? '<div><code>' + esc(recovery.receiptPath) + '</code></div>' : '') + '</div>'; });
+    }
+    panel.innerHTML = html;
+  }
+
+  function operationBusy() {
+    if (!localOperation && !activeOperation) return false;
+    toast(t('sync.operation.in-progress', 'Sync operation in progress…'), 'warning');
+    return true;
+  }
+
+  function beginOperation(kind) {
+    var operation = { kind: kind, stage: 'checking', operationId: null, startGeneration: serverGeneration, invalidated: false, awaitingReply: false, serviceCompleted: false };
+    localOperation = operation;
+    invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
+    return operation;
+  }
+
+  function ownsOperation(operation) { return localOperation === operation && !operation.invalidated; }
+
+  function dispatchOperation(operation, invoke) {
+    if (!ownsOperation(operation)) { toast(t('sync.compare.stale', 'Sync content changed. Compare again and choose resolutions afresh.'), 'warning'); return Promise.resolve(null); }
+    operation.stage = 'running'; operation.dispatched = true; operation.awaitingReply = true; operation.serviceCompleted = false; operation.operationId = null;
+    invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
+    // These are owned long-running writes, NOT the generic 15-second IPC write
+    // wrapper. A UI timeout must not release an operation that can still commit.
+    return Promise.resolve().then(invoke).then(function(r) {
+      operation.awaitingReply = false;
+      if (r && r.operationId) operation.operationId = r.operationId;
+      return r;
+    });
+  }
+
+  function refreshAfterOperation(savedDraft) {
+    return Promise.all([loadSyncConfig(savedDraft), refreshSurfaces()]);
+  }
+
+  function finishOperation(operation, savedDraft) {
+    if (localOperation !== operation) return Promise.resolve();
+    localOperation = null;
+    renderOperationState();
+    if (activeOperation && activeOperation.operationId !== operation.operationId) return Promise.resolve();
+    invalidateViews(); invalidateSurfaceCaches();
+    return refreshAfterOperation(savedDraft);
+  }
+
+  function applyStateEvent(event) {
+    if (!event || !Number.isSafeInteger(event.generation) || event.generation < 0 || typeof event.operationId !== 'string' || !event.operationId ||
+      ['push', 'pull', 'configure'].indexOf(event.kind) < 0 || ['started', 'completed'].indexOf(event.phase) < 0) return;
+    if (event.generation < serverGeneration) return;
+    if (event.generation === serverGeneration && serverOperationId) {
+      if (event.operationId !== serverOperationId || serverPhase === event.phase || serverPhase === 'completed') return;
+    }
+    var own = localOperation && ((localOperation.operationId === event.operationId) || (localOperation.awaitingReply && !localOperation.operationId && localOperation.kind === event.kind));
+    if (own) localOperation.operationId = event.operationId;
+    else if (localOperation) localOperation.invalidated = true;
+    serverGeneration = event.generation; serverOperationId = event.operationId; serverPhase = event.phase;
+    if (event.phase === 'started') activeOperation = { kind: event.kind, operationId: event.operationId };
+    else if (event.kind !== 'configure' && activeOperation && activeOperation.operationId === event.operationId) activeOperation = null;
+    // A result-less configure completion invalidates reads, not a different
+    // push/pull lease. Keep that owner until fresh status or its own completion.
+    if (own && event.phase === 'completed') localOperation.serviceCompleted = true;
+    invalidateViews(); invalidateSurfaceCaches(); renderOperationState();
+    if (event.phase === 'completed') {
+      if (event.result) renderResult(Object.assign({}, event.result, { operationId: event.operationId }));
+      refreshAfterOperation();
+    } else loadSyncConfig();
+  }
+
+  if (typeof api.on === 'function') api.on('sync:state-changed', applyStateEvent);
 
   function previewCountCard(label, value, detail) {
     var displayValue = value == null ? 0 : value;
@@ -57,8 +304,10 @@
   }
 
   function fetchPreview() {
+    var epoch = viewEpoch, seq = ++previewSeq;
     return api.sync.preview().then(function(preview) {
-      renderPreview(preview);
+      if (epoch !== viewEpoch) return null;
+      if (seq === previewSeq) renderPreview(preview);
       return preview;
     });
   }
@@ -67,12 +316,14 @@
     var listEl = document.getElementById('sync-preview');
     var messageEl = document.getElementById('sync-preview-message');
     var loading = t('common.loading', 'Loading...');
-    if (listEl && window.agentBrowser&&window.agentBrowser.renderViewState) window.agentBrowser.renderViewState(listEl,{loading:loading}); else if (listEl) listEl.innerHTML = '<div class="loading">' + esc(loading) + '</div>';
+    if (listEl && agentBrowser.renderViewState) agentBrowser.renderViewState(listEl,{loading:loading}); else if (listEl) listEl.innerHTML = '<div class="loading">' + esc(loading) + '</div>';
     if (messageEl) messageEl.textContent = loading;
+    var epoch = viewEpoch, seq = previewSeq + 1;
     return fetchPreview().catch(function(e) {
-      if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(t('sync.preview.load-failed-prefix','Preview 加载失败: ')) + esc(e.message || e) + '</div>';
-      if (messageEl) messageEl.textContent = t('sync.preview.load-failed','Preview 加载失败');
-      toast(t('sync.preview.load-failed-prefix','Preview 加载失败: ') + (e.message || e), 'error');
+      if (epoch !== viewEpoch || seq !== previewSeq) return null;
+      if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(t('sync.preview.load-failed-prefix','Preview load failed: ')) + esc(e.message || e) + '</div>';
+      if (messageEl) messageEl.textContent = t('sync.preview.load-failed','Preview load failed');
+      toast(t('sync.preview.load-failed-prefix','Preview load failed: ') + (e.message || e), 'error');
       return null;
     });
   };
@@ -117,7 +368,7 @@
       });
       lines.push('<div style="font-size:11px;color:var(--text-muted);word-break:break-all;">' + esc(t('sync.changed', 'Changed')) + ': ' + esc(changedLines.join(' · ')) + (section.changed.length > 8 ? ' (+' + (section.changed.length - 8) + ')' : '') + '</div>');
     }
-    if (!chips.length) lines.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.no-diff', 'No differences')) + '</div>');
+    if (!chips.length) lines.push('<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.no-diff', 'No differences in the compared fields')) + '</div>');
     return '<div class="profile-card">' +
       '<div class="card-header card-head-inline"><span class="name">' + esc(title) + '</span><span>' + chips.join(' ') + '</span></div>' +
       lines.join('') +
@@ -135,8 +386,18 @@
       return;
     }
     var timeHtml = diff.firstPush ? '  ·  ' + esc(t('sync.no-remote-yet', 'No remote data yet (first push)')) : (diff.remoteTimestamp ? '  ·  ' + esc(t('sync.remote-last-sync', 'Remote last synced')) + ': <strong class="num" title="' + escAttr(escTime(diff.remoteTimestamp)) + '">' + esc(helpers.relTime ? helpers.relTime(diff.remoteTimestamp) : escTime(diff.remoteTimestamp)) + '</strong>' : '');
-    messageEl.innerHTML = '<span class="health-text-good">' + esc(t('sync.compare-done', 'Comparison complete')) + '</span>' + timeHtml;
-    var cards = [];
+    var coverage = diff.coverage;
+    var covered = !!(coverage && Array.isArray(coverage.compared) && Array.isArray(coverage.notCompared) && Array.isArray(coverage.unverified));
+    var unverified = covered ? coverage.unverified : [];
+    var limited = !covered || unverified.length || !comparisonToken(diff);
+    messageEl.innerHTML = '<span class="' + (limited ? 'health-text-watch' : 'health-text-good') + '">' + esc(limited ? t('sync.compare.unverified', 'Comparison contains unverified data') : t('sync.compare-done', 'Supported scope compared')) + '</span>' + timeHtml;
+    var cards = ['<div class="profile-card"><div style="font-size:12px;line-height:1.5;">' + esc(t('sync.compare.scope', 'Compares portable profile settings and Preferences, proxy/account metadata and extension inventory only. Live Cookies, LocalStorage databases and full profile files are not compared.')) + '</div></div>'];
+    if (limited) {
+      cards.push('<div class="profile-card health-text-watch"><strong>' + esc(t('sync.compare.unverified', 'Comparison contains unverified data')) + '</strong>' +
+        (!covered ? '<div>' + esc(t('sync.compare.coverage-unavailable', 'Coverage evidence is unavailable; no full-content match is claimed.')) + '</div>' : '') +
+        (!comparisonToken(diff) ? '<div>' + esc(t('sync.compare.required', 'Compare with remote before pulling; previous choices have been cleared.')) + '</div>' : '') +
+        unverified.map(function(item) { return '<div>' + esc(item.id) + ' · ' + esc(item.reason) + '</div>'; }).join('') + '</div>');
+    }
     if ((diff.pushWarnings || []).length) {
       cards.push('<div class="profile-card" style="border-color: var(--danger-text);">' +
         '<div class="card-header card-head-inline"><span class="name" style="color: var(--danger-text);">' + esc(t('sync.push-will-remove', 'Push will remove remote data')) + '</span></div>' +
@@ -154,31 +415,38 @@
       '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.remote-artifacts', 'Remote data artifacts')) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text-muted);">' + esc(t('sync.remote-cookies', 'Remote cookies')) + ': ' + esc(String((artifacts.cookies || []).length)) + ' · localStorage: ' + esc(String((artifacts.localStorage || []).length)) + ' · preferences: ' + esc(String((artifacts.preferences || []).length)) + '</div>' +
       '</div>');
-    cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', true));
-    cards.push(diffSectionCard(t('sync.preview.title.proxies','Proxies'), diff.proxies, 'proxies', true));
-    cards.push(diffSectionCard(t('sync.preview.title.accounts','Accounts'), diff.accounts, 'accounts', true));
+    var selectable = !!comparisonToken(diff);
+    cards.push(diffSectionCard(t('sync.preview.title.profiles','Profiles'), diff.profiles, 'profiles', selectable));
+    cards.push(diffSectionCard(t('sync.preview.title.proxies','Proxies'), diff.proxies, 'proxies', selectable));
+    cards.push(diffSectionCard(t('sync.preview.title.accounts','Accounts'), diff.accounts, 'accounts', selectable));
     cards.push(diffSectionCard(t('sync.preview.title.extensions','Extensions'), diff.extensions, 'extensions', false));
     listEl.innerHTML = cards.join('');
   }
 
-  var syncDiffSeq = 0;
   function fetchSyncDiff() {
-    var seq = ++syncDiffSeq;
+    var epoch = viewEpoch, seq = ++syncDiffSeq;
     return api.sync.previewDiff().then(function(diff) {
-      if (seq === syncDiffSeq) renderSyncDiff(diff);
-      // A Push must still check its own preflight, even if Compare supersedes it.
+      if (epoch !== viewEpoch) return null;
+      if (seq === syncDiffSeq) {
+        var token = comparisonToken(diff);
+        viewedComparison = diff && diff.ok && token ? { token: token, epoch: epoch } : null;
+        renderSyncDiff(diff);
+      }
+      // A Push checks its own warnings/token even if another Compare supersedes
+      // its rendering. A mutation, unlike a newer read, revokes that preflight.
       return diff;
     });
   }
 
   agentBrowser.loadSyncDiff = function() {
+    viewedComparison = null;
     var listEl = document.getElementById('sync-diff');
     var messageEl = document.getElementById('sync-diff-message');
     if (listEl) listEl.innerHTML = '<div class="loading">' + esc(t('common.loading', 'Loading…')) + '</div>';
     if (messageEl) messageEl.textContent = t('common.loading', 'Loading…');
-    var seq = syncDiffSeq + 1;
+    var epoch = viewEpoch, seq = syncDiffSeq + 1;
     return fetchSyncDiff().catch(function(e) {
-      if (seq !== syncDiffSeq) return null;
+      if (epoch !== viewEpoch || seq !== syncDiffSeq) return null;
       if (listEl) listEl.innerHTML = '<div class="empty-state">' + esc(e.message || e) + '</div>';
       if (messageEl) messageEl.textContent = t('sync.compare-failed', 'Comparison failed');
       toast(t('sync.compare-failed-prefix', 'Comparison failed: ') + (e.message || String(e)), 'error');
@@ -187,85 +455,101 @@
   };
 
 
+  function stalePreview(r) { return !!(r && (r.code === 'SYNC_PREVIEW_STALE' || /\bSYNC_PREVIEW_STALE\b/.test(r.message || ''))); }
+
+  function reportOperationResult(operation, r, fallback) {
+    if (!r) return;
+    // An old write may settle after another operation has already completed.
+    // It may enrich its own last result, but must not replace a newer result.
+    if (lastResult && r.operationId && lastResult.operationId && r.operationId !== lastResult.operationId &&
+      serverGeneration > operation.startGeneration && r.operationId !== serverOperationId && (!activeOperation || activeOperation.operationId !== r.operationId)) return;
+    renderResult(r);
+    if (stalePreview(r)) {
+      clearComparison(t('sync.compare.stale', 'Sync content changed. Compare again and choose resolutions afresh.'));
+      toast(t('sync.compare.stale', 'Sync content changed. Compare again and choose resolutions afresh.'), 'warning');
+      return;
+    }
+    toastSyncResult(r, fallback);
+  }
+
+  function reportOperationError(operation, e, fallback) {
+    if (!ownsOperation(operation) && !operation.dispatched) return;
+    if (operation.dispatched) {
+      reportOperationResult(operation, { success: false, operationId: operation.operationId, outcome: 'partial', localCommit: 'unknown', remoteCommit: 'unknown',
+        code: stalePreview(e) ? 'SYNC_PREVIEW_STALE' : 'SYNC_RESULT_UNAVAILABLE', message: t('sync.result.unavailable', 'The operation result is unavailable. Changes may already be committed; check the current operation state before retrying.') }, fallback);
+    } else toast(fallback + ': ' + (e.message || String(e)), 'error');
+  }
+
   agentBrowser.syncPush = function() {
-    var reset = setButtonBusy('#tab-sync [data-cmd="syncPush"]', 'Checking...');
-    return fetchPreview().catch(function() { /* preview card is best-effort */ }).then(function() {
-      return fetchSyncDiff();
-    }).then(function(diff) {
-      if (!diff || !diff.ok) throw new Error((diff && diff.message) || t('sync.compare-failed', 'Comparison failed'));
-      if ((diff.pushWarnings || []).length) {
-        var removeMsg = t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + (diff.pushWarnings || []).join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
-        return agentBrowser.confirmAsync(removeMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(ok) {
-          if (!ok) { if (reset) reset(); return null; }
-          return api.sync.push();
-        });
-      }
-      return api.sync.push();
-    }).then(function(r) {
-      if (!r) return;
-      if (!r.success && /locked by another device/i.test(r.message || '')) {
-        var lockMsg = t('sync.push-blocked-by-lock', 'Push blocked by lock protection') + ':\n\n' + r.message + '\n\n' + t('sync.force-override', 'Override and continue?');
-        return agentBrowser.confirmAsync(lockMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(forceOk) {
-          if (!forceOk) { if (reset) reset(); return null; }
-          return api.sync.push({ force: true });
-        });
-      }
-      toastSyncResult(r, t('sync.toast.push-failed', 'Push failed'));
-      if (r.success) agentBrowser.loadSyncConfig();
-      else agentBrowser.loadSyncPreview();
+    if (operationBusy()) return Promise.resolve(null);
+    var operation = beginOperation('push');
+    var token = null;
+    function push(force) {
+      var opts = { comparisonToken: token };
+      if (force) opts.force = true;
+      return dispatchOperation(operation, function() { return api.sync.push(opts); });
+    }
+    return fetchPreview().catch(function() {
+      if (ownsOperation(operation)) toast(t('sync.preview.unavailable', 'Preview unavailable'), 'warning');
       return null;
-    }).then(function(r2) {
-      if (!r2) return;
-      toastSyncResult(r2, t('sync.toast.push-failed', 'Push failed'));
-      if (r2.success) agentBrowser.loadSyncConfig();
-      else agentBrowser.loadSyncPreview();
+    }).then(function() {
+      return ownsOperation(operation) ? fetchSyncDiff() : null;
+    }).then(function(diff) {
+      if (!ownsOperation(operation)) return null;
+      if (!diff || !diff.ok) throw new Error((diff && diff.message) || t('sync.compare-failed', 'Comparison failed'));
+      token = comparisonToken(diff);
+      if (!token) throw new Error(t('sync.compare.required', 'Compare with remote before pulling; previous choices have been cleared.'));
+      if (!(diff.pushWarnings || []).length) return push(false);
+      var removeMsg = t('sync.push-will-remove', 'Push will remove remote data') + ':\n\n' + diff.pushWarnings.join('\n') + '\n\n' + t('sync.continue-push', 'Continue pushing?');
+      return agentBrowser.confirmAsync(removeMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(ok) { return ok ? push(false) : null; });
+    }).then(function(r) {
+      if (!r || stalePreview(r) || r.success || !/locked by another device/i.test(r.message || '')) return r;
+      var lockMsg = t('sync.push-blocked-by-lock', 'Push blocked by lock protection') + ':\n\n' + r.message + '\n\n' + t('sync.force-override', 'Override and continue?');
+      return agentBrowser.confirmAsync(lockMsg, { ackLabel: t('confirm.ack.permanent','我了解此操作会永久删除数据且不可撤销。') }).then(function(forceOk) {
+        // Keep the acknowledged content token. Never silently rebind the force
+        // decision to a fresh remote/local snapshot while this dialog is open.
+        return forceOk ? push(true) : r;
+      });
+    }).then(function(r) {
+      reportOperationResult(operation, r, t('sync.toast.push-failed', 'Push failed'));
+      return r;
     }).catch(function(e) {
-      toast(t('sync.toast.push-error','Push failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
-    }).finally(function() {
-      if (reset) reset();
-    });
+      reportOperationError(operation, e, t('sync.toast.push-failed', 'Push failed'));
+      return null;
+    }).finally(function() { return finishOperation(operation); });
   };
 
   agentBrowser.syncPull = function() {
-    var reset = setButtonBusy('#tab-sync [data-cmd="syncPull"]', 'Checking...');
+    if (operationBusy()) return Promise.resolve(null);
+    if (!viewedComparison || viewedComparison.epoch !== viewEpoch) {
+      toast(t('sync.compare.required', 'Compare with remote before pulling; previous choices have been cleared.'), 'warning');
+      return Promise.resolve(null);
+    }
+    var token = viewedComparison.token;
     var strategySel = document.getElementById('sync-merge-strategy');
     var strategy = strategySel ? strategySel.value : 'local';
+    if (['local', 'remote', 'newest'].indexOf(strategy) < 0) strategy = 'local';
     var resolutions = {};
     Array.prototype.forEach.call(document.querySelectorAll('#sync-diff .sync-entry-strategy'), function(sel) {
-      var section = sel.getAttribute('data-section');
-      var id = sel.getAttribute('data-id');
-      var value = sel.value;
-      if (section && id && value) resolutions[section + ':' + id] = value;
+      var section = sel.getAttribute('data-section'), id = sel.getAttribute('data-id'), value = sel.value;
+      if (['profiles', 'proxies', 'accounts'].indexOf(section) >= 0 && id && ['local', 'remote', 'newest'].indexOf(value) >= 0) resolutions[section + ':' + id] = value;
     });
+    // Capture the exact displayed proof/choices BEFORE invalidating the UI.
+    var operation = beginOperation('pull');
+    function pull() { return dispatchOperation(operation, function() { return api.sync.pull({ strategy: strategy, resolutions: resolutions, comparisonToken: token }); }); }
     return fetchPreview().then(function(preview) {
-      var running = (preview && preview.runningProfiles) || [];
-      var proceed = function() {
-        return api.sync.pull({ strategy: strategy, resolutions: resolutions }).then(function(r) {
-          toastSyncResult(r, t('sync.toast.pull-failed', 'Pull failed'));
-          if (!r.success) { agentBrowser.loadSyncPreview(); return; }
-          return api.app.reloadConfig().then(function() {
-            agentBrowser.loadSyncConfig();
-          }).catch(function(e) {
-            toast(t('sync.toast.reload-failed','Reload config failed: ') + (e.message || String(e)), 'error');
-            agentBrowser.loadSyncConfig();
-          });
-        }).catch(function(e) {
-          toast(t('sync.toast.pull-error','Pull failed: {msg}').replace('{msg}', e.message || String(e)), 'error');
-        });
-      };
-      if (running.length) {
-        var runMsg = t('sync.confirm.pull-running','Detected {n} running profile(s). Pull will skip localStorage/preferences for them. Continue?').replace('{n}', String(running.length));
-        return agentBrowser.confirmAsync(runMsg).then(function(ok) {
-          if (!ok) return;
-          return proceed();
-        });
-      }
-      return proceed();
+      if (!ownsOperation(operation) || !preview) return null;
+      var running = preview.runningProfiles || [];
+      if (!running.length) return pull();
+      var runMsg = t('sync.confirm.pull-running','Detected {n} running profile(s). Pull will skip localStorage/preferences for them. Continue?').replace('{n}', String(running.length));
+      return agentBrowser.confirmAsync(runMsg).then(function(ok) { return ok ? pull() : null; });
+    }).then(function(r) {
+      reportOperationResult(operation, r, t('sync.toast.pull-failed', 'Pull failed'));
+      return r;
     }).catch(function(e) {
-      toast(t('sync.toast.preview-failed','Preview failed: ') + (e.message || String(e)), 'error');
-    }).finally(function() {
-      if (reset) reset();
-    });
+      reportOperationError(operation, e, t('sync.toast.pull-failed', 'Pull failed'));
+      return null;
+    }).finally(function() { return finishOperation(operation); });
   };
 
   // Sale-93: custody consent rides a SEPARATE checkbox. Enabling sync
@@ -286,75 +570,99 @@
   function consentError(r) {
     return !!(r && (r.code === 'CUSTODY_CONSENT_REQUIRED' || /custody consent/i.test(r.message || '')));
   }
-  function toastSyncResult(r, okFallback) {
-    if (r && r.success) { toast(r.message, 'success'); return; }
-    if (consentError(r)) {
-      toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error');
-      return;
-    }
-    toast((r && r.message) || okFallback, r && r.success ? 'success' : 'error');
+  function toastSyncResult(r, fallback) {
+    if (consentError(r)) { toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error'); return; }
+    if (!r) { toast(fallback, 'error'); return; }
+    if (!r.outcome && !r.items && !r.warnings) { toast(r.message || fallback, r.success ? 'success' : 'error'); return; }
+    var limited = limitedResult(r);
+    var message = resultOutcome(r) === 'complete' && limited ? t('sync.result.limited', 'Completed with limitations') : resultLabel('sync.result.outcome.', OUTCOME, resultOutcome(r));
+    message += ' · ' + t('sync.result.local-commit', 'Local changes') + ': ' + resultLabel('sync.result.commit.', COMMIT, COMMIT[r.localCommit] ? r.localCommit : 'unknown') +
+      ' · ' + t('sync.result.remote-commit', 'Remote publication') + ': ' + resultLabel('sync.result.commit.', COMMIT, COMMIT[r.remoteCommit] ? r.remoteCommit : 'unknown');
+    toast(message, limited ? 'warning' : 'success', { detail: r.message || fallback });
   }
+
   agentBrowser.syncSave = function() {
-    var config = {
-      enabled: document.getElementById('sync-enabled').checked,
-      endpoint: document.getElementById('sync-endpoint-input').value.trim(),
-      bucket: document.getElementById('sync-bucket-input').value.trim(),
-    };
-    var accessKey = document.getElementById('sync-ak-input').value.trim();
-    var secretKey = document.getElementById('sync-sk-input').value.trim();
+    if (operationBusy()) return Promise.resolve(null);
+    var submitted = captureForm();
+    var config = { enabled: !!submitted['sync-enabled'], endpoint: (submitted['sync-endpoint-input'] || '').trim(), bucket: (submitted['sync-bucket-input'] || '').trim() };
+    var accessKey = (submitted['sync-ak-input'] || '').trim(), secretKey = (submitted['sync-sk-input'] || '').trim();
     if (accessKey) config.accessKey = accessKey;
     if (secretKey) config.secretKey = secretKey;
-    // Enabling sync without the separate custody consent is a user error —
-    // warn before the main process refuses (already-consented stays valid).
     if (config.enabled && !custodyConsented()) {
       toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error');
       var box = document.getElementById('sync-custody-consent');
       if (box) box.focus();
-      return;
+      return Promise.resolve(null);
     }
     if (custodyConsented()) config.custodyConsent = true;
-    api.sync.configure(config).then(function(r) {
+    var operation = beginOperation('configure'), saved = null;
+    return dispatchOperation(operation, function() { return api.sync.configure(config); }).then(function(r) {
+      if (!r) return null;
       if (r.success) {
-        toast((window.i18n ? window.i18n.t("toast.sync.saved", "Sync config saved") : "Sync config saved"), "success");
-        document.getElementById('sync-enabled-text').textContent = (config.enabled && config.endpoint && config.bucket) ? t('sync.status.enabled', 'enabled') : t('sync.status.disabled', 'disabled');
-        document.getElementById('sync-endpoint').textContent = config.endpoint || '--';
-        document.getElementById('sync-bucket').textContent = config.bucket || '--';
-        // P2 (#109): team panel + custody state went stale behind the toast.
-        agentBrowser.loadSyncPreview();
-        agentBrowser.loadSyncConfig();
-        if (typeof agentBrowser.loadTeamPanel === "function") agentBrowser.loadTeamPanel();
-      } else {
-        toast(r.error || t('sync.toast.save-failed-default','Save failed'), 'error');
+        saved = submitted;
+        ['sync-ak-input', 'sync-sk-input'].forEach(function(id) {
+          var el = document.getElementById(id);
+          if (el && el.value === submitted[id]) { el.value = ''; formBaseline[id] = ''; formTouched[id] = false; }
+        });
       }
+      r = Object.assign({}, r, { message: r.message || r.error || (r.success ? t('toast.sync.saved', 'Sync config saved') : t('sync.toast.save-failed-default', 'Save failed')) });
+      reportOperationResult(operation, r, t('sync.toast.save-failed-default', 'Save failed'));
+      return r;
     }).catch(function(e) {
-      toast(t('sync.toast.save-failed-prefix','Save failed: ') + (e.message || String(e)), 'error');
-    });
+      reportOperationError(operation, e, t('sync.toast.save-failed-default', 'Save failed'));
+      return null;
+    }).finally(function() { return finishOperation(operation, saved); });
   };
 
-  function loadSyncConfig() {
-    api.sync.status().then(function(status) {
+  function hydrateOperation(operation) {
+    if (!operation || !Number.isSafeInteger(operation.generation)) return true;
+    if (operation.generation < serverGeneration) return false;
+    var active = operation.active || null;
+    if (active && operation.generation === serverGeneration && serverPhase === 'completed' && active.operationId === serverOperationId) return false;
+    var changed = operation.generation !== serverGeneration || (active && active.operationId) !== (activeOperation && activeOperation.operationId);
+    serverGeneration = operation.generation;
+    if (changed) {
+      if (localOperation && active && localOperation.operationId !== active.operationId && !localOperation.awaitingReply) localOperation.invalidated = true;
+      activeOperation = active;
+      if (active) { serverOperationId = active.operationId; serverPhase = 'started'; }
+      else if (operation.last && operation.last.operationId) { serverOperationId = operation.last.operationId; serverPhase = 'completed'; }
+      invalidateViews(); invalidateSurfaceCaches();
+      refreshSurfaces();
+    } else activeOperation = active;
+    // A configure event has no result and can occur while push/pull still owns
+    // the service. Only authoritative status (or that owner's completion) may
+    // release it. status.last can enrich the privacy-minimal event summary.
+    var last = operation.last;
+    if (last && (!localOperation || localOperation.operationId === last.operationId || (lastResult && lastResult.operationId === last.operationId))) renderResult(last);
+    renderOperationState();
+    return true;
+  }
+
+  function loadSyncConfig(savedDraft) {
+    var epoch = viewEpoch, seq = ++statusSeq, requestedDraft = captureForm();
+    return api.sync.status().then(function(status) {
+      if (epoch !== viewEpoch || seq !== statusSeq) return null;
       status = status || {};
+      if (!hydrateOperation(status.operation)) return null;
       document.getElementById('sync-enabled-text').textContent = status.enabled ? t('sync.status.enabled', 'enabled') : t('sync.status.disabled', 'disabled');
       document.getElementById('sync-endpoint').textContent = status.endpoint || '--';
       document.getElementById('sync-bucket').textContent = status.bucket || '--';
-      document.getElementById('sync-enabled').checked = !!status.enabled;
-      document.getElementById('sync-endpoint-input').value = status.endpoint || '';
-      document.getElementById('sync-bucket-input').value = status.bucket || '';
-      var ak = document.getElementById('sync-ak-input');
-      if (!ak.value) ak.placeholder = status.accessKeyMasked || '';
-      var sk = document.getElementById('sync-sk-input');
-      if (!sk.value) sk.placeholder = status.configured ? 'saved' : '';
-      // S9 (#108): rehydrate the custody checkbox from the recorded consent
-      // — otherwise consented users are blocked by the save guard after a
-      // tab reload until they re-tick.
-      var cbox = document.getElementById('sync-custody-consent');
-      if (cbox) cbox.checked = !!(status && status.custodyConsentAt);
+      hydrateField('sync-enabled', !!status.enabled, requestedDraft, savedDraft);
+      hydrateField('sync-endpoint-input', status.endpoint || '', requestedDraft, savedDraft);
+      hydrateField('sync-bucket-input', status.bucket || '', requestedDraft, savedDraft);
+      hydrateField('sync-custody-consent', !!status.custodyConsentAt, requestedDraft, savedDraft);
+      var ak = document.getElementById('sync-ak-input'), sk = document.getElementById('sync-sk-input');
+      if (ak && !ak.value) ak.placeholder = status.accessKeyMasked || '';
+      if (sk && !sk.value) sk.placeholder = status.configured ? t('sync.credentials.saved', 'Saved; leave blank to keep') : '';
       renderCustodyState(status);
       agentBrowser.loadSyncPreview();
-      agentBrowser.loadTeamPanel();
+      loadTeamPanel();
+      return status;
     }).catch(function(e) {
-      toast((window.i18n ? window.i18n.t('toast.sync.load-failed', 'Failed to load sync config') : 'Failed to load sync config') + ': ' + e.message, 'error');
+      if (epoch !== viewEpoch || seq !== statusSeq) return null;
+      toast(t('toast.sync.load-failed', 'Failed to load sync config') + ': ' + (e.message || String(e)), 'error');
       agentBrowser.loadSyncPreview();
+      return null;
     });
   }
   agentBrowser.loadSyncConfig = loadSyncConfig;
@@ -511,9 +819,12 @@
   }
 
   function loadTeamPanel() {
-    api.team.status().then(function(status) {
+    var epoch = viewEpoch, seq = ++teamSeq;
+    return api.team.status().then(function(status) {
+      if (epoch !== viewEpoch || seq !== teamSeq) return;
       renderTeamPanel(status);
     }).catch(function(e) {
+      if (epoch !== viewEpoch || seq !== teamSeq) return;
       var panel = document.getElementById('team-panel');
       if (panel) panel.innerHTML = '<div class="empty-state">' + esc(t('team.panel.failed', 'Team panel failed: ') + (e.message || String(e))) + '</div>';
     });

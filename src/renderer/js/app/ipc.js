@@ -6,7 +6,8 @@
  * stayed clickable and the UI sat there forever with no feedback.
  *
  * Guarantees:
- * - every call has a hard timeout drawn from a per-kind budget table;
+ * - calls use per-kind hard timeouts unless an explicitly non-cancellable
+ *   operation opts out with timeoutMs: 0 (busy/dedupe remain until settlement);
  * - every call gets a traceId that is echoed to the log so a UI action can be
  *   joined to the main-process work it triggered;
  * - `dedupe: true` collapses repeat clicks on the same key into one IPC call;
@@ -90,7 +91,8 @@
    *
    * @param {string} key        stable identifier, e.g. "browser.launch"
    * @param {Function} fn       () => Promise
-   * @param {Object}   opts     { kind, timeoutMs, dedupe, traceId }
+   * @param {Object}   opts     { kind, timeoutMs, dedupe, traceId, slowNoticeMs, onSlow }
+   * timeoutMs: 0 keeps the real promise pending; slow notices never cancel it.
    */
   function call(key, fn, opts) {
     opts = opts || {};
@@ -105,12 +107,21 @@
     var started = now();
     busyKeys[key] = true;
 
-    var promise = withTimeout(
-      Promise.resolve().then(fn),
-      timeoutMs,
-      key,
-      traceId,
-    ).then(function (value) {
+    var slowTimer = null;
+    if (typeof opts.slowNoticeMs === "number" && opts.slowNoticeMs > 0 && typeof opts.onSlow === "function") {
+      slowTimer = setTimeout(function () {
+        slowTimer = null;
+        try { opts.onSlow({ key: key, traceId: traceId }); }
+        catch (error) { console.warn("IPC slow-notice handler failed", error); }
+      }, opts.slowNoticeMs);
+    }
+    var underlying = Promise.resolve().then(fn);
+    var waiting = timeoutMs === 0 ? underlying : withTimeout(underlying, timeoutMs, key, traceId);
+    function settled() {
+      if (slowTimer !== null) clearTimeout(slowTimer);
+      cleanup(key);
+    }
+    var promise = waiting.then(function (value) {
       report(kind, key, traceId, Math.round(now() - started), true, null);
       return value;
     }, function (error) {
@@ -118,10 +129,10 @@
       report(kind, key, traceId, Math.round(now() - started), false, error);
       throw error;
     }).then(function (value) {
-      cleanup(key);
+      settled();
       return value;
     }, function (error) {
-      cleanup(key);
+      settled();
       throw error;
     });
 

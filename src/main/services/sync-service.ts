@@ -1,32 +1,32 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
-import { getSyncConfig, getConfig, saveConfig, getProfilesDir } from "./config-manager.js";
+import { getSyncConfig, getConfig, saveConfig, getProfilesDir, getAppDataDir, portableProfileContent } from "./config-manager.js";
 import { transact } from "./config/store.js";
 import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
 import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
-import { writeQueuedCookieImports } from "./cdp-cookie-service.js";
-import { listExtensions } from "./launch-args.js";
+import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
 import { acquireRestoreLock, isRestoreLocked } from "./profile-restore-lock.js";
 import { decryptSecretOr } from "./secrets.js";
-import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush } from "./team.js";
+import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush, requireSettingsMutation } from "./team.js";
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
-import { listExtensionRepository, getExtensionRepoEntryDir, restoreSyncedExtensionPackage } from "./extension-repository.js";
+import { listExtensionRepository, getExtensionRepoEntryDir, prepareSyncedExtensionPackage, restoreSyncedExtensionPackage } from "./extension-repository.js";
 import { tMain } from "./main-i18n.js";
-import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig } from "../types.js";
+import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken } from "../types.js";
+import { SyncOperationResult } from "./sync/operation-result.js";
+import { beginSyncOperation, getSyncOperationState } from "./sync/operation-state.js";
+import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot } from "./sync/profile-state.js";
+import type { ProfilePreferencesSnapshot, ExtensionRepositoryEntry } from "../types.js";
+import { PORTABLE_PROFILE_FIELDS } from "./profile-portability.js";
+import { captureSqliteLocalStorage, hasSqliteLocalStorage, validateSqliteLocalStorageGroup, validateStagedSqliteLocalStorage, writeOwnedSqliteFile, SQLITE_LOCAL_STORAGE_FILES, SQLITE_LOCAL_STORAGE_SIDECARS } from "./sync/sqlite-local-storage.js";
+import { syncArchiveDirectory } from "./zip-writer.js";
 
-export interface SyncResult {
-  success: boolean;
-  message: string;
-  transferredBytes?: number;
-  /** Machine-readable failure (sale-93: CUSTODY_CONSENT_REQUIRED). */
-  code?: string;
-}
+export type { SyncResult } from "../types.js";
 
 type SyncSafeConfig = Omit<MgmtConfig, "sync" | "proxies"> & {
   sync: Omit<SyncConfig, "accessKey" | "secretKey">;
@@ -60,6 +60,11 @@ function assertSyncNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Sync operation cancelled");
 }
 
+function assertSyncRole(kind: "push" | "pull", force = false): void {
+  const gate = kind === "pull" ? requireSettingsMutation() : force ? requireForcePush() : requireSyncPush();
+  if (!gate.ok) throw Object.assign(new Error(`Sync ${kind} blocked by team policy: ${gate.error}`), { code: "TEAM_ROLE_DENIED" });
+}
+
 export const syncService = {
   // ── Preview (offline pre-flight: what a push would involve + who'd skip on pull) ──
   preview(): { configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string } {
@@ -90,7 +95,7 @@ export const syncService = {
   },
   // ── Diff preview (remote vs local, read-only) ──
   async previewDiff(): Promise<SyncDiffResult> {
-    const sync = getSyncConfig();
+    const sync = structuredClone(getSyncConfig());
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
       return { ok: false, message: "Sync not enabled or configured", ...emptySyncDiff() };
     }
@@ -100,7 +105,9 @@ export const syncService = {
         if (fetched.message.startsWith("HTTP 404")) {
           const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
           const body = buildSyncDiff(localSnapshot, { browserProfiles: {}, proxies: {}, extensionRepository: {}, accounts: [] } as any, {}, getConfig().deviceId);
-          return { ok: true, firstPush: true, remoteTimestamp: null, ...body };
+          return { ok: true, firstPush: true, remoteTimestamp: null,
+            comparisonToken: createComparisonToken(sync, localSnapshot, null),
+            coverage: compareProfilePreferences(body.profiles, localSnapshot.browserProfiles || {}, {}, {}), ...body };
         }
         return { ok: false, message: fetched.message, ...emptySyncDiff() };
       }
@@ -109,8 +116,11 @@ export const syncService = {
       const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
       const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
       const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload, getConfig().deviceId);
+      const coverage = compareProfilePreferences(body.profiles, localSnapshot.browserProfiles || {}, remoteConfig.browserProfiles || {}, payload);
       return {
         ok: true,
+        coverage,
+        comparisonToken: createComparisonToken(sync, localSnapshot, payload),
         remoteTimestamp: typeof payload.timestamp === "number" ? payload.timestamp : null,
         ...body,
       };
@@ -119,7 +129,7 @@ export const syncService = {
     }
   },
   // ── Push ──
-  async push(signal?: AbortSignal, force = false): Promise<SyncResult> {
+  async push(signal?: AbortSignal, force = false, comparisonToken?: SyncComparisonToken): Promise<SyncResult> {
     assertSyncNotAborted(signal);
     const sync = getSyncConfig();
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
@@ -134,150 +144,19 @@ export const syncService = {
     // Team workspace RBAC: viewers are read-only; force push needs admin+.
     const pushGate = force ? requireForcePush() : requireSyncPush();
     if (!pushGate.ok) {
-      return { success: false, message: "Push blocked by team policy: " + pushGate.error };
+      return { success: false, code: "TEAM_ROLE_DENIED", message: "Push blocked by team policy: " + pushGate.error };
     }
 
-    try {
-      if (!force) {
-        const lockBlock = await collectRemoteLocksBlockingPush(sync, signal);
-        if (lockBlock.length) {
-          return { success: false, message: "Push blocked: " + lockBlock.length + " profile(s) locked by another device (" + lockBlock.map((x) => x.ownerName).filter((v, i, a) => a.indexOf(v) === i).join(", ") + "): " + lockBlock.map((x) => x.id).slice(0, 8).join(", ") + ". Release the lock on that device or pull first (or force push)." };
-        }
-      }
-      const now = Date.now();
-      const latestConfig = getConfig();
-      const syncSnapshot = sanitizeConfigForSync(cloneConfig(latestConfig));
-      assertSyncNotAborted(signal);
-
-      // Fetch cookies previously stored remotely to prevent overwrites for offline profiles.
-      const remoteCookies = await fetchRemoteCookiesForPush(sync, signal);
-      assertSyncNotAborted(signal);
-
-      const cookiesBlob: Record<string, string> = {};
-      const localStorageBlobs: Record<string, string> = {};
-      const prefsBlobs: Record<string, string> = {};
-      const profilePreferenceHashes: Record<string, string> = {};
-      let totalCookies = 0, totalLs = 0, totalPrefs = 0;
-
-      const profileDirIds = Object.keys(syncSnapshot.browserProfiles || {});
-      console.log(`[sync] push: exporting ${profileDirIds.length} Browser profiles`);
-
-      for (const dirId of profileDirIds) {
-        assertSyncNotAborted(signal);
-        validateDirId(dirId);
-        // Preferences
-        const prefsPath = path.join(getProfilesDir(), dirId, "Default", "Preferences");
-        if (fs.existsSync(prefsPath)) {
-          const rawPrefs = fs.readFileSync(prefsPath);
-          profilePreferenceHashes[dirId] = rawPrefs.toString("base64");
-          prefsBlobs[dirId] = zlib.gzipSync(rawPrefs).toString("base64");
-          totalPrefs++;
-        }
-
-        // Cookies (CDP / BiDi per engine)
-        const cookieList = await withTimeout(runtimeCookieOps.exportCookies(dirId, signal), 5000, signal);
-        assertSyncNotAborted(signal);
-        if (cookieList && cookieList.length > 0) {
-          cookiesBlob[dirId] = zlib.gzipSync(JSON.stringify(cookieList)).toString("base64");
-          totalCookies += cookieList.length;
-        } else if (remoteCookies[dirId] && isValidCookieBlob(remoteCookies[dirId])) {
-          cookiesBlob[dirId] = remoteCookies[dirId];
-        }
-
-        // LocalStorage (LevelDB)
-        const lsTar = await exportLocalStorage(dirId, signal);
-        if (lsTar) {
-          localStorageBlobs[dirId] = lsTar.toString("base64");
-          totalLs++;
-        }
-
-        // Extensions list
-        const extDir = path.join(getProfilesDir(), dirId, "Default", "Extensions");
-        if (fs.existsSync(extDir)) {
-          try {
-            const extSnap = listExtensionsForSync(dirId);
-            if (extSnap && extSnap.length > 0) {
-              const extPayload = { dirId, profileName: getSyncProfileName(syncSnapshot, dirId), timestamp: now, extensions: extSnap };
-              await s3Put(sync, `extensions-${dirId}.json`, Buffer.from(JSON.stringify(extPayload)), signal);
-            }
-          } catch (e) {
-            if (signal?.aborted) throw e;
-            console.error(`[sync] failed to snapshot extensions for ${dirId}:`, e);
-          }
-        }
-      }
-
-      markAllProfilesSynced(syncSnapshot, now, { profilePreferences: profilePreferenceHashes });
-
-      const configPayload = JSON.stringify({
-        version: syncSnapshot.version, timestamp: now,
-        data: zlib.gzipSync(JSON.stringify(syncSnapshot, null, 2)).toString("base64"),
-        cookies: cookiesBlob,
-        localStorage: localStorageBlobs,
-        preferences: prefsBlobs,
-      });
-
-      assertSyncNotAborted(signal);
-      const ok = await s3Put(sync, SYNC_CONFIG_KEY, Buffer.from(configPayload), signal);
-      if (!ok) return { success: false, message: "Upload failed (check endpoint/auth)" };
-
-      // Put files to S3
-      for (const [dirId, b64] of Object.entries(cookiesBlob)) {
-        assertSyncNotAborted(signal);
-        if (!b64) continue;
-        const entry = parseCookieBlob(b64);
-        const body = JSON.stringify({ dirId, profileName: getSyncProfileName(syncSnapshot, dirId), timestamp: now, count: entry.length, cookies: entry });
-        await s3Put(sync, `cookies-${dirId}.json`, Buffer.from(body), signal);
-      }
-      for (const [dirId, b64] of Object.entries(localStorageBlobs)) {
-        assertSyncNotAborted(signal);
-        await s3Put(sync, `localstorage-${dirId}.tgz`, Buffer.from(b64, "base64"), signal);
-      }
-      for (const [dirId, b64] of Object.entries(prefsBlobs)) {
-        assertSyncNotAborted(signal);
-        await s3Put(sync, `preferences-${dirId}.json`, Buffer.from(b64, "base64"), signal);
-      }
-
-      // Extension repository packages (per-key upload, like cookies/localStorage).
-      let totalExts = 0;
-      for (const entry of listExtensionRepository()) {
-        assertSyncNotAborted(signal);
-        // Find the package file: chrome-store → package.crx, local → package.zip or unpacked dir.
-        const repoDir = getExtensionRepoEntryDir(entry.id);
-        let pkgPath = path.join(repoDir, "package.crx");
-        let pkgKey = `extension-${entry.id}.crx`;
-        if (!fs.existsSync(pkgPath)) {
-          pkgPath = path.join(repoDir, "package.zip");
-          pkgKey = `extension-${entry.id}.zip`;
-        }
-        if (fs.existsSync(pkgPath)) {
-          const buf = fs.readFileSync(pkgPath);
-          if (buf.length > 0 && buf.length <= 80 * 1024 * 1024) {
-            const ok = await s3Put(sync, pkgKey, buf, signal);
-            if (ok) totalExts++;
-          }
-        }
-      }
-
-      try { const { transact } = require("./config/store.js"); const ts=Date.now(); transact((draft:any)=>{ markAllProfilesSynced(draft as any, ts, { profilePreferences: profilePreferenceHashes }); }); } catch { const latestConfig2 = getConfig(); markAllProfilesSynced(latestConfig2, now, { profilePreferences: profilePreferenceHashes }); saveConfig(latestConfig2 as any); }
-
-      const parts = [`${profileDirIds.length} profiles`];
-      if (totalCookies > 0) parts.push(`${totalCookies} cookies`);
-      if (totalLs > 0) parts.push(`${totalLs} localStorage`);
-      if (totalPrefs > 0) parts.push(`${totalPrefs} preferences`);
-      if (totalExts > 0) parts.push(`${totalExts} extensions`);
-
-      return { success: true, message: `Synced: ${parts.join(", ")}`, transferredBytes: configPayload.length };
-    } catch (e: any) {
-      if (signal?.aborted) throw e;
-      return { success: false, message: e.message };
-    }
+    return pushFrozenSnapshot(structuredClone(sync), force, signal, comparisonToken);
   },
 
   // ── Pull ──
   async pull(signal?: AbortSignal, opts?: SyncPullOptions): Promise<SyncResult> {
     assertSyncNotAborted(signal);
-    const sync = getSyncConfig();
+    const sync = structuredClone(getSyncConfig());
+    let stageRoot: string | undefined;
+    let finalResult: SyncResult | undefined;
+    const createdProfileIds = new Set<string>();
     if (!sync.endpoint || !sync.bucket) {
       return { success: false, message: "Endpoint and bucket required" };
     }
@@ -287,13 +166,20 @@ export const syncService = {
       return { success: false, message: "Sync data-custody consent required: tick the data-custody consent box and save first", code: "CUSTODY_CONSENT_REQUIRED" };
     }
 
+    const pullGate = requireSettingsMutation();
+    if (!pullGate.ok) return { success: false, code: "TEAM_ROLE_DENIED", message: "Pull blocked by team policy: " + pullGate.error };
+    const lease = beginSyncOperation("pull");
+    if ("busy" in lease) return lease.busy;
+    const operation = lease.operation;
     try {
       const fetched = await fetchSyncConfig(sync, signal);
       if (!fetched.ok) {
-        return { success: false, message: fetched.message };
+        finalResult = operation.failure(new Error(fetched.message));
+        return finalResult;
       }
 
       const payload = fetched.payload;
+      assertComparisonUnchanged(opts?.comparisonToken, sync, payload);
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
       const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
       assertSyncNotAborted(signal);
@@ -315,120 +201,149 @@ export const syncService = {
       const resolutions = opts?.resolutions;
       const profileResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "profiles", id);
       const remoteProfiles = remoteConfig.browserProfiles || {};
-      const selectedRemoteProfiles = selectRemoteEntries(profileSnapshot, remoteProfiles, mergeStrategy, profileResolve);
+      const selectedRemoteProfiles = selectRemoteEntries(profileDecisionMap(profileSnapshot), profileDecisionMap(remoteProfiles), mergeStrategy, profileResolve);
       const selectedRemoteEntries = Object.fromEntries(
         [...selectedRemoteProfiles].map((id) => [id, remoteProfiles[id]]),
       );
 
+      stageRoot = createPullStagingRoot();
+      const prepared = new Map<string, { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer }>();
       let aggregateCookies = 0;
-      let aggregateLocalStorage = 0;
       let aggregateLocalStorageBytes = 0;
       let aggregatePreferenceBytes = 0;
-
+      let archiveCount = 0;
+      // Prepare every selected artifact before the first profile/queue write.
       for (const dirId of selectedRemoteProfiles) {
         assertSyncNotAborted(signal);
-        validateDirId(dirId);
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
-        ensureProfileDefaultDir(dirId);
+        assertProfilePathsSafe(dirId);
+        assertLocalStorageRestorable(dirId);
+        const item: { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer } = {};
+        if (Object.hasOwn(payload.cookies || {}, dirId)) {
+          item.cookies = parseCookieBlob(payload.cookies[dirId]);
+          aggregateCookies += item.cookies.length;
+          if (aggregateCookies > MAX_PULL_COOKIES) throw new Error("Remote config contains too many cookies");
+        }
+        if (Object.hasOwn(payload.preferences || {}, dirId)) {
+          item.preferences = gunzipBase64Field(payload.preferences[dirId], MAX_PREFERENCES_GZIP_BYTES, MAX_PREFERENCES_JSON_BYTES, "preferences");
+          validatePreferencesJson(item.preferences);
+          aggregatePreferenceBytes += item.preferences.length;
+          if (aggregatePreferenceBytes > MAX_PULL_PREFERENCES_BYTES) throw new Error("Remote config contains too much preferences data");
+        }
+        if (Object.hasOwn(payload.localStorage || {}, dirId)) {
+          if (++archiveCount > MAX_PULL_LOCAL_STORAGE_ARCHIVES) throw new Error("Remote config contains too many localStorage archives");
+          item.localStorage = await prepareLocalStorage(dirId, decodeBase64Field(payload.localStorage[dirId], MAX_LOCAL_STORAGE_TGZ_BYTES, "localStorage"), stageRoot, MAX_PULL_LOCAL_STORAGE_BYTES - aggregateLocalStorageBytes, signal);
+          aggregateLocalStorageBytes += item.localStorage.bytesWritten;
+        }
+        const baseline = parseProfileSyncBaseline(remoteProfiles[dirId]?.syncBaseline);
+        if (payload.artifactVersion === 2 && (!baseline || baseline.snapshotId !== payload.snapshotId)) throw new Error("Remote profile baseline is missing or belongs to another snapshot");
+        if (baseline) {
+          const evidence = profilePreferencesSnapshot(item.preferences ?? null);
+          if (stableStringify(baseline.preferences) !== stableStringify(evidence) ||
+              profileContentHash(remoteProfiles[dirId], evidence) !== baseline.contentHash) throw new Error("Remote profile content does not match its published baseline");
+        }
+        prepared.set(dirId, item);
       }
-
-      // Cookies
+      const preparedExtensions = await preparePullExtensions(sync, remoteConfig, stageRoot, signal, payload.artifactVersion === 2);
+      assertSyncNotAborted(signal);
       let importedCookies = 0;
-      if (payload.cookies && typeof payload.cookies === "object") {
-        for (const [dirId, b64] of Object.entries(payload.cookies)) {
-          assertSyncNotAborted(signal);
-          validateDirId(dirId);
-          if (!selectedRemoteProfiles.has(dirId) || !b64) continue;
-          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
-          try {
-            const list = parseCookieBlob(b64);
-            aggregateCookies += list.length;
-            if (aggregateCookies > MAX_PULL_COOKIES) throw new Error("Remote config contains too many cookies");
-            if (list.length > 0) {
-              if (runtimeCookieOps.hasRunningBrowser(dirId)) {
-                const n = await withTimeout(runtimeCookieOps.importCookies(dirId, list, signal), 30000, signal) ?? 0;
-                assertSyncNotAborted(signal);
-                console.log(`[sync] pull: ${dirId.slice(0, 8)} ← ${n} cookies (runtime)`);
-                importedCookies += n;
-              } else {
-                writeQueuedCookieImports(dirId, list);
-                console.log(`[sync] pull: ${dirId.slice(0, 8)} queued ${list.length} cookies for next launch`);
-                importedCookies += list.length;
-              }
-            }
-          } catch (e: any) {
-            if (signal?.aborted) throw e;
-            console.error(`[sync] pull cookie error for ${dirId}:`, e.message);
-          }
-          // Runtime import may have awaited a concurrent user edit. Stop before
-          // writing any further artifacts or metadata for this stale selection.
-          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
-        }
-      }
-
-      // LocalStorage
+      let queuedCookies = 0;
       let importedLs = 0;
-      if (payload.localStorage && typeof payload.localStorage === "object") {
-        for (const [dirId, b64] of Object.entries(payload.localStorage)) {
-          assertSyncNotAborted(signal);
-          validateDirId(dirId);
-          if (!selectedRemoteProfiles.has(dirId)) continue;
-          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
-          if (isProfileRunningForRestore(dirId)) {
-            console.log(`[sync] pull: skipped localStorage for running profile ${dirId.slice(0, 8)}`);
-            continue;
-          }
-          aggregateLocalStorage++;
-          if (aggregateLocalStorage > MAX_PULL_LOCAL_STORAGE_ARCHIVES) throw new Error("Remote config contains too many localStorage archives");
-          const archive = decodeBase64Field(b64, MAX_LOCAL_STORAGE_TGZ_BYTES, "localStorage");
-          const release = acquireRestoreLock(dirId);
-          try {
-            const result = importLocalStorage(dirId, archive, MAX_PULL_LOCAL_STORAGE_BYTES - aggregateLocalStorageBytes, signal);
-            aggregateLocalStorageBytes += result.bytesWritten;
-            if (result.imported) importedLs++;
-          } finally {
-            release();
-          }
-        }
-      }
-
-      // Preferences
       let importedPrefs = 0;
-      if (payload.preferences && typeof payload.preferences === "object") {
-        for (const [dirId, b64] of Object.entries(payload.preferences)) {
+      lease.stage("applying");
+      for (const [dirId, artifacts] of prepared) {
+        assertSyncRole("pull");
+        assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
+        const release = acquireRestoreLock(dirId);
+        let pendingRuntimeImport: Promise<number> | undefined;
+        try {
           assertSyncNotAborted(signal);
-          validateDirId(dirId);
-          if (!selectedRemoteProfiles.has(dirId)) continue;
-          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
-          if (isProfileRunningForRestore(dirId)) {
-            console.log(`[sync] pull: skipped preferences for running profile ${dirId.slice(0, 8)}`);
-            continue;
+          assertLocalStorageRestorable(dirId);
+          if (!fs.existsSync(resolveProfileDir(dirId))) {
+            fs.mkdirSync(resolveProfileDir(dirId), { mode: 0o700 });
+            createdProfileIds.add(dirId);
           }
-          try {
-            const rawPrefs = gunzipBase64Field(b64, MAX_PREFERENCES_GZIP_BYTES, MAX_PREFERENCES_JSON_BYTES, "preferences");
-            aggregatePreferenceBytes += rawPrefs.length;
-            if (aggregatePreferenceBytes > MAX_PULL_PREFERENCES_BYTES) throw new Error("Remote config contains too much preferences data");
-            validatePreferencesJson(rawPrefs);
-            const release = acquireRestoreLock(dirId);
-            try {
-              if (runtimeCookieOps.hasRunningBrowser(dirId) || statusBrowser(dirId).running) {
-                console.log(`[sync] pull: skipped preferences for running profile ${dirId.slice(0, 8)}`);
-                continue;
+          ensureProfileDefaultDir(dirId);
+          if (artifacts.cookies) {
+            const list = artifacts.cookies;
+            if (!list.length) {
+              operation.add({ scope: "cookies", id: dirId, state: "preserved", count: 0, code: "EMPTY_COOKIE_SNAPSHOT", message: "Empty snapshot; merge import does not delete existing cookies" });
+            } else if (runtimeCookieOps.hasRunningBrowser(dirId)) {
+              const previousCommit = operation.localCommit;
+              operation.localCommit = "unknown";
+              pendingRuntimeImport = runtimeCookieOps.importCookies(dirId, list, combineAbortSignals(signal, 30000));
+              const n = await withTimeout(pendingRuntimeImport, 30000, signal);
+              if (n === null || !Number.isInteger(n) || n < 0 || n > list.length) {
+                operation.add({ scope: "cookies", id: dirId, state: "unknown", code: "COOKIE_IMPORT_UNCONFIRMED" });
+                throw Object.assign(new Error("Runtime Cookie import result is unknown; do not retry automatically"), { code: "COOKIE_IMPORT_UNCONFIRMED" });
               }
-              const prefPath = resolveProfileFile(dirId, "Default", "Preferences");
-              safeExistingParentInsideProfile(dirId, ["Default", "Preferences"]);
-              fs.mkdirSync(path.dirname(prefPath), { recursive: true });
-              writeFileAtomic(prefPath, rawPrefs);
-            } finally {
-              release();
+              operation.localCommit = previousCommit;
+              operation.add({ scope: "cookies", id: dirId, state: "applied", count: n });
+              importedCookies += n;
+              if (n !== list.length) {
+                operation.add({ scope: "cookies", id: dirId, state: "failed", code: "COOKIE_IMPORT_INCOMPLETE" });
+                throw new Error("Runtime Cookie import was incomplete");
+              }
+              assertSyncNotAborted(signal);
+            } else {
+              try {
+                writeQueuedCookieImports(dirId, list);
+                if (operation.localCommit === "none") operation.localCommit = "partial";
+                if (JSON.stringify(readQueuedCookieImports(dirId)) !== JSON.stringify(list)) throw new Error("Cookie queue readback mismatch after publication");
+                operation.add({ scope: "cookies", id: dirId, state: "queued", count: list.length });
+                queuedCookies += list.length;
+              } catch (error) {
+                operation.add({ scope: "cookies", id: dirId, state: "failed", message: (error as Error).message });
+                throw error;
+              }
             }
-            importedPreferenceHashes[dirId] = rawPrefs.toString("base64");
-            importedPreferenceIds.add(dirId);
-            importedPrefs++;
-          } catch (e: any) {
-            if (signal?.aborted) throw e;
-            console.error(`[sync] pull preferences error for ${dirId}:`, e.message);
           }
+          assertSyncRole("pull");
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
+          if (artifacts.localStorage || artifacts.preferences) {
+            const running = isProfileRunningForRestore(dirId);
+            if (artifacts.localStorage) {
+              if (running) {
+                operation.add({ scope: "localStorage", id: dirId, state: "skipped", code: "PROFILE_RUNNING" });
+              } else {
+                try {
+                  const restored = importLocalStorage(dirId, artifacts.localStorage, operation.operationId, signal);
+                  operation.add({ scope: "localStorage", id: dirId, state: restored.imported ? "applied" : "skipped", bytes: restored.bytesWritten, code: restored.imported ? undefined : "EMPTY_LOCAL_STORAGE_ARCHIVE" });
+                  if (restored.imported) importedLs++;
+                  if (restored.backupDir) operation.warnings.push(`Previous LocalStorage copy retained for runtime validation: ${restored.backupDir}`);
+                } catch (error) {
+                  operation.add({ scope: "localStorage", id: dirId, state: "failed", message: (error as Error).message });
+                  throw error;
+                }
+              }
+            }
+            if (artifacts.preferences) {
+              if (running) {
+                operation.add({ scope: "preferences", id: dirId, state: "skipped", code: "PROFILE_RUNNING" });
+              } else {
+                try {
+                  assertSyncNotAborted(signal);
+                  safeExistingParentInsideProfile(dirId, ["Default", "Preferences"]);
+                  writeFileAtomic(resolveProfileFile(dirId, "Default", "Preferences"), artifacts.preferences);
+                  operation.add({ scope: "preferences", id: dirId, state: "applied", bytes: artifacts.preferences.length });
+                  importedPreferenceHashes[dirId] = artifacts.preferences.toString("base64");
+                  importedPreferenceIds.add(dirId);
+                  importedPrefs++;
+                } catch (error) {
+                  operation.add({ scope: "preferences", id: dirId, state: "failed", message: (error as Error).message });
+                  throw error;
+                }
+              }
+            }
+          }
+        } finally {
+          if (pendingRuntimeImport) {
+            // An abort/deadline is not proof that the runtime stopped writing.
+            // Keep both the profile lock and shared operation owner until settle.
+            const [settled] = await Promise.allSettled([pendingRuntimeImport]);
+            if (settled.status === "rejected") operation.warnings.push(`Runtime Cookie request for ${dirId} ended with an error; consult the per-item result before retrying.`);
+          }
+          release();
         }
       }
 
@@ -444,11 +359,15 @@ export const syncService = {
       // unrelated profiles (including ones created during the await) survive.
       // A selected entry edited or deleted during the await fails closed.
       transact((draft: MgmtConfig) => {
+        assertSyncRole("pull");
         const localProfiles = draft.browserProfiles || {};
         for (const dirId of selectedRemoteProfiles) {
           assertSelectedProfileUnchanged(profileSnapshot, localProfiles, dirId);
         }
-        const mergedProfiles = mergeSectionById(localProfiles, selectedRemoteEntries, "remote");
+        const mergedProfiles = mergeSectionById(localProfiles, selectedRemoteEntries, "remote", undefined, {
+          ignoredFields: new Set([...SYNC_BOOKKEEPING_FIELDS, "fontsDir"]),
+          onRemoteWin: (local, remote) => ({ ...local, ...remote, fontsDir: local.fontsDir ?? null }),
+        });
         const mergedProxies = mergeProxySection(draft.proxies || {}, remoteConfig.proxies || {}, mergeStrategy, proxyResolve);
         const mergedAccounts = mergeAccountSection((remoteConfig as any).accounts, (draft as any).accounts, mergeStrategy, accountResolve);
         adoptedProfiles = countAdoptedFromRemote(localProfiles, mergedProfiles, mergeStrategy, profileResolve);
@@ -463,65 +382,30 @@ export const syncService = {
           selectedRemoteProfiles,
           preferences: importedPreferenceIds,
           preferenceHashes: importedPreferenceHashes,
+          targetId: getProfileSyncTarget(sync),
         });
-      }, undefined, { forceAccountRevision: true });
+      }, undefined, { forceAccountRevision: true, requireAccountRetention: true });
 
-      // Extensions: for each remote entry not present locally (or stale hash),
-      // pull the package from S3 and install it via installLocalExtension.
+      operation.localCommit = "committed";
+      operation.add({ scope: "config", state: "applied" });
       let importedExts = 0;
-      let extensionBytes = 0;
-      const remoteExts = (remoteConfig as any).extensionRepository || {};
-      const remoteExtEntries = Object.entries(remoteExts) as Array<[string, any]>;
-      if (remoteExtEntries.length > (DEFAULT_SYNC_LIMITS.maxProfileCount || MAX_SYNC_EXTENSIONS)) throw new Error("Remote config contains too many extensions");
-      const localExts = listExtensionRepository();
-      const localExtMap = new Map(localExts.map((e) => [e.id, e]));
-      for (const [extId, remoteEntry] of remoteExtEntries) {
+      for (const extension of preparedExtensions) {
         assertSyncNotAborted(signal);
-        if (!EXTENSION_HASH_RE.test(String(remoteEntry?.packageHash || "")) || !EXTENSION_HASH_RE.test(String(remoteEntry?.manifestHash || ""))) {
-          console.error(`[sync] pull: extension ${extId.slice(0, 16)} missing verified hashes, skipping`);
-          continue;
-        }
-        const local = localExtMap.get(extId);
-        if (local && local.manifestHash === remoteEntry.manifestHash && local.packageHash === remoteEntry.packageHash) continue; // up-to-date
-        if (extensionBytes >= MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
-        const keyExt = remoteEntry.source === "chrome-web-store" ? "crx" : "zip";
-        let pkg = await s3Get(sync, `extension-${extId}.${keyExt}`, signal);
-        if (!pkg) pkg = await s3Get(sync, `extension-${extId}.${keyExt === "crx" ? "zip" : "crx"}`, signal);
-        if (!pkg) {
-          console.log(`[sync] pull: extension ${extId.slice(0, 16)} package not on remote, skipping`);
-          continue;
-        }
-        extensionBytes += pkg.length;
-        if (extensionBytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
-        // Unpredictable staging dir + O_EXCL create (R5 #69): a predictable
-        // /tmp name lets a local link-plant redirect attacker-influenced S3
-        // bytes through a pre-planted symlink.
-        const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ext-pull-"));
-        const tmpFile = path.join(stageDir, `pkg.${remoteEntry.source === "chrome-web-store" ? "crx" : "zip"}`);
         try {
-          const fd = fs.openSync(tmpFile, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
-          try {
-            const st = fs.fstatSync(fd);
-            if (!st.isFile()) throw new Error("Refusing to stage extension package through a non-file");
-            fs.writeFileSync(fd, pkg);
-          } finally {
-            try { fs.closeSync(fd); } catch { /* ignore */ }
-          }
-          assertSyncNotAborted(signal);
-          await restoreSyncedExtensionPackage(extId, tmpFile, remoteEntry, signal);
-          assertSyncNotAborted(signal);
+          const restored = await restoreSyncedExtensionPackage(extension.id, extension.packagePath, extension.remoteEntry, signal);
+          operation.add({ scope: "extensions", id: extension.id, state: "applied" });
+          for (const warning of restored.repositoryCommit?.cleanupWarnings || []) operation.warnings.push(warning.message);
           importedExts++;
-        } catch (e: any) {
-          if (signal?.aborted) throw e;
-          console.error(`[sync] pull: failed to install extension ${extId.slice(0, 16)}:`, e.message);
-        } finally {
-          try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-          try { fs.rmdirSync(stageDir); } catch { /* ignore */ }
+          assertSyncNotAborted(signal);
+        } catch (error) {
+          operation.add({ scope: "extensions", id: extension.id, state: "failed", message: (error as Error).message });
+          throw error;
         }
       }
 
       const parts: string[] = [];
-      if (importedCookies > 0) parts.push(`${importedCookies} cookies`);
+      if (importedCookies > 0) parts.push(`${importedCookies} cookies imported`);
+      if (queuedCookies > 0) parts.push(`${queuedCookies} cookies queued (not yet imported)`);
       if (importedLs > 0) parts.push(`${importedLs} localStorage`);
       if (importedPrefs > 0) parts.push(`${importedPrefs} preferences`);
       if (importedExts > 0) parts.push(`${importedExts} extensions`);
@@ -531,10 +415,30 @@ export const syncService = {
       if (adoptedAccounts > 0) adopted.push(`${adoptedAccounts} accounts`);
      if (adopted.length) parts.push(adopted.join(", ") + " merged (remote adopted)");
 
-      return { success: true, message: `Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}` };
+      finalResult = operation.complete(`Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}`);
+      return finalResult;
     } catch (e: any) {
-      if (signal?.aborted) throw e;
-      return { success: false, message: e.message };
+      finalResult = operation.failure(e, signal?.aborted);
+      if (signal?.aborted) { e.syncResult = finalResult; throw e; }
+      return finalResult;
+    } finally {
+      for (const dirId of createdProfileIds) {
+        if (getConfig().browserProfiles?.[dirId]) continue;
+        try {
+          assertProfilePathsSafe(dirId);
+          const dir = resolveProfileDir(dirId);
+          const defaultDir = resolveProfileFile(dirId, "Default");
+          if (fs.existsSync(defaultDir) && !fs.readdirSync(defaultDir).length) fs.rmdirSync(defaultDir);
+          if (fs.existsSync(dir) && !fs.readdirSync(dir).length) fs.rmdirSync(dir);
+          else operation.warnings.push(`Uncommitted profile files retained for recovery: ${dirId}`);
+        } catch (error) { operation.warnings.push(`Could not clean uncommitted profile ${dirId}: ${(error as Error).message}`); }
+      }
+      if (stageRoot) {
+        try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
+        catch (error) { operation.warnings.push(`Could not clean owned sync staging directory: ${(error as Error).message}`); }
+      }
+      if (finalResult) finalResult.warnings = [...operation.warnings];
+      lease.finish(finalResult ?? operation.failure(new Error("Sync pull ended without a confirmed result")));
     }
   },
 
@@ -546,71 +450,650 @@ export const syncService = {
       endpoint: sync.endpoint || "",
       bucket: sync.bucket || "",
       accessKeyMasked: maskKey(sync.accessKey || ""),
+      operation: getSyncOperationState(),
       // Sale-93: the UI shows whether custody consent was recorded (and when).
       custodyConsentAt: typeof (sync as any)?.custodyConsentAt === "number" ? (sync as any).custodyConsentAt : null,
     };
   },
 };
 
-// LocalStorage LevelDB export/import
-async function exportLocalStorage(dirId: string, signal?: AbortSignal): Promise<Buffer | null> {
-  assertSyncNotAborted(signal);
-  const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
-  if (!fs.existsSync(lsDir)) return null;
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-browser-ls-export-${dirId.slice(0, 8)}-`));
+interface FrozenExtensionSnapshot {
+  entry: ExtensionRepositoryEntry;
+  packagePath: string;
+  commitLocalRepair?: () => Promise<{ repositoryCommit: { committed: true; cleanupWarnings: Array<{ message: string }> } } | null>;
+}
+
+function extensionObjectKey(entry: { id: string; packageHash: string; source: string }, addressed = true): string {
+  if (!/^(?:[a-p]{32}|local_[a-z0-9]{8,40})$/.test(entry.id) || !EXTENSION_HASH_RE.test(entry.packageHash)) throw new Error("Invalid extension package identity");
+  return `extension-${entry.id}${addressed ? "-" + entry.packageHash.toLowerCase() : ""}.${entry.source === "chrome-web-store" ? "crx" : "zip"}`;
+}
+
+function capturePreferences(dirId: string, validate = true): Buffer | null {
+  assertProfilePathsSafe(dirId);
+  const file = resolveProfileFile(dirId, "Default", "Preferences");
+  const before = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!before) return null;
+  if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_PREFERENCES_JSON_BYTES) throw new Error("Preferences is not a bounded regular file");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   try {
+    const opened = fs.fstatSync(fd);
+    const raw = fs.readFileSync(fd);
+    const after = fs.lstatSync(file);
+    if (opened.dev !== before.dev || opened.ino !== before.ino || raw.length !== before.size || after.isSymbolicLink() ||
+        after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new Error("Preferences changed during capture; retry after the profile has settled");
+    }
+    if (validate) validatePreferencesJson(raw);
+    return raw;
+  } finally { fs.closeSync(fd); }
+}
+
+async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: AbortSignal, comparisonToken?: SyncComparisonToken): Promise<SyncResult> {
+  const lease = beginSyncOperation("push");
+  if ("busy" in lease) return lease.busy;
+  const operation = lease.operation;
+  let stageRoot: string | undefined;
+  let result: SyncResult | undefined;
+  try {
+    const timestamp = Date.now();
+    const initial = cloneConfig(getConfig());
+    const snapshot = sanitizeConfigForSync(initial);
+    const targetId = getProfileSyncTarget(sync);
+    const ids = Object.keys(snapshot.browserProfiles || {});
+    if (ids.length > MAX_SYNC_PROFILES) throw new Error("Too many profiles in sync snapshot");
+    const fetched = await fetchSyncConfig(sync, signal);
+    if (!fetched.ok && !fetched.message.startsWith("HTTP 404")) throw new Error(`Cannot verify the previous remote snapshot: ${fetched.message}`);
+    const previous = fetched.ok ? fetched.payload : {};
+    assertComparisonUnchanged(comparisonToken, sync, fetched.ok ? fetched.payload : null);
+    const locks = await collectRemoteLocksBlockingPush(sync, signal, fetched);
+    if (!force && locks.length) throw new Error(`Push blocked: ${locks.length} profile(s) locked by another device (${locks.map((lock) => lock.id).slice(0, 8).join(", ")}). Release their locks or force push.`);
+    stageRoot = createPullStagingRoot();
+    const cookies: Record<string, string> = {};
+    const localStorage: Record<string, string> = {};
+    const preferences: Record<string, string> = {};
+    const preferenceSnapshots: Record<string, ProfilePreferencesSnapshot> = {};
+    const artifactSources: Record<string, Record<string, string>> = { cookies: {}, localStorage: {}, preferences: {} };
+    const extensionInventories: Record<string, ReturnType<typeof listExtensionsForSync>> = {};
+    let cookieCount = 0;
+    let preferenceBytes = 0;
+    let localStorageBytes = 0;
+    for (const id of ids) {
+      assertSyncNotAborted(signal);
+      const release = acquireRestoreLock(id);
+      try {
+        const raw = capturePreferences(id);
+        preferenceSnapshots[id] = profilePreferencesSnapshot(raw);
+        artifactSources.preferences[id] = raw === null ? "absent" : "captured";
+        if (raw !== null) {
+          preferenceBytes += raw.length;
+          if (preferenceBytes > MAX_PULL_PREFERENCES_BYTES) throw new Error("Sync snapshot contains too much preferences data");
+          const compressed = zlib.gzipSync(raw);
+          if (compressed.length > MAX_PREFERENCES_GZIP_BYTES) throw new Error("Preferences compressed snapshot is too large");
+          preferences[id] = compressed.toString("base64");
+        }
+        extensionInventories[id] = listExtensionsForSync(id);
+        const cookieSnapshot = await runtimeCookieOps.exportCookiesSnapshot(id, signal);
+        assertSyncNotAborted(signal);
+        if (cookieSnapshot.state === "cancelled") throw new Error("Cookie export cancelled");
+        if (cookieSnapshot.state === "available") {
+          const list = cookieSnapshot.cookies.map(normalizeCookieForSync);
+          if (list.length > MAX_COOKIE_COUNT) throw new Error("Too many cookies in sync snapshot");
+          const rawCookies = Buffer.from(JSON.stringify(list));
+          if (rawCookies.length > MAX_COOKIES_JSON_BYTES) throw new Error("Cookies JSON snapshot is too large");
+          const compressed = zlib.gzipSync(rawCookies);
+          if (compressed.length > MAX_COOKIES_GZIP_BYTES) throw new Error("Cookies compressed snapshot is too large");
+          cookies[id] = compressed.toString("base64");
+          artifactSources.cookies[id] = "captured";
+        } else {
+          if (Object.hasOwn(previous.cookies || {}, id)) {
+            parseCookieBlob(previous.cookies[id]);
+            cookies[id] = previous.cookies[id];
+          }
+          artifactSources.cookies[id] = cookies[id] ? "preserved" : "unavailable";
+          operation.add({ side: "remote", scope: "cookies", id, state: cookies[id] ? "preserved" : "skipped", required: false, code: "COOKIE_SOURCE_UNAVAILABLE" });
+          operation.warnings.push(`Cookies for ${id} were not freshly verified (${cookieSnapshot.reason}); ${cookies[id] ? "previous remote data retained" : "no previous snapshot available"}.`);
+        }
+        if (cookies[id]) {
+          cookieCount += parseCookieBlob(cookies[id]).length;
+          if (cookieCount > MAX_PULL_COOKIES) throw new Error("Too many cookies in sync snapshot");
+        }
+        if (isProfileRunningForRestore(id)) {
+          if (Object.hasOwn(previous.localStorage || {}, id)) {
+            const old = decodeBase64Field(previous.localStorage[id], MAX_LOCAL_STORAGE_TGZ_BYTES, "previous localStorage");
+            const checked = fs.mkdtempSync(path.join(stageRoot, "ls-previous-"));
+            localStorageBytes += (await validateLocalStorageArchive(old, checked, MAX_PULL_LOCAL_STORAGE_BYTES - localStorageBytes, signal)).bytesWritten;
+            fs.rmSync(checked, { recursive: true });
+            localStorage[id] = previous.localStorage[id];
+          }
+          artifactSources.localStorage[id] = localStorage[id] ? "preserved" : "unavailable";
+          operation.add({ side: "remote", scope: "localStorage", id, state: localStorage[id] ? "preserved" : "skipped", required: false, code: "PROFILE_RUNNING" });
+          operation.warnings.push(`LocalStorage for running profile ${id} was not captured; ${localStorage[id] ? "previous remote copy retained" : "no database snapshot available"}.`);
+        } else if (localStorageFormat(id) !== "absent") {
+          const archive = await exportLocalStorage(id, stageRoot, signal);
+          if (!archive) throw new Error(`Cannot capture LocalStorage for ${id}`);
+          const checked = fs.mkdtempSync(path.join(stageRoot, "ls-captured-"));
+          localStorageBytes += (await validateLocalStorageArchive(archive, checked, MAX_PULL_LOCAL_STORAGE_BYTES - localStorageBytes, signal)).bytesWritten;
+          fs.rmSync(checked, { recursive: true });
+          localStorage[id] = archive.toString("base64");
+          artifactSources.localStorage[id] = "captured";
+        } else artifactSources.localStorage[id] = "absent";
+      } finally { release(); }
+    }
+    const extensions: FrozenExtensionSnapshot[] = [];
+    const entries = Object.values(initial.extensionRepository || {});
+    if (entries.length > MAX_SYNC_EXTENSIONS) throw new Error("Too many extensions in sync snapshot");
+    let packageBytes = 0;
+    for (const entry of entries) {
+      assertSyncNotAborted(signal);
+      const capture = (await import("./extension-repository.js")).captureRepositoryExtensionForSync;
+      const frozen = await capture(entry, path.join(stageRoot, `extension-snapshot-${randomUUID()}`), signal);
+      const size = fs.statSync(frozen.packagePath).size;
+      packageBytes += size;
+      if (size > MAX_EXTENSION_PACKAGE_BYTES || packageBytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Extension snapshot byte budget exceeded");
+      snapshot.extensionRepository![entry.id] = sanitizeExtensionRepoEntry(entry.id, frozen.entry);
+      extensions.push(frozen);
+    }
+    markAllProfilesSynced(snapshot, timestamp, { profilePreferences: preferenceSnapshots, targetId, snapshotId: operation.operationId });
+    const configData = Buffer.from(JSON.stringify(snapshot));
+    const configGzip = zlib.gzipSync(configData);
+    if (configData.length > MAX_CONFIG_JSON_BYTES || configGzip.length > MAX_CONFIG_GZIP_BYTES) throw new Error("Sync configuration snapshot is too large");
+    const document = { version: snapshot.version, artifactVersion: 2, snapshotId: operation.operationId, timestamp,
+      data: configGzip.toString("base64"), cookies, localStorage, preferences, artifactSources };
+    const body = Buffer.from(JSON.stringify(document));
+    if (body.length > MAX_REMOTE_PAYLOAD_JSON_BYTES) throw new Error("Sync payload is too large");
+    assertSyncRole("push", force);
+    lease.stage("publishing");
+    for (const extension of extensions) {
+      const pkg = fs.readFileSync(extension.packagePath);
+      const key = extensionObjectKey(extension.entry);
+      const publication = await publishS3Object(sync, key, pkg, signal);
+      assertSyncNotAborted(signal);
+      if (publication.state !== "accepted") throw new Error(`Extension package was not confirmed uploaded: ${extension.entry.id} (${publication.message})`);
+      const readback = await s3Get(sync, key, signal);
+      if (!readback || !readback.equals(pkg)) throw new Error(`Extension package remote readback mismatch: ${extension.entry.id}`);
+      operation.add({ side: "remote", scope: "extensions", id: extension.entry.id, state: "uploaded", bytes: pkg.length });
+    }
+    assertSyncNotAborted(signal);
+    assertSyncRole("push", force);
+    const publication = await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal);
+    operation.remoteCommit = publication.state === "accepted" ? "committed" : "unknown";
+    assertSyncNotAborted(signal);
+    const observed = await fetchSyncConfig(sync, signal);
+    if (!observed.ok || stableStringify(observed.payload) !== stableStringify(document)) {
+      throw Object.assign(new Error(`Remote publication could not be verified${observed.ok ? ": snapshot differs" : ": " + observed.message}`), { code: "REMOTE_COMMIT_UNCONFIRMED" });
+    }
+    operation.remoteCommit = "committed";
+    operation.add({ side: "remote", scope: "config", state: "uploaded", bytes: body.length });
+    if (publication.state !== "accepted") operation.warnings.push("PUT acknowledgement was unavailable; exact remote snapshot readback confirmed publication.");
+    for (const extension of extensions) {
+      if (!extension.commitLocalRepair) continue;
+      const repaired = await extension.commitLocalRepair();
+      if (!repaired) operation.warnings.push(`Extension ${extension.entry.id} changed during upload; the local edit was retained.`);
+      else {
+        operation.localCommit = "partial";
+        for (const warning of repaired.repositoryCommit.cleanupWarnings) operation.warnings.push(warning.message);
+      }
+    }
+    assertSyncNotAborted(signal);
+    transact((draft: MgmtConfig) => {
+      for (const [id, uploaded] of Object.entries(snapshot.browserProfiles || {})) {
+        const current = draft.browserProfiles?.[id];
+        if (!current) continue;
+        current.syncedAt = uploaded.syncedAt;
+        current.syncedHash = uploaded.syncedHash;
+        current.syncBaseline = uploaded.syncBaseline;
+      }
+    });
+    operation.localCommit = "committed";
+    operation.add({ scope: "baseline", state: "applied" });
+    lease.stage("finalizing");
+    const sidecars: Array<{ key: string; body: Buffer }> = [];
+    for (const [id, encoded] of Object.entries(cookies)) {
+      const list = parseCookieBlob(encoded);
+      sidecars.push({ key: `cookies-${id}.json`, body: Buffer.from(JSON.stringify({ dirId: id, profileName: getSyncProfileName(snapshot, id), timestamp, count: list.length, cookies: list })) });
+    }
+    for (const [id, encoded] of Object.entries(localStorage)) sidecars.push({ key: `localstorage-${id}.tgz`, body: Buffer.from(encoded, "base64") });
+    for (const [id, encoded] of Object.entries(preferences)) sidecars.push({ key: `preferences-${id}.json`, body: Buffer.from(encoded, "base64") });
+    for (const [id, inventory] of Object.entries(extensionInventories)) {
+      sidecars.push({ key: `extensions-${id}.json`, body: Buffer.from(JSON.stringify({ dirId: id, profileName: getSyncProfileName(snapshot, id), timestamp, extensions: inventory })) });
+    }
+    for (const sidecar of sidecars) {
+      assertSyncNotAborted(signal);
+      const written = await publishS3Object(sync, sidecar.key, sidecar.body, signal);
+      const readback = written.state !== "rejected" && !signal?.aborted ? await s3Get(sync, sidecar.key, signal) : null;
+      const verified = readback !== null && readback.equals(sidecar.body);
+      operation.add({ side: "remote", scope: "sidecar", id: sidecar.key, state: verified ? "uploaded" : written.state === "rejected" || readback !== null ? "failed" : "unknown", code: verified ? undefined : "COMPAT_SIDECAR_UPLOAD_FAILED" });
+      if (!verified) operation.warnings.push(`Authoritative snapshot is published; compatibility sidecar ${sidecar.key} was not confirmed by byte readback.`);
+      assertSyncNotAborted(signal);
+    }
+    result = operation.complete(`Pushed ${ids.length} profile configuration(s), ${extensions.length} extension package(s); Cookie/LocalStorage coverage is recorded separately.`, body.length + packageBytes);
+    return result;
+  } catch (error: any) {
+    result = operation.failure(error, signal?.aborted);
+    if (signal?.aborted) { error.syncResult = result; throw error; }
+    return result;
+  } finally {
+    if (stageRoot) {
+      try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
+      catch (error) { operation.warnings.push(`Owned push staging cleanup failed: ${(error as Error).message}`); }
+    }
+    if (result) result.warnings = [...operation.warnings];
+    lease.finish(result ?? operation.failure(new Error("Sync push ended without a confirmed result")));
+  }
+}
+
+interface PreparedPullExtension { id: string; remoteEntry: any; packagePath: string; }
+
+function createPullStagingRoot(): string {
+  const root = getProfilesDir();
+  const stat = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("Unsafe profiles staging root");
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  return fs.mkdtempSync(path.join(root, ".sync-pull-stage-"));
+}
+
+async function preparePullExtensions(sync: SyncConfig, remoteConfig: MgmtConfig, stageRoot: string, signal?: AbortSignal, addressed = false): Promise<PreparedPullExtension[]> {
+  const remoteEntries = Object.entries(remoteConfig.extensionRepository || {});
+  if (remoteEntries.length > MAX_SYNC_EXTENSIONS) throw new Error("Remote config contains too many extensions");
+  const localEntries = new Map(listExtensionRepository().map((entry) => [entry.id, entry]));
+  const prepared: PreparedPullExtension[] = [];
+  let bytes = 0;
+  for (const [id, remoteEntry] of remoteEntries) {
+    assertSyncNotAborted(signal);
+    if (!/^[a-zA-Z0-9_-]{1,96}$/.test(id)) throw new Error("Invalid remote extension ID");
+    if (!EXTENSION_HASH_RE.test(remoteEntry.packageHash || "") || !EXTENSION_HASH_RE.test(remoteEntry.manifestHash || "")) {
+      throw new Error("Remote extension is missing verified hashes");
+    }
+    const local = localEntries.get(id);
+    if (local?.packageHash === remoteEntry.packageHash && local.manifestHash === remoteEntry.manifestHash) continue;
+    const suffix = remoteEntry.source === "chrome-web-store" ? "crx" : "zip";
+    let pkg = await s3Get(sync, extensionObjectKey({ ...remoteEntry, id }, addressed), signal);
+    if (!pkg && !addressed) pkg = await s3Get(sync, `extension-${id}.${suffix === "zip" ? "crx" : "zip"}`, signal);
+    if (!pkg) throw new Error(`Remote extension package is unavailable: ${id}`);
+    bytes += pkg.length;
+    if (bytes > MAX_PULL_EXTENSION_BYTES) throw new Error("Remote extension packages are too large");
+    const packagePath = path.join(stageRoot, `package-${randomUUID()}.${suffix}`);
+    fs.writeFileSync(packagePath, pkg, { flag: "wx", mode: 0o600 });
+    const validationRoot = path.join(stageRoot, `extension-validation-${randomUUID()}`);
+    const verified = prepareSyncedExtensionPackage(id, packagePath, remoteEntry, validationRoot, signal);
+    fs.rmSync(verified.stagedDir, { recursive: true });
+    if (verified.archivePath !== verified.packagePath) fs.rmSync(verified.archivePath);
+    fs.rmSync(packagePath);
+    prepared.push({ id, remoteEntry, packagePath: verified.packagePath });
+  }
+  return prepared;
+}
+
+// LocalStorage keeps the legacy base64 TGZ envelope. Its exact file inventory
+// selects the format; SQLite main/WAL must never be installed below leveldb.
+type LocalStorageFormat = "leveldb" | "sqlite";
+function localStorageFormat(dirId: string): LocalStorageFormat | "absent" {
+  assertProfilePathsSafe(dirId);
+  const sqlite = hasSqliteLocalStorage(resolveProfileFile(dirId, "Default"));
+  const legacy = fs.lstatSync(resolveProfileFile(dirId, "Default", "Local Storage", "leveldb"), { throwIfNoEntry: false });
+  if (sqlite && legacy) throw new Error("Mixed SQLite/LevelDB LocalStorage layouts are not supported");
+  return sqlite ? "sqlite" : legacy ? "leveldb" : "absent";
+}
+
+async function exportLocalStorage(dirId: string, stageRoot: string, signal?: AbortSignal): Promise<Buffer | null> {
+  assertSyncNotAborted(signal);
+  assertLocalStorageRestorable(dirId);
+  const format = localStorageFormat(dirId);
+  if (format === "absent") return null;
+  const tmpDir = fs.mkdtempSync(path.join(stageRoot, `ls-export-${dirId.slice(0, 8)}-`));
+  try {
+    if (format === "sqlite") {
+      await captureSqliteLocalStorage(resolveProfileFile(dirId, "Default"), tmpDir, signal);
+      const entries: Buffer[] = [];
+      for (const name of SQLITE_LOCAL_STORAGE_FILES) {
+        const file = path.join(tmpDir, name);
+        if (!fs.existsSync(file)) continue;
+        const bytes = fs.readFileSync(file);
+        const header = Buffer.alloc(512);
+        header.write(name, 0, 100, "ascii"); header.write("0000600\0", 100, 8, "ascii");
+        header.write(bytes.length.toString(8).padStart(11, "0") + "\0", 124, 12, "ascii");
+        header.fill(0x20, 148, 156); header[156] = 0x30; header.write("ustar\0", 257, 6, "ascii");
+        const checksum = header.reduce((sum, byte) => sum + byte, 0);
+        header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, 8, "ascii");
+        entries.push(header, bytes, Buffer.alloc(Math.ceil(bytes.length / 512) * 512 - bytes.length));
+      }
+      const tar = Buffer.concat([...entries, Buffer.alloc(1024)]);
+      if (tar.length > MAX_LOCAL_STORAGE_TAR_BYTES) throw new Error("SQLite LocalStorage TAR byte limit exceeded");
+      const archive = zlib.gzipSync(tar);
+      if (archive.length > MAX_LOCAL_STORAGE_TGZ_BYTES) throw new Error("SQLite LocalStorage compressed byte limit exceeded");
+      return archive;
+    }
     const tmpFile = path.join(tmpDir, "localstorage.tgz");
-    const result = await spawnTar(["--no-xattrs", "-czf", tmpFile, "-C", lsDir, "--exclude", "LOCK", "."], 15000, signal);
+    const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
+    const result = await spawnTar(["--no-xattrs", "--format", "ustar", "-czf", tmpFile, "-C", lsDir, "--exclude", "LOCK", "."], 15000, signal);
     if (!result || !fs.existsSync(tmpFile)) return null;
     assertSyncNotAborted(signal);
     const archive = fs.readFileSync(tmpFile);
     assertSyncNotAborted(signal);
     return archive.length > MAX_LOCAL_STORAGE_TGZ_BYTES ? null : archive;
-  } catch (e: any) {
-    if (signal?.aborted) throw e;
-    console.error(`[sync] exportLocalStorage:`, e.message);
-    return null;
   } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { console.error(`[sync] failed to remove temp localStorage export dir:`, e); }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-function importLocalStorage(dirId: string, tgzData: Buffer, remainingByteBudget = MAX_PULL_LOCAL_STORAGE_BYTES, signal?: AbortSignal): { imported: boolean; bytesWritten: number } {
+interface PreparedLocalStorage { stagingDir: string; owner: { dev: number; ino: number }; files: number; bytesWritten: number; format: LocalStorageFormat; inventory: Array<{ name: string; hash: string }>; }
+
+async function validateLocalStorageArchive(tgz: Buffer, stagingDir: string, byteBudget: number, signal?: AbortSignal): Promise<{ files: number; bytesWritten: number; format?: "sqlite" }> {
+  const extracted = extractSafeLocalStorageArchive(tgz, stagingDir, byteBudget, signal);
+  if (extracted.format === "sqlite") await validateStagedSqliteLocalStorage(stagingDir, signal);
+  return extracted;
+}
+function assertLocalStorageFormatCompatible(dirId: string, incoming: LocalStorageFormat): void {
+  const current = localStorageFormat(dirId);
+  if (current !== "absent" && current !== incoming) throw new Error("Cross-format LocalStorage replacement is not supported; original SQLite/LevelDB data retained");
+}
+
+class LocalStorageRecoveryRequiredError extends Error {
+  readonly code = "LOCAL_STORAGE_RECOVERY_REQUIRED";
+  recoveryReceiptPath?: string;
+  constructor(readonly dirId: string, readonly recoveryPaths: string[], message: string, readonly localChanged = false) {
+    super(message);
+  }
+}
+
+function localStorageRecoveryReceipt(dirId: string): string {
+  validateDirId(dirId);
+  const root = path.join(getAppDataDir(), "sync-recovery");
+  const stat = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("Unsafe sync recovery directory");
+  return path.join(root, `${dirId}.localStorage.json`);
+}
+
+function assertLocalStorageRestorable(dirId: string): void {
+  assertProfilePathsSafe(dirId);
+  const target = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
+  const parent = safeExistingParentInsideProfile(dirId, ["Default", "Local Storage", "leveldb"]);
+  const backups = fs.existsSync(parent) ? fs.readdirSync(parent).filter((name) => name.startsWith(".leveldb-backup-")).map((name) => path.join(parent, name)) : [];
+  const receipt = localStorageRecoveryReceipt(dirId);
+  if (fs.lstatSync(receipt, { throwIfNoEntry: false }) || (!fs.existsSync(target) && backups.length)) {
+    const error = new LocalStorageRecoveryRequiredError(dirId, backups, "LocalStorage recovery is unresolved; refusing to overwrite its rescue copies");
+    error.recoveryReceiptPath = receipt;
+    throw error;
+  }
+  assertSqliteRecoveryResolved(dirId);
+}
+
+async function prepareLocalStorage(dirId: string, tgzData: Buffer, stageRoot: string, remainingByteBudget: number, signal?: AbortSignal): Promise<PreparedLocalStorage> {
+  assertLocalStorageRestorable(dirId);
+  const stagingDir = fs.mkdtempSync(path.join(stageRoot, `ls-stage-${dirId.slice(0, 8)}-`));
+  const extracted = await validateLocalStorageArchive(tgzData, stagingDir, remainingByteBudget, signal);
+  const format = extracted.format || "leveldb";
+  if (extracted.files && !isProfileRunningForRestore(dirId)) assertLocalStorageFormatCompatible(dirId, format);
+  const inventory = fs.readdirSync(stagingDir).sort().map((name) => ({ name, hash: localStorageFileWitness(path.join(stagingDir, name), signal).hash }));
+  const owner = fs.lstatSync(stagingDir);
+  return { stagingDir, owner: { dev: owner.dev, ino: owner.ino }, ...extracted, format, inventory };
+}
+
+function localStorageFileWitness(file: string, signal?: AbortSignal): { stat: fs.Stats; hash: string } {
   assertSyncNotAborted(signal);
-  const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
-  if (tgzData.length > MAX_LOCAL_STORAGE_TGZ_BYTES || remainingByteBudget <= 0) return { imported: false, bytesWritten: 0 };
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-browser-ls-stage-${dirId.slice(0, 8)}-`));
-  let backupDir: string | null = null;
+  const before = fs.lstatSync(file);
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_LOCAL_STORAGE_TAR_BYTES) throw new Error("Unsafe LocalStorage file witness");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const same = (stat: fs.Stats) => stat.isFile() && stat.dev === before.dev && stat.ino === before.ino && stat.mode === before.mode && stat.nlink === before.nlink && stat.size === before.size && stat.mtimeMs === before.mtimeMs && stat.ctimeMs === before.ctimeMs;
   try {
-    const extracted = extractSafeLocalStorageArchive(tgzData, stagingDir, remainingByteBudget, signal);
-    if (extracted.files === 0) return { imported: false, bytesWritten: 0 };
-    assertSyncNotAborted(signal);
-    if (isProfileRunningForRestore(dirId)) {
-      console.log(`[sync] pull: skipped localStorage for running profile ${dirId.slice(0, 8)}`);
-      return { imported: false, bytesWritten: 0 };
-    }
-    const parentDir = safeExistingParentInsideProfile(dirId, ["Default", "Local Storage", "leveldb"]);
-    assertSyncNotAborted(signal);
-    fs.mkdirSync(parentDir, { recursive: true });
-    backupDir = fs.existsSync(lsDir) ? path.join(parentDir, `.leveldb-backup-${process.pid}-${Date.now()}`) : null;
-    if (backupDir) fs.renameSync(lsDir, backupDir);
-    try {
+    if (!same(fs.fstatSync(fd))) throw new Error("LocalStorage file changed before verification");
+    const hash = createHash("sha256"), chunk = Buffer.alloc(64 * 1024);
+    for (let offset = 0; offset < before.size;) {
       assertSyncNotAborted(signal);
-      fs.renameSync(stagingDir, lsDir);
-      if (backupDir) fs.rmSync(backupDir, { recursive: true, force: true });
-      backupDir = null;
-      return { imported: true, bytesWritten: extracted.bytesWritten };
-    } catch (e) {
-      if (backupDir && fs.existsSync(backupDir) && !fs.existsSync(lsDir)) fs.renameSync(backupDir, lsDir);
-      throw e;
+      const n = fs.readSync(fd, chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+      if (!n) throw new Error("LocalStorage file changed during verification");
+      hash.update(chunk.subarray(0, n)); offset += n;
     }
-  } catch (e: any) {
-    if (signal?.aborted) throw e;
-    console.error(`[sync] importLocalStorage:`, e.message);
-    return { imported: false, bytesWritten: 0 };
-  } finally {
-    if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true, force: true });
-    if (backupDir && fs.existsSync(backupDir)) fs.rmSync(backupDir, { recursive: true, force: true });
+    if (fs.readSync(fd, chunk, 0, 1, before.size) || !same(fs.fstatSync(fd)) || !same(fs.lstatSync(file))) throw new Error("LocalStorage file changed during verification");
+    return { stat: before, hash: hash.digest("hex") };
+  } finally { fs.closeSync(fd); }
+}
+function assertPreparedLocalStorage(prepared: PreparedLocalStorage, signal?: AbortSignal): void {
+  const stat = fs.lstatSync(prepared.stagingDir);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== prepared.owner.dev || stat.ino !== prepared.owner.ino) throw new Error("Unsafe or replaced LocalStorage staging directory");
+  const names = fs.readdirSync(prepared.stagingDir).sort();
+  if (JSON.stringify(names) !== JSON.stringify(prepared.inventory.map((item) => item.name))) throw new Error("LocalStorage staging inventory changed");
+  for (const entry of prepared.inventory) {
+    if (localStorageFileWitness(path.join(prepared.stagingDir, entry.name), signal).hash !== entry.hash) throw new Error("LocalStorage staging bytes changed");
+  }
+}
+
+function importLocalStorage(dirId: string, prepared: PreparedLocalStorage, operationId: string, signal?: AbortSignal): { imported: boolean; bytesWritten: number; backupDir?: string } {
+  assertSyncNotAborted(signal);
+  assertLocalStorageRestorable(dirId);
+  if (!prepared.files || isProfileRunningForRestore(dirId)) return { imported: false, bytesWritten: 0 };
+  assertPreparedLocalStorage(prepared, signal);
+  assertLocalStorageFormatCompatible(dirId, prepared.format);
+  if (prepared.format === "sqlite") return importSqliteLocalStorage(dirId, prepared, operationId, signal);
+  const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
+  const parentDir = safeExistingParentInsideProfile(dirId, ["Default", "Local Storage", "leveldb"]);
+  fs.mkdirSync(parentDir, { recursive: true, mode: 0o700 });
+  if (fs.statSync(prepared.stagingDir).dev !== fs.statSync(parentDir).dev) {
+    throw Object.assign(new Error("LocalStorage staging must be on the destination filesystem"), { code: "EXDEV" });
+  }
+  let backupDir: string | undefined;
+  if (fs.existsSync(lsDir)) {
+    backupDir = path.join(parentDir, `.leveldb-backup-${operationId}`);
+    fs.renameSync(lsDir, backupDir);
+  }
+  try {
+    assertSyncNotAborted(signal);
+    fs.renameSync(prepared.stagingDir, lsDir);
+  } catch (error) {
+    if (backupDir) {
+      try {
+        fs.renameSync(backupDir, lsDir);
+      } catch (rollbackError) {
+        const recovery = new LocalStorageRecoveryRequiredError(dirId, [backupDir], "LocalStorage publication and compensation failed; the original database is retained for recovery", true);
+        try {
+          const receipt = localStorageRecoveryReceipt(dirId);
+          fs.mkdirSync(path.dirname(receipt), { recursive: true, mode: 0o700 });
+          const fd = fs.openSync(receipt, "wx", 0o600);
+          try {
+            fs.writeFileSync(fd, JSON.stringify({ operationId, dirId, state: "recovery-required", backupDir, target: lsDir }));
+            fs.fsyncSync(fd);
+          } finally { fs.closeSync(fd); }
+          recovery.recoveryReceiptPath = receipt;
+        } catch (receiptError) {
+          console.error("[sync] rescue copy retained but recovery receipt could not be persisted:", receiptError);
+        }
+        console.error("[sync] LocalStorage compensation failed:", rollbackError);
+        throw recovery;
+      }
+    }
+    throw error;
+  }
+  // A parseable archive is not proof that Chromium can open the database.
+  // Keep the previous copy until a separately verified recovery/cleanup action.
+  return { imported: true, bytesWritten: prepared.bytesWritten, backupDir };
+}
+
+function syncLocalStorageDirectory(directory: string): void {
+  if (!syncArchiveDirectory(directory)) throw new Error("SQLite LocalStorage directory durability is unsupported on this filesystem");
+}
+function readLocalStorageReceipt(file: string): Record<string, any> {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error("Unsafe LocalStorage recovery receipt");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const opened = fs.fstatSync(fd);
+    if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size) throw new Error("LocalStorage recovery receipt changed");
+    const bytes = fs.readFileSync(fd);
+    const after = fs.fstatSync(fd);
+    if (bytes.length !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) throw new Error("LocalStorage recovery receipt changed");
+    const value = JSON.parse(bytes.toString("utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid LocalStorage recovery receipt");
+    return value;
+  } finally { fs.closeSync(fd); }
+}
+function assertSqliteRecoveryResolved(dirId: string): void {
+  const directory = resolveProfileFile(dirId, "Default");
+  if (!fs.existsSync(directory)) return;
+  const backups = fs.readdirSync(directory).filter((name) => name.startsWith(".sqlite-localstorage-backup-"));
+  for (const name of backups) {
+    const transaction = path.join(directory, name);
+    try {
+      const stat = fs.lstatSync(transaction);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe SQLite rescue directory");
+      const pending = readLocalStorageReceipt(path.join(transaction, "pending.json"));
+      const published = readLocalStorageReceipt(path.join(transaction, "published.json"));
+      if (pending.version !== 1 || pending.dirId !== dirId || pending.format !== "sqlite" || pending.target !== directory ||
+          published.state !== "published" || published.pendingHash !== createHash("sha256").update(JSON.stringify(pending)).digest("hex") ||
+          fs.lstatSync(path.join(transaction, "recovery-required.json"), { throwIfNoEntry: false }) || !hasSqliteLocalStorage(directory)) throw new Error("Unresolved SQLite rescue directory");
+    } catch {
+      throw new LocalStorageRecoveryRequiredError(dirId, [transaction], "SQLite LocalStorage recovery is unresolved; refusing to overwrite its rescue copies");
+    }
+  }
+}
+
+/** Same-volume multi-file publication. Every rescue/new byte lives OUTSIDE the
+ * pull stage before the first live move, so its finally cleanup cannot destroy
+ * the only copy after failed compensation. Journals are append-only/exclusive. */
+function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage, operationId: string, signal?: AbortSignal): { imported: boolean; bytesWritten: number; backupDir?: string } {
+  const directory = safeExistingParentInsideProfile(dirId, ["Default", "LocalStorage"]);
+  const original = new Map<string, ReturnType<typeof localStorageFileWitness>>();
+  for (const name of SQLITE_LOCAL_STORAGE_SIDECARS) {
+    const file = path.join(directory, name);
+    if (fs.lstatSync(file, { throwIfNoEntry: false })) original.set(name, localStorageFileWitness(file, signal));
+  }
+  if (fs.statSync(prepared.stagingDir).dev !== fs.statSync(directory).dev) throw Object.assign(new Error("LocalStorage staging must be on the destination filesystem"), { code: "EXDEV" });
+  const transaction = fs.mkdtempSync(path.join(directory, ".sqlite-localstorage-backup-"));
+  const owner = fs.lstatSync(transaction);
+  const oldDir = path.join(transaction, "old"), newDir = path.join(transaction, "new");
+  let oldOwner: fs.Stats | undefined, newOwner: { dev: number; ino: number } | undefined;
+  const moved: string[] = [];
+  const published = new Map<string, ReturnType<typeof localStorageFileWitness>>();
+  const ownerCheck = () => {
+    assertProfilePathsSafe(dirId);
+    const current = fs.lstatSync(transaction);
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owner.dev || current.ino !== owner.ino) throw new Error("LocalStorage transaction owner changed");
+    for (const [folder, expected] of [[oldDir, oldOwner], [newDir, newOwner]] as const) {
+      const stat = fs.lstatSync(folder, { throwIfNoEntry: false });
+      if (expected ? !stat || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== expected.dev || stat.ino !== expected.ino : stat !== undefined) throw new Error("LocalStorage transaction folder owner changed");
+    }
+  };
+  const checkOriginal = (name: string, file: string) => {
+    const expected = original.get(name)!;
+    const actual = localStorageFileWitness(file);
+    if (actual.stat.dev !== expected.stat.dev || actual.stat.ino !== expected.stat.ino || actual.stat.mode !== expected.stat.mode ||
+        actual.stat.size !== expected.stat.size || actual.stat.mtimeMs !== expected.stat.mtimeMs ||
+        !moved.includes(name) && actual.stat.ctimeMs !== expected.stat.ctimeMs || actual.hash !== expected.hash) throw new Error("Existing SQLite LocalStorage changed during publication");
+  };
+  const checkDestination = () => {
+    ownerCheck();
+    if (fs.lstatSync(resolveProfileFile(dirId, "Default", "Local Storage", "leveldb"), { throwIfNoEntry: false })) throw new Error("LocalStorage format changed during publication");
+    for (const name of SQLITE_LOCAL_STORAGE_SIDECARS) {
+      const file = path.join(directory, name), stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      const own = published.get(name);
+      if (own) {
+        if (!stat || stat.dev !== own.stat.dev || stat.ino !== own.stat.ino || localStorageFileWitness(file).hash !== own.hash) throw new Error("Published SQLite LocalStorage changed");
+      } else if (original.has(name) && !moved.includes(name)) checkOriginal(name, file);
+      else if (stat) throw new Error("SQLite LocalStorage destination appeared during publication");
+    }
+  };
+  try {
+    fs.mkdirSync(oldDir, { mode: 0o700 }); oldOwner = fs.lstatSync(oldDir);
+    ownerCheck();
+    const pending = { version: 1, format: "sqlite", operationId, dirId, target: directory,
+      old: [...original].map(([name, value]) => ({ name, hash: value.hash })), incoming: prepared.inventory };
+    writeOwnedSqliteFile(path.join(transaction, "pending.json"), Buffer.from(JSON.stringify(pending)));
+    syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
+    ownerCheck();
+    fs.renameSync(prepared.stagingDir, newDir); newOwner = prepared.owner;
+    ownerCheck(); syncLocalStorageDirectory(transaction);
+    assertPreparedLocalStorage({ ...prepared, stagingDir: newDir }, signal);
+    for (const name of original.keys()) {
+      assertSyncNotAborted(signal); checkDestination();
+      fs.renameSync(path.join(directory, name), path.join(oldDir, name));
+      moved.push(name);
+      checkOriginal(name, path.join(oldDir, name));
+      syncLocalStorageDirectory(oldDir); syncLocalStorageDirectory(directory);
+    }
+    for (const entry of prepared.inventory) {
+      assertSyncNotAborted(signal); checkDestination();
+      const from = path.join(newDir, entry.name), target = path.join(directory, entry.name);
+      const witness = localStorageFileWitness(from, signal);
+      if (witness.hash !== entry.hash) throw new Error("SQLite LocalStorage staged bytes changed before publication");
+      // Atomic no-clobber: never rename over a file that appeared after preflight.
+      fs.linkSync(from, target); published.set(entry.name, witness);
+      fs.unlinkSync(from);
+      if (localStorageFileWitness(target, signal).hash !== entry.hash) throw new Error("SQLite LocalStorage publication readback mismatch");
+      syncLocalStorageDirectory(newDir); syncLocalStorageDirectory(directory);
+    }
+    checkDestination(); assertSyncNotAborted(signal);
+    writeOwnedSqliteFile(path.join(transaction, "published.json"), Buffer.from(JSON.stringify({ state: "published", pendingHash: createHash("sha256").update(JSON.stringify(pending)).digest("hex") })));
+    syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
+    // Old main/WAL/SHM remain together. Native quick_check is not Chromium
+    // runtime proof and does not authorize deleting the previous database.
+    return { imported: true, bytesWritten: prepared.bytesWritten, ...(original.size ? { backupDir: oldDir } : {}) };
+  } catch (publicationError) {
+    const compensationErrors: unknown[] = [];
+    for (const [name, witness] of [...published].reverse()) {
+      try {
+        ownerCheck();
+        const target = path.join(directory, name), retained = path.join(newDir, name);
+        const actual = fs.lstatSync(target);
+        if (!actual.isFile() || actual.isSymbolicLink() || actual.dev !== witness.stat.dev || actual.ino !== witness.stat.ino) throw new Error("Published SQLite file owner changed; retaining both copies");
+        const existing = fs.lstatSync(retained, { throwIfNoEntry: false });
+        if (existing) {
+          if (existing.dev !== actual.dev || existing.ino !== actual.ino) throw new Error("SQLite new rescue target already exists");
+          fs.unlinkSync(target); // retained is this same owned inode (link succeeded, unlink had failed)
+        } else {
+          if (localStorageFileWitness(target).hash !== witness.hash) throw new Error("Published SQLite file was edited; retaining it for recovery");
+          fs.renameSync(target, retained);
+        }
+      } catch (error) { compensationErrors.push(error); }
+    }
+    for (const name of [...moved].reverse()) {
+      try {
+        ownerCheck();
+        const old = path.join(oldDir, name), target = path.join(directory, name);
+        const stat = fs.lstatSync(old), expected = original.get(name)!.stat;
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.dev !== expected.dev || stat.ino !== expected.ino) throw new Error("SQLite old rescue file owner changed");
+        fs.linkSync(old, target); // no-clobber, including when another owner created a target
+        fs.unlinkSync(old);
+      } catch (error) { compensationErrors.push(error); }
+    }
+    if (!compensationErrors.length) {
+      try {
+        ownerCheck(); syncLocalStorageDirectory(directory);
+        // Only exclusively-created transaction material is eligible for cleanup.
+        const allowed = new Set(["old", "new", "pending.json", "published.json"]);
+        for (const name of fs.readdirSync(transaction)) if (!allowed.has(name)) throw new Error("Unexpected LocalStorage transaction material; retaining it");
+        for (const [folder, names] of [[oldDir, []], [newDir, prepared.inventory.map((item) => item.name)]] as Array<[string, string[]]>) {
+          if (!fs.existsSync(folder)) continue;
+          const stat = fs.lstatSync(folder);
+          if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe LocalStorage transaction folder");
+          for (const name of fs.readdirSync(folder)) {
+            if (!names.includes(name)) throw new Error("Unexpected LocalStorage rescue material");
+            const entry = prepared.inventory.find((item) => item.name === name)!;
+            if (localStorageFileWitness(path.join(folder, name)).hash !== entry.hash) throw new Error("LocalStorage rescue material changed; retained");
+          }
+        }
+        fs.rmSync(transaction, { recursive: true });
+        syncLocalStorageDirectory(directory);
+      } catch (error) { compensationErrors.push(error); }
+    }
+    if (compensationErrors.length) {
+      const recovery = new LocalStorageRecoveryRequiredError(dirId, [transaction, directory], "SQLite LocalStorage publication/compensation is incomplete; old/new material retained for recovery", true);
+      const receiptData = Buffer.from(JSON.stringify({ operationId, dirId, state: "recovery-required", format: "sqlite", transaction, target: directory,
+        old: [...original].map(([name, value]) => ({ name, hash: value.hash, backupPath: path.join(oldDir, name), livePath: path.join(directory, name) })),
+        incoming: prepared.inventory.map((entry) => ({ ...entry, retainedPath: path.join(newDir, entry.name), livePath: path.join(directory, entry.name) })),
+      }));
+      try {
+        ownerCheck();
+        writeOwnedSqliteFile(path.join(transaction, "recovery-required.json"), receiptData);
+        syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
+      } catch (error) { console.error("[sync] SQLite transaction recovery journal not confirmed durable:", error); }
+      try {
+        const receipt = localStorageRecoveryReceipt(dirId);
+        fs.mkdirSync(path.dirname(receipt), { recursive: true, mode: 0o700 });
+        writeOwnedSqliteFile(receipt, receiptData); syncLocalStorageDirectory(path.dirname(receipt));
+        recovery.recoveryReceiptPath = receipt;
+      } catch (error) { console.error("[sync] SQLite recovery receipt not confirmed durable; transaction pending marker retained:", error); }
+      throw recovery;
+    }
+    throw publicationError;
   }
 }
 
@@ -660,15 +1143,27 @@ function resolveProfileFile(dirId: string, ...segments: string[]): string {
   return filePath;
 }
 
-function ensureProfileDefaultDir(dirId: string): void {
+function assertProfilePathsSafe(dirId: string): void {
   const profileDir = resolveProfileDir(dirId);
-  if (fs.existsSync(profileDir) && fs.lstatSync(profileDir).isSymbolicLink()) {
-    throw new Error(`Profile path is a symlink: ${dirId}`);
+  for (const p of [getProfilesDir(), profileDir, path.join(profileDir, "Default"), path.join(profileDir, "Default", "Local Storage"), path.join(profileDir, "Default", "Local Storage", "leveldb")]) {
+    const stat = fs.lstatSync(p, { throwIfNoEntry: false });
+    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error(`Unsafe profile directory: ${dirId}`);
   }
+  const prefs = fs.lstatSync(path.join(profileDir, "Default", "Preferences"), { throwIfNoEntry: false });
+  if (prefs && (!prefs.isFile() || prefs.isSymbolicLink())) throw new Error(`Unsafe profile Preferences path: ${dirId}`);
+  for (const name of SQLITE_LOCAL_STORAGE_SIDECARS) {
+    const stat = fs.lstatSync(path.join(profileDir, "Default", name), { throwIfNoEntry: false });
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw new Error(`Unsafe profile SQLite LocalStorage path: ${dirId}`);
+  }
+}
+
+function ensureProfileDefaultDir(dirId: string): void {
+  assertProfilePathsSafe(dirId);
   fs.mkdirSync(resolveProfileFile(dirId, "Default"), { recursive: true, mode: 0o700 });
 }
 
 function safeExistingParentInsideProfile(dirId: string, targetSegments: string[]): string {
+  assertProfilePathsSafe(dirId);
   const profileDir = resolveProfileDir(dirId);
   const profileReal = fs.existsSync(profileDir) ? fs.realpathSync(profileDir) : profileDir;
   let current = profileDir;
@@ -683,49 +1178,93 @@ function safeExistingParentInsideProfile(dirId: string, targetSegments: string[]
   return path.dirname(resolveProfileFile(dirId, ...targetSegments));
 }
 
-function extractSafeLocalStorageArchive(tgzData: Buffer, targetRoot: string, byteBudget = MAX_PULL_LOCAL_STORAGE_BYTES, signal?: AbortSignal): { files: number; bytesWritten: number } {
+function extractSafeLocalStorageArchive(tgzData: Buffer, targetRoot: string, byteBudget = MAX_PULL_LOCAL_STORAGE_BYTES, signal?: AbortSignal): { files: number; bytesWritten: number; format?: "sqlite" } {
   assertSyncNotAborted(signal);
-  const tarData = zlib.gunzipSync(tgzData, { maxOutputLength: Math.min(MAX_LOCAL_STORAGE_TAR_BYTES, byteBudget + 1024 * 1024) });
-  assertSyncNotAborted(signal);
+  if (tgzData.length > MAX_LOCAL_STORAGE_TGZ_BYTES || !Number.isSafeInteger(byteBudget) || byteBudget <= 0) {
+    throw new Error("LocalStorage archive exceeds pull byte budget");
+  }
+  const tarData = zlib.gunzipSync(tgzData, { maxOutputLength: Math.min(MAX_LOCAL_STORAGE_TAR_BYTES, byteBudget + (MAX_LOCAL_STORAGE_FILES + 4) * 1024) });
+  if (tarData.length % 512 !== 0) throw new Error("LocalStorage archive has a truncated TAR block");
   let offset = 0;
   let bytesWritten = 0;
+  let terminated = false;
   const entries: Array<{ path: string; start: number; end: number }> = [];
+  const names = new Set<string>();
+  let canonicalSqliteNames = true;
+  let sawDirectory = false;
+  const rootStat = fs.lstatSync(targetRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Unsafe LocalStorage staging directory");
   const rootReal = fs.realpathSync(targetRoot);
 
   while (offset + 512 <= tarData.length) {
     assertSyncNotAborted(signal);
     const header = tarData.subarray(offset, offset + 512);
-    if (isZeroBlock(header)) break;
-
-    const entryPath = normalizeTarEntryPath(readTarString(header, 0, 100), readTarString(header, 345, 155));
+    if (isZeroBlock(header)) {
+      if (offset + 1024 > tarData.length || !isZeroBlock(tarData.subarray(offset))) {
+        throw new Error("LocalStorage archive has incomplete TAR end markers");
+      }
+      terminated = true;
+      break;
+    }
+    const expectedChecksum = readTarOctal(header, 148, 8);
+    let actualChecksum = 0;
+    for (let i = 0; i < 512; i++) actualChecksum += i >= 148 && i < 156 ? 0x20 : header[i];
+    if (actualChecksum !== expectedChecksum) throw new Error("LocalStorage archive TAR checksum mismatch");
+    const rawName = readTarString(header, 0, 100), rawPrefix = readTarString(header, 345, 155);
+    const entryPath = normalizeTarEntryPath(rawName, rawPrefix);
+    const canonicalName = Buffer.alloc(100); canonicalName.write(entryPath, 0, 100, "utf8");
+    canonicalSqliteNames &&= rawName === entryPath && rawPrefix === "" && header.subarray(0, 100).equals(canonicalName) && isZeroBlock(header.subarray(345, 500));
     const typeFlag = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+    if (typeFlag === "5") sawDirectory = true;
     const size = readTarOctal(header, 124, 12);
     const dataStart = offset + 512;
     const dataEnd = dataStart + size;
-    if (size < 0 || dataEnd > tarData.length) throw new Error("LocalStorage archive has invalid entry size");
+    const nextOffset = dataStart + Math.ceil(size / 512) * 512;
+    if (!Number.isSafeInteger(size) || size < 0 || nextOffset > tarData.length) throw new Error("LocalStorage archive has invalid entry size");
     if (typeFlag !== "0" && typeFlag !== "5") throw new Error("LocalStorage archive contains non-regular entries");
-    if (!isAllowedLocalStoragePath(entryPath)) throw new Error("LocalStorage archive contains unsafe paths");
-
-    if (typeFlag === "0" && entryPath) {
+    if (!isAllowedLocalStoragePath(entryPath) || (typeFlag === "5" && (entryPath !== "" || size !== 0))) {
+      throw new Error("LocalStorage archive contains unsafe paths");
+    }
+    if (names.has(entryPath)) throw new Error("LocalStorage archive contains duplicate paths");
+    names.add(entryPath);
+    if (typeFlag === "0") {
+      if (!entryPath) throw new Error("LocalStorage archive contains an unnamed file");
       bytesWritten += size;
       if (bytesWritten > byteBudget) throw new Error("LocalStorage archive exceeds pull byte budget");
       if (entries.length >= MAX_LOCAL_STORAGE_FILES) throw new Error("LocalStorage archive contains too many files");
-      const target = path.resolve(rootReal, entryPath);
-      if (!isPathInside(target, rootReal)) throw new Error("LocalStorage archive escapes extraction directory");
       entries.push({ path: entryPath, start: dataStart, end: dataEnd });
     }
-
-    offset = dataStart + Math.ceil(size / 512) * 512;
+    offset = nextOffset;
+  }
+  if (!terminated) throw new Error("LocalStorage archive is missing TAR end markers");
+  const sqlite = entries.some((entry) => entry.path === "LocalStorage" || entry.path === "LocalStorage-wal");
+  if (sqlite) {
+    if (!canonicalSqliteNames || sawDirectory || entries.some((entry) => !SQLITE_LOCAL_STORAGE_FILES.includes(entry.path as typeof SQLITE_LOCAL_STORAGE_FILES[number]))) throw new Error("Mixed or noncanonical SQLite LocalStorage archive");
+    const main = entries.find((entry) => entry.path === "LocalStorage");
+    const wal = entries.find((entry) => entry.path === "LocalStorage-wal");
+    if (!main) throw new Error("Orphan SQLite LocalStorage WAL without main database");
+    validateSqliteLocalStorageGroup(tarData.subarray(main.start, main.end), wal ? tarData.subarray(wal.start, wal.end) : undefined, signal);
+  } else if (entries.length) {
+    const current = entries.find((entry) => entry.path === "CURRENT");
+    if (!current || current.end - current.start > 256) throw new Error("LocalStorage archive is missing a valid CURRENT manifest reference");
+    const manifest = tarData.subarray(current.start, current.end).toString("utf8");
+    if (!/^MANIFEST-[0-9]+\n$/.test(manifest) || !entries.some((entry) => entry.path === manifest.trim())) {
+      throw new Error("LocalStorage CURRENT refers to a missing or invalid MANIFEST");
+    }
   }
 
+  // All headers, references and limits are checked before the first file write.
   for (const entry of entries) {
     assertSyncNotAborted(signal);
     const target = path.resolve(rootReal, entry.path);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, tarData.subarray(entry.start, entry.end), { flag: "wx", mode: 0o600 });
+    if (!isPathInside(target, rootReal)) throw new Error("LocalStorage archive escapes extraction directory");
+    if (sqlite) writeOwnedSqliteFile(target, tarData.subarray(entry.start, entry.end));
+    else {
+      fs.writeFileSync(target, tarData.subarray(entry.start, entry.end), { flag: "wx", mode: 0o600 });
+      if (!fs.readFileSync(target).equals(tarData.subarray(entry.start, entry.end))) throw new Error("LocalStorage staging readback mismatch");
+    }
   }
-
-  return { files: entries.length, bytesWritten };
+  return { files: entries.length, bytesWritten, ...(sqlite ? { format: "sqlite" as const } : {}) };
 }
 
 function isZeroBlock(block: Buffer): boolean {
@@ -757,12 +1296,8 @@ function normalizeTarEntryPath(name: string, prefix: string): string {
 }
 
 function isAllowedLocalStoragePath(entry: string): boolean {
-  const normalized = entry.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (!normalized || normalized === ".") return true;
-  const name = path.posix.basename(normalized);
-  if (normalized.split("/").length > 2) return false;
-  if (name === "LOCK") return false;
-  return name.endsWith(".ldb") || name.endsWith(".log") || name.startsWith("MANIFEST-") || name === "CURRENT";
+  if (!entry) return true;
+  return /^(CURRENT|MANIFEST-[0-9]+|[0-9]+\.(ldb|sst|log)|LOG(?:\.old)?|IDENTITY|LocalStorage(?:-wal)?)$/.test(entry);
 }
 
 function validatePreferencesJson(rawPrefs: Buffer): void {
@@ -794,9 +1329,19 @@ function assertJsonShape(value: unknown, depth: number, state: { nodes: number }
 }
 
 function writeFileAtomic(filePath: string, data: Buffer): void {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, filePath);
+  const tmp = `${filePath}.${randomUUID()}.tmp`;
+  let published = false;
+  try {
+    const fd = fs.openSync(tmp, "wx", 0o600);
+    try { fs.writeFileSync(fd, data); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    if (!fs.readFileSync(tmp).equals(data)) throw new Error("Preferences staging readback mismatch");
+    fs.renameSync(tmp, filePath);
+    published = true;
+  } finally {
+    if (!published) {
+      try { fs.rmSync(tmp, { force: true }); } catch (error) { console.error("[sync] could not remove uncommitted Preferences staging file:", error); }
+    }
+  }
 }
 
 function isProfileRunningForRestore(dirId: string): boolean {
@@ -864,20 +1409,26 @@ function normalizeCookieForSync(cookie: any): CookieInfo {
   if (!cookie || typeof cookie !== "object" || Array.isArray(cookie)) throw new Error("invalid cookie entry");
   const domain = boundedCookieText(cookie.domain, 255, "domain");
   const name = boundedCookieText(cookie.name, 255, "name");
-  const value = boundedCookieText(cookie.value ?? "", 4096, "value", true);
-  const cookiePath = boundedCookieText(cookie.path || "/", 1024, "path");
-  const expires = cookie.expires === null || cookie.expires === undefined ? null : Number(cookie.expires);
-  if (expires !== null && (!Number.isFinite(expires) || expires < -1 || expires > 4102444800)) throw new Error("invalid cookie expiry");
-  return {
+  const value = boundedCookieText(cookie.value === undefined ? "" : cookie.value, 4096, "value", true);
+  const cookiePath = boundedCookieText(cookie.path === undefined ? "/" : cookie.path, 1024, "path");
+  for (const flag of ["secure", "httpOnly"]) {
+    if (cookie[flag] !== undefined && typeof cookie[flag] !== "boolean") throw new Error(`invalid cookie ${flag}`);
+  }
+  if (cookie.sameSite !== undefined && (!Number.isInteger(cookie.sameSite) || cookie.sameSite < 0 || cookie.sameSite > 2)) throw new Error("invalid cookie sameSite");
+  const expires = cookie.expires === null || cookie.expires === undefined ? null : cookie.expires;
+  if (expires !== null && (typeof expires !== "number" || !Number.isFinite(expires) || expires < -1 || expires > 4102444800)) throw new Error("invalid cookie expiry");
+  const normalized = normalizeCookieForQueue({
     domain,
     name,
     value,
     path: cookiePath,
     expires,
-    secure: Boolean(cookie.secure),
-    httpOnly: Boolean(cookie.httpOnly),
-    sameSite: Number.isInteger(cookie.sameSite) ? cookie.sameSite : 0,
-  };
+    secure: cookie.secure ?? false,
+    httpOnly: cookie.httpOnly ?? false,
+    sameSite: cookie.sameSite ?? 0,
+  });
+  if (!normalized) throw new Error("Cookie cannot be represented safely in the import queue");
+  return normalized;
 }
 
 function boundedCookieText(value: unknown, maxLength: number, field: string, allowEmpty = false): string {
@@ -891,25 +1442,23 @@ function isPathInside(childPath: string, basePath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-async function collectRemoteLocksBlockingPush(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<Array<{ id: string; ownerName: string }>> {
+async function collectRemoteLocksBlockingPush(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal, fetchedSnapshot?: Awaited<ReturnType<typeof fetchSyncConfig>>): Promise<Array<{ id: string; ownerName: string }>> {
   const myDevice = getConfig().deviceId || "local";
-  try {
-    const fetched = await fetchSyncConfig(sync, signal);
-    if (!fetched.ok) return [];
-    const raw = gunzipBase64Field(fetched.payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
-    const remoteCfg = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
-    const out: Array<{ id: string; ownerName: string }> = [];
-    for (const [id, p] of Object.entries(remoteCfg.browserProfiles || {}) as Array<[string, any]>) {
-      const lock = p?.lock;
-      if (lock && typeof lock.owner === "string" && lock.owner && lock.owner !== myDevice) {
-        out.push({ id, ownerName: String(lock.ownerName || lock.owner) });
-      }
-    }
-    return out;
-  } catch (e: any) {
-    if (signal?.aborted) throw e;
-    return [];
+  const fetched = fetchedSnapshot ?? await fetchSyncConfig(sync, signal);
+  if (!fetched.ok) {
+    if (fetched.message.startsWith("HTTP 404")) return [];
+    throw new Error(`Cannot verify remote profile locks: ${fetched.message}`);
   }
+  const raw = gunzipBase64Field(fetched.payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
+  const remoteCfg = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+  const out: Array<{ id: string; ownerName: string }> = [];
+  for (const [id, p] of Object.entries(remoteCfg.browserProfiles || {}) as Array<[string, any]>) {
+    const lock = p?.lock;
+    if (lock && typeof lock.owner === "string" && lock.owner && lock.owner !== myDevice) {
+      out.push({ id, ownerName: String(lock.ownerName || lock.owner) });
+    }
+  }
+  return out;
 }
 
 async function fetchSyncConfig(sync: ReturnType<typeof getSyncConfig>, signal?: AbortSignal): Promise<{ ok: true; payload: any } | { ok: false; message: string }> {
@@ -988,6 +1537,8 @@ async function readResponseTextLimited(resp: Response, maxBytes: number, signal?
 
 function validateSyncPayloadShape(payload: any, cookiesOnly = false): void {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Remote config payload must be an object");
+  if (payload.artifactVersion !== undefined && payload.artifactVersion !== 1 && payload.artifactVersion !== 2) throw new Error("Unsupported remote artifact format");
+  if (payload.artifactVersion === 2 && (typeof payload.snapshotId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.snapshotId))) throw new Error("Remote snapshot identity is invalid");
   if (!cookiesOnly && typeof payload.data !== "string") throw new Error("Remote config payload is missing data");
   for (const field of ["cookies", "localStorage", "preferences"]) {
     if (payload[field] !== undefined && (!payload[field] || typeof payload[field] !== "object" || Array.isArray(payload[field]))) {
@@ -1009,32 +1560,27 @@ function validateArtifactProfileIds(payload: any, allowedProfileIds: Set<string>
   }
 }
 
-async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal): Promise<boolean> {
+type S3Publication = { state: "accepted" | "rejected" | "unknown"; message?: string };
+
+async function publishS3Object(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal): Promise<S3Publication> {
   assertSyncNotAborted(signal);
   const objPath = `/${sync.bucket}/${key}`;
-  const url = `${sync.endpoint}${objPath}`;
-  const h = signS3Request({
-    method: "PUT",
-    endpoint: sync.endpoint,
-    objectPath: objPath,
-    body,
-    accessKey: sync.accessKey,
-    secretKey: decryptSecretOr(sync.secretKey),
-  });
+  const headers = signS3Request({ method: "PUT", endpoint: sync.endpoint, objectPath: objPath, body, accessKey: sync.accessKey, secretKey: decryptSecretOr(sync.secretKey) });
   try {
-    // Node's fetch accepts Buffer at runtime; DOM and Node declarations do not
-    // currently agree on Buffer<ArrayBufferLike> as a BodyInit.
-    const resp = await fetch(url, { method: "PUT", headers: h, body: body as any, signal: combineAbortSignals(signal, 30000) });
-    if (!resp.ok) {
-      const detail = await readS3ErrorDetail(resp);
-      console.error(`[sync] PUT ${key} failed: HTTP ${resp.status} ${detail}`);
-    }
-    return resp.ok;
-  } catch (e: any) {
-    if (signal?.aborted) throw e;
-    console.error(`[sync] PUT ${key} error:`, e?.message || String(e));
-    return false;
+    const response = await fetch(`${sync.endpoint}${objPath}`, { method: "PUT", headers, body: body as any, signal: combineAbortSignals(signal, 30000) });
+    if (!response.ok) return { state: "rejected", message: `HTTP ${response.status}: ${await readS3ErrorDetail(response)}` };
+    return { state: "accepted" };
+  } catch (error) {
+    // A lost response/abort after dispatch does not prove the object stayed old.
+    return { state: "unknown", message: signal?.aborted ? "Upload interrupted after dispatch" : (error as Error).message };
   }
+}
+
+async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: Buffer, signal?: AbortSignal): Promise<boolean> {
+  const result = await publishS3Object(sync, key, body, signal);
+  if (signal?.aborted) assertSyncNotAborted(signal);
+  if (result.state !== "accepted") console.error(`[sync] PUT ${key}: ${result.message}`);
+  return result.state === "accepted";
 }
 
 /** Fetch an object from S3 as a Buffer (for extension package pull). Returns null on 404/error. */
@@ -1200,7 +1746,40 @@ export function signV2(opts: { method: string; objectPath?: string; body?: Buffe
 }
 
 function listExtensionsForSync(dirId: string): Array<{ id: string; name: string; version: string }> {
-  return listExtensions(dirId).map(e => ({ id: e.id, name: e.name, version: e.version }));
+  const root = resolveProfileFile(dirId, "Default", "Extensions");
+  const rootStat = fs.lstatSync(root, { throwIfNoEntry: false });
+  if (!rootStat) return [];
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Unsafe extension inventory directory");
+  const inventory: Array<{ id: string; name: string; version: string }> = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || !/^[a-p]{32}$/.test(entry.name)) continue;
+    if (inventory.length >= 500) throw new Error("Profile extension inventory is too large");
+    const directory = path.join(root, entry.name);
+    const versions = fs.readdirSync(directory, { withFileTypes: true }).filter((item) => item.isDirectory())
+      .sort((a, b) => b.name.localeCompare(a.name, "en", { numeric: true }));
+    for (const candidate of [directory, ...versions.map((version) => path.join(directory, version.name))]) {
+      const file = path.join(candidate, "manifest.json");
+      const before = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (!before) continue;
+      if (!before.isFile() || before.isSymbolicLink() || before.size > 1024 * 1024) throw new Error("Unsafe extension inventory manifest");
+      const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      let raw: Buffer;
+      try {
+        const opened = fs.fstatSync(fd);
+        raw = fs.readFileSync(fd);
+        const after = fs.lstatSync(file);
+        if (opened.dev !== before.dev || opened.ino !== before.ino || raw.length !== before.size || after.isSymbolicLink() ||
+            after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size ||
+            after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error("Extension inventory changed during capture");
+      } finally { fs.closeSync(fd); }
+      const manifest = JSON.parse(raw.toString("utf8"));
+      if (typeof manifest.name !== "string" || typeof manifest.version !== "string" || manifest.name.length > 512 || manifest.version.length > 128) throw new Error("Invalid extension inventory manifest");
+      // Metadata only: do not read icons, locale paths, or extension code.
+      inventory.push({ id: entry.name, name: manifest.name, version: manifest.version });
+      break;
+    }
+  }
+  return inventory;
 }
 
 function cloneConfig(config: MgmtConfig): MgmtConfig {
@@ -1234,6 +1813,11 @@ function sanitizeExtensionRepoEntry(extId: string, entry: any): any | null {
 function sanitizeRemoteConfig(config: MgmtConfig): MgmtConfig {
   const safe = serializeSyncSafeConfig(config) as any;
   delete safe.sync;
+  for (const [id, raw] of Object.entries((config as any).browserProfiles ?? (config as any).cloakProfiles ?? {}) as Array<[string, any]>) {
+    for (const field of PORTABLE_PROFILE_FIELDS) {
+      if (!Object.hasOwn(raw, field)) delete safe.browserProfiles[id][field];
+    }
+  }
   // Preserve remote extension repository metadata needed for package restore, but
   // strip local absolute paths from older sync artifacts.
   const remoteExts = (config as any).extensionRepository;
@@ -1255,46 +1839,17 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
   const sourceProfiles = cfg.browserProfiles ?? cfg.cloakProfiles ?? {};
   for (const [dirId, profile] of Object.entries(sourceProfiles) as Array<[string, any]>) {
     validateDirId(dirId);
+    if (["__proto__", "prototype", "constructor"].includes(dirId)) throw new Error("Reserved profile ID is not portable");
     profiles[dirId] = {
-      name: String(profile.name || dirId.slice(0, 8)),
-      fingerprintMode: profile.fingerprintMode === "off" ? "off" : "managed",
-      engine: profile.engine === "firefox" ? "firefox" : "chromium",
-      browserVersion: typeof profile.browserVersion === "string" ? profile.browserVersion : null,
-      allowThirdPartyCookies: profile.allowThirdPartyCookies === true,
-      fingerprintSeed: Number.isInteger(profile.fingerprintSeed) ? profile.fingerprintSeed : 12345,
-      platform: profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
-        ? profile.platform : "windows",
-      timezone: profile.timezone || null,
-      locale: profile.locale || null,
-      webrtcMode: profile.webrtcMode === "real" || profile.webrtcMode === "altered" || profile.webrtcMode === "disable"
-        ? profile.webrtcMode
-        : "auto",
-      webrtcIp: profile.webrtcIp || null,
-      geolocationMode: profile.geolocationMode === "disable" || profile.geolocationMode === "custom" ? profile.geolocationMode : "real",
-      geolocationLatitude: Number.isFinite(profile.geolocationLatitude) ? profile.geolocationLatitude : null,
-      geolocationLongitude: Number.isFinite(profile.geolocationLongitude) ? profile.geolocationLongitude : null,
-      geolocationAccuracy: Number.isFinite(profile.geolocationAccuracy) ? profile.geolocationAccuracy : null,
-      gpuVendor: profile.gpuVendor || null,
-      gpuRenderer: profile.gpuRenderer || null,
-      hardwareConcurrency: Number.isInteger(profile.hardwareConcurrency) ? profile.hardwareConcurrency : null,
-      deviceMemory: Number.isInteger(profile.deviceMemory) ? profile.deviceMemory : null,
-      screenWidth: Number.isInteger(profile.screenWidth) ? profile.screenWidth : null,
-      screenHeight: Number.isInteger(profile.screenHeight) ? profile.screenHeight : null,
-      storageQuota: Number.isInteger(profile.storageQuota) ? profile.storageQuota : null,
-      taskbarHeight: Number.isInteger(profile.taskbarHeight) ? profile.taskbarHeight : null,
-      renderScaleMode: profile.renderScaleMode === "strict" ? "strict" : "native",
+      ...portableProfileContent(profile),
       fontsDir: null,
-      windowTitlePrefix: profile.windowTitlePrefix === null ? null : (typeof profile.windowTitlePrefix === "string" ? profile.windowTitlePrefix.slice(0, 64) : undefined),
-      proxyMode: profile.proxyMode,
-      proxyName: profile.proxyName || null,
-      note: profile.note || null,
-      extensions: profile.extensions || {},
       ...(profile.lock && typeof profile.lock === "object" && profile.lock.owner
         ? { lock: { owner: String(profile.lock.owner).slice(0, 64), ownerName: String(profile.lock.ownerName || "").slice(0, 64), at: Number.isFinite(profile.lock.at) ? profile.lock.at : 0 } }
         : {}),
       updatedAt: Number.isFinite(profile.updatedAt) ? profile.updatedAt : undefined,
       syncedAt: profile.syncedAt,
       syncedHash: profile.syncedHash,
+      syncBaseline: parseProfileSyncBaseline(profile.syncBaseline) || undefined,
     };
   }
 
@@ -1348,17 +1903,80 @@ function serializeSyncSafeConfig(config: MgmtConfig): SyncSafeConfig {
   } as SyncSafeConfig;
 }
 
-function markAllProfilesSynced(config: MgmtConfig | SyncSafeConfig, timestamp: number, artifacts: { profilePreferences: Record<string, string> }): void {
-  const cfg = config as any;
-  for (const [dirId, profile] of Object.entries(cfg.browserProfiles || {}) as Array<[string, any]>) {
-    if (!artifacts.profilePreferences[dirId]) {
-      delete profile.syncedAt;
-      delete profile.syncedHash;
-      continue;
-    }
+function markAllProfilesSynced(config: MgmtConfig | SyncSafeConfig, timestamp: number, artifacts: { profilePreferences: Record<string, ProfilePreferencesSnapshot>; targetId: string; snapshotId: string }): void {
+  for (const [dirId, profile] of Object.entries(config.browserProfiles || {})) {
+    const preferences = artifacts.profilePreferences[dirId];
+    if (!preferences) throw new Error(`Missing Preferences capture evidence for ${dirId}`);
+    const baseline = createProfileSyncBaseline(profile, preferences, artifacts.targetId, artifacts.snapshotId, timestamp);
     profile.syncedAt = timestamp;
-    profile.syncedHash = hashProfileMeta(profile, artifacts.profilePreferences[dirId]);
+    profile.syncedHash = baseline.contentHash;
+    profile.syncBaseline = baseline;
   }
+}
+
+function compareProfilePreferences(section: SyncDiffSection, localProfiles: Record<string, any>, remoteProfiles: Record<string, any>, payload: any): NonNullable<SyncDiffResult["coverage"]> {
+  const unverified: Array<{ id: string; reason: string }> = [];
+  for (const id of Object.keys(localProfiles)) {
+    if (!Object.hasOwn(remoteProfiles, id)) continue;
+    try {
+      const baseline = parseProfileSyncBaseline(remoteProfiles[id].syncBaseline);
+      if ((payload.artifactVersion === 2 && (!baseline || baseline.snapshotId !== payload.snapshotId)) ||
+          (remoteProfiles[id].syncBaseline !== undefined && !baseline)) {
+        unverified.push({ id, reason: "remote-baseline-mismatch" });
+        continue;
+      }
+      let remoteEvidence: ProfilePreferencesSnapshot;
+      if (Object.hasOwn(payload.preferences || {}, id)) {
+        const raw = gunzipBase64Field(payload.preferences[id], MAX_PREFERENCES_GZIP_BYTES, MAX_PREFERENCES_JSON_BYTES, "preferences");
+        validatePreferencesJson(raw);
+        remoteEvidence = profilePreferencesSnapshot(raw);
+      } else if (baseline?.preferences.state === "absent") remoteEvidence = profilePreferencesSnapshot(null);
+      else { unverified.push({ id, reason: "remote-preferences-not-covered" }); continue; }
+      if (baseline && (stableStringify(baseline.preferences) !== stableStringify(remoteEvidence) ||
+          profileContentHash(remoteProfiles[id], remoteEvidence) !== baseline.contentHash)) {
+        unverified.push({ id, reason: "remote-baseline-mismatch" });
+        continue;
+      }
+      const localEvidence = profilePreferencesSnapshot(capturePreferences(id, false));
+      if (stableStringify(localEvidence) === stableStringify(remoteEvidence)) continue;
+      const existing = section.changed.find((item) => item.id === id);
+      if (existing) existing.fields = [...new Set([...existing.fields, "preferences"])].sort();
+      else section.changed.push({ id, fields: ["preferences"] });
+    } catch { unverified.push({ id, reason: "preferences-unavailable" }); }
+  }
+  section.changed.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return { compared: ["portable-profile-metadata", "preferences-on-common-profiles", "proxy-settings", "account-references", "extension-metadata"],
+    notCompared: ["live-cookies", "localStorage-database", "full-profile-files"], unverified };
+}
+
+function createComparisonToken(sync: SyncConfig, local: any, payload: any): SyncComparisonToken {
+  const preferences: Record<string, ProfilePreferencesSnapshot> = {};
+  for (const id of Object.keys(local.browserProfiles || {})) preferences[id] = profilePreferencesSnapshot(capturePreferences(id, false));
+  return {
+    targetId: getProfileSyncTarget(sync),
+    localHash: sha256Hex(stableStringify({ profiles: profileDecisionMap(local.browserProfiles || {}), preferences,
+      proxies: local.proxies, accounts: local.accounts, extensions: local.extensionRepository, defaultProxy: local.defaultProxy, team: local.team })),
+    remoteHash: sha256Hex(stableStringify(payload)),
+  };
+}
+
+function assertComparisonUnchanged(token: SyncComparisonToken | undefined, sync: SyncConfig, payload: any): void {
+  if (token === undefined) return; // Direct API/automation intent has no prior UI decision.
+  const stale = (cause?: unknown) => Object.assign(new Error("Comparison is stale or cannot be verified; compare again before applying decisions", { cause }), { code: "SYNC_PREVIEW_STALE" });
+  if (!token || typeof token !== "object" || Array.isArray(token) ||
+      ![token.targetId, token.localHash, token.remoteHash].every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) throw stale();
+  let current: SyncComparisonToken;
+  try { current = createComparisonToken(sync, sanitizeConfigForSync(cloneConfig(getConfig())), payload); }
+  catch (error) { throw stale(error); }
+  if (token.targetId !== current.targetId || token.localHash !== current.localHash || token.remoteHash !== current.remoteHash) throw stale();
+}
+
+function profileDecisionMap(profiles: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(Object.entries(profiles).map(([id, profile]) => [id, {
+    ...portableProfileContent(profile),
+    updatedAt: profile.updatedAt,
+    ...(profile.lock ? { lock: profile.lock } : {}),
+  }]));
 }
 
 function getSyncProfileName(config: MgmtConfig | SyncSafeConfig, dirId: string): string {
@@ -1366,37 +1984,32 @@ function getSyncProfileName(config: MgmtConfig | SyncSafeConfig, dirId: string):
   return cfg.browserProfiles?.[dirId]?.name || dirId.slice(0, 8);
 }
 
-function markRemoteProfilesSynced(merged: MgmtConfig, remoteConfig: MgmtConfig, timestamp: number, artifacts: { selectedRemoteProfiles: Set<string>; preferences: Set<string>; preferenceHashes: Record<string, string> }): void {
-  const local = merged as any;
-  const remote = remoteConfig as any;
-  const remoteProfiles = remote.browserProfiles || {};
-  const mergedProfiles = local.browserProfiles || {};
-  for (const [dirId, remoteProfile] of Object.entries(remoteProfiles)) {
-    if (!artifacts.selectedRemoteProfiles.has(dirId)) continue;
-    const mergedProfile = mergedProfiles[dirId];
-    if (!mergedProfile) continue;
-    if (!(remoteProfile as any).syncedHash || !artifacts.preferences.has(dirId)) continue;
-    const artifactHash = artifacts.preferenceHashes[dirId] || null;
-    if (hashProfileMeta(mergedProfile, artifactHash || undefined) === hashProfileMeta(remoteProfile, artifactHash || undefined)) {
-      mergedProfile.syncedAt = timestamp;
-      mergedProfile.syncedHash = (remoteProfile as any).syncedHash || hashProfileMeta(mergedProfile, artifactHash || undefined);
+function markRemoteProfilesSynced(merged: MgmtConfig, remoteConfig: MgmtConfig, timestamp: number, artifacts: { selectedRemoteProfiles: Set<string>; preferences: Set<string>; preferenceHashes: Record<string, string>; targetId: string }): void {
+  for (const dirId of artifacts.selectedRemoteProfiles) {
+    const remote = remoteConfig.browserProfiles?.[dirId];
+    const current = merged.browserProfiles?.[dirId];
+    if (!remote || !current) continue;
+    const baseline = parseProfileSyncBaseline(remote.syncBaseline);
+    delete current.syncBaseline;
+    delete current.syncedHash;
+    current.syncedAt = timestamp;
+    if (!baseline) continue; // legacy data was adopted, not upgraded by guessing
+    let evidence: ProfilePreferencesSnapshot | undefined;
+    if (artifacts.preferences.has(dirId)) evidence = profilePreferencesSnapshot(Buffer.from(artifacts.preferenceHashes[dirId], "base64"));
+    else if (baseline.preferences.state === "absent") {
+      try { if (capturePreferences(dirId) === null) evidence = profilePreferencesSnapshot(null); }
+      catch (error) { console.warn(`[sync] adopted profile baseline remains unverified for ${dirId}:`, (error as Error).message); }
     }
+    if (!evidence || profileContentHash(remote, evidence) !== baseline.contentHash || profileContentHash(current, evidence) !== baseline.contentHash) continue;
+    current.syncBaseline = createProfileSyncBaseline(current, evidence, artifacts.targetId, baseline.snapshotId, timestamp);
+    current.syncedHash = current.syncBaseline.contentHash;
   }
-}
-
-function hashProfileMeta(profile: any, artifactHash?: string): string {
-  const clean = JSON.parse(JSON.stringify(profile || {}));
-  delete clean.syncedAt;
-  delete clean.syncedHash;
-  delete clean.updatedAt;
-  if (artifactHash) clean.__artifactHash = artifactHash;
-  return createHash("sha256").update(JSON.stringify(sortKeys(clean))).digest("hex");
 }
 
 function sortKeys(value: any): any {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (!value || typeof value !== "object") return value;
-  const out: Record<string, any> = {};
+  const out: Record<string, any> = Object.create(null);
   for (const key of Object.keys(value).sort()) out[key] = sortKeys(value[key]);
   return out;
 }
@@ -1410,6 +2023,8 @@ export interface SyncDiffSection {
 
 export interface SyncDiffResult {
   ok: boolean;
+  comparisonToken?: SyncComparisonToken;
+  coverage?: { compared: string[]; notCompared: string[]; unverified: Array<{ id: string; reason: string }> };
   message?: string;
   remoteTimestamp?: number | null;
   firstPush?: boolean;
@@ -1424,7 +2039,7 @@ export interface SyncDiffResult {
   pullNotes: string[];
 }
 
-const SYNC_BOOKKEEPING_FIELDS = new Set(["syncedAt", "syncedHash", "updatedAt"]);
+const SYNC_BOOKKEEPING_FIELDS = new Set(["syncedAt", "syncedHash", "syncBaseline", "updatedAt"]);
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? String(value);
@@ -1489,6 +2104,7 @@ function normalizeMergeStrategy(value: unknown): MergeStrategy {
 
 export interface SyncPullOptions {
   strategy?: MergeStrategy;
+  comparisonToken?: SyncComparisonToken;
   /** Per-entry overrides keyed as "<section>:<id>", e.g. "profiles:ab_xyz" or "accounts:user @ https://a.com". */
   resolutions?: Record<string, MergeStrategy>;
 }

@@ -7,8 +7,19 @@ import type { Conversation } from '../../src/main/services/agent/conversation-st
 import type { QueryResult, TableInfo } from '../../src/main/services/agent-db.js';
 import type { ApprovalRequest, ApprovalDecision } from '../../src/main/services/approval-gate.js';
 
+export interface AgentBrowserErrorOptions {
+  status?: number;
+  body?: unknown;
+  bodyTruncated?: boolean;
+  bodyReadError?: string;
+}
 export class AgentBrowserError extends Error {
-  constructor(message: string);
+  constructor(message: string, options?: AgentBrowserErrorOptions);
+  status?: number;
+  /** Complete JSON (or { raw } for non-JSON), bounded to 2 MiB. Undefined when truncated/unavailable. */
+  body?: unknown;
+  bodyTruncated: boolean;
+  bodyReadError?: string;
 }
 export interface ClientOptions { token?: string; timeout?: number }
 export type RequestHeaders = Record<string, string>;
@@ -25,6 +36,12 @@ export interface ProfileSummary {
   proxy: string | null;
   version: string;
   tags: string[];
+  syncedAt: number | null;
+  syncStatus: 'synced' | 'dirty' | 'never' | 'unknown';
+  syncScope: 'portable-profile+preferences';
+  syncReason: 'baseline-match' | 'content-changed' | 'no-baseline' | 'legacy-marker' |
+    'invalid-baseline' | 'target-mismatch' | 'target-unavailable' |
+    'preferences-unavailable' | 'content-unavailable';
 }
 export interface AgentBrowserClient {
   // Unreviewed response payloads are intentionally unknown, never wildcard any.

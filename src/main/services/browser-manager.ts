@@ -11,11 +11,12 @@ import { spawn, execSync, execFileSync } from "node:child_process";
 import { parseBrowserProcessLine, findBrowserByProfileSync, inspectBrowserLaunchesSync, browserLaunchProcessFromArgv, normalizeBrowserProcessPath, type BrowserLaunchProcess } from "./process-discovery.js";
 import { BrowserWindow, screen as electronScreen } from "electron";
 import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
-import { cdpCookieService } from "./cdp-cookie-service.js";
+import { cdpCookieService, readQueuedCookieImports } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
 import { checkProfileConsistency } from "./consistency-check.js";
 import { drmLaunchArgs } from "./drm.js";
+import { getProfileEngineByDirId } from "./page-eval.js";
 import {
   captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
   checkPersonaConsistency, mismatchesAsDrift,
@@ -32,6 +33,7 @@ import { prepareChromiumDiagnosticNetLogArgs } from "./browser/launch-diagnostic
 import { readChromiumGpuContext } from "./browser/chromium-gpu-context.js";
 import { getEnabledRepositoryExtensionPaths } from "./extension-repository.js";
 import { acquireRestoreLock } from "./profile-restore-lock.js";
+import { readProfileSyncState, type ProfileSyncState } from "./sync/profile-state.js";
 import {
   startAuthenticatedSocksBridge,
 } from "./authenticated-socks-bridge.js";
@@ -101,7 +103,7 @@ import { firefoxCookieService } from "./bidi-cookie-service.js";
 import { runBrowserCommand } from "./browser-command.js";
 import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
 import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
-import { runningProcesses, type RunningEntry } from "./browser/runtime-table.js";
+import { captureLaunchProxySnapshot, runningProcesses, type RunningEntry } from "./browser/runtime-table.js";
 import { firefoxEffectiveLaunchHash, firefoxLaunchDigest, firefoxLaunchRequestHash } from "./browser/firefox-launch-provenance.js";
 
 interface OwnedFirefoxLaunch {
@@ -157,7 +159,9 @@ export interface BrowserProfile {
   tags: string[];
   preset: string | null;    // business preset id used at creation (Slice 75)
   syncedAt: number | null;
-  syncStatus: "synced" | "dirty" | "never";
+  syncStatus: ProfileSyncState["syncStatus"];
+  syncScope: ProfileSyncState["syncScope"];
+  syncReason: ProfileSyncState["syncReason"];
   lastModified: number;
   lock: ProfileLock | null;
   running: boolean;
@@ -723,42 +727,48 @@ export function trashBrowserProfile(dirId: string, opts?: { force?: boolean }): 
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
   assertProfileWritable(dirId, opts); // TE-05 lock remains enforced
-  if (statusBrowser(dirId).running) throw new Error("Cannot delete profile while managed Chromium is running");
-
-  const entries = readTrashIndex(); // read and validate BEFORE any mutation
-  const cfg = getConfig() as any;
-  if (!Object.hasOwn(cfg.browserProfiles || {}, dirId)) throw new Error("Profile metadata is missing; cannot move it to trash");
-  const meta = structuredClone(cfg.browserProfiles[dirId]);
-  const newEntry: TrashEntry = { dirId, name: meta?.name || dirId.slice(0, 8), deletedAt: Date.now(), meta };
-  const profileDir = path.join(getProfilesDir(), dirId);
-  const target = path.join(trashRoot(), dirId);
-  if (pathKind(profileDir) !== "directory") throw new Error("Profile data directory is missing or is not a real directory");
-  if (entries.some((entry) => entry.dirId === dirId) || pathKind(target) !== "missing") {
-    throw new Error("A trashed copy with that id already exists; refusing to replace it");
-  }
-  validateTrashIndex([...entries, newEntry]); // reject invalid snapshots BEFORE moving any data
-  fs.mkdirSync(trashRoot(), { recursive: true, mode: 0o700 });
-  fs.renameSync(profileDir, target);
-  let configCommitted = false;
+  // Share export/restore/launch ownership, including any F09 compensation.
+  const release = acquireRestoreLock(dirId);
   try {
-    transact((draft: any) => {
-      if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Profile metadata disappeared during trash");
-      delete draft.browserProfiles[dirId];
-    });
-    configCommitted = true;
-    writeTrashIndex([...entries, newEntry]);
-  } catch (error) {
-    compensateTrashMove(error, dirId, target, profileDir, configCommitted ? () => {
+    if (statusBrowser(dirId).running) throw new Error("Cannot delete profile while managed Chromium is running");
+
+    const entries = readTrashIndex(); // read and validate BEFORE any mutation
+    const cfg = getConfig() as any;
+    if (!Object.hasOwn(cfg.browserProfiles || {}, dirId)) throw new Error("Profile metadata is missing; cannot move it to trash");
+    const meta = structuredClone(cfg.browserProfiles[dirId]);
+    const newEntry: TrashEntry = { dirId, name: meta?.name || dirId.slice(0, 8), deletedAt: Date.now(), meta };
+    const profileDir = path.join(getProfilesDir(), dirId);
+    const target = path.join(trashRoot(), dirId);
+    if (pathKind(profileDir) !== "directory") throw new Error("Profile data directory is missing or is not a real directory");
+    if (entries.some((entry) => entry.dirId === dirId) || pathKind(target) !== "missing") {
+      throw new Error("A trashed copy with that id already exists; refusing to replace it");
+    }
+    validateTrashIndex([...entries, newEntry]); // reject invalid snapshots BEFORE moving any data
+    fs.mkdirSync(trashRoot(), { recursive: true, mode: 0o700 });
+    fs.renameSync(profileDir, target);
+    let configCommitted = false;
+    try {
       transact((draft: any) => {
-        draft.browserProfiles = draft.browserProfiles || {};
-        if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during trash compensation");
-        draft.browserProfiles[dirId] = meta;
+        if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Profile metadata disappeared during trash");
+        delete draft.browserProfiles[dirId];
       });
-    } : undefined);
+      configCommitted = true;
+      writeTrashIndex([...entries, newEntry]);
+    } catch (error) {
+      compensateTrashMove(error, dirId, target, profileDir, configCommitted ? () => {
+        transact((draft: any) => {
+          draft.browserProfiles = draft.browserProfiles || {};
+          if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during trash compensation");
+          draft.browserProfiles[dirId] = meta;
+        });
+      } : undefined);
+    }
+    recordAudit({ category: "profile", action: "trash", target: dirId, actor: "user",
+      detail: `moved to trash as "${meta.name || dirId.slice(0, 8)}" (recoverable for 7 days)` });
+    return true;
+  } finally {
+    release();
   }
-  recordAudit({ category: "profile", action: "trash", target: dirId, actor: "user",
-    detail: `moved to trash as "${meta.name || dirId.slice(0, 8)}" (recoverable for 7 days)` });
-  return true;
 }
 
 /** Restore only into an unoccupied live config key AND directory. */
@@ -766,41 +776,45 @@ export function restoreTrashedProfile(dirId: string): boolean {
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
-
-  const entries = readTrashIndex();
-  const entry = entries.find((value) => value.dirId === dirId);
-  if (!entry) throw new Error("That profile is no longer in the trash");
-  const source = path.join(trashRoot(), dirId);
-  const profileDir = path.join(getProfilesDir(), dirId);
-  if (entry.deletionAttempted) throw new Error("Trashed profile data may be incomplete after a purge attempt; cannot restore it as complete. Review and delete remaining files manually.");
-  if (pathKind(source) !== "directory") throw new Error("The trashed profile data is missing or not a real directory");
-  if (Object.hasOwn(getConfig().browserProfiles || {}, dirId) || pathKind(profileDir) !== "missing") {
-    throw new Error("A profile with that id already exists");
-  }
-
-  fs.mkdirSync(getProfilesDir(), { recursive: true, mode: 0o700 });
-  fs.renameSync(source, profileDir);
-  let configCommitted = false;
+  const release = acquireRestoreLock(dirId);
   try {
-    transact((draft: any) => {
-      draft.browserProfiles = draft.browserProfiles || {};
-      if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during restore");
-      draft.browserProfiles[dirId] = entry.meta
-        ? { ...entry.meta, dirId, createdAt: entry.meta.createdAt ?? Date.now() }
-        : { dirId, name: entry.name, createdAt: Date.now(), engine: "chromium" };
-    });
-    configCommitted = true;
-    writeTrashIndex(entries.filter((value) => value.dirId !== dirId));
-  } catch (error) {
-    compensateTrashMove(error, dirId, profileDir, source, configCommitted ? () => {
+    const entries = readTrashIndex();
+    const entry = entries.find((value) => value.dirId === dirId);
+    if (!entry) throw new Error("That profile is no longer in the trash");
+    const source = path.join(trashRoot(), dirId);
+    const profileDir = path.join(getProfilesDir(), dirId);
+    if (entry.deletionAttempted) throw new Error("Trashed profile data may be incomplete after a purge attempt; cannot restore it as complete. Review and delete remaining files manually.");
+    if (pathKind(source) !== "directory") throw new Error("The trashed profile data is missing or not a real directory");
+    if (Object.hasOwn(getConfig().browserProfiles || {}, dirId) || pathKind(profileDir) !== "missing") {
+      throw new Error("A profile with that id already exists");
+    }
+
+    fs.mkdirSync(getProfilesDir(), { recursive: true, mode: 0o700 });
+    fs.renameSync(source, profileDir);
+    let configCommitted = false;
+    try {
       transact((draft: any) => {
-        if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Restored metadata disappeared during compensation");
-        delete draft.browserProfiles[dirId];
+        draft.browserProfiles = draft.browserProfiles || {};
+        if (Object.hasOwn(draft.browserProfiles, dirId)) throw new Error("Profile id occupied during restore");
+        draft.browserProfiles[dirId] = entry.meta
+          ? { ...entry.meta, dirId, createdAt: entry.meta.createdAt ?? Date.now() }
+          : { dirId, name: entry.name, createdAt: Date.now(), engine: "chromium" };
       });
-    } : undefined);
+      configCommitted = true;
+      writeTrashIndex(entries.filter((value) => value.dirId !== dirId));
+    } catch (error) {
+      compensateTrashMove(error, dirId, profileDir, source, configCommitted ? () => {
+        transact((draft: any) => {
+          if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("Restored metadata disappeared during compensation");
+          delete draft.browserProfiles[dirId];
+        });
+      } : undefined);
+    }
+    recordAudit({ category: "profile", action: "restore", target: dirId, actor: "user", detail: `restored "${entry.name}"` });
+    return true;
+  } finally {
+    release();
   }
-  recordAudit({ category: "profile", action: "restore", target: dirId, actor: "user", detail: `restored "${entry.name}"` });
-  return true;
 }
 
 /** Irreversible deletion: only remove the index entry after rm succeeded. */
@@ -808,29 +822,34 @@ export function purgeTrashedProfile(dirId: string): boolean {
   const mutationGate = requireProfileMutation();
   if (!mutationGate.ok) throw new Error(mutationGate.error);
   validateDirId(dirId);
-  const entries = readTrashIndex();
-  const entry = entries.find((value) => value.dirId === dirId);
-  if (!entry) throw new Error("That profile is not in the trash");
-  const target = path.join(trashRoot(), dirId);
-  if (trashRecoveryConflict(dirId, getConfig().browserProfiles || {})) {
-    throw new Error(`Recovery required: live config or directory still occupies ${dirId}; refusing to delete ${target}`);
-  }
-  const kind = pathKind(target);
-  if (kind === "other") throw new Error(`Refusing to purge non-directory trash path: ${target}`);
-  if (kind === "directory") {
-    // Persist uncertainty BEFORE recursive deletion: a partial rm (or process
-    // restart before the final index commit) must never advertise restoration.
-    if (!entry.deletionAttempted) {
-      try { writeTrashIndex(entries.map((value) => value.dirId === dirId ? { ...value, deletionAttempted: true } : value)); }
-      catch (error) { throw new Error(`Failed to mark trash data incomplete at ${target}; no deletion attempted: ${String(error)}`, { cause: error }); }
+  const release = acquireRestoreLock(dirId);
+  try {
+    const entries = readTrashIndex();
+    const entry = entries.find((value) => value.dirId === dirId);
+    if (!entry) throw new Error("That profile is not in the trash");
+    const target = path.join(trashRoot(), dirId);
+    if (trashRecoveryConflict(dirId, getConfig().browserProfiles || {})) {
+      throw new Error(`Recovery required: live config or directory still occupies ${dirId}; refusing to delete ${target}`);
     }
-    try { fs.rmSync(target, { recursive: true }); }
-    catch (error) { throw new Error(`Failed to remove trashed data at ${target}; data may be partially removed: ${String(error)}`, { cause: error }); }
+    const kind = pathKind(target);
+    if (kind === "other") throw new Error(`Refusing to purge non-directory trash path: ${target}`);
+    if (kind === "directory") {
+      // Persist uncertainty BEFORE recursive deletion: a partial rm (or process
+      // restart before the final index commit) must never advertise restoration.
+      if (!entry.deletionAttempted) {
+        try { writeTrashIndex(entries.map((value) => value.dirId === dirId ? { ...value, deletionAttempted: true } : value)); }
+        catch (error) { throw new Error(`Failed to mark trash data incomplete at ${target}; no deletion attempted: ${String(error)}`, { cause: error }); }
+      }
+      try { fs.rmSync(target, { recursive: true }); }
+      catch (error) { throw new Error(`Failed to remove trashed data at ${target}; data may be partially removed: ${String(error)}`, { cause: error }); }
+    }
+    try { writeTrashIndex(entries.filter((value) => value.dirId !== dirId)); }
+    catch (error) { throw new Error(`Trash index update failed after deleting ${target}; data may already be removed (no rollback): ${String(error)}`, { cause: error }); }
+    recordAudit({ category: "profile", action: "purge", target: dirId, actor: "user", detail: `permanently deleted "${entry.name}" from trash` });
+    return true;
+  } finally {
+    release();
   }
-  try { writeTrashIndex(entries.filter((value) => value.dirId !== dirId)); }
-  catch (error) { throw new Error(`Trash index update failed after deleting ${target}; data may already be removed (no rollback): ${String(error)}`, { cause: error }); }
-  recordAudit({ category: "profile", action: "purge", target: dirId, actor: "user", detail: `permanently deleted "${entry.name}" from trash` });
-  return true;
 }
 
 /** Sweep one entry at a time: only committed removals count as purged. */
@@ -842,43 +861,53 @@ export function purgeExpiredTrash(ttlMs: number = TRASH_TTL_MS): string[] {
   for (const entry of entries.slice()) {
     if (entry.deletedAt >= cutoff) continue;
     const target = path.join(trashRoot(), entry.dirId);
-    let kind: ReturnType<typeof pathKind>;
-    try {
-      if (trashRecoveryConflict(entry.dirId, getConfig().browserProfiles || {})) {
-        failures.push(`${entry.dirId}: recovery required; live config or directory still exists; retained ${target}`);
-        continue;
-      }
-      if (entry.deletionAttempted) {
-        failures.push(`${entry.dirId}: recovery required; earlier purge may have left incomplete data at ${target}; manual review needed`);
-        continue;
-      }
-      kind = pathKind(target);
-      if (kind === "other") throw new Error("not a real directory");
-    } catch (error) {
-      failures.push(`${entry.dirId}: inspection failed at ${target}; no deletion attempted: ${String(error)}`);
+    let release: () => void;
+    try { release = acquireRestoreLock(entry.dirId); }
+    catch (error) {
+      failures.push(`${entry.dirId}: restore/export lock unavailable at ${target}; no deletion attempted: ${String(error)}`);
       continue;
     }
-    if (kind === "directory") {
-      try {
-        const marked = entries.map((value) => value.dirId === entry.dirId ? { ...value, deletionAttempted: true as const } : value);
-        writeTrashIndex(marked);
-        entries = marked;
-      } catch (error) {
-        failures.push(`${entry.dirId}: pre-delete index update failed at ${target}; no deletion attempted: ${String(error)}`);
-        continue;
-      }
-      try { fs.rmSync(target, { recursive: true }); }
-      catch (error) {
-        failures.push(`${entry.dirId}: removal failed at ${target}; data may be partially removed: ${String(error)}`);
-        continue;
-      }
-    }
     try {
-      writeTrashIndex(entries.filter((value) => value.dirId !== entry.dirId));
-      entries = entries.filter((value) => value.dirId !== entry.dirId);
-      purged.push(entry.dirId);
-    } catch (error) {
-      failures.push(`${entry.dirId}: index update failed after deletion at ${target}; data may already be removed: ${String(error)}`);
+      let kind: ReturnType<typeof pathKind>;
+      try {
+        if (trashRecoveryConflict(entry.dirId, getConfig().browserProfiles || {})) {
+          failures.push(`${entry.dirId}: recovery required; live config or directory still exists; retained ${target}`);
+          continue;
+        }
+        if (entry.deletionAttempted) {
+          failures.push(`${entry.dirId}: recovery required; earlier purge may have left incomplete data at ${target}; manual review needed`);
+          continue;
+        }
+        kind = pathKind(target);
+        if (kind === "other") throw new Error("not a real directory");
+      } catch (error) {
+        failures.push(`${entry.dirId}: inspection failed at ${target}; no deletion attempted: ${String(error)}`);
+        continue;
+      }
+      if (kind === "directory") {
+        try {
+          const marked = entries.map((value) => value.dirId === entry.dirId ? { ...value, deletionAttempted: true as const } : value);
+          writeTrashIndex(marked);
+          entries = marked;
+        } catch (error) {
+          failures.push(`${entry.dirId}: pre-delete index update failed at ${target}; no deletion attempted: ${String(error)}`);
+          continue;
+        }
+        try { fs.rmSync(target, { recursive: true }); }
+        catch (error) {
+          failures.push(`${entry.dirId}: removal failed at ${target}; data may be partially removed: ${String(error)}`);
+          continue;
+        }
+      }
+      try {
+        writeTrashIndex(entries.filter((value) => value.dirId !== entry.dirId));
+        entries = entries.filter((value) => value.dirId !== entry.dirId);
+        purged.push(entry.dirId);
+      } catch (error) {
+        failures.push(`${entry.dirId}: index update failed after deletion at ${target}; data may already be removed: ${String(error)}`);
+      }
+    } finally {
+      release();
     }
   }
   if (failures.length) {
@@ -896,21 +925,26 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
   validateDirId(dirId);
   // TE-05: honour another device's checkout lock on the hard-delete path too.
   assertProfileWritable(dirId, opts);
-  const st = statusBrowser(dirId);
-  if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
-  const profileDir = path.join(getProfilesDir(), dirId);
+  const release = acquireRestoreLock(dirId);
   try {
-    if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
-  } catch (e: any) {
-    throw new Error(`Failed to remove profile directory: ${e?.message || String(e)}`);
+    const st = statusBrowser(dirId);
+    if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
+    const profileDir = path.join(getProfilesDir(), dirId);
+    try {
+      if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch (e: any) {
+      throw new Error(`Failed to remove profile directory: ${e?.message || String(e)}`);
+    }
+    // Single write path (no swallowed catch/boolean): a failed transact
+    // surfaces its error so callers can tell "rm failed" from "save failed".
+    let deleted = false;
+    transact((draft: any) => {
+      if (draft.browserProfiles?.[dirId]) { delete draft.browserProfiles[dirId]; deleted = true; }
+    });
+    return deleted;
+  } finally {
+    release();
   }
-  // Single write path (no swallowed catch/boolean): a failed transact
-  // surfaces its error so callers can tell "rm failed" from "save failed".
-  let deleted = false;
-  transact((draft: any) => {
-    if (draft.browserProfiles?.[dirId]) { delete draft.browserProfiles[dirId]; deleted = true; }
-  });
-  return deleted;
 }
 
 export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfileRuntimeSnapshot()): BrowserProfile[] {
@@ -922,8 +956,7 @@ export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfile
     const st = statusBrowser(dirId);
     const profileDir = path.join(getProfilesDir(), dirId);
     const lastModified = fs.existsSync(profileDir) ? Math.floor(fs.statSync(profileDir).mtimeMs) : 0;
-    const syncedAt = m.syncedAt || null;
-    const syncStatus = getProfileSyncStatus(m, lastModified, dirId);
+    const syncState = readProfileSyncState(dirId, m);
     const resolvedProxy = resolveProfileProxy(dirId);
     const engine = sanitizeBrowserEngine(m.engine);
     result.push({
@@ -972,8 +1005,7 @@ export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfile
       note: m.note || null,
       tags: normalizeTags(m.tags),
       preset: m.preset || null,
-      syncedAt,
-      syncStatus,
+      ...syncState,
       lastModified,
       lock: m.lock || null,
       running: st.running,
@@ -1146,13 +1178,14 @@ export interface LaunchEnvCheck {
 export interface LaunchCookieCheck {
   checked: boolean;
   applied?: number;
+  pending?: number;
   error?: string;
 }
 
 export async function launchBrowser(
   dirId: string,
   opts?: { headless?: boolean; forceDeadProxy?: boolean },
-): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck }> {
+): Promise<{ pid: number; cdpPort: number; driftCheck: LaunchDriftCheck; envCheck: LaunchEnvCheck; cookieCheck?: LaunchCookieCheck }> {
   validateDirId(dirId);
   if (!isManagedProfileId(dirId)) {
     throw new Error(`Profile ${dirId.slice(0, 8)} is not a managed Chromium profile`);
@@ -1711,26 +1744,40 @@ export async function launchBrowser(
   const launchEnv = (launchPlan as any).env as NodeJS.ProcessEnv | undefined;
   const child = spawn(bin, args, { detached: true, stdio: ["ignore", logFd, logFd], env: launchEnv || process.env });
   child.unref();
+  const pid = child.pid;
+  // Retain only this launch's resource if its runtime entry is later replaced.
+  // A failed spawn with no PID leaves pending bridge cleanup to the outer finally.
+  const launchProxyBridge = pid ? pendingProxyBridge : null;
+  const takeOwnedRuntimeEntry = (): RunningEntry | undefined => {
+    const entry = runningProcesses.get(dirId);
+    // Warm reuse may replace the entry object but keeps this exact child tuple.
+    // No liveness test: an exited child can still own the entry needing cleanup.
+    if (entry?.process === child && entry.pid === pid && entry.port === cdpPort) {
+      runningProcesses.delete(dirId);
+      return entry;
+    }
+    return undefined;
+  };
 
   child.on("error", (err: Error) => {
-    const failedEntry = runningProcesses.get(dirId);
-    void failedEntry?.proxyBridge?.close().catch(() => undefined);
-    runningProcesses.delete(dirId);
+    const failedEntry = takeOwnedRuntimeEntry();
+    void (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
     console.error(`[agent-browser] spawn error for ${dirId.slice(0, 8)}:`, err.message);
   });
 
-  if (!child.pid) throw new Error(`Managed Chromium failed to start (no PID returned) for ${dirId.slice(0, 8)}`);
-  const pid = child.pid;
+  if (!pid) throw new Error(`Managed Chromium failed to start (no PID returned) for ${dirId.slice(0, 8)}`);
 
-  runningProcesses.set(dirId, {
+  const launchedEntry: RunningEntry = {
     pid,
     process: child,
     port: cdpPort,
     lastActivityAt: Date.now(),
     engine: "chromium",
     launchProvenance,
+    launchProxy: captureLaunchProxySnapshot(resolvedProxy),
     ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
-  });
+  };
+  runningProcesses.set(dirId, launchedEntry);
   pendingProxyBridge = null;
   if (releaseLaunchLock) {
     releaseLaunchLock();
@@ -1749,16 +1796,43 @@ export async function launchBrowser(
       }
       throw e;
     }
-    const queuedCookies = await cdpCookieService.applyQueuedImports(dirId);
-    if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
   } catch (e) {
-    const failedEntry = runningProcesses.get(dirId);
-    runningProcesses.delete(dirId);
-    await failedEntry?.proxyBridge?.close().catch(() => undefined);
+    const failedEntry = takeOwnedRuntimeEntry();
+    await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
     try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error(`[agent-browser] failed to terminate unready process ${pid}:`, killError); }
     try { fs.closeSync(logFd); } catch (closeError) { console.error(`[agent-browser] failed to close launch log:`, closeError); }
     throw e;
   }
+
+  // A running browser and a restored Cookie identity are separate facts. Use
+  // this launch's owned endpoint, then read the queue back even after failure.
+  let expectedCookies: number | undefined, pendingCookies: number | undefined;
+  let appliedCookies = 0, cookieError: string | undefined;
+  try {
+    expectedCookies = readQueuedCookieImports(dirId, { strict: true }).length;
+    if (expectedCookies > 0) {
+      const applied = await cdpCookieService.applyQueuedImports(dirId, {
+        port: cdpPort,
+        isCurrent: () => {
+          const entry = runningProcesses.get(dirId);
+          return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping &&
+            child.pid === pid && child.exitCode === null && child.signalCode === null && child.killed !== true;
+        },
+      });
+      if (!Number.isSafeInteger(applied) || applied < 0 || applied > expectedCookies) throw new Error("Invalid Cookie import count");
+      appliedCookies = applied;
+    }
+  } catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+  try { pendingCookies = readQueuedCookieImports(dirId, { strict: true }).length; }
+  catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+  if (!cookieError && (expectedCookies !== appliedCookies || pendingCookies !== 0)) cookieError = "COOKIE_IMPORT_INCOMPLETE";
+  const cookieCheck: LaunchCookieCheck = {
+    checked: true, applied: appliedCookies,
+    ...(pendingCookies !== undefined ? { pending: pendingCookies } : {}),
+    ...(cookieError ? { error: cookieError } : {}),
+  };
+  if (cookieError) console.warn(`[agent-browser] queued Cookie import for ${dirId.slice(0, 8)}: ${cookieError}`);
+  else if (appliedCookies > 0) console.log(`[agent-browser] Applied ${appliedCookies} queued cookies for ${dirId.slice(0, 8)}`);
 
   let driftCheck: LaunchDriftCheck = { checked: false };
   try {
@@ -1773,9 +1847,8 @@ export async function launchBrowser(
     );
   } catch (e: any) {
     if (e instanceof LaunchBlockedError) {
-      const failedEntry = runningProcesses.get(dirId);
-      runningProcesses.delete(dirId);
-      await failedEntry?.proxyBridge?.close().catch(() => undefined);
+      const failedEntry = takeOwnedRuntimeEntry();
+      await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
       try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
       try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
       await waitForProcessExit(pid);
@@ -1800,9 +1873,8 @@ export async function launchBrowser(
     if (e instanceof LaunchBlockedError) {
       const detail = e.message;
       recordAudit({ category: "profile", action: "env-risk-block", target: dirId, actor: "auto", detail });
-      const failedEntry = runningProcesses.get(dirId);
-      runningProcesses.delete(dirId);
-      await failedEntry?.proxyBridge?.close().catch(() => undefined);
+      const failedEntry = takeOwnedRuntimeEntry();
+      await (failedEntry?.proxyBridge || launchProxyBridge)?.close().catch(() => undefined);
       try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate env-blocked process " + pid + ":", killError); }
       try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
       await waitForProcessExit(pid);
@@ -1814,13 +1886,18 @@ export async function launchBrowser(
   }
 
   child.on("exit", () => {
-    // Cancel pending SIGKILL timer if any — process exited naturally
+    // Verified warm reuse replaces the entry, but retains the same owned child.
+    // PID/port alone must never identify a replacement process as that child.
     const entry = runningProcesses.get(dirId);
-    if (entry?.killTimer) { clearTimeout(entry.killTimer); }
-    if (entry) delete (entry as any).stopping;
-    void entry?.proxyBridge?.close().catch(() => undefined);
-    runningProcesses.delete(dirId);
+    const currentIsOwned = entry?.process === child && entry.pid === pid && entry.port === cdpPort;
+    if (currentIsOwned) {
+      if (entry.killTimer) clearTimeout(entry.killTimer);
+      delete entry.stopping;
+      void entry.proxyBridge?.close().catch((error) => console.error("[browser-stop] proxy bridge cleanup failed:", error));
+      runningProcesses.delete(dirId);
+    }
     try { fs.closeSync(logFd); } catch (closeError) { console.error(`[agent-browser] failed to close launch log:`, closeError); }
+    if (entry && !currentIsOwned) return;
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         const payload = { dirId, pid, timestamp: Date.now() };
@@ -1833,7 +1910,7 @@ export async function launchBrowser(
 
   emitEvent("profile:launched", { dirId, pid, cdpPort });
   recordAudit({ category: "profile", action: "launch", target: dirId, actor: "user", detail: `pid=${pid} cdpPort=${cdpPort} fingerprint=${fingerprintMode} browser=${nativeChromiumVersion || "unknown"}` });
-  return { pid, cdpPort, driftCheck, envCheck };
+  return { pid, cdpPort, driftCheck, envCheck, cookieCheck };
   } finally {
     pendingNativeProxyAuth?.cleanup();
     await pendingProxyBridge?.close().catch(() => undefined);
@@ -1903,7 +1980,7 @@ export async function checkFingerprintDrift(dirId: string): Promise<FingerprintD
   const cfg = getConfig() as any;
   const meta = cfg.browserProfiles?.[dirId];
   if (!meta) return { ok: false, error: "Profile not found" };
-  const engine = sanitizeBrowserEngine(meta.engine);
+  const engine = getProfileEngineByDirId(dirId);
   if (!meta.fingerprintBaseline) {
     return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
   }
@@ -2166,7 +2243,8 @@ async function launchFirefoxProfile(
   // profile's debug port; agent CDP tooling remains Chromium-only for now
   // (documented follow-up), while the product's own tools went BiDi (Slice 79).
   const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
-  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox" });
+  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox",
+    launchProxy: captureLaunchProxySnapshot(resolvedProxy) });
   child.on("exit", () => {
     const entry = runningProcesses.get(dirId);
     if (entry && entry.pid === pid) {
@@ -3001,37 +3079,6 @@ export function patchThirdPartyCookieCompatibility(profileDir: string, enabled: 
 // ═══════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════
-
-function getProfileSyncStatus(meta: any, lastModified: number, dirId: string): "synced" | "dirty" | "never" {
-  if (!meta?.syncedAt) return "never";
-  if (meta.syncedHash) {
-    const clean = JSON.parse(JSON.stringify(meta));
-    delete clean.syncedAt;
-    delete clean.syncedHash;
-    delete clean.__artifactHash;
-    const prefsPath = path.join(getProfilesDir(), dirId, "Default", "Preferences");
-    if (!fs.existsSync(prefsPath)) return "dirty";
-    clean.__artifactHash = zlibSafeBase64(prefsPath);
-    return hashJson(clean) === meta.syncedHash ? "synced" : "dirty";
-  }
-  return lastModified && lastModified > meta.syncedAt ? "dirty" : "synced";
-}
-
-function zlibSafeBase64(filePath: string): string {
-  return fs.readFileSync(filePath).toString("base64");
-}
-
-function hashJson(value: any): string {
-  return createHash("sha256").update(JSON.stringify(sortKeys(value))).digest("hex");
-}
-
-function sortKeys(value: any): any {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (!value || typeof value !== "object") return value;
-  const out: Record<string, any> = {};
-  for (const key of Object.keys(value).sort()) out[key] = sortKeys(value[key]);
-  return out;
-}
 
 async function findFreePortWithRetry(retries = 2): Promise<number> {
   let last: unknown = null;

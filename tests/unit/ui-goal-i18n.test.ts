@@ -66,6 +66,25 @@ const TRANSLATIONS = [
   ["profile.card.real-machine", "Managed identity disabled; browser startup policies still apply", "托管身份已关闭；浏览器启动策略仍会生效"],
   ["toast.fp.consistency-unverified", "No conflicts found in stored/cached fields; live alignment is not verified.", "已存／缓存字段未发现冲突；尚未验证实时出口对齐。"],
   ["toast.profile.created", "Browser profile created!", "已创建浏览器配置！"],
+  ["health.outcome.pass", "Pass", "通过"],
+  ["health.outcome.warn", "Watch", "需留意"],
+  ["health.outcome.risk", "Risk", "有风险"],
+  ["health.outcome.error", "Error", "检测错误"],
+  ["health.outcome.unavailable", "Unavailable", "不可用"],
+  ["health.outcome.inconclusive", "Not verified", "未验证"],
+  ["health.outcome.cancelled", "Cancelled", "已取消"],
+  ["health.outcome.baseline-established", "Baseline established", "基线已建立"],
+  ["health.env.dns-resolver-unknown", "The upstream resolver is unverified; a local stub, router or unknown address does not establish its country.", "尚未验证上游 DNS；本地存根、路由器或未知地址不能证明解析归属国家。"],
+  ["health.env.dns-resolver-retry", "Verify the actual upstream DNS transactions; the configured address alone is insufficient.", "请核对实际上游 DNS 交易；仅凭系统配置地址不足以完成验证。"],
+  ["health.env.font-platform-mismatch", "The browser exposed fonts inconsistent with its declared platform: {fonts}", "浏览器实际暴露了与声明平台不一致的字体：{fonts}"],
+  ["health.env.font-platform-unverified", "Host fonts were found, but browser isolation has not been verified: {fonts}", "主机存在下列字体，但尚未验证浏览器是否隔离：{fonts}"],
+  ["health.env.font-platform-retry", "Review the declared platform and verify font exposure in the running browser.", "请核对声明的平台，并在运行中的浏览器内验证字体暴露情况。"],
+  ["health.env.runtime-proxy-unavailable", "This running process has no verified launch proxy snapshot; current settings are not evidence of its active route.", "该运行进程没有可验证的启动代理快照；当前设置不能证明其实际路由。"],
+  ["health.env.runtime-proxy-retry", "Restart the profile through its normal launch flow before checking the launch configuration again.", "请通过正常启动流程重启该配置，再核验启动时的代理设置。"],
+  ["health.env.proxy-dns-unknown", "A proxy route is configured, but this check did not observe browser DNS transactions and cannot certify that host resolvers were bypassed.", "虽然配置了代理路由，但本次检查未观测浏览器 DNS 交易，无法证明已绕过主机解析器。"],
+  ["health.env.proxy-direct", "Direct configuration: host DNS settings were read, but the browser's actual resolver path still needs transaction evidence.", "直连配置：已读取主机 DNS 设置，但浏览器实际解析链路仍需交易证据。"],
+  ["health.env.proxy-configured", "The proxy protocol is configured for proxy-side DNS; without DNS transactions, its type alone does not prove that no queries leak.", "代理协议配置预期使用代理端 DNS；未采集 DNS 交易，不能仅凭类型证明无泄漏。"],
+  ["webrtc.sum.inconclusive", "The probe did not complete with usable ICE evidence", "探针未完成或未获得可用的 ICE 证据"],
 ] as const;
 
 type TextNode = { nodeType: 3; textContent: string };
@@ -331,6 +350,24 @@ function injectAfterMerges(source: string, statement: string) {
 // This does not claim linguistic correctness of every legacy translation.
 // It checks all own keys and the runtime's actual last-merge winners.
 describe("full merged renderer parity and scoped truthful copies", () => {
+  it("passes the actual repository check-i18n gate including health loading markup", () => {
+    // This is the real CLI over the real repository HTML/modules, not the
+    // renderer-only mutant fixtures below. The outer runner supplies owned
+    // HOME/TMP/cache and strips provider credentials; no main module is imported.
+    const command = [path.join(ROOT, "scripts/check-i18n.mjs")];
+    const result = spawnSync(process.execPath, command, {
+      cwd: ROOT, encoding: "utf8", timeout: 15_000, env: { ...process.env, CI: "1", NO_COLOR: "1" },
+    });
+    assert.ifError(result.error); expect(result.signal).toBeNull();
+    const output = result.stdout + result.stderr;
+    console.log("actual-check-i18n " + JSON.stringify({ command: [process.execPath, ...command], exit: result.status, output }));
+    expect(result.status, output).toBe(0);
+    const bundles = effectiveBundles(SOURCE);
+    expect(output).toContain(`i18n key parity: zh=${Object.keys(bundles["zh-CN"]).length} en=${Object.keys(bundles["en-US"]).length}`);
+    expect(output).toMatch(/main-process key parity: zh=[1-9]\d* en=[1-9]\d*/);
+    expect(output).toContain("i18n check passed");
+  });
+
   it("checks own keys after all three merge layers, not only the first block", () => {
     const bundles = effectiveBundles(SOURCE);
     expect(Object.keys(bundles["en-US"]).sort()).toEqual(Object.keys(bundles["zh-CN"]).sort());
@@ -380,6 +417,34 @@ describe("full merged renderer parity and scoped truthful copies", () => {
     expect(result.exit, result.output).toBe(1);
     expect(result.output).toContain("i18n-effective-value");
     expect(result.output).toContain("zh-CN: sync.use-global");
+  });
+
+  it.each([false, true])("keeps the strict three-layer merge proof and rejects an unreviewed fourth merge (strict=%s)", strict => {
+    expect(SOURCE).not.toContain("var healthDict =");
+    const mutant = injectAfterMerges(SOURCE, '  Object.assign(dict["zh-CN"], { "health.outcome.error": "Error" });');
+    expect(loadRuntime(mutant, "zh-CN").i18n.t("health.outcome.error")).toBe("Error");
+    const result = checkParityFixture(mutant, strict);
+    expect(result.exit, result.output).toBe(1); expect(result.output).toContain("Renderer dictionary merge order changed");
+    expect(result.output).toContain("i18n-parity-evaluation");
+  });
+
+  it.each([false, true])("checks health literal winners, own-key omissions and late-shadow counterexamples (strict=%s)", strict => {
+    const bundles = effectiveBundles(SOURCE), key = "health.outcome.error";
+    for (const [locale, value] of [["en-US", "Error"], ["zh-CN", "检测错误"]] as const) {
+      expect(Object.hasOwn(bundles[locale], key)).toBe(true); expect(bundles[locale][key]).toBe(value);
+      expect(loadRuntime(SOURCE, locale).i18n.t(key, "__FALSE_FALLBACK__")).toBe(value);
+      const entry = `      "${key}": ${JSON.stringify(value)},\n`;
+      assert.equal(SOURCE.split(entry).length, 2);
+      const missing = checkParityFixture(SOURCE.replace(entry, ""), strict);
+      expect(missing.exit, missing.output).toBe(1);
+      expect(missing.output).toContain(`missing in ${locale === "en-US" ? "en" : "zh"}: ${key}`);
+    }
+    const mutant = injectAfterMerges(SOURCE, `  dict["zh-CN"]["${key}"] = "Error";`);
+    expect(mutant).toContain('"health.outcome.error": "检测错误"');
+    expect(loadRuntime(mutant, "zh-CN").i18n.t(key)).toBe("Error");
+    const shadowed = checkParityFixture(mutant, strict);
+    expect(shadowed.exit, shadowed.output).toBe(1); expect(shadowed.output).toContain("i18n-effective-value");
+    expect(shadowed.output).toContain("zh-CN: " + key);
   });
 
   it("fails closed when an own locale bundle is absent", () => {

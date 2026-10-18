@@ -19,7 +19,24 @@ from typing import Any, Optional
 
 
 class AgentBrowserError(RuntimeError):
-    """Raised when the controller returns a non-2xx response."""
+    """Non-2xx response with status and a complete bounded JSON body.
+
+    body_truncated is explicit when the 2 MiB error-body limit is exceeded;
+    body is then None, never a clipped object presented as commit evidence.
+    Existing RuntimeError positional arguments and string messages remain valid.
+    """
+
+    def __init__(self, *args: object, status: Optional[int] = None,
+                 body: Any = None, body_truncated: bool = False,
+                 body_read_error: Optional[str] = None) -> None:
+        super().__init__(*args)
+        self.status = status
+        self.body = body
+        self.body_truncated = body_truncated
+        self.body_read_error = body_read_error
+
+
+_MAX_ERROR_BODY_BYTES = 2 * 1024 * 1024
 
 
 class AgentBrowserClient:
@@ -59,11 +76,34 @@ class AgentBrowserClient:
                 return json.loads(raw)
         except urllib.error.HTTPError as exc:
             detail = ""
+            parsed: Any = None
+            truncated = False
+            read_error: Optional[str] = None
             try:
-                detail = exc.read().decode("utf-8")
-            except Exception:
-                pass
-            raise AgentBrowserError(f"{method} {path} -> {exc.code}: {detail[:500]}") from exc
+                try:
+                    raw = exc.read(_MAX_ERROR_BODY_BYTES + 1)
+                finally:
+                    exc.close()
+                truncated = len(raw) > _MAX_ERROR_BODY_BYTES
+                detail = raw[:_MAX_ERROR_BODY_BYTES].decode("utf-8", errors="replace")
+                if not truncated:
+                    if not detail:
+                        parsed = {}
+                    else:
+                        try:
+                            parsed = json.loads(detail)
+                        except (ValueError, TypeError):
+                            parsed = {"raw": detail}
+            except Exception as error:
+                read_error = str(error)
+            message = f"{method} {path} -> {exc.code}: {detail[:500]}"
+            if truncated:
+                message += " [response body truncated]"
+            elif read_error:
+                message += " [response body unavailable: " + read_error + "]"
+            raise AgentBrowserError(message, status=exc.code, body=parsed,
+                                    body_truncated=truncated,
+                                    body_read_error=read_error) from exc
 
     def get(self, path: str, auth: bool = True, headers: Optional[dict[str, str]] = None) -> Any:
         return self.request("GET", path, auth=auth, headers=headers)

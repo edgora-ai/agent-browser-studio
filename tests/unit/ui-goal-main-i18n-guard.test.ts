@@ -15,6 +15,28 @@ const RENDERER = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "ut
 const LOCALES = ["en-US", "zh-CN"] as const;
 type Locale = typeof LOCALES[number];
 
+// Independent required native UI inventory: do not let an equally empty/short
+// locale pair pass. This is a minimum contract, not a hard-coded total: the
+// complete current key sets/counts below come from the actual source AST, so
+// new health/DNS/font keys cannot be omitted from the guard's reported scope.
+const ARCHIVE_PLACEHOLDERS: Record<string, string[]> = {
+  "archive.export.title": [], "archive.export.batch-title": [],
+  "archive.import.title": [], "archive.import.batch-title": [],
+  "archive.filter.backup": [], "archive.replace.title": [],
+  "archive.replace.message": ["n"], "archive.replace.detail": ["files"],
+  "archive.replace.confirm": [], "archive.cancel": [],
+};
+const REQUIRED_MAIN_KEYS = [
+  ...["show", "running", "idle", "quit", "tooltip"].map(key => `tray.${key}`),
+  ...["cooldown", "consecutive", "geo-drift", "ip-drift", "idc", "idc-org", "latency", "unchecked", "good"].map(key => `proxy.sug.${key}`),
+  ...["no-result", "unavailable", "error", "host-ip", "mdns-only", "clean"].map(key => `webrtc.sum.${key}`),
+  "proxy.rotate.reason-cooldown", "proxy.rotate.reason-poor",
+  ...["remote-locks", "push-removes-profiles", "push-removes-proxies", "push-removes-extensions", "push-removes-accounts"].map(key => `sync.warn.${key}`),
+  ...["pull-imports-profiles", "pull-imports-proxies", "pull-overwrites-conflicts"].map(key => `sync.note.${key}`),
+  ...["done", "failed", "cancelled", "missed", "default-rule-name"].map(key => `notify.${key}`),
+  ...Object.keys(ARCHIVE_PLACEHOLDERS),
+];
+
 function table(source: string) {
   const file = ts.createSourceFile("main-i18n.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations = file.statements.filter(ts.isVariableStatement)
@@ -39,6 +61,18 @@ function ownKeys(source: string, locale: Locale) {
     return node.name.text;
   }));
 }
+function ownStrings(source: string, locale: Locale) {
+  const values = new Map<string, string>();
+  for (const node of localeTable(source, locale).entries) {
+    assert.ok(ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name) && ts.isStringLiteral(node.initializer));
+    // Read declaration order like object literals do; never import/evaluate the
+    // main module or accidentally accept an inherited/fallback translation.
+    values.set(node.name.text, node.initializer.text);
+  }
+  return values;
+}
+function placeholders(value: string) { return [...value.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map(match => match[1]).sort(); }
+
 function omit(source: string, locale: Locale, key: string) {
   const { file, entries } = localeTable(source, locale);
   const matches = entries.filter(node => ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name) && node.name.text === key);
@@ -93,11 +127,38 @@ function assertCounts(output: string, source: string) {
   expect(output).toContain(`main-process key parity: zh=${ownKeys(source, "zh-CN").size} en=${ownKeys(source, "en-US").size}`);
 }
 
+describe("native archive translation inventory", () => {
+  it.each(LOCALES)("has effective own %s archive translations with the required interpolation fields", locale => {
+    const values = ownStrings(MAIN, locale), other = ownStrings(MAIN, locale === "en-US" ? "zh-CN" : "en-US");
+    expect(Object.keys(ARCHIVE_PLACEHOLDERS)).toHaveLength(10);
+    for (const [key, expected] of Object.entries(ARCHIVE_PLACEHOLDERS)) {
+      const value = values.get(key);
+      expect(typeof value === "string" && value.trim().length > 0, `${locale} must own a nonempty translation for ${key}`).toBe(true);
+      assert.equal(typeof value, "string");
+      expect(value !== other.get(key), `${key} must not silently use the other locale`).toBe(true);
+      expect(/\p{Script=Han}/u.test(value!), `${key} language`).toBe(locale === "zh-CN");
+      expect(placeholders(value!), `${locale} ${key} interpolation contract`).toEqual(expected);
+      expect(placeholders(other.get(key)!), `${key} locale placeholder parity`).toEqual(expected);
+    }
+  });
+});
+
 describe.each([false, true])("main own-key guard (strict=%s)", strict => {
   it("reports nonvacuous actual own counts without evaluating the main module", () => {
+    const actualInventory = [...new Set(LOCALES.flatMap(locale => [...ownKeys(MAIN, locale)]))].sort();
+    expect(REQUIRED_MAIN_KEYS).toHaveLength(45); // The original independent surface is still required.
+    expect(new Set(REQUIRED_MAIN_KEYS).size, "the independent inventory must not inflate its count with duplicates").toBe(REQUIRED_MAIN_KEYS.length);
+    expect(actualInventory.length).toBeGreaterThanOrEqual(REQUIRED_MAIN_KEYS.length);
+    for (const key of REQUIRED_MAIN_KEYS) expect(actualInventory, `required native UI key ${key}`).toContain(key);
     for (const locale of LOCALES) {
-      expect(ownKeys(MAIN, locale).size).toBe(35);
+      expect([...ownKeys(MAIN, locale)].sort()).toEqual(actualInventory);
+      expect(ownKeys(MAIN, locale).size).toBe(actualInventory.length);
       expect(ownKeys(MAIN, locale).has("notify.done")).toBe(true);
+      const values = ownStrings(MAIN, locale), other = ownStrings(MAIN, locale === "en-US" ? "zh-CN" : "en-US");
+      for (const key of actualInventory) {
+        expect(values.get(key)?.trim().length, `${locale}: nonempty own value ${key}`).toBeGreaterThan(0);
+        expect(placeholders(values.get(key)!), `${locale}: all-key placeholder parity ${key}`).toEqual(placeholders(other.get(key)!));
+      }
     }
     const source = MAIN + '\nconst unrelated = { dict: { "zh-CN": { "fake.key": "PRIVATE_VALUE_SENTINEL" } } };\nunrelated.dict;\nthrow new Error("MAIN_MODULE_MUST_NOT_EXECUTE");\n';
     const result = check(source, strict);
@@ -106,14 +167,28 @@ describe.each([false, true])("main own-key guard (strict=%s)", strict => {
     expect(result.output).not.toContain("MAIN_MODULE_MUST_NOT_EXECUTE");
   });
 
-  it.each(LOCALES)("rejects an actual own %s omission even though the other locale retains it", locale => {
-    const mutant = omit(MAIN, locale, "notify.done");
+  it("includes newly added literal keys in actual counts and rejects either-locale omission without a fixed table size", () => {
+    let expanded = MAIN;
+    for (const locale of LOCALES) expanded = appendEntry(expanded, locale, '"health.future-own-key": "PRIVATE_VALUE_SENTINEL {n}"');
+    for (const locale of LOCALES) expect(ownKeys(expanded, locale).size).toBe(ownKeys(MAIN, locale).size + 1);
+    const good = check(expanded, strict);
+    expect(good.exit, good.output).toBe(0); assertCounts(good.output, expanded);
+    for (const locale of LOCALES) {
+      const mutant = omit(expanded, locale, "health.future-own-key"), bad = check(mutant, strict);
+      expect(bad.exit, bad.output).toBe(1); assertCounts(bad.output, mutant);
+      expect(bad.output).toContain(`missing in ${locale === "en-US" ? "en" : "zh"}: health.future-own-key`);
+      expect(bad.output).toContain("key parity FAILED"); expect(bad.output).not.toContain("PRIVATE_VALUE_SENTINEL");
+    }
+  });
+
+  it.each(LOCALES.flatMap(locale => ["notify.done", "archive.replace.detail"].map(key => ({ locale, key }))))("rejects an actual own $locale $key omission even though the other locale retains it", ({ locale, key }) => {
+    const mutant = omit(MAIN, locale, key);
     const other = locale === "en-US" ? "zh-CN" : "en-US";
-    expect(ownKeys(mutant, other).has("notify.done")).toBe(true);
+    expect(ownKeys(mutant, other).has(key)).toBe(true);
     const result = check(mutant, strict);
     expect(result.exit, result.output).toBe(1);
     assertCounts(result.output, mutant);
-    expect(result.output).toContain(`missing in ${locale === "en-US" ? "en" : "zh"}: notify.done`);
+    expect(result.output).toContain(`missing in ${locale === "en-US" ? "en" : "zh"}: ${key}`);
     expect(result.output).toContain("key parity FAILED");
     // Diagnostics identify keys/counts, never translation or module contents.
     expect(result.output).not.toContain("Scheduled task finished");

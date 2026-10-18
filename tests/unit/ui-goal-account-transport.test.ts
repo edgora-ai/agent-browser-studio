@@ -79,6 +79,9 @@ function fixture(transport: "rest" | "mcp" = "rest") {
   const allow = new Set([
     "services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts",
     "services/secrets.ts", "services/local-agent.ts", "services/team.ts", "services/browser-engine.ts",
+    // Receipt classification is part of the real MCP dispatch, not an optional
+    // capability. Compile the production classifier in this realm as well.
+    "services/agent/tool-outcome.ts",
     "services/rest-api-server.ts", "services/mcp-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/server-mode.ts", "branding.ts", "ipc/agent.ts",
   ]);
   function load(relative: string): any {

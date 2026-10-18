@@ -68,7 +68,8 @@ describe("F01 running-profile runtime cookies obey selected profile source", () 
     const importer = vi.spyOn(runtimeCookieOps, "importCookies").mockResolvedValue(1);
     const result = await syncService.pull(undefined, { strategy: "remote" });
     expect(result.success, result.message).toBe(true);
-    expect(importer).toHaveBeenCalledWith(ID, [remoteCookie], undefined);
+    expect(importer).toHaveBeenCalledWith(ID, [remoteCookie], expect.any(AbortSignal));
+    expect(importer.mock.calls[0][2]?.aborted).toBe(false);
     expect(getConfig().browserProfiles[ID].name).toBe("remote");
   });
 

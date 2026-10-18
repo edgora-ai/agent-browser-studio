@@ -61,6 +61,11 @@ function readRemoteData(s3: any): { payload: any; data: any } {
 }
 
 function writeRemoteData(s3: any, payload: any, data: any): void {
+  // Simulate a legacy writer for these hand-authored merge fixtures. New-format
+  // proof cannot survive arbitrary edits; real V2 publishers are tested separately.
+  delete payload.artifactVersion;
+  delete payload.snapshotId;
+  for (const profile of Object.values(data.browserProfiles || {}) as any[]) delete profile.syncBaseline;
   payload.data = zlib.gzipSync(JSON.stringify(data, null, 2)).toString("base64");
   payload.timestamp = Date.now() + 1000;
   s3.put(CONFIG_KEY, Buffer.from(JSON.stringify(payload)));
@@ -74,7 +79,7 @@ describe("J62 — sync pull merge strategy", () => {
   beforeAll(async () => {
     s3 = await startMockS3();
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
+    const configured = await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
       enabled: true,
       endpoint: "http://127.0.0.1:" + s3.port,
       bucket: "bucket",
@@ -82,6 +87,7 @@ describe("J62 — sync pull merge strategy", () => {
       secretKey: "testsk",
       custodyConsent: true,
     });
+    expect(configured.success).toBe(true);
     const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J62", platform: "windows", fingerprintSeed: 62626 }));
     dirId = r.dirId;
     const push = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.push());

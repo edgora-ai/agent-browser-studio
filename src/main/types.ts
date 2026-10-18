@@ -72,8 +72,22 @@ export interface ProxyHealthEntry {
 
 export type ProxyMode = "none" | "default" | "named";
 
+export type ProfileHealthKind = "env" | "webrtc" | "drift" | "consistency";
+export type ProfileHealthOutcome = "pass" | "warn" | "risk" | "error" | "unavailable" | "inconclusive" | "cancelled" | "baseline-established";
+export interface ProfileHealthEntry {
+  kind: ProfileHealthKind;
+  at: number;
+  outcome: ProfileHealthOutcome;
+  summary: string;
+  requestId?: string;
+  source: "runtime" | "host" | "baseline" | "cached" | "legacy";
+}
+
 /** One persisted host-environment risk snapshot for a profile (R9 P1-4). */
 export interface EnvRiskDiagnosticsEntry {
+  outcome?: ProfileHealthOutcome;
+  requestId?: string;
+  source?: ProfileHealthEntry["source"];
   at: number;
   ok: boolean;
   high: number;
@@ -88,6 +102,9 @@ export interface EnvRiskDiagnosticsEntry {
 /** One persisted in-browser WebRTC diagnostics run for a profile. */
 export interface WebRtcDiagnosticsEntry {
   at: number;
+  outcome?: ProfileHealthOutcome;
+  requestId?: string;
+  gatheringState?: string;
   success: boolean;
   rtcAvailable: boolean;
   candidates: string[];
@@ -174,6 +191,25 @@ export interface ProfileLock {
   at: number;
 }
 
+export type ProfilePreferencesSnapshot =
+  | { state: "present"; sha256: string; bytes: number }
+  | { state: "absent" };
+
+/** A completed remote snapshot of portable metadata plus Preferences only. */
+export interface ProfileSyncBaseline {
+  version: 1;
+  targetId: string;
+  snapshotId: string;
+  contentHash: string;
+  preferences: ProfilePreferencesSnapshot;
+  timestamp: number;
+}
+
+export type ProfileSyncStatus = "synced" | "dirty" | "never" | "unknown";
+export type ProfileSyncScope = "portable-profile+preferences";
+export type ProfileSyncReason = "baseline-match" | "content-changed" | "no-baseline" | "legacy-marker"
+  | "invalid-baseline" | "target-mismatch" | "target-unavailable" | "preferences-unavailable" | "content-unavailable";
+
 export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   windowTitlePrefix?: string | null;
@@ -187,6 +223,7 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   drm?: boolean;
   syncedAt?: number;
   syncedHash?: string;
+  syncBaseline?: ProfileSyncBaseline;
   note?: string | null;
   tags?: string[];
   /** Business preset id used at creation (Slice 75). */
@@ -256,7 +293,9 @@ export interface ProfileInfo {
   proxyName: string | null;
   proxyMode: ProxyMode;
   syncedAt: number | null;
-  syncStatus: "synced" | "dirty" | "never";
+  syncStatus: ProfileSyncStatus;
+  syncScope: ProfileSyncScope;
+  syncReason: ProfileSyncReason;
   tags: string[];
   fingerprint: BrowserFingerprintMeta;
 }
@@ -358,6 +397,8 @@ export interface MgmtConfig {
   webrtcDiagnostics?: Record<string, WebRtcDiagnosticsEntry[]>;
   /** Persisted host-environment risk snapshots per profile (R9 P1-4, mirrors webrtcDiagnostics). */
   envRiskDiagnostics?: Record<string, EnvRiskDiagnosticsEntry[]>;
+  /** Local diagnostic facts only; not part of portable profile or sync content. */
+  profileHealthHistory?: Record<string, ProfileHealthEntry[]>;
   sync: SyncConfig;
   browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;
@@ -652,12 +693,45 @@ export interface StatusResult {
   cdpPort: number | null;
 }
 
+export interface SyncComparisonToken {
+  targetId: string;
+  localHash: string;
+  remoteHash: string;
+}
+
+export type SyncOutcome = "complete" | "partial" | "failed" | "cancelled" | "recovery-required";
+export type SyncCommitState = "none" | "committed" | "partial" | "unknown";
+export interface SyncItemResult {
+  side?: "local" | "remote";
+  scope: "config" | "profiles" | "cookies" | "localStorage" | "preferences" | "extensions" | "sidecar" | "baseline";
+  id?: string;
+  state: "applied" | "uploaded" | "queued" | "preserved" | "skipped" | "failed" | "unknown";
+  code?: string;
+  message?: string;
+  count?: number;
+  bytes?: number;
+  /** A policy-selected omission is distinct from an incomplete requested item. */
+  required?: boolean;
+}
+export interface SyncRecoveryInfo {
+  resource: "localStorage" | "extensions" | "profiles";
+  id: string;
+  receiptPath?: string;
+  paths: string[];
+}
 export interface SyncResult {
   success: boolean;
   message: string;
   transferredBytes?: number;
   /** Machine-readable failure (sale-93: CUSTODY_CONSENT_REQUIRED). */
   code?: string;
+  operationId?: string;
+  outcome?: SyncOutcome;
+  localCommit?: SyncCommitState;
+  remoteCommit?: SyncCommitState;
+  items?: SyncItemResult[];
+  warnings?: string[];
+  recovery?: SyncRecoveryInfo[];
 }
 
 // ── Updates (version-aware release store with pin + rollback) ──

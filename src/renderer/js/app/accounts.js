@@ -14,6 +14,8 @@
   function t(key, fallback) { return window.i18n ? window.i18n.t(key, fallback) : fallback; }
   var _role = null;
   var _rolePromise = null;
+  var _roleGeneration = 0;
+  var _listGeneration = 0;
   var _accountRequest = 0;
   var _accountReady = false;
   var _accountSaving = false;
@@ -65,13 +67,17 @@
   function loadAccountRole() {
     if (_role) return Promise.resolve(_role);
     if (_rolePromise) return _rolePromise;
-    _rolePromise = api.team.status().then(function(st) {
-      _role = (st && st.local && st.local.role) || 'owner';
-      return _role;
+    var generation = _roleGeneration;
+    _rolePromise = Promise.resolve().then(function() { return api.team.status(); }).then(function(st) {
+      if (generation !== _roleGeneration) return 'viewer';
+      var role = st && st.local && st.local.role;
+      if (['owner', 'admin', 'member', 'viewer'].indexOf(role) === -1) throw new Error('Invalid team role response');
+      _role = role;
+      return role;
     }).catch(function() {
-      // S11 (#108): never fail open to owner. A failed role lookup falls
-      // back to viewer (read-only) with a one-shot toast — the main process
-      // still enforces RBAC, this only gates which buttons render.
+      if (generation !== _roleGeneration) return 'viewer';
+      // Missing/malformed authority fails closed too. No workspace is a valid
+      // main-process response with local.role=owner, not a missing role field.
       _role = 'viewer';
       try {
         toast((window.i18n ? window.i18n.t("toast.team.role-unknown", "Team role unavailable — showing read-only view") : "Team role unavailable — showing read-only view"), "error");
@@ -82,8 +88,9 @@
   }
 
   function withAccountRole(action) {
+    var generation = _roleGeneration;
     return loadAccountRole().then(function(role) {
-      if (role === 'viewer') {
+      if (generation !== _roleGeneration || role === 'viewer') {
         toast(t('toast.account.read-only', 'Accounts are read-only for viewers'), 'error');
         return;
       }
@@ -160,9 +167,10 @@
     var el = document.getElementById(targetId);
     if (!el) return;
     var request = (_listRequests[targetId] || 0) + 1;
+    var generation = _listGeneration;
     _listRequests[targetId] = request;
     Promise.all([R.agent.accounts.list(), profileNameById(), loadAccountRole()]).then(function(res) {
-      if (request !== _listRequests[targetId]) return;
+      if (generation !== _listGeneration || request !== _listRequests[targetId]) return;
       var accounts = res[0] || [];
       var nameById = res[1] || {};
       var role = res[2];
@@ -207,7 +215,7 @@
       html += '</div>';
       el.innerHTML = html;
     }).catch(function(e) {
-      if (request !== _listRequests[targetId]) return;
+      if (generation !== _listGeneration || request !== _listRequests[targetId]) return;
       var el = document.getElementById(targetId);
       if (el && window.agentBrowser&&window.agentBrowser.renderViewState){ window.agentBrowser.renderViewState(el,{error: e.message||String(e), retry:{cmd:'agentLoadAccounts'}}); } else if (el) el.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
@@ -219,21 +227,35 @@
     applyAccountRoleToToolbar();
   };
 
-  function applyAccountRoleToToolbar() {
-    function apply(role) {
-      var canManage = role && role !== 'viewer';
-      document.querySelectorAll('[data-cmd="agentAddAccount"]').forEach(function(btn) {
-        btn.style.display = canManage ? '' : 'none';
-      });
-      var importBtn = document.getElementById('acct-bulk-import-btn');
-      var exportBtn = document.getElementById('acct-export-btn');
-      if (importBtn) importBtn.style.display = canManage ? '' : 'none';
-      if (exportBtn) exportBtn.style.display = canManage ? '' : 'none';
-    }
-    // Both the standalone and Agent toolbar stay read-only while role loads.
-    apply(_role);
-    loadAccountRole().then(apply);
+  function applyAccountToolbarRole(role) {
+    var canManage = role === 'owner' || role === 'admin' || role === 'member';
+    document.querySelectorAll('[data-cmd="agentAddAccount"]').forEach(function(btn) {
+      btn.style.display = canManage ? '' : 'none';
+    });
+    var importBtn = document.getElementById('acct-bulk-import-btn');
+    var exportBtn = document.getElementById('acct-export-btn');
+    if (importBtn) importBtn.style.display = canManage ? '' : 'none';
+    if (exportBtn) exportBtn.style.display = canManage ? '' : 'none';
   }
+
+  function applyAccountRoleToToolbar() {
+    var generation = _roleGeneration;
+    // Both the standalone and Agent toolbar stay read-only while role loads.
+    applyAccountToolbarRole(_role);
+    loadAccountRole().then(function(role) {
+      if (generation === _roleGeneration) applyAccountToolbarRole(role);
+    });
+  }
+
+  agentBrowser.invalidateAccountsForSync = function() {
+    ++_listGeneration;
+    ++_roleGeneration;
+    _role = null;
+    _rolePromise = null;
+    // Revoke visible authority synchronously, without fetching or touching any
+    // open dialog's input/ref/readiness. The coordinator owns the next reload.
+    applyAccountToolbarRole(null);
+  };
 
 
   // R157: dialog title h3 hosts a hydrated svg — write the label span, not the
