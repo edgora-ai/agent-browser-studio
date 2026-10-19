@@ -6,6 +6,11 @@ import * as os from "node:os";
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-proxy-health-test");
 
+vi.mock("node:os", async original => ({ tmpdir: (await original<typeof import("node:os")>()).tmpdir, homedir: () => process.env.TMPDIR, hostname: () => "synthetic-health-fixture" }));
+vi.mock("node:child_process", () => ({ spawn: () => { throw new Error("Unexpected child"); }, execFileSync: () => { throw new Error("Unexpected child"); } }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("Unexpected DNS"); }, resolve: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:net", async original => ({ isIP: (await original<typeof import("node:net")>()).isIP, connect: () => { throw new Error("Unexpected network"); } }));
 vi.mock("electron", () => {
   const nodePath = require("node:path");
   const nodeOs = require("node:os");
@@ -36,7 +41,8 @@ type LegacyNullSyncedProfile = Omit<BrowserProfileMeta, "syncedAt"> & {
 // meaning the moment the default changed.
 import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 import {
-  recordProxyDetection,
+  recordProxyDetection as recordExplicitProxyDetection,
+  type ProxyHealthObservation,
   computeScore,
   riskFromScore,
   listProxyHealth,
@@ -45,6 +51,11 @@ import {
   computeBindings,
 } from "../../src/main/services/proxy-health.js";
 
+// This suite supplies explicit synthetic measurement authority/time. The
+// production writer must no longer invent "now" for an unobserved DTO.
+function recordProxyDetection(name: string, obs: ProxyHealthObservation) {
+  return recordExplicitProxyDetection(name, { ...obs, observedAt: Date.now(), source: "network" });
+}
 const BASE = {
   success: true,
   exitIp: "1.2.3.4",

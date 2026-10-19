@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { getAppDataDir, getProfilesDir, getSyncConfig, portableProfileContent } from "../config-manager.js";
 import { parseProfilePreferencesSnapshot, parseProfileSyncBaseline } from "../profile-portability.js";
 import { validateDirId } from "../utils.js";
-import type { ProfilePreferencesSnapshot, ProfileSyncBaseline, ProfileSyncReason, ProfileSyncScope, ProfileSyncStatus } from "../../types.js";
+import type { ProfilePreferencesSnapshot, ProfileSyncBaseline, ProfileSyncReason, ProfileSyncScope, ProfileSyncStatus, ProfileHistorySyncState } from "../../types.js";
+import { parseHistoryCoverage, parseProfileHistoryBaseline } from "../profile-portability.js";
+import { captureHistory } from "./sqlite-history.js";
 
 export { parseProfileSyncBaseline } from "../profile-portability.js";
 export const PROFILE_SYNC_SCOPE: ProfileSyncScope = "portable-profile+preferences";
@@ -131,4 +133,42 @@ export function readProfileSyncState(dirId: string, rawMeta: unknown): ProfileSy
   // assert contradictory Preferences presence/bytes. Retain that uncertainty.
   if (digest(preferences) !== digest(baseline.preferences)) return state("unknown", "invalid-baseline");
   return state("synced", "baseline-match");
+}
+
+/** Metadata-only coverage, not a live SQLite comparison or full-profile proof. */
+export function profileHistoryCoverage(rawMeta: unknown): ProfileHistorySyncState {
+  const meta = rawMeta && typeof rawMeta === "object" ? rawMeta as Record<string, unknown> : {};
+  const coverage = parseHistoryCoverage(meta.historySyncCoverage), baseline = parseProfileHistoryBaseline(meta.historySyncBaseline);
+  return { scope: "history-and-firefox-bookmarks", status: coverage?.state === "unselected" ? "unselected" : "unknown", coverage: coverage?.state ?? "legacy",
+    freshness: coverage?.freshness ?? "not-covered", reason: coverage?.code || (coverage ? "not-rechecked" : "history-not-covered"),
+    capturedAt: coverage?.artifact?.capturedAt ?? coverage?.capturedAt ?? baseline?.timestamp ?? null };
+}
+
+/** Independent semantic comparison on an owned, WAL-aware copy. The caller owns
+ * the restore lock, staging lifetime, and fail-closed runtime/config guard. */
+export async function readProfileHistorySyncState(dirId: string, rawMeta: unknown, stageRoot: string, guard: () => void, signal?: AbortSignal): Promise<ProfileHistorySyncState> {
+  validateDirId(dirId);
+  const state = profileHistoryCoverage(rawMeta), meta = rawMeta as Record<string, unknown>;
+  const baseline = parseProfileHistoryBaseline(meta?.historySyncBaseline), coverage = parseHistoryCoverage(meta?.historySyncCoverage);
+  const sync = getSyncConfig();
+  // includeHistory controls future automatic operations, not this explicit
+  // read-only recheck of a separately consented per-operation snapshot.
+  if (!Number.isSafeInteger(sync.historyConsentAt) || sync.historyConsentAt! <= 0) return { ...state, status: "unselected", reason: "history-not-selected" };
+  if (!baseline || !coverage) return { ...state, reason: "history-no-baseline" };
+  if (coverage.state === "unselected" || coverage.state === "failed") return state;
+  if (baseline.engine !== (meta.engine || "chromium")) return { ...state, reason: "history-engine-mismatch" };
+  let target: string;
+  try { target = getProfileSyncTarget(sync); } catch { return { ...state, reason: "target-unavailable" }; }
+  if (baseline.targetId !== target) return { ...state, reason: "target-mismatch" };
+  if (coverage.artifact ? coverage.artifact.snapshotId !== baseline.snapshotId || coverage.artifact.semanticHash !== baseline.semanticHash || coverage.artifact.schema.sha256 !== baseline.schemaHash
+      : coverage.state !== "absent" || baseline.state !== "absent" || coverage.snapshotId !== baseline.snapshotId) return { ...state, reason: "history-not-applied" };
+  try {
+    guard();
+    const current = await captureHistory(path.join(getProfilesDir(), dirId), baseline.engine, stageRoot, guard, signal);
+    const matches = current === null ? baseline.state === "absent" : baseline.state === "present" && current.summary.semanticHash === baseline.semanticHash && current.summary.schema.sha256 === baseline.schemaHash;
+    return { ...state, status: matches ? "synced" : "dirty", reason: matches ? coverage.freshness === "preserved" ? "preserved-baseline-match" : "history-baseline-match" : "history-content-changed" };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { ...state, status: "unknown", reason: "history-read-or-runtime-unconfirmed" };
+  }
 }

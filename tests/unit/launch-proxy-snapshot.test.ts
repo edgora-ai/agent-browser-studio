@@ -8,7 +8,8 @@ vi.mock("electron", () => ({ app: { getPath: f.path } }));
 vi.mock("../../src/main/services/main-i18n.js", () => ({ tMain: (_key: string, fallback: string) => fallback }));
 vi.mock("../../src/main/services/config/store.js", () => ({
   getCommittedConfig: f.current, readSnapshot: f.current,
-  setNormalizer: vi.fn(), setAfterTransactHook: vi.fn(),
+  setNormalizer: vi.fn(), setAfterTransactHook: vi.fn(), setProxyWitnessAdapter: vi.fn(),
+  captureProxyTarget: () => { throw new Error("No detection target capture allowed in read-only route tests"); },
   adoptLoadedConfig: vi.fn(() => { throw new Error("No config load allowed"); }),
   transact: vi.fn(() => { throw new Error("No config writer allowed"); }),
 }));

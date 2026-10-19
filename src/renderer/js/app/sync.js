@@ -26,8 +26,11 @@
   var lastResult = null;
   var formBaseline = {};
   var formTouched = {};
-  var formFields = ['sync-enabled', 'sync-endpoint-input', 'sync-bucket-input', 'sync-custody-consent', 'sync-ak-input', 'sync-sk-input'];
-  var checkboxFields = { 'sync-enabled': true, 'sync-custody-consent': true };
+  var formFields = ['sync-enabled', 'sync-endpoint-input', 'sync-bucket-input', 'sync-custody-consent', 'sync-history-consent', 'sync-include-history', 'sync-ak-input', 'sync-sk-input'];
+  var checkboxFields = { 'sync-enabled': true, 'sync-custody-consent': true, 'sync-history-consent': true, 'sync-include-history': true };
+  var savedHistoryScope;
+  var lastHistoryStatus = null;
+  var historyObservations = {};
   var controls = [
     { cmd: 'syncPush', kind: 'push', key: 'sync.push', fallback: 'Push' },
     { cmd: 'syncPull', kind: 'pull', key: 'sync.pull', fallback: 'Pull' },
@@ -102,6 +105,7 @@
 
   function invalidateViews() {
     viewEpoch++; statusSeq++; previewSeq++; syncDiffSeq++; teamSeq++;
+    historyObservations = {};
     clearComparison();
     var preview = document.getElementById('sync-preview');
     var label = document.getElementById('sync-preview-message');
@@ -162,7 +166,20 @@
   var OUTCOME = { complete: 'Complete in reported scope', partial: 'Partial completion', failed: 'Failed', cancelled: 'Cancelled', 'recovery-required': 'Recovery required' };
   var COMMIT = { none: 'No commit reported', committed: 'Committed', partial: 'Partially committed', unknown: 'Unknown' };
   var ITEM = { applied: 'Applied', uploaded: 'Uploaded', queued: 'Queued', preserved: 'Preserved', skipped: 'Skipped', failed: 'Failed', unknown: 'Unknown' };
-  var SCOPE = { config: 'Configuration', profiles: 'Profiles', cookies: 'Cookies', localStorage: 'LocalStorage', preferences: 'Preferences', extensions: 'Extensions', sidecar: 'Compatibility sidecars', baseline: 'Sync baseline' };
+  var SCOPE = { config: 'Configuration', profiles: 'Profiles', cookies: 'Cookies', localStorage: 'LocalStorage', preferences: 'Preferences', extensions: 'Extensions', history: 'History / Firefox bookmarks', sidecar: 'Compatibility sidecars', baseline: 'Sync baseline' };
+  var HISTORY_COVERAGE = { legacy: 'Legacy backup: history not covered', unselected: 'History not selected', absent: 'Source confirmed absent (not an empty database)', empty: 'Complete empty database snapshot', complete: 'Complete database snapshot', preserved: 'Previous snapshot preserved', failed: 'History capture failed' };
+  var HISTORY_FRESHNESS = { captured: 'Captured at the recorded time', preserved: 'Not freshly captured', 'not-covered': 'Not covered', 'not-rechecked': 'Local content not rechecked' };
+  var HISTORY_COMPARE = { synced: 'Semantic baseline matches', dirty: 'History has local changes', unknown: 'Local content not rechecked or unavailable', unselected: 'History not selected' };
+  function historyLabel(coverage) {
+    if (!coverage) return t('sync.history.coverage.legacy', HISTORY_COVERAGE.legacy);
+    var state = coverage.coverage || coverage.state || 'legacy';
+    return resultLabel('sync.history.coverage.', HISTORY_COVERAGE, state) + ' · ' + resultLabel('sync.history.freshness.', HISTORY_FRESHNESS, coverage.freshness || 'not-covered');
+  }
+  function identityLabel(identity) {
+    var state = identity && identity.configuration && identity.configuration.state || 'not-verifiable';
+    var labels = { retained: 'Configuration identity retained', changed: 'Configuration identity changed', 'not-verifiable': 'Configuration identity not verifiable', 'missing-seed': 'Legacy configuration has no identity seed' };
+    return t('identity.config.' + state, labels[state] || labels['not-verifiable']) + ' · ' + t('identity.runtime.not-verified', 'Runtime fingerprint not re-verified');
+  }
   function resultLabel(prefix, labels, value) { return t(prefix + value, labels[value] || labels.unknown || value); }
   function resultOutcome(r) { return OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
   function limitedResult(r) {
@@ -194,6 +211,8 @@
     (r.items || []).forEach(function(item) {
       html += '<div>' + esc(resultLabel('sync.result.scope.', SCOPE, item.scope)) + (item.id ? ' · ' + esc(item.id) : '') + ': <strong>' + esc(resultLabel('sync.result.item.', ITEM, item.state)) + '</strong>' +
         (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (item.message ? ' · ' + esc(item.message) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
+      if (item.scope === 'history') html += '<div class="status-note">' + esc(historyLabel(item.history)) + '</div>';
+      if (item.identity) html += '<div class="status-note">' + esc(identityLabel(item.identity)) + '</div>';
     });
     if ((r.warnings || []).length) html += '<div class="health-text-watch"><strong>' + esc(t('sync.result.warnings', 'Warnings')) + '</strong>' + (r.warnings || []).map(function(warning) { return '<div>' + esc(warning) + '</div>'; }).join('') + '</div>';
     if ((r.recovery || []).length || outcome === 'recovery-required') {
@@ -391,7 +410,7 @@
     var unverified = covered ? coverage.unverified : [];
     var limited = !covered || unverified.length || !comparisonToken(diff);
     messageEl.innerHTML = '<span class="' + (limited ? 'health-text-watch' : 'health-text-good') + '">' + esc(limited ? t('sync.compare.unverified', 'Comparison contains unverified data') : t('sync.compare-done', 'Supported scope compared')) + '</span>' + timeHtml;
-    var cards = ['<div class="profile-card"><div style="font-size:12px;line-height:1.5;">' + esc(t('sync.compare.scope', 'Compares portable profile settings and Preferences, proxy/account metadata and extension inventory only. Live Cookies, LocalStorage databases and full profile files are not compared.')) + '</div></div>'];
+    var cards = ['<div class="profile-card"><div style="font-size:12px;line-height:1.5;">' + esc(t('sync.compare.scope', 'Compares portable profile settings and Preferences, proxy/account metadata and extension inventory only. Live Cookies, LocalStorage/History/Places databases and full profile files are not compared. History uses separate coverage and semantic rechecks.')) + '</div></div>'];
     if (limited) {
       cards.push('<div class="profile-card health-text-watch"><strong>' + esc(t('sync.compare.unverified', 'Comparison contains unverified data')) + '</strong>' +
         (!covered ? '<div>' + esc(t('sync.compare.coverage-unavailable', 'Coverage evidence is unavailable; no full-content match is claimed.')) + '</div>' : '') +
@@ -486,6 +505,7 @@
     var token = null;
     function push(force) {
       var opts = { comparisonToken: token };
+      if (typeof savedHistoryScope === 'boolean') opts.history = savedHistoryScope;
       if (force) opts.force = true;
       return dispatchOperation(operation, function() { return api.sync.push(opts); });
     }
@@ -536,7 +556,11 @@
     });
     // Capture the exact displayed proof/choices BEFORE invalidating the UI.
     var operation = beginOperation('pull');
-    function pull() { return dispatchOperation(operation, function() { return api.sync.pull({ strategy: strategy, resolutions: resolutions, comparisonToken: token }); }); }
+    function pull() { return dispatchOperation(operation, function() {
+      var opts = { strategy: strategy, resolutions: resolutions, comparisonToken: token };
+      if (typeof savedHistoryScope === 'boolean') opts.history = savedHistoryScope;
+      return api.sync.pull(opts);
+    }); }
     return fetchPreview().then(function(preview) {
       if (!ownsOperation(operation) || !preview) return null;
       var running = preview.runningProfiles || [];
@@ -567,6 +591,33 @@
       el.textContent = t('sync.custody.off', 'No data-custody consent recorded — push/pull will refuse until you consent and save.');
     }
   }
+  function renderHistoryState(status) {
+    var panel = syncPanel('sync-history-coverage');
+    if (!panel) return;
+    lastHistoryStatus = status;
+    var title = status && status.includeHistory ? t('sync.history.selected', 'History scope selected for saved automatic sync') : t('sync.history.unselected', 'History scope is not selected');
+    var html = '<strong>' + esc(title) + '</strong><div class="status-note">' + esc(t('sync.history.proof-note', 'History has separate coverage and a semantic baseline. A configuration sync badge is not full browser restore or runtime fingerprint proof.')) + '</div>';
+    Object.keys(status && status.history || {}).forEach(function(id) {
+      var observed = historyObservations[id], coverage = observed || status.history[id];
+      html += '<div>' + esc(id) + ' · ' + esc(historyLabel(coverage)) + ' · ' + esc(resultLabel('sync.history.compare.', HISTORY_COMPARE, observed ? observed.status : 'unknown'));
+      if (coverage.capturedAt != null) html += ' · ' + esc(new Date(coverage.capturedAt).toLocaleString());
+      html += '</div>';
+    });
+    panel.innerHTML = html;
+  }
+  agentBrowser.syncRecheckHistory = function() {
+    if (operationBusy() || !lastHistoryStatus || typeof api.sync.historyState !== 'function') return Promise.resolve(null);
+    var epoch = viewEpoch, status = lastHistoryStatus, observations = {};
+    var ids = Object.keys(status.history || {});
+    return ids.reduce(function(chain, id) {
+      return chain.then(function() {
+        if (epoch !== viewEpoch) return;
+        return api.sync.historyState(id).then(function(state) { observations[id] = state; }, function() {
+          observations[id] = Object.assign({}, status.history[id], { status: 'unknown', reason: 'history-read-or-runtime-unconfirmed' });
+        });
+      });
+    }, Promise.resolve()).then(function() { if (epoch === viewEpoch) { historyObservations = observations; renderHistoryState(status); } return observations; });
+  };
   function consentError(r) {
     return !!(r && (r.code === 'CUSTODY_CONSENT_REQUIRED' || /custody consent/i.test(r.message || '')));
   }
@@ -595,6 +646,11 @@
       return Promise.resolve(null);
     }
     if (custodyConsented()) config.custodyConsent = true;
+    if (document.getElementById('sync-include-history')) {
+      config.includeHistory = !!submitted['sync-include-history'];
+      config.historyConsent = !!submitted['sync-history-consent'];
+      if (config.includeHistory && !config.historyConsent) { toast(t('sync.history.consent-required', 'History scope includes Firefox bookmarks. Give separate consent and save before selecting it.'), 'error'); return Promise.resolve(null); }
+    }
     var operation = beginOperation('configure'), saved = null;
     return dispatchOperation(operation, function() { return api.sync.configure(config); }).then(function(r) {
       if (!r) return null;
@@ -651,10 +707,14 @@
       hydrateField('sync-endpoint-input', status.endpoint || '', requestedDraft, savedDraft);
       hydrateField('sync-bucket-input', status.bucket || '', requestedDraft, savedDraft);
       hydrateField('sync-custody-consent', !!status.custodyConsentAt, requestedDraft, savedDraft);
+      hydrateField('sync-history-consent', !!status.historyConsentAt, requestedDraft, savedDraft);
+      hydrateField('sync-include-history', status.includeHistory === true, requestedDraft, savedDraft);
+      savedHistoryScope = typeof status.includeHistory === 'boolean' ? status.includeHistory : undefined;
       var ak = document.getElementById('sync-ak-input'), sk = document.getElementById('sync-sk-input');
       if (ak && !ak.value) ak.placeholder = status.accessKeyMasked || '';
       if (sk && !sk.value) sk.placeholder = status.configured ? t('sync.credentials.saved', 'Saved; leave blank to keep') : '';
       renderCustodyState(status);
+      renderHistoryState(status);
       agentBrowser.loadSyncPreview();
       loadTeamPanel();
       return status;

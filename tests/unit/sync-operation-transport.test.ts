@@ -270,6 +270,19 @@ for (const transport of ["ipc", "rest"] as const) describe(`${transport}: origin
       if (transport === "ipc") expect(f.invocations.at(-1)).toEqual({ channel: "sync:" + kind, args: [before] });
     });
   }
+  it("passes explicit history scope unchanged and refuses truthy coercion before calling the service", async () => {
+    const f = fixture();
+    for (const history of [true, false]) {
+      if (transport === "ipc") { await f.api.sync.push({ history }); await f.api.sync.pull({ history }); }
+      else { await f.request("POST", "/api/sync/push", { history }); await f.request("POST", "/api/sync/pull", { history }); }
+      expect(f.service.push).toHaveBeenLastCalledWith(undefined, false, undefined, { history });
+      expect(f.service.pull).toHaveBeenLastCalledWith(undefined, { strategy: "local", resolutions: {}, comparisonToken: undefined, history });
+    }
+    const count = f.service.push.mock.calls.length;
+    if (transport === "ipc") expect(await f.api.sync.push({ history: "true" })).toMatchObject({ success: false, code: "INVALID_HISTORY_SCOPE" });
+    else expect((await f.request("POST", "/api/sync/push", { history: "true" })).status).toBe(400);
+    expect(f.service.push).toHaveBeenCalledTimes(count);
+  });
   it("keeps optional tokens absent and strategy/force defaults intact", async () => {
     const f = fixture();
     if (transport === "ipc") { await f.api.sync.push(); await f.api.sync.pull({ strategy: "invalid" }); }

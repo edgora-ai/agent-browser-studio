@@ -24,7 +24,8 @@ vi.mock("node:http", async (importOriginal) => ({
 vi.mock("node:https", () => ({ request: () => fixture.forbidden("HTTPS") }));
 
 import * as agent from "../../src/main/services/local-agent.js";
-import { getConfig, reloadConfig } from "../../src/main/services/config-manager.js";
+import { getConfig, getConfigPath, reloadConfig } from "../../src/main/services/config-manager.js";
+import { agentRunRecorder } from "../../src/main/services/agent-run-trace.js";
 import { cdpConnect, cdpDisconnect } from "../../src/main/services/agent/cdp-transport.js";
 import { runningProcesses, type RunningEntry } from "../../src/main/services/browser/runtime-table.js";
 import { captureChatBrowserScope } from "../../src/main/services/agent/run-scope.js";
@@ -35,7 +36,9 @@ type CdpOptions = {
   nativeInputFailure?: boolean; nativeMismatch?: boolean; fallbackFailure?: boolean;
   element?: Partial<{ connected: boolean; visible: boolean; enabled: boolean; pointerEvents: boolean; editable: boolean }>;
   covered?: boolean; frames?: boolean; emptyTargets?: boolean; invalidMetrics?: boolean;
+  navigationError?: string; lifecycleError?: string;
   onCall?: (call: Wire) => void;
+  responseDelay?: (call: Wire) => number;
 };
 const nativeFetch = globalThis.fetch;
 const closers: Array<() => Promise<void>> = [];
@@ -44,6 +47,7 @@ const closers: Array<() => Promise<void>> = [];
 async function cdpWire(options: CdpOptions = {}) {
   const calls: Wire[] = [];
   const sockets = new Set<WebSocket>();
+  const delayedReplies = new Set<ReturnType<typeof setTimeout>>();
   const unexpected: string[] = [];
   let port = 0; let input = "prefill"; let pageY = 100;
   const server = http.createServer((req, res) => {
@@ -59,6 +63,7 @@ async function cdpWire(options: CdpOptions = {}) {
       let result: any = {}; let error: string | undefined;
       const p = call.params || {};
       switch (call.method) {
+        case "Page.setLifecycleEventsEnabled": if (options.lifecycleError) error = options.lifecycleError; break;
         case "Page.enable": case "Runtime.enable": case "Network.enable": case "DOM.enable": case "Input.enable": case "Emulation.enable":
         case "Runtime.releaseObject": case "DOM.scrollIntoViewIfNeeded": case "Target.detachFromTarget":
         case "Emulation.setDeviceMetricsOverride": case "Emulation.setUserAgentOverride": case "Emulation.setGeolocationOverride": case "Page.close": break;
@@ -71,6 +76,7 @@ async function cdpWire(options: CdpOptions = {}) {
           { targetId: "other-page", type: "page" },
         ] : [] }; break;
         case "Target.attachToTarget": result = { sessionId: `session-${p.targetId}` }; break;
+        case "Page.getFrameTree": result = { frameTree: { frame: { id: "task49-root", loaderId: "task49-loader" } } }; break;
         case "Page.createIsolatedWorld": result = { executionContextId: call.sessionId ? 4902 : 4901 }; break;
         case "Runtime.evaluate": {
           const expression = String(p.expression);
@@ -84,6 +90,7 @@ async function cdpWire(options: CdpOptions = {}) {
             else if (expression.includes("throw new Error")) { result = { exceptionDetails: { text: "synthetic page exception" } }; break; }
             else if (expression === "location.href" || expression === "window.location.href") value = "https://page.task49.test/current";
             else if (expression === "document.title") value = "Task 49 title";
+            else if (expression === "document.readyState") value = "loading";
             else if (expression.includes("textContent?.trim")) value = "Task 49 text";
             else if (expression.startsWith("!!document.querySelector")) value = !expression.includes("#missing");
             else if (expression.includes("getAttribute")) value = "task49-attribute";
@@ -115,7 +122,7 @@ async function cdpWire(options: CdpOptions = {}) {
         case "Page.getLayoutMetrics": result = options.invalidMetrics ? {} : { cssLayoutViewport: { pageY, clientWidth: 1280, clientHeight: 720 }, cssContentSize: { height: 5000 } }; break;
         case "DOM.getFrameOwner": result = { backendNodeId: 49 }; break;
         case "DOM.getBoxModel": result = { model: { content: [100, 100, 1380, 100, 1380, 820, 100, 820] } }; break;
-        case "Page.navigate": result = { frameId: "task49-root" }; break;
+        case "Page.navigate": result = { frameId: "task49-root", loaderId: "task49-loader", ...(options.navigationError ? { errorText: options.navigationError } : {}) }; break;
         case "Page.captureScreenshot": result = { data: "c3ludGhldGljLXRhc2s0OS1waXhlbHM=" }; break;
         case "Network.getAllCookies": result = { cookies: [{ name: "session", domain: "page.task49.test", value: "synthetic-secret-cookie" }] }; break;
         case "Network.setCookie": result = { success: true }; break;
@@ -125,7 +132,12 @@ async function cdpWire(options: CdpOptions = {}) {
         case "DOM.setFileInputFiles": break;
         default: unexpected.push(call.method); error = `unregistered protocol method ${call.method}`;
       }
-      socket.send(JSON.stringify({ id: call.id, ...(error ? { error: { message: error } } : { result }) }));
+      const reply = () => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ id: call.id, ...(error ? { error: { message: error } } : { result }) })); };
+      const delay = options.responseDelay?.(call) ?? 0;
+      if (delay) {
+        const timer = setTimeout(() => { delayedReplies.delete(timer); reply(); }, delay);
+        delayedReplies.add(timer);
+      } else reply();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -133,6 +145,7 @@ async function cdpWire(options: CdpOptions = {}) {
   fixture.origins.add(`http://127.0.0.1:${port}`);
   fixture.profiles.push({ dirId: `ab_${port}`, name: "Task49", running: true, cdpPort: port, fingerprintSeed: 49 });
   closers.push(async () => {
+    for (const timer of delayedReplies) clearTimeout(timer);
     for (const socket of sockets) socket.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -208,6 +221,89 @@ afterEach(async () => {
 });
 
 describe("real Chromium tool dispatch over fake CDP wire", () => {
+  it("rejects native navigation failure and translates only a typed load timeout in the public tool", async () => {
+    const broken = await cdpWire({ navigationError: "net::ERR_PROXY_CONNECTION_FAILED" });
+    await expect(agent.executeToolCall("browser_navigate", { port: broken.port, url: "https://page.task49.test/failure" })).rejects.toMatchObject({ code: "BROWSER_NAVIGATION_FAILED" });
+    const quiet = await cdpWire();
+    expect(await agent.executeToolCall("browser_wait_for_load", { port: quiet.port, timeout: 100 })).toEqual({ loaded: false });
+    const refused = await cdpWire({ lifecycleError: "synthetic load protocol refusal" });
+    await expect(agent.executeToolCall("browser_wait_for_load", { port: refused.port, timeout: 100 })).rejects.toThrow("synthetic load protocol refusal");
+  });
+
+  it("honors an explicit unscoped caller cancellation during navigation and load preparation", async () => {
+    const navController = new AbortController();
+    const navigation = await cdpWire({ onCall: (call) => { if (call.method === "Page.navigate") navController.abort(new Error("unscoped navigation cancelled")); } });
+    await expect(agent.executeToolCall("browser_navigate", { port: navigation.port, url: "https://page.task49.test/cancel" }, undefined, { signal: navController.signal })).rejects.toThrow("unscoped navigation cancelled");
+    const loadController = new AbortController();
+    const load = await cdpWire({ onCall: (call) => { if (call.method === "Page.createIsolatedWorld") loadController.abort(new Error("unscoped load cancelled")); } });
+    await expect(agent.executeToolCall("browser_wait_for_load", { port: load.port, timeout: 100 }, undefined, { signal: loadController.signal })).rejects.toThrow("unscoped load cancelled");
+  });
+
+  it("includes a held cached-client probe in the public load timeout without evicting the shared client", async () => {
+    const wire = await cdpWire();
+    await agent.executeToolCall("browser_get_title", { port: wire.port });
+    wire.options.responseDelay = (call) => call.method === "Runtime.evaluate" && call.params?.expression === "1" ? 180 : 0;
+    const start = Date.now();
+    expect(await agent.executeToolCall("browser_wait_for_load", { port: wire.port, timeout: 100 })).toEqual({ loaded: false });
+    expect(Date.now() - start).toBeLessThan(160);
+    expect(wire.calls.some((call) => call.method === "Page.getFrameTree")).toBe(false);
+    wire.options.responseDelay = undefined;
+    expect(await agent.executeToolCall("browser_get_title", { port: wire.port })).toEqual({ title: "Task 49 title" });
+    expect(wire.calls.filter((call) => call.method === "Page.enable")).toHaveLength(1);
+  });
+
+  it("records actual navigation/timeout wire outcomes as failed Agent steps and persists their readback", async () => {
+    const broken = await cdpWire({ navigationError: "net::ERR_PROXY_CONNECTION_FAILED" });
+    const quiet = await cdpWire();
+    let round = 0;
+    const model = http.createServer(async (req, res) => {
+      for await (const _chunk of req) { /* consume only the owned synthetic request */ }
+      const message = round++ === 0 ? { role: "assistant", content: "", tool_calls: [
+        { id: "native-failure", type: "function", function: { name: "browser_navigate", arguments: JSON.stringify({ port: broken.port, url: "https://page.task49.test/failure" }) } },
+        { id: "load-expiry", type: "function", function: { name: "browser_wait_for_load", arguments: JSON.stringify({ port: quiet.port, timeout: 100 }) } },
+      ] } : { role: "assistant", content: "Neither navigation nor full load was verified." };
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ choices: [{ message }] }));
+    });
+    await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(model.address() as AddressInfo).port}`;
+    fixture.origins.add(origin);
+    closers.push(async () => { model.closeAllConnections(); await new Promise<void>((resolve) => model.close(() => resolve())); });
+    const run = agentRunRecorder.startRun({ name: "Synthetic navigation failure", source: { type: "chat", conversationId: "navigation-wire-fixture" } });
+    await agent.agentChat({ provider: "openai", model: "synthetic-local-wire", apiUrl: origin + "/v1", apiKey: "synthetic-fixture-only" }, [{ role: "user", content: "Exercise only the local wire fixture" }], { runId: run.id });
+    const stored = JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).agentRuns.find((item: any) => item.id === run.id);
+    expect(stored.steps).toMatchObject([
+      { tool: "browser_navigate", ok: false, error: expect.stringContaining("ERR_PROXY_CONNECTION_FAILED") },
+      { tool: "browser_wait_for_load", ok: false, result: { loaded: false } },
+    ]);
+    agentRunRecorder.finishRun(run.id, "done", undefined, { endReason: "completed", verification: { status: "unverified" } });
+    reloadConfig();
+    expect(agentRunRecorder.listRuns().find((item) => item.id === run.id)?.steps).toMatchObject([{ ok: false }, { ok: false }]);
+  });
+
+  it("retains MCP isError for the actual native navigation failure and loaded:false tool outcomes", async () => {
+    vi.stubEnv("AGENT_BROWSER_MCP_PORT", "0");
+    const mcp = await import("../../src/main/services/mcp-server.js");
+    const started = mcp.startMcpServer(); await started.ready;
+    const origin = `http://127.0.0.1:${mcp.getMcpPort()}`;
+    fixture.origins.add(origin);
+    const broken = await cdpWire({ navigationError: "net::ERR_PROXY_CONNECTION_FAILED" });
+    const quiet = await cdpWire();
+    try {
+      for (const [name, args] of [
+        ["agent_browser_navigate", { port: broken.port, url: "https://page.task49.test/mcp-failure" }],
+        ["agent_browser_wait_for_load", { port: quiet.port, timeout: 100 }],
+      ] as const) {
+        const response = await fetch(origin + "/mcp", { method: "POST", headers: { Authorization: `Bearer ${mcp.getMcpToken()}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: args } }), signal: AbortSignal.timeout(1500) });
+        expect(response.status).toBe(200);
+        const body: any = await response.json();
+        expect(body.result.isError).toBe(true);
+        const payload = JSON.parse(body.result.content[0].text);
+        if (name === "agent_browser_navigate") expect(payload.error).toContain("ERR_PROXY_CONNECTION_FAILED");
+        else expect(payload).toEqual({ loaded: false });
+      }
+    } finally { await mcp.stopMcpServer(); vi.unstubAllEnvs(); }
+  });
+
   it("dispatches navigation, extraction, screenshots, cookies and tabs without launching a browser", async () => {
     const wire = await cdpWire(); const args = { port: wire.port };
     expect(await agent.executeToolCall("browser_navigate", { ...args, url: "https://page.task49.test/new" })).toMatchObject({ frameId: "task49-root" });
@@ -289,7 +385,7 @@ describe("real Chromium tool dispatch over fake CDP wire", () => {
     await expect(agent.executeToolCall("browser_upload_file", { port, selector: "#missing", filePath: upload })).rejects.toThrow("File input not found");
     expect(await agent.executeToolCall("browser_wait_for", { port, selector: "#input", timeout: 100 })).toMatchObject({ found: true });
     expect(await agent.executeToolCall("browser_wait_for", { port, selector: "#missing", timeout: 100 })).toMatchObject({ found: false });
-    expect(await agent.executeToolCall("browser_wait_for_load", { port, timeout: 100 })).toEqual({ loaded: true });
+    expect(await agent.executeToolCall("browser_wait_for_load", { port, timeout: 100 })).toEqual({ loaded: false });
   });
 
   it("uses the key fallback only after protocol failure and handles unavailable scroll metrics", async () => {

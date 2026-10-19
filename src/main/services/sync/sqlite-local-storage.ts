@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { ensureArchiveDirectory } from "../zip-writer.js";
 
 export const SQLITE_LOCAL_STORAGE_FILES = ["LocalStorage", "LocalStorage-wal"] as const;
 export const SQLITE_LOCAL_STORAGE_SIDECARS = [...SQLITE_LOCAL_STORAGE_FILES, "LocalStorage-shm", "LocalStorage-journal"] as const;
@@ -13,7 +14,8 @@ const MAX_WAL_FRAMES = 16384;
 const CHECK_TIMEOUT_MS = 5000;
 const BLOCK = 64 * 1024;
 
-type Witness = { name: string; stat: fs.Stats | undefined };
+export type SqliteFileWitness = { name: string; stat: fs.Stats | undefined };
+type Witness = SqliteFileWitness;
 function abort(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Sync operation cancelled");
 }
@@ -23,32 +25,34 @@ function sameStat(a: fs.Stats, b: fs.Stats): boolean {
 }
 function safeDirectory(directory: string): void {
   let current = path.resolve(directory);
-  for (;;) {
-    const stat = fs.lstatSync(current, { throwIfNoEntry: false });
-    if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("Unsafe SQLite LocalStorage directory");
-    const parent = path.dirname(current);
-    if (parent === current) return;
-    current = parent;
+  // Reuse the archive helper's OS temporary-root anchor (/var -> /private/var
+  // on macOS). Links below that platform anchor are still refused, not followed.
+  while (!fs.lstatSync(current, { throwIfNoEntry: false })) {
+    const parent = path.dirname(current); if (parent === current) throw new Error("SQLite directory root unavailable"); current = parent;
   }
+  ensureArchiveDirectory(current);
 }
-function witnesses(directory: string): Witness[] {
+export function sqliteGroupWitnesses(directory: string, basename = "LocalStorage"): Witness[] {
+  if (!["LocalStorage", "History", "places.sqlite"].includes(basename)) throw new Error("Unsupported SQLite group name");
   safeDirectory(directory);
-  return SQLITE_LOCAL_STORAGE_SIDECARS.map((name) => {
+  return [basename, basename + "-wal", basename + "-shm", basename + "-journal"].map((name) => {
     const stat = fs.lstatSync(path.join(directory, name), { throwIfNoEntry: false });
     if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)) throw new Error("Unsafe SQLite LocalStorage file");
     // A nonempty rollback journal can carry pre-transaction pages even while
     // main quick_check is green. Never open/checkpoint/repair a live journal.
-    if (name === "LocalStorage-journal" && stat && stat.size !== 0) throw new Error("Nonempty SQLite LocalStorage rollback journal is not supported");
+    if (name === basename + "-journal" && stat && stat.size !== 0) throw new Error("Nonempty SQLite rollback journal is not supported");
     return { name, stat };
   });
 }
-function sameGroup(directory: string, expected: Witness[]): void {
-  const actual = witnesses(directory);
+const witnesses = (directory: string) => sqliteGroupWitnesses(directory);
+export function assertSqliteGroupUnchanged(directory: string, expected: Witness[], basename = "LocalStorage"): void {
+  const actual = sqliteGroupWitnesses(directory, basename);
   if (actual.some((item, i) => Boolean(item.stat) !== Boolean(expected[i].stat) ||
       item.stat && expected[i].stat && !sameStat(item.stat, expected[i].stat!))) {
     throw new Error("SQLite LocalStorage group changed during capture");
   }
 }
+const sameGroup = assertSqliteGroupUnchanged;
 export function hasSqliteLocalStorage(directory: string): boolean {
   const group = witnesses(directory);
   if (!group[0].stat) {
@@ -59,9 +63,9 @@ export function hasSqliteLocalStorage(directory: string): boolean {
 }
 
 /** Open once, NOFOLLOW, exact EOF and pre/post identity; bounded chunked I/O. */
-function readPinned(file: string, before: fs.Stats, signal?: AbortSignal): Buffer {
+export function readPinnedSqliteFile(file: string, before: fs.Stats, signal?: AbortSignal, maxBytes = MAX_SQLITE_LOCAL_STORAGE_BYTES): Buffer {
   abort(signal);
-  if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size === 0 && path.basename(file) !== "LocalStorage-wal" || before.size > MAX_SQLITE_LOCAL_STORAGE_BYTES) throw new Error("SQLite LocalStorage file exceeds validation byte limit or has an empty main");
+  if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size === 0 && !path.basename(file).endsWith("-wal") || before.size > maxBytes) throw new Error("SQLite file exceeds validation byte limit or has an empty main");
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     const opened = fs.fstatSync(fd);
@@ -78,6 +82,7 @@ function readPinned(file: string, before: fs.Stats, signal?: AbortSignal): Buffe
     return bytes;
   } finally { fs.closeSync(fd); }
 }
+const readPinned = readPinnedSqliteFile;
 export function writeOwnedSqliteFile(file: string, bytes: Buffer): void {
   const fd = fs.openSync(file, "wx", 0o600);
   try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
@@ -164,13 +169,14 @@ try {
 } finally { parentPort.close(); }
 `;
 
-function runChecker(file: string, signal?: AbortSignal): Promise<void> {
+export function runSqliteChecker<T = void>(source: string, data: Record<string, unknown>, label: string, signal?: AbortSignal): Promise<T> {
   abort(signal);
   return new Promise((resolve, reject) => {
-    const worker = new Worker(CHECKER_SOURCE, { eval: true, workerData: { file },
+    const worker = new Worker(source, { eval: true, workerData: data,
       resourceLimits: { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8, stackSizeMb: 2 } });
     let failure: Error | undefined;
     let passed = false;
+    let value: T;
     let terminating = false;
     const stop = (error: Error) => {
       failure ??= error;
@@ -181,16 +187,20 @@ function runChecker(file: string, signal?: AbortSignal): Promise<void> {
         void worker.terminate().catch((error) => { console.error("[sync] SQLite worker termination failed:", error); });
       }
     };
-    const timer = setTimeout(() => stop(new Error("SQLite LocalStorage validation deadline exceeded")), CHECK_TIMEOUT_MS);
+    const timer = setTimeout(() => stop(new Error(`${label} validation deadline exceeded`)), CHECK_TIMEOUT_MS);
     const onAbort = () => stop(new Error("Sync operation cancelled"));
     signal?.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message) => { passed = message?.ok === true; if (!passed) failure ??= new Error("SQLite LocalStorage integrity/schema validation failed"); });
-    worker.on("error", () => { failure ??= new Error("SQLite LocalStorage checker failed"); });
+    worker.on("message", (message) => {
+      passed = message?.ok === true; value = message?.value;
+      if (!passed) failure ??= Object.assign(new Error(`${label} integrity/schema validation failed${typeof message?.reason === "string" ? ": " + message.reason : ""}`),
+        message?.code === "HISTORY_SCHEMA_UNSUPPORTED" || message?.code === "HISTORY_VALIDATION_FAILED" ? { code: message.code } : {});
+    });
+    worker.on("error", () => { failure ??= new Error(`${label} checker failed`); });
     worker.once("exit", (code) => {
       clearTimeout(timer); signal?.removeEventListener("abort", onAbort);
       if (failure) reject(failure);
-      else if (code !== 0 || !passed) reject(new Error("SQLite LocalStorage validation was not confirmed"));
-      else resolve();
+      else if (code !== 0 || !passed) reject(new Error(`${label} validation was not confirmed`));
+      else resolve(value);
     });
     if (signal?.aborted) onAbort();
   });
@@ -210,7 +220,7 @@ export async function validateStagedSqliteLocalStorage(directory: string, signal
   try {
     writeOwnedSqliteFile(path.join(scratch, "LocalStorage"), main);
     if (wal) writeOwnedSqliteFile(path.join(scratch, "LocalStorage-wal"), wal);
-    await runChecker(path.join(scratch, "LocalStorage"), signal);
+    await runSqliteChecker(CHECKER_SOURCE, { file: path.join(scratch, "LocalStorage") }, "SQLite LocalStorage", signal);
     abort(signal); sameGroup(directory, expected);
     if (!readPinned(path.join(directory, "LocalStorage"), expected[0].stat, signal).equals(main) ||
         wal && !readPinned(path.join(directory, "LocalStorage-wal"), expected[1].stat!, signal).equals(wal)) throw new Error("SQLite LocalStorage staging changed during validation");

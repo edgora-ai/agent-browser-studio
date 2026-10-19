@@ -127,11 +127,13 @@ async function fixture() {
     getConfig: () => store.getCommittedConfig(),
     getProfileMeta: (id: string) => store.getCommittedConfig().browserProfiles[id] || null,
     getAppDataDir: () => dir, getProfilesDir: () => profilesDir, getConfigPath: () => configPath,
-    // Portable normalization semantics are not under test here; the archive,
-    // config transaction and caller routing remain production implementations.
+    // Normalization defaults are a fixture boundary; identity validation/hash,
+    // archive, config transactions and caller routing remain production code.
+    portableProfileContent: (raw: any) => structuredClone(raw),
     normalizePortableProfileMeta: (raw: any) => {
       if (!raw || typeof raw.name !== "string") throw new Error("Invalid fixture profile metadata");
-      return { ...structuredClone(raw), updatedAt: Date.now() };
+      // Production normalization returns an object in its module's own realm.
+      return vm.runInContext("JSON.parse", context)(JSON.stringify({ ...raw, updatedAt: Date.now() }));
     },
   } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque("config-manager")[key] });
   const browser = new Proxy({
@@ -163,7 +165,7 @@ async function fixture() {
   };
   const allow = new Set([
     "ipc/profile.ts", "services/profile-archive.ts", "services/zip-writer.ts", "services/archive-path-guard.ts",
-    "services/profile-portability.ts", "services/config/store.ts", "services/config/limits.ts",
+    "services/profile-portability.ts", "services/profile-identity.ts", "services/config/store.ts", "services/config/limits.ts",
     "services/rest-api-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/main-i18n.ts", "branding.ts",
   ]);
   function boundary(relative: string, original: any): any {
@@ -469,7 +471,14 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
     expect(result.report.failed[0].zipPath).toBe(bad);
     const imported = result.report.imported[0].dirId;
     expect(before.has(imported)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(f.configPath, "utf8")).browserProfiles[imported]).toBeDefined();
+    const saved = JSON.parse(fs.readFileSync(f.configPath, "utf8")).browserProfiles[imported];
+    expect(saved).toMatchObject({ fingerprintSeed: 101, platform: "windows" });
+    expect(result.report.imported[0].identity).toMatchObject({
+      configuration: { state: "retained", changes: [], reasons: [] },
+      runtime: { state: "not-verified", reason: "no-live-comparison" },
+    });
+    expect(result.report.imported[0].identity.configuration.beforeHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.report.imported[0].identity.configuration.afterHash).toBe(result.report.imported[0].identity.configuration.beforeHash);
     expect(fs.readFileSync(path.join(f.profilesDir, imported, "sentinel.txt"), "utf8")).toContain(A);
     expect(result.success, "real report imported 1 and rejected 1 corrupt ZIP").toBe(false);
   });

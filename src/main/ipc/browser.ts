@@ -19,14 +19,17 @@ import {
   profileHealthFailure, recordProfileHealthResult, runProfileEnvironmentRisk,
   type ProfileHealthOptions, type ProfileHealthRun,
 } from "../services/profile-health.js";
-import type { ProfileHealthKind, ProfileHealthOutcome } from "../types.js";
+import type { ProfileHealthKind, ProfileHealthOutcome, ProfileNetworkObservationResult } from "../types.js";
+import { listProfileNetworkPages, runProfileNetworkObservation } from "../services/profile-network-diagnostics.js";
 import { recordAudit } from "../services/audit-log.js";
 import { parseBulkCsv } from "../services/bulk-import.js";
 import { listBusinessPresets, resolveBusinessPreset, presetProfileToCreateOpts } from "../services/business-presets.js";
 import { validateDirId } from "../services/utils.js";
 import { sanitizeBrowserEngine } from "../services/browser-engine.js";
-import { getProfileEngineByDirId } from "../services/page-eval.js";
-import { cdpConnect, cdpNavigate, cdpWaitForLoad, cdpDisconnect, assertSafeNavigationUrl } from "../services/local-agent.js";
+import { getProfileEngineByDirId, navigateInPage } from "../services/page-eval.js";
+import { assertSafeNavigationUrl } from "../services/local-agent.js";
+import { getEntry } from "../services/browser/runtime-table.js";
+import { assertChatBrowserScopePort, captureChatBrowserScope } from "../services/agent/run-scope.js";
 import {
   runBatch,
   normalizeConcurrency,
@@ -312,12 +315,81 @@ export function registerBrowserHandlers(): void {
   });
 
   handleBrowser("health-history", async (_event, dirId: string) => {
-    try { return { entries: listProfileHealthHistory(dirId) }; }
-    catch (error: any) { return { entries: [], error: error?.message || String(error) }; }
+    let reading = false;
+    try {
+      if (typeof dirId !== "string") return { ok: false, entries: [], outcome: "error", code: "HEALTH_INVALID_REQUEST" };
+      validateDirId(dirId); reading = true;
+      return { entries: listProfileHealthHistory(dirId) };
+    } catch {
+      // Failure is not an authoritative empty history. Neither a malformed
+      // identity nor storage/native exception prose may cross this shared route.
+      return { ok: false, entries: [], outcome: "error", code: reading ? "NETWORK_OBSERVATION_FAILED" : "HEALTH_INVALID_REQUEST" };
+    }
   });
   handleBrowser("health-cancel", async (event, dirId: string, options: { kind: ProfileHealthKind; requestId: string }) => {
     try { return cancelProfileHealthRun(dirId, { kind: options?.kind, requestId: options?.requestId, owner: ipcHealthOwner(event) }); }
-    catch (error: any) { return { success: false, cancelled: false, code: "HEALTH_INVALID_REQUEST", error: error?.message || String(error) }; }
+    catch { return { success: false, cancelled: false, code: "HEALTH_INVALID_REQUEST" }; }
+  });
+
+  // New network routes accept only this positional contract. Ports, URLs,
+  // target IDs, owners and observation times are never renderer authority.
+  const networkRequestId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/;
+  const networkSelection = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function networkOptions(raw: unknown): raw is { selection: string; requestId: string } {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const prototype = Object.getPrototypeOf(raw);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(raw);
+    if (keys.length !== 2 || keys.some(key => key !== "selection" && key !== "requestId")) return false;
+    const selection = Object.getOwnPropertyDescriptor(raw, "selection");
+    const requestId = Object.getOwnPropertyDescriptor(raw, "requestId");
+    return Boolean(selection?.enumerable && requestId?.enumerable && Object.hasOwn(selection, "value") && Object.hasOwn(requestId, "value")
+      && typeof selection.value === "string" && networkSelection.test(selection.value)
+      && typeof requestId.value === "string" && networkRequestId.test(requestId.value));
+  }
+  function invalidNetworkObservation(requestId: string): ProfileNetworkObservationResult {
+    return { ok: false, outcome: "error", requestId, code: "HEALTH_INVALID_REQUEST", hops: [], httpStatusEvidence: [], observation: {
+      version: 1, completion: "unavailable", stopReason: "setup-rejected", armedAt: null, endedAt: Date.now(), durationMs: 0,
+      counts: { requests: 0, hops: 0, responses: 0, finished: 0, failed: 0, blocked: 0, requestCancelled: 0, redirects: 0, http4xx: 0, http5xx: 0, pending: 0, cache: 0, serviceWorker: 0, unattributed: 0, cspIssues: 0 },
+      coverage: { network: "unavailable", csp: "unavailable", worker: "not-observed", oopif: "not-observed", console: "not-observed", storage: "not-observed", frames: "selected-target-main-frame", bridgeHop: "unknown", upstreamHop: "unknown" },
+    } };
+  }
+  handleBrowser("network-pages", async (event, ...args: unknown[]) => {
+    try {
+      if (args.length !== 1 || typeof args[0] !== "string") return { ok: false, pages: [], code: "HEALTH_INVALID_REQUEST", outcome: "error" };
+      validateDirId(args[0]);
+      return await withIpcHealthOwner(event, options => listProfileNetworkPages(args[0] as string, options));
+    } catch { return { ok: false, pages: [], code: "HEALTH_INVALID_REQUEST", outcome: "error" }; }
+  });
+  handleBrowser("network-observe", async (event, ...args: unknown[]) => {
+    let requestId: string = randomUUID();
+    try {
+      if (args.length !== 2 || typeof args[0] !== "string" || !networkOptions(args[1])) return invalidNetworkObservation(requestId);
+      const dirId = args[0]; const params = args[1]; requestId = params.requestId;
+      validateDirId(dirId);
+      return await withIpcHealthOwner(event, options => runProfileNetworkObservation(dirId, { ...options,
+        selection: params.selection, requestId,
+        onArmed(armed) {
+          if (options.signal?.aborted || event.sender.isDestroyed() || armed.dirId !== dirId || armed.requestId !== requestId) return;
+          event.sender.send("browser:network-armed", { dirId, requestId, armedAt: armed.armedAt, observeForMs: 10_000 });
+        },
+      }));
+    } catch { return invalidNetworkObservation(requestId); }
+  });
+  handleBrowser("health-clear", async (event, ...args: unknown[]) => {
+    let clearing = false;
+    try {
+      if (args.length < 1 || args.length > 2 || typeof args[0] !== "string"
+        || args[1] !== undefined && !["env", "webrtc", "drift", "consistency", "network"].includes(args[1] as string)) {
+        return { ok: false, code: "HEALTH_INVALID_REQUEST" };
+      }
+      validateDirId(args[0]); ipcHealthOwner(event);
+      clearing = true;
+      // The shared clear service invalidates active work before the transaction.
+      // Diagnostic reads/clears do not gain baseline or launch mutation gates.
+      clearProfileHealthHistory(args[0], args[1] as ProfileHealthKind | undefined);
+      return { ok: true };
+    } catch { return { ok: false, code: clearing ? "HEALTH_HISTORY_WRITE_FAILED" : "HEALTH_INVALID_REQUEST" }; }
   });
 
   // A missing baseline is unavailable, not a passed live drift comparison.
@@ -733,7 +805,9 @@ export function registerBrowserHandlers(): void {
     const rawUrl = String(params?.url || "https://ping0.cc/env");
     let url: string;
     try {
+      ipcHealthOwner(_event);
       url = await assertSafeNavigationUrl(rawUrl);
+      ipcHealthOwner(_event);
     } catch (e: any) {
       return { success: false, error: `Refused unsafe navigation URL: ${e?.message || String(e)}` };
     }
@@ -768,17 +842,25 @@ export function registerBrowserHandlers(): void {
       return { success: false, error: "Profile is not running and CDP port could not be obtained" };
     }
 
-    let client;
     try {
-      client = await cdpConnect(cdpPort);
-      await cdpNavigate(client, url);
-      // Wait up to 10s for page load
-      await cdpWaitForLoad(client, 10000);
+      const runtime = getEntry(dirId);
+      const scope = captureChatBrowserScope(dirId);
+      if (!runtime || !scope || runtime.port !== cdpPort) throw new Error("Browser navigation runtime changed");
+      const engine = runtime.engine ?? "chromium";
+      const session = runtime.bidiConn ?? null;
+      const assertCurrent = () => {
+        ipcHealthOwner(_event);
+        assertChatBrowserScopePort(scope, cdpPort);
+        if ((runtime.engine ?? "chromium") !== engine || (runtime.bidiConn ?? null) !== session) throw new Error("Browser navigation runtime was replaced");
+      };
+      await withIpcHealthOwner(_event, ({ signal }) => navigateInPage(cdpPort, engine, url, {
+        timeoutMs: 10000, waitForLoad: true, signal, assertCurrent,
+        ...(engine === "firefox" ? { expectedFirefoxSession: session } : {}),
+      }));
+      assertCurrent();
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
-    } finally {
-      if (client) { try { cdpDisconnect(client); } catch (e) { /* ignore */ } }
     }
   });
 
@@ -797,7 +879,9 @@ export function registerBrowserHandlers(): void {
     if (!rawAppUrl) return { success: false, error: "No Web App URL configured for this profile" };
     let appUrl: string;
     try {
+      ipcHealthOwner(_event);
       appUrl = await assertSafeNavigationUrl(rawAppUrl);
+      ipcHealthOwner(_event);
     } catch (e: any) {
       return { success: false, error: `Refused unsafe navigation URL: ${e?.message || String(e)}` };
     }
@@ -820,16 +904,25 @@ export function registerBrowserHandlers(): void {
       return { success: false, error: "Profile is not running and CDP port could not be obtained" };
     }
 
-    let client;
     try {
-      client = await cdpConnect(cdpPort);
-      await cdpNavigate(client, appUrl);
-      await cdpWaitForLoad(client, 10000);
+      const runtime = getEntry(dirId);
+      const scope = captureChatBrowserScope(dirId);
+      if (!runtime || !scope || runtime.port !== cdpPort) throw new Error("Browser navigation runtime changed");
+      const engine = runtime.engine ?? "chromium";
+      const session = runtime.bidiConn ?? null;
+      const assertCurrent = () => {
+        ipcHealthOwner(_event);
+        assertChatBrowserScopePort(scope, cdpPort);
+        if ((runtime.engine ?? "chromium") !== engine || (runtime.bidiConn ?? null) !== session) throw new Error("Browser navigation runtime was replaced");
+      };
+      await withIpcHealthOwner(_event, ({ signal }) => navigateInPage(cdpPort, engine, appUrl, {
+        timeoutMs: 10000, waitForLoad: true, signal, assertCurrent,
+        ...(engine === "firefox" ? { expectedFirefoxSession: session } : {}),
+      }));
+      assertCurrent();
       return { success: true, appUrl };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
-    } finally {
-      if (client) { try { cdpDisconnect(client); } catch (e) { /* ignore */ } }
     }
   });
 

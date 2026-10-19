@@ -37,7 +37,7 @@ vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ runtimeCookie
 
 import { syncService } from "../../src/main/services/sync-service.js";
 import { exportProfileArchive, importProfileArchive } from "../../src/main/services/profile-archive.js";
-import { getConfig, getConfigPath, getProfileMeta, getProfilesDir, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
+import { getConfig, getConfigPath, getProfileMeta, getProfilesDir, reloadConfig, saveConfig, setSyncConfig } from "../../src/main/services/config-manager.js";
 import { writeZipArchive, readZipEntries, extractZipEntry, type ZipFileEntry, type ZipDirEntry } from "../../src/main/services/zip-writer.js";
 import { isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
 
@@ -102,15 +102,77 @@ function zipEntries(zipPath: string): TestZipEntry[] {
   const bytes = fs.readFileSync(zipPath);
   return readZipEntries(bytes).map((entry) => entry.isDirectory ? { name: entry.name, isDirectory: true } : { name: entry.name, data: extractZipEntry(bytes, entry) });
 }
-async function rawProfileZip(zipPath: string): Promise<void> {
+async function rawProfileZip(zipPath: string, engine: "chromium" | "firefox" = "chromium"): Promise<void> {
   // Simulate an older exporter faithfully, without the new preflight. This is
   // only ZIP construction, not a duplicate/fake recovery classifier.
   const entries: TestZipEntry[] = [{ name: "meta.json", data: Buffer.from(JSON.stringify({
-    formatVersion: 1, sourceDirId: ID, profile: { name: "Recovery archive", engine: "chromium", fingerprintSeed: 42 },
+    formatVersion: 1, sourceDirId: ID, profile: { name: "Recovery archive", engine, fingerprintSeed: 42 },
   })) }];
   for (const relative of Object.keys(tree(profileDir()))) entries.push(relative.endsWith("/")
     ? { name: relative, isDirectory: true } : { name: relative, filePath: path.join(profileDir(), relative) });
   await writeZipArchive(zipPath, entries);
+}
+type HistoryEngine = "chromium" | "firefox";
+const HISTORY_PREFIX = ".history-backup-";
+const HISTORY_URL = "https://business.example.test/restored-history";
+const HISTORY_ID = 9007199254741009n, HISTORY_TIME = 132987654321012345n;
+const historyMain = (engine: HistoryEngine) => engine === "firefox" ? "places.sqlite" : "History";
+const historyDirectory = (engine: HistoryEngine, id = ID) => engine === "firefox" ? profileDir(id) : defaultDir(id);
+const historyBackups = (engine: HistoryEngine, id = ID) => fs.readdirSync(historyDirectory(engine, id)).filter((name) => name.startsWith(HISTORY_PREFIX));
+function historyBytes(engine: HistoryEngine, title: string): { main: Buffer; wal: Buffer } {
+  const dir = fs.mkdtempSync(path.join(h.root, "history-generator-")), file = path.join(dir, historyMain(engine));
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
+    if (engine === "chromium") {
+      db.exec("CREATE TABLE meta(key LONGVARCHAR PRIMARY KEY NOT NULL,value LONGVARCHAR); INSERT INTO meta VALUES('version','70'),('last_compatible_version','16'); CREATE TABLE urls(id INTEGER PRIMARY KEY,url LONGVARCHAR,title LONGVARCHAR,visit_count INTEGER,typed_count INTEGER,last_visit_time INTEGER,hidden INTEGER); CREATE TABLE visits(id INTEGER PRIMARY KEY,url INTEGER,visit_time INTEGER,from_visit INTEGER,transition INTEGER,visit_duration INTEGER);");
+    } else {
+      db.exec("PRAGMA user_version=86; CREATE TABLE moz_places(id INTEGER PRIMARY KEY,url LONGVARCHAR,title LONGVARCHAR,visit_count INTEGER,last_visit_date INTEGER,frecency INTEGER); CREATE TABLE moz_historyvisits(id INTEGER PRIMARY KEY,from_visit INTEGER,place_id INTEGER,visit_date INTEGER,visit_type INTEGER); CREATE TABLE moz_bookmarks(id INTEGER PRIMARY KEY,type INTEGER,fk INTEGER,parent INTEGER,position INTEGER,title LONGVARCHAR,dateAdded INTEGER,lastModified INTEGER,guid TEXT);");
+    }
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    const insert = (sql: string, ...values: Array<string | bigint>) => { const statement = db.prepare(sql); statement.setReadBigInts(true); statement.run(...values); };
+    if (engine === "chromium") {
+      insert("INSERT INTO urls VALUES(?,?,?,?,?,?,?)", HISTORY_ID, HISTORY_URL, title, 1n, 0n, HISTORY_TIME, 0n);
+      insert("INSERT INTO visits VALUES(?,?,?,?,?,?)", HISTORY_ID + 1n, HISTORY_ID, HISTORY_TIME, 0n, 805306368n, 0n);
+    } else {
+      insert("INSERT INTO moz_places VALUES(?,?,?,?,?,?)", HISTORY_ID, HISTORY_URL, title, 1n, HISTORY_TIME, 0n);
+      insert("INSERT INTO moz_historyvisits VALUES(?,?,?,?,?)", HISTORY_ID + 1n, 0n, HISTORY_ID, HISTORY_TIME, 1n);
+      insert("INSERT INTO moz_bookmarks VALUES(?,?,?,?,?,?,?,?,?)", HISTORY_ID + 2n, 1n, HISTORY_ID, 0n, 0n, title, HISTORY_TIME, HISTORY_TIME, "synthetic___");
+    }
+    return { main: fs.readFileSync(file), wal: fs.readFileSync(file + "-wal") };
+  } finally { db.close(); fs.rmSync(dir, { recursive: true }); }
+}
+function installHistory(engine: HistoryEngine, title: string): ReturnType<typeof historyBytes> {
+  const bytes = historyBytes(engine, title), directory = historyDirectory(engine), main = path.join(directory, historyMain(engine));
+  fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(main, bytes.main); fs.writeFileSync(main + "-wal", bytes.wal);
+  return bytes;
+}
+function assertHistoryRows(engine: HistoryEngine, directory: string, title: string): void {
+  const copy = fs.mkdtempSync(path.join(h.root, "history-readback-")), main = historyMain(engine);
+  for (const name of [main, main + "-wal"]) if (fs.existsSync(path.join(directory, name))) fs.copyFileSync(path.join(directory, name), path.join(copy, name));
+  const db = new DatabaseSync(path.join(copy, main), { readOnly: true, allowExtension: false });
+  try {
+    const query = db.prepare(engine === "chromium" ? "SELECT u.id,u.title,v.visit_time AS time FROM urls u JOIN visits v ON v.url=u.id WHERE u.url=?"
+      : "SELECT u.id,u.title,v.visit_date AS time FROM moz_places u JOIN moz_historyvisits v ON v.place_id=u.id WHERE u.url=?");
+    query.setReadBigInts(true); expect(query.get(HISTORY_URL)).toEqual({ id: HISTORY_ID, title, time: HISTORY_TIME });
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    if (engine === "firefox") {
+      const bookmarks = db.prepare("SELECT fk,title FROM moz_bookmarks WHERE fk=?"); bookmarks.setReadBigInts(true);
+      expect(bookmarks.get(HISTORY_ID)).toEqual({ fk: HISTORY_ID, title });
+    }
+  } finally { db.close(); fs.rmSync(copy, { recursive: true }); }
+}
+async function completedHistory(engine: HistoryEngine) {
+  const cfg = structuredClone(getConfig()); cfg.browserProfiles[ID].engine = engine; saveConfig(cfg);
+  setSyncConfig({ includeHistory: true, historyConsent: true });
+  installHistory(engine, "published history 中文");
+  const pushed = await syncService.push(undefined, true, undefined, { history: true }); expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+  const old = installHistory(engine, "unique original history 中文");
+  const pulled = await syncService.pull(undefined, { strategy: "remote", history: true }); expect(pulled.success, JSON.stringify(pulled)).toBe(true);
+  const [backup] = historyBackups(engine); expect(historyBackups(engine)).toHaveLength(1);
+  const relative = (engine === "chromium" ? "Default/" : "") + backup, transaction = path.join(profileDir(), relative);
+  const zipPath = path.join(h.appData, `${engine}-history-recovery.zip`); await exportProfileArchive(ID, zipPath);
+  return { transaction, relative, backup, old, zipPath };
 }
 async function completedSqlite(): Promise<{ transaction: string; backup: string; old: ReturnType<typeof sqliteBytes>; zipPath: string }> {
   installSqlite(sqliteBytes("published-new-business-row"));
@@ -137,9 +199,9 @@ async function expectRejectedExport(label: string): Promise<void> {
   await expect(exportProfileArchive(ID, destination, { overwrite: true }), label).rejects.toThrow(expect.objectContaining({ code: "ARCHIVE_RECOVERY_REQUIRED" }));
   expect(tree(h.appData), label).toEqual(before);
 }
-function setPending(entries: TestZipEntry[], backup: string, edit: (pending: any) => void): void {
-  const pendingEntry = entries.find((entry) => entry.name === `Default/${backup}/pending.json`) as ZipFileEntry;
-  const publishedEntry = entries.find((entry) => entry.name === `Default/${backup}/published.json`) as ZipFileEntry;
+function setPending(entries: TestZipEntry[], backup: string, edit: (pending: any) => void, relative = `Default/${backup}`): void {
+  const pendingEntry = entries.find((entry) => entry.name === `${relative}/pending.json`) as ZipFileEntry;
+  const publishedEntry = entries.find((entry) => entry.name === `${relative}/published.json`) as ZipFileEntry;
   const pending = JSON.parse(pendingEntry.data!.toString("utf8")); edit(pending);
   pendingEntry.data = Buffer.from(JSON.stringify(pending));
   publishedEntry.data = Buffer.from(JSON.stringify({ state: "published", pendingHash: sha(pendingEntry.data) }));
@@ -294,6 +356,88 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
     const zipPath = path.join(h.appData, "legacy-unfinished.zip"); await rawProfileZip(zipPath); expectRejectedImport(zipPath, "legacy missing live");
     fs.mkdirSync(live); fs.writeFileSync(path.join(live, "CURRENT"), "MANIFEST-000099\n"); fs.writeFileSync(path.join(live, "MANIFEST-000099"), "unrelated replacement owner");
     await expectRejectedExport("legacy external recovery receipt must not be cleared by a new live directory");
+  });
+});
+
+describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_000 }, () => {
+  it.each(["chromium", "firefox"] as const)("namespaces completed %s history rescue bytes and keeps the next production push searchable", async (engine) => {
+    const fixture = await completedHistory(engine), before = tree(profileDir()), zip = fs.readFileSync(fixture.zipPath);
+    const pending = JSON.parse(fs.readFileSync(path.join(fixture.transaction, "pending.json"), "utf8"));
+    expect(pending).toMatchObject({ version: 1, format: "sqlite", scope: "history", dirId: ID, target: historyDirectory(engine) });
+    assertHistoryRows(engine, historyDirectory(engine), "published history 中文");
+    assertHistoryRows(engine, path.join(fixture.transaction, "old"), "unique original history 中文");
+    const imported = importProfileArchive(fixture.zipPath), retained = path.join(profileDir(imported.dirId), HISTORY, ID, fixture.relative);
+    expect(historyBackups(engine, imported.dirId)).toEqual([]);
+    expect(imported.warnings).toContainEqual(expect.stringMatching(/History\/Places rescue.*inert history.*not a recovery\/commit proof/i));
+    expect(tree(retained)).toEqual(tree(fixture.transaction)); expect(tree(profileDir())).toEqual(before);
+    expect(fs.readFileSync(fixture.zipPath)).toEqual(zip);
+    assertHistoryRows(engine, path.join(retained, "old"), "unique original history 中文");
+    assertHistoryRows(engine, historyDirectory(engine, imported.dirId), "published history 中文");
+    reloadConfig(); expect(getProfileMeta(imported.dirId)?.engine).toBe(engine);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[imported.dirId].name).toBe(imported.name);
+    const pushed = await syncService.push(undefined, true, undefined, { history: true }); expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+    expect(JSON.parse(h.objects.get(MAIN)!.toString("utf8")).history[imported.dirId]).toMatchObject({ state: "complete", dirId: imported.dirId, engine });
+    const historyBefore = tree(path.join(profileDir(imported.dirId), HISTORY)), secondZip = path.join(h.appData, "history-second-generation.zip");
+    await exportProfileArchive(imported.dirId, secondZip);
+    const second = importProfileArchive(secondZip);
+    expect(historyBackups(engine, second.dirId)).toEqual([]); expect(tree(path.join(profileDir(second.dirId), HISTORY))).toEqual(historyBefore);
+    assertHistoryRows(engine, historyDirectory(engine, second.dirId), "published history 中文");
+    const pushedAgain = await syncService.push(undefined, true, undefined, { history: true }); expect(pushedAgain.success, JSON.stringify(pushedAgain)).toBe(true);
+  });
+
+  it.each(["chromium", "firefox"] as const)("refuses unresolved %s History transactions and external alarms without overwriting prior archives", async (engine) => {
+    const fixture = await completedHistory(engine), published = fs.readFileSync(path.join(fixture.transaction, "published.json"));
+    fs.unlinkSync(path.join(fixture.transaction, "published.json"));
+    await expectRejectedExport("unconfirmed History publication");
+    const raw = path.join(h.appData, "old-unconfirmed-history.zip"); await rawProfileZip(raw, engine); expectRejectedImport(raw);
+    const entries = zipEntries(raw).map((entry) => entry.name.startsWith(fixture.relative + "/")
+      ? { ...entry, name: `${HISTORY}/${ID}/` + entry.name } : entry);
+    const inertZip = path.join(h.appData, "unconfirmed-history-replay.zip"); await writeZipArchive(inertZip, entries); expectRejectedImport(inertZip);
+    fs.writeFileSync(path.join(fixture.transaction, "published.json"), published);
+    const receipts = path.join(h.appData, "sync-recovery"); fs.mkdirSync(receipts, { recursive: true });
+    fs.writeFileSync(path.join(receipts, `${ID}.history.json`), '{"state":"recovery-required"}');
+    await expectRejectedExport("outstanding History recovery alarm despite a live main database");
+    assertHistoryRows(engine, path.join(fixture.transaction, "old"), "unique original history 中文");
+  });
+
+  it.each(["chromium", "firefox"] as const)("accepts %s foreign target text without reading it or claiming new-ID transaction ownership", async (engine) => {
+    const fixture = await completedHistory(engine), leaf = engine === "chromium" ? "/Default" : "";
+    const targets = [path.join(h.root, "absent-source-device", ID) + leaf,
+      `C:\\OwnedSourceDevice\\profiles\\${ID}` + leaf.replaceAll("/", "\\"),
+      `\\\\owned-source-device\\share\\profiles\\${ID}` + leaf.replaceAll("/", "\\")];
+    for (const [index, target] of targets.entries()) {
+      const entries = zipEntries(fixture.zipPath); setPending(entries, fixture.backup, (pending) => { pending.target = target; }, fixture.relative);
+      const zipPath = path.join(h.appData, `foreign-history-${index}.zip`); await writeZipArchive(zipPath, entries);
+      h.opened = []; h.fault = (op, file) => { if (op === "open" && file.startsWith(target)) throw new Error("Foreign History target must never be read"); };
+      const imported = importProfileArchive(zipPath); h.fault = null;
+      expect(h.opened.some((file) => file.startsWith(target))).toBe(false); expect(historyBackups(engine, imported.dirId)).toEqual([]);
+      const retained = path.join(profileDir(imported.dirId), HISTORY, ID, fixture.relative);
+      expect(JSON.parse(fs.readFileSync(path.join(retained, "pending.json"), "utf8"))).toMatchObject({ target, dirId: ID, scope: "history" });
+      assertHistoryRows(engine, path.join(retained, "old"), "unique original history 中文");
+      const pushed = await syncService.push(undefined, true, undefined, { history: true }); expect(pushed.success, JSON.stringify(pushed)).toBe(true);
+    }
+  });
+
+  it.each(["chromium", "firefox"] as const)("rejects forged %s History completion, foreign paths, case aliases and inert destination collisions", async (engine) => {
+    const fixture = await completedHistory(engine);
+    const mutations: Array<[string, (pending: any) => void]> = [
+      ["wrong scope", (p) => { p.scope = "localStorage"; }], ["wrong source ID", (p) => { p.dirId = "ab_other"; }],
+      ["wrong target", (p) => { p.target = "/owned/ab_other/Default"; }], ["path traversal", (p) => { p.old[0].name = "../History"; }],
+      ["wrong main", (p) => { p.old[0].name = engine === "firefox" ? "History" : "places.sqlite"; }],
+      ["lying hash", (p) => { p.old[0].hash = "0".repeat(64); }], ["unknown scope field", (p) => { p.engine = engine; }],
+    ];
+    for (const [index, [label, edit]] of mutations.entries()) {
+      for (const inert of [false, true]) {
+        let entries = zipEntries(fixture.zipPath); setPending(entries, fixture.backup, edit, fixture.relative);
+        if (inert) entries = entries.map((entry) => entry.name.startsWith(fixture.relative + "/") ? { ...entry, name: `${HISTORY}/${ID}/` + entry.name } : entry);
+        const zipPath = path.join(h.appData, `bad-history-${index}-${inert}.zip`); await writeZipArchive(zipPath, entries);
+        expectRejectedImport(zipPath, `${label}, inert=${inert}`); fs.unlinkSync(zipPath);
+      }
+    }
+    const entries = zipEntries(fixture.zipPath), aliases = entries.map((entry) => entry.name.includes(HISTORY_PREFIX) ? { ...entry, name: entry.name.replace(HISTORY_PREFIX, HISTORY_PREFIX.toUpperCase()) } : entry);
+    const aliased = path.join(h.appData, "history-case-alias.zip"); await writeZipArchive(aliased, aliases); expectRejectedImport(aliased);
+    const duplicate = entries.filter((entry) => entry.name.startsWith(fixture.relative + "/")).map((entry) => ({ ...entry, name: `${HISTORY}/${ID}/` + entry.name }));
+    const collision = path.join(h.appData, "history-inert-collision.zip"); await writeZipArchive(collision, [...entries, ...duplicate]); expectRejectedImport(collision);
   });
 });
 

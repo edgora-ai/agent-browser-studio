@@ -2,6 +2,13 @@
 // Successful detections are cached per proxy identity (10 min TTL) so repeat
 // launches skip the network round-trip; failures are never cached.
 import { describe, it, expect, afterEach, vi } from "vitest";
+vi.mock("node:child_process", () => ({ spawn: () => { throw new Error("Unexpected child"); }, execFileSync: () => { throw new Error("Unexpected child"); } }));
+vi.mock("node:fs", () => ({ writeFileSync: () => { throw new Error("Unexpected file write"); }, unlinkSync: () => { throw new Error("Unexpected file unlink"); } }));
+vi.mock("node:os", () => ({ tmpdir: () => process.env.TMPDIR, homedir: () => process.env.TMPDIR, hostname: () => "inert-cache-fixture" }));
+vi.mock("node:net", async original => ({ isIP: (await original<typeof import("node:net")>()).isIP, connect: () => { throw new Error("Unexpected network"); } }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("Unexpected DNS"); }, resolve: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("../../src/main/services/config-manager.js", () => ({ getConfig: () => { throw new Error("Unexpected app config"); } }));
 import {
   rememberProxyDetectionForTests,
   cachedProxyDetectionForTests,
@@ -91,8 +98,11 @@ describe("proxy geo-IP detection cache (Slice 57)", () => {
     rememberProxyDetectionForTests(PROXY, original);
     vi.setSystemTime(start + 9 * 60 * 1000);
     const cached = cachedProxyDetectionForTests(PROXY)!;
-    expect(cached).toBe(original);
-    expect(proxyDetectionObservedAt(cached)).toBe(start);
+    // The old shared-object expectation was unsafe: cache DTOs are detached,
+    // while explicit metadata (not object identity) preserves original age.
+    expect(cached).not.toBe(original);
+    expect(cached).toMatchObject({ source: "cache", observationId: original.observationId });
+    expect(proxyDetectionObservedAt(structuredClone(cached))).toBe(start);
     rememberProxyDetectionForTests(PROXY, successResult());
     expect(proxyDetectionObservedAt(cachedProxyDetectionForTests(PROXY)!)).toBe(start + 9 * 60 * 1000);
     expect(proxyDetectionObservedAt(original)).toBe(start);

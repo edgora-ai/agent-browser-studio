@@ -334,11 +334,42 @@
       }
   });
   var proxyHealthEpoch = Object.create(null);
+  function observationText(at, source) {
+    var label = source === "network" ? t('proxy.observation.network', 'Network measurement')
+      : source === "cache" ? t('proxy.observation.cache', 'Cached measurement') : t('proxy.observation.unknown-source', 'Unknown source');
+    if (typeof at !== "number" || !Number.isSafeInteger(at) || at < 0) return label + ' · ' + t('proxy.observation.unknown-time', 'Measurement time unknown');
+    var absolute = new Date(at).toISOString();
+    var relative = helpers.relTime ? helpers.relTime(at) : '';
+    return label + ' · ' + t('proxy.observation.measured-at', 'Measured {time}').replace('{time}', absolute) + (relative ? ' · ' + relative : '');
+  }
+  function detectionError(result) {
+    if (result.code === 'PROXY_DETECTION_TARGET_CHANGED') return t('proxy.detect.target-changed', 'Proxy changed or was cleared; result was not saved.');
+    if (result.code === 'PROXY_DETECTION_STALE') return t('proxy.detect.stale', 'A newer observation was already saved; this result was not saved.');
+    if (result.code === 'PROXY_DETECTION_SAVE_FAILED') return t('proxy.detect.save-failed', 'Measurement completed, but detection and health could not be saved.');
+    if (result.code === 'PROXY_DETECTION_UNOBSERVED') return t('proxy.detect.unobserved', 'No authenticated measurement was available to save.');
+    return result.error || t('proxy.detect.failed', 'Failed');
+  }
+  function detectionText(result) {
+    var parts = [];
+    if (result.success) {
+      if (result.exitIp) parts.push('IP:' + result.exitIp);
+      if (result.country) parts.push(result.country);
+      if (result.city) parts.push(result.city);
+      if (result.hosting === true) parts.push('IDC');
+      if (result.isProxy === true) parts.push(t('proxy.health.proxy', 'Proxy'));
+      if (typeof result.latencyMs === 'number') parts.push(result.latencyMs + 'ms');
+    } else parts.push(detectionError(result));
+    parts.push(observationText(Object.hasOwn(result, 'observedAt') ? result.observedAt : result.detectedAt, result.source));
+    return parts.join(' | ');
+  }
   function healthBadgeHtml(entry) {
     if (window.__proxyHealthError) return '<span class="proxy-health-badge health-none" title="' + escAttr(window.__proxyHealthError) + '">' + esc(t('health.proxy-unavailable', 'Proxy health unavailable; previous results are not verified.')) + '</span>';
     if (!entry) return '<span class="proxy-health-badge health-none">' + esc(t('proxy.health.not-checked', 'Not checked')) + '</span>';
-    var cls = entry.risk === "good" ? "health-good" : entry.risk === "watch" ? "health-watch" : "health-poor";
-    var label = entry.risk === "good" ? t('proxy.health.good', 'Good') : entry.risk === "watch" ? t('proxy.health.watch', 'Watch') : t('proxy.health.poor', 'Poor');
+    var currentRisk = entry.risk;
+    if (entry.freshness !== 'fresh' && currentRisk === 'good') currentRisk = entry.freshness === 'stale' ? 'watch' : 'poor';
+    var cls = currentRisk === "good" ? "health-good" : currentRisk === "watch" ? "health-watch" : "health-poor";
+    var label = entry.freshness === 'stale' ? t('proxy.health.stale', 'Stale') : entry.freshness !== 'fresh' ? t('proxy.health.unknown', 'Unverified')
+      : currentRisk === "good" ? t('proxy.health.good', 'Good') : currentRisk === "watch" ? t('proxy.health.watch', 'Watch') : t('proxy.health.poor', 'Poor');
     var cooldown = entry.cooldownUntil && entry.cooldownUntil > Date.now() ? " · " + t('proxy.health.cooldown', 'Cooldown') : "";
     var history = entry.history || [];
     var latest = history.length ? history[history.length - 1] : null;
@@ -351,7 +382,7 @@
     }
     /* S2-17: the score becomes a meter as well as a number — "almost full"
        registers before the digits are read. Colour follows the risk class. */
-    var meterCls = entry.risk === "good" ? "is-good" : entry.risk === "watch" ? "is-watch" : "is-poor";
+    var meterCls = currentRisk === "good" ? "is-good" : currentRisk === "watch" ? "is-watch" : "is-poor";
     var meter = typeof entry.score === "number"
       ? ' <span class="meter ' + meterCls + '" aria-hidden="true"><i style="width:' + Math.max(0, Math.min(100, entry.score)) + '%"></i></span>'
       : "";
@@ -369,6 +400,8 @@
       '<span class="health-text-watch">' + esc(t('proxy.health.watch', 'Watch')) + ' <b>' + summary.watch + '</b></span>' +
       '<span class="health-text-poor">' + esc(t('proxy.health.poor', 'Poor')) + ' <b>' + summary.poor + '</b></span>' +
       (summary.inCooldown ? '<span>' + icon("clock", 12) + ' ' + esc(t('proxy.health.cooldown', 'Cooldown')) + ' <b>' + summary.inCooldown + '</b></span>' : '') +
+      (summary.stale ? '<span>' + esc(t('proxy.health.stale', 'Stale')) + ' <b>' + summary.stale + '</b></span>' : '') +
+      (summary.unknown ? '<span>' + esc(t('proxy.health.unknown', 'Unverified')) + ' <b>' + summary.unknown + '</b></span>' : '') +
       '</div>';
   }
 
@@ -380,8 +413,13 @@
     return null;
   }
 
-  function healthRowsHtml(entry) {
-    var html = '<div class="info-row"><span>' + esc(t('proxy.row.health', 'Health')) + '</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>';
+  function healthRowsHtml(entry, detection) {
+    var latest = entry && entry.history && entry.history.length ? entry.history[entry.history.length - 1] : null;
+    var provenance = detection || latest;
+    var time = detection ? detection.detectedAt : latest ? latest.at : null;
+    var observation = observationText(time, provenance && provenance.source);
+    var html = '<div class="info-row"><span>' + esc(t('proxy.row.health', 'Health')) + '</span><span class="proxy-health-row">' + healthBadgeHtml(entry) + '</span></div>' +
+      '<div class="info-row"><span>' + esc(t('proxy.row.observation', 'Observation')) + '</span><span class="proxy-observation-text" title="' + escAttr(observation) + '">' + esc(observation) + '</span></div>';
     // R154: the suggestion value sits in the generic ellipsising info-row cell,
     // so long suggestions were cut with no way to read the rest — real ones
     // (proxy.sug.idc with an org suffix) run ~140 chars. title restores the
@@ -398,14 +436,12 @@
       /* R79: bare muted span joins .hint-line. */
       return '<span class="hint-line">' + esc(t('proxy.history.empty', 'No detections recorded yet — run Detect to start tracking.')) + '</span>';
     }
-    var points = entry.history.slice().sort(function (a, b) { return b.at - a.at; }).slice(0, 8);
+    var points = entry.history.slice().sort(function (a, b) { return (b.at == null ? -1 : b.at) - (a.at == null ? -1 : a.at); }).slice(0, 8);
     var lines = points.map(function (h) {
-      /* S2-24: relative stamp, absolute kept on the title — the reader's
-         question is "how long ago", not "what was the wall clock". */
-      var when = new Date(h.at);
-      var abs = when.toLocaleDateString() + " " + when.toLocaleTimeString();
-      var rel = helpers.relTime ? helpers.relTime(h.at) : abs;
-      var stamp = '<span title="' + escAttr(abs) + '">' + esc(rel) + '</span>';
+      // Historical measurement time/source remain the original facts, not the
+      // time this history was opened. Null must never become epoch or "now".
+      var provenance = observationText(h.at, h.source);
+      var stamp = '<span title="' + escAttr(provenance) + '">' + esc(provenance) + '</span>';
       if (h.success) {
         var bits = [];
         if (h.exitIp) bits.push(h.exitIp);
@@ -526,8 +562,8 @@
           '<div class="info-row"><span>' + esc(t('proxy.row.endpoint', 'Endpoint')) + '</span><span>' + esc(label) + '</span></div>' +
           // `proxy.detect` is the same word the Detect button uses ("检测"),
           // so the row label and the control that fills it stay in sync.
-          '<div class="info-row"><span>' + esc(t('proxy.detect', 'Detect')) + '</span><span class="proxy-detect-result">' + esc(t('proxy.not-checked', 'Not checked')) + '</span></div>' +
-          healthRowsHtml(entry) +
+          '<div class="info-row"><span>' + esc(t('proxy.detect', 'Detect')) + '</span><span class="proxy-detect-result">' + esc(p.detection ? detectionText(p.detection) : t('proxy.not-checked', 'Not checked')) + '</span></div>' +
+          healthRowsHtml(entry, p.detection) +
           rotationRowsHtml(cfg) +
           '</div>' +
           '<div class="card-actions">' +
@@ -605,6 +641,9 @@
       var entry = findHealth(health.entries, name);
       var row = card.querySelector(".proxy-health-row");
       if (row) row.innerHTML = healthBadgeHtml(entry);
+      var observationRow = card.querySelector('.proxy-observation-text');
+      var latest = entry && entry.history && entry.history.length ? entry.history[entry.history.length - 1] : null;
+      if (observationRow) { observationRow.textContent = observationText(latest && latest.at, latest && latest.source); observationRow.title = observationRow.textContent; }
       var sugRow = card.querySelector(".proxy-health-suggestion-row");
       if (sugRow) {
         if (entry && entry.suggestion) {
@@ -649,18 +688,7 @@
       return api.detect.proxyByName(name);
     }).then(function (r) {
       if (!r || !current()) return;
-      if (r.success) {
-        var parts = [];
-        if (r.exitIp) parts.push("IP:" + r.exitIp);
-        if (r.country) parts.push(r.country);
-        if (r.city) parts.push(r.city);
-        if (r.hosting === true) parts.push("IDC");
-        if (r.isProxy === true) parts.push(t('proxy.health.proxy', 'Proxy'));
-        if (r.latencyMs) parts.push(r.latencyMs + "ms");
-        if (el) el.textContent = parts.join(" | ") || "OK";
-      } else if (el) {
-        el.textContent = (r.error || t("proxy.detect.failed", "Failed"));
-      }
+      if (el) { el.textContent = detectionText(r); el.title = el.textContent; }
       return refreshHealthInCard(name, card);
     }).catch(function (e) { if (el && current()) el.textContent = e.message || String(e); });
   }

@@ -346,10 +346,10 @@ describe("health renderer request ownership and truthful clears", () => {
 });
 
 describe("health authoritative history, cancellation and baseline review contract", () => {
-  it("renders the seven health entries and routes every one through the production handler", async () => {
+  it("retains the legacy health entries and routes beside the explicit network action", async () => {
     const h = harness(); await h.render();
     const options = h.card().querySelector('[data-action="health"]')!.querySelectorAll("option").map(o => o.value);
-    expect(options).toEqual(["", "drift", "lock", "consistency", "env", "webrtc", "risk", "history"]);
+    expect(options).toEqual(["", "drift", "lock", "consistency", "env", "webrtc", "network", "risk", "history"]);
     h.authority("drift", "pass"); h.menu("drift"); await flush(); expect(h.api.browser.checkDrift).toHaveBeenCalledWith(PROFILE.dirId);
     h.menu("lock"); await flush(); expect(h.api.browser.captureBaseline).toHaveBeenCalledTimes(1);
     h.menu("consistency"); await flush(); expect(h.api.browser.consistencyCheck).toHaveBeenCalledWith(PROFILE.dirId);
@@ -608,5 +608,77 @@ describe("proxy health re-read boundary", () => {
     h.api.detect.proxyByName.mockReturnValue(old.promise); h.app.detectProxyIntoCard("synthetic-proxy", card); await flush();
     h.app.clearHealth("synthetic-proxy"); await flush(); const before = card.innerHTML;
     old.resolve({ success: true, exitIp: "203.0.113.55" }); await flush(); expect(card.innerHTML).toBe(before);
+  });
+
+  it.each(["en-US", "zh-CN"])("shows original source/time and a non-green stale card/history/summary in %s", async language => {
+    const h = harness(language), at = Date.parse("2026-10-19T00:00:00Z"); vi.setSystemTime(at);
+    const history = [{ at, source: "network", observationId: "synthetic-network-sample", success: true, exitIp: "192.0.2.10" }];
+    const entry = { proxyName: "synthetic-proxy", risk: "good", score: 100, freshness: "fresh", checks: 1, successes: 1, lastCheckedAt: at, lastSuccessAt: at, history };
+    const detection = { detectedAt: at, source: "cache", observationId: "synthetic-network-sample", success: true, exitIp: "192.0.2.10" };
+    h.api.proxy.list.mockResolvedValue([{ name: "synthetic-proxy", config: { type: "http", host: "proxy.synthetic.invalid", port: 1080 }, detection }]);
+    h.api.proxy.healthGet.mockResolvedValue({ entries: [entry], summary: { total: 1, good: 1, watch: 0, poor: 0, stale: 0, unknown: 0 } });
+    await h.app.loadProxies(); await flush();
+    expect(h.el("proxy-list").querySelector(".proxy-health-row .health-good")).not.toBeNull();
+    expect(h.el("proxy-list").textContent).toContain(h.window.i18n.t("proxy.observation.cache"));
+    expect(h.el("proxy-list").textContent).toContain(new Date(at).toISOString());
+    const original = JSON.stringify(entry);
+    vi.setSystemTime(at + 10 * 60_000 + 1);
+    // Exact current-read DTO from the separately real-store-tested main reducer,
+    // not a renderer-side measurement or a fabricated new observation.
+    h.api.proxy.healthGet.mockResolvedValue({ entries: [{ ...entry, risk: "watch", score: 79, freshness: "stale", observationAgeMs: 600001 }],
+      summary: { total: 1, good: 0, watch: 1, poor: 0, stale: 1, unknown: 0 } });
+    await h.app.loadProxies(); await flush();
+    const card = h.el("proxy-list").querySelector(".profile-card")!;
+    expect(card.querySelector(".proxy-health-row .health-good")).toBeNull();
+    expect(card.querySelector(".proxy-health-row")?.textContent).toContain(h.window.i18n.t("proxy.health.stale"));
+    expect(h.el("proxy-list").querySelector(".proxy-health-summary-host")?.textContent).toContain(h.window.i18n.t("proxy.health.stale"));
+    (h.el("proxy-list") as any).onclick({ target: card.querySelector('[data-action="toggle-history"]') });
+    const timeline = card.querySelector(".proxy-history-text")!;
+    expect(timeline.textContent).toContain(h.window.i18n.t("proxy.observation.network"));
+    expect(timeline.textContent).toContain(new Date(at).toISOString());
+    expect(timeline.textContent).not.toContain(new Date(Date.now()).toISOString());
+    expect(JSON.stringify(entry)).toBe(original); expect(h.api.detect.proxyByName).not.toHaveBeenCalled(); expect(h.memory.has("proxy-health")).toBe(false);
+  });
+
+  it("legacy null timestamps and missing source stay explicit unknown, never epoch or current time", async () => {
+    const h = harness();
+    h.api.proxy.list.mockResolvedValue([{ name: "synthetic-proxy", config: { type: "http", host: "proxy.synthetic.invalid", port: 1080 } }]);
+    h.api.proxy.healthGet.mockResolvedValue({ entries: [{ proxyName: "synthetic-proxy", risk: "poor", score: 54, freshness: "unknown", checks: 1,
+      history: [{ at: null, success: true, exitIp: "192.0.2.10" }] }], summary: { total: 1, good: 0, watch: 0, poor: 1, unknown: 1 } });
+    await h.app.loadProxies(); await flush();
+    const card = h.el("proxy-list").querySelector(".profile-card")!;
+    (h.el("proxy-list") as any).onclick({ target: card.querySelector('[data-action="toggle-history"]') });
+    expect(card.textContent).toContain("Unknown source"); expect(card.textContent).toContain("Measurement time unknown"); expect(card.textContent).toContain("Unverified");
+    expect(card.textContent).not.toContain("1970-"); expect(card.querySelector(".proxy-health-row .health-good")).toBeNull();
+  });
+
+  it.each(["PROXY_DETECTION_TARGET_CHANGED", "PROXY_DETECTION_STALE", "PROXY_DETECTION_SAVE_FAILED"])("a %s reply renders a failure distinct from its original network measurement", async code => {
+    const h = harness(), at = Date.parse("2026-10-19T00:00:00Z");
+    h.api.proxy.list.mockResolvedValue([{ name: "synthetic-proxy", config: { type: "http", host: "proxy.synthetic.invalid", port: 1080 } }]);
+    h.api.detect.proxyByName.mockResolvedValue({ success: false, code, observedAt: at, source: "network", observationId: "synthetic-unsaved-measurement", exitIp: "192.0.2.10" });
+    await h.app.loadProxies(); await flush(); const card = h.el("proxy-list").querySelector(".profile-card")!;
+    await h.app.detectProxyIntoCard("synthetic-proxy", card); await flush();
+    const text = card.querySelector(".proxy-detect-result")?.textContent || "";
+    expect(text).toMatch(/not (?:be )?saved/); expect(text).toContain("Network measurement"); expect(text).toContain(new Date(at).toISOString());
+    expect(text).not.toContain("OK"); expect(card.querySelector(".health-good")).toBeNull();
+  });
+
+  it("new source/age/error keys have exact mirror and locale parity without shadowing", () => {
+    const keys = ["proxy.health.stale", "proxy.health.unknown", "proxy.row.observation", "proxy.observation.network", "proxy.observation.cache",
+      "proxy.observation.unknown-source", "proxy.observation.unknown-time", "proxy.observation.measured-at", "proxy.detect.target-changed", "proxy.detect.stale", "proxy.detect.save-failed", "proxy.detect.unobserved"];
+    expect(fs.readFileSync(path.join(ROOT, "i18n.js")).toString()).toBe(I18N);
+    const source = ts.createSourceFile("i18n.js", I18N, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS), counts = new Map<string, number>();
+    function visit(node: ts.Node) {
+      if (ts.isPropertyAssignment(node) && ts.isStringLiteral(node.name) && keys.includes(node.name.text)) counts.set(node.name.text, (counts.get(node.name.text) || 0) + 1);
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+    const zh = harness("zh-CN"), en = harness("en-US");
+    for (const key of keys) {
+      expect(counts.get(key), key).toBe(2);
+      const a = zh.window.i18n.t(key, "__MISSING__"), b = en.window.i18n.t(key, "__MISSING__");
+      expect(a, key).toMatch(/[㐀-鿿]/); expect(b, key).not.toBe("__MISSING__");
+      expect([...a.matchAll(/\{[^}]+\}/g)].map(m => m[0]), key).toEqual([...b.matchAll(/\{[^}]+\}/g)].map(m => m[0]));
+    }
   });
 });

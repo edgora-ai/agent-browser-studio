@@ -359,7 +359,7 @@ describe("profile archive export/import", () => {
     saveConfig(cfg);
     const zipPath = path.join(ARCHIVES, "extensions.zip");
     await writeZipArchive(zipPath, [{ name: "meta.json", data: Buffer.from(JSON.stringify({ formatVersion: 1, profile: {
-      name: "Referenced", extensions: { [installedId]: true, [missingId]: true },
+      name: "Referenced", fingerprintSeed: 12345, extensions: { [installedId]: true, [missingId]: true },
     } })) }]);
     const imp = importProfileArchive(zipPath);
     expect(imp.warnings).toHaveLength(1);

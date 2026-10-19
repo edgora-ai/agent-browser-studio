@@ -7,6 +7,11 @@ import * as os from "node:os";
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-proxy-rotation-test");
 
+vi.mock("node:os", async original => ({ tmpdir: (await original<typeof import("node:os")>()).tmpdir, homedir: () => process.env.TMPDIR, hostname: () => "synthetic-rotation-fixture" }));
+vi.mock("node:child_process", () => ({ spawn: () => { throw new Error("Unexpected child"); }, execFileSync: () => { throw new Error("Unexpected child"); } }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("Unexpected DNS"); }, resolve: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:net", async original => ({ isIP: (await original<typeof import("node:net")>()).isIP, connect: () => { throw new Error("Unexpected network"); } }));
 vi.mock("electron", () => {
   const nodePath = require("node:path");
   const nodeOs = require("node:os");
@@ -32,7 +37,11 @@ import {
   resolveProfileProxy,
   getProxyRotationInfo,
 } from "../../src/main/services/config-manager.js";
-import { recordProxyDetection, recordProxyRotation } from "../../src/main/services/proxy-health.js";
+import { recordProxyDetection as recordExplicitProxyDetection, recordProxyRotation, type ProxyHealthObservation } from "../../src/main/services/proxy-health.js";
+// Explicit inert measurements replace the old implicit Date.now contract.
+function recordProxyDetection(name: string, obs: ProxyHealthObservation) {
+  return recordExplicitProxyDetection(name, { ...obs, observedAt: Date.now(), source: "network" });
+}
 // R146: rotationReason is localized via tMain, so these assertions are written
 // in Chinese. Pin the language instead of depending on the ambient default,
 // which is en-US — otherwise the test would change meaning if the default moved.

@@ -933,6 +933,12 @@
       var msg = t("toast.profile.imported", "Imported {n} profiles").replace("{n}", imported);
       if (failed) msg += t("toast.profile.import-failed-count", ", {n} failed").replace("{n}", failed);
       if (warnings) msg += t("toast.profile.import-dependencies", ". {n} dependency warnings: check named proxies/credentials, install missing extensions, and configure local fonts if needed before launch.").replace("{n}", warnings);
+      if (imported) {
+        var identityCounts = {};
+        (rep.imported || []).forEach(function(item) { var state = item.identity && item.identity.configuration && item.identity.configuration.state || "not-verifiable"; identityCounts[state] = (identityCounts[state] || 0) + 1; });
+        var identityLabels = { retained: "Configuration identity retained", changed: "Configuration identity changed", "not-verifiable": "Configuration identity not verifiable", "missing-seed": "Legacy configuration has no identity seed" };
+        msg += ". " + Object.keys(identityCounts).map(function(state) { return t("identity.config." + state, identityLabels[state] || identityLabels["not-verifiable"]) + ": " + identityCounts[state]; }).join("; ") + ". " + t("identity.runtime.not-verified", "Runtime fingerprint not re-verified");
+      }
       toast(msg, imported === 0 && failed > 0 ? "error" : (failed || warnings || imported === 0 ? "warning" : "success"));
       if (imported > 0) loadProfiles();
       return r;
@@ -1398,17 +1404,38 @@
   var healthHistoryViewSeq = 0;
   var HEALTH_OUTCOMES = ["pass", "warn", "risk", "error", "unavailable", "inconclusive", "cancelled", "baseline-established"];
 
+  var CACHEABLE_HEALTH_KINDS = ["env", "webrtc", "drift", "consistency"];
+  function projectHealthDisplayCache(value) {
+    var projected = Object.create(null);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return projected;
+    Object.keys(value).forEach(function (dirId) {
+      if (!Array.isArray(value[dirId])) return;
+      projected[dirId] = value[dirId].filter(function (entry) {
+        return entry && typeof entry === "object" && !Array.isArray(entry) && CACHEABLE_HEALTH_KINDS.indexOf(entry.kind) !== -1;
+      }).map(function (entry) {
+        // This is the OLD display-cache schema, not canonical health history.
+        // In particular, an unrelated check/clear must not reserialize network
+        // entries or a networkSummary/hop sidecar left in an older cache.
+        var legacy = { kind: entry.kind };
+        if (typeof entry.at === "number" && Number.isFinite(entry.at)) legacy.at = entry.at;
+        ["outcome", "verdict", "detail", "summary", "requestId", "source"].forEach(function (key) {
+          if (typeof entry[key] === "string") legacy[key] = entry[key];
+        });
+        return legacy;
+      });
+    });
+    return projected;
+  }
   function readHealthHistory() {
     try {
-      var value = JSON.parse(localStorage.getItem(HEALTH_HISTORY_KEY) || "{}");
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    } catch (e) { return {}; }
+      return projectHealthDisplayCache(JSON.parse(localStorage.getItem(HEALTH_HISTORY_KEY) || "{}"));
+    } catch (e) { return Object.create(null); }
   }
   function knownHealthOutcome(value) { return HEALTH_OUTCOMES.indexOf(value) !== -1; }
   function healthEntryOutcome(entry) {
     if (!entry) return "inconclusive";
     var outcome = knownHealthOutcome(entry.outcome) ? entry.outcome : "inconclusive";
-    if (outcome === "pass" && (entry.source === "legacy" || entry.kind === "consistency" || entry.unverified)) return "inconclusive";
+    if (outcome === "pass" && (entry.source === "legacy" || entry.kind === "consistency" || entry.kind === "network" || entry.unverified)) return "inconclusive";
     return outcome;
   }
   function cachedHealthEntries(dirId) {
@@ -1424,7 +1451,7 @@
     return list.slice().sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
   }
   function recordHealthResult(dirId, kind, summary, requestId) {
-    if (!dirId || !summary) return;
+    if (!dirId || !summary || CACHEABLE_HEALTH_KINDS.indexOf(kind) === -1) return;
     var outcome = knownHealthOutcome(summary.outcome || summary.verdict) ? (summary.outcome || summary.verdict) : "inconclusive";
     var entry = { kind: kind, at: Date.now(), outcome: outcome, verdict: outcome, detail: summary.detail || "", summary: summary.detail || "", requestId: requestId, source: "cached" };
     var all = readHealthHistory();
@@ -1432,7 +1459,7 @@
     list.push(entry);
     list.sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
     all[dirId] = list.slice(0, HEALTH_HISTORY_LIMIT);
-    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); }
+    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(projectHealthDisplayCache(all))); }
     catch (e) { console.warn("Health display cache could not be saved", e); }
     // A just-returned main result can be shown while its authoritative history
     // is queried. History read failures retain it as unverified, not empty.
@@ -1446,24 +1473,31 @@
     var all = readHealthHistory();
     if (!Array.isArray(all[dirId])) return;
     all[dirId] = all[dirId].filter(function (en) { return en && en.kind !== kind; });
-    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(all)); }
+    try { localStorage.setItem(HEALTH_HISTORY_KEY, JSON.stringify(projectHealthDisplayCache(all))); }
     catch (e) { console.warn("Cleared health display cache could not be saved", e); }
   }
-  function queryHealthHistory(dirId) {
+  function queryHealthHistory(dirId, networkRead) {
     return lcall("browser.healthHistory:" + dirId, function () {
       if (typeof api.browser.healthHistory !== "function") throw new Error(t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
-      return api.browser.healthHistory(dirId);
+      return networkRead ? networkSafeInvoke(function () { return api.browser.healthHistory(dirId); }, "health.history-unavailable") : api.browser.healthHistory(dirId);
     }).then(function (h) {
       if (!h || h.ok === false || h.success === false || !Array.isArray(h.entries) || h.entries.some(function (en) {
-        return !en || ["env", "webrtc", "drift", "consistency"].indexOf(en.kind) === -1 || !knownHealthOutcome(en.outcome) ||
-          ["runtime", "host", "baseline", "cached", "legacy"].indexOf(en.source) === -1 || typeof en.at !== "number" || !Number.isFinite(en.at);
-      })) throw new Error(h && h.error || t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
-      return h.entries;
+        if (!en || !knownHealthOutcome(en.outcome) || typeof en.at !== "number" || !Number.isFinite(en.at)) return true;
+        if (en.kind === "network") return en.source !== "runtime" || en.summary !== NETWORK_SUMMARY_CODE || en.outcome === "pass" || en.outcome === "baseline-established" || !projectNetworkSummary(en.networkSummary);
+        return CACHEABLE_HEALTH_KINDS.indexOf(en.kind) === -1 || ["runtime", "host", "baseline", "cached", "legacy"].indexOf(en.source) === -1;
+      })) throw new Error(!networkRead && h && h.error || t("health.history-unavailable", "Authoritative health history is unavailable; cached results are not verified."));
+      return h.entries.map(function (entry) {
+        if (entry.kind !== "network") return entry;
+        // Only the canonical typed summary may enter history memory. Do not
+        // reuse raw summary/detail strings or any origin/detail sidecar.
+        return { kind: "network", at: entry.at, outcome: entry.outcome, summary: NETWORK_SUMMARY_CODE,
+          requestId: typeof entry.requestId === "string" ? entry.requestId : undefined, source: "runtime", networkSummary: projectNetworkSummary(entry.networkSummary) };
+      });
     });
   }
-  function refreshHealthSummary(dirId) {
+  function refreshHealthSummary(dirId, networkRead) {
     var seq = healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1;
-    return queryHealthHistory(dirId).then(function (entries) {
+    return queryHealthHistory(dirId, networkRead).then(function (entries) {
       if (seq !== healthReadSeq[dirId]) return null;
       var previous = healthHistoryByProfile[dirId];
       var unpersisted = previous ? previous.entries.filter(function (en) {
@@ -1508,6 +1542,9 @@
     var verdict = healthVerdict(entry);
     return '<span class="status-badge" data-health-outcome="' + verdict.outcome + '" style="color:' + verdict.color + ';">' + icon(verdict.icon, 12) + ' ' + esc(verdict.label) + '</span>';
   }
+  function healthEntryDetail(entry) {
+    return entry && entry.kind === "network" ? networkSummaryText(entry.networkSummary) : entry && (entry.summary || entry.detail) || "";
+  }
   function healthSummaryHtml(last) {
     if (!last) return esc(t("profile.health.never", "Not checked yet"));
     var verdict = healthVerdict(last);
@@ -1521,7 +1558,7 @@
     var snapshot = healthHistoryByProfile[dirId];
     el.innerHTML = !last && snapshot && snapshot.error ? esc(t("health.outcome.inconclusive", "Not verified")) : healthSummaryHtml(last);
     el.setAttribute("data-health-outcome", last ? healthEntryOutcome(last) : "inconclusive");
-    el.setAttribute("title", snapshot && snapshot.error || last && (last.summary || last.detail) || "");
+    el.setAttribute("title", snapshot && snapshot.error || healthEntryDetail(last));
   }
   function showHealthHistory(dirId) {
     var viewSeq = ++healthHistoryViewSeq;
@@ -1533,7 +1570,7 @@
         return '<div style="display:flex;gap:8px;align-items:baseline;border-bottom:1px solid var(--border);padding:5px 0;">' +
           '<b style="min-width:110px;">' + esc(t("profile.health.kind." + entry.kind, entry.kind)) + '</b>' +
           '<span style="min-width:82px;color:var(--text-muted);">' + esc(relativeTime(entry.at)) + '</span>' + healthBadgeHtml(entry) +
-          '<span style="color:var(--text-muted);word-break:break-word;">' + esc(entry.summary || entry.detail || "") + '</span></div>';
+          '<span style="min-width:0;color:var(--text-muted);word-break:break-word;">' + (entry.kind === "network" ? networkSummaryHtml(entry.networkSummary) : esc(healthEntryDetail(entry))) + '</span></div>';
       }).join("");
       agentBrowser.confirmHtml(esc(t("profile.health.history-title", "Health check history")), function () {}, {
         title: esc(t("profile.health.history-heading", "Recent checks")), detailHtml: '<div style="font-size:12px;">' + rows + '</div>',
@@ -1542,7 +1579,7 @@
   }
   function lastHealthHtml(dirId) {
     var last = lastHealthFor(dirId);
-    return '<span class="health-verdict" data-health-outcome="' + (last ? healthEntryOutcome(last) : "inconclusive") + '" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(last && (last.summary || last.detail) || "") + '">' + healthSummaryHtml(last) + '</span>';
+    return '<span class="health-verdict" data-health-outcome="' + (last ? healthEntryOutcome(last) : "inconclusive") + '" style="font-size:11px;color:var(--text-muted);" title="' + escAttr(healthEntryDetail(last)) + '">' + healthSummaryHtml(last) + '</span>';
   }
   function summarizeEnvRisk(r) {
     var res = r && r.result;
@@ -1602,7 +1639,8 @@
     detectGlobalCount = Math.max(0, detectGlobalCount - 1);
   }
 
-  var healthDialogs = { env: { seq: 0, dirId: null, request: null }, webrtc: { seq: 0, dirId: null, request: null } };
+  var healthDialogs = { env: { seq: 0, dirId: null, request: null }, webrtc: { seq: 0, dirId: null, request: null },
+    network: { seq: 0, dirId: null, request: null, pageSeq: 0, pages: [], selection: null, origin: "", phase: "idle", loading: false, latestResult: null, notice: null } };
   function healthEpochKey(dirId, kind) { return dirId + ":" + kind; }
   function invalidateHealthKind(dirId, kind) {
     var key = healthEpochKey(dirId, kind);
@@ -1619,15 +1657,16 @@
     return request;
   }
   function healthRequestCurrent(request) {
-    if (!request || request.epoch !== (healthEpoch[healthEpochKey(request.dirId, request.kind)] || 0)) return false;
+    if (!request || request.discarded || request.epoch !== (healthEpoch[healthEpochKey(request.dirId, request.kind)] || 0)) return false;
     if (!request.view) return true;
     var view = healthDialogs[request.kind];
-    var dlg = document.getElementById(request.kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
+    var dlg = document.getElementById(request.kind === "network" ? "dlg-network-observation" : request.kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
     return view.seq === request.view && view.dirId === request.dirId && !!(dlg && dlg.open);
   }
   function healthResponseCurrent(request, result) {
-    // Only env/RTC accept the caller's requestId in the public contract.
-    // Drift/baseline/consistency may return a main-generated run identity.
+    if (request.kind === "network") return healthRequestCurrent(request) && !!result && result.requestId === request.requestId;
+    // Env/RTC keep their established compatibility contract. Network requires
+    // the caller's exact ID even if an otherwise plausible reply omits it.
     var callerOwnsId = request.kind === "env" || request.kind === "webrtc";
     return healthRequestCurrent(request) && (!callerOwnsId || !result || !result.requestId || result.requestId === request.requestId);
   }
@@ -1645,7 +1684,11 @@
     request.settled = true;
     releaseDetectSlot(request.dirId, request);
     var view = healthDialogs[request.kind];
-    if (view && view.request === request) { view.request = null; updateHealthCancelButton(request.kind); }
+    if (view && view.request === request) {
+      view.request = null;
+      if (request.kind === "network") updateNetworkControls();
+      else updateHealthCancelButton(request.kind);
+    }
   }
   function updateHealthCancelButton(kind) {
     var button = document.getElementById(kind === "env" ? "env-risk-cancel" : "webrtc-diag-cancel");
@@ -1962,6 +2005,7 @@
   }
 
   agentBrowser.invalidateProfilesForSync = function() {
+    retireNetworkView(false, "network.unavailable");
     ++profilesLoadSeq;
     ++profileEditSeq;
     ++newProfileProxySeq;
@@ -2231,6 +2275,7 @@
           '<option value="consistency">' + esc(t('profile.health.consistency', '4-field alignment')) + '</option>' +
           '<option value="env">' + esc(t('profile.health.env', 'Host environment')) + '</option>' +
           '<option value="webrtc">' + esc(t('profile.health.webrtc', 'WebRTC leak')) + '</option>' +
+          '<option value="network">' + esc(t('profile.health.network', 'Observe this page’s network for 10 seconds')) + '</option>' +
           '<option value="risk">' + esc(t('profile.health.external', 'External site (ping0.cc)')) + '</option>' +
           '<option value="history">' + esc(t('profile.health.history', 'History')) + '</option>' +
           '</select>';
@@ -2610,6 +2655,7 @@
         else if (kind === "consistency") agentBrowser.runConsistencyCheck(id);
         else if (kind === "env") agentBrowser.openEnvRisk(id);
         else if (kind === "webrtc") agentBrowser.openWebRtcDiag(id);
+        else if (kind === "network") agentBrowser.openNetworkDiagnostics(id);
         else if (kind === "risk") agentBrowser.openRiskCheck(id);
         else if (kind === "history") showHealthHistory(id);
       }
@@ -3083,8 +3129,377 @@
 
   agentBrowser.webRtcDiagClear = function() { clearHealthHistory("webrtc"); };
 
+  // ── Explicit, bounded observation of one already-running Chromium page ──
+  // No polling/job, page navigation, launch, active fetch or report export lives
+  // here. Main owns runtime/selection authority and the finite transport window.
+  var NETWORK_SUMMARY_CODE = "NETWORK_OBSERVATION_V1";
+  var NETWORK_COUNT_KEYS = ["requests", "hops", "responses", "finished", "failed", "blocked", "requestCancelled", "redirects", "http4xx", "http5xx", "pending", "cache", "serviceWorker", "unattributed", "cspIssues"];
+  var NETWORK_STOP_REASONS = ["window-ended", "cancelled", "deadline", "connection-closed", "target-changed", "setup-rejected", "setup-timeout", "protocol-invalid", "limit-exceeded", "evidence-incomplete", "cleanup-unverified"];
+  var NETWORK_COVERAGE = { network: ["observed", "partial", "unavailable"], csp: ["observed", "unavailable"], worker: ["not-observed"], oopif: ["not-observed"], console: ["not-observed"], storage: ["not-observed"], frames: ["selected-target-main-frame"], bridgeHop: ["unknown"], upstreamHop: ["unknown"] };
+  var NETWORK_TERMINALS = ["pending", "finished", "failed", "blocked", "cancelled", "redirected"];
+  var NETWORK_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"];
+  var NETWORK_RESOURCE_TYPES = ["Document", "Stylesheet", "Image", "Media", "Font", "Script", "TextTrack", "XHR", "Fetch", "Prefetch", "EventSource", "WebSocket", "Manifest", "SignedExchange", "Ping", "CSPViolationReport", "Preflight", "Other"];
+  var NETWORK_ERRORS = ["ERR_FAILED", "ERR_ABORTED", "ERR_TIMED_OUT", "ERR_CONNECTION_TIMED_OUT", "ERR_CONNECTION_CLOSED", "ERR_CONNECTION_RESET", "ERR_CONNECTION_REFUSED", "ERR_CONNECTION_ABORTED", "ERR_CONNECTION_FAILED", "ERR_NAME_NOT_RESOLVED", "ERR_NAME_RESOLUTION_FAILED", "ERR_INTERNET_DISCONNECTED", "ERR_NETWORK_CHANGED", "ERR_ADDRESS_UNREACHABLE", "ERR_PROXY_CONNECTION_FAILED", "ERR_TUNNEL_CONNECTION_FAILED", "ERR_NO_SUPPORTED_PROXIES", "ERR_PROXY_AUTH_REQUESTED", "ERR_PROXY_AUTH_UNSUPPORTED", "ERR_INVALID_AUTH_CREDENTIALS", "ERR_SSL_PROTOCOL_ERROR", "ERR_CERT_AUTHORITY_INVALID", "ERR_CERT_COMMON_NAME_INVALID", "ERR_CERT_DATE_INVALID", "ERR_BLOCKED_BY_CLIENT", "ERR_BLOCKED_BY_RESPONSE", "ERR_BLOCKED_BY_CSP", "ERR_CONTENT_LENGTH_MISMATCH", "ERR_INCOMPLETE_CHUNKED_ENCODING", "ERR_EMPTY_RESPONSE", "ERR_HTTP_RESPONSE_CODE_FAILURE", "ERR_HTTP2_PROTOCOL_ERROR", "ERR_QUIC_PROTOCOL_ERROR", "ERR_CACHE_MISS", "ERR_UNSAFE_REDIRECT", "ERR_TOO_MANY_REDIRECTS", "ERR_INVALID_REDIRECT", "ERR_INVALID_URL", "ERR_UNKNOWN_URL_SCHEME", "ERR_DISALLOWED_URL_SCHEME", "ERR_ACCESS_DENIED"];
+  var NETWORK_BLOCKED_REASONS = ["other", "csp", "mixed-content", "origin", "inspector", "subresource-filter", "content-type", "coep-frame-resource-needs-coep-header", "coop-sandboxed-iframe-cannot-navigate-to-coop-page", "corp-not-same-origin", "corp-not-same-origin-after-defaulted-to-same-origin-by-coep", "corp-not-same-site", "sri-message-signature-mismatch"];
+  var NETWORK_CORS_REASONS = ["DisallowedByMode", "OriginDisallowedByMode", "InvalidResponse", "WildcardOriginNotAllowed", "MissingAllowOriginHeader", "MultipleAllowOriginValues", "InvalidAllowOriginValue", "AllowOriginMismatch", "InvalidAllowCredentials", "CorsDisabledScheme", "PreflightInvalidStatus", "PreflightDisallowedRedirect", "PreflightWildcardOriginNotAllowed", "PreflightMissingAllowOriginHeader", "PreflightMultipleAllowOriginValues", "PreflightInvalidAllowOriginValue", "PreflightAllowOriginMismatch", "PreflightInvalidAllowCredentials", "PreflightMissingAllowExternal", "PreflightInvalidAllowExternal", "PreflightMissingAllowPrivateNetwork", "PreflightInvalidAllowPrivateNetwork", "InvalidAllowMethodsPreflightResponse", "InvalidAllowHeadersPreflightResponse", "MethodDisallowedByPreflightResponse", "HeaderDisallowedByPreflightResponse", "RedirectContainsCredentials", "InsecurePrivateNetwork", "InvalidPrivateNetworkAccess"];
+
+  function networkExactKeys(value, keys) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Reflect.ownKeys(value).length !== keys.length) return false;
+    return keys.every(function (key) {
+      var field = Object.getOwnPropertyDescriptor(value, key);
+      return field && field.enumerable && Object.prototype.hasOwnProperty.call(field, "value");
+    });
+  }
+  function projectNetworkSummary(value) {
+    // Renderer-only defensive projection of the published scalar schema. Main's
+    // pure normalizer remains the storage authority; JSON words are not proof.
+    try {
+      if (!networkExactKeys(value, ["version", "completion", "stopReason", "armedAt", "endedAt", "durationMs", "counts", "coverage"]) || value.version !== 1 ||
+          ["completed", "partial", "cancelled", "unavailable"].indexOf(value.completion) === -1 || NETWORK_STOP_REASONS.indexOf(value.stopReason) === -1 ||
+          !Number.isSafeInteger(value.endedAt) || value.endedAt < 0 || !Number.isSafeInteger(value.durationMs) || value.durationMs < 0 || value.durationMs > 10000 ||
+          !networkExactKeys(value.counts, NETWORK_COUNT_KEYS) || !networkExactKeys(value.coverage, Object.keys(NETWORK_COVERAGE))) return null;
+      var counts = {}, scope = {};
+      if (!NETWORK_COUNT_KEYS.every(function (key) {
+        var count = value.counts[key], limit = key === "cspIssues" || key === "unattributed" ? 256 : 128;
+        if (!Number.isSafeInteger(count) || count < 0 || count > limit) return false;
+        counts[key] = count; return true;
+      }) || !Object.keys(NETWORK_COVERAGE).every(function (key) {
+        var claim = value.coverage[key];
+        if (NETWORK_COVERAGE[key].indexOf(claim) === -1) return false;
+        scope[key] = claim; return true;
+      })) return null;
+      if (counts.requests !== counts.hops || counts.finished + counts.failed + counts.blocked + counts.requestCancelled + counts.redirects + counts.pending !== counts.hops ||
+          counts.responses > counts.hops || counts.http4xx > counts.responses || counts.http5xx > counts.responses || counts.cache > counts.hops || counts.serviceWorker > counts.hops ||
+          counts.cspIssues > 0 && scope.csp !== "observed") return null;
+      if (value.armedAt === null) {
+        if (["unavailable", "cancelled"].indexOf(value.completion) === -1 || value.durationMs !== 0 || scope.network !== "unavailable" || scope.csp !== "unavailable" ||
+            NETWORK_COUNT_KEYS.some(function (key) { return counts[key] !== 0; })) return null;
+      } else {
+        if (!Number.isSafeInteger(value.armedAt) || value.armedAt < 0 || value.endedAt - value.armedAt !== value.durationMs || value.completion === "unavailable") return null;
+        if (value.completion === "completed" ? value.durationMs !== 10000 || value.stopReason !== "window-ended" || scope.network !== "observed" : scope.network !== "partial") return null;
+      }
+      return { version: 1, completion: value.completion, stopReason: value.stopReason, armedAt: value.armedAt, endedAt: value.endedAt, durationMs: value.durationMs, counts: counts, coverage: scope };
+    } catch (error) { return null; }
+  }
+  function networkSummaryText(value) {
+    var summary = projectNetworkSummary(value);
+    if (!summary) return t("network.unavailable", "Network observation is unavailable.");
+    return [t("network.completion." + summary.completion), t("network.stop." + summary.stopReason),
+      t("network.duration", "Observed duration: {ms} ms").replace("{ms}", summary.durationMs)]
+      .concat(NETWORK_COUNT_KEYS.map(function (key) { return t("network.count." + key) + ": " + summary.counts[key]; }))
+      .concat(Object.keys(NETWORK_COVERAGE).map(function (key) { return t("network.coverage." + key) + ": " + t("network.coverage." + summary.coverage[key]); })).join(" · ");
+  }
+  function networkSummaryHtml(value) {
+    var summary = projectNetworkSummary(value);
+    if (!summary) return '<div class="empty-state">' + esc(t("network.unavailable", "Network observation is unavailable.")) + '</div>';
+    return '<div style="font-size:12px;line-height:1.6;min-width:0;">' +
+      '<b>' + esc(t("network.completion." + summary.completion)) + '</b> · ' + esc(t("network.duration", "Observed duration: {ms} ms").replace("{ms}", summary.durationMs)) +
+      '<div style="color:var(--text-muted);">' + esc(t("network.stop." + summary.stopReason)) + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:6px;">' + NETWORK_COUNT_KEYS.map(function (key) {
+        return '<span data-network-count="' + key + '">' + esc(t("network.count." + key)) + ': ' + summary.counts[key] + '</span>';
+      }).join("") + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);">' + Object.keys(NETWORK_COVERAGE).map(function (key) {
+        return '<span data-network-coverage="' + key + '">' + esc(t("network.coverage." + key)) + ': ' + esc(t("network.coverage." + summary.coverage[key])) + '</span>';
+      }).join("") + '</div><p style="margin:8px 0;color:var(--text-muted);">' + esc(t("network.scope")) + '</p></div>';
+  }
+  function networkOrigin(value) {
+    if (typeof value !== "string" || value.length > 2048 || /[\x00-\x20\x7f]/.test(value)) return null;
+    try {
+      var parsed = new URL(value);
+      return (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password && parsed.origin === value ? parsed.origin : null;
+    } catch (error) { return null; }
+  }
+  function networkLocalId(value) { return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$/.test(value) ? value : null; }
+  function networkStatus(value) { return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null; }
+  function networkEnum(value, values) { return values.indexOf(value) !== -1 ? value : value == null ? null : "unknown"; }
+  function projectNetworkHop(value) {
+    if (!value || typeof value !== "object" || !networkLocalId(value.id) || !networkLocalId(value.chainId) || !networkOrigin(value.origin)) return null;
+    return { id: value.id, chainId: value.chainId, redirectedFrom: networkLocalId(value.redirectedFrom), origin: networkOrigin(value.origin),
+      method: networkEnum(value.method, NETWORK_METHODS), resourceType: networkEnum(value.resourceType, NETWORK_RESOURCE_TYPES),
+      status: networkStatus(value.status), networkStatus: networkStatus(value.networkStatus), terminal: networkEnum(value.terminal, NETWORK_TERMINALS),
+      errorCode: networkEnum(value.errorCode, NETWORK_ERRORS), blockedReason: networkEnum(value.blockedReason, NETWORK_BLOCKED_REASONS), corsReason: networkEnum(value.corsReason, NETWORK_CORS_REASONS),
+      fromDiskCache: typeof value.fromDiskCache === "boolean" ? value.fromDiskCache : null, fromServiceWorker: typeof value.fromServiceWorker === "boolean" ? value.fromServiceWorker : null,
+      fromPrefetchCache: typeof value.fromPrefetchCache === "boolean" ? value.fromPrefetchCache : null, servedFromCache: typeof value.servedFromCache === "boolean" ? value.servedFromCache : null };
+  }
+  function projectNetworkStatusEvidence(value) {
+    if (!value || !networkLocalId(value.id) || !networkLocalId(value.chainId) || networkStatus(value.status) === null || value.source !== "extra-info" || ["unique", "unknown"].indexOf(value.association) === -1) return null;
+    var hopId = value.association === "unique" ? networkLocalId(value.hopId) : null;
+    if (value.association === "unique" && !hopId) return null;
+    return { id: value.id, chainId: value.chainId, hopId: hopId, status: value.status, source: "extra-info", association: value.association };
+  }
+  function networkFailureCopy(code) {
+    if (typeof code !== "string") return "network.unavailable";
+    var copy = { PROFILE_NOT_FOUND: "network.failure.profile-not-found", HEALTH_INVALID_REQUEST: "network.failure.invalid-request",
+      HEALTH_BUSY: "network.failure.busy", HEALTH_CANCELLED: "network.failure.cancelled", HEALTH_TIMEOUT: "network.failure.timeout",
+      HEALTH_PROFILE_CHANGED: "network.failure.profile-changed", HEALTH_HISTORY_WRITE_FAILED: "network.failure.history-write-failed",
+      NETWORK_RUNTIME_UNAVAILABLE: "network.failure.runtime-unavailable", NETWORK_ENGINE_UNSUPPORTED: "network.failure.engine-unsupported",
+      NETWORK_SELECTION_STALE: "network.selection-expired", NETWORK_SELECTION_LIMIT: "network.failure.selection-limit",
+      NETWORK_SETUP_TIMEOUT: "network.failure.setup-timeout", NETWORK_PROTOCOL_INVALID: "network.failure.protocol-invalid",
+      NETWORK_OBSERVATION_FAILED: "network.failure.observation-failed" };
+    return Object.prototype.hasOwnProperty.call(copy, code) ? copy[code] : "network.unavailable";
+  }
+  function projectNetworkReply(value, request) {
+    if (!value || value.requestId !== request.requestId) return null;
+    var summary = projectNetworkSummary(value.observation);
+    var safe = { requestId: request.requestId, observation: summary, outcome: ["warn", "risk", "error", "unavailable", "inconclusive", "cancelled"].indexOf(value.outcome) !== -1 ? value.outcome : "inconclusive",
+      notice: value.ok !== true || !summary || typeof value.code === "string" ? networkFailureCopy(value.code) : null, hops: [], httpStatusEvidence: [], detailUnavailable: false };
+    if (!summary) return safe;
+    if (!Array.isArray(value.hops) || value.hops.length > 128 || !Array.isArray(value.httpStatusEvidence) || value.httpStatusEvidence.length > 256) {
+      safe.observation = null; safe.notice = "network.unavailable"; return safe;
+    }
+    value.hops.forEach(function (value) { var projected = projectNetworkHop(value); if (projected) safe.hops.push(projected); else safe.detailUnavailable = true; });
+    value.httpStatusEvidence.forEach(function (value) { var projected = projectNetworkStatusEvidence(value); if (projected) safe.httpStatusEvidence.push(projected); else safe.detailUnavailable = true; });
+    if (new Blob([JSON.stringify({ hops: safe.hops, httpStatusEvidence: safe.httpStatusEvidence })]).size > 262144) {
+      safe.observation = null; safe.hops = []; safe.httpStatusEvidence = []; safe.notice = "network.unavailable";
+    }
+    return safe;
+  }
+  function networkSafeInvoke(fn, copyKey) {
+    // Sanitize before ipc.call can report an exception to observability. Native
+    // messages, full URLs or stack samples must not become renderer logs/toasts.
+    return Promise.resolve().then(fn).catch(function () { throw new Error(t(copyKey || "network.unavailable", "Network observation is unavailable.")); });
+  }
+  function networkViewCurrent(seq, dirId, pageSeq) {
+    var view = healthDialogs.network, dialog = document.getElementById("dlg-network-observation");
+    return !!(dialog && dialog.open) && view.seq === seq && view.dirId === dirId && (pageSeq === undefined || view.pageSeq === pageSeq);
+  }
+  function unsubscribeNetworkRequest(request) {
+    var unsubscribe = request && request.networkUnsubscribe;
+    if (typeof unsubscribe !== "function") return;
+    request.networkUnsubscribe = null;
+    try { unsubscribe(); }
+    catch (error) { console.warn("Network observation notification cleanup could not be confirmed"); }
+  }
+  function updateNetworkControls() {
+    var view = healthDialogs.network, request = view.request;
+    var active = !!(request && !request.settled && !request.discarded);
+    var clearing = !!(view.dirId && healthClearInFlight[view.dirId]);
+    var select = document.getElementById("network-page-select"), start = document.getElementById("network-observation-start"), refresh = document.getElementById("network-page-refresh");
+    var cancel = document.getElementById("network-observation-cancel"), clear = document.getElementById("network-observation-clear");
+    if (select) select.disabled = !view.dirId || view.loading || active || clearing;
+    if (start) start.disabled = !view.dirId || !view.selection || view.loading || active || clearing;
+    if (refresh) refresh.disabled = !view.dirId || active || clearing;
+    if (cancel) cancel.disabled = !active || request.cancelPending || request.cancelSent;
+    if (clear) clear.disabled = !view.dirId || clearing;
+  }
+  function renderNetworkChooser() {
+    var view = healthDialogs.network, select = document.getElementById("network-page-select"), origin = document.getElementById("network-page-origin");
+    if (select) {
+      select.innerHTML = '<option value="">' + esc(t("network.pages.placeholder")) + '</option>' + view.pages.map(function (page) {
+        return '<option value="' + escAttr(page.handle) + '">' + esc(t("network.pages.ordinal", "Page {n}").replace("{n}", page.ordinal)) + ' · ' + esc(page.origin) + '</option>';
+      }).join("");
+      select.value = view.selection || "";
+    }
+    if (origin) origin.textContent = view.origin;
+    updateNetworkControls();
+  }
+  function networkFactText(value, kind) {
+    if (value === null || value === undefined || value === "unknown") return t("network.fact.unknown", "Unknown");
+    if (kind === "terminal") return t("network.terminal." + value);
+    if (kind === "blocked" && value === "csp") return t("network.blocked.csp");
+    if (kind === "cors" && value === "MissingAllowOriginHeader") return t("network.cors.MissingAllowOriginHeader");
+    return value;
+  }
+  function networkHopHtml(hop) {
+    var facts = [esc(networkFactText(hop.method)), esc(networkFactText(hop.resourceType)), esc(networkFactText(hop.terminal, "terminal")),
+      esc(t("network.status.browser")) + ': ' + esc(networkFactText(hop.status)), esc(t("network.status.wire")) + ': ' + esc(networkFactText(hop.networkStatus))];
+    if (hop.errorCode !== null) facts.push(esc(t("network.error.label", "Network error")) + ': ' + esc(networkFactText(hop.errorCode)));
+    if (hop.blockedReason !== null) facts.push(esc(t("network.blocked.label", "Blocked reason")) + ': ' + esc(networkFactText(hop.blockedReason, "blocked")));
+    if (hop.corsReason !== null) facts.push('CORS: ' + esc(networkFactText(hop.corsReason, "cors")));
+    ["fromDiskCache", "fromServiceWorker", "fromPrefetchCache", "servedFromCache"].forEach(function (key) {
+      facts.push(esc(t("network.flag." + key)) + ': ' + esc(t(hop[key] === null ? "network.fact.unknown" : hop[key] ? "network.fact.yes" : "network.fact.no")));
+    });
+    return '<div data-network-hop="' + escAttr(hop.id) + '" style="padding:8px 0;border-top:1px solid var(--border);min-width:0;">' +
+      '<div style="overflow-wrap:anywhere;word-break:break-word;font-family:var(--mono);font-size:11px;">' + esc(hop.origin) + '</div>' +
+      '<div style="font-size:11px;line-height:1.6;color:var(--text-muted);">' + facts.join(' · ') + '</div></div>';
+  }
+  function renderNetworkView() {
+    var view = healthDialogs.network, status = document.getElementById("network-observation-status"), body = document.getElementById("network-observation-body");
+    renderNetworkChooser();
+    if (status) {
+      status.setAttribute("data-network-phase", view.phase);
+      var key = view.notice || (view.phase === "setup" ? "network.setup" : view.phase === "observing10s" ? "network.observing10s" :
+        ["completed", "partial", "cancelled", "unavailable"].indexOf(view.phase) !== -1 ? "network.completion." + view.phase : "network.choose");
+      status.textContent = view.dirId ? (view.phase === "unavailable" && key !== "network.unavailable" ? t("network.unavailable") + " " : "") + t(key) : "";
+    }
+    if (!body) return;
+    var result = view.latestResult;
+    if (!result || !result.observation) { body.textContent = ""; return; }
+    var summary = result.observation, counts = summary.counts;
+    var html = networkSummaryHtml(summary);
+    if (summary.armedAt !== null && counts.requests === 0) html += '<p class="hint-line">' + esc(t("network.no-traffic")) + '</p>';
+    else if (summary.completion === "completed" && summary.coverage.network === "observed" && counts.finished > 0 && !result.notice && !result.detailUnavailable &&
+        ["error", "risk", "unavailable", "cancelled"].indexOf(result.outcome) === -1 &&
+        ["failed", "blocked", "requestCancelled", "http4xx", "http5xx", "pending", "unattributed", "cspIssues"].every(function (key) { return counts[key] === 0; })) {
+      html += '<p style="color:var(--text-muted);">' + icon("info", 12) + ' ' + esc(t("network.no-errors")) + '</p>';
+    }
+    if (result.detailUnavailable) html += '<p class="hint-line">' + esc(t("network.detail-unavailable")) + '</p>';
+    html += result.hops.map(networkHopHtml).join("");
+    html += result.httpStatusEvidence.map(function (evidence) {
+      // Chain-level evidence stays separate. Do not guess which redirect hop
+      // owns an ambiguous status, nor overwrite browser status with wire status.
+      return '<div data-network-http-evidence="' + escAttr(evidence.id) + '" style="font-size:11px;padding:6px 0;color:var(--text-muted);">' +
+        esc(t("network.status.extra-info")) + ': ' + evidence.status + ' · ' + esc(t("network.status.association." + evidence.association)) + '</div>';
+    }).join("");
+    body.innerHTML = html;
+  }
+  function discardNetworkDetails(notice) {
+    var view = healthDialogs.network, request = view.request;
+    view.seq++; view.pageSeq++;
+    if (view.dirId) invalidateHealthKind(view.dirId, "network");
+    if (request) { request.discarded = true; request.selection = null; unsubscribeNetworkRequest(request); }
+    view.pages = []; view.selection = null; view.origin = ""; view.latestResult = null; view.loading = false;
+    view.phase = "cancelled"; view.notice = notice || "network.completion.cancelled";
+    renderNetworkView();
+    return request;
+  }
+  function sendNetworkCancellation(request, notify) {
+    if (!request || request.kind !== "network" || request.settled || !request.invoked || request.cancelSent || detectInFlight[request.dirId] !== request) return;
+    request.cancelSent = true; request.cancelPending = true;
+    var seq = healthDialogs.network.seq, dirId = request.dirId;
+    updateNetworkControls();
+    lcall("browser.healthCancel:" + request.requestId, function () {
+      return networkSafeInvoke(function () { return api.browser.healthCancel(dirId, { kind: "network", requestId: request.requestId }); }, "health.cancel-not-confirmed");
+    }).then(function (response) {
+      request.cancelRequested = !!(response && response.success && response.cancelled);
+      if (notify && networkViewCurrent(seq, dirId) && !request.settled) toast(t(request.cancelRequested ? "health.cancel-requested" : "health.cancel-not-confirmed"), "warning");
+    }).catch(function () {
+      if (notify && networkViewCurrent(seq, dirId) && !request.settled) toast(t("health.cancel-not-confirmed"), "warning");
+    }).finally(function () { request.cancelPending = false; if (healthDialogs.network.request === request) updateNetworkControls(); });
+  }
+  function retireNetworkView(close, notice) {
+    var view = healthDialogs.network;
+    if (!view.dirId && !view.request) return;
+    var request = discardNetworkDetails(notice);
+    sendNetworkCancellation(request, false);
+    view.request = null;
+    if (close) view.dirId = null;
+    renderNetworkView();
+  }
+  agentBrowser.openNetworkDiagnostics = function (dirId) {
+    var dialog = document.getElementById("dlg-network-observation"), view = healthDialogs.network;
+    if (!dialog || typeof dirId !== "string" || !dirId) { toast(t("network.unavailable"), "warning"); return; }
+    retireNetworkView(false);
+    view.seq++; view.pageSeq++; view.dirId = dirId; view.request = null; view.notice = null; view.phase = "idle";
+    if (!dialog._networkLifecycleBound) {
+      dialog._networkLifecycleBound = true;
+      dialog.addEventListener("cancel", function () { retireNetworkView(true); });
+      dialog.addEventListener("close", function () { if (!dialog.open) retireNetworkView(true); });
+    }
+    if (!dialog.open) dialog.showModal();
+    agentBrowser.refreshNetworkPages();
+  };
+  agentBrowser.refreshNetworkPages = function () {
+    var view = healthDialogs.network;
+    if (!view.dirId || view.request && !view.request.settled && !view.request.discarded || healthClearInFlight[view.dirId]) return;
+    var dirId = view.dirId, seq = view.seq, pageSeq = ++view.pageSeq;
+    view.pages = []; view.selection = null; view.origin = ""; view.latestResult = null; view.loading = true; view.phase = "choosing"; view.notice = "network.pages.loading";
+    renderNetworkView();
+    lcall("browser.networkPages:" + dirId + ":" + pageSeq, function () {
+      return networkSafeInvoke(function () { return api.browser.networkPages(dirId); });
+    }).then(function (response) {
+      if (!networkViewCurrent(seq, dirId, pageSeq)) return;
+      if (!response || response.ok !== true || !Array.isArray(response.pages) || response.pages.length > 32) {
+        view.phase = "unavailable"; view.notice = networkFailureCopy(response && response.code); return;
+      }
+      var seen = Object.create(null);
+      view.pages = response.pages.filter(function (page) {
+        if (!page || typeof page.handle !== "string" || !page.handle || page.handle.length > 1024 || /[\x00-\x1f\x7f]/.test(page.handle) || seen[page.handle] ||
+            !networkOrigin(page.origin) || !Number.isSafeInteger(page.ordinal) || page.ordinal < 1) return false;
+        seen[page.handle] = true; return true;
+      }).map(function (page) { return { handle: page.handle, origin: networkOrigin(page.origin), ordinal: page.ordinal }; });
+      view.notice = view.pages.length ? "network.choose" : "network.pages.empty";
+    }).catch(function () { if (networkViewCurrent(seq, dirId, pageSeq)) { view.phase = "unavailable"; view.notice = "network.unavailable"; } })
+      .finally(function () { if (networkViewCurrent(seq, dirId, pageSeq)) { view.loading = false; renderNetworkView(); } });
+  };
+  agentBrowser.networkPageChanged = function () {
+    var view = healthDialogs.network, select = document.getElementById("network-page-select");
+    if (!view.dirId || !select || view.loading || view.request && !view.request.settled && !view.request.discarded || healthClearInFlight[view.dirId]) return;
+    var page = view.pages.find(function (page) { return page.handle === select.value; });
+    view.selection = page ? page.handle : null; view.origin = page ? page.origin : "";
+    renderNetworkChooser();
+  };
+  agentBrowser.startNetworkObservation = function () {
+    var view = healthDialogs.network;
+    if (!view.dirId || view.loading || !view.selection || !view.pages.some(function (page) { return page.handle === view.selection; })) return;
+    var request = beginHealthRequest(view.dirId, "network");
+    if (!request) return;
+    request.view = view.seq; request.selection = view.selection; request.armed = false;
+    view.request = request; view.pages = []; view.selection = null; view.latestResult = null; view.phase = "setup"; view.notice = null;
+    renderNetworkView();
+    try {
+      request.networkUnsubscribe = api.browser.onNetworkArmed(function (event) {
+        if (!healthRequestCurrent(request) || !request.invoked || request.settled || request.armed || !networkExactKeys(event, ["dirId", "requestId", "armedAt", "observeForMs"]) ||
+            event.dirId !== request.dirId || event.requestId !== request.requestId || event.observeForMs !== 10000 || !Number.isSafeInteger(event.armedAt) || event.armedAt < 0) return;
+        request.armed = true; view.phase = "observing10s"; view.notice = null; renderNetworkView();
+      });
+      if (typeof request.networkUnsubscribe !== "function") throw new Error("NETWORK_ARMED_SUBSCRIPTION_UNAVAILABLE");
+    } catch (error) {
+      unsubscribeNetworkRequest(request); request.selection = null; view.phase = "unavailable"; view.notice = "network.unavailable";
+      finishHealthRequest(request); renderNetworkView(); return;
+    }
+    healthCall("browser.networkObserve", function () {
+      if (!healthRequestCurrent(request)) { request.selection = null; return null; }
+      var selection = request.selection; request.selection = null;
+      return networkSafeInvoke(function () {
+        if (!healthRequestCurrent(request)) return null;
+        request.invoked = true;
+        return api.browser.networkObserve(request.dirId, { selection: selection, requestId: request.requestId });
+      })
+        .then(function (response) { return healthRequestCurrent(request) ? projectNetworkReply(response, request) : null; });
+    }, request).then(function (result) {
+      if (!healthRequestCurrent(request)) return;
+      if (!healthResponseCurrent(request, result)) { view.phase = "unavailable"; view.notice = "network.unavailable"; renderNetworkView(); return; }
+      view.latestResult = result; view.phase = result.observation ? result.observation.completion : "unavailable"; view.notice = result.notice;
+      renderNetworkView();
+      // Do not synthesize a persisted history entry from the transient result.
+      // A failed canonical refresh retains the old summary only as unverified.
+      refreshHealthSummary(request.dirId, true).catch(function () { /* The reader marks the retained safe summary unverified. */ });
+    }).catch(function () {
+      if (healthRequestCurrent(request)) { view.phase = "unavailable"; view.notice = "network.unavailable"; renderNetworkView(); }
+    }).finally(function () { unsubscribeNetworkRequest(request); finishHealthRequest(request); });
+  };
+  agentBrowser.cancelNetworkObservation = function () {
+    var view = healthDialogs.network, request = view.request;
+    if (!request || request.settled || request.discarded) return;
+    discardNetworkDetails(); sendNetworkCancellation(request, true);
+  };
+  agentBrowser.networkObservationClear = function () {
+    var view = healthDialogs.network, dirId = view.dirId, seq = view.seq;
+    if (!dirId || healthClearInFlight[dirId]) return;
+    agentBrowser.confirm(t("network.clear-confirm"), function () {
+      if (!networkViewCurrent(seq, dirId) || healthClearInFlight[dirId]) return;
+      var request = discardNetworkDetails("network.clearing");
+      var epoch = healthEpoch[healthEpochKey(dirId, "network")], clearSeq = view.seq, cleared = false, failureCopy = "health.clear-failed";
+      healthClearInFlight[dirId] = true; sendNetworkCancellation(request, false); updateNetworkControls();
+      agentBrowser.ipc.call("network.clear:" + dirId, function () {
+        return networkSafeInvoke(function () { return api.browser.healthClear(dirId, "network"); }, "health.clear-failed");
+      }, { kind: "write", timeoutMs: 0, slowNoticeMs: 15000, onSlow: function () {
+        if (networkViewCurrent(clearSeq, dirId)) toast(t("network.clearing"), "warning");
+      } }).then(function (response) {
+        if (!response || response.ok !== true) { failureCopy = response && response.code ? networkFailureCopy(response.code) : "health.clear-failed"; throw new Error(t(failureCopy)); }
+        cleared = true; return queryHealthHistory(dirId, true);
+      }).then(function (entries) {
+        if (epoch !== healthEpoch[healthEpochKey(dirId, "network")]) return;
+        removeCachedHealthKind(dirId, "network");
+        healthHistoryByProfile[dirId] = { entries: entries }; healthReadSeq[dirId] = (healthReadSeq[dirId] || 0) + 1; updateHealthCard(dirId);
+        if (!networkViewCurrent(clearSeq, dirId)) return;
+        view.phase = "idle"; view.notice = "network.cleared"; renderNetworkView(); toast(t("network.cleared"), "success");
+      }).catch(function () {
+        if (cleared && epoch === healthEpoch[healthEpochKey(dirId, "network")]) {
+          var previous = healthHistoryByProfile[dirId];
+          healthHistoryByProfile[dirId] = { entries: (previous ? previous.entries : cachedHealthEntries(dirId)).map(function (entry) { return entry.kind === "network" ? Object.assign({}, entry, { unverified: true }) : entry; }), error: t("health.clear-unverified") };
+          updateHealthCard(dirId);
+        }
+        if (!networkViewCurrent(clearSeq, dirId)) return;
+        view.notice = cleared ? "health.clear-unverified" : failureCopy; renderNetworkView(); toast(t(view.notice), "error");
+      }).finally(function () { delete healthClearInFlight[dirId]; if (networkViewCurrent(clearSeq, dirId)) updateNetworkControls(); });
+    }, { title: t("network.clear-title") });
+  };
+
   if (typeof document.addEventListener === "function") document.addEventListener("agent-browser-language-change", function () {
     Object.keys(healthHistoryByProfile).forEach(updateHealthCard);
+    if (healthDialogs.network.dirId) renderNetworkView();
     ["env", "webrtc"].forEach(function (kind) {
       var view = healthDialogs[kind];
       if (!view.dirId) return;

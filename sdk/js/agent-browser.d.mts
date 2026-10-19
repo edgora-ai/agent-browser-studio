@@ -2,7 +2,11 @@
 // unknown: readJson also returns {} for an empty body or { raw } for non-JSON.
 // These declarations describe the controller protocol, not runtime validation.
 import type { Browser } from 'playwright-core';
-import type { AgentRun, LlmConfig } from '../../src/main/types.js';
+import type { AgentRun, LlmConfig, SyncResult, SyncConfig, SyncComparisonToken, ProfileHistorySyncState } from '../../src/main/types.js';
+export type SyncHistoryOptions = { history?: boolean; comparisonToken?: SyncComparisonToken };
+export type SyncSettings = Pick<Partial<SyncConfig>, 'enabled' | 'endpoint' | 'bucket' | 'accessKey' | 'secretKey' | 'includeHistory'> & { custodyConsent?: boolean; historyConsent?: boolean };
+export type SyncStatus = { enabled: boolean; configured: boolean; endpoint: string; bucket: string; accessKeyMasked: string;
+  includeHistory: boolean; custodyConsentAt: number | null; historyConsentAt: number | null; history: Record<string, ProfileHistorySyncState>; operation: unknown };
 import type { Conversation } from '../../src/main/services/agent/conversation-store.js';
 import type { QueryResult, TableInfo } from '../../src/main/services/agent-db.js';
 import type { ApprovalRequest, ApprovalDecision } from '../../src/main/services/approval-gate.js';
@@ -82,6 +86,11 @@ export class AgentBrowserClient {
   health(): Promise<{ status: string; service: string; port: number; mode: 'headless' | 'gui'; version: string; profiles: number; uptimeSeconds: number }>;
   version(): Promise<{ name: string; slug: string; version: string; chromium: { path: string | null; version: string | null } }>;
   openapi(): Promise<{ paths: Record<string, unknown> }>;
+  syncStatus(): Promise<SyncStatus>;
+  configureSync(settings: SyncSettings): Promise<{ success: boolean } & Partial<SyncStatus>>;
+  syncPush(options?: SyncHistoryOptions & { force?: boolean }): Promise<SyncResult>;
+  syncPull(options?: SyncHistoryOptions & { strategy?: 'local' | 'remote' | 'newest'; resolutions?: Record<string, 'local' | 'remote' | 'newest'> }): Promise<SyncResult>;
+  syncHistoryState(dirId: string): Promise<{ dirId: string } & ProfileHistorySyncState>;
   listProfiles(): Promise<ProfileSummary[]>;
   createProfile(name: string, options?: Record<string, unknown>): Promise<{ success: boolean; dirId: string }>;
   llmConfig(): Promise<{ config: RedactedLlmConfig | null }>;

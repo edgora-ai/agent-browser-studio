@@ -50,7 +50,7 @@ interface ActiveHealthRun {
 const active = new Map<string, ActiveHealthRun>();
 const MAX_ACTIVE_HEALTH_RUNS = 4;
 const HEALTH_DEADLINE_MS = 20_000;
-const kinds = new Set<ProfileHealthKind>(["env", "webrtc", "drift", "consistency"]);
+const kinds = new Set<ProfileHealthKind>(["env", "webrtc", "drift", "consistency", "network"]);
 
 onProfileHealthRecordsCleared((dirId, kind) => {
   const running = active.get(dirId);
@@ -60,10 +60,25 @@ onProfileHealthRecordsCleared((dirId, kind) => {
   }
 });
 
-function targetIdentity(dirId: string): string {
+function targetIdentity(dirId: string, kind: ProfileHealthKind): string {
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.browserProfiles || {}, dirId) || !cfg.browserProfiles[dirId] || typeof cfg.browserProfiles[dirId] !== "object") {
     throw new ProfileHealthError("PROFILE_NOT_FOUND", "Profile not found");
+  }
+  if (kind === "network") {
+    // statusBrowser can discover/adopt a recovered process. A read-only network
+    // lease must never mint runtime authority through that legacy path. Saved
+    // proxy intent is deliberately not evidence of this running process's route.
+    const runtime = getEntry(dirId);
+    const bytes = JSON.stringify({
+      configPath: getConfigPath(), deviceId: cfg.deviceId,
+      profile: portableProfileContent(cfg.browserProfiles[dirId]),
+      engine: runtime?.engine ?? null, pid: runtime?.pid ?? null, port: runtime?.port ?? null,
+      stopping: runtime?.stopping === true, launchProxy: getLaunchProxySnapshot(dirId),
+      childPid: runtime?.process?.pid ?? null, exitCode: runtime?.process?.exitCode ?? null,
+      signalCode: runtime?.process?.signalCode ?? null, killed: runtime?.process?.killed ?? null,
+    });
+    return createHash("sha256").update(bytes).digest("hex");
   }
   const status = statusBrowser(dirId);
   const bytes = JSON.stringify({
@@ -89,9 +104,14 @@ export function beginProfileHealthRun(dirId: string, kind: ProfileHealthKind, op
     || options.owner !== undefined && (typeof options.owner !== "string" || !options.owner || options.owner.length > 160)) {
     throw new ProfileHealthError("HEALTH_INVALID_REQUEST", "Invalid diagnostic request identity");
   }
-  const initialIdentity = targetIdentity(dirId);
+  const initialIdentity = targetIdentity(dirId, kind);
   const initialRuntime = getEntry(dirId);
   const initialBidi = initialRuntime?.bidiConn;
+  const initialNetwork = kind === "network" ? {
+    child: initialRuntime?.process, bridge: initialRuntime?.proxyBridge,
+    pid: initialRuntime?.pid, port: initialRuntime?.port, engine: initialRuntime?.engine,
+    launchProxy: initialRuntime?.launchProxy,
+  } : undefined;
   if (active.has(dirId) || active.size >= MAX_ACTIVE_HEALTH_RUNS) throw new ProfileHealthError("HEALTH_BUSY", "A diagnostic is still running");
   const controller = new AbortController();
   const entry: ActiveHealthRun = { kind, requestId, owner: options.owner ?? "internal", controller };
@@ -110,11 +130,15 @@ export function beginProfileHealthRun(dirId: string, kind: ProfileHealthKind, op
     assertCurrent() {
       if (controller.signal.aborted) throw new ProfileHealthError(entry.cancelCode || "HEALTH_CANCELLED", "Diagnostic cancelled or its deadline elapsed", "cancelled");
       if (active.get(dirId) !== entry || finished) throw new ProfileHealthError("HEALTH_CANCELLED", "Diagnostic no longer owns its result", "cancelled");
-      if (getEntry(dirId) !== initialRuntime || initialRuntime?.bidiConn !== initialBidi) {
+      if (getEntry(dirId) !== initialRuntime || (initialNetwork
+        ? initialRuntime?.process !== initialNetwork.child || initialRuntime?.proxyBridge !== initialNetwork.bridge
+          || initialRuntime?.pid !== initialNetwork.pid || initialRuntime?.port !== initialNetwork.port
+          || initialRuntime?.engine !== initialNetwork.engine || initialRuntime?.launchProxy !== initialNetwork.launchProxy
+        : initialRuntime?.bidiConn !== initialBidi)) {
         throw new ProfileHealthError("HEALTH_PROFILE_CHANGED", "Browser session changed while the diagnostic was running", "cancelled");
       }
       let current: string;
-      try { current = targetIdentity(dirId); } catch { throw new ProfileHealthError("HEALTH_PROFILE_CHANGED", "Profile changed while the diagnostic was running", "cancelled"); }
+      try { current = targetIdentity(dirId, kind); } catch { throw new ProfileHealthError("HEALTH_PROFILE_CHANGED", "Profile changed while the diagnostic was running", "cancelled"); }
       if (current !== initialIdentity) throw new ProfileHealthError("HEALTH_PROFILE_CHANGED", "Profile changed while the diagnostic was running", "cancelled");
     },
     finish() {
@@ -131,7 +155,9 @@ export function cancelProfileHealthRun(dirId: string, options: { kind: ProfileHe
   validateDirId(dirId);
   const current = active.get(dirId);
   if (!current || current.kind !== options?.kind || current.requestId !== options?.requestId || current.owner !== (options.owner ?? "internal")) {
-    return { success: false, cancelled: false, code: "HEALTH_NOT_OWNED" };
+    // The network bridge publishes a closed vocabulary. Keep the established
+    // ownership-refusal code unchanged for every pre-existing diagnostic kind.
+    return { success: false, cancelled: false, code: options?.kind === "network" ? "HEALTH_INVALID_REQUEST" : "HEALTH_NOT_OWNED" };
   }
   if (!current.controller.signal.aborted) {
     current.cancelCode = "HEALTH_CANCELLED";

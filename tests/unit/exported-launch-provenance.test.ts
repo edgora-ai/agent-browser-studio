@@ -9,6 +9,7 @@ const f = vi.hoisted(() => ({
   inspect: vi.fn(), legacy: vi.fn(), proxy: vi.fn(), audit: vi.fn(), release: vi.fn(), lock: vi.fn(),
   spawn: vi.fn(), version: vi.fn(), managedBinary: vi.fn(), fetch: vi.fn(), netCreate: vi.fn(), kill: vi.fn(),
   proxyProbe: vi.fn(), proxyUrl: vi.fn(), geoDetect: vi.fn(), geoObservedAt: vi.fn(), persistDetection: vi.fn(), diagnostics: vi.fn(), gpuContext: vi.fn(),
+  captureDetectionTarget: vi.fn(), commitObservation: vi.fn(), targets: new WeakMap<object, { name: string; config: ProxyConfig }>(), policies: [] as string[],
   secrets: vi.fn(() => { throw new Error("No secret access allowed"); }), saveConfig: vi.fn(), transact: vi.fn(),
   fs: {
     existsSync: vi.fn(), mkdirSync: vi.fn(), readFileSync: vi.fn(), writeFileSync: vi.fn(),
@@ -23,8 +24,16 @@ const f = vi.hoisted(() => ({
   queuedCookies: [] as any[], cookieApply: vi.fn(),
 }));
 
-vi.mock("node:fs", () => f.fs);
+vi.mock("node:fs", async (importOriginal) => ({
+  ...f.fs,
+  // Import-time SQLite/ZIP guards need platform flags, not real file effects.
+  // Keep every callable mocked; undeclared fs capabilities still fail closed.
+  constants: (await importOriginal<typeof import("node:fs")>()).constants,
+}));
 vi.mock("node:net", () => ({ createServer: f.netCreate }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("No DNS lookup allowed"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("No DNS lookup allowed"); }, resolve: () => { throw new Error("No DNS lookup allowed"); } }));
+vi.mock("node:os", () => ({ tmpdir: () => process.env.TMPDIR, homedir: () => process.env.HOME, hostname: () => "synthetic-launch-host", platform: () => process.platform, arch: () => process.arch }));
 vi.mock("node:child_process", () => ({
   spawn: f.spawn,
   execSync: vi.fn(() => { throw new Error("No real process commands"); }),
@@ -81,6 +90,18 @@ vi.mock("../../src/main/services/masque-socks-bridge.js", () => ({ startMasqueSo
 vi.mock("../../src/main/services/proxy-detector.js", () => ({
   buildChromiumProxyUrl: f.proxyUrl, probeProxyPort: f.proxyProbe, proxyDetectionObservedAt: f.geoObservedAt,
   proxyDetector: { detect: f.geoDetect },
+}));
+// Explicit new main-only observation boundary. The launch fixture models no
+// config/store authority; actual target+stamp+disk commits have a separate suite.
+vi.mock("../../src/main/services/proxy-detection.js", () => ({
+  captureProxyDetectionTarget: f.captureDetectionTarget,
+  detectProxyTarget: (target: object, policy: string) => {
+    const captured = f.targets.get(target);
+    if (!captured) throw new Error("Uncaptured launch detection target");
+    f.policies.push(policy);
+    return f.geoDetect(captured.config);
+  },
+  commitProxyDetectionIfCurrent: f.commitObservation,
 }));
 vi.mock("../../src/main/services/proxy-health.js", () => ({ recordProxyRotation: vi.fn() }));
 vi.mock("../../src/main/services/native-chromium-manager.js", () => ({
@@ -230,6 +251,20 @@ beforeEach(() => {
   f.geoDetect.mockReset().mockImplementation(() => { throw new Error("No proxy/network probe allowed"); });
   f.geoObservedAt.mockReset().mockReturnValue(null);
   f.persistDetection.mockReset().mockImplementation(() => { throw new Error("No proxy cache writes allowed"); });
+  f.targets = new WeakMap(); f.policies.length = 0;
+  f.captureDetectionTarget.mockReset().mockImplementation((name: string, config: ProxyConfig) => {
+    const target = Object.freeze({});
+    f.targets.set(target, { name, config: structuredClone(config) });
+    return target;
+  });
+  f.commitObservation.mockReset().mockImplementation((target: object, detection: any) => {
+    const captured = f.targets.get(target);
+    if (!captured) throw new Error("Uncaptured launch persistence target");
+    let timezone: string | null = null;
+    try { if (detection.timezone && !/^[+-]/.test(detection.timezone)) timezone = new Intl.DateTimeFormat('en-US', { timeZone: detection.timezone }).resolvedOptions().timeZone; } catch { /* explicit invalid provider field */ }
+    f.persistDetection(captured.name, captured.config, { ...detection, timezone, detectedAt: detection.observedAt });
+    return 'committed';
+  });
   f.cachedDetection.mockReset().mockReturnValue(null);
   f.proxyUrl.mockImplementation((proxy: ProxyConfig) => `${proxy.type}://${proxy.host}:${proxy.port}`);
   f.fs.existsSync.mockImplementation((file) => file === bin || file === "/virtual/firefox-bin");
@@ -1129,6 +1164,7 @@ describe("Firefox effective Auto launch identity", () => {
   const geo = (timezone = "America/Toronto", countryCode = "CA") => ({
     success: true, exitIp: "192.0.2.40", country: countryCode, countryCode, timezone,
     provider: "mock-geo", latencyMs: 2,
+    observedAt: 1_800_000_000_000, source: "network" as const, observationId: "synthetic-launch-observation",
   });
 
   function autoProxy() {
@@ -1341,7 +1377,10 @@ describe("Firefox effective Auto launch identity", () => {
     expect(f.audit.mock.calls.some(([event]) => event.action === "firefox-identity" && event.detail.includes("host fallback, proxy alignment unverified"))).toBe(true);
     expect(currentMeta()).toMatchObject({ timezone: null, locale: null });
     if (failure === "failed" || failure === "throw") {
-      expect(f.persistDetection).not.toHaveBeenCalled();
+      // An actually completed network failure is now an atomic negative sample;
+      // a thrown/non-observation still cannot invent persistence authority.
+      if (failure === "throw") expect(f.persistDetection).not.toHaveBeenCalled();
+      else expect(f.persistDetection).toHaveBeenCalledWith("primary", proxy, expect.objectContaining({ success: false, source: "network", detectedAt: 1_800_000_000_000 }));
       expect(f.consistency.mock.calls[0][0].proxyGeo).toBeNull();
     } else if (failure !== "invalid-country") {
       expect(f.persistDetection.mock.calls[0][2].timezone).toBeNull();
@@ -1367,21 +1406,49 @@ describe("Firefox effective Auto launch identity", () => {
 
   it("persists the original cached observation time rather than renewing its age at launch", async () => {
     autoProxy();
-    const result = geo();
+    const result = { ...geo(), source: "cache" as const };
     const observedAt = 1_800_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(observedAt + 5 * 60_000);
     f.geoDetect.mockResolvedValue(result);
     f.geoObservedAt.mockImplementation(value => value === result ? observedAt : null);
     const owned = await launchOwned();
     expect(f.geoObservedAt).toHaveBeenCalledExactlyOnceWith(result);
-    expect(f.persistDetection.mock.calls[0][2].detectedAt).toBe(observedAt);
+    expect(f.persistDetection.mock.calls[0][2]).toMatchObject({ detectedAt: observedAt, source: "cache", observationId: result.observationId });
     expect(f.persistDetection.mock.calls[0][2].detectedAt).not.toBe(Date.now());
+    expect(f.captureDetectionTarget.mock.invocationCallOrder[0]).toBeLessThan(f.geoDetect.mock.invocationCallOrder[0]);
+    expect(f.policies).toEqual(["prefer-cache"]);
     expect(await launchBrowser(dirId)).toMatchObject({ pid: owned.response.pid });
     owned.unchanged();
   });
 
+  it.each(["chromium", "firefox"] as const)("captures %s proxy authority before await and preserves original startup cache metadata", async engine => {
+    autoProxy(); currentMeta().engine = engine;
+    const result = { ...geo(), observedAt: 1_800_000_000_000, source: "cache" as const, observationId: "synthetic-cached-startup" };
+    vi.spyOn(Date, "now").mockReturnValue(result.observedAt + 9 * 60_000);
+    f.geoDetect.mockImplementation(async () => {
+      expect(f.captureDetectionTarget).toHaveBeenCalledExactlyOnceWith("primary", proxy);
+      await Promise.resolve();
+      return result;
+    });
+    await launchBrowser(dirId);
+    expect(f.captureDetectionTarget.mock.invocationCallOrder[0]).toBeLessThan(f.geoDetect.mock.invocationCallOrder[0]);
+    expect(f.policies).toEqual(["prefer-cache"]);
+    expect(f.commitObservation).toHaveBeenCalledExactlyOnceWith(f.captureDetectionTarget.mock.results[0].value, result);
+    expect(f.persistDetection.mock.calls[0][2]).toMatchObject({ source: "cache", detectedAt: result.observedAt, observationId: result.observationId });
+    expect(f.persistDetection.mock.calls[0][2].detectedAt).not.toBe(Date.now());
+  });
+
+  it.each(["chromium", "firefox"] as const)("does not invent a persistence stamp for unknown %s startup results", async engine => {
+    autoProxy(); currentMeta().engine = engine;
+    f.geoDetect.mockResolvedValue({ ...geo(), observedAt: null, source: "unknown", observationId: null });
+    f.geoObservedAt.mockReturnValue(null);
+    await launchBrowser(dirId);
+    expect(f.persistDetection).not.toHaveBeenCalled(); expect(f.commitObservation).not.toHaveBeenCalled();
+  });
+
   it("uses an unobserved success as identity input without inventing a fresh persistence timestamp", async () => {
     autoProxy();
+    f.geoDetect.mockResolvedValue({ ...geo(), observedAt: null, source: "unknown", observationId: null });
     f.geoObservedAt.mockReturnValue(null);
     await launchBrowser(dirId);
     expect(f.firefoxManaged.mock.calls[0][0]).toMatchObject({ timezone: "America/Toronto", locale: "en-CA" });

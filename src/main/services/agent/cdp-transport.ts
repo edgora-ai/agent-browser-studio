@@ -1,4 +1,7 @@
-import type { BrowserEngine } from "../../types.js";
+import { performance } from "node:perf_hooks";
+import { closeCdpNavigation, navigateCdp, waitForCdpLoad } from "./cdp-navigation.js";
+import { navigationConnectionClosed } from "./cdp-navigation-errors.js";
+export { BrowserLoadTimeoutError, BrowserNavigationError } from "./cdp-navigation-errors.js";
 import {
   assertProtocolDispatchAllowed,
   captureProtocolDispatchGuard,
@@ -9,6 +12,7 @@ export interface CdpClient {
   ws: any;
   port: number;
   targetId: string | null;
+  closed?: boolean;
   msgId: number;
   callbacks: Map<number, { resolve: Function; reject: Function; timer: ReturnType<typeof setTimeout> }>;
   pendingMessages: Promise<any>[];
@@ -31,9 +35,13 @@ async function getWs(): Promise<any> {
   try { return (await import("ws" as any)).default ?? (await import("ws" as any)); } catch { return null; }
 }
 
-const CDP_CONNECT_PREPARATION_TIMEOUT_MS = 15_000;
-
-export async function cdpConnect(port: number, interactionSeed = port): Promise<CdpClient> {
+export async function cdpConnect(port: number, interactionSeed = port, timeoutMs = 15_000): Promise<CdpClient> {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error("Invalid CDP connection timeout");
+  // Elapsed time is measured on the monotonic clock: a wall-clock correction
+  // (NTP step, manual change, sleep/wake) must not turn a reply that arrived
+  // within the real budget into a fabricated timeout. setTimeout stays the
+  // backstop for the ordinary case.
+  const deadline = performance.now() + timeoutMs;
   // Capture once: fetch/socket callbacks can execute under the async context that
   // created a transport rather than the context currently awaiting this call.
   const guard = captureProtocolDispatchGuard();
@@ -52,6 +60,8 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
 
   const closeNewConnection = (error: unknown) => {
     if (newClient) {
+      newClient.closed = true;
+      closeCdpNavigation(newClient);
       for (const callback of newClient.callbacks.values()) {
         clearTimeout(callback.timer);
         callback.reject(error);
@@ -82,6 +92,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
     if (preparationFailed) throw preparationFailure;
     try {
       guard?.(port);
+      if (performance.now() >= deadline) throw new Error(`CDP connection preparation timed out on port ${port}`);
     } catch (error) {
       failPreparation(error);
       throw error;
@@ -90,7 +101,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
 
   const deadlineTimer = setTimeout(() => {
     failPreparation(new Error(`CDP connection preparation timed out on port ${port}`));
-  }, CDP_CONNECT_PREPARATION_TIMEOUT_MS);
+  }, timeoutMs);
   const guardTimer = guard
     ? setInterval(() => {
         try {
@@ -166,7 +177,7 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
           ];
           const setup = runWithProtocolDispatchGuard(guard, () => setupMethods.map((method) => {
             try {
-              return cdpSendRaw(client, method);
+              return cdpSendRaw(client, method, undefined, undefined, Math.max(1, Math.ceil(deadline - performance.now())));
             } catch (error) {
               // Keep every already-created promise observed even if the guard
               // flips midway through constructing the setup batch.
@@ -191,8 +202,9 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
       });
 
       ws.on("message", (data: Buffer) => {
-        const msg = JSON.parse(data.toString());
-        if (msg.id && client.callbacks.has(msg.id)) {
+        let msg: any;
+        try { msg = JSON.parse(data.toString()); } catch { return; }
+        if (msg?.id && client.callbacks.has(msg.id)) {
           const callback = client.callbacks.get(msg.id)!;
           client.callbacks.delete(msg.id);
           clearTimeout(callback.timer);
@@ -201,8 +213,16 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
         }
       });
 
-      ws.on("error", failConnect);
-      ws.on("close", () => failConnect(new Error("CDP websocket closed during connection preparation")));
+      const disconnected = () => {
+        const error = navigationConnectionClosed();
+        client.closed = true;
+        closeCdpNavigation(client);
+        for (const callback of client.callbacks.values()) callback.reject(error);
+        client.callbacks.clear();
+        failConnect(error);
+      };
+      ws.on("error", disconnected);
+      ws.on("close", disconnected);
     });
 
     const client = await Promise.race([connecting, cancellation]);
@@ -219,40 +239,56 @@ export async function cdpConnect(port: number, interactionSeed = port): Promise<
   }
 }
 
-export function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string, timeoutMs = 15_000): Promise<any> {
-  // Explicit per-command deadlines do not change the ordinary 15-second budget.
-  // A command timeout is not proof that page JavaScript stopped executing.
+export function cdpSendRaw(client: CdpClient, method: string, params?: any, sessionId?: string, timeoutMs = 15_000, signal?: AbortSignal): Promise<any> {
+  // The optional signal owns only this callback, never the shared socket.
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) throw new Error("Invalid CDP command timeout");
-  // Check before allocating an id/timer so a rejected dispatch leaves no waiter.
   assertProtocolDispatchAllowed(client.port);
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  if (client.closed || client.ws.readyState !== undefined && client.ws.readyState !== 1) return Promise.reject(navigationConnectionClosed());
+  const guard = captureProtocolDispatchGuard();
+  // Monotonic budget: a wall-clock step during an awaited command must not
+  // fabricate a timeout for a reply that actually arrived in time.
+  const deadline = performance.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const id = ++client.msgId;
-    const timer = setTimeout(() => {
-      if (client.callbacks.has(id)) {
-        client.callbacks.delete(id);
-        reject(new Error(`CDP ${method} timeout`));
-      }
-    }, timeoutMs);
-    client.callbacks.set(id, { resolve, reject, timer });
-    try {
-      // Re-check immediately before the actual wire write. If this throws after
-      // allocation, the catch below removes both callback and timer.
-      assertProtocolDispatchAllowed(client.port);
-      client.ws.send(JSON.stringify({
-        id,
-        method,
-        ...(params ? { params } : {}),
-        ...(sessionId ? { sessionId } : {}),
-      }));
-    } catch (error) {
+    let settled = false;
+    let guardTimer: ReturnType<typeof setInterval> | undefined;
+    const finish = (ok: boolean, value: any) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      if (guardTimer) clearInterval(guardTimer);
       client.callbacks.delete(id);
-      reject(error);
-    }
+      signal?.removeEventListener("abort", aborted);
+      if (ok) {
+        try {
+          guard?.(client.port);
+          if (signal?.aborted) throw signal.reason;
+          if (performance.now() >= deadline) throw new Error(`CDP ${method} timeout`);
+          resolve(value);
+        } catch (error) { reject(error); }
+      } else reject(value);
+    };
+    const aborted = () => finish(false, signal!.reason);
+    const timer = setTimeout(() => finish(false, new Error(`CDP ${method} timeout`)), timeoutMs);
+    client.callbacks.set(id, { resolve: (value: any) => finish(true, value), reject: (error: unknown) => finish(false, error), timer });
+    signal?.addEventListener("abort", aborted, { once: true });
+    if (guard) guardTimer = setInterval(() => {
+      try { guard(client.port); } catch (error) { finish(false, error); }
+    }, 25);
+    try {
+      assertProtocolDispatchAllowed(client.port);
+      if (signal?.aborted) throw signal.reason;
+      client.ws.send(JSON.stringify({ id, method, ...(params ? { params } : {}), ...(sessionId ? { sessionId } : {}) }));
+    } catch (error) { finish(false, error); }
   });
 }
 
 export function cdpDisconnect(client: CdpClient): void {
+  client.closed = true;
+  closeCdpNavigation(client);
+  for (const callback of client.callbacks.values()) callback.reject(navigationConnectionClosed());
+  client.callbacks.clear();
   try {
     client.ws.close();
   } catch (error) {
@@ -260,62 +296,12 @@ export function cdpDisconnect(client: CdpClient): void {
   }
 }
 
-export async function cdpNavigate(client: CdpClient, url: string): Promise<any> {
-  return cdpSendRaw(client, "Page.navigate", { url });
+export async function cdpNavigate(client: CdpClient, url: string, timeoutMs = 15_000): Promise<any> {
+  return navigateCdp(client, url, timeoutMs, cdpSendRaw);
 }
 
 export async function cdpWaitForLoad(client: CdpClient, timeout = 10000): Promise<void> {
-  // Socket events may be emitted under the context that created a cached client.
-  // Bind this wait to its caller's guard instead of consulting ambient ALS later.
-  const guard = captureProtocolDispatchGuard();
-  guard?.(client.port);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let timeoutTimer: ReturnType<typeof setTimeout>;
-    let guardTimer: ReturnType<typeof setInterval> | undefined;
-    const cleanup = () => {
-      clearTimeout(timeoutTimer);
-      if (guardTimer) clearInterval(guardTimer);
-      client.ws.off("message", handler);
-    };
-    const finish = (ok: boolean, error?: unknown) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (ok) resolve();
-      else reject(error);
-    };
-    const checkGuard = () => {
-      try {
-        guard?.(client.port);
-        return true;
-      } catch (error) {
-        finish(false, error);
-        return false;
-      }
-    };
-    const handler = (data: Buffer) => {
-      let msg: any;
-      try {
-        msg = JSON.parse(data.toString());
-      } catch {
-        return;
-      }
-      if (msg.method === "Page.loadEventFired" || msg.method === "Page.lifecycleEvent" && msg.params?.name === "networkAlmostIdle") {
-        if (checkGuard()) finish(true);
-      }
-    };
-    timeoutTimer = setTimeout(() => {
-      if (checkGuard()) finish(true);
-    }, timeout);
-    if (guard) {
-      // This is a local event wait, not an issued browser command. Polling the
-      // per-call assertion makes cancellation prompt without closing a shared
-      // websocket or attaching a global signal to it.
-      guardTimer = setInterval(checkGuard, 25);
-    }
-    client.ws.on("message", handler);
-  });
+  return waitForCdpLoad(client, timeout, cdpSendRaw);
 }
 
 export async function cdpGetContent(client: CdpClient): Promise<string> {

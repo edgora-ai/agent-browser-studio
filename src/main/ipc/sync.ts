@@ -17,24 +17,28 @@ export function registerSyncHandlers(): void {
     }
   });
 
-  ipcMain.handle("sync:push", async (_event, opts?: { force?: boolean; comparisonToken?: SyncComparisonToken }): Promise<SyncResult> => {
-    return syncService.push(undefined, opts?.force === true, opts?.comparisonToken);
+  ipcMain.handle("sync:push", async (_event, opts?: { force?: boolean; comparisonToken?: SyncComparisonToken; history?: boolean }): Promise<SyncResult> => {
+    if (opts?.history !== undefined && typeof opts.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" };
+    return opts?.history === undefined ? syncService.push(undefined, opts?.force === true, opts?.comparisonToken)
+      : syncService.push(undefined, opts?.force === true, opts?.comparisonToken, { history: opts.history });
   });
 
-  ipcMain.handle("sync:pull", async (_event, opts?: { strategy?: string; resolutions?: Record<string, string>; comparisonToken?: SyncComparisonToken }): Promise<SyncResult> => {
+  ipcMain.handle("sync:pull", async (_event, opts?: { strategy?: string; resolutions?: Record<string, string>; comparisonToken?: SyncComparisonToken; history?: boolean }): Promise<SyncResult> => {
+    if (opts?.history !== undefined && typeof opts.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" };
     const strategy = opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local";
     const resolutions: Record<string, "local" | "remote" | "newest"> = {};
     for (const [key, value] of Object.entries(opts?.resolutions || {})) {
       if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
     }
-    return syncService.pull(undefined, { strategy, resolutions, comparisonToken: opts?.comparisonToken });
+    return syncService.pull(undefined, { strategy, resolutions, comparisonToken: opts?.comparisonToken, ...(opts?.history === undefined ? {} : { history: opts.history }) });
   });
 
   ipcMain.handle("sync:status", async () => syncService.getStatus());
+  ipcMain.handle("sync:history-state", async (_event, dirId: string) => syncService.historyState(dirId));
   ipcMain.handle("sync:preview", async () => syncService.preview());
   ipcMain.handle("sync:preview-diff", async () => syncService.previewDiff());
 
-  ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig> & { custodyConsent?: boolean }): Promise<{ success: boolean; error?: string; code?: string }> => {
+  ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean }): Promise<{ success: boolean; error?: string; code?: string }> => {
     const gate = requireSettingsMutation();
     if (!gate.ok) return { success: false, code: "TEAM_ROLE_DENIED", error: gate.error };
     try {

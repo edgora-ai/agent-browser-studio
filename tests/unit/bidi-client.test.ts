@@ -16,6 +16,7 @@ import {
   bidiSetCookie,
   bidiDeleteCookies,
   bidiGetTopContext,
+  bidiNavigate,
   bidiEvaluateInContext,
   normalizeBidiWebSocketUrl,
   registerFirefoxSession,
@@ -98,6 +99,38 @@ describe("bidi-client wire protocol", () => {
     conn.close();
     expect(conn.closed).toBe(true);
   }, 15000);
+
+  it("cancels only one caller's command without closing or poisoning the shared session", async () => {
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`);
+    let lateReply!: () => void;
+    wireOverrides.set("browsingContext.getTree", (ws, id) => { lateReply = () => ws.send(JSON.stringify({ id, result: { contexts: [{ context: "late-context" }] } })); });
+    try {
+      const controller = new AbortController();
+      const pending = conn.send("browsingContext.getTree", {}, 300, controller.signal);
+      const rejected = expect(pending).rejects.toThrow("only the navigation caller cancelled");
+      await vi.waitFor(() => expect(lateReply).toBeTypeOf("function"));
+      controller.abort(new Error("only the navigation caller cancelled"));
+      await rejected;
+      expect(conn.closed).toBe(false);
+      lateReply(); wireOverrides.clear();
+      expect(await bidiGetTopContext(conn, 300)).toBe("ctx-1");
+    } finally { conn.close(); }
+  });
+
+  it("bounds complete-navigation context preparation inside the same deadline", async () => {
+    const sent: string[] = [];
+    const fake = {
+      wsUrl: `ws://127.0.0.1:${port}/session`, closed: false, close: vi.fn(),
+      async send(method: string) {
+        sent.push(method);
+        if (method === "browsingContext.getTree") { await new Promise<void>((resolve) => setTimeout(resolve, 40)); return { contexts: [{ context: "late" }] }; }
+        return { navigation: "late-navigation" };
+      },
+    };
+    await expect(bidiNavigate(fake, "https://navigation.fixture.test/", null, 20, "complete")).rejects.toMatchObject({ code: "BROWSER_LOAD_TIMEOUT" });
+    expect(sent).toEqual(["browsingContext.getTree"]);
+    expect(fake.close).not.toHaveBeenCalled();
+  });
 
   it("never opts the default session into ignoring TLS certificate failures", async () => {
     const before = wireCalls.length;

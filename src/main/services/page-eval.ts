@@ -11,6 +11,10 @@ import { getConfig } from "./config-manager.js";
 import type { BrowserEngine } from "./browser-engine.js";
 import { sanitizeBrowserEngine } from "./browser-engine.js";
 import { getEntry } from "./browser/runtime-table.js";
+import type { BidiConnection } from "./bidi-client.js";
+import type { CdpClient } from "./agent/cdp-transport.js";
+import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
+import { BrowserLoadTimeoutError, BrowserNavigationError } from "./agent/cdp-navigation-errors.js";
 
 export interface PageEvalOpts {
   timeoutMs?: number;
@@ -109,36 +113,76 @@ export async function evaluateInPage(
   }
 }
 
-/** Navigate the profile's top-level page (Firefox: BiDi nothing; CDP: Runtime). */
-export async function navigateInPage(port: number, engine: BrowserEngine, url: string, opts: PageEvalOpts = {}): Promise<void> {
-  assertNotAborted(opts.signal);
-  if (engine === "chromium") {
-    const { cdpConnect, cdpNavigate, cdpDisconnect } = await import("./local-agent.js");
-    const client = await cdpConnect(port);
-    try {
-      assertNotAborted(opts.signal);
-      await cdpNavigate(client, url);
-      assertNotAborted(opts.signal);
-    } finally {
-      cdpDisconnect(client);
-    }
-    return;
-  }
-  const { connectBidi, getRegisteredFirefoxSession, bidiNavigate } = await import("./bidi-client.js");
-  const live = getRegisteredFirefoxSession(port);
-  if (live) {
-    assertNotAborted(opts.signal);
-    await bidiNavigate(live, url, null, opts.timeoutMs ?? 15000);
-    assertNotAborted(opts.signal);
-    return;
-  }
-  const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: opts.timeoutMs ?? 15000 });
+export interface PageNavigationOpts extends PageEvalOpts {
+  /** Default remains navigation acceptance, not full page load. */
+  waitForLoad?: boolean;
+  /** Caller-owned runtime/sender identity assertion, checked through every await. */
+  assertCurrent?: () => void;
+  /** When supplied, never open or borrow a different Firefox session. */
+  expectedFirefoxSession?: BidiConnection | null;
+}
+
+/** One engine router for acceptance-only callers and explicit full-load callers. */
+export async function navigateInPage(port: number, engine: BrowserEngine, url: string, opts: PageNavigationOpts = {}): Promise<void> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid debug port for ${engine}: ${JSON.stringify(port)}`);
+  let borrowed: BidiConnection | undefined;
+  let registeredSession: ((port: number) => BidiConnection | null) | undefined;
+  const budget = new NavigationBudget(opts.timeoutMs ?? 15000, port,
+    () => opts.waitForLoad ? new BrowserLoadTimeoutError() : new BrowserNavigationError("BROWSER_NAVIGATION_TIMEOUT", "In-page navigation timed out"),
+    () => {
+      if (opts.signal?.aborted) throw opts.signal.reason instanceof Error ? opts.signal.reason : new Error("In-page navigation cancelled");
+      opts.assertCurrent?.();
+      if (borrowed && registeredSession?.(port) !== borrowed) throw new BrowserNavigationError("BROWSER_NAVIGATION_SESSION_CHANGED", "Firefox navigation session was replaced or closed");
+    });
+  let ownedClient: CdpClient | undefined;
+  let ownedBidi: BidiConnection | undefined;
+  let disconnect: ((client: CdpClient) => void) | undefined;
+  const cleanup = () => {
+    if (ownedClient && disconnect) { const client = ownedClient; ownedClient = undefined; disconnect(client); }
+    if (ownedBidi) { const conn = ownedBidi; ownedBidi = undefined; conn.close(); }
+  };
   try {
-    assertNotAborted(opts.signal);
-    await bidiNavigate(conn, url, null, opts.timeoutMs ?? 15000);
-    assertNotAborted(opts.signal);
+    if (engine === "chromium") {
+      const cdp = await budget.run(() => import("./agent/cdp-transport.js"));
+      budget.check();
+      disconnect = cdp.cdpDisconnect;
+      const client = await budget.run(() => cdp.cdpConnect(port, port, budget.remaining()).then((connected) => {
+        ownedClient = connected;
+        try { budget.check(); return connected; }
+        catch (error) { cleanup(); throw error; }
+      }));
+      budget.check();
+      await budget.run(() => cdp.cdpNavigate(client, url, budget.remaining()));
+      budget.check();
+      if (opts.waitForLoad) await budget.run(() => cdp.cdpWaitForLoad(client, budget.remaining()));
+      budget.check();
+      return;
+    }
+    const bidi = await budget.run(() => import("./bidi-client.js"));
+    budget.check();
+    registeredSession = bidi.getRegisteredFirefoxSession;
+    const live = registeredSession(port);
+    if (opts.expectedFirefoxSession !== undefined && (!live || live !== opts.expectedFirefoxSession)) {
+      throw new BrowserNavigationError("BROWSER_NAVIGATION_SESSION_CHANGED", "Firefox navigation has no matching managed session");
+    }
+    let conn: BidiConnection;
+    if (live) { borrowed = live; conn = live; }
+    else {
+      conn = await budget.run(() => bidi.connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: budget.remaining(), signal: budget.signal }).then((connected) => {
+        ownedBidi = connected;
+        try { budget.check(); return connected; }
+        catch (error) { cleanup(); throw error; }
+      }));
+    }
+    budget.check();
+    await budget.run(() => bidi.bidiNavigate(conn, url, null, budget.remaining(), opts.waitForLoad ? "complete" : "interactive"));
+    budget.check();
+  } catch (error) {
+    budget.fail(error);
+    throw error;
   } finally {
-    conn.close();
+    budget.close();
+    cleanup();
   }
 }
 

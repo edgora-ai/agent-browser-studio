@@ -102,6 +102,7 @@ function harness(locale?: "en-US" | "zh-CN") {
       push: vi.fn(async (_opts?: any): Promise<any> => result({ operationId: "manual-push", remoteCommit: "committed" })),
       pull: vi.fn(async (_opts?: any): Promise<any> => result()),
       configure: vi.fn(async (_config: any): Promise<any> => result({ operationId: "manual-configure" })),
+      historyState: vi.fn(async (_dirId: string): Promise<any> => ({ scope: "history-and-firefox-bookmarks", status: "unknown", coverage: "legacy", freshness: "not-covered", capturedAt: null })),
     },
     app: { reloadConfig: vi.fn(async () => { throw new Error("renderer must not reload the live config store"); }), setLanguage: vi.fn(async () => {}) },
     team: { status: vi.fn(async () => ({ team: null, local: { role: "owner" } })) },
@@ -141,6 +142,34 @@ function event(phase: "started" | "completed", generation: number, kind = "pull"
   return { phase, generation, kind, operationId, scopes: ["config", "profiles", "accounts", "proxies", "extensions"], ...(phase === "completed" ? { result: { success: true, outcome: "complete", localCommit: "committed", remoteCommit: "none" } } : {}) };
 }
 afterEach(() => vi.useRealTimers());
+
+describe("separate history scope and truthful bilingual coverage", () => {
+  it("requires explicit separate consent before saving the selected automatic scope", async () => {
+    const h = harness(); await h.ab.loadSyncConfig();
+    expect(h.elements["sync-history-consent"].checked).toBe(false); expect(h.elements["sync-include-history"].checked).toBe(false);
+    h.elements["sync-include-history"].checked = true;
+    await h.ab.syncSave(); expect(h.api.sync.configure).not.toHaveBeenCalled();
+    h.elements["sync-history-consent"].checked = true;
+    await h.ab.syncSave(); expect(h.api.sync.configure).toHaveBeenCalledWith(expect.objectContaining({ historyConsent: true, includeHistory: true }));
+  });
+  it("passes only saved history scope, not an unsaved checkbox draft, to push/pull", async () => {
+    const h = harness(); h.status().includeHistory = true; h.status().historyConsentAt = 1;
+    await h.ab.loadSyncConfig(); h.elements["sync-include-history"].checked = false;
+    await h.ab.syncPush(); expect(h.api.sync.push).toHaveBeenCalledWith(expect.objectContaining({ history: true }));
+    await h.ab.loadSyncDiff(); await h.ab.syncPull(); expect(h.api.sync.pull).toHaveBeenCalledWith(expect.objectContaining({ history: true }));
+  });
+  it.each(["zh-CN", "en-US"] as const)("renders %s distinct complete/empty/absent/legacy/preserved/failed/unselected coverage without claiming full restore", async (locale) => {
+    const h = harness(locale); h.status().includeHistory = true; h.status().historyConsentAt = 1;
+    const states = ["complete", "empty", "absent", "legacy", "preserved", "failed", "unselected"];
+    h.status().history = Object.fromEntries(states.map((coverage) => ["synthetic-" + coverage, { coverage, status: "unknown", freshness: coverage === "preserved" ? "preserved" : coverage === "complete" || coverage === "empty" || coverage === "absent" ? "captured" : "not-covered", capturedAt: null }]));
+    await h.ab.loadSyncConfig();
+    const panel = h.elements["sync-history-coverage"].textContent;
+    if (locale === "zh-CN") { expect(panel).toContain("完整的空数据库快照"); expect(panel).toContain("源不存在"); expect(panel).toContain("保留之前"); expect(panel).toContain("未覆盖历史"); expect(panel).not.toContain("Complete database snapshot"); expect(panel).toContain("不证明完整"); }
+    else { expect(panel).toContain("Complete empty database snapshot"); expect(panel).toContain("Source confirmed absent"); expect(panel).toContain("Previous snapshot preserved"); expect(panel).toContain("Legacy backup"); expect(panel).toContain("not full browser restore"); }
+    h.api.sync.historyState.mockResolvedValue({ scope: "history-and-firefox-bookmarks", coverage: "complete", status: "dirty", freshness: "captured", capturedAt: null });
+    await h.ab.syncRecheckHistory(); expect(h.elements["sync-history-coverage"].textContent).toContain(locale === "zh-CN" ? "历史有本地改动" : "History has local changes");
+  });
+});
 
 describe("sync mutation events, cache invalidation and request epochs", () => {
   it.each(["push", "pull", "configure"])("refreshes %s completed outside the renderer without reloadConfig or another write", async (kind) => {

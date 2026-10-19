@@ -90,7 +90,7 @@ export function fixture(reuse?: string) {
       const rel = path.relative(SOURCE, resolved).replace(/\\/g, "/");
       if (["services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts", "services/secrets.ts", "services/local-agent.ts", "services/sync-service.ts", "services/sync/limits.ts", "branding.ts", "services/browser-engine.ts",
         "services/profile-portability.ts", "services/sync/profile-state.ts", "services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/event-bus.ts", "services/team.ts",
-        "services/sync/sqlite-local-storage.ts", "services/zip-writer.ts",
+        "services/sync/sqlite-local-storage.ts", "services/zip-writer.ts", "services/proxy-observation.ts",
       ].includes(rel)) return load(rel);
       if (rel === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("invalid synthetic dirId"); } };
       if (rel === "services/main-i18n.ts") return { tMain: (key: string) => key };

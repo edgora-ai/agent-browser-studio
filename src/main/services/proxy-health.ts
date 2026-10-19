@@ -1,9 +1,11 @@
-import type { ProxyHealthEntry, ProxyHealthHistoryPoint, ProxyRiskLevel } from "../types.js";
-import { getConfig, getProxyHealthEntry, saveConfig, setProxyHealth } from "./config-manager.js";
+import type { MgmtConfig, ProxyHealthEntry, ProxyHealthHistoryPoint, ProxyRiskLevel, ProxyObservationMetadata } from "../types.js";
+import { getConfig, getProxyHealthEntry } from "./config-manager.js";
+import { transact, ProxyDetectionCommitError } from "./config/store.js";
+import { proxyObservationTime, PROXY_OBSERVATION_TTL_MS } from "./proxy-observation.js";
 import { tMain } from "./main-i18n.js";
 
 
-export interface ProxyHealthObservation {
+export interface ProxyHealthObservation extends Partial<ProxyObservationMetadata> {
   success: boolean;
   exitIp?: string | null;
   countryCode?: string | null;
@@ -24,6 +26,8 @@ export interface ProxyHealthSummary {
   watch: number;
   poor: number;
   inCooldown: number;
+  stale: number;
+  unknown: number;
   lastCheckedAt: number | null;
 }
 
@@ -33,8 +37,7 @@ const COOLDOWN_AFTER_FAILURES = 3;
 const COOLDOWN_MS = 30 * 60 * 1000;
 const STALE_DAILY_DECAY = 24 * 60 * 60 * 1000;
 
-function freshEntry(name: string): ProxyHealthEntry {
-  const now = Date.now();
+function freshEntry(name: string, now: number): ProxyHealthEntry {
   return {
     proxyName: name,
     firstSeenAt: now,
@@ -65,11 +68,14 @@ function freshEntry(name: string): ProxyHealthEntry {
  * consecutive failures / cooldown, exit-IP and geo drift, and recomputes the
  * score, risk, bindings and suggestion.
  */
-export function recordProxyDetection(name: string, obs: ProxyHealthObservation): ProxyHealthEntry {
-  const existing = getProxyHealthEntry(name) || freshEntry(name);
-  const now = Date.now();
+export function reduceProxyDetection(name: string, previous: ProxyHealthEntry | null, obs: ProxyHealthObservation,
+  observedAt: number, bindings: string[]): ProxyHealthEntry {
+  const now = observedAt;
+  const existing = previous ? structuredClone(previous) : freshEntry(name, now);
   const point: ProxyHealthHistoryPoint = {
     at: now,
+    source: obs.source === "network" || obs.source === "cache" ? obs.source : "unknown",
+    observationId: obs.observationId || null,
     success: Boolean(obs.success),
     exitIp: obs.exitIp || null,
     countryCode: obs.countryCode || null,
@@ -120,13 +126,25 @@ export function recordProxyDetection(name: string, obs: ProxyHealthObservation):
   }
 
   entry.avgLatencyMs = computeAvgLatency(entry.history);
-  entry.score = computeScore(entry);
+  entry.score = computeScore(entry, now);
   entry.risk = riskFromScore(entry.score);
-  entry.bindings = computeBindings(name);
-  entry.suggestion = suggestionFor(entry);
-
-  setProxyHealth(name, entry);
+  entry.bindings = [...bindings];
+  entry.suggestion = suggestionFor(entry, now);
   return entry;
+}
+
+/** Main-only explicit observation writer. Transport callers instead use the
+ * authenticated target+stamp transaction, which also writes detection. */
+export function recordProxyDetection(name: string, obs: ProxyHealthObservation): ProxyHealthEntry {
+  const at = proxyObservationTime(obs.observedAt);
+  if (at === null || obs.source !== "network") throw new ProxyDetectionCommitError("PROXY_DETECTION_UNOBSERVED");
+  getConfig();
+  return transact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+    const entry = reduceProxyDetection(name, draft.proxyHealth?.[name] || null, obs, at, computeBindings(name, draft));
+    draft.proxyHealth = { ...draft.proxyHealth, [name]: entry };
+    return structuredClone(entry);
+  });
 }
 
 /**
@@ -136,14 +154,13 @@ export function recordProxyDetection(name: string, obs: ProxyHealthObservation):
 export function recordProxyRotation(fromName: string, toName: string): ProxyHealthEntry | null {
   const existing = getProxyHealthEntry(fromName);
   if (!existing) return null;
-  const entry: ProxyHealthEntry = {
-    ...existing,
-    rotations: (existing.rotations || 0) + 1,
-    lastRotatedAt: Date.now(),
-    lastRotatedTo: toName,
-  };
-  setProxyHealth(fromName, entry);
-  return entry;
+  return transact((draft: MgmtConfig) => {
+    const current = draft.proxyHealth?.[fromName];
+    if (!current) return null;
+    const entry: ProxyHealthEntry = { ...current, rotations: (current.rotations || 0) + 1, lastRotatedAt: Date.now(), lastRotatedTo: toName };
+    draft.proxyHealth![fromName] = entry;
+    return structuredClone(entry);
+  });
 }
 
 export function computeAvgLatency(history: ProxyHealthHistoryPoint[]): number | null {
@@ -158,7 +175,7 @@ export function computeAvgLatency(history: ProxyHealthHistoryPoint[]): number | 
  * 0-100 health score:
  *   success rate 45 + latency 25 + stability/drift 20 + freshness 10
  */
-export function computeScore(entry: Pick<ProxyHealthEntry, "checks" | "successes" | "avgLatencyMs" | "ipDriftCount" | "geoDriftCount" | "lastCheckedAt">): number {
+export function computeScore(entry: Pick<ProxyHealthEntry, "checks" | "successes" | "avgLatencyMs" | "ipDriftCount" | "geoDriftCount" | "lastCheckedAt">, now = Date.now()): number {
   const checks = entry.checks || 0;
   const successRate = checks > 0 ? (entry.successes || 0) / checks : 0;
   const successScore = successRate * 45;
@@ -170,7 +187,7 @@ export function computeScore(entry: Pick<ProxyHealthEntry, "checks" | "successes
 
   const driftPenalty = Math.max(0, 20 - (entry.ipDriftCount || 0) * 10 - (entry.geoDriftCount || 0) * 10);
 
-  const ageMs = entry.lastCheckedAt ? Date.now() - entry.lastCheckedAt : Number.MAX_SAFE_INTEGER;
+  const ageMs = entry.lastCheckedAt !== null ? Math.max(0, now - entry.lastCheckedAt) : Number.MAX_SAFE_INTEGER;
   const freshness = Math.max(0, 10 - Math.floor(ageMs / STALE_DAILY_DECAY));
 
   return Math.max(0, Math.min(100, Math.round(successScore + latencyScore + driftPenalty + freshness)));
@@ -187,14 +204,16 @@ export function riskFromScore(score: number): ProxyRiskLevel {
 // from tMain so it follows the UI language; the renderer pushes the user's
 // choice over IPC ("app:set-language"), so this stays in sync without the
 // main process knowing about the renderer's dictionary.
-export function suggestionFor(entry: ProxyHealthEntry): string | null {
-  const now = Date.now();
+export function suggestionFor(entry: ProxyHealthEntry, now = Date.now()): string | null {
   if (entry.cooldownUntil && now < entry.cooldownUntil) {
     return tMain("proxy.sug.cooldown", "Repeated failures — in cooldown, check credentials or switch nodes");
   }
   if (entry.consecutiveFailures >= COOLDOWN_AFTER_FAILURES) {
     return tMain("proxy.sug.consecutive", "Failing repeatedly — switch nodes or check the proxy configuration");
   }
+  // Freshness is localized by the renderer's explicit source/age badge. Never
+  // retain the historical "Healthy" suggestion for a stale/unknown sample.
+  if (entry.freshness === "stale" || entry.freshness === "unknown") return null;
   if ((entry.geoDriftCount || 0) >= 2) {
     return tMain("proxy.sug.geo-drift", "Exit country/region keeps drifting — pin this proxy to a single node");
   }
@@ -218,8 +237,7 @@ export function suggestionFor(entry: ProxyHealthEntry): string | null {
 }
 
 /** Which profiles route through the given proxy (named binding or default). */
-export function computeBindings(name: string): string[] {
-  const cfg = getConfig();
+export function computeBindings(name: string, cfg: MgmtConfig = getConfig()): string[] {
   const bindings: string[] = [];
   for (const [dirId, meta] of Object.entries(cfg.browserProfiles || {})) {
     const mode = meta.proxyMode;
@@ -239,56 +257,37 @@ export function listProxyHealth(): ProxyHealthEntry[] {
   for (const name of Object.keys(cfg.proxies || {})) {
     const entry = getProxyHealthEntry(name);
     if (!entry) continue;
-    // R146: `suggestion` is *derived* copy, not a measurement, but it is
-    // persisted inside the health entry — so the string written when the check
-    // ran would keep its old language after the user switches locale. Recompute
-    // on read so the card always matches the active language. Nothing has to be
-    // written back: the stored copy is refreshed on the next detection.
-    const localized = suggestionFor(entry);
-    if (localized !== entry.suggestion) entry.suggestion = localized;
+    // Current UI is a detached projection, never a new sample. Ten minutes is
+    // the detector's reuse TTL; an old perfect score cannot remain green merely
+    // because the historical formula loses at most ten freshness points.
+    const now = Date.now(), latest = entry.history.at(-1);
+    const at = proxyObservationTime(entry.lastCheckedAt);
+    entry.observationAgeMs = at === null ? null : Math.max(0, now - at);
+    entry.freshness = at === null || latest?.source !== "network" ? "unknown"
+      : entry.observationAgeMs! > PROXY_OBSERVATION_TTL_MS ? "stale" : "fresh";
+    entry.score = Math.min(computeScore(entry, now), entry.freshness === "fresh" ? 100 : entry.freshness === "stale" ? 79 : 54);
+    entry.risk = riskFromScore(entry.score);
+    entry.bindings = computeBindings(name, cfg);
+    entry.suggestion = suggestionFor(entry, now);
     entries.push(entry);
   }
-  return entries.sort((a, b) => b.lastCheckedAt - a.lastCheckedAt);
+  return entries.sort((a, b) => (b.lastCheckedAt ?? -1) - (a.lastCheckedAt ?? -1));
 }
 
 /** Clear one proxy's health history, or all when no name is given. Returns count cleared. */
 export function clearProxyHealth(name?: string): number {
-  let result = 0;
-  let needsFallback = false;
-  try {
-    const { transact } = require("./config/store.js");
-    transact((draft: any) => {
-      if (name) {
-        if (!Object.hasOwn(draft.proxies || {}, name)) throw new Error(`Proxy not found: ${name}`);
-        if (draft.proxyHealth && Object.hasOwn(draft.proxyHealth, name)) {
-          delete draft.proxyHealth[name];
-          result = 1;
-        } else {
-          result = 0;
-        }
-        return;
-      }
-      result = Object.keys(draft.proxyHealth || {}).length;
-      draft.proxyHealth = {};
-    });
-    if (!needsFallback) return result;
-  } catch (e: any) {
-    if (e && e.message && String(e.message).includes("Proxy not found")) throw e;
-  }
-  const cfg = getConfig();
-  if (name) {
-    if (!Object.hasOwn(cfg.proxies || {}, name)) throw new Error(`Proxy not found: ${name}`);
-    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name)) {
-      delete cfg.proxyHealth[name];
-      saveConfig(cfg);
-      return 1;
+  getConfig();
+  return transact((draft: MgmtConfig) => {
+    if (name !== undefined) {
+      if (!Object.hasOwn(draft.proxies || {}, name)) throw new Error(`Proxy not found: ${name}`);
+      const count = draft.proxyHealth && Object.hasOwn(draft.proxyHealth, name) ? 1 : 0;
+      if (draft.proxyHealth) delete draft.proxyHealth[name];
+      return count;
     }
-    return 0;
-  }
-  const count = Object.keys(cfg.proxyHealth || {}).length;
-  cfg.proxyHealth = {};
-  saveConfig(cfg);
-  return count;
+    const count = Object.keys(draft.proxyHealth || {}).length;
+    draft.proxyHealth = {};
+    return count;
+  }, undefined, { invalidateProxyTargets: name === undefined ? "all" : [name] });
 }
 
 /** Aggregate health counts without exposing proxy configuration. */
@@ -300,13 +299,17 @@ export function proxyHealthSummary(): ProxyHealthSummary {
     watch: 0,
     poor: 0,
     inCooldown: 0,
+    stale: 0,
+    unknown: 0,
     lastCheckedAt: null,
   };
   const now = Date.now();
   for (const e of entries) {
     summary[e.risk] += 1;
+    if (e.freshness === "stale") summary.stale++;
+    if (e.freshness === "unknown") summary.unknown++;
     if (e.cooldownUntil && e.cooldownUntil > now) summary.inCooldown += 1;
-    if (!summary.lastCheckedAt || e.lastCheckedAt > summary.lastCheckedAt) summary.lastCheckedAt = e.lastCheckedAt;
+    if (e.lastCheckedAt !== null && (summary.lastCheckedAt === null || e.lastCheckedAt > summary.lastCheckedAt)) summary.lastCheckedAt = e.lastCheckedAt;
   }
   return summary;
 }

@@ -133,6 +133,25 @@ class AgentBrowserClient:
     def openapi(self) -> dict[str, Any]:
         return self.get("/openapi.json", auth=False)
 
+    # ── sync: history is separately consented and never enabled implicitly ──
+    def sync_status(self) -> dict[str, Any]:
+        return self.get("/api/sync/status")
+
+    def configure_sync(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """historyConsent=True explicitly includes Firefox Places bookmarks;
+        includeHistory=True selects that consented scope for automatic sync."""
+        return self.post("/api/sync/config", settings)
+
+    def sync_push(self, options: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return self.post("/api/sync/push", {} if options is None else options)
+
+    def sync_pull(self, options: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return self.post("/api/sync/pull", {} if options is None else options)
+
+    def sync_history_state(self, dir_id: str) -> dict[str, Any]:
+        from urllib.parse import quote
+        return self.get("/api/sync/history/" + quote(dir_id, safe=""))
+
     # ── profiles ───────────────────────────────────────────────────────────
     def list_profiles(self) -> list[dict[str, Any]]:
         return self.get("/api/profiles").get("profiles", [])

@@ -27,16 +27,16 @@ export class SyncOperationResult {
 
   complete(message: string, transferredBytes?: number): SyncResult {
     const incomplete = this.items.some((item) => item.required !== false &&
-      (item.state === "failed" || item.state === "unknown" || item.state === "skipped"));
+      (item.state === "failed" || item.state === "unknown" || item.state === "skipped" || item.scope === "history" && item.state === "preserved"));
     return this.result({ success: !incomplete, message, transferredBytes, outcome: incomplete ? "partial" : "complete" });
   }
 
   failure(error: unknown, cancelled = false): SyncResult {
     const e = error as any;
     const code = typeof e?.code === "string" ? e.code : cancelled ? "SYNC_CANCELLED" : "SYNC_FAILED";
-    if (code === "EXTENSION_REPOSITORY_RECOVERY_REQUIRED" || code === "LOCAL_STORAGE_RECOVERY_REQUIRED") {
+    if (code === "EXTENSION_REPOSITORY_RECOVERY_REQUIRED" || code === "LOCAL_STORAGE_RECOVERY_REQUIRED" || code === "HISTORY_RECOVERY_REQUIRED") {
       this.recovery.push({
-        resource: code === "LOCAL_STORAGE_RECOVERY_REQUIRED" ? "localStorage" : "extensions",
+        resource: code === "HISTORY_RECOVERY_REQUIRED" ? "history" : code === "LOCAL_STORAGE_RECOVERY_REQUIRED" ? "localStorage" : "extensions",
         id: e.dirId || e.extensionId || "",
         receiptPath: e.recoveryReceiptPath,
         paths: Array.isArray(e.recoveryPaths) ? e.recoveryPaths : [],
@@ -59,7 +59,7 @@ export class SyncOperationResult {
       operationId: this.operationId,
       localCommit: this.localCommit,
       remoteCommit: this.remoteCommit,
-      items: this.items.map((item) => ({ ...item })),
+      items: structuredClone(this.items),
       warnings: [...this.warnings],
       recovery: this.recovery.map((entry) => ({ ...entry, paths: [...entry.paths] })),
     };

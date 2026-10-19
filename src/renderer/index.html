@@ -173,7 +173,8 @@
  <p><span data-i18n="sync.status.label">Sync is</span> <strong id="sync-enabled-text" data-i18n="sync.status.disabled">disabled</strong></p>
  <p><span data-i18n="sync.endpoint">Endpoint</span>: <span id="sync-endpoint">--</span></p>
  <p><span data-i18n="sync.bucket">Bucket</span>: <span id="sync-bucket">--</span></p>
- <p class="hint-line" data-i18n="sync.synced-scope">Supported sync data: configuration and Preferences; Cookies and LocalStorage depend on capture. Check the operation result for commits and skipped items.</p>
+ <p class="hint-line" data-i18n="sync.synced-scope">Supported sync data: the configuration badge covers portable settings and Preferences only. History/Firefox bookmarks require separate consent and scope; Cookies and LocalStorage depend on capture. Check the operation result for per-item coverage/freshness and skips; this is not a full-restore claim.</p>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="syncRecheckHistory" data-i18n="sync.history.recheck">Recheck stopped profiles’ history</button>
  </div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncPush" data-i18n="sync.push" data-icon="upload">Push</button>
@@ -222,6 +223,12 @@
   <span data-i18n="sync.custody">I agree to upload portable settings and Preferences, plus Cookies, LocalStorage and extension packages available for this capture, to my bucket. This may include login-session Cookies. Consent remains active while sync is enabled; to remove remote data, disable sync and delete the remote objects.</span>
  </label>
  <div id="sync-custody-state" class="status-note"></div>
+ <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
+  <input type="checkbox" id="sync-history-consent" style="margin-top:2px;">
+  <span data-i18n="sync.history.consent">I separately consent to syncing browsing History and Firefox Places, which may include bookmarks, URLs and titles, to my bucket. Disabling this scope does not delete existing remote objects. This is custodial bucket storage, not an additionally end-to-end-encrypted backup.</span>
+ </label>
+ <label><input type="checkbox" id="sync-include-history"><span data-i18n="sync.history.include">Include consented history/bookmarks in future push/pull and automatic sync (save first)</span></label>
+ <p class="status-note" data-i18n="sync.history.restore-note">Only stopped, stable SQLite groups are captured/restored. Legacy backups cannot recover history they never uploaded; absent, empty, preserved and failed snapshots are distinct. A restored file group is not browser-UI or live identity verification.</p>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
  </div>
  </div>
@@ -679,6 +686,32 @@
  </div>
 </dialog>
 
+<!-- ── Explicit selected-page network observation (no launch or navigation) ── -->
+<dialog id="dlg-network-observation" aria-labelledby="dlg-network-observation-title" style="max-width:760px;width:94%;">
+ <div style="min-width:0;">
+  <h3 id="dlg-network-observation-title" data-icon="activity"><span data-i18n="network.title">Observe this page’s network for 10 seconds</span></h3>
+  <p class="hint-line" data-i18n="network.privacy">Only origins and allowlisted request facts appear here. Current page details stay in this dialog’s memory and are not exported.</p>
+  <label for="network-page-select" data-i18n="network.pages.label">Already-running owned Chromium page</label>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;min-width:0;">
+   <select id="network-page-select" data-role="change" data-change-cmd="networkPageChanged" style="flex:1 1 260px;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;" disabled>
+    <option value="" data-i18n="network.pages.placeholder">Choose a page by origin and ordinal</option>
+   </select>
+   <button id="network-page-refresh" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshNetworkPages" data-icon="refresh"><span data-i18n="network.pages.refresh">Refresh pages</span></button>
+  </div>
+  <div id="network-page-origin" style="min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;font-size:12px;font-family:var(--mono);margin-top:6px;"></div>
+  <div id="network-observation-status" role="status" aria-live="polite" data-network-phase="idle" style="font-size:12px;color:var(--text-muted);margin:10px 0;"><span data-i18n="network.choose">Choose a page, then explicitly start the next observation window.</span></div>
+  <div id="network-observation-body" style="max-height:46vh;overflow:auto;min-width:0;overflow-wrap:anywhere;"></div>
+  <p class="hint-line" data-i18n="network.limits">Workers, out-of-process frames, console and storage are not observed. Bridge and upstream fault attribution remain unknown.</p>
+  <p class="hint-line" data-i18n="network.close-boundary">Closing requests cancellation of this observation and discards page details. Its slot stays occupied until the original work and cleanup settle; the browser is not stopped.</p>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="network-observation-start" type="button" class="btn btn-primary" data-role="cmd" data-cmd="startNetworkObservation" data-icon="play" disabled><span data-i18n="network.start">Start 10-second observation</span></button>
+   <button id="network-observation-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelNetworkObservation" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
+   <button id="network-observation-clear" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="networkObservationClear" data-icon="trash"><span data-i18n="network.clear">Clear network summaries</span></button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
+  </div>
+ </div>
+</dialog>
+
 <!-- ── Profile Logs Dialog (RoxyBrowser 4.0.3 Trackable Activity / 4.0.2 rolling logs) ── -->
 <dialog id="dlg-profile-logs" aria-labelledby="dlg-profile-logs-title" style="max-width:760px;width:96%;">
  <div>
@@ -866,10 +899,11 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="new-agent-browser-device-memory">Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="new-agent-browser-screen-width">Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="new-agent-browser-screen-height">Screen Height</label><input id="new-agent-browser-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage" for="new-agent-browser-storage-quota">Storage Quota (MB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="new-agent-browser-storage-quota">Reported quota (MiB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" aria-describedby="new-profile-storage-quota-help" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="new-agent-browser-taskbar-height">Taskbar Height</label><input id="new-agent-browser-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
  <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="new-agent-browser-fonts-dir">Fonts Directory</label><input id="new-agent-browser-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
+ <p id="new-profile-storage-quota-help" class="field-note-tight" data-i18n="profile.storage-quota.help">Managed Chromium changes the quota reported to sites, not writable capacity or the LocalStorage limit. MiB = 1,048,576 bytes. Auto reports 120,000 MiB, not free disk space. Increasing this value does not resolve LocalStorage QuotaExceededError.</p>
  </details>
  </div>
  </details>
@@ -1445,10 +1479,11 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="agent-browser-meta-device-memory">Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="agent-browser-meta-screen-width">Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="agent-browser-meta-screen-height">Screen Height</label><input id="agent-browser-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage" for="agent-browser-meta-storage-quota">Storage Quota (MB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="agent-browser-meta-storage-quota">Reported quota (MiB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" aria-describedby="edit-profile-storage-quota-help" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="agent-browser-meta-taskbar-height">Taskbar Height</label><input id="agent-browser-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
  <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="agent-browser-meta-fonts-dir">Fonts Directory</label><input id="agent-browser-meta-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
+ <p id="edit-profile-storage-quota-help" class="field-note-tight" data-i18n="profile.storage-quota.help">Managed Chromium changes the quota reported to sites, not writable capacity or the LocalStorage limit. MiB = 1,048,576 bytes. Auto reports 120,000 MiB, not free disk space. Increasing this value does not resolve LocalStorage QuotaExceededError.</p>
  </details>
  </div>
  <div class="btn-row">

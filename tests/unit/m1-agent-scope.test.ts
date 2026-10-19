@@ -4,6 +4,7 @@ import * as net from "node:net";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { getPath: () => process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}` },
+  app: { getPath: () => process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`) },
   BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
@@ -22,7 +23,7 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../src/main/services/config-manager.js", () => ({
-  getAppDataDir: () => process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}`,
+  getAppDataDir: () => process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`),
   getConfig: () => ({ accounts: mocks.accounts, agentFs: { mode: "sandbox", allowlist: [] }, automation: [], browserProfiles: {} }),
   saveConfig: vi.fn(),
   getProfileMeta: (dirId: string) => {
@@ -247,8 +248,10 @@ async function startMockCdp(options: {
         mock.beforeRespond?.(call);
         if (ws.readyState !== ws.OPEN) return;
         const result = message.method === "Runtime.evaluate"
-          ? { result: { value: message.params?.expression === "document.title" ? "Mock title" : 1 } }
-          : {};
+          ? { result: { value: message.params?.expression === "document.title" ? "Mock title" : message.params?.expression === "document.readyState" ? "loading" : 1 } }
+          : message.method === "Page.getFrameTree" ? { frameTree: { frame: { id: "fake-root", loaderId: "fake-loader" } } }
+            : message.method === "Page.createIsolatedWorld" ? { executionContextId: 1 }
+              : {};
         ws.send(JSON.stringify({ id: message.id, result }));
       };
       if (CONNECT_METHODS.has(message.method)) {
@@ -289,7 +292,9 @@ function fakeCdpClient(port: number): { client: CdpClient; sent: WireCall[] } {
         if (!callback) return;
         client.callbacks.delete(message.id);
         clearTimeout(callback.timer);
-        callback.resolve({});
+        callback.resolve(message.method === "Page.getFrameTree" ? { frameTree: { frame: { id: "fake-root", loaderId: "fake-loader" } } }
+          : message.method === "Page.createIsolatedWorld" ? { executionContextId: 1 }
+            : message.method === "Runtime.evaluate" && message.params?.expression === "document.readyState" ? { result: { value: "loading" } } : {});
       });
     },
   });
@@ -321,7 +326,7 @@ afterEach(async () => {
 
 describe("M1 local-agent message metadata wrapper", () => {
   it("writes metadata, verifies the file, and returns the committed readback", () => {
-    const dataDir = process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}`;
+    const dataDir = process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`);
     const historyPath = path.join(dataDir, "agent-conversations.json");
     fs.mkdirSync(dataDir, { recursive: true });
     fs.rmSync(historyPath, { force: true });
@@ -682,7 +687,7 @@ describe("M1 CDP dispatch boundary", () => {
   });
 
   it("keeps each load-event wait bound to the guard that started it", async () => {
-    const loadEvent = Buffer.from(JSON.stringify({ method: "Page.loadEventFired", params: {} }));
+    const loadEvent = Buffer.from(JSON.stringify({ method: "Page.lifecycleEvent", params: { name: "load", frameId: "fake-root", loaderId: "fake-loader" } }));
 
     const { client: healthyB } = fakeCdpClient(42010);
     const waitForHealthyB = runWithProtocolDispatchGuard(() => {}, () => cdpWaitForLoad(healthyB, 1000));

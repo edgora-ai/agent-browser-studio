@@ -139,6 +139,8 @@ export function saveLlmConfig(config: LlmConfig): void {
 import type { CdpClient } from "./agent/cdp-transport.js";
 import { cdpConnect as _cdpConnect, cdpSendRaw as _cdpSendRaw, cdpDisconnect as _cdpDisconnect, cdpNavigate as _cdpNavigate, cdpWaitForLoad as _cdpWaitForLoad, cdpGetContent as _cdpGetContent, cdpGetTitle as _cdpGetTitle, cdpGetUrl as _cdpGetUrl, cdpSnapshot as _cdpSnapshot, cdpTextSnapshot as _cdpTextSnapshot } from "./agent/cdp-transport.js";
 import { assertProtocolDispatchAllowed, runWithProtocolDispatchGuard, waitForProtocolDelay } from "./agent/dispatch-guard.js";
+import { BrowserLoadTimeoutError, BrowserNavigationError } from "./agent/cdp-navigation-errors.js";
+import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
 import { classifyAgentToolOutcome } from "./agent/tool-outcome.js";
 import {
   assertCapturedChatBrowserScope,
@@ -2586,8 +2588,17 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
     // ── Browser tools (engine-aware: CDP for Chromium, BiDi for Firefox) ──
     case "browser_navigate": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
-      const url = await assertSafeNavigationUrl(args.url);
-      return runBrowserTool(port, context, (c) => cdpNavigate(c, url), (conn) => firefoxNavigate(conn, url));
+      const budget = new NavigationBudget(15000, port,
+        () => new BrowserNavigationError("BROWSER_NAVIGATION_TIMEOUT", "Browser navigation acceptance timed out"),
+        () => assertNotAborted(context.signal));
+      try {
+        const url = await budget.run(() => assertSafeNavigationUrl(args.url));
+        return await budget.run(() => runBrowserTool(port, { ...context, signal: budget.signal },
+          (c) => cdpNavigate(c, url, budget.remaining()), (conn) => firefoxNavigate(conn, url)));
+      } catch (error) {
+        budget.fail(error);
+        throw error;
+      } finally { budget.close(); }
     }
     case "browser_snapshot": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
@@ -2651,10 +2662,17 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
     case "browser_wait_for_load": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const timeout = normalizeToolNumber(args.timeout, 10000, 100, 30000, "load timeout");
-      return runBrowserTool(port, context, async (c) => {
-        await cdpWaitForLoad(c, timeout);
-        return { loaded: true };
-      }, (conn) => firefoxWaitForLoad(conn, timeout));
+      const budget = new NavigationBudget(timeout, port, () => new BrowserLoadTimeoutError(), () => assertNotAborted(context.signal));
+      try {
+        return await budget.run(() => runBrowserTool(port, { ...context, signal: budget.signal }, async (c) => {
+          await cdpWaitForLoad(c, budget.remaining());
+          return { loaded: true };
+        }, (conn) => firefoxWaitForLoad(conn, budget.remaining())));
+      } catch (error) {
+        budget.fail(error);
+        if (error instanceof BrowserLoadTimeoutError) return { loaded: false };
+        throw error;
+      } finally { budget.close(); }
     }
     case "browser_get_text": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");

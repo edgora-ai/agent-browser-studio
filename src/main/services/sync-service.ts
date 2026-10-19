@@ -20,11 +20,15 @@ import { tMain } from "./main-i18n.js";
 import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken } from "../types.js";
 import { SyncOperationResult } from "./sync/operation-result.js";
 import { beginSyncOperation, getSyncOperationState } from "./sync/operation-state.js";
-import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot } from "./sync/profile-state.js";
+import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot, profileHistoryCoverage, readProfileHistorySyncState } from "./sync/profile-state.js";
 import type { ProfilePreferencesSnapshot, ExtensionRepositoryEntry } from "../types.js";
-import { PORTABLE_PROFILE_FIELDS } from "./profile-portability.js";
+import { PORTABLE_PROFILE_FIELDS, parseHistoryCoverage } from "./profile-portability.js";
+import type { BrowserEngine, HistoryCoverage } from "../types.js";
+import { captureHistory, historyBaseline, historyPath, historyBasename, historySidecars, makeHistoryArtifact, prepareHistoryArtifact, MAX_HISTORY_OBJECT_BYTES, MAX_SYNC_HISTORY_BYTES, type PreparedHistory } from "./sync/sqlite-history.js";
+import { sqliteGroupWitnesses } from "./sync/sqlite-local-storage.js";
 import { captureSqliteLocalStorage, hasSqliteLocalStorage, validateSqliteLocalStorageGroup, validateStagedSqliteLocalStorage, writeOwnedSqliteFile, SQLITE_LOCAL_STORAGE_FILES, SQLITE_LOCAL_STORAGE_SIDECARS } from "./sync/sqlite-local-storage.js";
 import { syncArchiveDirectory } from "./zip-writer.js";
+import { compareProfileIdentity } from "./profile-identity.js";
 
 export type { SyncResult } from "../types.js";
 
@@ -114,6 +118,8 @@ export const syncService = {
       const payload = fetched.payload;
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
       const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+      validateArtifactProfileIds(payload, new Set(Object.keys(remoteConfig.browserProfiles || {})));
+      parseRemoteHistory(payload, remoteConfig.browserProfiles || {});
       const localSnapshot = sanitizeConfigForSync(cloneConfig(getConfig())) as any;
       const body = buildSyncDiff(localSnapshot, remoteConfig as any, payload, getConfig().deviceId);
       const coverage = compareProfilePreferences(body.profiles, localSnapshot.browserProfiles || {}, remoteConfig.browserProfiles || {}, payload);
@@ -129,7 +135,7 @@ export const syncService = {
     }
   },
   // ── Push ──
-  async push(signal?: AbortSignal, force = false, comparisonToken?: SyncComparisonToken): Promise<SyncResult> {
+  async push(signal?: AbortSignal, force = false, comparisonToken?: SyncComparisonToken, opts?: SyncHistoryOptions): Promise<SyncResult> {
     assertSyncNotAborted(signal);
     const sync = getSyncConfig();
     if (!sync.enabled || !sync.endpoint || !sync.bucket) {
@@ -147,7 +153,9 @@ export const syncService = {
       return { success: false, code: "TEAM_ROLE_DENIED", message: "Push blocked by team policy: " + pushGate.error };
     }
 
-    return pushFrozenSnapshot(structuredClone(sync), force, signal, comparisonToken);
+    try { historySelected(sync, opts); }
+    catch (error) { return { success: false, message: (error as Error).message, code: (error as any).code || "INVALID_HISTORY_SCOPE" }; }
+    return pushFrozenSnapshot(structuredClone(sync), force, signal, comparisonToken, opts);
   },
 
   // ── Pull ──
@@ -171,7 +179,12 @@ export const syncService = {
     const lease = beginSyncOperation("pull");
     if ("busy" in lease) return lease.busy;
     const operation = lease.operation;
+    const historyRollbacks: Array<() => void> = [];
+    let historyConfigCommitted = false;
     try {
+      const selectedHistory = historySelected(sync, opts);
+      assertActiveHistoryScope(sync, selectedHistory);
+      const appliedHistory = new Map<string, HistoryCoverage>();
       const fetched = await fetchSyncConfig(sync, signal);
       if (!fetched.ok) {
         finalResult = operation.failure(new Error(fetched.message));
@@ -181,7 +194,11 @@ export const syncService = {
       const payload = fetched.payload;
       assertComparisonUnchanged(opts?.comparisonToken, sync, payload);
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
-      const remoteConfig = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+      // Preserve original presence/absence of identity seed before the portable
+      // projection supplies legacy defaults. An imported baseline is not live proof.
+      const rawRemoteConfig = JSON.parse(raw.toString()) as any;
+      const rawRemoteProfiles = rawRemoteConfig.browserProfiles ?? rawRemoteConfig.cloakProfiles ?? {};
+      const remoteConfig = sanitizeRemoteConfig(rawRemoteConfig as MgmtConfig);
       assertSyncNotAborted(signal);
 
       const pullTimestamp = typeof payload.timestamp === "number" ? payload.timestamp : Date.now();
@@ -190,6 +207,7 @@ export const syncService = {
       const allowedProfileIds = new Set(Object.keys(remoteConfig.browserProfiles || {}));
       if (allowedProfileIds.size > MAX_SYNC_PROFILES) throw new Error("Remote config contains too many profiles");
       validateArtifactProfileIds(payload, allowedProfileIds);
+      const remoteHistory = parseRemoteHistory(payload, remoteConfig.browserProfiles || {});
 
       // Select artifacts from a frozen local snapshot BEFORE touching any
       // profile directory, cookies, or files. At commit, verify each selected
@@ -207,7 +225,9 @@ export const syncService = {
       );
 
       stageRoot = createPullStagingRoot();
-      const prepared = new Map<string, { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer }>();
+      type PullArtifacts = { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer; history?: PreparedHistory; historyCoverage?: HistoryCoverage };
+      const prepared = new Map<string, PullArtifacts>();
+      let aggregateHistoryBytes = 0;
       let aggregateCookies = 0;
       let aggregateLocalStorageBytes = 0;
       let aggregatePreferenceBytes = 0;
@@ -218,7 +238,7 @@ export const syncService = {
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         assertProfilePathsSafe(dirId);
         assertLocalStorageRestorable(dirId);
-        const item: { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer } = {};
+        const item: PullArtifacts = { historyCoverage: remoteHistory[dirId] };
         if (Object.hasOwn(payload.cookies || {}, dirId)) {
           item.cookies = parseCookieBlob(payload.cookies[dirId]);
           aggregateCookies += item.cookies.length;
@@ -236,15 +256,39 @@ export const syncService = {
           aggregateLocalStorageBytes += item.localStorage.bytesWritten;
         }
         const baseline = parseProfileSyncBaseline(remoteProfiles[dirId]?.syncBaseline);
-        if (payload.artifactVersion === 2 && (!baseline || baseline.snapshotId !== payload.snapshotId)) throw new Error("Remote profile baseline is missing or belongs to another snapshot");
+        if ([2, 3].includes(payload.artifactVersion) && (!baseline || baseline.snapshotId !== payload.snapshotId)) throw new Error("Remote profile baseline is missing or belongs to another snapshot");
         if (baseline) {
           const evidence = profilePreferencesSnapshot(item.preferences ?? null);
           if (stableStringify(baseline.preferences) !== stableStringify(evidence) ||
               profileContentHash(remoteProfiles[dirId], evidence) !== baseline.contentHash) throw new Error("Remote profile content does not match its published baseline");
         }
+        if (selectedHistory && item.historyCoverage?.artifact) {
+          const artifact = item.historyCoverage.artifact;
+          if (profileSnapshot[dirId] && historyEngine(profileSnapshot[dirId]) !== artifact.engine) throw new Error("Incompatible target history engine; original profile retained");
+          aggregateHistoryBytes += artifact.members.reduce((n, member) => n + member.bytes, 0);
+          if (aggregateHistoryBytes > MAX_SYNC_HISTORY_BYTES) throw new Error("Aggregate history byte limit exceeded");
+          assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
+          const body = await s3Get(sync, artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+          assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
+          if (!body) throw new Error(`History object unavailable: ${dirId}`);
+          item.history = await prepareHistoryArtifact(body, artifact, stageRoot, signal);
+          assertSyncRole("pull"); assertActiveHistoryScope(sync, true);
+          assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
+          // Before any profile writes, reject replacing another engine/schema.
+          // Runtime-unconfirmed profiles are skipped at apply without source reads.
+          if (!isProfileRunningForRestore(dirId)) {
+            const release = acquireRestoreLock(dirId);
+            try {
+              assertHistoryRestorable(dirId, artifact.engine);
+              const guard = () => { assertSyncRole("pull"); assertActiveHistoryScope(sync, true); assertHistoryStopped(dirId); assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId); };
+              const existing = await captureHistory(resolveProfileDir(dirId), artifact.engine, stageRoot, guard, signal);
+              if (existing && stableStringify(existing.summary.schema) !== stableStringify(artifact.schema)) throw new Error("Incompatible target history schema/version; original group retained");
+            } finally { release(); }
+          }
+        }
         prepared.set(dirId, item);
       }
-      const preparedExtensions = await preparePullExtensions(sync, remoteConfig, stageRoot, signal, payload.artifactVersion === 2);
+      const preparedExtensions = await preparePullExtensions(sync, remoteConfig, stageRoot, signal, [2, 3].includes(payload.artifactVersion));
       assertSyncNotAborted(signal);
       let importedCookies = 0;
       let queuedCookies = 0;
@@ -264,6 +308,41 @@ export const syncService = {
             createdProfileIds.add(dirId);
           }
           ensureProfileDefaultDir(dirId);
+          const coverage = artifacts.historyCoverage;
+          if (!selectedHistory || !coverage || !artifacts.history && coverage.state !== "absent") {
+            operation.add({ scope: "history", id: dirId, state: "skipped", required: selectedHistory && Boolean(coverage),
+              code: !selectedHistory ? "HISTORY_NOT_SELECTED" : !coverage ? "HISTORY_LEGACY_UNCOVERED" : coverage.code || "HISTORY_NOT_COVERED", history: coverage });
+          } else {
+            const guard = () => { assertSyncRole("pull"); assertActiveHistoryScope(sync, true); assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId); assertHistoryStopped(dirId); };
+            try { guard(); }
+            catch (error) {
+              if (["HISTORY_SCOPE_CHANGED", "TEAM_ROLE_DENIED"].includes((error as any)?.code)) throw error;
+              operation.add({ scope: "history", id: dirId, state: "skipped", required: true, code: "PROFILE_RUNNING_OR_UNCONFIRMED", history: coverage });
+              operation.warnings.push(`History for ${dirId} was not applied: ${(error as Error).message}`);
+            }
+            if (!operation.items.some((item) => item.scope === "history" && item.id === dirId && item.code === "PROFILE_RUNNING_OR_UNCONFIRMED")) {
+              assertHistoryRestorable(dirId, coverage.engine);
+              const existing = await captureHistory(resolveProfileDir(dirId), coverage.engine, stageRoot, guard, signal);
+              guard();
+              if (artifacts.history) {
+                if (existing && stableStringify(existing.summary.schema) !== stableStringify(artifacts.history.summary.schema)) throw new Error("Incompatible target history schema/version; original group retained");
+                const restored = importSqliteLocalStorage(dirId, artifacts.history, operation.operationId, signal, { engine: coverage.engine, guard });
+                if (restored.rollback) historyRollbacks.push(() => {
+                  const release = acquireRestoreLock(dirId);
+                  try { restored.rollback!(); }
+                  finally { release(); }
+                });
+                operation.add({ scope: "history", id: dirId, state: "applied", bytes: restored.bytesWritten, history: coverage });
+                appliedHistory.set(dirId, coverage);
+                if (restored.backupDir) operation.warnings.push(`Previous History/Places group retained for runtime validation: ${restored.backupDir}`);
+              } else {
+                // Confirmed absence is not an empty database and never deletes
+                // the receiver's existing history/bookmarks.
+                operation.add({ scope: "history", id: dirId, state: "preserved", required: false, code: "HISTORY_SOURCE_ABSENT", history: coverage });
+                if (!existing) appliedHistory.set(dirId, coverage);
+              }
+            }
+          }
           if (artifacts.cookies) {
             const list = artifacts.cookies;
             if (!list.length) {
@@ -359,7 +438,7 @@ export const syncService = {
       // unrelated profiles (including ones created during the await) survive.
       // A selected entry edited or deleted during the await fails closed.
       transact((draft: MgmtConfig) => {
-        assertSyncRole("pull");
+        assertSyncRole("pull"); assertActiveHistoryScope(sync, selectedHistory);
         const localProfiles = draft.browserProfiles || {};
         for (const dirId of selectedRemoteProfiles) {
           assertSelectedProfileUnchanged(profileSnapshot, localProfiles, dirId);
@@ -384,10 +463,30 @@ export const syncService = {
           preferenceHashes: importedPreferenceHashes,
           targetId: getProfileSyncTarget(sync),
         });
+        for (const dirId of selectedRemoteProfiles) {
+          const current = draft.browserProfiles[dirId], coverage = remoteHistory[dirId];
+          const applied = appliedHistory.get(dirId);
+          if (applied) {
+            assertHistoryStopped(dirId);
+            current.historySyncCoverage = applied;
+            const baseline = historyBaseline(applied, getProfileSyncTarget(sync));
+            if (baseline) current.historySyncBaseline = baseline;
+          } else if (!selectedHistory) {
+            current.historySyncCoverage = { version: 1, dirId, snapshotId: payload.snapshotId || operation.operationId, engine: historyEngine(current), state: "unselected", freshness: "not-covered", code: "HISTORY_NOT_SELECTED" };
+          } else if (coverage) current.historySyncCoverage = coverage;
+          else delete current.historySyncCoverage;
+          if (current.historySyncBaseline && current.historySyncBaseline.engine !== historyEngine(current)) delete current.historySyncBaseline;
+        }
       }, undefined, { forceAccountRevision: true, requireAccountRetention: true });
 
+      historyConfigCommitted = true;
       operation.localCommit = "committed";
       operation.add({ scope: "config", state: "applied" });
+      for (const dirId of selectedRemoteProfiles) {
+        const identity = compareProfileIdentity(rawRemoteProfiles[dirId], getConfig().browserProfiles[dirId]);
+        operation.add({ scope: "profiles", id: dirId, state: "applied", identity, message: "Configuration identity comparison only; runtime fingerprint not re-verified." });
+        if (identity.configuration.state === "missing-seed") operation.warnings.push(`Profile ${dirId} came from a legacy snapshot without a seed; configuration identity cannot be proven retained. Runtime fingerprint remains unverified.`);
+      }
       let importedExts = 0;
       for (const extension of preparedExtensions) {
         assertSyncNotAborted(signal);
@@ -418,6 +517,18 @@ export const syncService = {
       finalResult = operation.complete(`Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}`);
       return finalResult;
     } catch (e: any) {
+      if (!historyConfigCommitted && historyRollbacks.length) {
+        let recoveryError: unknown;
+        for (const rollback of historyRollbacks.reverse()) {
+          try { rollback(); }
+          catch (error) { recoveryError ??= error; operation.warnings.push(`History rollback was not confirmed: ${(error as Error).message}`); }
+        }
+        if (recoveryError) e = recoveryError;
+        else {
+          for (const item of operation.items) if (item.scope === "history" && item.state === "applied") { item.state = "preserved"; item.code = "HISTORY_ROLLED_BACK"; }
+          operation.localCommit = operation.items.some((item) => item.scope !== "history" && item.side !== "remote" && ["applied", "queued"].includes(item.state)) ? "partial" : "none";
+        }
+      }
       finalResult = operation.failure(e, signal?.aborted);
       if (signal?.aborted) { e.syncResult = finalResult; throw e; }
       return finalResult;
@@ -442,6 +553,20 @@ export const syncService = {
     }
   },
 
+  async historyState(dirId: string, signal?: AbortSignal) {
+    validateDirId(dirId); assertSyncNotAborted(signal);
+    const profile = structuredClone(getConfig().browserProfiles?.[dirId]);
+    const sync = getSyncConfig();
+    if (!profile) throw new Error("Profile not found");
+    const release = acquireRestoreLock(dirId);
+    let root: string | undefined;
+    try {
+      root = createPullStagingRoot();
+      const guard = () => { assertActiveHistoryScope(sync, true); assertSelectedProfileUnchanged({ [dirId]: profile }, getConfig().browserProfiles || {}, dirId); assertHistoryStopped(dirId); assertHistoryRestorable(dirId, historyEngine(profile)); };
+      return await readProfileHistorySyncState(dirId, profile, root, guard, signal);
+    } finally { try { if (root) fs.rmSync(root, { recursive: true }); } finally { release(); } }
+  },
+
   getStatus() {
     const sync = getSyncConfig();
     return {
@@ -453,6 +578,9 @@ export const syncService = {
       operation: getSyncOperationState(),
       // Sale-93: the UI shows whether custody consent was recorded (and when).
       custodyConsentAt: typeof (sync as any)?.custodyConsentAt === "number" ? (sync as any).custodyConsentAt : null,
+      includeHistory: sync.includeHistory === true,
+      history: Object.fromEntries(Object.entries(getConfig().browserProfiles || {}).map(([id, profile]) => [id, profileHistoryCoverage(profile)])),
+      historyConsentAt: Number.isSafeInteger(sync.historyConsentAt) && sync.historyConsentAt! > 0 ? sync.historyConsentAt : null,
     };
   },
 };
@@ -488,7 +616,41 @@ function capturePreferences(dirId: string, validate = true): Buffer | null {
   } finally { fs.closeSync(fd); }
 }
 
-async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: AbortSignal, comparisonToken?: SyncComparisonToken): Promise<SyncResult> {
+export interface SyncHistoryOptions { history?: boolean; }
+function historySelected(sync: SyncConfig, opts?: SyncHistoryOptions): boolean {
+  if (opts?.history !== undefined && typeof opts.history !== "boolean") throw new Error("History scope must be a boolean");
+  const selected = opts?.history ?? sync.includeHistory === true;
+  if (selected && !(Number.isSafeInteger(sync.historyConsentAt) && sync.historyConsentAt! > 0)) {
+    throw Object.assign(new Error("History scope consent required (includes Firefox Places bookmarks)"), { code: "HISTORY_CONSENT_REQUIRED" });
+  }
+  return selected;
+}
+function assertActiveHistoryScope(sync: SyncConfig, selected: boolean): void {
+  if (!selected) return;
+  const current = getSyncConfig();
+  let sameTarget = false;
+  try { sameTarget = getProfileSyncTarget(current) === getProfileSyncTarget(sync); }
+  catch { sameTarget = false; }
+  if (!sameTarget || !Number.isSafeInteger(current.historyConsentAt) || current.historyConsentAt! <= 0 || current.historyConsentAt !== sync.historyConsentAt) {
+    throw Object.assign(new Error("History consent or storage target changed during this operation; no further history transfer is authorized"), { code: "HISTORY_SCOPE_CHANGED" });
+  }
+}
+function assertHistoryStopped(dirId: string): void {
+  assertProfilePathsSafe(dirId);
+  if (runtimeCookieOps.hasRunningBrowser(dirId)) throw Object.assign(new Error("History source/target profile is running"), { code: "PROFILE_RUNNING" });
+  const status = statusBrowser(dirId);
+  if (status.running !== false || status.pid !== null && status.pid !== undefined) throw Object.assign(new Error("History profile runtime ownership is not confirmed stopped"), { code: "PROFILE_RUNNING" });
+  for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock", ".parentlock", "lock"]) {
+    // lstat detects dangling lock symlinks; existsSync would silently miss them.
+    if (fs.lstatSync(resolveProfileFile(dirId, name), { throwIfNoEntry: false })) throw Object.assign(new Error("History profile lock is present; stopped ownership unconfirmed"), { code: "PROFILE_RUNNING" });
+  }
+}
+function historyEngine(profile: any): BrowserEngine {
+  if (profile?.engine !== undefined && profile.engine !== "chromium" && profile.engine !== "firefox") throw new Error("Unsupported profile history engine");
+  return profile?.engine || "chromium";
+}
+
+async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: AbortSignal, comparisonToken?: SyncComparisonToken, opts?: SyncHistoryOptions): Promise<SyncResult> {
   const lease = beginSyncOperation("push");
   if ("busy" in lease) return lease.busy;
   const operation = lease.operation;
@@ -512,7 +674,12 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const localStorage: Record<string, string> = {};
     const preferences: Record<string, string> = {};
     const preferenceSnapshots: Record<string, ProfilePreferencesSnapshot> = {};
-    const artifactSources: Record<string, Record<string, string>> = { cookies: {}, localStorage: {}, preferences: {} };
+    const history: Record<string, HistoryCoverage> = {};
+    const historyObjects: Array<{ id: string; body: Buffer; artifact: NonNullable<HistoryCoverage["artifact"]> }> = [];
+    const uploadedHistoryItems = new Map<string, SyncItemResult>();
+    const selectedHistory = historySelected(sync, opts);
+    let historyBytes = 0;
+    const artifactSources: Record<string, Record<string, string>> = { cookies: {}, localStorage: {}, preferences: {}, history: {} };
     const extensionInventories: Record<string, ReturnType<typeof listExtensionsForSync>> = {};
     let cookieCount = 0;
     let preferenceBytes = 0;
@@ -577,6 +744,53 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
           localStorage[id] = archive.toString("base64");
           artifactSources.localStorage[id] = "captured";
         } else artifactSources.localStorage[id] = "absent";
+        const engine = historyEngine(initial.browserProfiles[id]);
+        const base = { version: 1 as const, snapshotId: operation.operationId, dirId: id, engine };
+        let captureError: unknown;
+        if (selectedHistory) {
+          try {
+            const guard = () => { assertSyncRole("push", force); assertActiveHistoryScope(sync, true); assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id); assertHistoryRestorable(id, engine); };
+            const capturedAt = Date.now();
+            const captured = await captureHistory(resolveProfileDir(id), engine, stageRoot, guard, signal, MAX_SYNC_HISTORY_BYTES - historyBytes);
+            assertSyncNotAborted(signal);
+            if (!captured) history[id] = { ...base, state: "absent", freshness: "captured", capturedAt };
+            else {
+              historyBytes += captured.bytesWritten;
+              if (historyBytes > MAX_SYNC_HISTORY_BYTES) throw new Error("Aggregate history byte limit exceeded");
+              const object = await makeHistoryArtifact(captured, engine, id, operation.operationId, capturedAt, stageRoot, signal);
+              guard();
+              history[id] = { ...base, state: Object.values(captured.summary.counts).every((n) => n === "0") ? "empty" : "complete", freshness: "captured", artifact: object.artifact };
+              historyObjects.push({ id, ...object });
+            }
+          } catch (error) {
+            assertSyncNotAborted(signal);
+            if (["HISTORY_RECOVERY_REQUIRED", "HISTORY_SCOPE_CHANGED", "TEAM_ROLE_DENIED"].includes((error as any)?.code)) throw error;
+            captureError = error;
+          }
+        }
+        if (!history[id]) {
+          const old = parseHistoryCoverage(previous.history?.[id]);
+          if (old?.artifact && old.dirId === id && old.engine === engine) {
+            if (selectedHistory) {
+              assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
+              historyBytes += old.artifact.members.reduce((n, member) => n + member.bytes, 0);
+              if (historyBytes > MAX_SYNC_HISTORY_BYTES) throw new Error("Aggregate history byte limit exceeded");
+              const body = await s3Get(sync, old.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+              assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
+              if (!body) throw new Error("Cannot verify the previous history object; previous remote envelope retained");
+              await prepareHistoryArtifact(body, old.artifact, stageRoot, signal);
+              assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
+            }
+            // Excluding history retains only its prior reference, not a new
+            // capture, download, freshness claim or locally adopted baseline.
+            history[id] = { ...base, state: "preserved", freshness: "preserved", artifact: old.artifact, code: selectedHistory ? (captureError as any)?.code === "HISTORY_SCHEMA_UNSUPPORTED" ? "HISTORY_SCHEMA_UNSUPPORTED" : "HISTORY_CAPTURE_FAILED" : "HISTORY_NOT_SELECTED" };
+          } else history[id] = { ...base, state: selectedHistory ? "failed" : "unselected", freshness: "not-covered", code: selectedHistory ? (captureError as any)?.code === "HISTORY_SCHEMA_UNSUPPORTED" ? "HISTORY_SCHEMA_UNSUPPORTED" : "HISTORY_CAPTURE_FAILED" : "HISTORY_NOT_SELECTED" };
+        }
+        const coverage = history[id]; artifactSources.history[id] = coverage.state;
+        const incomplete = selectedHistory && (coverage.state === "failed" || coverage.state === "preserved");
+        if (incomplete || coverage.state === "unselected" || coverage.state === "preserved") operation.add({ side: "remote", scope: "history", id,
+          state: incomplete ? coverage.state === "preserved" ? "preserved" : "failed" : "skipped", required: selectedHistory, code: coverage.code, history: coverage });
+        if (captureError) operation.warnings.push(`History for ${id} was not freshly captured: ${(captureError as Error).message}; ${coverage.state === "preserved" ? "previous verified object preserved" : "no verified history snapshot available"}.`);
       } finally { release(); }
     }
     const extensions: FrozenExtensionSnapshot[] = [];
@@ -597,12 +811,32 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const configData = Buffer.from(JSON.stringify(snapshot));
     const configGzip = zlib.gzipSync(configData);
     if (configData.length > MAX_CONFIG_JSON_BYTES || configGzip.length > MAX_CONFIG_GZIP_BYTES) throw new Error("Sync configuration snapshot is too large");
-    const document = { version: snapshot.version, artifactVersion: 2, snapshotId: operation.operationId, timestamp,
-      data: configGzip.toString("base64"), cookies, localStorage, preferences, artifactSources };
+    const document = { version: snapshot.version, artifactVersion: 3, snapshotId: operation.operationId, timestamp,
+      data: configGzip.toString("base64"), cookies, localStorage, preferences, history, artifactSources };
     const body = Buffer.from(JSON.stringify(document));
     if (body.length > MAX_REMOTE_PAYLOAD_JSON_BYTES) throw new Error("Sync payload is too large");
     assertSyncRole("push", force);
     lease.stage("publishing");
+    for (const object of historyObjects) {
+      assertSyncRole("push", force); assertActiveHistoryScope(sync, true); assertSyncNotAborted(signal);
+      const publication = await publishS3Object(sync, object.artifact.object.key, object.body, signal);
+      // Even a non-2xx response follows dispatch, not positive proof of no
+      // object-side effects. Never mark such a history failure retry-safe.
+      operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
+      const pendingItem: SyncItemResult = { side: "remote", scope: "history", id: object.id, state: "unknown", code: "HISTORY_OBJECT_UNCONFIRMED", history: history[object.id],
+        message: "History object dispatch may have changed remote storage; its envelope reference has not been published." };
+      operation.add(pendingItem); uploadedHistoryItems.set(object.id, pendingItem);
+      assertSyncNotAborted(signal); assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
+      if (publication.state === "rejected") throw Object.assign(new Error(`History object upload rejected: ${object.id}`), { code: "HISTORY_OBJECT_UNCONFIRMED" });
+      const readback = await s3Get(sync, object.artifact.object.key, signal, MAX_HISTORY_OBJECT_BYTES);
+      const item = uploadedHistoryItems.get(object.id)!;
+      if (readback?.equals(object.body)) {
+        operation.remoteCommit = "partial"; item.state = "uploaded"; item.code = "HISTORY_OBJECT_ONLY";
+        item.message = "History object bytes verified; no envelope reference has been published yet.";
+      }
+      assertSyncRole("push", force); assertActiveHistoryScope(sync, true);
+      if (item.state !== "uploaded") throw Object.assign(new Error(`History object remote readback mismatch: ${object.id}`), { code: "HISTORY_OBJECT_UNCONFIRMED" });
+    }
     for (const extension of extensions) {
       const pkg = fs.readFileSync(extension.packagePath);
       const key = extensionObjectKey(extension.entry);
@@ -614,7 +848,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
       operation.add({ side: "remote", scope: "extensions", id: extension.entry.id, state: "uploaded", bytes: pkg.length });
     }
     assertSyncNotAborted(signal);
-    assertSyncRole("push", force);
+    assertSyncRole("push", force); assertActiveHistoryScope(sync, selectedHistory);
     const publication = await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal);
     operation.remoteCommit = publication.state === "accepted" ? "committed" : "unknown";
     assertSyncNotAborted(signal);
@@ -624,6 +858,14 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     }
     operation.remoteCommit = "committed";
     operation.add({ side: "remote", scope: "config", state: "uploaded", bytes: body.length });
+    for (const id of ids) operation.add({ side: "remote", scope: "profiles", id, state: "uploaded", identity: compareProfileIdentity(initial.browserProfiles[id], snapshot.browserProfiles[id]),
+      message: "Compared current saved configuration with uploaded metadata, not ancestor legacy seed presence or a live runtime fingerprint." });
+    for (const [id, coverage] of Object.entries(history)) if (["complete", "empty", "absent"].includes(coverage.state)) {
+      const uploaded = uploadedHistoryItems.get(id);
+      if (uploaded) { uploaded.code = undefined; uploaded.message = undefined; uploaded.bytes = coverage.artifact?.object.bytes; }
+      else operation.add({ side: "remote", scope: "history", id, state: "uploaded", required: selectedHistory, history: coverage, bytes: coverage.artifact?.object.bytes });
+    }
+    assertSyncRole("push", force); assertActiveHistoryScope(sync, selectedHistory);
     if (publication.state !== "accepted") operation.warnings.push("PUT acknowledgement was unavailable; exact remote snapshot readback confirmed publication.");
     for (const extension of extensions) {
       if (!extension.commitLocalRepair) continue;
@@ -636,12 +878,21 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     }
     assertSyncNotAborted(signal);
     transact((draft: MgmtConfig) => {
+      assertSyncRole("push", force); assertActiveHistoryScope(sync, selectedHistory);
       for (const [id, uploaded] of Object.entries(snapshot.browserProfiles || {})) {
         const current = draft.browserProfiles?.[id];
         if (!current) continue;
         current.syncedAt = uploaded.syncedAt;
         current.syncedHash = uploaded.syncedHash;
         current.syncBaseline = uploaded.syncBaseline;
+        if (historyEngine(current) === history[id].engine) {
+          current.historySyncCoverage = history[id];
+          if (selectedHistory) {
+            const baseline = historyBaseline(history[id], targetId);
+            if (baseline) current.historySyncBaseline = baseline;
+            else delete current.historySyncBaseline;
+          }
+        }
       }
     });
     operation.localCommit = "committed";
@@ -789,19 +1040,44 @@ function assertLocalStorageFormatCompatible(dirId: string, incoming: LocalStorag
 }
 
 class LocalStorageRecoveryRequiredError extends Error {
-  readonly code = "LOCAL_STORAGE_RECOVERY_REQUIRED";
+  readonly code: string;
   recoveryReceiptPath?: string;
-  constructor(readonly dirId: string, readonly recoveryPaths: string[], message: string, readonly localChanged = false) {
-    super(message);
+  constructor(readonly dirId: string, readonly recoveryPaths: string[], message: string, readonly localChanged = false, scope: "localStorage" | "history" = "localStorage") {
+    super(message); this.code = scope === "history" ? "HISTORY_RECOVERY_REQUIRED" : "LOCAL_STORAGE_RECOVERY_REQUIRED";
   }
 }
 
-function localStorageRecoveryReceipt(dirId: string): string {
+function localStorageRecoveryReceipt(dirId: string, scope = "localStorage"): string {
   validateDirId(dirId);
   const root = path.join(getAppDataDir(), "sync-recovery");
   const stat = fs.lstatSync(root, { throwIfNoEntry: false });
   if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error("Unsafe sync recovery directory");
-  return path.join(root, `${dirId}.localStorage.json`);
+  return path.join(root, `${dirId}.${scope}.json`);
+}
+
+function assertHistoryRestorable(dirId: string, engine: BrowserEngine): void {
+  assertProfilePathsSafe(dirId);
+  const directory = safeExistingParentInsideProfile(dirId, historyPath(engine).split("/"));
+  const receipt = localStorageRecoveryReceipt(dirId, "history");
+  const recovery = (paths: string[]) => {
+    const error = new LocalStorageRecoveryRequiredError(dirId, paths, "History recovery is unresolved; original/new groups retained", false, "history");
+    error.recoveryReceiptPath = receipt; return error;
+  };
+  if (fs.lstatSync(receipt, { throwIfNoEntry: false })) throw recovery([receipt]);
+  if (!fs.existsSync(directory)) return;
+  sqliteGroupWitnesses(directory, historyBasename(engine));
+  for (const name of fs.readdirSync(directory).filter((name) => name.startsWith(".history-backup-"))) {
+    const transaction = path.join(directory, name);
+    try {
+      const stat = fs.lstatSync(transaction);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe history rescue directory");
+      const pending = readLocalStorageReceipt(path.join(transaction, "pending.json"));
+      const published = readLocalStorageReceipt(path.join(transaction, "published.json"));
+      if (pending.version !== 1 || pending.dirId !== dirId || pending.scope !== "history" || pending.target !== directory ||
+          published.state !== "published" || published.pendingHash !== sha256Hex(JSON.stringify(pending)) ||
+          fs.lstatSync(path.join(transaction, "recovery-required.json"), { throwIfNoEntry: false })) throw new Error("Unresolved history rescue directory");
+    } catch { throw recovery([transaction]); }
+  }
 }
 
 function assertLocalStorageRestorable(dirId: string): void {
@@ -949,15 +1225,18 @@ function assertSqliteRecoveryResolved(dirId: string): void {
 /** Same-volume multi-file publication. Every rescue/new byte lives OUTSIDE the
  * pull stage before the first live move, so its finally cleanup cannot destroy
  * the only copy after failed compensation. Journals are append-only/exclusive. */
-function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage, operationId: string, signal?: AbortSignal): { imported: boolean; bytesWritten: number; backupDir?: string } {
-  const directory = safeExistingParentInsideProfile(dirId, ["Default", "LocalStorage"]);
+interface HistoryPublicationPolicy { engine: BrowserEngine; guard: () => void; }
+function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage, operationId: string, signal?: AbortSignal, policy?: HistoryPublicationPolicy): { imported: boolean; bytesWritten: number; backupDir?: string; rollback?: () => void } {
+  const directory = safeExistingParentInsideProfile(dirId, policy ? historyPath(policy.engine).split("/") : ["Default", "LocalStorage"]);
+  const names: readonly string[] = policy ? historySidecars(policy.engine) : SQLITE_LOCAL_STORAGE_SIDECARS;
+  const scope = policy ? "history" : "localStorage";
   const original = new Map<string, ReturnType<typeof localStorageFileWitness>>();
-  for (const name of SQLITE_LOCAL_STORAGE_SIDECARS) {
+  for (const name of names) {
     const file = path.join(directory, name);
     if (fs.lstatSync(file, { throwIfNoEntry: false })) original.set(name, localStorageFileWitness(file, signal));
   }
   if (fs.statSync(prepared.stagingDir).dev !== fs.statSync(directory).dev) throw Object.assign(new Error("LocalStorage staging must be on the destination filesystem"), { code: "EXDEV" });
-  const transaction = fs.mkdtempSync(path.join(directory, ".sqlite-localstorage-backup-"));
+  const transaction = fs.mkdtempSync(path.join(directory, policy ? ".history-backup-" : ".sqlite-localstorage-backup-"));
   const owner = fs.lstatSync(transaction);
   const oldDir = path.join(transaction, "old"), newDir = path.join(transaction, "new");
   let oldOwner: fs.Stats | undefined, newOwner: { dev: number; ino: number } | undefined;
@@ -980,9 +1259,9 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
         !moved.includes(name) && actual.stat.ctimeMs !== expected.stat.ctimeMs || actual.hash !== expected.hash) throw new Error("Existing SQLite LocalStorage changed during publication");
   };
   const checkDestination = () => {
-    ownerCheck();
-    if (fs.lstatSync(resolveProfileFile(dirId, "Default", "Local Storage", "leveldb"), { throwIfNoEntry: false })) throw new Error("LocalStorage format changed during publication");
-    for (const name of SQLITE_LOCAL_STORAGE_SIDECARS) {
+    ownerCheck(); policy?.guard();
+    if (!policy && fs.lstatSync(resolveProfileFile(dirId, "Default", "Local Storage", "leveldb"), { throwIfNoEntry: false })) throw new Error("LocalStorage format changed during publication");
+    for (const name of names) {
       const file = path.join(directory, name), stat = fs.lstatSync(file, { throwIfNoEntry: false });
       const own = published.get(name);
       if (own) {
@@ -994,7 +1273,7 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
   try {
     fs.mkdirSync(oldDir, { mode: 0o700 }); oldOwner = fs.lstatSync(oldDir);
     ownerCheck();
-    const pending = { version: 1, format: "sqlite", operationId, dirId, target: directory,
+    const pending = { version: 1, format: "sqlite", ...(policy ? { scope } : {}), operationId, dirId, target: directory,
       old: [...original].map(([name, value]) => ({ name, hash: value.hash })), incoming: prepared.inventory };
     writeOwnedSqliteFile(path.join(transaction, "pending.json"), Buffer.from(JSON.stringify(pending)));
     syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
@@ -1025,12 +1304,17 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
     syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
     // Old main/WAL/SHM remain together. Native quick_check is not Chromium
     // runtime proof and does not authorize deleting the previous database.
-    return { imported: true, bytesWritten: prepared.bytesWritten, ...(original.size ? { backupDir: oldDir } : {}) };
-  } catch (publicationError) {
+    return { imported: true, bytesWritten: prepared.bytesWritten, ...(original.size ? { backupDir: oldDir } : {}),
+      ...(policy ? { rollback: () => {
+        const cancelled = new Error("History publication compensated before config commit");
+        try { compensate(cancelled); } catch (error) { if (error !== cancelled) throw error; }
+      } } : {}) };
+  } catch (publicationError) { return compensate(publicationError); }
+  function compensate(publicationError: unknown): never {
     const compensationErrors: unknown[] = [];
     for (const [name, witness] of [...published].reverse()) {
       try {
-        ownerCheck();
+        ownerCheck(); if (policy) assertHistoryStopped(dirId);
         const target = path.join(directory, name), retained = path.join(newDir, name);
         const actual = fs.lstatSync(target);
         if (!actual.isFile() || actual.isSymbolicLink() || actual.dev !== witness.stat.dev || actual.ino !== witness.stat.ino) throw new Error("Published SQLite file owner changed; retaining both copies");
@@ -1046,7 +1330,7 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
     }
     for (const name of [...moved].reverse()) {
       try {
-        ownerCheck();
+        ownerCheck(); if (policy) assertHistoryStopped(dirId);
         const old = path.join(oldDir, name), target = path.join(directory, name);
         const stat = fs.lstatSync(old), expected = original.get(name)!.stat;
         if (!stat.isFile() || stat.isSymbolicLink() || stat.dev !== expected.dev || stat.ino !== expected.ino) throw new Error("SQLite old rescue file owner changed");
@@ -1075,7 +1359,7 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
       } catch (error) { compensationErrors.push(error); }
     }
     if (compensationErrors.length) {
-      const recovery = new LocalStorageRecoveryRequiredError(dirId, [transaction, directory], "SQLite LocalStorage publication/compensation is incomplete; old/new material retained for recovery", true);
+      const recovery = new LocalStorageRecoveryRequiredError(dirId, [transaction, directory], `SQLite ${scope} publication/compensation is incomplete; old/new material retained for recovery`, true, scope);
       const receiptData = Buffer.from(JSON.stringify({ operationId, dirId, state: "recovery-required", format: "sqlite", transaction, target: directory,
         old: [...original].map(([name, value]) => ({ name, hash: value.hash, backupPath: path.join(oldDir, name), livePath: path.join(directory, name) })),
         incoming: prepared.inventory.map((entry) => ({ ...entry, retainedPath: path.join(newDir, entry.name), livePath: path.join(directory, entry.name) })),
@@ -1086,7 +1370,7 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
         syncLocalStorageDirectory(transaction); syncLocalStorageDirectory(directory);
       } catch (error) { console.error("[sync] SQLite transaction recovery journal not confirmed durable:", error); }
       try {
-        const receipt = localStorageRecoveryReceipt(dirId);
+        const receipt = localStorageRecoveryReceipt(dirId, scope);
         fs.mkdirSync(path.dirname(receipt), { recursive: true, mode: 0o700 });
         writeOwnedSqliteFile(receipt, receiptData); syncLocalStorageDirectory(path.dirname(receipt));
         recovery.recoveryReceiptPath = receipt;
@@ -1451,6 +1735,8 @@ async function collectRemoteLocksBlockingPush(sync: ReturnType<typeof getSyncCon
   }
   const raw = gunzipBase64Field(fetched.payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
   const remoteCfg = sanitizeRemoteConfig(JSON.parse(raw.toString()) as MgmtConfig);
+  validateArtifactProfileIds(fetched.payload, new Set(Object.keys(remoteCfg.browserProfiles || {})));
+  parseRemoteHistory(fetched.payload, remoteCfg.browserProfiles || {});
   const out: Array<{ id: string; ownerName: string }> = [];
   for (const [id, p] of Object.entries(remoteCfg.browserProfiles || {}) as Array<[string, any]>) {
     const lock = p?.lock;
@@ -1537,18 +1823,33 @@ async function readResponseTextLimited(resp: Response, maxBytes: number, signal?
 
 function validateSyncPayloadShape(payload: any, cookiesOnly = false): void {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Remote config payload must be an object");
-  if (payload.artifactVersion !== undefined && payload.artifactVersion !== 1 && payload.artifactVersion !== 2) throw new Error("Unsupported remote artifact format");
-  if (payload.artifactVersion === 2 && (typeof payload.snapshotId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.snapshotId))) throw new Error("Remote snapshot identity is invalid");
+  if (payload.artifactVersion !== undefined && ![1, 2, 3].includes(payload.artifactVersion)) throw new Error("Unsupported remote artifact format");
+  if ([2, 3].includes(payload.artifactVersion) && (typeof payload.snapshotId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.snapshotId))) throw new Error("Remote snapshot identity is invalid");
   if (!cookiesOnly && typeof payload.data !== "string") throw new Error("Remote config payload is missing data");
-  for (const field of ["cookies", "localStorage", "preferences"]) {
+  for (const field of ["cookies", "localStorage", "preferences", "history"]) {
     if (payload[field] !== undefined && (!payload[field] || typeof payload[field] !== "object" || Array.isArray(payload[field]))) {
       throw new Error(`Remote config ${field} must be an object`);
     }
   }
 }
 
+function parseRemoteHistory(payload: any, profiles: Record<string, any>): Record<string, HistoryCoverage> {
+  if (payload.artifactVersion !== 3) {
+    if (payload.history !== undefined) throw new Error("History coverage requires a v3 envelope");
+    return {};
+  }
+  if (!payload.history || typeof payload.history !== "object" || Array.isArray(payload.history) || Object.keys(payload.history).length !== Object.keys(profiles).length) throw new Error("Remote history coverage inventory is incomplete");
+  const coverage: Record<string, HistoryCoverage> = {};
+  for (const [id, profile] of Object.entries(profiles)) {
+    const parsed = parseHistoryCoverage(payload.history[id]);
+    if (!parsed || parsed.dirId !== id || parsed.snapshotId !== payload.snapshotId || parsed.engine !== historyEngine(profile)) throw new Error("History descriptor snapshot/profile/engine mismatch");
+    coverage[id] = parsed;
+  }
+  return coverage;
+}
+
 function validateArtifactProfileIds(payload: any, allowedProfileIds: Set<string>): void {
-  for (const field of ["cookies", "localStorage", "preferences"]) {
+  for (const field of ["cookies", "localStorage", "preferences", "history"]) {
     const artifactMap = payload[field];
     if (!artifactMap || typeof artifactMap !== "object") continue;
     const ids = Object.keys(artifactMap);
@@ -1584,7 +1885,7 @@ async function s3Put(sync: ReturnType<typeof getSyncConfig>, key: string, body: 
 }
 
 /** Fetch an object from S3 as a Buffer (for extension package pull). Returns null on 404/error. */
-async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal?: AbortSignal): Promise<Buffer | null> {
+async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal?: AbortSignal, maxBytes = MAX_EXTENSION_PACKAGE_BYTES): Promise<Buffer | null> {
   assertSyncNotAborted(signal);
   const objPath = `/${sync.bucket}/${key}`;
   const url = `${sync.endpoint}${objPath}`;
@@ -1605,9 +1906,9 @@ async function s3Get(sync: ReturnType<typeof getSyncConfig>, key: string, signal
       return null;
     }
     const length = Number(resp.headers.get("content-length") || "0");
-    if (length > MAX_EXTENSION_PACKAGE_BYTES) throw new Error("Remote extension package is too large");
+    if (length > maxBytes) throw new Error("Remote artifact object is too large");
     assertSyncNotAborted(signal);
-    return await readResponseBytesLimited(resp, MAX_EXTENSION_PACKAGE_BYTES, "Remote extension package is too large", signal);
+    return await readResponseBytesLimited(resp, maxBytes, "Remote artifact object is too large", signal);
   } catch (e: any) {
     if (signal?.aborted) throw e;
     console.error(`[sync] GET ${key} error:`, e?.message || String(e));
@@ -1920,7 +2221,7 @@ function compareProfilePreferences(section: SyncDiffSection, localProfiles: Reco
     if (!Object.hasOwn(remoteProfiles, id)) continue;
     try {
       const baseline = parseProfileSyncBaseline(remoteProfiles[id].syncBaseline);
-      if ((payload.artifactVersion === 2 && (!baseline || baseline.snapshotId !== payload.snapshotId)) ||
+      if (([2, 3].includes(payload.artifactVersion) && (!baseline || baseline.snapshotId !== payload.snapshotId)) ||
           (remoteProfiles[id].syncBaseline !== undefined && !baseline)) {
         unverified.push({ id, reason: "remote-baseline-mismatch" });
         continue;
@@ -1946,7 +2247,7 @@ function compareProfilePreferences(section: SyncDiffSection, localProfiles: Reco
   }
   section.changed.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return { compared: ["portable-profile-metadata", "preferences-on-common-profiles", "proxy-settings", "account-references", "extension-metadata"],
-    notCompared: ["live-cookies", "localStorage-database", "full-profile-files"], unverified };
+    notCompared: ["live-cookies", "localStorage-database", "history-database", "full-profile-files"], unverified };
 }
 
 function createComparisonToken(sync: SyncConfig, local: any, payload: any): SyncComparisonToken {
@@ -2102,7 +2403,7 @@ function normalizeMergeStrategy(value: unknown): MergeStrategy {
   return value === "remote" || value === "newest" ? value : "local";
 }
 
-export interface SyncPullOptions {
+export interface SyncPullOptions extends SyncHistoryOptions {
   strategy?: MergeStrategy;
   comparisonToken?: SyncComparisonToken;
   /** Per-entry overrides keyed as "<section>:<id>", e.g. "profiles:ab_xyz" or "accounts:user @ https://a.com". */

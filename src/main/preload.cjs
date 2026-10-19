@@ -90,6 +90,7 @@ const api = {
     push: (opts) => ipcRenderer.invoke("sync:push", opts),
     pull: (opts) => ipcRenderer.invoke("sync:pull", opts),
     status: () => ipcRenderer.invoke("sync:status"),
+    historyState: (dirId) => ipcRenderer.invoke("sync:history-state", dirId),
     preview: () => ipcRenderer.invoke("sync:preview"),
     previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
     configure: (config) => ipcRenderer.invoke("sync:configure", config),
@@ -173,6 +174,20 @@ const api = {
     envRisk: (dirId, options) => ipcRenderer.invoke("browser:env-risk", options ? { ...options, dirId } : dirId),
     healthHistory: (dirId) => ipcRenderer.invoke("browser:health-history", dirId),
     healthCancel: (dirId, options) => ipcRenderer.invoke("browser:health-cancel", dirId, options),
+    healthClear: (dirId, kind) => ipcRenderer.invoke("browser:health-clear", dirId, kind),
+    networkPages: (dirId) => ipcRenderer.invoke("browser:network-pages", dirId),
+    networkObserve: (dirId, options) => ipcRenderer.invoke("browser:network-observe", dirId, options),
+    onNetworkArmed: (callback) => {
+      if (typeof callback !== "function") throw new TypeError("Network armed callback must be a function");
+      const wrapped = (_event, payload) => callback(payload);
+      ipcRenderer.on("browser:network-armed", wrapped);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        ipcRenderer.removeListener("browser:network-armed", wrapped);
+      };
+    },
     envRiskHistory: (dirId) => ipcRenderer.invoke("browser:env-risk-history", dirId),
     envRiskClear: (dirId) => ipcRenderer.invoke("browser:env-risk-clear", dirId),
     // PL-07: pick a local Chromium build when no managed engine is installed.

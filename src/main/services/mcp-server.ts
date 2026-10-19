@@ -8,7 +8,8 @@ import { classifyAgentToolOutcome } from "./agent/tool-outcome.js";
 import { isAuthorized as isAuthorizedShared } from "./http/auth.js";
 import { randomBytes } from "node:crypto";
 import { listProfiles, getProfileInfo } from "./profile-manager.js";
-import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig } from "./config-manager.js";
+import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig, setSyncConfig } from "./config-manager.js";
+import { syncService } from "./sync-service.js";
 import { readProfileSyncState } from "./sync/profile-state.js";
 import { getAccounts, executeToolCall, AGENT_TOOLS, agentChat, llmChat, getLlmConfig, getOrDetectLlmConfig, redactLlmConfig, createConversation, getConversation, listConversations, deleteConversation, renameConversation, addMessage, repairMessageSequence, type LlmMessage } from "./local-agent.js";
 import { listJobs } from "./job-store.js";
@@ -181,6 +182,11 @@ const MCP_PASSTHROUGH_DEFS = MCP_PASSTHROUGH.map((toolName) => {
   };
 });
 const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
+  { name: "agent_browser_sync_status", description: "Read sync configuration/operation receipts and separately scoped history coverage; configuration sync is not full browser restore proof", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_sync_history_state", description: "Compare stopped profile History/Places semantically against its independent baseline, including WAL; requires saved history consent. No runtime/browser-UI proof", inputSchema: { type: "object", properties: { dirId: { type: "string" } }, required: ["dirId"] } },
+  { name: "agent_browser_sync_configure", description: "Configure sync. History is opt-in and includes Firefox Places bookmarks; historyConsent:true records explicit user consent, includeHistory:true selects it for future automatic operations. Never infer consent from ordinary sync consent", inputSchema: { type: "object", additionalProperties: false, properties: { enabled: { type: "boolean" }, endpoint: { type: "string" }, bucket: { type: "string" }, accessKey: { type: "string" }, secretKey: { type: "string" }, custodyConsent: { type: "boolean" }, historyConsent: { type: "boolean" }, includeHistory: { type: "boolean" } } } },
+  { name: "agent_browser_sync_push", description: "Push the frozen selected sync scope. Optional history boolean overrides saved scope only; true needs separate saved consent and includes Firefox bookmarks. Inspect per-item freshness and commit receipts; no automatic retries", inputSchema: { type: "object", additionalProperties: false, properties: { history: { type: "boolean" }, force: { type: "boolean" }, comparisonToken: { type: "object" } } } },
+  { name: "agent_browser_sync_pull", description: "Pull selected remote metadata/artifacts into the same profile IDs. Optional history boolean needs separate consent; legacy/config-only backups cannot restore visits. Inspect skipped/preserved/failure and rollback receipts", inputSchema: { type: "object", additionalProperties: false, properties: { history: { type: "boolean" }, strategy: { type: "string", enum: ["local", "remote", "newest"] }, resolutions: { type: "object" }, comparisonToken: { type: "object" } } } },
  { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
  { name: "agent_browser_runs_list", description: "List recent agent runs (optionally filtered by profile dirId)", inputSchema: { type: "object", properties: { limit: { type: "number" }, dirId: { type: "string" } } } },
  { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
@@ -227,6 +233,23 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
     }
   }
   switch (name) {
+    case "agent_browser_sync_status": return syncService.getStatus();
+    case "agent_browser_sync_history_state": validateDirId(args?.dirId); return syncService.historyState(args.dirId);
+    case "agent_browser_sync_configure": {
+      const denied = denyMcpMutation(); if (denied) return { success: false, code: "TEAM_ROLE_DENIED", error: denied };
+      try { setSyncConfig(args); return { success: true, ...syncService.getStatus() }; }
+      catch (error) { return { success: false, code: (error as any).code, error: (error as Error).message }; }
+    }
+    case "agent_browser_sync_push":
+    case "agent_browser_sync_pull": {
+      if (!args || typeof args !== "object" || Array.isArray(args) || args.history !== undefined && typeof args.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", error: "History scope must be a boolean" };
+      if (name === "agent_browser_sync_push") return args.history === undefined ? syncService.push(undefined, args.force === true, args.comparisonToken)
+        : syncService.push(undefined, args.force === true, args.comparisonToken, { history: args.history });
+      const resolutions: Record<string, "local" | "remote" | "newest"> = {};
+      for (const [key, value] of Object.entries(args.resolutions || {})) if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
+      return syncService.pull(undefined, { strategy: args.strategy === "remote" || args.strategy === "newest" ? args.strategy : "local", resolutions, comparisonToken: args.comparisonToken,
+        ...(args.history === undefined ? {} : { history: args.history }) });
+    }
     case "agent_browser_list_profiles": {
       const runtime = getProfileRuntimeSnapshot();
       const browserProfiles = listBrowserProfiles(runtime);

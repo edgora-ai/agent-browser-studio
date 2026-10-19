@@ -150,6 +150,13 @@ export class AgentBrowserClient {
   version() { return this.request('GET', '/version'); }
   openapi() { return this.request('GET', '/openapi.json'); }
 
+  // History is independently consented/scoped; never default it to true here.
+  syncStatus() { return this.get('/api/sync/status'); }
+  configureSync(settings) { return this.post('/api/sync/config', settings); }
+  syncPush(options = {}) { return this.post('/api/sync/push', options); }
+  syncPull(options = {}) { return this.post('/api/sync/pull', options); }
+  syncHistoryState(dirId) { return this.get('/api/sync/history/' + encodeURIComponent(dirId)); }
+
   listProfiles() {
     return this.request('GET', '/api/profiles').then((d) => d.profiles || []);
   }

@@ -1,13 +1,13 @@
 import { spawn, execFileSync } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ProxyConfig } from "../types.js";
+import type { ProxyConfig, ProxyObservationMetadata } from "../types.js";
 import { getConfig } from "./config-manager.js";
+import { cloneProxyObservation, completeProxyObservation, nextProxyObservationOrder, proxyIdentityToken, proxyObservationTime, PROXY_OBSERVATION_TTL_MS } from "./proxy-observation.js";
 
-export interface ProxyDetectionResult {
+export interface ProxyDetectionResult extends ProxyObservationMetadata {
   success: boolean;
   exitIp: string | null;
   country: string | null;
@@ -65,6 +65,9 @@ export function probeProxyPort(config: Pick<ProxyConfig, "host" | "port">, timeo
 function emptyResult(success: boolean, error?: string): ProxyDetectionResult {
   return {
     success,
+    observedAt: null,
+    source: "unknown",
+    observationId: null,
     exitIp: null,
     country: null,
     countryCode: null,
@@ -301,75 +304,71 @@ export function downloadFileWithCurl(
 
 function spawnCurlWithProxy(config: ProxyConfig, args: string[]) {
   const configPath = writeCurlConfig(config);
-  const child = spawn("curl", ["--config", configPath, ...args]);
-  const cleanup = () => { try { fs.unlinkSync(configPath); } catch {} };
-  child.on("close", cleanup);
-  child.on("error", cleanup);
-  return child;
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    try { fs.unlinkSync(configPath); } catch { /* child already cleaned up */ }
+  };
+  try {
+    const child = spawn("curl", ["--config", configPath, ...args]);
+    child.on("close", cleanup);
+    child.on("error", cleanup);
+    return child;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
-function curlJsonAsync(config: ProxyConfig, url: string, timeoutSeconds: number, signal?: AbortSignal): Promise<{ data: any | null; latencyMs: number; error: string | null }> {
+interface CurlProbeResult { data: any | null; latencyMs: number; error: string | null; dispatched: boolean; }
+function curlJsonAsync(config: ProxyConfig, url: string, timeoutSeconds: number, signal?: AbortSignal): Promise<CurlProbeResult> {
   return new Promise((resolve) => {
     const startTime = Date.now();
-    let settled = false;
-    const done = (v: { data: any | null; latencyMs: number; error: string | null }) => {
+    let settled = false, dispatched = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let child: ReturnType<typeof spawnCurlWithProxy> | null = null;
+    const done = (data: any | null, error: string | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      resolve(v);
+      resolve({ data, latencyMs: Date.now() - startTime, error, dispatched });
     };
-    // R13 P3-2: abort kills the curl child promptly instead of waiting out
-    // the inner timer when the caller's withTimeout fires.
     const onAbort = () => {
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
-      done({ data: null, latencyMs: Date.now() - startTime, error: "aborted" });
+      // Settle before kill: an inert child (or a fast real exit) may close
+      // synchronously. Cancellation never authenticates that close as a sample.
+      done(null, "aborted");
+      try { child?.kill("SIGKILL"); } catch { /* already gone */ }
     };
-    const child = spawnCurlWithProxy(config, [
-      "-sS", "--connect-timeout", "2", "--max-time", String(timeoutSeconds),
-      url,
-    ]);
-    if (signal?.aborted) {
-      onAbort();
-      return;
-    }
+    if (signal?.aborted) { done(null, "aborted"); return; }
+    try {
+      child = spawnCurlWithProxy(config, ["-sS", "--connect-timeout", "2", "--max-time", String(timeoutSeconds), url]);
+      dispatched = typeof child.pid === "number";
+      child.once("spawn", () => { dispatched = true; });
+    } catch { done(null, "Geo-IP probe could not be dispatched"); return; }
     signal?.addEventListener("abort", onAbort, { once: true });
-
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
-      done({ data: null, latencyMs: Date.now() - startTime, error: "timeout" });
+    if (signal?.aborted) { onAbort(); return; }
+    let stdout = "", stderr = "";
+    timer = setTimeout(() => {
+      done(null, "timeout");
+      try { child?.kill(); } catch { /* already gone */ }
     }, (timeoutSeconds + 1) * 1000);
-
-    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
-
-    child.on("close", (code) => {
-      const latencyMs = Date.now() - startTime;
-      if (code !== 0) {
-        done({ data: null, latencyMs, error: (stderr || stdout || `curl exited ${code}`).trim() });
-        return;
-      }
-
+    child.stdout?.on("data", chunk => { dispatched = true; stdout += chunk.toString(); });
+    child.stderr?.on("data", chunk => { dispatched = true; stderr += chunk.toString(); });
+    child.on("close", code => {
+      if (typeof code === "number" && code >= 0) dispatched = true;
+      if (code !== 0) { done(null, (stderr || stdout || `curl exited ${code}`).trim()); return; }
       const output = stdout.trim();
-      if (!output) {
-        done({ data: null, latencyMs, error: "Empty Geo-IP response" });
-        return;
-      }
-
-      try {
-        done({ data: JSON.parse(output), latencyMs, error: null });
-      } catch {
-        const ipMatch = output.match(/\d+\.\d+\.\d+\.\d+/);
-        if (ipMatch) done({ data: { ip: ipMatch[0] }, latencyMs, error: null });
-        else done({ data: null, latencyMs, error: `Unrecognized Geo-IP response: ${output.slice(0, 100)}` });
+      if (!output) { done(null, "Empty Geo-IP response"); return; }
+      try { done(JSON.parse(output), null); }
+      catch {
+        const ip = output.match(/\d+\.\d+\.\d+\.\d+/);
+        if (ip) done({ ip: ip[0] }, null);
+        else done(null, `Unrecognized Geo-IP response: ${output.slice(0, 100)}`);
       }
     });
-
-    child.on("error", (err) => {
-      done({ data: null, latencyMs: Date.now() - startTime, error: err.message || "Execution error" });
-    });
+    child.on("error", error => { done(null, error.message || "Execution error"); });
   });
 }
 
@@ -383,6 +382,7 @@ function fromIpwhois(data: any, latencyMs: number): ProxyDetectionResult | null 
   if (!ip || !data.timezone?.id || !data.country_code) return null;
   const classified = classifyHosting({ as: data.connection?.asn ? `AS${data.connection.asn}` : null, org: data.connection?.org, isp: data.connection?.isp });
   return {
+    ...emptyResult(true),
     success: true,
     exitIp: ip,
     country: data.country || null,
@@ -410,6 +410,7 @@ function fromIpapi(data: any, latencyMs: number): ProxyDetectionResult | null {
   if (!ip || !data.timezone || !data.country_code) return null;
   const classified = classifyHosting({ as: data.asn, org: data.org, isp: data.org });
   return {
+    ...emptyResult(true),
     success: true,
     exitIp: ip,
     country: data.country_name || null,
@@ -437,6 +438,7 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
   if (!ip || !data.timezone || !data.countryCode) return null;
   const classified = classifyHosting({ as: data.as, org: data.org, isp: data.isp });
   return {
+    ...emptyResult(true),
     success: true,
     exitIp: ip,
     country: data.country || null,
@@ -462,55 +464,47 @@ function fromIpApi(data: any, latencyMs: number): ProxyDetectionResult | null {
 
 // Successful geo-IP detections are cached per proxy identity so repeat
 // launches skip the network round-trip (profile launch speed optimization).
-const DETECT_CACHE_TTL_MS = 10 * 60 * 1000;
-const detectCache = new Map<string, { at: number; result: ProxyDetectionResult }>();
-const detectCacheSecret = randomBytes(32);
-const detectionObservedAt = new WeakMap<ProxyDetectionResult, number>();
+const DETECT_CACHE_TTL_MS = PROXY_OBSERVATION_TTL_MS;
+const detectCache = new Map<string, ProxyDetectionResult>();
+// Separate from the committed target's lifecycle generation. Each dispatched
+// cache miss/refresh supersedes older cache writers, even when it later fails.
+const cacheRequests = new Map<string, object>();
 
-function detectCacheKey(config: ProxyConfig): string {
-  // Credentials can select a different exit; keep neither plaintext nor a
-  // stable, offline-testable credential digest in the cache key.
-  const identity = [config.type, String(config.host || ""), String(config.port || ""), String(config.username || ""), String(config.password || "")];
-  return createHmac("sha256", detectCacheSecret).update(JSON.stringify(identity)).digest("hex");
-}
-
-/** Original successful observation time; reading a cached result never renews it. */
+/** Serializable original time, including across IPC clone; NOT authentication. */
 export function proxyDetectionObservedAt(result: ProxyDetectionResult): number | null {
-  return detectionObservedAt.get(result) ?? null;
+  return proxyObservationTime(result.observedAt);
 }
 
 function cachedDetection(config: ProxyConfig): ProxyDetectionResult | null {
-  const cached = detectCache.get(detectCacheKey(config));
+  const key = proxyIdentityToken(config), cached = detectCache.get(key);
   if (!cached) return null;
-  if (Date.now() - cached.at > DETECT_CACHE_TTL_MS) {
-    detectCache.delete(detectCacheKey(config));
+  const at = proxyDetectionObservedAt(cached);
+  if (at === null || Date.now() - at > DETECT_CACHE_TTL_MS) {
+    detectCache.delete(key);
     return null;
   }
-  return cached.result;
+  return cloneProxyObservation(cached, "cache");
+}
+function rememberDetection(key: string, request: object, result: ProxyDetectionResult): void {
+  if (cacheRequests.get(key) !== request || !result.success || !result.exitIp || result.source !== "network") return;
+  detectCache.set(key, cloneProxyObservation(result));
 }
 
-function rememberDetection(config: ProxyConfig, result: ProxyDetectionResult): void {
-  if (!result.success || !result.exitIp) return;
-  const at = Date.now();
-  detectionObservedAt.set(result, at);
-  detectCache.set(detectCacheKey(config), { at, result });
-}
-
-/** Test-only hooks for the geo-IP detection cache. */
+/** Test-only seeding is explicit synthetic measurement, not a production path. */
 export function rememberProxyDetectionForTests(config: ProxyConfig, result: ProxyDetectionResult): void {
-  rememberDetection(config, result);
+  if (!result.success || !result.exitIp) return;
+  const key = proxyIdentityToken(config), request = {};
+  cacheRequests.set(key, request);
+  const observed = completeProxyObservation({ ...emptyResult(true), ...result }, key, nextProxyObservationOrder());
+  Object.assign(result, observed);
+  rememberDetection(key, request, observed);
 }
-
-export function cachedProxyDetectionForTests(config: ProxyConfig): ProxyDetectionResult | null {
-  return cachedDetection(config);
-}
-
-export function resetProxyDetectionCacheForTests(): void {
-  detectCache.clear();
-}
+export function cachedProxyDetectionForTests(config: ProxyConfig): ProxyDetectionResult | null { return cachedDetection(config); }
+export function resetProxyDetectionCacheForTests(): void { detectCache.clear(); cacheRequests.clear(); }
+export type ProxyDetectionCachePolicy = "prefer-cache" | "refresh";
 
 export const proxyDetector = {
-  async detect(config: ProxyConfig, opts?: { signal?: AbortSignal }): Promise<ProxyDetectionResult> {
+  async detect(config: ProxyConfig, opts?: { signal?: AbortSignal; cachePolicy?: ProxyDetectionCachePolicy }): Promise<ProxyDetectionResult> {
     // R13 P3-2: honor the caller's abort signal — reject promptly instead of
     // waiting out the inner provider timers when withTimeout fires.
     if (opts?.signal?.aborted) return emptyResult(false, "aborted");
@@ -540,16 +534,24 @@ export const proxyDetector = {
       return emptyResult(false, e.message || "Invalid proxy config");
     }
 
-    // Repeat launches of the same proxy reuse the last successful detection.
-    const cached = cachedDetection(config);
-    if (cached) return cached;
+    // Freeze routing/auth across the await without retaining them in a witness.
+    config = structuredClone(config);
+    const key = proxyIdentityToken(config);
+    if (opts?.cachePolicy !== "refresh") {
+      const cached = cachedDetection(config);
+      if (cached) return cached;
+    }
+    const request = {}, order = nextProxyObservationOrder();
+    cacheRequests.set(key, request);
+    detectCache.delete(key);
 
-    // Fire all geo-IP queries concurrently and settle on the FIRST success
-    // (Promise.any) instead of waiting for the slowest provider.
+    // Fire all geo-IP queries concurrently and settle on the FIRST success.
     const signal = opts?.signal;
+    let dispatched = false;
     const attempts = providers.map(async (provider) => {
       if (signal?.aborted) throw new Error("aborted");
       const result = await curlJsonAsync(config, provider.url, provider.timeoutSeconds, signal);
+      dispatched ||= result.dispatched;
       if (signal?.aborted) throw new Error("aborted");
       if (result.error) throw new Error(`${provider.url}: ${result.error}`);
       const parsed = provider.parse(result.data, result.latencyMs);
@@ -559,8 +561,10 @@ export const proxyDetector = {
 
     try {
       const parsed = await Promise.any(attempts);
-      rememberDetection(config, parsed);
-      return parsed;
+      if (signal?.aborted) return emptyResult(false, "aborted");
+      const observed = completeProxyObservation(parsed, key, order);
+      rememberDetection(key, request, observed);
+      return cloneProxyObservation(observed);
     } catch (e: any) {
       const errors: string[] = Array.isArray(e?.errors) ? e.errors.map((x: any) => String(x?.message || x)) : [String(e?.message || e)];
       const summary = errors.map(error => {
@@ -570,7 +574,9 @@ export const proxyDetector = {
         if (/Could not resolve|Name or service not known/i.test(error)) return `${provider}: DNS failed`;
         return `${provider}: failed`;
       }).join("; ");
-      return emptyResult(false, summary || "Proxy Geo-IP detection failed");
+      if (signal?.aborted) return emptyResult(false, "aborted");
+      const failed = emptyResult(false, summary || "Proxy Geo-IP detection failed");
+      return dispatched ? completeProxyObservation(failed, key, order) : failed;
     }
   },
 

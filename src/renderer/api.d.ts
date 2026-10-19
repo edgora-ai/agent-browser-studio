@@ -1,5 +1,10 @@
-import type { SyncResult, SyncComparisonToken, ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry } from "../main/types.js";
+import type { SyncResult, SyncComparisonToken, ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry, ProxyDetectionCacheEntry, ProxyObservationMetadata } from "../main/types.js";
+import type { ProxyDetectionResult } from "../main/services/proxy-detector.js";
+export type { ProxyDetectionCacheEntry, ProxyObservationMetadata, ProxyDetectionResult };
 export type { ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry } from "../main/types.js";
+import type { ProfileNetworkPage, ProfileNetworkPagesResult, ProfileNetworkObservationResult, ProfileNetworkArmedEvent } from "../main/types.js";
+export type { ProfileNetworkPage, ProfileNetworkPagesResult, ProfileNetworkObservationResult, ProfileNetworkArmedEvent,
+  NetworkCounts, NetworkCoverage, NetworkObservationSummary, NetworkObservationPayload, ObservedNetworkHop, NetworkHttpStatusEvidence } from "../main/types.js";
 import type { SyncDiffResult } from "../main/services/sync-service.js";
 import type { ActiveSyncOperation } from "../main/services/sync/operation-state.js";
 
@@ -55,7 +60,11 @@ export interface ResolvedProfileProxy {
 export type ProxyRiskLevel = "good" | "watch" | "poor";
 
 export interface ProxyHealthHistoryPoint {
-  at: number;
+  at: number | null;
+  source?: ProxyObservationMetadata["source"];
+  observationId?: string | null;
+  hosting?: boolean | null;
+  isProxy?: boolean | null;
   success: boolean;
   exitIp: string | null;
   countryCode: string | null;
@@ -70,8 +79,8 @@ export interface ProxyHealthHistoryPoint {
 
 export interface ProxyHealthEntry {
   proxyName: string;
-  firstSeenAt: number;
-  lastCheckedAt: number;
+  firstSeenAt: number | null;
+  lastCheckedAt: number | null;
   lastSuccessAt: number | null;
   checks: number;
   successes: number;
@@ -82,6 +91,8 @@ export interface ProxyHealthEntry {
   avgLatencyMs: number | null;
   score: number;
   risk: ProxyRiskLevel;
+  freshness?: "fresh" | "stale" | "unknown";
+  observationAgeMs?: number | null;
   history: ProxyHealthHistoryPoint[];
   bindings: string[];
   cooldownUntil: number | null;
@@ -97,6 +108,8 @@ export interface ProxyHealthSummary {
   watch: number;
   poor: number;
   inCooldown: number;
+  stale: number;
+  unknown: number;
   lastCheckedAt: number | null;
 }
 
@@ -522,7 +535,7 @@ export interface AgentBrowserAPI {
     deleteCookie: (dirId: string, domain: string, name: string) => Promise<{ success: boolean; error?: string }>;
   };
   proxy: {
-    list: () => Promise<Array<{ name: string; config: RedactedProxyConfig; isDefault: boolean }>>;
+    list: () => Promise<Array<{ name: string; config: RedactedProxyConfig; isDefault: boolean; detection?: ProxyDetectionCacheEntry }>>;
     get: (name: string) => Promise<RedactedProxyConfig | null>;
     getProfile: (dirId: string) => Promise<ResolvedProfileProxy>;
     add: (name: string, config: ProxyConfig) => Promise<{ success: boolean; error?: string }>;
@@ -537,9 +550,9 @@ export interface AgentBrowserAPI {
     rotationInfo: (name: string) => Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }>;
   };
   detect: {
-    proxy: (config: ProxyConfig) => Promise<any>;
-    proxyPing: (config: ProxyConfig) => Promise<any>;
-    proxyByName: (name: string) => Promise<any>;
+    proxy: (config: ProxyConfig) => Promise<ProxyDetectionResult>;
+    proxyPing: (config: ProxyConfig) => Promise<{ success: boolean; latencyMs: number | null; error: string | null }>;
+    proxyByName: (name: string) => Promise<Partial<ProxyDetectionResult> & { success: boolean; code?: "PROXY_DETECTION_TARGET_CHANGED" | "PROXY_DETECTION_STALE" | "PROXY_DETECTION_UNOBSERVED" | "PROXY_DETECTION_SAVE_FAILED" }>;
     webrtcLeak: (config: ProxyConfig) => Promise<any>;
   };
   storage: {
@@ -618,6 +631,11 @@ export interface AgentBrowserAPI {
     healthHistory: (dirId: string) => Promise<{ entries: ProfileHealthEntry[] | null; ok?: boolean; outcome?: ProfileHealthOutcome; code?: string; error?: string }>;
     /** Acknowledges a request; cancelled=true is not evidence that the run settled or the browser stopped. */
     healthCancel: (dirId: string, options: { kind: ProfileHealthKind; requestId: string }) => Promise<{ success: boolean; cancelled: boolean; code?: string }>;
+    healthClear: (dirId: string, kind?: ProfileHealthKind) => Promise<{ ok: boolean; code?: string }>;
+    /** Lists already-owned HTTP(S) pages; does not start an observation or browser. */
+    networkPages: (dirId: string) => Promise<ProfileNetworkPagesResult>;
+    networkObserve: (dirId: string, options: { selection: string; requestId: string }) => Promise<ProfileNetworkObservationResult>;
+    onNetworkArmed: (callback: (event: ProfileNetworkArmedEvent) => void) => () => void;
     consistencyCheck: (dirId: string) => Promise<Omit<HealthResponse<never>, "result"> & { warnings?: Array<{ severity: string; code: string; message: string }>; blockers?: Array<{ severity: string; code: string; message: string }> }>;
     checkDrift: (dirId: string) => Promise<Omit<HealthResponse<never>, "result"> & { hasBaseline?: boolean; risky?: boolean; drift?: Array<{ field: string; baseline: unknown; current: unknown }> }>;
     captureBaseline: (dirId: string, options?: { confirmationToken?: string }) => Promise<BaselineCaptureResult>;

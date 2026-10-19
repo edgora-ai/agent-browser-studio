@@ -5,11 +5,12 @@ import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
 import { sanitizePortableFingerprintBaseline } from "./fingerprint-baseline.js";
-import { PORTABLE_PROFILE_FIELDS, parseProfileSyncBaseline, type PortableProfileContent } from "./profile-portability.js";
+import { PORTABLE_PROFILE_FIELDS, parseProfileSyncBaseline, parseProfileHistoryBaseline, parseHistoryCoverage, type PortableProfileContent } from "./profile-portability.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { tMain } from "./main-i18n.js";
-import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommittedConfig, adoptLoadedConfig, setNormalizer } from "./config/store.js";
+import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommittedConfig, adoptLoadedConfig, setNormalizer, setProxyWitnessAdapter, captureProxyTarget, type ProxyDetectionTarget } from "./config/store.js";
+import { createProxyWitness, proxyObservationTime } from "./proxy-observation.js";
 import { assertConfigSize } from "./config/limits.js";
 import { invalidateSyncSettings } from "./sync/operation-state.js";
 import {
@@ -35,6 +36,7 @@ function normalizeProfileBrowserVersion(profile: { engine?: unknown; browserVers
 }
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
 import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry, ProfileHealthEntry, ProfileHealthKind } from "../types.js";
+import { normalizeNetworkObservationSummary } from "./network-diagnostics-contract.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
@@ -114,12 +116,13 @@ export function getProfilesDir(): string {
 
 // ── Proxy management ──
 
-export function getProxyList(): Array<{ name: string; config: ProxyConfig & { hasAuth?: boolean }; isDefault: boolean }> {
+export function getProxyList(): Array<{ name: string; config: ProxyConfig & { hasAuth?: boolean }; isDefault: boolean; detection?: ProxyDetectionCacheEntry }> {
   const cfg = getConfig();
   return Object.entries(cfg.proxies).map(([name, c]) => ({
     name,
     config: redactProxyConfig(c),
     isDefault: name === cfg.defaultProxy,
+    ...(cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? { detection: structuredClone(cfg.proxyDetections[name]) } : {}),
   }));
 }
 
@@ -134,57 +137,73 @@ export function getProxySecret(name: string): ProxyConfig | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return null;
-  const proxy = cfg.proxies[name];
+  const proxy = structuredClone(cfg.proxies[name]);
   return proxy.username && proxy.password
     ? { ...proxy, password: decryptSecretOr(proxy.password) }
-    : { ...proxy };
+    : proxy;
+}
+
+/** Capture from committed state before dedupe or any asynchronous dispatch.
+ * An optional launch snapshot must still describe this exact committed route. */
+export function captureProxyDetectionTarget(name: string, expected?: ProxyConfig): ProxyDetectionTarget | null {
+  if (!isValidProxyName(name)) return null;
+  const cfg = getConfig();
+  if (!Object.hasOwn(cfg.proxies, name) || expected && !proxyConfigEquivalent(cfg.proxies[name], expected)) return null;
+  return captureProxyTarget(name);
 }
 
 export function getProxyDetection(name: string): ProxyDetectionCacheEntry | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
-  return cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? cfg.proxyDetections[name] : null;
+  return cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? structuredClone(cfg.proxyDetections[name]) : null;
 }
 
 export function setProxyDetection(name: string, entry: ProxyDetectionCacheEntry): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
-  cfg.proxyDetections = cfg.proxyDetections || {};
-  cfg.proxyDetections[name] = normalizeProxyDetection(entry);
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+    draft.proxyDetections = draft.proxyDetections || {};
+    draft.proxyDetections[name] = normalizeProxyDetection(entry);
+  });
 }
 
+// Legacy synchronous CAS for main-only callers. Async detectors use the opaque
+// lifecycle target instead; a mismatch exits BEFORE any persistence attempt.
 export function setProxyDetectionIfCurrent(name: string, expectedConfig: ProxyConfig, entry: ProxyDetectionCacheEntry): boolean {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) return false;
-  if (!proxyConfigEquivalent(cfg.proxies[name], normalizeProxyConfig(expectedConfig, cfg.proxies[name]))) return false;
-  cfg.proxyDetections = cfg.proxyDetections || {};
-  cfg.proxyDetections[name] = normalizeProxyDetection(entry);
-  saveConfig(cfg);
-  return true;
+  getConfig();
+  const conflict = {};
+  try {
+    storeTransact((draft: MgmtConfig) => {
+      if (!Object.hasOwn(draft.proxies, name) || !proxyConfigEquivalent(draft.proxies[name], normalizeProxyConfig(expectedConfig, draft.proxies[name]))) throw conflict;
+      draft.proxyDetections = draft.proxyDetections || {};
+      draft.proxyDetections[name] = normalizeProxyDetection(entry);
+    });
+    return true;
+  } catch (error) { if (error === conflict) return false; throw error; }
 }
 
 export function getProxyHealthEntry(name: string): ProxyHealthEntry | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
-  return cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
+  return cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? structuredClone(cfg.proxyHealth[name]) : null;
 }
 
 export function setProxyHealth(name: string, entry: ProxyHealthEntry): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
-  cfg.proxyHealth = cfg.proxyHealth || {};
-  cfg.proxyHealth[name] = normalizeProxyHealthEntry(entry);
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+    draft.proxyHealth = draft.proxyHealth || {};
+    draft.proxyHealth[name] = normalizeProxyHealthEntry(entry);
+  });
 }
 
 const MAX_WEBRTC_DIAG_HISTORY = 20;
 const MAX_ENV_RISK_DIAG_HISTORY = 20;
 const MAX_PROFILE_HEALTH_HISTORY = 20;
-const HEALTH_KINDS = new Set(["env", "webrtc", "drift", "consistency"]);
+const HEALTH_KINDS = new Set(["env", "webrtc", "drift", "consistency", "network"]);
 const HEALTH_OUTCOMES = new Set(["pass", "warn", "risk", "error", "unavailable", "inconclusive", "cancelled", "baseline-established"]);
 const HEALTH_SOURCES = new Set(["runtime", "host", "baseline", "cached", "legacy"]);
 
@@ -194,6 +213,18 @@ function normalizeProfileHealthEntry(raw: unknown): ProfileHealthEntry | null {
   if (!HEALTH_KINDS.has(value.kind) || !HEALTH_OUTCOMES.has(value.outcome) || !HEALTH_SOURCES.has(value.source)
     || !Number.isSafeInteger(value.at) || value.at < 0 || typeof value.summary !== "string"
     || value.requestId !== undefined && (typeof value.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(value.requestId))) return null;
+  if (value.kind === "network") {
+    const networkSummary = normalizeNetworkObservationSummary(value.networkSummary);
+    if (!networkSummary) return null;
+    // Network details never enter canonical history. Even a forged native PASS
+    // cannot turn one finite observation into website/proxy availability proof.
+    return {
+      kind: "network", at: value.at,
+      outcome: value.outcome === "pass" || value.outcome === "baseline-established" ? "inconclusive" : value.outcome,
+      summary: "NETWORK_OBSERVATION_V1", source: value.source,
+      ...(value.requestId !== undefined ? { requestId: value.requestId } : {}), networkSummary,
+    };
+  }
   return {
     kind: value.kind, at: value.at,
     outcome: value.source === "legacy" && value.outcome === "pass" ? "inconclusive" : value.outcome,
@@ -295,15 +326,15 @@ export function clearEnvRiskDiagnostics(dirId: string): void {
 
 export function addProxy(name: string, config: ProxyConfig): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  cfg.proxies[name] = normalizeProxyConfig(config);
-  cfg.proxies[name].updatedAt = Date.now();
-  if (cfg.proxies[name].fallbacks && cfg.proxies[name].fallbacks.includes(name)) {
-    cfg.proxies[name].fallbacks = cfg.proxies[name].fallbacks.filter((f) => f !== name);
-  }
-  if (cfg.proxyDetections) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    const proxy = normalizeProxyConfig(config);
+    proxy.updatedAt = Date.now();
+    if (proxy.fallbacks?.includes(name)) proxy.fallbacks = proxy.fallbacks.filter(f => f !== name);
+    draft.proxies[name] = proxy;
+    if (draft.proxyDetections) delete draft.proxyDetections[name];
+    if (draft.proxyHealth) delete draft.proxyHealth[name];
+  }, undefined, { invalidateProxyTargets: [name] });
 }
 
 export function renameProxy(oldName: string, newName: string, config: ProxyConfig): boolean {
@@ -312,45 +343,35 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
   const cfg = getConfig();
   if (oldName === "default") throw new Error("Default proxy cannot be renamed");
   if (!Object.hasOwn(cfg.proxies, oldName)) return false;
-  if (oldName !== newName && Object.hasOwn(cfg.proxies, newName)) throw new Error(`Proxy already exists: ${newName}`);
-
-  const previous = cfg.proxies[oldName];
-  const normalized = normalizeProxyConfig(config, previous);
-  normalized.updatedAt = Date.now();
-  cfg.proxies[newName] = normalized;
-
-  if (oldName === newName) {
-    if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName) && !proxyConfigEquivalent(previous, normalized)) {
-      delete cfg.proxyDetections[oldName];
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, oldName)) throw new Error(`Proxy not found: ${oldName}`);
+    if (oldName !== newName && Object.hasOwn(draft.proxies, newName)) throw new Error(`Proxy already exists: ${newName}`);
+    const previous = draft.proxies[oldName];
+    const normalized = normalizeProxyConfig(config, previous);
+    normalized.updatedAt = Date.now();
+    draft.proxies[newName] = normalized;
+    if (oldName === newName) {
+      // The shared store compares endpoint/auth/bypass once and resets only
+      // genuinely changed identities; fallback-only edits remain equivalent.
+      if (normalized.fallbacks?.includes(oldName)) normalized.fallbacks = normalized.fallbacks.filter(f => f !== oldName);
+      return;
     }
-    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName) && !proxyConfigEquivalent(previous, normalized)) {
-      delete cfg.proxyHealth[oldName];
+    const equivalent = proxyConfigEquivalent(previous, normalized);
+    delete draft.proxies[oldName];
+    replaceFallbackReference(draft, oldName, newName);
+    if (draft.proxyDetections && Object.hasOwn(draft.proxyDetections, oldName)) {
+      if (equivalent) draft.proxyDetections[newName] = draft.proxyDetections[oldName];
+      delete draft.proxyDetections[oldName];
     }
-    if (normalized.fallbacks && normalized.fallbacks.includes(oldName)) {
-      normalized.fallbacks = normalized.fallbacks.filter((f) => f !== oldName);
+    if (draft.proxyHealth && Object.hasOwn(draft.proxyHealth, oldName)) {
+      if (equivalent) draft.proxyHealth[newName] = { ...draft.proxyHealth[oldName], proxyName: newName };
+      delete draft.proxyHealth[oldName];
     }
-  } else {
-    delete cfg.proxies[oldName];
-    replaceFallbackReference(cfg, oldName, newName);
-    if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName)) {
-      if (proxyConfigEquivalent(previous, normalized)) cfg.proxyDetections[newName] = cfg.proxyDetections[oldName];
-      delete cfg.proxyDetections[oldName];
+    if (draft.defaultProxy === oldName) draft.defaultProxy = newName;
+    for (const profile of Object.values(draft.browserProfiles || {})) {
+      if (profile.proxyMode === "named" && profile.proxyName === oldName) profile.proxyName = newName;
     }
-    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName)) {
-      if (proxyConfigEquivalent(previous, normalized)) {
-        cfg.proxyHealth[newName] = { ...cfg.proxyHealth[oldName], proxyName: newName };
-      }
-      delete cfg.proxyHealth[oldName];
-    }
-    if (cfg.defaultProxy === oldName) cfg.defaultProxy = newName;
-    for (const profile of Object.values(cfg.browserProfiles || {})) {
-      if (profile.proxyMode === "named" && profile.proxyName === oldName) {
-        profile.proxyName = newName;
-      }
-    }
-  }
-
-  saveConfig(cfg);
+  });
   return true;
 }
 
@@ -403,18 +424,14 @@ export function deleteProxy(name: string): boolean {
     }
   }
 
-  delete cfg.proxies[name];
-  if (cfg.proxyDetections) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
-  removeFallbackReference(cfg, name);
-
-  if (cfg.defaultProxy === name) {
-    // No built-in fallback proxy exists anymore: unset so default-mode
-    // profiles resolve to a direct connection instead of a missing proxy.
-    cfg.defaultProxy = "";
-  }
-
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => {
+    delete draft.proxies[name];
+    if (draft.proxyDetections) delete draft.proxyDetections[name];
+    if (draft.proxyHealth) delete draft.proxyHealth[name];
+    removeFallbackReference(draft, name);
+    // No built-in fallback: default-mode profiles resolve to direct.
+    if (draft.defaultProxy === name) draft.defaultProxy = "";
+  });
   return true;
 }
 
@@ -422,8 +439,7 @@ export function setDefaultProxyName(name: string): boolean {
   validateProxyName(name);
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return false;
-  cfg.defaultProxy = name;
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => { draft.defaultProxy = name; });
   return true;
 }
 
@@ -431,13 +447,11 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   validateProxyName(name);
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return false;
-  const previous = cfg.proxies[name];
-  const normalized = normalizeProxyConfig(config, previous);
-  normalized.updatedAt = Date.now();
-  cfg.proxies[name] = normalized;
-  if (cfg.proxyDetections && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyHealth[name];
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => {
+    const normalized = normalizeProxyConfig(config, draft.proxies[name]);
+    normalized.updatedAt = Date.now();
+    draft.proxies[name] = normalized;
+  });
   return true;
 }
 
@@ -983,23 +997,33 @@ function isRealDirectoryInside(candidate: string, parent: string): boolean {
 
 function proxyConfigEquivalent(a: ProxyConfig | undefined, b: ProxyConfig | undefined): boolean {
   if (!a || !b) return false;
-  const bypassA = [...(a.bypassList || [])].sort();
-  const bypassB = [...(b.bypassList || [])].sort();
+  const bypassA = (a.bypassList || []).map(entry => entry.trim()).filter(Boolean).sort();
+  const bypassB = (b.bypassList || []).map(entry => entry.trim()).filter(Boolean).sort();
   return a.type === b.type && a.host === b.host && a.port === b.port &&
-    (a.username || "") === (b.username || "") && comparableProxyPassword(a.password) === comparableProxyPassword(b.password) &&
-    bypassA.length === bypassB.length && bypassA.every((entry, index) => entry === bypassB[index]);
+    (a.username || "") === (b.username || "") &&
+    bypassA.length === bypassB.length && bypassA.every((entry, index) => entry === bypassB[index]) &&
+    ((a.password || "") === (b.password || "") || comparableProxyPassword(a.password) === comparableProxyPassword(b.password));
 }
 
 function comparableProxyPassword(value: string | undefined): string {
   if (!value) return "";
   if (!isEncrypted(value)) return value;
-  const decrypted = decryptSecretOr(value, "");
-  return decrypted || value;
+  try {
+    // A successfully decrypted empty string IS the real empty credential;
+    // only the helper's thrown failure below preserves the encoded identity.
+    return decryptSecretOr(value, value);
+  } catch {
+    // Equality must not turn failed decryption into a real empty credential.
+    // Preserve the original encoded value only for comparison, never for use.
+    return value;
+  }
 }
 
 function normalizeProxyDetection(entry: ProxyDetectionCacheEntry): ProxyDetectionCacheEntry {
   return {
-    detectedAt: sanitizeTimestamp(entry.detectedAt),
+    detectedAt: proxyObservationTime(entry.detectedAt),
+    source: entry.source === "network" || entry.source === "cache" ? entry.source : "unknown",
+    observationId: sanitizeOptionalText(entry.observationId, 80),
     success: Boolean(entry.success),
     exitIp: sanitizeOptionalText(entry.exitIp, 80),
     country: sanitizeOptionalText(entry.country, 120),
@@ -1033,7 +1057,9 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
   const history: ProxyHealthEntry["history"] = (Array.isArray(entry.history) ? entry.history : [])
     .slice(-20)
     .map((h) => ({
-      at: sanitizeTimestamp(h.at),
+      at: proxyObservationTime(h.at),
+      source: h.source === "network" || h.source === "cache" ? h.source : "unknown",
+      observationId: sanitizeOptionalText(h.observationId, 80),
       success: Boolean(h.success),
       exitIp: sanitizeOptionalText(h.exitIp, 80),
       countryCode: sanitizeOptionalText(h.countryCode, 8),
@@ -1050,9 +1076,9 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
   const risk = entry.risk === "good" || entry.risk === "watch" || entry.risk === "poor" ? entry.risk : "poor";
   return {
     proxyName: sanitizeOptionalText(entry.proxyName, 80) || "unknown",
-    firstSeenAt: sanitizeTimestamp(entry.firstSeenAt),
-    lastCheckedAt: sanitizeTimestamp(entry.lastCheckedAt),
-    lastSuccessAt: entry.lastSuccessAt ? sanitizeTimestamp(entry.lastSuccessAt) : null,
+    firstSeenAt: proxyObservationTime(entry.firstSeenAt),
+    lastCheckedAt: proxyObservationTime(entry.lastCheckedAt),
+    lastSuccessAt: proxyObservationTime(entry.lastSuccessAt),
     checks: Math.max(0, Math.floor(Number(entry.checks) || 0)),
     successes: Math.max(0, Math.floor(Number(entry.successes) || 0)),
     consecutiveFailures: Math.max(0, Math.floor(Number(entry.consecutiveFailures) || 0)),
@@ -1251,6 +1277,8 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     syncedAt: cp.syncedAt,
     syncedHash: cp.syncedHash,
     ...(syncBaseline ? { syncBaseline } : {}),
+    ...(parseProfileHistoryBaseline(cp.historySyncBaseline) ? { historySyncBaseline: parseProfileHistoryBaseline(cp.historySyncBaseline)! } : {}),
+    ...(parseHistoryCoverage(cp.historySyncCoverage) ? { historySyncCoverage: parseHistoryCoverage(cp.historySyncCoverage)! } : {}),
     fontsDir: sanitizeOptionalFontsDir(cp.fontsDir),
   };
 }
@@ -1428,20 +1456,25 @@ export function getSyncConfig() {
   return { ...getConfig().sync };
 }
 
-export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean }): void {
+export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean }): void {
   if (!sync || typeof sync !== "object" || Array.isArray(sync)) throw new Error("Sync settings must be an object");
-  for (const key of ["enabled", "custodyConsent"] as const) {
+  for (const key of ["enabled", "custodyConsent", "includeHistory", "historyConsent"] as const) {
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`Sync ${key} must be a boolean`);
   }
   for (const key of ["endpoint", "bucket", "accessKey", "secretKey"] as const) {
     if (sync[key] !== undefined && typeof sync[key] !== "string") throw new Error(`Sync ${key} must be a string`);
   }
-  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey"];
+  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey", "includeHistory"];
   storeTransact((cfg) => {
     const next = { ...cfg.sync };
     // Custody consent is stamped by main, but published only if validation and
     // the configuration rename commit both succeed. Never mutate live state.
     if (sync?.custodyConsent === true) next.custodyConsentAt = Date.now();
+    if (sync.historyConsent === true) next.historyConsentAt = Date.now();
+    else if (sync.historyConsent === false) { next.historyConsentAt = null; next.includeHistory = false; }
+    if (sync.includeHistory === true && !(Number.isSafeInteger(next.historyConsentAt) && next.historyConsentAt! > 0)) {
+      throw Object.assign(new Error("History scope consent required (includes Firefox Places bookmarks)"), { code: "HISTORY_CONSENT_REQUIRED" });
+    }
     for (const key of allowed) {
       const value = sync[key];
       if (value === undefined) continue;
@@ -1539,6 +1572,7 @@ function loadConfig(): MgmtConfig {
 
 // The store publishes config and account identity state at the rename commit
 // point. This hook owns ONLY best-effort run-eviction cleanup, not publication.
+setProxyWitnessAdapter((proxy, previous) => createProxyWitness(proxy, previous, comparableProxyPassword));
 setNormalizer((draft, mode) => mergeConfig(DefaultConfig, draft, mode));
 setAfterTransactHook((normalized, draft) => {
   // Only normalization-evicted terminal IDs, not every run omitted by a
@@ -1665,6 +1699,12 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       const syncBaseline = parseProfileSyncBaseline(profile.syncBaseline);
       if (syncBaseline) profile.syncBaseline = syncBaseline;
       else delete profile.syncBaseline;
+      const historyBaseline = parseProfileHistoryBaseline(profile.historySyncBaseline);
+      if (historyBaseline && historyBaseline.engine === (profile.engine || "chromium")) profile.historySyncBaseline = historyBaseline;
+      else delete profile.historySyncBaseline;
+      const historyCoverage = parseHistoryCoverage(profile.historySyncCoverage);
+      if (historyCoverage && historyCoverage.dirId === dirId && historyCoverage.engine === (profile.engine || "chromium")) profile.historySyncCoverage = historyCoverage;
+      else delete profile.historySyncCoverage;
       merged.browserProfiles[dirId] = profile;
     }
   }

@@ -12,8 +12,16 @@ const f = vi.hoisted(() => ({
   sessions: new Map<number, any>(),
   fs: Object.fromEntries(["existsSync", "mkdirSync", "readFileSync", "writeFileSync", "openSync", "writeSync", "closeSync", "renameSync", "unlinkSync", "rmSync", "realpathSync", "lstatSync", "statSync"].map((name) => [name, vi.fn()])) as Record<string, ReturnType<typeof vi.fn>>,
 }));
-vi.mock("node:fs", () => f.fs);
+vi.mock("node:fs", async (importOriginal) => ({
+  ...f.fs,
+  // Import-time SQLite/ZIP guards need platform flags, not real file effects.
+  // Keep every callable mocked; undeclared fs capabilities still fail closed.
+  constants: (await importOriginal<typeof import("node:fs")>()).constants,
+}));
 vi.mock("node:net", () => ({ createServer: f.netCreate }));
+vi.mock("node:dns", () => ({ lookup: () => f.forbidden("DNS") }));
+vi.mock("node:dns/promises", () => ({ lookup: () => f.forbidden("DNS"), resolve: () => f.forbidden("DNS") }));
+vi.mock("node:os", () => ({ tmpdir: () => process.env.TMPDIR, homedir: () => process.env.HOME, hostname: () => "synthetic-health-launch-host", platform: () => process.platform, arch: () => process.arch }));
 vi.mock("node:child_process", () => ({ spawn: f.spawn, ...Object.fromEntries(["exec", "execSync", "execFile", "execFileSync", "spawnSync", "fork"].map((name) => [name, () => f.forbidden(name)])) }));
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] }, screen: { getPrimaryDisplay: () => ({ scaleFactor: 2 }) } }));
 vi.mock("../../src/main/services/browser-platform-policy.js", () => ({ getHostBrowserPlatform: () => "macos" }));
@@ -51,6 +59,10 @@ vi.mock("../../src/main/services/masque-socks-bridge.js", () => ({ startMasqueSo
 vi.mock("../../src/main/services/proxy-detector.js", () => ({
   buildChromiumProxyUrl: (proxy: ProxyConfig) => `${proxy.type}://${proxy.host}:${proxy.port}`,
   probeProxyPort: async () => true, proxyDetectionObservedAt: () => null, proxyDetector: { detect: () => f.forbidden("proxy Geo network") },
+}));
+vi.mock("../../src/main/services/proxy-detection.js", () => ({
+  captureProxyDetectionTarget: () => f.forbidden("proxy target capture"), detectProxyTarget: () => f.forbidden("proxy target network"),
+  commitProxyDetectionIfCurrent: () => f.forbidden("proxy observation commit"),
 }));
 vi.mock("../../src/main/services/proxy-health.js", () => ({ recordProxyRotation: () => undefined }));
 vi.mock("../../src/main/services/native-chromium-manager.js", () => ({

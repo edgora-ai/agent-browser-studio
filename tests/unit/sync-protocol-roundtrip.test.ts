@@ -205,7 +205,8 @@ async function publish(engine: "chromium" | "firefox" = "chromium", preferences:
   expect(result).toMatchObject({ localCommit: "committed", remoteCommit: "committed" });
   const document = payload();
   const uploaded = remoteConfig(document).browserProfiles[ID];
-  expect(document.artifactVersion).toBe(2);
+  expect(document.artifactVersion).toBe(3);
+  expect(document.history[ID]).toMatchObject({ state: "unselected", freshness: "not-covered", snapshotId: document.snapshotId });
   expect(uploaded.syncBaseline).toMatchObject({ version: 1, snapshotId: document.snapshotId });
   expect(uploaded.syncBaseline).toEqual(disk().browserProfiles[ID].syncBaseline);
   for (const field of PORTABLE_PROFILE_FIELDS) expect(uploaded[field], `uploaded portable field ${field}`).toEqual(expected[field]);
@@ -352,7 +353,7 @@ describe("legacy sync optional-field absence", () => {
     await publish();
     const document = payload();
     const remote = remoteConfig(document);
-    delete document.artifactVersion; delete document.snapshotId; delete document.artifactSources;
+    delete document.artifactVersion; delete document.snapshotId; delete document.artifactSources; delete document.history;
     delete remote.browserProfiles[ID].syncBaseline; delete remote.browserProfiles[ID].syncedAt; delete remote.browserProfiles[ID].syncedHash;
     for (const field of omitted) delete remote.browserProfiles[ID][field];
     remote.browserProfiles[ID].name = "Adopted legacy remote name";

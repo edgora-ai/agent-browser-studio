@@ -9,7 +9,8 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { getAppDataDir, getProfilesDir, getConfig, getProfileMeta, normalizePortableProfileMeta } from "./config-manager.js";
 import { PORTABLE_PROFILE_FIELDS } from "./profile-portability.js";
-import type { BrowserProfileMeta } from "../types.js";
+import { compareProfileIdentity, type ProfileIdentityComparison } from "./profile-identity.js";
+import type { BrowserEngine, BrowserProfileMeta } from "../types.js";
 import { transact } from "./config/store.js";
 import { requireProfileMutation } from "./team.js";
 import { hasInstalledRepositoryExtension } from "./extension-repository.js";
@@ -23,6 +24,7 @@ import {
 import { acquireRestoreLock } from "./profile-restore-lock.js";
 import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArchiveImportPath } from "./archive-path-guard.js";
 import { hasSqliteLocalStorage, SQLITE_LOCAL_STORAGE_SIDECARS } from "./sync/sqlite-local-storage.js";
+import { historyBasename, historySidecars } from "./sync/sqlite-history.js";
 
 export const PROFILE_ARCHIVE_FORMAT = 1;
 const META_FILE = "meta.json";
@@ -53,6 +55,8 @@ export interface ImportProfileResult {
   bytes: number;
   /** Local dependencies referenced by the backup, never bundled with it. */
   warnings: string[];
+  /** Saved configuration only; imported baseline data is not a live retest. */
+  identity?: ProfileIdentityComparison;
 }
 
 export interface BatchExportItem {
@@ -76,6 +80,7 @@ export interface BatchImportItem {
   files: number;
   bytes: number;
   warnings: string[];
+  identity?: ProfileIdentityComparison;
 }
 
 export interface BatchImportReport {
@@ -110,12 +115,13 @@ function newDirId(): string {
 }
 
 const SQLITE_RESCUE_PREFIX = ".sqlite-localstorage-backup-";
+const HISTORY_RESCUE_PREFIX = ".history-backup-";
 const LEVELDB_RESCUE_PREFIX = ".leveldb-backup-";
 const RECOVERY_HISTORY = ".profile-archive-recovery";
-interface ArchiveRecovery { sqlite: string[]; legacy: string[]; history: boolean; }
+interface ArchiveRecovery { sqlite: string[]; historySqlite: string[]; legacy: string[]; history: boolean; }
 
 function recoveryRequired(reason: string, cause?: unknown): Error {
-  return Object.assign(new Error("LocalStorage recovery requires manual resolution before profile backup/transfer: " + reason, { cause }), { code: "ARCHIVE_RECOVERY_REQUIRED" });
+  return Object.assign(new Error("Profile data recovery requires manual resolution before profile backup/transfer: " + reason, { cause }), { code: "ARCHIVE_RECOVERY_REQUIRED" });
 }
 function sameRecoveryStat(a: fs.Stats, b: fs.Stats): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.nlink === b.nlink &&
@@ -154,40 +160,42 @@ function recoverySourceId(value: unknown): string {
   if (typeof value !== "string") throw new Error("Recovery source ID is missing");
   validateDirId(value); return value;
 }
-function assertRecoveryTarget(target: unknown, sourceId: string): void {
+function assertRecoveryTarget(target: unknown, sourceId: string, profileRoot = false): void {
   if (typeof target !== "string" || /[\x00-\x1f\x7f]/.test(target)) throw new Error("Invalid recovery target");
   const style = target.startsWith("/") && !target.includes("\\") ? path.posix : path.win32;
   if (style === path.win32 && target.replace(/^[A-Za-z]:\\/, "").split("\\").filter(Boolean).some((part) =>
       /[<>:"|?*]/.test(part) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw new Error("Unsafe Windows recovery target");
   if (!style.isAbsolute(target) || style.normalize(target) !== target || target.endsWith(style.sep) ||
       (style === path.win32 && !/^(?:[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+\\)/.test(target)) ||
-      style.basename(target) !== "Default" || style.basename(style.dirname(target)) !== sourceId) throw new Error("Recovery target is not its source profile's canonical Default path");
+      (profileRoot ? style.basename(target) !== sourceId : style.basename(target) !== "Default" || style.basename(style.dirname(target)) !== sourceId)) throw new Error("Recovery target is not its source profile's canonical path");
   // This is only a foreign-path identity check. Never resolve/read that path.
 }
-function recoveryInventory(value: unknown, requireMain: boolean): Array<{ name: string; hash: string }> {
-  if (!Array.isArray(value) || value.length > SQLITE_LOCAL_STORAGE_SIDECARS.length) throw new Error("Invalid SQLite recovery inventory");
+function recoveryInventory(value: unknown, requireMain: boolean, historyEngine?: BrowserEngine): Array<{ name: string; hash: string }> {
+  const main = historyEngine ? historyBasename(historyEngine) : "LocalStorage";
+  const names: readonly string[] = historyEngine ? historySidecars(historyEngine) : SQLITE_LOCAL_STORAGE_SIDECARS;
+  if (!Array.isArray(value) || value.length > names.length) throw new Error("Invalid SQLite recovery inventory");
   const seen = new Set<string>();
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).sort().join("|") !== "hash|name" ||
-        !SQLITE_LOCAL_STORAGE_SIDECARS.includes(item.name) || typeof item.hash !== "string" || !/^[a-f0-9]{64}$/.test(item.hash) || seen.has(item.name)) throw new Error("Invalid SQLite recovery member");
+        !names.includes(item.name) || typeof item.hash !== "string" || !/^[a-f0-9]{64}$/.test(item.hash) || seen.has(item.name)) throw new Error("Invalid SQLite recovery member");
     seen.add(item.name);
   }
-  if ((requireMain || value.length) && !seen.has("LocalStorage")) throw new Error("SQLite recovery inventory has no main database");
-  if (requireMain && value.some((item) => !["LocalStorage", "LocalStorage-wal"].includes(item.name))) throw new Error("Invalid incoming SQLite recovery sidecar");
+  if ((requireMain || value.length) && !seen.has(main)) throw new Error("SQLite recovery inventory has no main database");
+  if (requireMain && value.some((item) => ![main, main + "-wal"].includes(item.name))) throw new Error("Invalid incoming SQLite recovery sidecar");
   return value;
 }
-function assertCompletedSqliteRecovery(transaction: string, sourceId: string, liveDefault?: string, exactSourcePath = false): void {
+function assertCompletedSqliteRecovery(transaction: string, sourceId: string, liveDirectory?: string, exactSourcePath = false, historyEngine?: BrowserEngine): void {
   ensureArchiveDirectory(transaction);
   if (fs.readdirSync(transaction).sort().join("|") !== "new|old|pending.json|published.json") throw new Error("Incomplete or unknown SQLite rescue material");
-  const pending = recoveryReceipt(path.join(transaction, "pending.json"), ["version", "format", "operationId", "dirId", "target", "old", "incoming"]);
+  const pending = recoveryReceipt(path.join(transaction, "pending.json"), ["version", "format", "operationId", "dirId", "target", "old", "incoming", ...(historyEngine ? ["scope"] : [])]);
   const published = recoveryReceipt(path.join(transaction, "published.json"), ["state", "pendingHash"]);
-  if (pending.version !== 1 || pending.format !== "sqlite" || pending.dirId !== sourceId ||
+  if (pending.version !== 1 || pending.format !== "sqlite" || pending.dirId !== sourceId || historyEngine && pending.scope !== "history" ||
       typeof pending.operationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(pending.operationId) ||
       published.state !== "published" || published.pendingHash !== createHash("sha256").update(JSON.stringify(pending)).digest("hex")) throw new Error("SQLite recovery publication is unconfirmed");
-  assertRecoveryTarget(pending.target, sourceId);
-  if (exactSourcePath && pending.target !== liveDefault) throw new Error("SQLite recovery belongs to another source path");
-  const old = recoveryInventory(pending.old, false);
-  recoveryInventory(pending.incoming, true);
+  assertRecoveryTarget(pending.target, sourceId, historyEngine === "firefox");
+  if (exactSourcePath && pending.target !== liveDirectory) throw new Error("SQLite recovery belongs to another source path");
+  const old = recoveryInventory(pending.old, false, historyEngine);
+  recoveryInventory(pending.incoming, true, historyEngine);
   const oldDir = ensureArchiveDirectory(path.join(transaction, "old")), newDir = ensureArchiveDirectory(path.join(transaction, "new"));
   if (fs.readdirSync(newDir).length || fs.readdirSync(oldDir).sort().join("|") !== old.map((item) => item.name).sort().join("|")) throw new Error("SQLite rescue inventory is incomplete");
   for (const item of old) {
@@ -195,7 +203,13 @@ function assertCompletedSqliteRecovery(transaction: string, sourceId: string, li
     visitRecoveryFile(path.join(oldDir, item.name), MAX_IMPORT_BYTES, (chunk) => { hash.update(chunk); });
     if (hash.digest("hex") !== item.hash) throw new Error("SQLite old rescue bytes do not match their receipt");
   }
-  if (liveDefault && !hasSqliteLocalStorage(liveDefault)) throw new Error("SQLite live database is missing");
+  if (liveDirectory) {
+    if (historyEngine) {
+      let header: Buffer | undefined;
+      visitRecoveryFile(path.join(liveDirectory, historyBasename(historyEngine)), MAX_IMPORT_BYTES, (chunk) => { header ??= Buffer.from(chunk.subarray(0, 16)); });
+      if (!header?.equals(Buffer.from("SQLite format 3\0"))) throw new Error("History live database is missing or invalid");
+    } else if (!hasSqliteLocalStorage(liveDirectory)) throw new Error("SQLite live database is missing");
+  }
 }
 function assertLegacyRescue(directory: string): void {
   ensureArchiveDirectory(directory);
@@ -206,16 +220,18 @@ function assertLegacyRescue(directory: string): void {
     if (stat.isDirectory()) assertLegacyRescue(file);
   }
 }
-function inspectArchiveRecovery(profileDir: string, sourceId: unknown, exporting = false): ArchiveRecovery {
+function inspectArchiveRecovery(profileDir: string, sourceId: unknown, exporting = false, engine: BrowserEngine = "chromium"): ArchiveRecovery {
   try {
     if (exporting) {
       const receipts = path.join(getAppDataDir(), "sync-recovery");
       if (fs.lstatSync(receipts, { throwIfNoEntry: false })) {
         ensureArchiveDirectory(receipts);
-        if (fs.lstatSync(path.join(receipts, `${recoverySourceId(sourceId)}.localStorage.json`), { throwIfNoEntry: false })) throw new Error("A local recovery-required receipt is still present");
+        for (const scope of ["localStorage", "history"]) {
+          if (fs.lstatSync(path.join(receipts, `${recoverySourceId(sourceId)}.${scope}.json`), { throwIfNoEntry: false })) throw new Error("A local recovery-required receipt is still present");
+        }
       }
     }
-    const result: ArchiveRecovery = { sqlite: [], legacy: [], history: false };
+    const result: ArchiveRecovery = { sqlite: [], historySqlite: [], legacy: [], history: false };
     // Case aliases must not change meaning when a ZIP crosses filesystems.
     const canonicalChild = (directory: string, name: string): string | null => {
       if (fs.readdirSync(directory).some((child) => child !== name && child.toLowerCase() === name.toLowerCase())) throw new Error("Ambiguous recovery directory spelling");
@@ -241,17 +257,31 @@ function inspectArchiveRecovery(profileDir: string, sourceId: unknown, exporting
         }
       }
     }
+    for (const [directory, prefix, ownerEngine] of [[profileDir, "", "firefox"], [liveDefault, "Default/", "chromium"]] as const) {
+      if (!directory) continue;
+      for (const name of fs.readdirSync(directory).filter((name) => name.toLowerCase().startsWith(HISTORY_RESCUE_PREFIX))) {
+        if (!name.startsWith(HISTORY_RESCUE_PREFIX) || engine !== ownerEngine) throw new Error("Ambiguous History rescue spelling or engine layout");
+        assertCompletedSqliteRecovery(path.join(directory, name), recoverySourceId(sourceId), directory, exporting, engine);
+        result.historySqlite.push(prefix + name);
+      }
+    }
     const history = canonicalChild(profileDir, RECOVERY_HISTORY);
     if (history) {
       result.history = true;
       for (const originalId of fs.readdirSync(history)) {
         recoverySourceId(originalId);
-        const root = ensureArchiveDirectory(path.join(history, originalId));
-        if (fs.readdirSync(root).join("|") !== "Default") throw new Error("Unknown recovery history layout");
-        const originalDefault = ensureArchiveDirectory(path.join(root, "Default"));
-        for (const name of fs.readdirSync(originalDefault)) {
-          if (!name.startsWith(SQLITE_RESCUE_PREFIX)) throw new Error("Unknown recovery history material");
-          assertCompletedSqliteRecovery(path.join(originalDefault, name), originalId);
+        const root = ensureArchiveDirectory(path.join(history, originalId)), children = fs.readdirSync(root);
+        if (!children.length) throw new Error("Unknown recovery history layout");
+        for (const child of children) {
+          if (child === "Default") {
+            const originalDefault = ensureArchiveDirectory(path.join(root, child));
+            for (const name of fs.readdirSync(originalDefault)) {
+              if (!name.startsWith(SQLITE_RESCUE_PREFIX) && !name.startsWith(HISTORY_RESCUE_PREFIX)) throw new Error("Unknown recovery history material");
+              assertCompletedSqliteRecovery(path.join(originalDefault, name), originalId, undefined, false, name.startsWith(HISTORY_RESCUE_PREFIX) ? "chromium" : undefined);
+            }
+          } else if (child.startsWith(HISTORY_RESCUE_PREFIX)) {
+            assertCompletedSqliteRecovery(path.join(root, child), originalId, undefined, false, "firefox");
+          } else throw new Error("Unknown recovery history layout");
         }
       }
     }
@@ -259,25 +289,31 @@ function inspectArchiveRecovery(profileDir: string, sourceId: unknown, exporting
   } catch (error) { throw recoveryRequired(error instanceof Error ? error.message : String(error), error); }
 }
 function preserveImportedRecovery(staging: string, sourceId: unknown, recovery: ArchiveRecovery, warnings: string[]): void {
-  if (recovery.sqlite.length) {
+  const namespaces = [...recovery.sqlite, ...recovery.historySqlite];
+  if (namespaces.length) {
     const id = recoverySourceId(sourceId);
-    const moves = recovery.sqlite.map((relative) => ({ from: path.join(staging, relative), to: path.join(staging, RECOVERY_HISTORY, id, relative) }));
+    const moves = namespaces.map((relative) => ({ from: path.join(staging, relative), to: path.join(staging, RECOVERY_HISTORY, id, relative) }));
     for (const move of moves) if (fs.lstatSync(move.to, { throwIfNoEntry: false })) throw recoveryRequired("Recovery history destination already exists; refusing to overwrite it");
-    const parent = ensureArchiveDirectory(path.dirname(moves[0].to), true);
-    for (const move of moves) fs.renameSync(move.from, move.to);
+    const directories = new Set<string>([staging]);
+    for (const move of moves) {
+      ensureArchiveDirectory(path.dirname(move.to), true);
+      fs.renameSync(move.from, move.to); directories.add(path.dirname(move.from));
+      for (let directory = path.dirname(move.to); directory !== staging; directory = path.dirname(directory)) directories.add(directory);
+    }
     let durable = true;
-    for (const directory of [path.join(staging, "Default"), parent, path.dirname(parent), path.join(staging, RECOVERY_HISTORY)]) {
+    for (const directory of [...directories].sort((a, b) => b.length - a.length)) {
       if (!syncArchiveDirectory(directory)) durable = false;
     }
     if (!durable) warnings.push("Directory fsync is unsupported on Windows; recovery history directory durability is not guaranteed.");
   }
-  if (recovery.sqlite.length || recovery.history) warnings.push(`Completed SQLite LocalStorage rescue copies and original receipts are preserved in ${RECOVERY_HISTORY}; this inert history is not a recovery/commit proof for the imported profile.`);
+  if (recovery.sqlite.length || recovery.history) warnings.push(`Completed SQLite rescue copies and original receipts are preserved in ${RECOVERY_HISTORY}; this inert history is not a recovery/commit proof for the imported profile.`);
+  if (recovery.historySqlite.length) warnings.push(`Completed History/Places rescue copies and original receipts are preserved in ${RECOVERY_HISTORY}; this inert history is not a recovery/commit proof for the imported profile.`);
   if (recovery.legacy.length) warnings.push("Legacy LevelDB rescue copies are retained unchanged beside the live database; they are not a recovery/commit proof for the imported profile.");
 }
 
 function collectProfileEntries(profileDir: string, recovery: ArchiveRecovery): Array<ZipFileEntry | ZipDirEntry> {
   const entries: Array<ZipFileEntry | ZipDirEntry> = [];
-  const protectedRoots = [...recovery.sqlite, ...recovery.legacy, ...(recovery.history ? [RECOVERY_HISTORY] : [])];
+  const protectedRoots = [...recovery.sqlite, ...recovery.historySqlite, ...recovery.legacy, ...(recovery.history ? [RECOVERY_HISTORY] : [])];
   const walk = (baseRel: string): void => {
     const absDir = baseRel ? path.join(profileDir, baseRel) : profileDir;
     ensureArchiveDirectory(absDir);
@@ -364,7 +400,7 @@ export async function exportProfileArchive(
       omitted: { fontsDir: Boolean(meta.fontsDir) },
       profile: portableProfile(meta),
     };
-    const recovery = inspectArchiveRecovery(profileDir, dirId, true);
+    const recovery = inspectArchiveRecovery(profileDir, dirId, true, meta.engine || "chromium");
     const dataEntries = collectProfileEntries(profileDir, recovery);
     const result = await writeZipArchive(destPath, [
       { name: META_FILE, data: Buffer.from(JSON.stringify(metaDoc, null, 2), "utf8") },
@@ -409,11 +445,21 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
     try { metaDoc = JSON.parse(fs.readFileSync(metaPath, "utf8")); }
     catch (error) { throw new Error("Archive meta.json is corrupt", { cause: error }); }
     if (metaDoc?.formatVersion !== PROFILE_ARCHIVE_FORMAT) throw new Error("Unsupported archive format: " + JSON.stringify(metaDoc?.formatVersion));
+    // Compare the original document before the normalizer supplies a new seed
+    // for legacy backups. A generated value cannot prove the old identity.
     const importedMeta = normalizePortableProfileMeta(metaDoc.profile);
+    const identity = compareProfileIdentity(metaDoc.profile, importedMeta);
     const hadLocalFontsDir = metaDoc.omitted?.fontsDir === true ||
       (typeof metaDoc.profile?.fontsDir === "string" && Boolean(metaDoc.profile.fontsDir.trim()));
     const warnings = importWarnings(importedMeta, hadLocalFontsDir);
-    const recovery = inspectArchiveRecovery(tmpDir, metaDoc.sourceDirId);
+    if (identity.configuration.state === "missing-seed") {
+      warnings.push("Legacy backup has no fingerprint seed; a new seed was generated. The previous fingerprint cannot be verified, and runtime identity has not been retested.");
+    } else if (identity.configuration.state === "changed") {
+      warnings.push("Imported fingerprint configuration was normalized with changes; review the identity differences before launching. Runtime identity has not been retested.");
+    } else if (identity.configuration.state === "not-verifiable") {
+      warnings.push("The backup's fingerprint configuration cannot be verified. A copied fingerprint baseline is not a runtime identity retest.");
+    }
+    const recovery = inspectArchiveRecovery(tmpDir, metaDoc.sourceDirId, false, importedMeta.engine || "chromium");
     preserveImportedRecovery(tmpDir, metaDoc.sourceDirId, recovery, warnings);
     dirId = newDirId(); validateDirId(dirId);
     if (Object.hasOwn(getConfig().browserProfiles || {}, dirId)) throw new Error("Imported profile ID already exists (config collision)");
@@ -440,7 +486,7 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
     });
     // No fallible post-commit lookup may turn this adoption into a rollback.
     committed = true;
-    result = { dirId, name, files: extracted.files, bytes: extracted.bytes, warnings };
+    result = { dirId, name, files: extracted.files, bytes: extracted.bytes, warnings, identity };
   } catch (error) {
     failure = error;
     if (!committed && profileDir && profileOwner && dirId) {
@@ -532,7 +578,7 @@ export function importProfileArchives(zipPaths: string[]): BatchImportReport {
   for (const zipPath of zipPaths) {
     try {
       const r = importProfileArchive(zipPath);
-      report.imported.push({ zipPath, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes, warnings: r.warnings });
+      report.imported.push({ zipPath, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes, warnings: r.warnings, ...(r.identity ? { identity: r.identity } : {}) });
     } catch (e: any) {
       const failure = archiveOperationFailure(e);
       report.failed.push({ zipPath, error: failure.error, ...(failure.code ? { code: failure.code } : {}) });

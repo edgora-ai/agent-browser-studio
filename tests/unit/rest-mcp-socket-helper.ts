@@ -47,7 +47,7 @@ const state = vi.hoisted(() => {
     },
     sync: {
       getStatus: vi.fn(() => ({ configured: false } as any)), preview: vi.fn(() => ({ profiles: 0 } as any)),
-      previewDiff: fail("unconfigured sync comparison"), push: fail("unconfigured sync push"), pull: fail("unconfigured sync pull"),
+      previewDiff: fail("unconfigured sync comparison"), push: fail("unconfigured sync push"), pull: fail("unconfigured sync pull"), historyState: fail("unconfigured history state"),
     },
     automation: {
       retryAgentRun: fail("unconfigured run retry"), retryJobRuns: fail("unconfigured job retry"),

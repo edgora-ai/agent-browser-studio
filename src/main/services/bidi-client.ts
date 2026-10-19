@@ -1,4 +1,6 @@
-import { assertProtocolDispatchAllowed } from "./agent/dispatch-guard.js";
+import { assertProtocolDispatchAllowed, captureProtocolDispatchGuard } from "./agent/dispatch-guard.js";
+import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
+import { BrowserLoadTimeoutError, BrowserNavigationError, navigationConnectionClosed } from "./agent/cdp-navigation-errors.js";
 
 // ── WebDriver BiDi runtime client (Slice 79) ──
 // The runtime bridge that gives Firefox profiles the managed capabilities
@@ -69,7 +71,7 @@ export type BidiEventListener = (event: BidiEvent) => void | Promise<void>;
 export interface BidiConnection {
   wsUrl: string;
   /** Send one BiDi command; resolves with `result`, rejects on protocol error. */
-  send(method: string, params?: Record<string, any>, timeoutMs?: number): Promise<any>;
+  send(method: string, params?: Record<string, any>, timeoutMs?: number, signal?: AbortSignal): Promise<any>;
   /** Observe received events only; does not send session.subscribe or retain history. */
   onEvent?(listener: BidiEventListener): () => void;
   close(): void;
@@ -80,6 +82,7 @@ export interface BidiConnection {
 export interface BidiConnectOpts {
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }
 
 /** Validate that a BiDi WebSocket URL is a local loopback target. */
@@ -118,8 +121,10 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
   const timeoutMs = opts.timeoutMs ?? 15000;
   const normalized = normalizeBidiWebSocketUrl(wsUrl);
   const endpointPort = bidiEndpointPort(normalized);
+  if (opts.signal?.aborted) throw opts.signal.reason;
   assertProtocolDispatchAllowed(endpointPort);
   const Ws = await getWsModule();
+  if (opts.signal?.aborted) throw opts.signal.reason;
   assertProtocolDispatchAllowed(endpointPort);
   if (!Ws) throw new Error("BiDi client unavailable (ws module missing)");
 
@@ -137,10 +142,12 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
     pending.clear();
   };
 
+  const abortInit = () => failInit(opts.signal?.reason instanceof Error ? opts.signal.reason : new Error("BiDi connection cancelled"));
   const failInit = (error: Error) => {
     if (settled) return;
     settled = true;
     clearTimeout(initTimer);
+    opts.signal?.removeEventListener("abort", abortInit);
     try { socket?.close(); } catch { /* ignore */ }
     rejectAll(error);
     initReject(error);
@@ -150,12 +157,15 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
     if (settled) return;
     settled = true;
     clearTimeout(initTimer);
+    opts.signal?.removeEventListener("abort", abortInit);
   };
 
   const initTimer = setTimeout(() => failInit(new Error("BiDi connection timed out")), timeoutMs);
 
   return new Promise<BidiConnection>((resolveInit, reject) => {
     initReject = reject;
+    opts.signal?.addEventListener("abort", abortInit, { once: true });
+    if (opts.signal?.aborted) { abortInit(); return; }
     try {
       assertProtocolDispatchAllowed(endpointPort);
       socket = new Ws(normalized);
@@ -178,32 +188,39 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
       }
     });
 
-    const send = (method: string, params?: Record<string, any>, commandTimeoutMs = 15000): Promise<any> => {
-      if (closedFlag && method !== "session.new") {
-        return Promise.reject(new Error("BiDi connection is closed"));
-      }
-      // Reject before allocating a command id/timer whenever possible.
+    const send = (method: string, params?: Record<string, any>, commandTimeoutMs = 15000, signal?: AbortSignal): Promise<any> => {
+      if (closedFlag && method !== "session.new") return Promise.reject(new Error("BiDi connection is closed"));
+      if (signal?.aborted) return Promise.reject(signal.reason);
       assertProtocolDispatchAllowed(endpointPort);
+      const guard = captureProtocolDispatchGuard();
       return new Promise((resolve, reject) => {
         const id = nextId++;
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`BiDi command ${method} timed out`));
-        }, commandTimeoutMs);
-        pending.set(id, {
-          resolve: (v) => { clearTimeout(timer); resolve(v); },
-          reject: (e) => { clearTimeout(timer); reject(e); },
-        });
-        try {
-          // This second check is deliberately adjacent to the actual send. A
-          // rejection removes all state allocated for this command below.
-          assertProtocolDispatchAllowed(endpointPort);
-          socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-        } catch (error) {
+        let settled = false;
+        let guardTimer: ReturnType<typeof setInterval> | undefined;
+        const finish = (ok: boolean, value: any) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
+          if (guardTimer) clearInterval(guardTimer);
           pending.delete(id);
-          reject(error);
-        }
+          signal?.removeEventListener("abort", aborted);
+          if (ok) {
+            try { guard?.(endpointPort); if (signal?.aborted) throw signal.reason; resolve(value); }
+            catch (error) { reject(error); }
+          } else reject(value);
+        };
+        const aborted = () => finish(false, signal!.reason);
+        const timer = setTimeout(() => finish(false, new Error(`BiDi command ${method} timed out`)), commandTimeoutMs);
+        pending.set(id, { resolve: (value) => finish(true, value), reject: (error) => finish(false, error) });
+        signal?.addEventListener("abort", aborted, { once: true });
+        if (guard) guardTimer = setInterval(() => {
+          try { guard(endpointPort); } catch (error) { finish(false, error); }
+        }, 25);
+        try {
+          assertProtocolDispatchAllowed(endpointPort);
+          if (signal?.aborted) throw signal.reason;
+          socket.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
+        } catch (error) { finish(false, error); }
       });
     };
 
@@ -247,7 +264,7 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
               unhandledPromptBehavior: { default: "dismiss" },
             },
           },
-        }, timeoutMs);
+        }, timeoutMs, opts.signal);
         // Re-check after the handshake await and before handing off a cached,
         // long-lived connection to the caller.
         assertProtocolDispatchAllowed(endpointPort);
@@ -273,17 +290,25 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
 }
 
 /** Return the first (top-level) browsing context id from the context tree. */
-export async function bidiGetTopContext(conn: BidiConnection, timeoutMs = 8000): Promise<string> {
-  const result = await conn.send("browsingContext.getTree", {}, timeoutMs);
+export async function bidiGetTopContext(conn: BidiConnection, timeoutMs = 8000, signal?: AbortSignal): Promise<string> {
+  const result = await conn.send("browsingContext.getTree", {}, timeoutMs, signal);
   const contexts: any[] = result?.contexts || [];
   if (!contexts.length) throw new Error("Firefox has no browsing contexts yet");
   return contexts[0].context;
 }
 
-/** Navigate the top-level context to a URL, waiting for "interactive". */
-export async function bidiNavigate(conn: BidiConnection, url: string, contextId: string | null = null, timeoutMs = 15000): Promise<void> {
-  const context = contextId ?? await bidiGetTopContext(conn, timeoutMs);
-  await conn.send("browsingContext.navigate", { context, url, wait: "interactive" }, timeoutMs);
+/** Interactive acceptance by default; callers may explicitly require complete readiness. */
+export async function bidiNavigate(conn: BidiConnection, url: string, contextId: string | null = null, timeoutMs = 15000, wait: "interactive" | "complete" = "interactive"): Promise<void> {
+  const port = bidiEndpointPort(normalizeBidiWebSocketUrl(conn.wsUrl));
+  const budget = new NavigationBudget(timeoutMs, port,
+    () => wait === "complete" ? new BrowserLoadTimeoutError() : new BrowserNavigationError("BROWSER_NAVIGATION_TIMEOUT", "Firefox navigation timed out"),
+    () => { if (conn.closed) throw navigationConnectionClosed(); });
+  try {
+    const context = contextId ?? await budget.run(() => bidiGetTopContext(conn, budget.remaining(), budget.signal));
+    budget.check();
+    await budget.run(() => conn.send("browsingContext.navigate", { context, url, wait }, budget.remaining(), budget.signal));
+    budget.check();
+  } finally { budget.close(); }
 }
 
 /** Open a fresh tab (about:blank). The fingerprint preload applies to it. */
@@ -352,14 +377,14 @@ export async function bidiSetFiles(conn: BidiConnection, contextId: string, elem
  * Evaluate a JS expression in the top-level context, awaiting promises.
  * Throws when the page throws (exceptionDetails), so callers see real failures.
  */
-export async function bidiEvaluateInContext(conn: BidiConnection, expression: string, contextId: string | null = null, timeoutMs = 15000): Promise<any> {
-  const context = contextId ?? await bidiGetTopContext(conn, timeoutMs);
+export async function bidiEvaluateInContext(conn: BidiConnection, expression: string, contextId: string | null = null, timeoutMs = 15000, signal?: AbortSignal): Promise<any> {
+  const context = contextId ?? await bidiGetTopContext(conn, timeoutMs, signal);
   const result = await conn.send("script.evaluate", {
     expression,
     target: { context },
     awaitPromise: true,
     resultOwnership: "none",
-  }, timeoutMs);
+  }, timeoutMs, signal);
   const value = result?.result;
   if (!value) throw new Error("BiDi evaluate returned no result");
   if (value.type === "exception" || value.subtype === "error") {

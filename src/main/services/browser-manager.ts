@@ -10,7 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { parseBrowserProcessLine, findBrowserByProfileSync, inspectBrowserLaunchesSync, browserLaunchProcessFromArgv, normalizeBrowserProcessPath, type BrowserLaunchProcess } from "./process-discovery.js";
 import { BrowserWindow, screen as electronScreen } from "electron";
-import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, setProxyDetectionIfCurrent, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
+import { getConfig, saveConfig, getAppDataDir, getProfilesDir, resolveProfileProxy, resolveProfileProxySecret, getProxyDetection, sanitizeAppUrl, getProxyHealthEntry, assertProfileWritable } from "./config-manager.js";
 import { cdpCookieService, readQueuedCookieImports } from "./cdp-cookie-service.js";
 import { decryptSecretOr } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
@@ -39,6 +39,7 @@ import {
 } from "./authenticated-socks-bridge.js";
 import { startMasqueSocksBridge } from "./masque-socks-bridge.js";
 import { buildChromiumProxyUrl, proxyDetector, proxyDetectionObservedAt, probeProxyPort, type ProxyDetectionResult } from "./proxy-detector.js";
+import { captureProxyDetectionTarget, detectProxyTarget, commitProxyDetectionIfCurrent, type ProxyDetectionTarget } from "./proxy-detection.js";
 import { recordProxyRotation } from "./proxy-health.js";
 import { validateDirId } from "./utils.js";
 import { requireProfileMutation } from "./team.js";
@@ -1518,11 +1519,10 @@ export async function launchBrowser(
   let webrtcIp = shouldResolveWebRtc ? normalizeOptionalIp(meta.webrtcIp) : null;
   if (!passThrough) {
     if (activeProxy && (!effectiveTimezone || !effectiveLocale || (shouldResolveWebRtc && !webrtcIp))) {
-      geoDetection = await resolveGeoFromProxy(activeProxy);
+      const target = resolvedProxy.name ? captureProxyDetectionTarget(resolvedProxy.name, activeProxy) : null;
+      geoDetection = await resolveGeoFromProxy(activeProxy, target);
       assertCurrentRequest();
-      if (resolvedProxy.name && geoDetection?.detection?.success) {
-        persistLaunchDetection(resolvedProxy.name, activeProxy, geoDetection.detection);
-      }
+      if (target && geoDetection.detection) persistLaunchDetection(target, geoDetection.detection);
       if (!effectiveTimezone) effectiveTimezone = geoDetection.timezone;
       if (!effectiveLocale) effectiveLocale = geoDetection.locale;
       if (shouldResolveWebRtc && !webrtcIp) {
@@ -1569,7 +1569,13 @@ export async function launchBrowser(
   if (shouldResolveWebRtc && !webrtcIp) {
     webrtcIp = normalizeOptionalIp(getLaunchArgValue(args, "--fingerprint-webrtc-ip"));
     if (!webrtcIp && activeProxy) {
-      webrtcIp = geoDetection?.exitIp ?? (await resolveGeoFromProxy(activeProxy)).exitIp;
+      if (!geoDetection) {
+        const target = resolvedProxy.name ? captureProxyDetectionTarget(resolvedProxy.name, activeProxy) : null;
+        geoDetection = await resolveGeoFromProxy(activeProxy, target);
+        assertCurrentRequest();
+        if (target && geoDetection.detection) persistLaunchDetection(target, geoDetection.detection);
+      }
+      webrtcIp = geoDetection.exitIp;
       assertCurrentRequest();
     }
   }
@@ -2031,7 +2037,7 @@ async function resolveFirefoxLaunchIdentity(
   assertCurrentRequest: () => void,
 ) {
   if (meta.fingerprintMode === "off") {
-    return { meta: { ...meta, timezone: null, locale: null }, geo: null, observedAt: null, timezoneSource: "off", localeSource: "off" };
+    return { meta: { ...meta, timezone: null, locale: null }, geo: null, observedAt: null, observation: null, target: null, timezoneSource: "off", localeSource: "off" };
   }
   let timezone = normalizeFirefoxTimezone(meta.timezone);
   let locale = normalizeOptionalLocale(meta.locale);
@@ -2039,14 +2045,20 @@ async function resolveFirefoxLaunchIdentity(
   let localeSource = locale ? "explicit" : "host";
   let geo: ProxyDetectionResult | null = null;
   let observedAt: number | null = null;
+  let observation: ProxyDetectionResult | null = null;
+  let target: ProxyDetectionTarget | null = null;
   if (proxy.config && (!timezone || !locale)) {
-    const resolved = await resolveGeoFromProxy(proxy.config);
+    target = proxy.name ? captureProxyDetectionTarget(proxy.name, proxy.config) : null;
+    const resolved = await resolveGeoFromProxy(proxy.config, target);
     assertCurrentRequest();
     let proxyTimezone: string | null = null;
     try { proxyTimezone = normalizeFirefoxTimezone(resolved.timezone); }
     catch (error) { console.warn("[agent-browser] Firefox ignored an invalid proxy IANA timezone:", error); }
-    geo = resolved.detection ? { ...resolved.detection, timezone: proxyTimezone } : null;
-    observedAt = resolved.detection ? proxyDetectionObservedAt(resolved.detection) : null;
+    // Retain the original authenticated result before making a normalized
+    // consistency-check projection; a spread/IPC clone is not new authority.
+    observation = resolved.detection;
+    observedAt = observation ? proxyDetectionObservedAt(observation) : null;
+    geo = observation?.success ? { ...observation, timezone: proxyTimezone } : null;
     if (!timezone && proxyTimezone) { timezone = proxyTimezone; timezoneSource = "proxy"; }
     if (!locale && resolved.locale) { locale = normalizeOptionalLocale(resolved.locale); localeSource = "proxy"; }
   }
@@ -2058,7 +2070,7 @@ async function resolveFirefoxLaunchIdentity(
     if (!locale) locale = normalizeOptionalLocale(host.locale);
   }
   if (!timezone || !locale) throw new Error("Firefox Auto timezone or locale could not be resolved from the proxy or host");
-  return { meta: { ...meta, timezone, locale }, geo, observedAt, timezoneSource, localeSource };
+  return { meta: { ...meta, timezone, locale }, geo, observedAt, observation, target, timezoneSource, localeSource };
 }
 
 /**
@@ -2149,8 +2161,8 @@ async function launchFirefoxProfile(
   const effectiveHash = firefoxEffectiveLaunchHash(effectiveMeta, resolvedProxy);
   const managedIdentity = fingerprintMode === "off" ? null : buildFirefoxManagedIdentity(effectiveMeta, firefoxVersion, null);
   assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
-  if (effective.geo && effective.observedAt !== null && resolvedProxy.name && resolvedProxy.config) {
-    persistLaunchDetection(resolvedProxy.name, resolvedProxy.config, effective.geo, effective.observedAt);
+  if (effective.observation && effective.observedAt !== null && effective.target) {
+    persistLaunchDetection(effective.target, effective.observation);
   }
   if (managedIdentity) recordAudit({
     category: "profile", action: "firefox-identity", target: dirId, actor: "auto",
@@ -2913,12 +2925,12 @@ export { parseBrowserProcessLine } from "./process-discovery.js";
 // Geo-IP: Auto-detect timezone + locale from proxy exit IP
 // ═══════════════════════════════════════════════════════════════
 
-async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: string | null; locale: string | null; exitIp: string | null; detection: ProxyDetectionResult | null }> {
+async function resolveGeoFromProxy(proxy: ProxyConfig, target: ProxyDetectionTarget | null = null): Promise<{ timezone: string | null; locale: string | null; exitIp: string | null; detection: ProxyDetectionResult | null }> {
   try {
-    const detection = await proxyDetector.detect(proxy);
+    const detection = target ? await detectProxyTarget(target, "prefer-cache") : await proxyDetector.detect(proxy);
     if (!detection.success) {
       console.log(`[agent-browser] Geo-IP detection skipped: ${detection.error || "proxy may be local or unreachable"}`);
-      return { timezone: null, locale: null, exitIp: null, detection: null };
+      return { timezone: null, locale: null, exitIp: null, detection };
     }
     const locale = localeFromCountry(detection.countryCode);
     console.log(`[agent-browser] Geo-IP via ${detection.provider}: country=${detection.countryCode || ""} tz=${detection.timezone || ""} locale=${locale || ""}`);
@@ -2929,31 +2941,15 @@ async function resolveGeoFromProxy(proxy: ProxyConfig): Promise<{ timezone: stri
   }
 }
 
-/**
- * Persist a launch-time geo detection into the proxy's detection cache so the
- * next launch's consistency check sees fresh risk flags (hosting / isProxy)
- * even when the user never clicked Detect. Only touches the detection cache,
- * not the health history (which is owned by the manual Detect flow).
- */
-function persistLaunchDetection(proxyName: string, proxy: ProxyConfig, detection: ProxyDetectionResult, detectedAt = Date.now()): void {
-  try {
-    setProxyDetectionIfCurrent(proxyName, proxy, {
-      detectedAt,
-      success: true,
-      exitIp: detection.exitIp,
-      country: detection.country || detection.countryCode || null,
-      countryCode: detection.countryCode,
-      timezone: detection.timezone,
-      provider: detection.provider,
-      latencyMs: typeof detection.latencyMs === "number" ? detection.latencyMs : null,
-      org: detection.org,
-      as: detection.as,
-      hosting: detection.hosting,
-      isProxy: detection.isProxy,
-      error: null,
-    });
-  } catch (e) {
-    console.warn(`[agent-browser] failed to persist launch detection for ${proxyName}:`, e);
+/** Launches share the authenticated atomic observation path. Cache reuse keeps
+ * its original time and never renews health/cooldown; unknown time is not now. */
+function persistLaunchDetection(target: ProxyDetectionTarget, detection: ProxyDetectionResult): void {
+  if (typeof detection.observedAt !== "number" || detection.source === "unknown") return;
+  try { commitProxyDetectionIfCurrent(target, detection); }
+  catch (error) {
+    // Launching a browser is not a promise that a diagnostic was saved. Keep
+    // the warning explicit and avoid logging target/credential-comparable keys.
+    console.warn("[agent-browser] launch proxy observation was not committed:", error);
   }
 }
 

@@ -40,6 +40,8 @@ const TRANSLATIONS = [
   ["profile.new.advanced.help", "Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.", "留空由种子选择连贯画像。显式 CPU、内存、屏幕及 GPU 值是平台画像组合的部分约束，必须共同匹配受支持画像，不能各自任意覆盖。"],
   ["profile.edit.advanced.help", "Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.", "留空由种子选择连贯画像。显式 CPU、内存、屏幕及 GPU 值是平台画像组合的部分约束，必须共同匹配受支持画像，不能各自任意覆盖。"],
   ["profile.edit.help", "<strong>Fingerprint seed</strong> varies managed privacy surfaces; it is not a whole-device match.<br>Use the host OS. Supported macOS ARM64 managed setups can select a WebGL persona; WebGPU and GPU capabilities stay native.", "<strong>指纹种子</strong> 用于变化托管隐私特征，不代表整台物理设备。<br>请选择宿主系统；受支持的 macOS ARM64 托管环境可选择 WebGL 画像，WebGPU 与 GPU 能力仍原生。"],
+  ["profile.new.field.storage", "Reported quota (MiB)", "上报配额（MiB）"],
+  ["profile.storage-quota.help", "Managed Chromium changes the quota reported to sites, not writable capacity or the LocalStorage limit. MiB = 1,048,576 bytes. Auto reports 120,000 MiB, not free disk space. Increasing this value does not resolve LocalStorage QuotaExceededError.", "Chromium 受管模式仅改变网站读到的配额，不增加实际可写容量或 LocalStorage 上限。MiB = 1,048,576 字节；自动值为 120,000 MiB，并非磁盘可用空间。调大此项不能修复 LocalStorage 的 QuotaExceededError。"],
   ["profile.gpu.help", "WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.", "仅模拟 WebGL 身份，不改变物理显卡：托管模式要求 macOS 原生 ARM64 主进程及所选 ARM64 Chromium。厂商为 Google Inc. (Apple)；渲染器为 Apple M1、Apple M2、Apple M3 或 Apple M2 Pro。受支持的旧 ANGLE／裸型号别名必须精确匹配同一画像。"],
   ["profile.gpu.scope", "Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.", "Intel、Rosetta、架构未知及其他 Chromium 平台保留原生 GPU 身份，显式覆盖会被拒绝启动。关闭指纹身份时保持原生；Firefox 不变。WebGPU、GPU 能力和实际绘制仍原生。可编辑不代表可生效，由主进程在启动时权威校验。"],
   ["launch.gpu-unsupported", "This explicit WebGL request is unsupported. Managed overrides require a native ARM64 macOS main process, selected ARM64 Chromium and a matching platform persona. Use a supported tuple or clear gpuVendor/gpuRenderer to keep native GPU identity. Saved metadata is unchanged; WebGPU and GPU capabilities remain native.", "此显式 WebGL 请求不受支持。托管覆盖要求 macOS 原生 ARM64 主进程、所选 ARM64 Chromium 及匹配的平台画像；请改为受支持组合，或清空 gpuVendor/gpuRenderer，保留原生 GPU 身份。已存元数据未被改写；WebGPU 与 GPU 能力仍原生。"],
@@ -191,6 +193,23 @@ describe("UI goal effective i18n", () => {
         const el = new Element({ "data-i18n": key }); const { i18n } = loadRuntime(SOURCE, locale, [el]);
         i18n.apply(); expect(el.textContent).toBe(locale === "en-US" ? entry[1] : entry[2]);
       }
+    }
+  });
+
+  it("links both quota inputs to report-only MiB guidance without promising LocalStorage capacity", () => {
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
+    const help = TRANSLATIONS.find(([key]) => key === "profile.storage-quota.help")!;
+    for (const [input, note] of [["new-agent-browser-storage-quota", "new-profile-storage-quota-help"], ["agent-browser-meta-storage-quota", "edit-profile-storage-quota-help"]]) {
+      const inputTag = html.match(new RegExp(`<input[^>]*id="${input}"[^>]*>`))?.[0] || "";
+      expect(inputTag).toContain(`aria-describedby="${note}"`);
+      const noteLine = html.split("\n").find(line => line.includes(`id="${note}"`)) || "";
+      expect(noteLine).toContain(`id="${note}" class="field-note-tight" data-i18n="profile.storage-quota.help">${help[1]}<`);
+    }
+    expect(html.includes("Storage Quota (MB)")).toBe(false);
+    const literals = [...SOURCE.matchAll(/"([\w.-]+)"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+    for (const key of ["profile.new.field.storage", "profile.storage-quota.help"]) {
+      const entry = TRANSLATIONS.find(([candidate]) => candidate === key)!;
+      expect(literals.filter(match => match[1] === key).map(match => JSON.parse(match[2])).sort()).toEqual([entry[1], entry[2]].sort());
     }
   });
 

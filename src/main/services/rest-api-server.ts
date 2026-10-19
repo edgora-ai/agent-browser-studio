@@ -13,7 +13,7 @@ import * as path from "node:path";
 import {
   getConfig, getProxyList, addProxy, deleteProxy, updateProxy,
   setDefaultProxyName, getProxyRotationInfo, getProfileMeta,
-  resolveProfileProxy, saveConfig, getAppDataDir,
+  resolveProfileProxy, saveConfig, getAppDataDir, setSyncConfig,
 } from "./config-manager.js";
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
@@ -1452,8 +1452,21 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   }
 
   // ── Sync (team workspace) ──
+  if (method === "POST" && p === "/api/sync/config") {
+    const denied = requireRestSettingsMutation(); if (denied) return denied;
+    const settings = await readJsonObject(req);
+    const currentDenied = requireRestSettingsMutation(); if (currentDenied) return currentDenied;
+    try { setSyncConfig(settings); return { status: 200, body: { success: true, ...syncService.getStatus() } }; }
+    catch (error) { return { status: 400, body: { success: false, code: (error as any).code, error: (error as Error).message } }; }
+  }
   if (method === "GET" && p === "/api/sync/status") {
     return { status: 200, body: syncService.getStatus() };
+  }
+  const historyStateMatch = p.match(/^\/api\/sync\/history\/([^/]+)$/);
+  if (method === "GET" && historyStateMatch) {
+    const dirId = decodeURIComponent(historyStateMatch[1]); validateDirId(dirId);
+    if (!getConfig().browserProfiles?.[dirId]) return { status: 404, body: { error: "Profile not found" } };
+    return { status: 200, body: { dirId, ...await syncService.historyState(dirId) } };
   }
   if (method === "GET" && p === "/api/sync/preview") {
     return { status: 200, body: syncService.preview() };
@@ -1465,7 +1478,9 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "POST" && p === "/api/sync/push") {
     const opts = await readJsonObject(req);
     try {
-      const r = await syncService.push(undefined, opts?.force === true, opts?.comparisonToken);
+      if (opts?.history !== undefined && typeof opts.history !== "boolean") return { status: 400, body: { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" } };
+      const r = opts?.history === undefined ? await syncService.push(undefined, opts?.force === true, opts?.comparisonToken)
+        : await syncService.push(undefined, opts?.force === true, opts?.comparisonToken, { history: opts.history });
       return { status: syncRestStatus(r), body: r };
     } catch (e: any) {
       if (e.syncResult) return { status: syncRestStatus(e.syncResult), body: e.syncResult };
@@ -1480,7 +1495,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       for (const [key, value] of Object.entries(opts?.resolutions || {})) {
         if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
       }
-      const r = await syncService.pull(undefined, { strategy, resolutions, comparisonToken: opts?.comparisonToken });
+      if (opts?.history !== undefined && typeof opts.history !== "boolean") return { status: 400, body: { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" } };
+      const r = await syncService.pull(undefined, { strategy, resolutions, comparisonToken: opts?.comparisonToken, ...(opts?.history === undefined ? {} : { history: opts.history }) });
       return { status: syncRestStatus(r), body: { ...r, strategy } };
     } catch (e: any) {
       if (e.syncResult) return { status: syncRestStatus(e.syncResult), body: e.syncResult };
@@ -2071,20 +2087,22 @@ function buildOpenApi(): any {
           responses: ok("Resolve result"),
         },
       },
-      "/api/sync/status": { get: { summary: "Sync configuration and active/last operation state", responses: ok("Sync status") } },
+      "/api/sync/config": { post: { summary: "Save sync settings (member+); separately consent/select History and Firefox Places bookmarks", requestBody: { content: { "application/json": { schema: { type: "object", properties: { enabled: { type: "boolean" }, endpoint: { type: "string" }, bucket: { type: "string" }, accessKey: { type: "string" }, secretKey: { type: "string" }, custodyConsent: { type: "boolean" }, historyConsent: { type: "boolean", description: "Explicit user consent including Firefox bookmarks; main stamps time, false revokes future history scope" }, includeHistory: { type: "boolean", description: "Select separately consented history for future automatic operations; default false" } } } } } }, responses: { ...ok("Settings saved; masked status only"), "400": { description: "Invalid input or missing separate history consent" }, "403": { description: "Team role denied" } } } },
+      "/api/sync/history/{dirId}": { get: { summary: "Read independent WAL-aware semantic history state on an owned copy; no runtime UI proof", parameters: [{ in: "path", name: "dirId", required: true, schema: { type: "string" } }], responses: ok("History state, coverage and freshness") } },
+      "/api/sync/status": { get: { summary: "Sync configuration and active/last operation state; history coverage is independent of the config badge", responses: ok("Sync status") } },
       "/api/sync/preview": { get: { summary: "Local sync coverage preview", responses: ok("Local preview") } },
       "/api/sync/preview-diff": { get: { summary: "Read-only comparison with coverage and a content-bound comparisonToken", responses: ok("Comparison preview") } },
       "/api/sync/push": {
         post: {
           summary: "Push local config + artifacts to the team workspace",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { force: { type: "boolean", description: "Admin-only override of remote profile locks" }, comparisonToken: { type: "object", description: "Unmodified token from preview-diff; stale content returns 409", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Override saved history scope for this operation only; true requires separate consent and includes Firefox bookmarks" }, force: { type: "boolean", description: "Admin-only override of remote profile locks" }, comparisonToken: { type: "object", description: "Unmodified token from preview-diff; stale content returns 409", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } } } } } } },
           responses: { ...ok("Push result with commit facts, per-item states and warnings"), "403": { description: "Team role denied" }, "409": { description: "Busy, stale comparison, partial/unconfirmed commit or recovery required; inspect result before retrying" } },
         },
       },
       "/api/sync/pull": {
         post: {
           summary: "Pull + merge remote config (global or per-entry conflict strategy)",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { comparisonToken: { type: "object", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } }, strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Select History/Places explicitly; never invent visits from legacy/config-only backups" }, comparisonToken: { type: "object", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } }, strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
           description: "Member+ when team RBAC is enabled. comparisonToken from preview-diff may be supplied to reject stale decisions before changing data.",
           responses: { ...ok("Pull result with merge summary and commit facts"), "403": { description: "Team role denied" }, "409": { description: "Busy, stale comparison, partial/unconfirmed commit or recovery required; inspect result before retrying" } },
         },

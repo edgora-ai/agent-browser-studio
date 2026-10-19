@@ -73,6 +73,21 @@ describe("JavaScript SDK full bounded error receipts", () => {
     expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({ force: true, comparisonToken: TOKEN });
     expect(fetch).toHaveBeenCalledTimes(4);
   });
+  it("forwards separately consented history options through dedicated SDK methods without defaults or retries", async () => {
+    const receipt = { ...RESULT, items: [{ scope: "history", state: "preserved", history: { state: "preserved", freshness: "preserved" } }] };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(receipt))), f = sdk(fetch);
+    expect(await f.client.configureSync({ historyConsent: true, includeHistory: true })).toEqual(receipt);
+    expect(await f.client.syncPush({ history: true, comparisonToken: TOKEN })).toEqual(receipt);
+    expect(await f.client.syncPull({ history: false, strategy: "remote" })).toEqual(receipt);
+    await f.client.syncPush(); await f.client.syncHistoryState("synthetic profile");
+    expect(fetch.mock.calls.map((call: any[]) => call[0])).toEqual([
+      "https://sdk.synthetic.invalid/api/sync/config", "https://sdk.synthetic.invalid/api/sync/push", "https://sdk.synthetic.invalid/api/sync/pull", "https://sdk.synthetic.invalid/api/sync/push", "https://sdk.synthetic.invalid/api/sync/history/synthetic%20profile",
+    ]);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ historyConsent: true, includeHistory: true });
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ history: true, comparisonToken: TOKEN });
+    expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({ history: false, strategy: "remote" });
+    expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({}); expect(fetch).toHaveBeenCalledTimes(5);
+  });
   it("keeps the old standalone Error constructor compatible", () => {
     const f = sdk(async () => { throw new Error("unplanned fetch"); });
     const error = new f.ErrorClass("old caller message");
@@ -140,6 +155,15 @@ profile={'dirId':'synthetic-profile','syncedAt':0,'syncStatus':'unknown','syncSc
 mode.update(status=200,body={'profiles':[profile]}); assert c.list_profiles()==[profile]
 mode.update(body=profile); assert c.get_profile('synthetic-profile')==profile
 mode.update(body={'operation':{'generation':1,'active':None,'last':result}}); assert c.get('/api/sync/status')['operation']['last']==result
+mode.update(status=200,body=result)
+assert c.configure_sync({'historyConsent':True,'includeHistory':True})==result
+assert json.loads(requests[-1].data)=={'historyConsent':True,'includeHistory':True}
+assert c.sync_push({'history':True,'comparisonToken':token})==result
+assert json.loads(requests[-1].data)=={'history':True,'comparisonToken':token}
+assert c.sync_pull({'history':False,'strategy':'remote'})==result
+assert json.loads(requests[-1].data)=={'history':False,'strategy':'remote'}
+c.sync_push(); assert json.loads(requests[-1].data)=={}
+c.sync_history_state('synthetic profile'); assert requests[-1].full_url.endswith('/api/sync/history/synthetic%20profile')
 assert str(ns['AgentBrowserError']('old caller message'))=='old caller message'; assert not prohibited
 print(json.dumps({'requests':len(requests),'boundedErrorReads':reads,'prohibited':prohibited,'completeTypedReceipt':True,'noRetry':True}))`;
   const result = spawnSync("python3", ["-I", "-B", "-c", script, PY_FILE], { encoding: "utf8", timeout: 15000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } });
