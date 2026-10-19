@@ -1047,7 +1047,10 @@ describe.skipIf(!OPTED_IN)("real-app sync/state/backup acceptance (explicit coor
         await assertLocalizedSyncStatusHint();
         expect(await h!.page.locator("#sync-operation-result").innerText()).toMatch(/Last synchronization result/);
         const payload = fixture!.config();
-        expect(payload).toMatchObject({ artifactVersion: 2, snapshotId: result.operationId });
+        // artifactVersion 3 adds the History/source section on top of v2's
+        // snapshot identity; the acceptance must track the producer's current
+        // version rather than the older v2-only shape.
+        expect(payload).toMatchObject({ artifactVersion: 3, snapshotId: result.operationId });
         const publishedConfig = JSON.parse(zlib.gunzipSync(Buffer.from(payload.data, "base64")).toString());
         expect(publishedConfig.browserProfiles[id].syncBaseline).toMatchObject({ version: 1, snapshotId: payload.snapshotId });
         expect(fixture!.journal.filter((entry) => entry.method === "PUT" && entry.key === CONFIG_KEY)).toHaveLength(1);

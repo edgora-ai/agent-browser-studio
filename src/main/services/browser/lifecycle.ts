@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { runningProcesses, type RunningEntry } from "./runtime-table.js";
 import { requestChromiumClose } from "./graceful-close.js";
-import { findBrowserByProfileSync } from "../process-discovery.js";
+import { findBrowserByProfileSync, inspectBrowserLaunchesSync } from "../process-discovery.js";
 import { getProfilesDir } from "../config-manager.js";
 import { validateDirId } from "../utils.js";
 import { dropFirefoxSession } from "../bidi-client.js";
@@ -139,11 +139,42 @@ export function stopBrowser(dirId: string): boolean {
   validateDirId(dirId);
   const entry = runningProcesses.get(dirId);
   if (entry?.stopping) return false;
+  // Ownership rule: a stop may only signal processes this app launched and
+  // still tracks. Discovery is used solely to describe a residue that is
+  // already ours — never to adopt an unrelated process that happens to carry
+  // the same --user-data-dir. A second browser sharing the directory belongs
+  // to someone else (another app instance, an adopted/foreign launch, or a
+  // stale handler), and signalling it would be an unowned kill.
   const pids: number[] = [];
   if (entry) pids.push(entry.pid);
   const psFound = findBrowserByProfile(dirId);
-  if (psFound && !pids.includes(psFound.pid)) pids.push(psFound.pid);
+  if (psFound && entry && psFound.pid === entry.pid) {
+    // Same PID: discovery only confirms the owned runtime is still alive.
+    pids.push(psFound.pid);
+  } else if (psFound && !entry && launchProvenanceMatches(dirId, psFound)) {
+    // No tracked runtime, but the process carries this profile's fresh-launch
+    // stamp: it is a residue of an owned launch (e.g. after a crash), so it may
+    // be signalled. The check is narrow and fails closed.
+    pids.push(psFound.pid);
+  }
   return beginBrowserStop(dirId, entry, pids);
+}
+
+/** True only for a process whose argv carries this profile's launch stamp. */
+function launchProvenanceMatches(
+  dirId: string,
+  found: { pid: number; cdpPort: number },
+): boolean {
+  try {
+    const expectedProfileDir = path.resolve(getProfilesDir(), dirId);
+    const snapshot = inspectBrowserLaunchesSync(expectedProfileDir, found.pid);
+    const tracked = snapshot.tracked;
+    if (!tracked || tracked.pid !== found.pid || tracked.engine !== "chromium") return false;
+    const hasStamp = tracked.args.some((arg) => arg.startsWith("--agent-browser-launch-stamp="));
+    return hasStamp && tracked.profileDirs.includes(expectedProfileDir);
+  } catch {
+    return false;
+  }
 }
 
 function isLivePid(pid: number): boolean {
