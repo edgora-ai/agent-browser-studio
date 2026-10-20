@@ -41,6 +41,13 @@ const SQL_ROWS = [
   { id: 2, label: "wal-only", payload: "synthetic-committed-wal-payload-7f321" },
 ];
 const MAX_OBJECT_BYTES = 8 * 1024 * 1024;
+// The receipt records every phase's evidence (per-cycle timings, per-area
+// confirmation counts, journal and network summaries). It grew past the old
+// 128 KiB cap once the native flush barrier added truthful per-partition
+// results; the cap exists to stop unbounded capture, not to truncate the one
+// artifact that proves the run. Keep it bounded at 512 KiB and name the
+// largest observations when it trips.
+const RECEIPT_BUDGET_BYTES = 512 * 1024;
 const OPTED_IN = process.env.ABS_SYNC_ACCEPTANCE === "1";
 
 function sha256(bytes: Buffer | string): string {
@@ -1587,7 +1594,14 @@ describe.skipIf(!OPTED_IN)("real-app sync/state/backup acceptance (explicit coor
         receipt.cleanup.push("Owned bulky app/browser/fixture data removed; supplied parent root preserved");
       }
       const json = JSON.stringify(receipt, null, 2) + "\n";
-      if (Buffer.byteLength(json) > 128 * 1024) throw new Error("Acceptance receipt exceeds bounded evidence budget");
+      const receiptBytes = Buffer.byteLength(json);
+      const observationBytes = Object.entries(receipt.observations as Record<string, unknown>)
+        .map(([key, value]) => [key, Buffer.byteLength(JSON.stringify(value))] as const)
+        .sort((left, right) => right[1] - left[1]).slice(0, 6)
+        .map(([key, bytes]) => `${key}=${bytes}`).join(",");
+      if (receiptBytes > RECEIPT_BUDGET_BYTES) {
+        throw new Error(`Acceptance receipt exceeds bounded evidence budget (${receiptBytes} bytes; largest: ${observationBytes})`);
+      }
       fs.writeFileSync(path.join(owned, "receipt.json"), json, { flag: "wx" });
       console.log(`SYNC_STATE_ACCEPTANCE_RECEIPT=${path.join(owned, "receipt.json")}`);
     }
