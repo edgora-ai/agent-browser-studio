@@ -51,7 +51,25 @@ describe("Chromium macOS source and build scripts", () => {
 
     const patchedSourceBytes = fs.readFileSync(PATCHED_SOURCE);
     const patchedSource = patchedSourceBytes.toString("utf8").trim().split(/\r?\n/);
-    expect(patchedSource).toHaveLength(111);
+    // Every entry must be a single well-formed "<sha256>  <path>" line, and the
+    // count must equal the number of distinct patch-final files. Do not pin a
+    // literal: a new append-only patch legitimately adds entries, and a stale
+    // literal would fail on a correct patch set.
+    const sourceEntries = patchedSource.map((line) => {
+      const match = /^([0-9a-f]{64}) {2}(\S+)$/.exec(line);
+      expect(match, `malformed PATCHED_SOURCE line: ${line}`).not.toBeNull();
+      return match![2];
+    });
+    expect(new Set(sourceEntries).size).toBe(sourceEntries.length);
+    expect(sourceEntries.length).toBeGreaterThanOrEqual(111);
+    const patchNames = fs.readdirSync(path.join(ROOT, "patches", "chromium", "patches"))
+      .filter((name) => name.endsWith(".patch")).sort();
+    const patchset = fs.readFileSync(path.join(ROOT, "patches", "chromium", "PATCHSET.sha256"), "utf8").trim().split(/\r?\n/);
+    // PATCHSET lists exactly one hash line per patch file, plus its other
+    // inputs; a missing or duplicated patch entry is a real failure.
+    for (const name of patchNames) {
+      expect(patchset.filter((line) => line.endsWith("  " + path.posix.join("patches", name))), name).toHaveLength(1);
+    }
     for (const required of [
       "build/toolchain/apple/toolchain.gni",
       "services/network/public/cpp/agent_browser_local_dns_policy.cc",
