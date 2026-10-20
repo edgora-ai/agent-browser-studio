@@ -1,0 +1,38 @@
+diff --git a/third_party/blink/public/common/roxy_fingerprint_config.h b/third_party/blink/public/common/roxy_fingerprint_config.h
+--- a/third_party/blink/public/common/roxy_fingerprint_config.h
++++ b/third_party/blink/public/common/roxy_fingerprint_config.h
+@@ -17,7 +17,12 @@
+ #include "base/json/json_reader.h"
+ #include "base/no_destructor.h"
+ #include "base/values.h"
++#include "build/build_config.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
++
++#if BUILDFLAG(IS_MAC)
++#include "base/mac/mac_util.h"
++#endif
+ 
+ namespace blink {
+ 
+@@ -339,6 +344,21 @@
+     metadata.full_version = full_version;
+     metadata.platform_version = platform_version_;
+     metadata.architecture = "x86";
++#if BUILDFLAG(IS_MAC)
++    // Match native UA-CH on Apple Silicon, including Intel builds under Rosetta.
++    // Other OS personas retain their existing managed CPU contract.
++    if (platform_ == "MacIntel") {
++      switch (base::mac::GetCPUType()) {
++        case base::mac::CPUType::kIntel:
++          metadata.architecture = "x86";
++          break;
++        case base::mac::CPUType::kArm:
++        case base::mac::CPUType::kTranslatedIntel:
++          metadata.architecture = "arm";
++          break;
++      }
++    }
++#endif
+     metadata.bitness = "64";
+     metadata.model = "";
+     metadata.wow64 = false;

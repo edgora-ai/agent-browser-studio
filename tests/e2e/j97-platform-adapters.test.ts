@@ -115,7 +115,8 @@ describe('J97 — AI Skills Hub platform adapter catalog', () => {
     await h.page.evaluate(() => (window as any).agentBrowser.adapterToggle('crypto-exchange'));
     await h.page.waitForFunction(() => {
       const detail = document.querySelector('.adapter-card[data-adapter-id="crypto-exchange"] .adapter-detail');
-      return detail && detail.style.display === 'block';
+      if (!(detail instanceof HTMLElement)) throw new Error('Expected the adapter overview to be an HTML element');
+      return detail.style.display === 'block';
     }, { timeout: 8000 });
     const overview = await h.page.locator('.adapter-card[data-adapter-id="crypto-exchange"] .adapter-detail').textContent();
     expect(overview).toContain('Login URL hints');
@@ -124,7 +125,8 @@ describe('J97 — AI Skills Hub platform adapter catalog', () => {
     await h.page.evaluate(() => (window as any).agentBrowser.adapterShowDetail('crypto-exchange'));
     await h.page.waitForFunction(() => {
       const holder = document.querySelector('.adapter-card[data-adapter-id="crypto-exchange"] .adapter-full-detail');
-      return holder && holder.style.display === 'block' && holder.textContent.includes('loginCheck');
+      if (!(holder instanceof HTMLElement)) throw new Error('Expected the full adapter detail to be an HTML element');
+      return holder.style.display === 'block' && holder.textContent.includes('loginCheck');
     }, { timeout: 8000 });
     const detail = await h.page.locator('.adapter-card[data-adapter-id="crypto-exchange"] .adapter-full-detail').textContent();
     expect(detail).toContain('loginCheck');

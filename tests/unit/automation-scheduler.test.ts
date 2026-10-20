@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   saveConfig: vi.fn(),
   launchBrowser: vi.fn(),
   stopBrowser: vi.fn(),
+  syncPush: vi.fn(),
+  syncPull: vi.fn(),
   enqueueJob: vi.fn(),
   markRunning: vi.fn(),
   markRunningAttempt: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock("../../src/main/services/browser-manager.js", () => ({
 }));
 vi.mock("../../src/main/services/local-agent.js", () => ({ agentChat: vi.fn(), getOrDetectLlmConfig: vi.fn() }));
 vi.mock("../../src/main/services/agent-run-trace.js", () => ({ agentRunRecorder: {} }));
-vi.mock("../../src/main/services/sync-service.js", () => ({ syncService: {} }));
+vi.mock("../../src/main/services/sync-service.js", () => ({ syncService: { push: mocks.syncPush, pull: mocks.syncPull } }));
 vi.mock("../../src/main/services/event-bus.js", () => ({ onEvent: () => vi.fn() }));
 // Applies the mutation to the mock config so assertions can read the result
 // through current(), mirroring what the real store does via its hook.
@@ -61,7 +63,7 @@ vi.mock("../../src/main/services/job-store.js", () => ({
 }));
 
 import {
-  startScheduler, stopScheduler, reloadSchedule, testRunRule,
+  startScheduler, stopScheduler, reloadSchedule, refreshScheduleTimers, testRunRule,
   cancelRunningJob, jobGuard, getRunLogs, getSchedulerLiveState,
   getScheduleStates, getScheduleState,
 } from "../../src/main/services/automation.js";
@@ -100,6 +102,8 @@ beforeEach(() => {
   mocks.saveConfig.mockImplementation((cfg) => { mocks.config = structuredClone(cfg); });
   mocks.launchBrowser.mockReset().mockResolvedValue({ pid: 10, cdpPort: 20 });
   mocks.stopBrowser.mockReturnValue(true);
+  mocks.syncPush.mockReset().mockResolvedValue({ success: true, message: "synthetic sync" });
+  mocks.syncPull.mockReset().mockResolvedValue({ success: true, message: "synthetic sync" });
   let jobId = 0;
   mocks.enqueueJob.mockImplementation(() => ({ id: `job_${++jobId}` }));
   jobGuard.reset();
@@ -112,7 +116,220 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+describe("synchronization retry commit boundaries", () => {
+  for (const action of ["sync-push", "sync-pull"] as const) {
+    const execute = () => action === "sync-push" ? mocks.syncPush : mocks.syncPull;
+    it.each([
+      { outcome: "partial", localCommit: "committed", remoteCommit: "committed" },
+      { outcome: "partial", localCommit: "none", remoteCommit: "unknown" },
+      { outcome: "recovery-required", localCommit: "partial", remoteCommit: "none" },
+      { outcome: "failed", localCommit: "unknown", remoteCommit: "none" },
+    ])(`${action} never automatically replays a committed/unconfirmed attempt: %j`, async (facts) => {
+      execute().mockResolvedValue({ success: false, message: "synthetic commit requires review", ...facts });
+      once({ action: { type: action }, maxRetries: 2 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(execute()).toHaveBeenCalledTimes(1);
+      expect(mocks.markRetryWaiting).not.toHaveBeenCalled();
+      expect(mocks.markFailed).toHaveBeenCalledWith("job_1", expect.stringContaining("requires review"));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(execute()).toHaveBeenCalledTimes(1);
+    });
+    it(`${action} keeps configured retry for a proven no-commit preparation failure`, async () => {
+      execute().mockResolvedValueOnce({ success: false, message: "synthetic preparation failure", outcome: "failed", localCommit: "none", remoteCommit: "none" });
+      once({ action: { type: action }, maxRetries: 1 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.markRetryWaiting).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(execute()).toHaveBeenCalledTimes(2);
+      expect(mocks.markDone).toHaveBeenCalledTimes(1);
+    });
+    it(`${action} does not retry an untyped transport failure with unknown effects`, async () => {
+      execute().mockRejectedValue(new Error("synthetic transport lost"));
+      once({ action: { type: action }, maxRetries: 2 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.markRetryWaiting).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(execute()).toHaveBeenCalledTimes(1);
+    });
+  }
+});
+
 describe("once scheduler execution lifecycle", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const MAX_NODE_TIMEOUT_MS = 2 ** 31 - 1;
+
+  it.each([25, 30, 365])("arms a %i-day once in bounded chunks and runs only at its deadline", async (days) => {
+    const at = Date.now() + days * DAY_MS;
+    const rule = once({ trigger: { type: "once", at }, planId: `plan_far_${days}` });
+    const delays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    // Node clamps delays above 2^31-1 to 1 ms; Vitest's fake timers do not.
+    // Model that host behaviour without waiting days in real time.
+    const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay: number) => {
+      delays.push(delay);
+      if (delay > MAX_NODE_TIMEOUT_MS) {
+        process.emitWarning(`${delay} does not fit into a 32-bit signed integer`, "TimeoutOverflowWarning");
+        return originalSetTimeout(fn, 1);
+      }
+      return originalSetTimeout(fn, delay);
+    }) as typeof setTimeout);
+    try {
+      startScheduler();
+      expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: at });
+      expect(getScheduleState(rule.id)).toMatchObject({ phase: "scheduled-once", nextRunAt: at });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(mocks.launchBrowser).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(days * DAY_MS - 2);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(current(rule)).toMatchObject({ enabled: true, planId: `plan_far_${days}` });
+      expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: at });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+      expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+      expect(mocks.markDone).toHaveBeenCalledOnce();
+      expect(current(rule)).toMatchObject({ enabled: false, planId: `plan_far_${days}`, lastRunAt: at });
+      await vi.advanceTimersByTimeAsync(2 * DAY_MS);
+      expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+      expect(delays.length).toBeGreaterThan(1);
+      expect(delays.every((delay) => delay >= 0 && delay <= MAX_NODE_TIMEOUT_MS)).toBe(true);
+      expect(warning).not.toHaveBeenCalledWith(expect.anything(), "TimeoutOverflowWarning");
+    } finally {
+      timer.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
+  it("rechecks the deadline if the clock moves backward before a short timer wakes", async () => {
+    const start = Date.now();
+    const rule = once({ planId: "plan_clock_back" });
+    startScheduler();
+    vi.setSystemTime(new Date(start - DAY_MS));
+    await vi.advanceTimersByTimeAsync(100); // old 100-ms timer woke a day too early
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: start + 100 });
+    expect(getScheduleState(rule.id)).toMatchObject({ phase: "scheduled-once", nextRunAt: start + 100 });
+    await vi.advanceTimersByTimeAsync(DAY_MS - 1);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+    expect(current(rule)?.enabled).toBe(false);
+    expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+  });
+
+  it("recomputes the remaining wait when the clock jumps forward during a far chunk", async () => {
+    const at = Date.now() + 30 * DAY_MS;
+    const rule = once({ trigger: { type: "once", at }, planId: "plan_clock_forward" });
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(DAY_MS - 1);
+    vi.setSystemTime(new Date(at - 2));
+    await vi.advanceTimersByTimeAsync(1); // first 24h chunk wakes at at-1ms
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: at });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+    expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+    expect(current(rule)?.enabled).toBe(false);
+  });
+
+  it("never executes an old chunk after live refresh, edit/reload or stop/restart", async () => {
+    const at = Date.now() + 30 * DAY_MS;
+    const rule = once({ trigger: { type: "once", at }, planId: "plan_old_far" });
+    const captured: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay: number) => {
+      if (delay === DAY_MS) captured.push(fn);
+      return originalSetTimeout(fn, delay);
+    }) as typeof setTimeout);
+    try {
+      startScheduler();
+      const initialChunk = captured.at(-1)!;
+      expect(refreshScheduleTimers()).toBe(1);
+      initialChunk();
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: at });
+      const displacedChunk = captured.at(-1)!;
+      current(rule)!.trigger = { type: "once", at: Date.now() + 100 };
+      current(rule)!.planId = "plan_new_near";
+      reloadSchedule();
+      displacedChunk();
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+      expect(current(rule)).toMatchObject({ enabled: false, planId: "plan_new_near" });
+
+      // A new far plan is invalidated again by stop; neither the old callback
+      // nor a callback from the stopped generation may run after restart.
+      const newAt = Date.now() + 25 * DAY_MS;
+      current(rule)!.trigger = { type: "once", at: newAt };
+      current(rule)!.planId = "plan_after_stop";
+      current(rule)!.enabled = true;
+      reloadSchedule();
+      const beforeStop = captured.at(-1)!;
+      stopScheduler();
+      beforeStop();
+      expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+      startScheduler();
+      beforeStop();
+      expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: newAt });
+      await vi.advanceTimersByTimeAsync(25 * DAY_MS);
+      expect(mocks.launchBrowser).toHaveBeenCalledTimes(2);
+      expect(mocks.enqueueJob).toHaveBeenCalledTimes(2);
+      expect(current(rule)?.enabled).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("cancels a far once on disable/delete, and never resurrects it after clock rollback", async () => {
+    const start = Date.now();
+    const at = start + 25 * DAY_MS;
+    const disabled = once({ trigger: { type: "once", at }, planId: "plan_disabled_far" });
+    const deleted = once({ trigger: { type: "once", at }, planId: "plan_deleted_far" });
+    startScheduler();
+    current(disabled)!.enabled = false;
+    mocks.config.automation = mocks.config.automation.filter((r) => r.id !== deleted.id);
+    reloadSchedule();
+    expect(getSchedulerLiveState(disabled.id).armed).toBe(false);
+    expect(getSchedulerLiveState(deleted.id).armed).toBe(false);
+    vi.setSystemTime(new Date(start - DAY_MS));
+    expect(refreshScheduleTimers()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30 * DAY_MS);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.launchBrowser).not.toHaveBeenCalled();
+  });
+
+  it("keeps a far plan missed after a forward-clock live resume and later rollback", async () => {
+    const start = Date.now();
+    const at = start + 30 * DAY_MS;
+    const rule = once({ trigger: { type: "once", at }, planId: "plan_missed_far" });
+    const captured: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay: number) => {
+      if (delay === DAY_MS) captured.push(fn);
+      return originalSetTimeout(fn, delay);
+    }) as typeof setTimeout);
+    try {
+      startScheduler();
+      const staleChunk = captured[0];
+      vi.setSystemTime(new Date(at + 1_000));
+      expect(refreshScheduleTimers()).toBe(0);
+      expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+      expect(current(rule)?.missedAt).toBe(at + 1_000);
+      staleChunk();
+      vi.setSystemTime(new Date(start));
+      expect(refreshScheduleTimers()).toBe(0);
+      staleChunk();
+      await vi.advanceTimersByTimeAsync(31 * DAY_MS);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      expect(current(rule)).toMatchObject({ enabled: true, planId: "plan_missed_far", missedAt: at + 1_000 });
+      expect(getScheduleState(rule.id)?.phase).toBe("missed-once");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("actually executes when due, then disables and never repeats after reload", async () => {
     const rule = once();
     startScheduler();
@@ -156,7 +373,8 @@ describe("once scheduler execution lifecycle", () => {
     const rule = once({ maxRetries: 1 });
     startScheduler();
     await vi.advanceTimersByTimeAsync(100);
-    expect(mocks.markFailed).toHaveBeenCalledOnce();
+    expect(mocks.markFailed).not.toHaveBeenCalled();
+    expect(mocks.markRetryWaiting).toHaveBeenCalledWith("job_1", Date.now() + 30_000, "first failure");
     expect(current(rule)?.enabled).toBe(true);
     await vi.advanceTimersByTimeAsync(29_999);
     expect(mocks.launchBrowser).toHaveBeenCalledOnce();
@@ -174,7 +392,7 @@ describe("once scheduler execution lifecycle", () => {
     expect(mocks.markRunningAttempt.mock.calls[0][1]).toBe(1);
     // Both calls target the same row — the whole point of the change.
     expect(mocks.markRunningAttempt.mock.calls[0][0]).toBe(mocks.markRunning.mock.calls[0][0]);
-    expect(mocks.markFailed).toHaveBeenCalledTimes(failRetry ? 2 : 1);
+    expect(mocks.markFailed).toHaveBeenCalledTimes(failRetry ? 1 : 0);
     expect(mocks.markDone).toHaveBeenCalledTimes(failRetry ? 0 : 1);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(mocks.launchBrowser).toHaveBeenCalledTimes(2);
@@ -312,17 +530,41 @@ describe("once scheduler execution lifecycle", () => {
     expect(current(rule)?.lastRunAt).toBeUndefined();
   });
 
-  it("marks a cooldown-skipped once as missed, and still never re-arms it", async () => {
-    // M3 does NOT fix this (see the plan's 明确不做): the rule stays enabled and
-    // permanently dead. What changes is that it is now visible as missed-once
-    // instead of silently claiming to be enabled. Asserted in both directions
-    // so a future "fix" cannot land unnoticed.
+  it("persists a cooldown-skipped once immediately, before a clock rollback can re-arm the same plan", async () => {
+    const start = Date.now();
+    const at = start + 100;
+    const rule = once({ planId: "plan_skipped_clock_rollback", cooldownUntil: start + 60_000 });
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(101);
+    expect(mocks.markSkipped).toHaveBeenCalledWith("job_1", "skipped: cooldown");
+    expect(mocks.launchBrowser).not.toHaveBeenCalled();
+    expect(current(rule)).toMatchObject({ enabled: true, planId: rule.planId, missedAt: at });
+
+    vi.setSystemTime(new Date(at - 2_500));
+    expect(refreshScheduleTimers()).toBe(0);
+    expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+    expect(getScheduleState(rule.id)).toMatchObject({ phase: "missed-once", nextRunAt: null });
+    vi.setSystemTime(new Date(start + 60_001)); // cooldown has ended in real time
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+    expect(mocks.launchBrowser).not.toHaveBeenCalled();
+    stopScheduler();
+    startScheduler();
+    expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+    expect(current(rule)).toMatchObject({ enabled: true, planId: rule.planId, missedAt: at });
+  });
+
+  it("keeps the cooldown-skipped once missed across reload without consuming it", async () => {
+    // The cooldown skip permanently consumes its timer, but not the rule: the
+    // missed mark must already be durable before any reload or clock refresh.
     const rule = once({ cooldownUntil: Date.now() + 60_000 });
     startScheduler();
     await vi.advanceTimersByTimeAsync(100);
+    const missedAt = current(rule)?.missedAt;
+    expect(missedAt).toBeGreaterThan(0);
     reloadSchedule();
-    expect(current(rule)?.missedAt).toBeGreaterThan(0);
-    // Still enabled — the mark is display-only.
+    expect(current(rule)?.missedAt).toBe(missedAt);
+    // Still enabled — the mark records the dead plan, not a user disable.
     expect(current(rule)?.enabled).toBe(true);
     // And the at-time was not rewritten.
     expect(current(rule)?.trigger).toEqual(rule.trigger);
@@ -396,6 +638,49 @@ describe("once scheduler execution lifecycle", () => {
     expect(current(rule)?.missedAt).toBe(first);
   });
 
+  it("never re-arms a missed once after the clock moves before its original deadline", async () => {
+    const at = Date.now() - 5_000;
+    const rule = once({ trigger: { type: "once", at }, planId: "plan_original" });
+    startScheduler();
+    const missedAt = current(rule)?.missedAt;
+    expect(missedAt).toBeGreaterThan(0);
+    expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date(at - 1_000));
+    expect(refreshScheduleTimers()).toBe(0);
+    expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+    expect(getScheduleState(rule.id)).toMatchObject({ phase: "missed-once", nextRunAt: null });
+    reloadSchedule(); // startup/edit path must not resurrect the same plan either
+    expect(getSchedulerLiveState(rule.id).armed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.launchBrowser).not.toHaveBeenCalled();
+    expect(current(rule)).toMatchObject({ planId: "plan_original", missedAt, enabled: true });
+
+    // Only an explicit new plan with its old mark cleared may be armed.
+    const updated = current(rule)!;
+    updated.planId = "plan_rescheduled";
+    updated.missedAt = undefined;
+    updated.trigger = { type: "once", at: Date.now() + 100 };
+    reloadSchedule();
+    expect(getSchedulerLiveState(rule.id)).toMatchObject({ armed: true, armedAt: updated.trigger.at });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+    expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+    expect(current(rule)?.enabled).toBe(false);
+  });
+
+  it("rejects an already-armed once if its plan is marked missed before callback", async () => {
+    const rule = once();
+    startScheduler();
+    current(rule)!.missedAt = Date.now();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    expect(mocks.launchBrowser).not.toHaveBeenCalled();
+    expect(current(rule)?.enabled).toBe(true);
+  });
+
   it("marks a once that was skipped by the guard at startup, not only at fire time", async () => {
     // The rule's at-time is already past when the scheduler starts, so it is
     // never armed at all — this is the "expired once silently dropped" path.
@@ -450,6 +735,107 @@ describe("once scheduler execution lifecycle", () => {
     if (change === "reload" || change === "stop") expect(current(rule)?.enabled).toBe(true);
   });
 
+  it("refreshes armed timers without interrupting a running once or its terminal write", async () => {
+    const release = holdLaunch();
+    const rule = once();
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getSchedulerLiveState(rule.id).executing).toBe(true);
+    expect(refreshScheduleTimers()).toBe(0);
+    expect(mocks.markFailed).not.toHaveBeenCalled();
+    expect(mocks.markCancelled).not.toHaveBeenCalled();
+    expect(current(rule)?.missedAt).toBeUndefined();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.markDone).toHaveBeenCalledExactlyOnceWith("job_1", expect.stringContaining("launched"));
+    expect(current(rule)?.enabled).toBe(false);
+    expect(mocks.launchBrowser).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes while queued and still drains FIFO without cancelling either job", async () => {
+    const release = holdLaunch();
+    const first = once();
+    const second = once();
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getSchedulerLiveState(second.id).waitingForSlot).toBe(true);
+    refreshScheduleTimers();
+    expect(mocks.markCancelled).not.toHaveBeenCalled();
+    expect(current(second)?.missedAt).toBeUndefined();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.launchBrowser.mock.calls.map((args) => args[0])).toEqual([first.id, second.id]);
+    expect(mocks.markDone).toHaveBeenCalledTimes(2);
+    expect(current(first)?.enabled).toBe(false);
+    expect(current(second)?.enabled).toBe(false);
+  });
+
+  it("refreshes while retry-waiting without changing the retry deadline or attempt", async () => {
+    mocks.launchBrowser.mockRejectedValueOnce(new Error("first failure"));
+    const rule = once({ maxRetries: 1 });
+    startScheduler();
+    await vi.advanceTimersByTimeAsync(100);
+    const retryAt = mocks.markRetryWaiting.mock.calls[0][1];
+    await vi.advanceTimersByTimeAsync(5_000);
+    refreshScheduleTimers();
+    expect(getSchedulerLiveState(rule.id).retryAt).toBe(retryAt);
+    expect(mocks.markRetryAbandoned).not.toHaveBeenCalled();
+    expect(current(rule)?.missedAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(mocks.markRunningAttempt).toHaveBeenCalledExactlyOnceWith("job_1", 1);
+    expect(mocks.markDone).toHaveBeenCalledOnce();
+    expect(mocks.launchBrowser).toHaveBeenCalledTimes(2);
+    expect(current(rule)?.enabled).toBe(false);
+  });
+
+  it("ignores a displaced once callback rather than starting a duplicate execution", async () => {
+    const rule = once();
+    const captured: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay: number) => {
+      if (delay === 100) captured.push(fn);
+      return originalSetTimeout(fn, delay);
+    }) as typeof setTimeout);
+    try {
+      startScheduler();
+      const stale = captured[0];
+      expect(refreshScheduleTimers()).toBe(1);
+      stale();
+      expect(mocks.launchBrowser).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.launchBrowser).toHaveBeenCalledExactlyOnceWith(rule.id);
+      expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("ignores a displaced timer callback after a clock jump and recomputes cron from the new clock", async () => {
+    const rule = once({ trigger: { type: "cron", cron: "* * * * *" } });
+    const captured: Array<() => void> = [];
+    // Capture callbacks while preserving Vitest's fake timer implementation.
+    const originalSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay: number) => {
+      if (delay === 60_000) captured.push(fn);
+      return originalSetTimeout(fn, delay);
+    }) as typeof setTimeout);
+    try {
+      startScheduler();
+      expect(getSchedulerLiveState(rule.id).armedAt).toBe(Date.now() + 60_000);
+      const stale = captured[0];
+      vi.setSystemTime(new Date("2026-09-19T12:10:00Z"));
+      expect(refreshScheduleTimers()).toBe(1);
+      expect(getSchedulerLiveState(rule.id).armedAt).toBe(Date.now() + 60_000);
+      stale();
+      expect(mocks.launchBrowser).not.toHaveBeenCalled();
+      expect(getSchedulerLiveState(rule.id).armedAt).toBe(Date.now() + 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mocks.launchBrowser).toHaveBeenCalledOnce();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not consume a running-guard skip", async () => {
     const rule = once();
     jobGuard.begin(rule.id, Date.now());
@@ -458,6 +844,7 @@ describe("once scheduler execution lifecycle", () => {
     expect(mocks.launchBrowser).not.toHaveBeenCalled();
     expect(mocks.markSkipped).toHaveBeenCalledWith("job_1", "skipped: running");
     expect(current(rule)?.enabled).toBe(true);
+    expect(current(rule)?.missedAt).toBeUndefined(); // guard still owns pending work
   });
 
   it("does not retry or consume a timed-out action still unwinding", async () => {

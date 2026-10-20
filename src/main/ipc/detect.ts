@@ -1,98 +1,51 @@
 import { ipcMain } from "electron";
-import { proxyDetector, type ProxyDetectionResult } from "../services/proxy-detector.js";
-import { recordProxyDetection } from "../services/proxy-health.js";
+import { proxyDetector } from "../services/proxy-detector.js";
+import { captureProxyDetectionTarget, commitProxyDetectionIfCurrent, detectProxyTarget, proxyDetectionTargetKey } from "../services/proxy-detection.js";
+import { ProxyDetectionCommitError } from "../services/config/store.js";
 import { webrtcDetector } from "../services/webrtc-detector.js";
-import { getProxySecret, setProxyDetectionIfCurrent } from "../services/config-manager.js";
 import { withTimeout } from "../services/job-guard.js";
-import type { ProxyConfig, ProxyDetectionCacheEntry } from "../types.js";
+import type { ProxyConfig } from "../types.js";
 
-// R10 P0-2 (partial): main-side timeout for detections. The renderer times
-// out detect at 20s — without a main-side bound a hung curl keeps the worker
-// (and proxy socket) alive after the UI has given up. 25s gives slow
-// providers headroom while guaranteeing termination.
-// launch/stop intentionally have NO main-side timeout: killing the IPC reply
-// while launchBrowser keeps running would manufacture "failed but actually
-// started" lies. launchBrowser already idempotently returns the existing
-// process for the same dirId (runningProcesses check), so renderer-timeout
-// retries converge instead of double-spawning.
-
-function cacheEntryFromDetection(result: ProxyDetectionResult): ProxyDetectionCacheEntry {
-  return {
-    detectedAt: Date.now(),
-    success: Boolean(result?.success),
-    exitIp: result?.exitIp || null,
-    country: result?.country || result?.countryCode || null,
-    countryCode: result?.countryCode || null,
-    timezone: result?.timezone || null,
-    provider: result?.provider || null,
-    latencyMs: typeof result?.latencyMs === "number" ? result.latencyMs : null,
-    org: result?.org || null,
-    as: result?.as || null,
-    hosting: result?.hosting ?? null,
-    isProxy: result?.isProxy ?? null,
-    error: result?.error || null,
-  };
-}
-
-// R8 P1-5: main-side in-flight dedupe for detection. The renderer caps
-// concurrent checks, but REST/MCP/proxies-page callers bypass it — without
-// this, rapid repeats fan out parallel curl storms against the same proxy.
+// Share a complete named operation, not only transport: one physical fresh
+// measurement has one persistence attempt/sample and one truthful IPC outcome.
 const inflightDetections = new Map<string, Promise<unknown>>();
 function dedupeDetection<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const existing = inflightDetections.get(key);
   if (existing) return existing as Promise<T>;
-  const p = fn().finally(() => {
-    if (inflightDetections.get(key) === p) inflightDetections.delete(key);
+  const pending = fn().finally(() => {
+    if (inflightDetections.get(key) === pending) inflightDetections.delete(key);
   });
-  inflightDetections.set(key, p);
-  return p;
+  inflightDetections.set(key, pending);
+  return pending;
 }
-
 const DETECT_TIMEOUT_MS = 25_000;
 
-// R13 P3-2: honor the withTimeout contract — pass the abort signal into the
-// detectors so a timeout actually stops the work instead of relying on the
-// inner curl timers. Falls back gracefully: detectors that ignore the signal
-// keep their existing self-timeout behavior.
 export function registerDetectHandlers(): void {
   ipcMain.handle("detect:proxy", async (_event, config: ProxyConfig) => {
-    return withTimeout((signal) => proxyDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy");
+    return withTimeout(signal => proxyDetector.detect(config, { signal, cachePolicy: "refresh" }), DETECT_TIMEOUT_MS, "detect:proxy");
   });
-
   ipcMain.handle("detect:proxy-ping", async (_event, config: ProxyConfig) => {
-    return withTimeout((signal) => proxyDetector.ping(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy-ping");
+    return withTimeout(signal => proxyDetector.ping(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy-ping");
   });
-
   ipcMain.handle("detect:proxy-by-name", async (_event, name: string) => {
-    const key = `by-name:${String(name)}`;
-    return dedupeDetection(key, async () => {
-    const config = getProxySecret(name);
-    if (!config) return { success: false, error: "Proxy not found" };
-    const result = await withTimeout((signal) => proxyDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:proxy-by-name");
-    try {
-      setProxyDetectionIfCurrent(name, config, cacheEntryFromDetection(result));
-      recordProxyDetection(name, {
-        success: Boolean(result?.success),
-        exitIp: result?.exitIp || null,
-        countryCode: result?.countryCode || null,
-        timezone: result?.timezone || null,
-        provider: result?.provider || null,
-        latencyMs: typeof result?.latencyMs === "number" ? result.latencyMs : null,
-        isp: result?.isp || null,
-        org: result?.org || null,
-        as: result?.as || null,
-        hosting: result?.hosting ?? null,
-        isProxy: result?.isProxy ?? null,
-        error: result?.error || null,
-      });
-    } catch (e) {
-      console.warn(`[detect] failed to persist proxy detection for ${name}:`, e);
-    }
-    return result;
+    // Capture committed identity/lifecycle BEFORE dedupe and before any await.
+    const target = captureProxyDetectionTarget(name);
+    if (!target) return { success: false, error: "Proxy not found", code: "PROXY_DETECTION_TARGET_CHANGED" };
+    const result = await dedupeDetection(proxyDetectionTargetKey(target, "refresh"), async () => {
+      const detected = await withTimeout(signal => detectProxyTarget(target, "refresh", signal), DETECT_TIMEOUT_MS, "detect:proxy-by-name");
+      // Aborted/not-dispatched results have no authenticated sample to save.
+      if (detected.source === "unknown") return detected;
+      try { commitProxyDetectionIfCurrent(target, detected); }
+      catch (error) {
+        const code = error instanceof ProxyDetectionCommitError ? error.code : "PROXY_DETECTION_SAVE_FAILED";
+        return { ...detected, success: false, code, error: code };
+      }
+      return detected;
     });
+    // Electron clones too, but direct main callers must not share a result.
+    return structuredClone(result);
   });
-
   ipcMain.handle("detect:webrtc-leak", async (_event, config: ProxyConfig) => {
-    return withTimeout((signal) => webrtcDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:webrtc-leak");
+    return withTimeout(signal => webrtcDetector.detect(config, { signal }), DETECT_TIMEOUT_MS, "detect:webrtc-leak");
   });
 }

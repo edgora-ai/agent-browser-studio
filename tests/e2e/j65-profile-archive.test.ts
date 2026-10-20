@@ -5,13 +5,13 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 import { openCardMenu } from "./helpers/find.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j65");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j65-profile-archive-"));
 
 function apiRequest(
   port: number, token: string, method: string, p: string, body?: any, auth = true,
@@ -62,8 +62,8 @@ describe("J65 — profile backup export/import", () => {
   }, 60000);
   afterAll(async () => {
     if (h) await closeApp(h);
-    try { fs.rmSync(zipPath, { force: true }); } catch { /* ignore */ }
-    try { fs.rmSync(restZipPath, { force: true }); } catch { /* ignore */ }
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j65-profile-archive-")) throw new Error("Unsafe J65 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("exports a profile to a zip and re-imports it with meta + data intact", async () => {
@@ -88,8 +88,17 @@ describe("J65 — profile backup export/import", () => {
     expect(exp.success, JSON.stringify(exp)).toBe(true);
     expect(exp.entries).toBeGreaterThan(0);
     expect(fs.existsSync(zipPath)).toBe(true);
+    const originalZip = fs.readFileSync(zipPath);
+    const conflict = await h.page.evaluate(async ({ id, p }) =>
+      (window as any).agentBrowser.api.profile.exportArchive(id, p), { id: dirId, p: zipPath });
+    expect(conflict).toMatchObject({ success: false, code: "ARCHIVE_DESTINATION_EXISTS" });
+    expect(fs.readFileSync(zipPath)).toEqual(originalZip);
+    fs.writeFileSync(path.join(info.path, "bookmarks.html"), "bookmarks-confirmed-replacement");
+    const replaced = await h.page.evaluate(async ({ id, p }) =>
+      (window as any).agentBrowser.api.profile.exportArchive(id, p, { overwrite: true }), { id: dirId, p: zipPath });
+    expect(replaced).toMatchObject({ success: true, outcome: "completed" });
 
-    // Remove the source profile, then import the backup.
+    // Remove the source profile, then import the explicitly replaced backup.
     const del = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.delete(id), dirId);
     expect(del.success).toBe(true);
 
@@ -111,7 +120,7 @@ describe("J65 — profile backup export/import", () => {
     const iinfo = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), imp.dirId);
     const prefs = JSON.parse(fs.readFileSync(path.join(iinfo.path, "Default", "Preferences"), "utf8"));
     expect(prefs.profile.name).toBe("backup-data");
-    expect(fs.readFileSync(path.join(iinfo.path, "bookmarks.html"), "utf8")).toBe("bookmarks-html");
+    expect(fs.readFileSync(path.join(iinfo.path, "bookmarks.html"), "utf8")).toBe("bookmarks-confirmed-replacement");
   }, 60000);
 
   it("profiles tab shows the export-backup button", async () => {
@@ -154,8 +163,15 @@ describe("J65 — profile backup export/import", () => {
     expect(exp.body.entries).toBeGreaterThan(0);
     expect(exp.body.bytes).toBeGreaterThan(0);
     expect(fs.existsSync(restZipPath)).toBe(true);
+    const originalZip = fs.readFileSync(restZipPath);
+    const conflict = await apiRequest(port, token, "POST", "/api/profiles/" + dirId + "/export", { destPath: restZipPath });
+    expect(conflict).toMatchObject({ status: 409, body: { success: false, code: "ARCHIVE_DESTINATION_EXISTS" } });
+    expect(fs.readFileSync(restZipPath)).toEqual(originalZip);
+    fs.writeFileSync(path.join(info.path, "Default", "Preferences"), JSON.stringify({ profile: { name: "rest-confirmed-replacement" } }));
+    const replaced = await apiRequest(port, token, "POST", "/api/profiles/" + dirId + "/export", { destPath: restZipPath, overwrite: true });
+    expect(replaced).toMatchObject({ status: 200, body: { success: true, outcome: "completed" } });
 
-    // Delete the source, then import the archive back under a fresh dirId.
+    // Delete the source, then import the explicitly replaced archive under a fresh dirId.
     const del = await apiRequest(port, token, "DELETE", "/api/profiles/" + dirId);
     expect(del.status).toBe(200);
     const imp = await apiRequest(port, token, "POST", "/api/profiles/import", { zipPath: restZipPath });
@@ -167,7 +183,7 @@ describe("J65 — profile backup export/import", () => {
 
     const iinfo = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), imp.body.dirId);
     const prefs = JSON.parse(fs.readFileSync(path.join(iinfo.path, "Default", "Preferences"), "utf8"));
-    expect(prefs.profile.name).toBe("rest-data");
+    expect(prefs.profile.name).toBe("rest-confirmed-replacement");
     expect(fs.readFileSync(path.join(iinfo.path, "cookies.sqlite"), "utf8")).toBe("cookie-db");
 
     // Import without a zipPath must be a client error.
@@ -202,11 +218,18 @@ describe("J65 — profile backup export/import", () => {
 
     const exp = await apiRequest(port, token, "POST", "/api/profiles/export", { dirIds: [a, b], destDir });
     expect(exp.status, JSON.stringify(exp)).toBe(200);
-    expect(exp.body.success).toBe(true);
+    expect(exp.body).toMatchObject({ success: true, outcome: "completed" });
     expect(exp.body.report.exported.length).toBe(2);
+    expect(exp.body.report.skipped.length).toBe(0);
     expect(exp.body.report.failed.length).toBe(0);
     const files = fs.readdirSync(destDir).filter((f) => f.endsWith(".zip"));
     expect(files.length).toBe(2);
+    const originals = files.map((file) => fs.readFileSync(path.join(destDir, file)));
+    const conflicts = await apiRequest(port, token, "POST", "/api/profiles/export", { dirIds: [a, b], destDir });
+    expect(conflicts).toMatchObject({ status: 200, body: { success: false, outcome: "failed" } });
+    expect(conflicts.body.report.exported).toEqual([]);
+    expect(conflicts.body.report.failed).toHaveLength(2);
+    for (let i = 0; i < files.length; i++) expect(fs.readFileSync(path.join(destDir, files[i]))).toEqual(originals[i]);
 
     // Delete both sources, then import the whole batch back.
     expect((await apiRequest(port, token, "DELETE", "/api/profiles/" + a)).status).toBe(200);
@@ -215,6 +238,7 @@ describe("J65 — profile backup export/import", () => {
       zipPaths: files.map((f) => path.join(destDir, f)),
     });
     expect(imp.status, JSON.stringify(imp)).toBe(200);
+    expect(imp.body).toMatchObject({ success: true, outcome: "completed" });
     expect(imp.body.report.imported.length).toBe(2);
     expect(imp.body.report.failed.length).toBe(0);
 
@@ -223,7 +247,11 @@ describe("J65 — profile backup export/import", () => {
     let found = false;
     for (const d of dirIds) {
       const ii = await h.page.evaluate(async (id: string) => (window as any).agentBrowser.api.profile.get(id), d);
-      if (fs.existsSync(path.join(ii.path, "batch-a.txt"))) { found = true; break; }
+      if (fs.existsSync(path.join(ii.path, "batch-a.txt"))) {
+        expect(fs.readFileSync(path.join(ii.path, "batch-a.txt"), "utf8")).toBe("A-data");
+        found = true;
+        break;
+      }
     }
     expect(found).toBe(true);
 

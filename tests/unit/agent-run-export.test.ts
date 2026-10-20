@@ -13,10 +13,44 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createHash } from "node:crypto";
 
 // pid-suffixed: this file writes real export destinations and a real
 // agent-results tree, so concurrent vitest processes must not share the path.
 const TEST_USER_DATA = path.join(os.tmpdir(), `agent-browser-m2-export-test-${process.pid}`);
+
+const exportIo = vi.hoisted(() => ({
+  fault: null as null | { syscall: "openSync" | "writeSync" | "fsyncSync" | "renameSync"; code: string; target?: "file" | "directory"; systemCall?: string },
+  events: [] as string[],
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const fail = (syscall: "openSync" | "writeSync" | "fsyncSync" | "renameSync", kind: "file" | "directory") => {
+    const fault = exportIo.fault;
+    if (!fault || fault.syscall !== syscall || (fault.target && fault.target !== kind)) return;
+    const error = Object.assign(new Error(fault.code + ": injected export " + syscall), {
+      code: fault.code, syscall: fault.systemCall ?? (syscall === "fsyncSync" ? "fsync" : syscall),
+    });
+    throw error;
+  };
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const file = args[0];
+      const isDirectory = typeof file === "string" && actual.existsSync(file) && actual.statSync(file).isDirectory();
+      fail("openSync", isDirectory ? "directory" : "file");
+      return actual.openSync(...args);
+    },
+    writeSync: (fd: number, data: Uint8Array) => { fail("writeSync", "file"); return actual.writeSync(fd, data); },
+    fsyncSync: (fd: number) => {
+      const kind = actual.fstatSync(fd).isDirectory() ? "directory" : "file";
+      exportIo.events.push(kind + "-fsync"); fail("fsyncSync", kind); return actual.fsyncSync(fd);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      exportIo.events.push("rename"); fail("renameSync", "file"); return actual.renameSync(...args);
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   app: {
@@ -99,10 +133,14 @@ function commitRun(opts: {
 }
 
 beforeEach(() => {
+  exportIo.fault = null;
+  exportIo.events = [];
   fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
   reloadConfig();
 });
 afterEach(() => {
+  exportIo.fault = null;
+  exportIo.events = [];
   fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
   reloadConfig();
 });
@@ -230,7 +268,61 @@ describe("plan", () => {
   });
 });
 
+function onExportPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  if (!original?.configurable) throw new Error("Platform control must be restorable");
+  try { Object.defineProperty(process, "platform", { value: platform }); return run(); }
+  finally { Object.defineProperty(process, "platform", original); }
+}
+
 describe("write", () => {
+  it.each([false, true])("exports and reads back real CSV with only unsupported Windows directory fsync (overwrite=%s)", overwrite => {
+    const { runId } = commitRun({ rows: [["needle-title", "https://e.com/needle", "S", "2026-09-19"]] });
+    const dest = path.join(TEST_USER_DATA, "windows-directory.csv");
+    if (overwrite) fs.writeFileSync(dest, "OLD CONTENT");
+    exportIo.events = [];
+    exportIo.fault = { syscall: "fsyncSync", code: "EPERM", target: "directory" };
+    const result = onExportPlatform("win32", () => writeExport({ runId, kind: "dataset-csv", destPath: dest }));
+    expect(result.ok).toBe(true);
+    expect(exportIo.events).toEqual(["file-fsync", "rename", "directory-fsync"]);
+    const bytes = fs.readFileSync(dest), text = bytes.toString("utf8");
+    expect(text).toBe("title,url,source,published_at\r\nneedle-title,https://e.com/needle,S,2026-09-19\r\n");
+    expect(text).not.toContain("OLD CONTENT");
+    expect(text.split("\r\n").filter(row => row.startsWith("needle-title,"))).toHaveLength(1);
+    if (result.ok) {
+      expect(result.bytes).toBe(bytes.length);
+      expect(result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      expect(result.rows).toBe(1);
+    }
+    expect(fs.readdirSync(TEST_USER_DATA).filter(name => name.startsWith(".agent-run-export-"))).toEqual([]);
+  });
+
+  it.each([
+    { platform: "darwin" as const, syscall: "fsyncSync" as const, target: "directory" as const, code: "EPERM" },
+    { platform: "linux" as const, syscall: "fsyncSync" as const, target: "directory" as const, code: "EPERM" },
+    { platform: "win32" as const, syscall: "fsyncSync" as const, target: "directory" as const, code: "EIO" },
+    { platform: "win32" as const, syscall: "fsyncSync" as const, target: "directory" as const, code: "EINVAL" },
+    { platform: "win32" as const, syscall: "fsyncSync" as const, target: "directory" as const, code: "EPERM", systemCall: "open" },
+    { platform: "win32" as const, syscall: "fsyncSync" as const, target: "file" as const, code: "EPERM" },
+    { platform: "win32" as const, syscall: "openSync" as const, target: "directory" as const, code: "EPERM" },
+    { platform: "win32" as const, syscall: "writeSync" as const, target: "file" as const, code: "EPERM" },
+    { platform: "win32" as const, syscall: "renameSync" as const, target: "file" as const, code: "EPERM" },
+    { platform: "win32" as const, syscall: "writeSync" as const, target: "file" as const, code: "ENOSPC" },
+  ])("fails closed for $platform $target $syscall $code outside the exact unsupported case", fault => {
+    const { runId } = commitRun();
+    const dest = path.join(TEST_USER_DATA, "genuine-failure.csv");
+    fs.writeFileSync(dest, "PREVIOUS CONTENT");
+    exportIo.events = [];
+    exportIo.fault = fault;
+    const result = onExportPlatform(fault.platform, () => writeExport({ runId, kind: "dataset-csv", destPath: dest }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasonCode).toBe(fault.code === "ENOSPC" ? "no_space" : "write_failed");
+    if (fault.syscall === "writeSync" || fault.syscall === "renameSync" || (fault.syscall === "fsyncSync" && fault.target === "file")) {
+      expect(fs.readFileSync(dest, "utf8")).toBe("PREVIOUS CONTENT");
+    }
+    expect(fs.readdirSync(TEST_USER_DATA).filter(name => name.startsWith(".agent-run-export-"))).toEqual([]);
+  });
+
   it("writes the CSV atomically and reports the byte count", () => {
     const { runId } = commitRun({ rows: [["=cmd", "https://e.com/a", "S", "2026-09-19"]] });
     const dest = path.join(TEST_USER_DATA, "out.csv");

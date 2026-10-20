@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { setupTestApp, closeApp, type TestAppHandle } from "./helpers/app.js";
 import { connectBrowserCdp, connectPageCdp, listTargets, waitForCdpPort, waitForPortClosed, waitForPageUrl } from "./helpers/cdp.js";
@@ -241,28 +243,59 @@ describe("M1 — real desktop execution boundaries and persistence", () => {
 
   it("cancels a real browser load wait without dispatching the following action or closing the browser", async () => {
     await seed(a);
-    const id = await conversation("Cancel browser wait");
-    mock.setResponses([{ chunks: [], toolCalls: [
-      { id: "wait", name: "browser_wait_for_load", arguments: { port: a.port, timeoutMs: 20_000 } },
-      { id: "after-wait", name: "browser_type", arguments: { port: a.port, selector: "#m1-target", text: "must-not-dispatch" } },
-    ] }]);
-    const requestId = await start(id, { profile: a });
-    await expect.poll(async () => (await active(id))?.currentTool, { timeout: 10_000 }).toBe("browser_wait_for_load");
-    // This Chromium helper waits for the next load event (not readyState).
-    // Keep the fixture stable and verify the wait is still in flight before Stop.
-    await h.page.waitForTimeout(150);
-    const snapshot = await active(id);
-    expect(snapshot.currentTool).toBe("browser_wait_for_load");
-    const since = Date.now();
-    const stopped = await h.page.evaluate((identity) => (window as any).agentBrowser.api.agent.cancelRun(identity), { conversationId: id, runId: snapshot.runId, streamId: requestId });
-    expect(stopped).toMatchObject({ accepted: true, state: "cancelling" });
-    const finished = await result(requestId);
-    expect(Date.now() - since).toBeLessThan(3_000);
-    expect(finished).toMatchObject({ endReason: "user_cancelled", persisted: true });
-    expect(config().agentRuns.find((run: any) => run.id === finished.runId).steps).toHaveLength(1);
-    expect((await pageState(a)).value).toBe("untouched");
-    expect((await pageState(b)).value).toBe("untouched");
-    expect((await h.page.evaluate((id) => (window as any).agentBrowser.api.browser.status(id), a.dirId)).running).toBe(true);
+    // A held parser-blocking script makes this document genuinely incomplete.
+    // Waiting on an already-complete page would no longer exercise cancellation.
+    const held = new Set<http.ServerResponse>();
+    const server = http.createServer((request, response) => {
+      if (request.url === "/hold.js") {
+        held.add(response); response.once("close", () => held.delete(response)); return;
+      }
+      if (request.url !== "/document") { response.writeHead(404).end(); return; }
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end('<title>M1 held fixture</title><body><input id="m1-target" value="untouched"><button id="m1-click">Count</button><script>window.__m1Clicks=0;document.getElementById("m1-click").onclick=()=>window.__m1Clicks++;</script><script src="/hold.js"></script></body>');
+    });
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    let client: Awaited<ReturnType<typeof connectPageCdp>> | undefined;
+    try {
+      client = await connectPageCdp(a.port, (target) => target.id === a.targetId);
+      const port = (server.address() as AddressInfo).port;
+      const navigation = await client.send("Page.navigate", { url: `http://127.0.0.1:${port}/document` });
+      expect(navigation.errorText).toBeUndefined();
+      await vi.waitFor(() => expect(held.size).toBe(1), { timeout: 5_000 });
+      expect(await fixtureEvaluate(a, "document.readyState")).not.toBe("complete");
+      const id = await conversation("Cancel browser wait");
+      mock.setResponses([{ chunks: [], toolCalls: [
+        { id: "wait", name: "browser_wait_for_load", arguments: { port: a.port, timeout: 20_000 } },
+        { id: "after-wait", name: "browser_type", arguments: { port: a.port, selector: "#m1-target", text: "must-not-dispatch" } },
+      ] }]);
+      const requestId = await start(id, { profile: a });
+      await expect.poll(async () => (await active(id))?.currentTool, { timeout: 10_000 }).toBe("browser_wait_for_load");
+      await h.page.waitForTimeout(150);
+      expect(await fixtureEvaluate(a, "document.readyState")).not.toBe("complete");
+      const snapshot = await active(id);
+      expect(snapshot.currentTool).toBe("browser_wait_for_load");
+      const since = Date.now();
+      const stopped = await h.page.evaluate((identity) => (window as any).agentBrowser.api.agent.cancelRun(identity), { conversationId: id, runId: snapshot.runId, streamId: requestId });
+      expect(stopped).toMatchObject({ accepted: true, state: "cancelling" });
+      const finished = await result(requestId);
+      expect(Date.now() - since).toBeLessThan(3_000);
+      expect(finished).toMatchObject({ endReason: "user_cancelled", persisted: true });
+      expect(config().agentRuns.find((run: any) => run.id === finished.runId).steps).toHaveLength(1);
+      expect((await pageState(a)).value).toBe("untouched");
+      expect((await pageState(b)).value).toBe("untouched");
+      expect((await h.page.evaluate((id) => (window as any).agentBrowser.api.browser.status(id), a.dirId)).running).toBe(true);
+    } finally {
+      for (const response of held) response.end("/* release only the owned fixture */");
+      try {
+        if (client) {
+          await client.send("Page.navigate", { url: FIXTURE_URL });
+          await vi.waitFor(async () => expect(await fixtureEvaluate(a, "document.readyState === 'complete' && document.title === 'M1 fixture'")).toBe(true), { timeout: 10_000 });
+        }
+      } finally {
+        client?.close(); server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
   });
 
   it.each([true, false])("deduplicates, disconnects a paused model and prevents later actions (stream=%s)", async (streaming) => {

@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
 import { CAPTURE_EXPRESSION } from "../main/services/fingerprint-baseline.js";
 import {
@@ -14,6 +15,18 @@ import {
   type BrowserFingerprintConfig,
 } from "../main/services/browser-fingerprint-config.js";
 import type { BrowserFingerprintMeta } from "../main/types.js";
+import { getHostBrowserPlatform } from "../main/services/browser-platform-policy.js";
+import {
+  captureHostIdentityInPage,
+  verifyHostIdentityCoherence,
+  type HostIdentityCorpus,
+  type HostIdentityRequestHeaders,
+} from "./host-identity-corpus.js";
+export { verifyHostIdentityCoherence } from "./host-identity-corpus.js";
+export type { HostIdentityCorpus } from "./host-identity-corpus.js";
+export { captureFullHostIdentity, startHostIdentityFixture } from "./host-identity-capture.js";
+export type { FullHostIdentityCapture, HostIdentityFixture } from "./host-identity-capture.js";
+import { parseChromeVersionElement, parseChromiumProductVersion, parseChromiumUserAgentVersion } from "./client-hints.js";
 import { captureWebGlCorpusInPage, type WebGlCorpus } from "./webgl-corpus.js";
 import {
   captureWebGpuCorpusInPage,
@@ -32,13 +45,10 @@ const SYSTEM_COLOR_KEYWORDS = [
   "SelectedItem", "SelectedItemText", "VisitedText",
 ] as const;
 
-// The normalized WebGL capability shape is stable across the observed
-// RoxyChrome 149 profiles and the stock Chrome 151/152 reference corpora. The
-// WebGPU shape is pinned to stock Chrome 152, including subgroup-size-control.
-const STOCK_CHROME_152_WEBGL_CAPABILITY_SHA256 =
-  "8f97b97709c5c782ef0b5751e8c2217826721af0bfb8daeba76d29694d040bc2";
-const STOCK_CHROME_152_WEBGPU_CAPABILITY_SHA256 =
-  "d6f8c588d2270ff32761fa2d512820f27eb932248a492a536696bc60b42c4999";
+// GPU capabilities come from this executable's native pass-through capture on
+// the same host and in the same window mode, not normalized stock constants.
+// An explicit generated WebGL identity proves only simulated identity conformance,
+// never a physical GPU match.
 const TARGET_CHROMIUM_VERSION = "152.0.7977.72";
 
 type SystemColorKeyword = typeof SYSTEM_COLOR_KEYWORDS[number];
@@ -63,17 +73,17 @@ interface SystemThemeIdentity {
   dark: SystemThemeSchemeIdentity;
 }
 
-interface PassThroughIdentity {
+export interface GpuCorpus {
+  webgl: WebGlCorpus;
+  webgpu: WebGpuCorpus;
+}
+
+interface PassThroughIdentity extends GpuCorpus {
   probe: Probe;
   systemTheme: SystemThemeIdentity;
 }
 
-interface RequestIdentityHeaders {
-  userAgent: string | null;
-  acceptLanguage: string | null;
-  doNotTrack: string | null;
-  uaPlatform: string | null;
-}
+type RequestIdentityHeaders = HostIdentityRequestHeaders;
 
 interface RequestIdentityByContext {
   window: RequestIdentityHeaders;
@@ -98,10 +108,34 @@ interface CdpOverrideIdentity {
   requestHeaders: RequestIdentityByContext;
 }
 
-interface VersionIdentity {
+export interface VersionElementEvidence {
+  found: boolean;
+  elementCount: number;
+  textContent: string | null;
+  outerHTML: string | null;
+  directTextNodes: string[];
+  versionTextSelector: string;
+  versionTextCandidateCount: number;
+  versionTextCandidates: { textContent: string; outerHTML: string; childElementCount: number }[];
+  versionTextSource: "#version (direct Text nodes)" | "#version > span#copy-content > span:first-child" | null;
+  truncated: boolean;
+}
+
+export interface VersionIdentity {
   product: string;
+  productVersion: string;
   userAgent: string;
+  /** Canonical value from the exact captured version source, retained under the existing field name. */
   chromeVersionText: string;
+  versionElement: string;
+  versionElementSource: "chrome://version#version";
+  rawVersionElement: VersionElementEvidence;
+}
+
+export class VersionIdentityCaptureError extends Error {
+  constructor(message: string, readonly evidence: {
+    product?: string; userAgent?: string; rawVersionElement?: VersionElementEvidence; cleanupErrors: string[];
+  }) { super(message); this.name = "VersionIdentityCaptureError"; }
 }
 
 interface StockWindowModeIdentity {
@@ -109,10 +143,8 @@ interface StockWindowModeIdentity {
   innerHeight: number;
 }
 
-interface RunResult {
+interface RunResult extends GpuCorpus {
   probe: Probe;
-  webgl: WebGlCorpus;
-  webgpu: WebGpuCorpus;
   storage: StorageCorpus;
   fonts: FontCorpus;
   codecs: {
@@ -184,39 +216,108 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) fail(message);
 }
 
-function webGlCapabilitySha256(contexts: WebGlCorpus["window"]): string {
-  const normalize = (context: WebGlCorpus["window"]["webgl1"]) => {
-    expect(context !== null, "WebGL capability hash received a null context");
-    return {
-      vendor: context.vendor,
-      renderer: context.renderer,
-      contextAttributes: context.contextAttributes,
-      extensions: context.extensions,
-      parameters: context.parameters,
-      shaderPrecision: context.shaderPrecision,
-    };
-  };
-  return createHash("sha256").update(JSON.stringify({
-    webgl1: normalize(contexts.webgl1),
-    webgl2: normalize(contexts.webgl2),
-  })).digest("hex");
+export function webGlCorpusSha256(contexts: WebGlCorpus["window"]): string {
+  return createHash("sha256").update(JSON.stringify(contexts)).digest("hex");
 }
 
-function webGpuCapabilitySha256(context: WebGpuContextCorpus): string {
-  return createHash("sha256").update(JSON.stringify({
-    available: context.available,
-    adapter: context.adapter ? {
-      features: context.adapter.features,
-      limits: context.adapter.limits,
-    } : null,
-    device: context.device ? {
-      features: context.device.features,
-      limits: context.device.limits,
-    } : null,
-    preferredCanvasFormat: context.preferredCanvasFormat,
-    wgslLanguageFeatures: context.wgslLanguageFeatures,
-    error: context.error,
-  })).digest("hex");
+export function webGpuCorpusSha256(context: WebGpuContextCorpus): string {
+  return createHash("sha256").update(JSON.stringify(context)).digest("hex");
+}
+
+function configuredWebGlIdentity(config: Pick<BrowserFingerprintConfig, "webgl"> | null): { vendor: string; renderer: string } | undefined {
+  const identity = config?.webgl;
+  // Both empty strings mean native pass-through. A one-sided override is still
+  // explicit and must fail pair validation rather than silently becoming native.
+  return identity && (identity.vendor || identity.renderer) ? identity : undefined;
+}
+
+function projectNativeWebGlCorpus(native: WebGlCorpus, expectedWebgl?: { vendor: string; renderer: string }): WebGlCorpus {
+  if (expectedWebgl === undefined) return native;
+  expect(expectedWebgl !== null, "Expected WebGL identity pair was unavailable");
+  for (const field of ["vendor", "renderer"] as const) {
+    expect(typeof expectedWebgl[field] === "string" && expectedWebgl[field].trim().length > 0,
+      `Expected WebGL ${field} was unavailable`);
+  }
+  const projected = { ...native };
+  for (const contextName of ["window", "windowOffscreen", "worker"] as const) {
+    projected[contextName] = { ...native[contextName] };
+    for (const version of ["webgl1", "webgl2"] as const) {
+      const context = native[contextName]?.[version];
+      expect(context != null, `native baseline ${contextName} ${version} was unavailable`);
+      // Retain every native field, including unknown capability fields. Only
+      // these two unmasked identity strings may differ; never project actual.
+      projected[contextName][version] = {
+        ...context,
+        unmaskedVendor: expectedWebgl.vendor,
+        unmaskedRenderer: expectedWebgl.renderer,
+      };
+    }
+  }
+  return projected;
+}
+
+function webGlProbeHash(corpus: WebGlCorpus): string {
+  // Match fingerprint-baseline's FNV-1a probe hash, which includes identities
+  // as well as capabilities. Expected bytes come only from the native projection.
+  const serialized = JSON.stringify(corpus);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index++) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Compare full observed identity/capabilities, including requested devices.
+ * Explicit WebGL expectations check simulated identity conformance, not physical GPU proof.
+ * Omission retains strict same-host native identity equality on every surface.
+ */
+export function verifyNativeGpuCorpus(
+  actual: GpuCorpus,
+  native: GpuCorpus,
+  label = "managed GPU",
+  expectedWebgl?: { vendor: string; renderer: string },
+): void {
+  for (const [captureLabel, capture] of [[`${label} native baseline`, native], [label, actual]] as const) {
+    for (const version of ["webgl1", "webgl2"] as const) {
+      for (const contextName of ["window", "windowOffscreen", "worker"] as const) {
+        const context = capture.webgl[contextName]?.[version];
+        expect(context != null, `${captureLabel} ${contextName} ${version} was unavailable`);
+        expect(typeof context.unmaskedVendor === "string" && context.unmaskedVendor.length > 0,
+          `${captureLabel} ${contextName} ${version} unmasked vendor was unavailable`);
+        expect(typeof context.unmaskedRenderer === "string" && context.unmaskedRenderer.length > 0,
+          `${captureLabel} ${contextName} ${version} unmasked renderer was unavailable`);
+      }
+      expectEqual(capture.webgl.window[version], capture.webgl.worker[version], `${captureLabel} ${version} Window/Worker full corpus`);
+      expectEqual(capture.webgl.window[version], capture.webgl.windowOffscreen[version], `${captureLabel} ${version} Window/Offscreen full corpus`);
+    }
+    for (const contextName of ["window", "worker"] as const) {
+      const context = capture.webgpu[contextName];
+      expectEqual(context.available, true, `${captureLabel} ${contextName} WebGPU availability`);
+      expectEqual(context.error, null, `${captureLabel} ${contextName} WebGPU corpus error`);
+      expect(context.adapter !== null, `${captureLabel} ${contextName} WebGPU adapter was unavailable`);
+      expect(context.device !== null, `${captureLabel} ${contextName} WebGPU requested device was unavailable`);
+      for (const [identityName, info] of [["adapter", context.adapter.info], ["device", context.device.adapterInfo]] as const) {
+        expect(info !== null, `${captureLabel} ${contextName} ${identityName} WebGPU info was unavailable`);
+        for (const field of ["vendor", "architecture", "device", "description"] as const) {
+          expect(typeof info[field] === "string", `${captureLabel} ${contextName} ${identityName} WebGPU ${field} was not captured`);
+        }
+        for (const field of ["subgroupMinSize", "subgroupMaxSize"] as const) {
+          expect(typeof info[field] === "number" && Number.isFinite(info[field]) && Number(info[field]) >= 0,
+            `${captureLabel} ${contextName} ${identityName} WebGPU ${field} was not captured`);
+        }
+        expect(typeof info.isFallbackAdapter === "boolean", `${captureLabel} ${contextName} ${identityName} WebGPU fallback identity was not captured`);
+      }
+      expectEqual(context.device.adapterInfo, context.adapter.info, `${captureLabel} ${contextName} WebGPU adapter/device identity`);
+      expect(Object.keys(context.adapter.limits).length > 0 && Object.keys(context.device.limits).length > 0,
+        `${captureLabel} ${contextName} WebGPU adapter/device limits were not captured`);
+    }
+    expectEqual(capture.webgpu.window, capture.webgpu.worker, `${captureLabel} WebGPU Window/Worker full corpus`);
+  }
+  const expectedWebGlCorpus = projectNativeWebGlCorpus(native.webgl, expectedWebgl);
+  expectEqual(actual.webgl, expectedWebGlCorpus, `${label} WebGL full corpus vs ${expectedWebgl === undefined ? "same-host native baseline" : "generated identity and same-host native capabilities"}`);
+  expectEqual(actual.webgpu, native.webgpu, `${label} WebGPU full corpus vs same-host native baseline`);
 }
 
 function fontCapabilitySha256(corpus: FontCorpus): string {
@@ -235,6 +336,14 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function captureGpuCorpus(page: Page, label: string): Promise<GpuCorpus> {
+  process.stderr.write(`[verify:chromium] ${label}: WebGL 1/2 Window/Offscreen/Worker full corpus\n`);
+  const webgl = await withTimeout(page.evaluate(captureWebGlCorpusInPage), 25_000, `${label} WebGL corpus`);
+  process.stderr.write(`[verify:chromium] ${label}: WebGPU adapter/device Window/Worker full corpus\n`);
+  const webgpu = await withTimeout(page.evaluate(captureWebGpuCorpusInPage), 30_000, `${label} WebGPU corpus`);
+  return { webgl, webgpu };
 }
 
 async function captureSystemColors(
@@ -375,8 +484,10 @@ function detectVersion(executablePath: string): string {
   return version;
 }
 
-async function startOrigin(): Promise<{ origin: string; crossOrigin: string; close: () => Promise<void> }> {
+export async function startOrigin(): Promise<{ origin: string; crossOrigin: string; close: () => Promise<void> }> {
   const server = http.createServer((request, response) => {
+    response.setHeader("Accept-CH", "Sec-CH-UA-Arch, Sec-CH-UA-Bitness, Sec-CH-UA-Platform-Version");
+    response.setHeader("Cache-Control", "no-store");
     const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
     if (pathname === "/echo") {
       response.setHeader("content-type", "application/json");
@@ -610,7 +721,7 @@ async function captureWebAuthn(page: Page): Promise<RunResult["webauthn"]> {
   });
 }
 
-async function captureRequestHeaders(page: Page, scope = "baseline"): Promise<RequestIdentityByContext> {
+export async function captureRequestHeaders(page: Page, scope = "baseline"): Promise<RequestIdentityByContext> {
   return page.evaluate(async (scopeToken) => {
     type RawHeaders = Record<string, string | undefined>;
     const query = `?verify=${encodeURIComponent(scopeToken)}`;
@@ -619,6 +730,9 @@ async function captureRequestHeaders(page: Page, scope = "baseline"): Promise<Re
       acceptLanguage: headers["accept-language"] || null,
       doNotTrack: headers.dnt || null,
       uaPlatform: headers["sec-ch-ua-platform"] || null,
+      uaArchitecture: headers["sec-ch-ua-arch"] || null,
+      uaBitness: headers["sec-ch-ua-bitness"] || null,
+      uaPlatformVersion: headers["sec-ch-ua-platform-version"] || null,
     });
     const windowHeaders = await fetch(`/echo${query}`)
       .then((response) => response.json())
@@ -750,24 +864,91 @@ async function captureCdpOverrideIdentity(
   }
 }
 
-async function captureVersionIdentity(context: BrowserContext, page: Page): Promise<VersionIdentity> {
-  const session = await context.newCDPSession(page);
-  const versionPage = await context.newPage();
+export async function captureVersionIdentity(context: BrowserContext, page: Page): Promise<VersionIdentity> {
+  let session: Awaited<ReturnType<BrowserContext["newCDPSession"]>> | undefined;
+  let versionPage: Page | undefined;
+  let result: VersionIdentity | undefined;
+  let failure: unknown;
+  const evidence: VersionIdentityCaptureError["evidence"] = { cleanupErrors: [] };
   try {
-    const browserVersion = await session.send("Browser.getVersion");
+    let sessionAbandoned = false;
+    const attaching = context.newCDPSession(page).then(async (created) => {
+      if (sessionAbandoned) {
+        try { await withTimeout(created.detach(), 3000, "Late version CDP detach"); } catch (error) { evidence.cleanupErrors.push(`Late CDP detach: ${String(error).slice(0, 512)}`); }
+        throw new Error("Version CDP session was created after the capture deadline");
+      }
+      return created;
+    });
+    try { session = await withTimeout(attaching, 5000, "version CDP session"); }
+    finally { sessionAbandoned = !session; }
+    // Late acquisitions retain responsibility for their own cleanup.
+    let abandoned = false;
+    const creating = context.newPage().then(async (created) => {
+      if (abandoned) {
+        try { await withTimeout(created.close(), 3000, "Late version page close"); } catch (error) { evidence.cleanupErrors.push(`Late version page close: ${String(error).slice(0, 512)}`); }
+        throw new Error("Version page was created after the capture deadline");
+      }
+      return created;
+    });
+    try { versionPage = await withTimeout(creating, 5000, "version page creation"); }
+    finally { abandoned = !versionPage; }
+    const browserVersion = await withTimeout(session.send("Browser.getVersion"), 5000, "runtime product capture");
+    evidence.product = browserVersion.product;
+    evidence.userAgent = browserVersion.userAgent;
     await versionPage.goto("chrome://version/", { waitUntil: "domcontentloaded", timeout: 10_000 });
-    const chromeVersionText = await versionPage.evaluate(() =>
-      document.querySelector("#version")?.textContent?.trim() || document.body.innerText,
-    );
-    return {
-      product: browserVersion.product,
-      userAgent: browserVersion.userAgent,
-      chromeVersionText,
+    const raw = await withTimeout(versionPage.evaluate(() => {
+      const elements = document.querySelectorAll("#version"), element = elements[0];
+      // Chromium 152 puts the tuple in this first span, not in the td's Text nodes.
+      // Never scan other descendants for version-looking text or strip build/button labels.
+      const versionTextSelector = "#version > span#copy-content > span:first-child";
+      const matches = document.querySelectorAll(versionTextSelector);
+      const versionTextCandidates: VersionElementEvidence["versionTextCandidates"] = [];
+      let candidatesTruncated = matches.length > 2;
+      for (let index = 0; index < Math.min(matches.length, 2); index++) {
+        const candidate = matches[index], text = candidate.textContent || "", html = candidate.outerHTML;
+        candidatesTruncated ||= text.length > 1024 || html.length > 1024;
+        versionTextCandidates.push({ textContent: text.slice(0, 1024), outerHTML: html.slice(0, 1024), childElementCount: candidate.childElementCount });
+      }
+      const direct = element ? Array.from(element.childNodes).filter((node) => node.nodeType === 3).map((node) => node.textContent || "") : [];
+      const directValue = direct.join("").trim();
+      const versionTextSource: VersionElementEvidence["versionTextSource"] = directValue && matches.length === 0
+        ? "#version (direct Text nodes)" : !directValue && matches.length === 1 ? versionTextSelector : null;
+      const text = element?.textContent || "", html = element?.outerHTML || "";
+      return {
+        found: !!element, elementCount: elements.length,
+        textContent: element ? text.slice(0, 8192) : null, outerHTML: element ? html.slice(0, 8192) : null,
+        directTextNodes: direct.slice(0, 64).map((value) => value.slice(0, 1024)),
+        versionTextSelector, versionTextCandidateCount: matches.length, versionTextCandidates, versionTextSource,
+        truncated: candidatesTruncated || text.length > 8192 || html.length > 8192 || direct.length > 64 || direct.some((value) => value.length > 1024),
+      };
+    }), 5000, "chrome://version element capture");
+    evidence.rawVersionElement = raw;
+    if (!raw.found || raw.elementCount !== 1 || raw.truncated) throw new Error("Missing, ambiguous or oversized chrome://version #version element");
+    if (!raw.versionTextSource) throw new Error("Missing or ambiguous chrome://version version text source");
+    const directSource = raw.versionTextSource === "#version (direct Text nodes)";
+    if (!directSource && raw.versionTextCandidates[0].childElementCount !== 0) throw new Error("Non-leaf chrome://version version text element");
+    const element = parseChromeVersionElement(directSource ? raw.directTextNodes.join("").trim() : raw.versionTextCandidates[0].textContent);
+    const product = parseChromiumProductVersion(browserVersion.product);
+    if (product.version !== element.version) throw new Error(`Browser.getVersion product and ${raw.versionTextSource} disagree`);
+    result = {
+      product: browserVersion.product, productVersion: product.version, userAgent: browserVersion.userAgent,
+      chromeVersionText: element.version, versionElement: element.version,
+      versionElementSource: "chrome://version#version", rawVersionElement: raw,
     };
-  } finally {
-    await versionPage.close().catch(() => undefined);
-    await session.detach().catch(() => undefined);
+  } catch (error) { failure = error; }
+  finally {
+    for (const [label, close] of [
+      ["version page close", versionPage ? () => versionPage!.close() : undefined],
+      ["version CDP detach", session ? () => session!.detach() : undefined],
+    ] as const) {
+      if (close) try { await withTimeout(close(), 3000, label); }
+      catch (error) { evidence.cleanupErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
   }
+  if (failure || evidence.cleanupErrors.length || !result) {
+    throw new VersionIdentityCaptureError(failure instanceof Error ? failure.message : failure ? String(failure) : "Version capture cleanup failed", evidence);
+  }
+  return result;
 }
 
 async function captureStockWindowMode(
@@ -910,18 +1091,7 @@ async function runOnce(
       `${label} fingerprint probe`,
     );
     const probe = JSON.parse(String(raw)) as Probe;
-    process.stderr.write(`[verify:chromium] ${label}: WebGL 1/2 capability corpus\n`);
-    const webgl = await withTimeout(
-      page.evaluate(captureWebGlCorpusInPage),
-      25_000,
-      `${label} WebGL capability corpus`,
-    );
-    process.stderr.write(`[verify:chromium] ${label}: WebGPU adapter/device capability corpus\n`);
-    const webgpu = await withTimeout(
-      page.evaluate(captureWebGpuCorpusInPage),
-      30_000,
-      `${label} WebGPU capability corpus`,
-    );
+    const { webgl, webgpu } = await captureGpuCorpus(page, label);
     process.stderr.write(`[verify:chromium] ${label}: Storage modern/legacy/OPFS corpus\n`);
     const storage = await withTimeout(
       page.evaluate(captureStorageCorpusInPage, config.storageQuotaBytes * 2),
@@ -930,7 +1100,7 @@ async function runOnce(
     );
     process.stderr.write(`[verify:chromium] ${label}: Font Window/Worker/DOM/Local Access corpus\n`);
     const fonts = await withTimeout(
-      page.evaluate(captureFontCorpusInPage),
+      page.evaluate(captureFontCorpusInPage, { includeLocalAccess: true }),
       90_000,
       `${label} Font corpus`,
     );
@@ -1022,13 +1192,14 @@ async function capturePassThrough(
   origin: string,
   crossOrigin: string,
   userDataDir: string,
+  headless = true,
 ): Promise<PassThroughIdentity> {
   let context: BrowserContext | null = null;
   try {
-    process.stderr.write("[verify:chromium] pass-through: launch without managed identity\n");
+    process.stderr.write(`[verify:chromium] pass-through ${headless ? "headless" : "headed"}: launch without managed identity\n`);
     context = await chromium.launchPersistentContext(userDataDir, {
       executablePath,
-      headless: true,
+      headless,
       colorScheme: null,
       timeout: 20_000,
       viewport: null,
@@ -1050,7 +1221,8 @@ async function capturePassThrough(
       15_000,
       "pass-through system theme",
     );
-    return { probe, systemTheme };
+    const gpu = await captureGpuCorpus(page, `pass-through ${headless ? "headless" : "headed"}`);
+    return { probe, systemTheme, ...gpu };
   } finally {
     if (context) await withTimeout(context.close(), 10_000, "pass-through browser close").catch(() => undefined);
   }
@@ -1066,8 +1238,10 @@ function verifyPassThrough(passThrough: PassThroughIdentity, managed: RunResult)
   if (process.platform === "darwin") {
     expect(!String(probe.userAgent || "").includes("Windows NT"), "pass-through leaked the managed Windows UA");
   }
-  expect(probe.platform !== managed.probe.platform, "pass-through retained the managed platform");
-  expect(probe.userAgent !== managed.probe.userAgent, "pass-through retained the managed User-Agent");
+  if (managed.probe.platform !== nativePlatform) {
+    expect(probe.platform !== managed.probe.platform, "pass-through retained the cross-OS persona platform");
+    expect(probe.userAgent !== managed.probe.userAgent, "pass-through retained the cross-OS persona User-Agent");
+  }
   expect(probe.tz !== managed.probe.tz, "pass-through retained the managed timezone");
   if (process.platform === "darwin") {
     expectEqual(
@@ -1075,10 +1249,12 @@ function verifyPassThrough(passThrough: PassThroughIdentity, managed: RunResult)
       "rgb(0, 0, 0)",
       "pass-through native macOS HighlightText",
     );
-    expect(
-      passThrough.systemTheme.light.colors.HighlightText !== managed.systemTheme.light.colors.HighlightText,
-      "pass-through retained the managed Windows system palette",
-    );
+    if (managed.probe.platform === "Win32") {
+      expect(
+        passThrough.systemTheme.light.colors.HighlightText !== managed.systemTheme.light.colors.HighlightText,
+        "pass-through retained the managed Windows persona system palette",
+      );
+    }
   }
 }
 
@@ -1199,6 +1375,7 @@ function verifyPlatformThemeDistinction(
 function verifyExpected(
   run: RunResult,
   config: BrowserFingerprintConfig,
+  nativeGpu: PassThroughIdentity,
   stockWindowMode?: StockWindowModeIdentity,
 ): void {
   const probe = run.probe;
@@ -1253,52 +1430,31 @@ function verifyExpected(
   );
   expectEqual(probe.devicePixelRatio, config.screen.devicePixelRatio, "devicePixelRatio");
   expectEqual(probe.tz, config.timezone, "Intl timezone");
-  expectEqual(probe.glUnmaskedVendor, config.webgl.vendor, "WebGL unmasked vendor");
-  expectEqual(probe.glRenderer, config.webgl.renderer, "WebGL unmasked renderer");
-  for (const version of ["webgl1", "webgl2"] as const) {
-    const windowContext = run.webgl.window[version];
-    const workerContext = run.webgl.worker[version];
-    expect(windowContext !== null, `Window ${version} was unavailable`);
-    expect(workerContext !== null, `Worker ${version} was unavailable`);
-    expectEqual(windowContext.unmaskedVendor, config.webgl.vendor, `Window ${version} unmasked vendor`);
-    expectEqual(windowContext.unmaskedRenderer, config.webgl.renderer, `Window ${version} unmasked renderer`);
-    expectEqual(workerContext.unmaskedVendor, config.webgl.vendor, `Worker ${version} unmasked vendor`);
-    expectEqual(workerContext.unmaskedRenderer, config.webgl.renderer, `Worker ${version} unmasked renderer`);
-    expectEqual(windowContext, workerContext, `${version} Window/Worker capability corpus`);
+  const expectedWebgl = configuredWebGlIdentity(config);
+  verifyNativeGpuCorpus(run, nativeGpu, `${config.platform} GPU`, expectedWebgl);
+  const webGlIdentityLabel = expectedWebgl ? "configured simulated identity" : "native baseline";
+  const nativeGl = nativeGpu.webgl.window.webgl1!;
+  expectEqual(probe.glVendor, nativeGl.vendor, "WebGL masked vendor vs native baseline");
+  expectEqual(probe.glUnmaskedVendor, expectedWebgl?.vendor ?? nativeGl.unmaskedVendor, `WebGL unmasked vendor vs ${webGlIdentityLabel}`);
+  expectEqual(probe.glRenderer, expectedWebgl?.renderer ?? nativeGl.unmaskedRenderer, `WebGL unmasked renderer vs ${webGlIdentityLabel}`);
+  const workerProbe = JSON.parse(String(probe.workerIdentity)) as Probe;
+  const nativeWorkerGl = nativeGpu.webgl.worker.webgl1!;
+  expectEqual(workerProbe.glVendor, nativeWorkerGl.vendor, "Worker WebGL masked vendor vs native baseline");
+  expectEqual(workerProbe.glUnmaskedVendor, expectedWebgl?.vendor ?? nativeWorkerGl.unmaskedVendor, `Worker WebGL unmasked vendor vs ${webGlIdentityLabel}`);
+  expectEqual(workerProbe.glRenderer, expectedWebgl?.renderer ?? nativeWorkerGl.unmaskedRenderer, `Worker WebGL unmasked renderer vs ${webGlIdentityLabel}`);
+  expectEqual(probe.webglCapabilityHash, expectedWebgl
+    ? webGlProbeHash(projectNativeWebGlCorpus(nativeGpu.webgl, expectedWebgl))
+    : nativeGpu.probe.webglCapabilityHash, "webglCapabilityHash vs expected full native-baseline projection");
+  expectEqual(probe.webgpuCapabilityHash, nativeGpu.probe.webgpuCapabilityHash, "webgpuCapabilityHash vs native baseline");
+  const nativeGpuInfo = nativeGpu.webgpu.window.adapter!.info;
+  for (const [probeKey, infoKey] of [
+    ["webgpuVendor", "vendor"], ["webgpuArchitecture", "architecture"],
+    ["webgpuDevice", "device"], ["webgpuDescription", "description"],
+    ["webgpuSubgroupMinSize", "subgroupMinSize"], ["webgpuSubgroupMaxSize", "subgroupMaxSize"],
+    ["webgpuIsFallbackAdapter", "isFallbackAdapter"],
+  ] as const) {
+    expectEqual(probe[probeKey], nativeGpuInfo[infoKey], `${probeKey} vs native baseline`);
   }
-  expectEqual(
-    webGlCapabilitySha256(run.webgl.window),
-    STOCK_CHROME_152_WEBGL_CAPABILITY_SHA256,
-    "WebGL 1/2 capability corpus vs Stock Chrome 152",
-  );
-  expectEqual(probe.webgpuVendor, config.webgpu.vendor, "WebGPU vendor");
-  expectEqual(probe.webgpuArchitecture, config.webgpu.architecture, "WebGPU architecture");
-  expectEqual(probe.webgpuSubgroupMinSize, config.webgpu.subgroupMinSize, "WebGPU subgroupMinSize");
-  expectEqual(probe.webgpuSubgroupMaxSize, config.webgpu.subgroupMaxSize, "WebGPU subgroupMaxSize");
-  expectEqual(probe.webgpuIsFallbackAdapter, false, "WebGPU isFallbackAdapter");
-  expectEqual(run.webgpu.window, run.webgpu.worker, "WebGPU Window/Worker capability corpus");
-  for (const [contextName, context] of Object.entries(run.webgpu)) {
-    expectEqual(context.available, true, `${contextName} WebGPU availability`);
-    expectEqual(context.error, null, `${contextName} WebGPU corpus error`);
-    expect(context.adapter !== null, `${contextName} WebGPU adapter was unavailable`);
-    expect(context.device !== null, `${contextName} WebGPU device was unavailable`);
-    for (const [identityName, identity] of Object.entries({
-      adapter: context.adapter.info,
-      device: context.device.adapterInfo,
-    })) {
-      expect(identity !== null, `${contextName} ${identityName} WebGPU info was unavailable`);
-      expectEqual(identity.vendor, config.webgpu.vendor, `${contextName} ${identityName} WebGPU vendor`);
-      expectEqual(identity.architecture, config.webgpu.architecture, `${contextName} ${identityName} WebGPU architecture`);
-      expectEqual(identity.subgroupMinSize, config.webgpu.subgroupMinSize, `${contextName} ${identityName} subgroupMinSize`);
-      expectEqual(identity.subgroupMaxSize, config.webgpu.subgroupMaxSize, `${contextName} ${identityName} subgroupMaxSize`);
-      expectEqual(identity.isFallbackAdapter, false, `${contextName} ${identityName} isFallbackAdapter`);
-    }
-  }
-  expectEqual(
-    webGpuCapabilitySha256(run.webgpu.window),
-    STOCK_CHROME_152_WEBGPU_CAPABILITY_SHA256,
-    "WebGPU adapter/device corpus vs Stock Chrome 152",
-  );
   expect(String(probe.workerIdentity || "").includes(config.userAgent), "Worker user agent did not match Window");
   expect(String(probe.workerIdentity || "").includes(config.platform), "Worker platform did not match Window");
   expectEqual(run.geolocation.latitude, config.geolocation.latitude, "geolocation latitude");
@@ -1347,15 +1503,13 @@ function verifyExpected(
       `${context} CDP Worker request Sec-CH-UA-Platform`,
     );
   }
-  expect(
-    expectedFullVersion !== null && run.versionIdentity.product.includes(expectedFullVersion),
-    `Browser.getVersion product did not include ${expectedFullVersion}: ${run.versionIdentity.product}`,
-  );
+  const actualProductVersion = parseChromiumProductVersion(run.versionIdentity.product).version;
+  const actualElementVersion = parseChromeVersionElement(run.versionIdentity.versionElement).version;
+  expectEqual(actualProductVersion, actualElementVersion, "Actual product/#version full version");
+  expectEqual(run.versionIdentity.productVersion, actualProductVersion, "Normalized actual product version");
+  expectEqual(actualProductVersion, parseChromiumUserAgentVersion(config.userAgent).version, "Managed configured/runtime full version");
   expectEqual(run.versionIdentity.userAgent, config.userAgent, "Browser.getVersion User-Agent");
-  expect(
-    expectedFullVersion !== null && run.versionIdentity.chromeVersionText.includes(expectedFullVersion),
-    `chrome://version did not include ${expectedFullVersion}: ${run.versionIdentity.chromeVersionText}`,
-  );
+  expectEqual(run.versionIdentity.chromeVersionText, actualElementVersion, "Canonical chrome://version direct Text-node version");
   expectEqual(run.webrtcCandidates, [], "disabled WebRTC candidates");
   verifySystemTheme(run.systemTheme, config, config.platform);
 
@@ -1522,6 +1676,8 @@ function verifyStable(
   second: RunResult,
   label = "same-seed stability",
   allowedProbeDifferences: ReadonlySet<string> = new Set(),
+  nativeGpuBaselines?: readonly [GpuCorpus, GpuCorpus],
+  expectedWebgl?: { vendor: string; renderer: string },
 ): void {
   const differences: string[] = [];
   const compare = (firstValue: unknown, secondValue: unknown, surface: string): void => {
@@ -1535,8 +1691,13 @@ function verifyStable(
     if (allowedProbeDifferences.has(field)) continue;
     compare(first.probe[field], second.probe[field], field);
   }
-  compare(first.webgl, second.webgl, "WebGL 1/2 capability corpus");
-  compare(first.webgpu, second.webgpu, "WebGPU adapter/device capability corpus");
+  if (nativeGpuBaselines) {
+    verifyNativeGpuCorpus(first, nativeGpuBaselines[0], `${label} first window mode`, expectedWebgl);
+    verifyNativeGpuCorpus(second, nativeGpuBaselines[1], `${label} second window mode`, expectedWebgl);
+  } else {
+    compare(first.webgl, second.webgl, "WebGL 1/2 full corpus");
+    compare(first.webgpu, second.webgpu, "WebGPU adapter/device full corpus");
+  }
   compare(first.storage, second.storage, "Storage modern/legacy/OPFS corpus");
   compare(first.fonts, second.fonts, "Font Window/Worker/DOM/Local Access corpus");
   compare(first.codecs, second.codecs, "codec capabilities");
@@ -1559,6 +1720,9 @@ function verifyHeadedHeadlessParity(
   managedHeaded: RunResult,
   stockHeadless: StockWindowModeIdentity,
   stockHeaded: StockWindowModeIdentity,
+  nativeHeadless: PassThroughIdentity,
+  nativeHeaded: PassThroughIdentity,
+  expectedWebgl?: { vendor: string; renderer: string },
 ): void {
   const stockDifferenceCandidates = ["screenY", "innerHeight"] as const;
   const allowedDifferences = new Set<string>();
@@ -1575,11 +1739,33 @@ function verifyHeadedHeadlessParity(
     );
     if (stockHeadless[field] !== stockHeaded[field]) allowedDifferences.add(field);
   }
+  // A native GPU can differ by window mode. Permit only differences observed
+  // in that mode's pass-through, while checking both full GPU corpora strictly.
+  for (const field of [
+    "glVendor", "glUnmaskedVendor", "glRenderer", "webglCapabilityHash",
+    "webgpuVendor", "webgpuArchitecture", "webgpuDevice", "webgpuDescription",
+    "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize", "webgpuIsFallbackAdapter", "webgpuCapabilityHash",
+  ] as const) {
+    if (nativeHeadless.probe[field] !== nativeHeaded.probe[field]) allowedDifferences.add(field);
+  }
+  if (JSON.stringify(nativeHeadless.webgl) !== JSON.stringify(nativeHeaded.webgl)) {
+    const firstWorker = JSON.parse(String(managedHeadless.probe.workerIdentity)) as Probe;
+    const secondWorker = JSON.parse(String(managedHeaded.probe.workerIdentity)) as Probe;
+    const gpuFields = new Set(["glVendor", "glUnmaskedVendor", "glRenderer"]);
+    for (const field of new Set([...Object.keys(firstWorker), ...Object.keys(secondWorker)])) {
+      if (!gpuFields.has(field)) expectEqual(firstWorker[field], secondWorker[field], `headless/headed Worker ${field}`);
+    }
+    // The GPU portion is verified against each mode's native capture by
+    // verifyExpected, including all three Worker GL probe identity fields.
+    allowedDifferences.add("workerIdentity");
+  }
   verifyStable(
     managedHeadless,
     managedHeaded,
-    "headless/headed full-surface parity",
+    "headless/headed non-GPU parity and per-mode GPU identity/capability contract",
     allowedDifferences,
+    [nativeHeadless, nativeHeaded],
+    expectedWebgl,
   );
 }
 
@@ -1614,16 +1800,250 @@ function verifyDistinct(first: RunResult, second: RunResult): void {
   }
 }
 
+export function parseNativeChromiumVerificationArgs(argv: string[]): {
+  executable: string;
+  gpuOnly: boolean;
+  artifacts: string | null;
+} {
+  let executable: string | null = null;
+  let gpuOnly = false;
+  let artifacts: string | null = null;
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--gpu-only") {
+      if (gpuOnly) fail("Duplicate --gpu-only option");
+      gpuOnly = true;
+    } else if (arg === "--artifacts") {
+      if (artifacts !== null) fail("Duplicate --artifacts option");
+      const value = argv[++index];
+      if (!value || value.startsWith("--")) fail("--artifacts requires an absolute owned directory path");
+      if (!path.isAbsolute(value)) fail("--artifacts requires an absolute owned directory path");
+      artifacts = path.resolve(value);
+    } else if (arg.startsWith("--")) {
+      fail(`Unsupported verification option: ${arg}`);
+    } else {
+      if (executable !== null) fail(`Unexpected extra executable argument: ${arg}`);
+      executable = arg;
+    }
+  }
+  if (!executable) fail("usage: verify-native-chromium /path/to/Chromium[.app] [--gpu-only --artifacts /owned/path]");
+  if (gpuOnly && !artifacts) fail("--gpu-only requires --artifacts /absolute/owned/path");
+  if (!gpuOnly && artifacts) fail("--artifacts is only supported with --gpu-only");
+  return { executable, gpuOnly, artifacts };
+}
+
+export function prepareGpuArtifactsRoot(input: string): string {
+  expect(path.isAbsolute(input), "GPU artifacts require an absolute owned directory path");
+  const root = path.resolve(input);
+  const ownerUid = typeof process.getuid === "function" ? process.getuid() : null;
+  expect(ownerUid !== null, "Cannot verify current-user ownership of GPU artifacts on this platform");
+  const ancestors: string[] = [];
+  for (let entry = root; ; entry = path.dirname(entry)) {
+    ancestors.unshift(entry);
+    if (path.dirname(entry) === entry) break;
+  }
+  const checkDirectory = (entry: string): void => {
+    const stats = fs.lstatSync(entry);
+    expect(!stats.isSymbolicLink(), `GPU artifact path must not contain a symlink: ${entry}`);
+    expect(stats.isDirectory(), `GPU artifact path must be a directory: ${entry}`);
+  };
+  // Check before creation so mkdir cannot follow an existing ancestor redirect.
+  for (const entry of ancestors) {
+    try {
+      checkDirectory(entry);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  for (const entry of ancestors) checkDirectory(entry);
+  expectEqual(fs.realpathSync(root), root, "GPU artifact root must not redirect to another path");
+  const stats = fs.lstatSync(root);
+  expectEqual(stats.uid, ownerUid, "GPU artifact root must be owned by the current user");
+  expect((stats.mode & 0o022) === 0, "GPU artifact root must not be writable by other users");
+  return root;
+}
+
+export function gpuPersonaDiagnostic(platform: "windows" | "macos", runtimePlatform = process.platform): string {
+  return getHostBrowserPlatform(runtimePlatform) === platform
+    ? "native-host-persona"
+    : "unsupported-cross-os-persona-diagnostic";
+}
+
+export function verifyManagedGpuIdentity(
+  actual: { userAgent: string; platform: string },
+  configured: Pick<BrowserFingerprintConfig, "userAgent" | "platform">,
+  label = "managed GPU sample",
+): void {
+  expectEqual(actual.userAgent, configured.userAgent, `${label} managed User-Agent activation`);
+  expectEqual(actual.platform, configured.platform, `${label} managed platform activation`);
+}
+
+async function captureGpuSample(
+  executablePath: string,
+  version: string,
+  origin: string,
+  userDataDir: string,
+  mode: "headless" | "headed",
+  label: string,
+  meta: BrowserFingerprintMeta | null,
+) {
+  const config = meta ? buildBrowserFingerprintConfig(meta, version) : null;
+  let context: BrowserContext | null = null;
+  try {
+    process.stderr.write(`[verify:chromium:gpu] ${mode} ${label}: launch\n`);
+    context = await chromium.launchPersistentContext(userDataDir, {
+      executablePath,
+      headless: mode === "headless",
+      colorScheme: null,
+      timeout: 20_000,
+      viewport: null,
+      args: ["--use-mock-keychain", ...(meta ? [buildBrowserFingerprintArg(meta, version)] : [])],
+    });
+    const page = context.pages()[0] || await context.newPage();
+    await page.goto(origin, { waitUntil: "load", timeout: 15_000 });
+    const session = await context.newCDPSession(page);
+    let runtimeProduct: string;
+    try {
+      const runtime = await withTimeout(session.send("Browser.getVersion"), 5000, `${label} runtime version`);
+      runtimeProduct = runtime.product;
+      expectEqual(runtimeProduct.split("/").pop(), version, `${label} actual runtime version`);
+    } finally {
+      await withTimeout(session.detach(), 2000, `${label} CDP detach`);
+    }
+    const navigators = await withTimeout(page.evaluate(captureHostIdentityInPage), 8000, `${label} Window/Worker identity`);
+    const requestHeaders = await withTimeout(captureRequestHeaders(page, label), 15_000, `${label} actual request identity`);
+    const hostIdentity: HostIdentityCorpus = { ...navigators, requestHeaders };
+    const navigatorIdentity = hostIdentity.window;
+    const gpu = await captureGpuCorpus(page, `${mode} ${label}`);
+    return {
+      label,
+      mode,
+      selectedPlatform: meta?.platform || null,
+      personaDiagnostic: meta?.platform === "windows" || meta?.platform === "macos"
+        ? gpuPersonaDiagnostic(meta.platform)
+        : "native-pass-through",
+      seed: config?.seed || null,
+      runtimeProduct,
+      navigatorIdentity,
+      hostIdentity,
+      configured: config ? { userAgent: config.userAgent, platform: config.platform, webgl: config.webgl, webgpu: config.webgpu } : null,
+      ...gpu,
+    };
+  } finally {
+    if (context) await withTimeout(context.close(), 10_000, `${mode} ${label} browser close`);
+  }
+}
+
+async function runGpuOnly(executablePath: string, version: string, artifacts: string): Promise<void> {
+  const hostPlatform = getHostBrowserPlatform();
+  expect(hostPlatform !== null, "Managed host OS compatibility is not supported on this runtime");
+  // Every invocation owns a new directory; old profiles and evidence are never
+  // read, overwritten, copied, or removed. Five host-matched samples per mode.
+  const artifactsRoot = prepareGpuArtifactsRoot(artifacts);
+  const runRoot = fs.mkdtempSync(path.join(artifactsRoot, "gpu-native-verify-"));
+  const artifactPath = path.join(runRoot, "gpu-result.json");
+  const report = {
+    ok: false,
+    status: "in-progress",
+    executablePath,
+    version,
+    nativeHost: process.platform,
+    gpuPolicy: "configured-WebGL-identity-or-strict-native; all-other-WebGL-and-WebGPU-fields-native",
+    configuredWebglProof: "simulated identity conformance, not physical GPU proof",
+    identityPolicy: "same-host OS family across Window, Worker, UA-CH and actual requests",
+    workerRequestHintsPolicy: "present values are checked; matching native-control omissions are recorded as absent, not verified hint values",
+    highEntropyPhysicalMatch: "not-asserted; captured architecture and OS version are checked for cross-surface agreement only",
+    foreignOsSamples: "not-run; foreign OS native-GPU personas are unsupported, not positive acceptance samples",
+    realUserDataUsed: false,
+    publicNetworkTargets: [] as string[],
+    modeChecks: { headless: "not-run", headed: "not-run" },
+    crossModeGpuComparison: "not-asserted; each mode is checked against its own native baseline",
+    samples: [] as Awaited<ReturnType<typeof captureGpuSample>>[],
+    errors: [] as string[],
+  };
+  let origin: Awaited<ReturnType<typeof startOrigin>> | null = null;
+  try {
+    origin = await startOrigin();
+    for (const mode of ["headless", "headed"] as const) {
+      report.modeChecks[mode] = "in-progress";
+      let nativeControl: HostIdentityCorpus | undefined;
+      const capture = async (label: string, profile: string, meta: BrowserFingerprintMeta | null) => {
+        const sample = await captureGpuSample(executablePath, version, origin!.origin, path.join(runRoot, `${mode}-${profile}`), mode, label, meta);
+        report.samples.push(sample);
+        process.stdout.write(JSON.stringify({
+          label, mode, nativeHost: report.nativeHost, selectedPlatform: sample.selectedPlatform,
+          personaDiagnostic: sample.personaDiagnostic, seed: sample.seed, runtimeProduct: sample.runtimeProduct,
+          webglSha256: webGlCorpusSha256(sample.webgl.window), webgpuSha256: webGpuCorpusSha256(sample.webgpu.window),
+          webgpuAdapterInfo: sample.webgpu.window.adapter?.info, webgpuDeviceInfo: sample.webgpu.window.device?.adapterInfo,
+        }) + "\n");
+        if (sample.configured) {
+          // A stock executable ignoring the managed switch must not pass just
+          // because both captures expose the same native GPU.
+          verifyManagedGpuIdentity(sample.navigatorIdentity, sample.configured, `${mode} ${label}`);
+        }
+        if (!meta && !nativeControl) nativeControl = sample.hostIdentity;
+        verifyHostIdentityCoherence(sample.hostIdentity, sample.configured || {
+          userAgent: sample.navigatorIdentity.userAgent,
+          platform: hostPlatform === "macos" ? "MacIntel" : "Win32",
+        }, process.platform, `${mode} ${label}`, nativeControl);
+        return sample;
+      };
+      const baseline = await capture("pass-through", "pass-through", null);
+      verifyNativeGpuCorpus(baseline, baseline, `${mode} native pass-through`);
+      const baselineRepeat = await capture("pass-through restart", "pass-through", null);
+      verifyNativeGpuCorpus(baselineRepeat, baseline, `${mode} native repeat stability`);
+      for (const platform of [hostPlatform]) {
+        const meta: BrowserFingerprintMeta = { fingerprintSeed: 424242, platform, locale: "en-US", timezone: "America/New_York" };
+        const diagnostic = `${platform} persona on ${process.platform} (${gpuPersonaDiagnostic(platform)})`;
+        const first = await capture(diagnostic, platform, meta);
+        verifyNativeGpuCorpus(first, baseline, `${mode} ${diagnostic}`, configuredWebGlIdentity(first.configured));
+        const restart = await capture(`${diagnostic} same-seed restart`, platform, meta);
+        verifyNativeGpuCorpus(restart, baseline, `${mode} ${diagnostic} repeat stability`, configuredWebGlIdentity(restart.configured));
+        const distinct = await capture(`${diagnostic} different seed`, `${platform}-distinct`, { ...meta, fingerprintSeed: 424243 });
+        verifyNativeGpuCorpus(distinct, baseline, `${mode} ${diagnostic} different-seed identity and capabilities`, configuredWebGlIdentity(distinct.configured));
+      }
+      report.modeChecks[mode] = "verified-host-OS-identity-and-same-mode-GPU-contract";
+    }
+    report.ok = true;
+    report.status = "host-os-and-gpu-contract-verified";
+  } catch (error) {
+    report.status = "gpu-contract-failed";
+    for (const mode of ["headless", "headed"] as const) {
+      if (report.modeChecks[mode] === "in-progress") report.modeChecks[mode] = "failed";
+    }
+    report.errors.push(error instanceof Error ? error.stack || error.message : String(error));
+  } finally {
+    if (origin) {
+      try {
+        await withTimeout(origin.close(), 5000, "GPU verification origin close");
+      } catch (error) {
+        report.ok = false;
+        report.status = "gpu-contract-failed";
+        report.errors.push(error instanceof Error ? error.stack || error.message : String(error));
+      }
+    }
+    fs.writeFileSync(artifactPath, JSON.stringify(report, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    process.stdout.write(JSON.stringify({ ok: report.ok, status: report.status, artifactPath, samples: report.samples.length, modeChecks: report.modeChecks, crossModeGpuComparison: report.crossModeGpuComparison, errors: report.errors }, null, 2) + "\n");
+  }
+  if (!report.ok) fail(`Native GPU verification failed; retained evidence: ${artifactPath}`);
+}
+
 async function main(): Promise<void> {
-  const executableArg = process.argv[2];
-  if (!executableArg) fail("usage: npm run verify:chromium -- /path/to/Chromium[.app]");
-  const executablePath = resolveExecutable(executableArg);
+  const options = parseNativeChromiumVerificationArgs(process.argv.slice(2));
+  const executablePath = resolveExecutable(options.executable);
   const version = detectVersion(executablePath);
   expectEqual(version, TARGET_CHROMIUM_VERSION, "Chromium verification target version");
+  if (options.gpuOnly) {
+    await runGpuOnly(executablePath, version, options.artifacts!);
+    return;
+  }
 
+  const managedPlatform = getHostBrowserPlatform();
+  expect(managedPlatform !== null, "Full managed protocol diagnostics require a supported host platform");
+  process.stderr.write("[verify:chromium] Full protocol diagnostics include foreign-OS samples; these are not supported host/GPU compatibility evidence. Use --gpu-only for joint host-identity acceptance.\n");
   const origin = await startOrigin();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-native-verify-"));
-  const managedPlatform = process.platform === "win32" ? "macos" : "windows";
   const alternatePlatform = managedPlatform === "windows" ? "macos" : "windows";
   const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const baseMeta: BrowserFingerprintMeta = {
@@ -1636,10 +2056,9 @@ async function main(): Promise<void> {
     geolocationLatitude: 40.7128,
     geolocationLongitude: -74.006,
     geolocationAccuracy: 25,
-    gpuVendor: managedPlatform === "macos" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)",
-    gpuRenderer: managedPlatform === "macos"
-      ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
-      : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    // Non-GPU tuple constraints remain managed; GPU identity is native even
+    // for the alternate cross-OS persona diagnostic below.
+
     hardwareConcurrency: managedPlatform === "macos" ? 8 : 12,
     deviceMemory: 16,
     screenWidth: managedPlatform === "macos" ? 1512 : 1920,
@@ -1705,10 +2124,6 @@ async function main(): Promise<void> {
         timezone: "Asia/Nicosia",
         geolocationLatitude: 35.1856,
         geolocationLongitude: 33.3823,
-        gpuVendor: alternatePlatform === "macos" ? "Google Inc. (Apple)" : "Google Inc. (NVIDIA)",
-        gpuRenderer: alternatePlatform === "macos"
-          ? "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)"
-          : "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
         hardwareConcurrency: alternatePlatform === "macos" ? 8 : 12,
         deviceMemory: 16,
         screenWidth: alternatePlatform === "macos" ? 1512 : 1920,
@@ -1754,6 +2169,13 @@ async function main(): Promise<void> {
       origin.crossOrigin,
       path.join(tempRoot, "pass-through"),
     );
+    const passThroughHeaded = await capturePassThrough(
+      executablePath,
+      origin.origin,
+      origin.crossOrigin,
+      path.join(tempRoot, "pass-through-headed"),
+      false,
+    );
     verifyStable(first.result, repeat.result, "same seed across independent Profiles");
     verifyStable(first.result, persistentRestart.result, "same persistent Profile after restart");
     verifyHeadedHeadlessParity(
@@ -1761,14 +2183,17 @@ async function main(): Promise<void> {
       headed.result,
       stockHeadlessWindowMode,
       stockHeadedWindowMode,
+      passThrough,
+      passThroughHeaded,
+      configuredWebGlIdentity(first.config),
     );
-    verifyExpected(first.result, first.config);
-    verifyExpected(persistentRestart.result, persistentRestart.config);
-    verifyExpected(repeat.result, repeat.config);
-    verifyExpected(distinct.result, distinct.config);
-    verifyExpected(greekGreece.result, greekGreece.config);
-    verifyExpected(greekCyprus.result, greekCyprus.config);
-    verifyExpected(headed.result, headed.config, stockHeadedWindowMode);
+    verifyExpected(first.result, first.config, passThrough);
+    verifyExpected(persistentRestart.result, persistentRestart.config, passThrough);
+    verifyExpected(repeat.result, repeat.config, passThrough);
+    verifyExpected(distinct.result, distinct.config, passThrough);
+    verifyExpected(greekGreece.result, greekGreece.config, passThrough);
+    verifyExpected(greekCyprus.result, greekCyprus.config, passThrough);
+    verifyExpected(headed.result, headed.config, passThroughHeaded, stockHeadedWindowMode);
     verifyStorageCorpus(incognitoStorage.storage, incognitoStorage.config.storageQuotaBytes, "incognito");
     expectEqual(first.result.storage, incognitoStorage.storage, "persistent/incognito Storage corpus parity");
     verifyDistinct(first.result, distinct.result);
@@ -1791,17 +2216,31 @@ async function main(): Promise<void> {
       ok: true,
       executablePath,
       version,
+      nativeHost: process.platform,
+      selectedPlatform: managedPlatform,
+      personaDiagnostic: gpuPersonaDiagnostic(managedPlatform),
+      alternatePersona: { selectedPlatform: alternatePlatform, diagnostic: gpuPersonaDiagnostic(alternatePlatform) },
+      gpuPolicy: configuredWebGlIdentity(first.config)
+        ? "simulated-WebGL-identity-conformance-and-same-mode-native-capabilities-WebGPU"
+        : "native-host-gpu-verified-against-same-mode-pass-through",
+      configuredWebglProof: "simulated identity conformance, not physical GPU proof",
       checkedSurfaces: STABLE_FIELDS.length,
       webglCapabilityCorpus: {
-        contexts: 4,
-        stockChrome152Sha256: webGlCapabilitySha256(first.result.webgl.window),
+        contexts: 6,
+        sameHostNativeSha256: webGlCorpusSha256(passThrough.webgl.window),
+        managedFullCorpusSha256: webGlCorpusSha256(first.result.webgl.window),
         webgl1Parameters: Object.keys(first.result.webgl.window.webgl1?.parameters || {}).length,
         webgl2Parameters: Object.keys(first.result.webgl.window.webgl2?.parameters || {}).length,
-        shaderPrecisionCases: Object.keys(first.result.webgl.window.webgl1?.shaderPrecision || {}).length * 2,
+        shaderPrecisionCases: (["window", "windowOffscreen", "worker"] as const).reduce((total, realm) => total
+          + Object.keys(first.result.webgl[realm].webgl1?.shaderPrecision || {}).length
+          + Object.keys(first.result.webgl[realm].webgl2?.shaderPrecision || {}).length, 0),
       },
       webgpuCapabilityCorpus: {
         contexts: 2,
-        stockChrome152Sha256: webGpuCapabilitySha256(first.result.webgpu.window),
+        sameHostNativeSha256: webGpuCorpusSha256(passThrough.webgpu.window),
+        managedFullCorpusSha256: webGpuCorpusSha256(first.result.webgpu.window),
+        nativeAdapterInfo: passThrough.webgpu.window.adapter?.info,
+        nativeDeviceInfo: passThrough.webgpu.window.device?.adapterInfo,
         adapterFeatures: first.result.webgpu.window.adapter?.features.length || 0,
         adapterLimits: Object.keys(first.result.webgpu.window.adapter?.limits || {}).length,
         deviceFeatures: first.result.webgpu.window.device?.features.length || 0,
@@ -1827,7 +2266,11 @@ async function main(): Promise<void> {
       cdpIdentityCoherence: "verified",
       buildVersionCoherence: "verified",
       headedHeadlessParity: {
-        status: "full-surface-verified",
+        status: "non-gpu-parity-and-per-mode-gpu-contract-verified",
+        gpuBaselines: {
+          headless: { webglSha256: webGlCorpusSha256(passThrough.webgl.window), webgpuSha256: webGpuCorpusSha256(passThrough.webgpu.window) },
+          headed: { webglSha256: webGlCorpusSha256(passThroughHeaded.webgl.window), webgpuSha256: webGpuCorpusSha256(passThroughHeaded.webgpu.window) },
+        },
         stockWindowDifferences: (["screenY", "innerHeight"] as const).filter(
           (field) => stockHeadlessWindowMode[field] !== stockHeadedWindowMode[field],
         ),
@@ -1850,7 +2293,10 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`[verify:chromium] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+// Importing pure GPU checks must never start an origin or launch a browser.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`[verify:chromium] ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

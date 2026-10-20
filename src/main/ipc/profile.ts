@@ -1,4 +1,5 @@
 import { ipcMain, dialog } from "electron";
+import * as fs from "node:fs";
 import {
   getProfileInfo,
   listCookies,
@@ -18,7 +19,10 @@ import {
 import { setProfileMeta } from "../services/config-manager.js";
 import { checkCreateAllowed } from "../services/license.js";
 import { validateDirId } from "../services/utils.js";
-import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../services/profile-archive.js";
+import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives,
+  archiveOperationFailure, classifyArchiveBatchReport, getProfileArchiveExportConflicts,
+} from "../services/profile-archive.js";
+import { tMain } from "../services/main-i18n.js";
 import { assertSafeArchiveExportPath, assertSafeArchiveExportDir, assertSafeArchiveImportPath } from "../services/archive-path-guard.js";
 import type { GeolocationMode, ProfileInfo, ProxyMode, WebRtcMode } from "../types.js";
 
@@ -124,12 +128,20 @@ export function registerProfileHandlers(): void {
   });
 
   ipcMain.handle("profile:trash-list", async () => {
+    let sweepError: unknown;
+    try { purgeExpiredTrash(); } // Sweep expired entries whenever the trash is inspected.
+    catch (error) { sweepError = error; }
     try {
-      // Sweep expired entries whenever the trash is inspected.
-      purgeExpiredTrash();
-      return { success: true, entries: listTrashedProfiles() };
-    } catch (e: any) {
-      return { success: false, entries: [], error: e.message };
+      const entries = listTrashedProfiles();
+      return sweepError
+        ? { success: false, entries, error: String(sweepError) }
+        : { success: true, entries };
+    } catch (error) {
+      const listingError = String(error);
+      const sweepMessage = sweepError ? String(sweepError) : "";
+      return { success: false, entries: [], error: sweepMessage && sweepMessage !== listingError
+        ? `${sweepMessage}; trash listing failed: ${listingError}`
+        : listingError };
     }
   });
 
@@ -144,96 +156,107 @@ export function registerProfileHandlers(): void {
   });
 
   // ── Profile backup / transfer ──
-  ipcMain.handle("profile:export-archive", async (_event, opts: { dirId: string; destPath?: string }): Promise<{
-    success: boolean; filePath?: string; entries?: number; bytes?: number; error?: string;
-  }> => {
+  const archiveCancelled = () => ({ success: false as const, outcome: "cancelled" as const, cancelled: true, code: "ARCHIVE_CANCELLED", error: "cancelled" });
+  const archiveArray = (values: unknown, label: string): string[] => {
+    if (!Array.isArray(values) || !values.length || Array.from(values).some((value) => typeof value !== "string" || !value.trim())) {
+      throw Object.assign(new Error(`${label} must be a non-empty array of non-empty strings`), { code: "ARCHIVE_INVALID_INPUT" });
+    }
+    return [...values];
+  };
+  const archiveOverwrite = (overwrite: unknown): boolean => {
+    if (overwrite !== undefined && typeof overwrite !== "boolean") throw Object.assign(new Error("overwrite must be a boolean"), { code: "ARCHIVE_INVALID_INPUT" });
+    return overwrite === true;
+  };
+
+  ipcMain.handle("profile:export-archive", async (_event, opts: { dirId: string; destPath?: string; overwrite?: boolean }) => {
     try {
+      validateDirId(opts?.dirId);
+      let overwrite = archiveOverwrite(opts?.overwrite);
       let destPath = opts?.destPath;
       if (!destPath) {
         const r = await dialog.showSaveDialog({
-          title: "Export Profile Backup",
+          title: tMain("archive.export.title", "Export Profile Backup"),
           defaultPath: "profile-backup.zip",
-          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+          filters: [{ name: tMain("archive.filter.backup", "Profile backup"), extensions: ["zip"] }],
+          properties: ["showOverwriteConfirmation"],
         });
-        if (r.canceled || !r.filePath) return { success: false, error: "cancelled" };
-        destPath = r.filePath;
-      } else {
-        destPath = assertSafeArchiveExportPath(destPath);
-      }
-      const result = await exportProfileArchive(opts?.dirId, destPath);
-      return { success: true, filePath: result.filePath, entries: result.entries, bytes: result.bytes };
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) };
-    }
+        if (r.canceled || !r.filePath) return archiveCancelled();
+        destPath = assertSafeArchiveExportPath(r.filePath);
+        // Accepted native Save, with native overwrite confirmation enabled, is
+        // consent for this specific file. An explicit false still refuses it.
+        overwrite = overwrite || (opts?.overwrite === undefined && fs.existsSync(destPath));
+      } else destPath = assertSafeArchiveExportPath(destPath);
+      const result = await exportProfileArchive(opts.dirId, destPath, { overwrite });
+      return { success: true, outcome: "completed" as const, ...result };
+    } catch (error) { return archiveOperationFailure(error); }
   });
 
-  ipcMain.handle("profile:import-archive", async (_event, opts?: { zipPath?: string }): Promise<{
-    success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; error?: string;
-  }> => {
+  ipcMain.handle("profile:import-archive", async (_event, opts?: { zipPath?: string }) => {
     try {
       let zipPath = opts?.zipPath;
       if (!zipPath) {
         const r = await dialog.showOpenDialog({
-          title: "Import Profile Backup",
+          title: tMain("archive.import.title", "Import Profile Backup"),
           properties: ["openFile"],
-          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+          filters: [{ name: tMain("archive.filter.backup", "Profile backup"), extensions: ["zip"] }],
         });
-        if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
+        if (r.canceled || !r.filePaths?.[0]) return archiveCancelled();
         zipPath = r.filePaths[0];
-      } else {
-        zipPath = assertSafeArchiveImportPath(zipPath);
       }
-      const result = importProfileArchive(zipPath);
-      return { success: true, dirId: result.dirId, name: result.name, files: result.files, bytes: result.bytes };
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) };
-    }
+      const result = importProfileArchive(assertSafeArchiveImportPath(zipPath));
+      return { success: true, outcome: "completed" as const, ...result };
+    } catch (error) { return archiveOperationFailure(error); }
   });
 
   // ── Batch profile backup (export selected profiles / import many zips) ──
-  ipcMain.handle("profile:export-archives", async (_event, opts: { dirIds?: string[]; destDir?: string }): Promise<{
-    success: boolean; report?: import("../services/profile-archive.js").BatchExportReport; error?: string;
-  }> => {
+  ipcMain.handle("profile:export-archives", async (_event, opts: { dirIds?: string[]; destDir?: string; overwrite?: boolean }) => {
     try {
+      const dirIds = archiveArray(opts?.dirIds, "dirIds");
+      const overwrite = archiveOverwrite(opts?.overwrite);
+      let confirmedOverwritePaths: string[] | undefined;
       let destDir = opts?.destDir;
       if (!destDir) {
         const r = await dialog.showOpenDialog({
-          title: "Export Profile Backups",
+          title: tMain("archive.export.batch-title", "Export Profile Backups"),
           properties: ["openDirectory", "createDirectory"],
         });
-        if (r.canceled || !r.filePaths?.[0]) return { success: false, error: "cancelled" };
-        destDir = r.filePaths[0];
-      } else {
-        destDir = assertSafeArchiveExportDir(destDir);
-      }
-      const report = await exportProfileArchives(opts?.dirIds || [], destDir);
-      return { success: true, report };
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) };
-    }
+        if (r.canceled || !r.filePaths?.[0]) return archiveCancelled();
+        destDir = assertSafeArchiveExportDir(r.filePaths[0]);
+        if (opts?.overwrite === undefined) {
+          const conflicts = getProfileArchiveExportConflicts(dirIds, destDir);
+          if (conflicts.length) {
+            const confirmation = await dialog.showMessageBox({
+              type: "warning", title: tMain("archive.replace.title", "Replace existing backups?"),
+              message: tMain("archive.replace.message", "Replace {n} existing backup file(s)?").replace("{n}", String(conflicts.length)),
+              detail: tMain("archive.replace.detail", "Only these existing backup files are approved for replacement:\n{files}").replace("{files}", conflicts.join("\n")),
+              buttons: [tMain("archive.cancel", "Cancel"), tMain("archive.replace.confirm", "Replace backups")],
+              defaultId: 0, cancelId: 0, noLink: true,
+            });
+            if (confirmation.response !== 1) return archiveCancelled();
+            confirmedOverwritePaths = conflicts;
+          }
+        }
+      } else destDir = assertSafeArchiveExportDir(destDir);
+      const report = await exportProfileArchives(dirIds, destDir, { overwrite, ...(confirmedOverwritePaths ? { confirmedOverwritePaths } : {}) });
+      return { ...classifyArchiveBatchReport(report), report };
+    } catch (error) { return archiveOperationFailure(error); }
   });
 
-  ipcMain.handle("profile:import-archives", async (_event, opts?: { zipPaths?: string[] }): Promise<{
-    success: boolean; report?: import("../services/profile-archive.js").BatchImportReport; error?: string;
-  }> => {
+  ipcMain.handle("profile:import-archives", async (_event, opts?: { zipPaths?: string[] }) => {
     try {
-      let zipPaths = opts?.zipPaths;
-      if (!zipPaths || !zipPaths.length) {
+      let zipPaths: string[];
+      if (opts?.zipPaths === undefined) {
         const r = await dialog.showOpenDialog({
-          title: "Import Profile Backups",
+          title: tMain("archive.import.batch-title", "Import Profile Backups"),
           properties: ["openFile", "multiSelections"],
-          filters: [{ name: "Profile backup", extensions: ["zip"] }],
+          filters: [{ name: tMain("archive.filter.backup", "Profile backup"), extensions: ["zip"] }],
         });
-        if (r.canceled || !r.filePaths?.length) return { success: false, error: "cancelled" };
-        zipPaths = r.filePaths;
-      } else {
-        zipPaths = zipPaths.map((p) => assertSafeArchiveImportPath(p));
-      }
-      const report = importProfileArchives(zipPaths);
-      return { success: true, report };
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) };
-    }
+        if (r.canceled || !r.filePaths?.length) return archiveCancelled();
+        zipPaths = archiveArray(r.filePaths, "zipPaths");
+      } else zipPaths = archiveArray(opts.zipPaths, "zipPaths");
+      const report = importProfileArchives(zipPaths.map((file) => assertSafeArchiveImportPath(file)));
+      return { ...classifyArchiveBatchReport(report), report };
+    } catch (error) { return archiveOperationFailure(error); }
   });
 
   // Rename a profile

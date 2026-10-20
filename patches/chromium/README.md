@@ -20,7 +20,7 @@ keys, `lumi.conf` decryption, or code copied from RoxyChrome.
 ```
 
 Released Chromium changes are append-only: add the next numbered patch instead
-of rewriting an earlier patch. The current `0002`–`0050` chain keeps the
+of rewriting an earlier patch. The current `0002`–`0055` chain keeps the
 system-theme, occluded-input, managed-QUIC, payload-resume and secure-DNS changes
 independently reviewable and revertible. `check.sh` validates exact Git checkouts
 or the trusted official-archive plus immutable-delta source chain.
@@ -34,7 +34,26 @@ the exit proxy, preserves managed ICU locale/fonts and keeps the native refresh
 rate. `0045`/`0046` add Widevine registration and the title prefix. The
 append-only `0047`–`0050` fixes discovered by the real 152 compile preserve
 payload evolution, generic-font semantics and secure-DNS parsing across
-incremental resumes. The next Chromium change must start at `0051`.
+incremental resumes. Patch `0051` adds a restricted, fingerprint-independent
+proxy local-DNS deny policy without suppressing bad-flag warnings. Patch `0052`
+permits DNS-only hints over explicitly configured strict proxy DoH while keeping
+multicast names, ordinary proxy preconnects and preloading gates unchanged.
+Patch `0053` corrects the GURL accessor and delegate definition after an actual
+translation-unit compile rejected `0052`; it does not weaken the DNS policy.
+Patch `0054` removes forced clonefile from macOS bundle resource copying after
+an actual cross-volume build failure, without changing browser behavior or
+release compiler settings. Patch `0055` corrects the shared managed macOS
+high-entropy CPU architecture producer: `base::mac::GetCPUType()` maps Intel to
+`x86` and both ARM and translated Intel (Rosetta) to `arm`, matching native
+Chromium semantics. The API and its include are guarded by `BUILDFLAG(IS_MAC)`;
+Blink public/common headers already publicly depend on `//base`, which exports
+this API, so no embedder dependency or GN dependency change is needed. Other OS
+personas, `bitness: "64"`, low-entropy/off behavior and GPU fall-through remain
+unchanged. This source correction changes no payload schema or legacy UA token.
+Source constraint tests and normal apply/check are not native compilation,
+native CPU/Rosetta runtime tests or Ping0 GPU acceptance; a rebuilt kernel and
+independent real-site verification are still required. The next Chromium change
+must start at `0056`.
 
 ## Build configuration
 
@@ -257,3 +276,149 @@ On Debian/Ubuntu hosts, install build deps once before building:
 ```bash
 sudo ./chromium-src-150/build/install-build-deps.sh --no-prompt
 ```
+
+## `0051` restricted proxy local-DNS policy (source-only, 2026-10-16)
+
+The new public capability is `agent-browser-local-dns-policy-v1`, advertised by
+`--agent-browser-capabilities`. A capability-gated launcher can replace its
+**generic** `--host-resolver-rules` / `--host-rules` argument with these
+browser-only inputs:
+
+```text
+--agent-browser-local-dns-policy=proxy-local-dns-deny
+--agent-browser-proxy-bootstrap-host=<one-exact-proxy-host>   (optional)
+```
+
+The bootstrap host must come from the effective proxy snapshot, not a target
+site or an allow-list supplied by a page. It is one ASCII DNS hostname (LDH
+labels, at most 63 bytes per label / 253 bytes total, one optional trailing dot)
+or IP literal; URLs, ports, credentials, wildcards, multiple hosts, spaces and
+mapping expressions are rejected. Canonical IPv4 is required. IPv6 accepts
+bracketed or bare literals and is normalized to the unbracketed canonical
+`HostPortPair` hostname. There is no replacement-address input. Without a
+bootstrap argument, the only exclusions are **exactly** `localhost` and
+`127.0.0.1`; there is no `*.localhost`, `127.*` or implicit `::1` exclusion.
+An explicit bootstrap argument can permit exactly the configured IPv6 proxy.
+
+Consumption and isolation:
+
+1. `SystemNetworkContextManager::ConfigureDefaultNetworkContextParams()` parses
+   the switches in the browser process. This is the shared system/profile/OTR/
+   storage-partition defaults entry point, also used after network-service
+   restarts; it is not a prefetch-only hook. The typed nullable
+   `NetworkContextParams.agent_browser_local_dns_policy` carries only a mode
+   enum and an optional bootstrap host, never fingerprint data.
+2. `NetworkContext::MakeURLRequestContext()` feeds the internally constructed
+   fixed rules into `URLRequestContextBuilder::set_host_mapping_rules()` before
+   considering generic mapping switches. The builder's production resolver
+   factory creates `MappedHostResolver`. In this **actual 152 baseline** its
+   immediate failure sentinel is `^NOTFOUND`, so the native rule is
+   `MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1` plus the exact validated
+   bootstrap exclusion. `~NOTFOUND` is not the `HostPortPair` failure sentinel.
+   Both address and service-endpoint requests are denied before the underlying
+   cache/hosts/system/DNS resolver can run.
+3. `NetworkContext::CreateHostResolver(config_overrides)` passes the same fixed
+   rules to its separately created standalone resolver. Proxy-selection failure
+   and per-resolver DNS overrides cannot remove the wrapper. The existing
+   `ProxyCheckingHostResolverRequest` proxy-selection shortcut is not relied on
+   as the sole privacy barrier.
+4. The parser and deny policy require **no fingerprint configuration**, so
+   native/off-mode launches remain protected. The browser-only accessor
+   `StubResolverConfigReader::IsManagedSecureDnsEnabled()` exposes the unchanged
+   `0044` managed strict DoH opt-in condition. Its existing caller and shared
+   defaults use the same condition. A valid explicit managed strict DoH launch
+   gets no deny policy
+   and retains `kSecure` / no plaintext fallback / DoH-through-proxy behavior
+   from `0044`/`0050`. Launchers should omit both new switches for that path.
+   Input validation happens **before** the DoH opt-out: an unsupported mode,
+   empty/invalid bootstrap or bootstrap without a mode `CHECK`-fails rather
+   than silently becoming stock. The network-service consumer revalidates the
+   typed policy; unknown Mojo enum values are also rejected by Mojo.
+
+`0051` does not edit `bad_flags_prompt.cc`, suppress any bad-flag information
+bar, add `--disable-infobars` / `--test-type`, or change keychain, TLS, page JS,
+renderer identity, or speculative-prediction behavior. A launcher still passing
+an old generic bad flag will still get upstream's warning. Actual banner and
+network-wire acceptance require a rebuilt engine plus the separate gated
+launcher integration; neither is claimed by this source change.
+
+Apply this **after** the immutable `0002`–`0050` chain. `apply.sh` copies the
+original payloads first, preserves evolved payloads on incremental resumes,
+then applies/skips patches in number order and verifies the rolling final-file
+`PATCHED_SOURCE.sha256` (110 files after `0052`). Do not change `0044`/`0050`, recopy an old payload over
+an evolved header, or forge an applied-patch marker. On archive-seeded trees,
+`check.sh` requires `apply.sh`'s exact marker for `0051` and the final source
+bytes; a tree still at `0050` cannot pass that final-state check. On a pinned
+Git baseline it simulates the whole chain in a temporary index. Those scripts
+were **not** run against the external source tree for this change, since source
+writes were prohibited.
+
+Offline validation covers patch applicability to the verified post-`0050`
+source, a bounded 1,039,277-byte-original-file scratch apply/reverse-check, Mojo
+syntax parsing, immutable checksums, and the independent source-policy test
+`tests/unit/chromium-local-dns-policy-source.test.ts`. Native tests are included
+but were **not built or executed**: `AgentBrowserLocalDnsPolicyTest.*` and
+`NetworkContextTest.AgentBrowserLocalDnsPolicy*` in `services_unittests`, plus
+`SystemNetworkContextManagerBrowsertest.AgentBrowserLocalDnsPolicyDefaultsWithoutFingerprint`
+in `browser_tests`. Source-policy tests are not substitutes for those tests,
+actual startup/banner verification, proxy-failure DNS-wire checks, or external
+site acceptance.
+
+## `0052` DNS-only hints with managed strict proxy DoH (source-only, 2026-10-16)
+
+Chromium's actual Chrome network-hints handler reaches `PreconnectManagerImpl`,
+which normally skips DNS when its proxy lookup reports a non-DIRECT proxy. A
+configured strict resolver alone does not change that skip. `0052` adds an
+embedder permission that defaults to false; Chrome opts in only for enabled
+managed secure DNS with a nonempty, fully parsed provider configuration.
+
+The exception applies only to DNS-only jobs (`num_sockets == 0`). Ordinary
+proxy socket preconnects and every existing `IsPreconnectEnabled` gate retain
+their previous behavior. `.local` and `.local.` names remain skipped even with
+the opt-in: the resolver's default ANY source can otherwise send those names
+to the system resolver despite secure mode. There is no site-specific rule,
+plaintext-DNS fallback, page-evidence override or warning suppression.
+
+The patch includes native `PreconnectManagerImplTest.TestProxy*` cases for
+permission, successful and failed resolution, disabled preloading, multicast
+names and unchanged proxy socket preconnects. The offline contract test is
+`tests/unit/chromium-managed-dns-prefetch-source.test.ts`; it does **not**
+compile or execute those C++ cases. A rebuilt kernel, positive correlated DoH
+and proxy evidence, and completed real-page findings are still required before
+claiming a fix or packaging the application.
+
+## `0053` real-compile prefetch correction (2026-10-16)
+
+The real pinned Clang compile rejected `GURL::host_piece()` in `0052`.
+`GURL::host()` is the available `std::string_view` accessor in this tree; `0053`
+uses it while preserving the `.local` / `.local.` proxy skip. The default-deny
+virtual delegate method moves to the existing implementation file, with an
+exported delegate for component builds, rather than leaving a nonempty inline
+virtual body. No browser warning, proxy, preloading, GPU or DNS decision changes.
+
+This append-only correction preserves `0051` / `0052` bytes and keeps the
+rolling final-source count at 110. The offline guard is
+`tests/unit/chromium-managed-dns-prefetch-compile-source.test.ts`. Its source
+checks cannot stand in for recompiling the corrected units, linking the engine,
+running native cases or completing real-page and banner acceptance.
+
+## `0054` cross-volume macOS bundle resource copies (2026-10-16)
+
+The full Chrome target reached action 54,154/54,745 before macOS `/bin/cp -Rc`
+failed copying a helper app icon with `clonefile failed: Cross-device link`.
+The real source and output are on different volumes. A separate small control
+with the exact same source icon and output volume reproduced `-Rc` exit 1 and
+verified `-R` exit 0, equal bytes/SHA-256, unchanged source, and distinct output
+file identity.
+
+The append-only patch changes only Apple `copy_bundle_data` on a macOS host to
+ordinary `/bin/cp -R`, preserving independent copies without requiring
+clonefile. The Linux branch, browser behavior, warning policy, optimization,
+ThinLTO and codec options are unchanged. The rolling source manifest adds
+`build/toolchain/apple/toolchain.gni` (111 files); all previous 110 source
+identities and earlier patch/payload digests remain unchanged.
+
+Normal provenance/apply/check and all 111 final-source hashes passed. GN
+regeneration preserved `args.gn`; the actual same-output incremental dry-run
+contains 643 remaining actions. Full build/link completion and real browser,
+banner, DNS/GPU and site acceptance remain separate, still-unmet gates.

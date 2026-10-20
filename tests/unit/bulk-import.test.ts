@@ -30,6 +30,23 @@ describe("parseBulkCsv", () => {
     expect(specs[0]).toMatchObject({ name: "P1", platform: "windows", locale: "en-US", timezone: "America/Chicago", fingerprintSeed: 12345, webrtcIp: "5.6.7.8" });
   });
 
+  it.each([
+    "name,locale\nHeader-only,en-US",
+    "name,platform,locale\nEmpty-header,,en-US",
+    "Positional-only",
+    "Empty-positional,,en-US",
+  ])("leaves omitted OS unset for the common creation default: %s", (csv) => {
+    const specs = parseBulkCsv(csv);
+    expect(specs).toHaveLength(1);
+    expect(specs[0].platform).toBeUndefined();
+  });
+
+  it.each(["windows", "macos", "android"] as const)("preserves explicit %s in header and positional rows", (platform) => {
+    for (const csv of [`name,os\nExplicit,${platform.toUpperCase()}`, `Explicit,${platform.toUpperCase()}`]) {
+      expect(parseBulkCsv(csv)[0].platform).toBe(platform);
+    }
+  });
+
   it("ignores invalid seed values", () => {
     const specs = parseBulkCsv("name,seed\nP1,abc");
     expect(specs[0].fingerprintSeed).toBeUndefined();

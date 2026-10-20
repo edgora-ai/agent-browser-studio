@@ -26,9 +26,10 @@ vi.mock("electron", () => {
   };
 });
 
-import { reloadConfig, getConfig, saveConfig } from "../../src/main/services/config-manager.js";
+import { reloadConfig, getConfig, getConfigPath, saveConfig } from "../../src/main/services/config-manager.js";
 import {
   getAccounts,
+  getAccountsSnapshot,
   getAccountPassword,
   setAccountProfileIds,
   parseAccountsBulkText,
@@ -41,6 +42,12 @@ import {
 import { requireAccountSecret, requireAccountMutation, initTeam } from "../../src/main/services/team.js";
 import { listBrowserProfiles } from "../../src/main/services/browser-manager.js";
 import { isEncrypted, initializeSecretStorage, planSecretStorage, resetSecretStorageForTests } from "../../src/main/services/secrets.js";
+
+// Each independent legacy service operation captures the displayed snapshot.
+function referenceAt(index: number) {
+  const snapshot = getAccountsSnapshot();
+  return snapshot.accounts[index]?.ref || { index, revision: snapshot.revision };
+}
 
 function freshConfig(): void {
   const cfg = getConfig();
@@ -114,8 +121,8 @@ describe("account service (real config)", () => {
     const accounts = getAccounts();
     expect(accounts).toHaveLength(2);
     expect(isEncrypted(accounts[0].platformPassword)).toBe(true);
-    expect(getAccountPassword(0)).toBe("s3cret");
-    expect(getAccountPassword(1)).toBe("hunter2");
+    expect(getAccountPassword(0, referenceAt(0))).toBe("s3cret");
+    expect(getAccountPassword(1, referenceAt(1))).toBe("hunter2");
     // The stored config never holds plaintext.
     const raw = JSON.stringify(accounts);
     expect(raw).not.toContain("s3cret");
@@ -130,9 +137,9 @@ describe("account service (real config)", () => {
 
   it("setAccountProfileIds binds, dedupes, validates, and clears", () => {
     bulkAddAccounts([{ url: "https://x.com", username: "alice" }]);
-    const updated = setAccountProfileIds(0, ["prof_abc", "prof_abc", "bad id!", "prof_zzz"]);
+    const updated = setAccountProfileIds(0, ["prof_abc", "prof_abc", "bad id!", "prof_zzz"], referenceAt(0));
     expect(updated!.profileIds).toEqual(["prof_abc", "prof_zzz"]);
-    const cleared = setAccountProfileIds(0, []);
+    const cleared = setAccountProfileIds(0, [], referenceAt(0));
     expect(cleared!.profileIds).toBeUndefined();
   });
 
@@ -141,29 +148,54 @@ describe("account service (real config)", () => {
     const accounts = getAccounts();
     expect(accounts).toHaveLength(1);
     expect(isEncrypted(accounts[0].platformPassword)).toBe(true);
-    expect(getAccountPassword(0)).toBe("s3cret");
+    expect(getAccountPassword(0, referenceAt(0))).toBe("s3cret");
     // A replacement password is re-encrypted.
-    const updated = updateAccount(0, { platformPassword: "newpass" });
-    expect(isEncrypted(updated!.platformPassword)).toBe(true);
-    expect(getAccountPassword(0)).toBe("newpass");
+    const updated = updateAccount(0, { platformPassword: "newpass" }, referenceAt(0));
+    // Task270: committed public DTOs are redacted; verify encryption in the
+    // actual config/private read and disk bytes, not in the returned DTO.
+    expect(updated.hasPassword).toBe(true);
+    expect(updated).not.toHaveProperty("platformPassword");
+    const replacementCiphertext = getAccounts()[0].platformPassword;
+    expect(isEncrypted(replacementCiphertext)).toBe(true);
+    expect(getConfig().accounts![0].platformPassword).toBe(replacementCiphertext);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).accounts[0].platformPassword).toBe(replacementCiphertext);
+    expect(getAccountPassword(0, referenceAt(0))).toBe("newpass");
     // An omitted/empty password keeps the stored encrypted value.
-    const kept = updateAccount(0, { tags: ["social"] });
+    const kept = updateAccount(0, { tags: ["social"] }, referenceAt(0));
     expect(kept!.tags).toEqual(["social"]);
-    expect(getAccountPassword(0)).toBe("newpass");
+    expect(kept.hasPassword).toBe(true);
+    expect(kept).not.toHaveProperty("platformPassword");
+    expect(getAccounts()[0].platformPassword).toBe(replacementCiphertext);
+    expect(getConfig().accounts![0].platformPassword).toBe(replacementCiphertext);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).accounts[0].platformPassword).toBe(replacementCiphertext);
+    reloadConfig();
+    expect(getAccounts().find(a => a.tags?.includes("social"))?.platformPassword).toBe(replacementCiphertext);
+    expect(getAccountPassword(0, referenceAt(0))).toBe("newpass");
     // Never store plaintext in the config.
     const raw = JSON.stringify(getAccounts());
     expect(raw).not.toContain("s3cret");
     expect(raw).not.toContain("newpass");
     // Delete works on the index.
-    expect(deleteAccount(0)).toBe(true);
+    expect(deleteAccount(0, referenceAt(0))).toBe(true);
     expect(getAccounts()).toHaveLength(0);
   });
 
-  it("getAccountPassword returns null out of range / missing", () => {
-    expect(getAccountPassword(0)).toBeNull();
+  it("getAccountPassword distinguishes valid-current missing accounts from absent passwords", () => {
+    // Task270: retain each original missing index with the CURRENT collection
+    // revision. Missing rows are domain errors, never an unguarded null fallback.
+    expect(() => getAccountPassword(0, referenceAt(0))).toThrowError(expect.objectContaining({
+      code: "ACCOUNT_NOT_FOUND", message: expect.stringContaining("ACCOUNT_NOT_FOUND"),
+    }));
     bulkAddAccounts([{ url: "https://x.com", username: "alice" }]);
-    expect(getAccountPassword(0)).toBeNull();
-    expect(getAccountPassword(5)).toBeNull();
+    expect(getAccountPassword(0, referenceAt(0))).toBeNull();
+    const missing = referenceAt(5);
+    expect(() => getAccountPassword(5, missing)).toThrowError(expect.objectContaining({
+      code: "ACCOUNT_NOT_FOUND", message: expect.stringContaining("ACCOUNT_NOT_FOUND"),
+    }));
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    expect(() => getAccountPassword(unsafe, { index: unsafe, revision: missing.revision })).toThrowError(expect.objectContaining({
+      code: "ACCOUNT_REFERENCE_INVALID", message: expect.stringContaining("ACCOUNT_REFERENCE_INVALID"),
+    }));
   });
 
   describe("account RBAC", () => {
@@ -225,6 +257,7 @@ describe("bulk create profiles + accounts (RoxyBrowser 3.8.9 workflow)", () => {
     expect(profiles.some((p: any) => p.name === "amazon.com · bob")).toBe(true);
     // Each account is bound to its own created profile.
     const prof = profiles.find((p: any) => p.name === "twitter.com · alice");
+    if (!prof) throw new Error("Expected the bound twitter.com · alice profile to exist");
     const acc = accounts[0];
     expect(acc.profileIds).toEqual([prof.dirId]);
     expect(isEncrypted(acc.platformPassword)).toBe(true);

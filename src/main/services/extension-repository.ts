@@ -2,8 +2,10 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
-import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
-function __extTransact(mut: (draft:any)=>void): boolean { try { const { transact } = require("./config/store.js"); transact(mut); return true; } catch { return false; } }
+import { isDeepStrictEqual } from "node:util";
+import { ensureArchiveDirectory, writeZipArchive } from "./zip-writer.js";
+import { getAppDataDir, getConfig } from "./config-manager.js";
+import { transact } from "./config/store.js";
 import { downloadFileWithCurl } from "./proxy-detector.js";
 
 
@@ -22,6 +24,36 @@ export interface ExtensionRepositoryEntry {
   tags: string[];
   addedAt: number;
   updatedAt: number;
+}
+
+export interface ExtensionRepositoryCleanupWarning {
+  code: "EXTENSION_REPOSITORY_CLEANUP_FAILED";
+  path: string;
+  message: string;
+}
+
+export interface ExtensionRepositoryCommitReceipt {
+  committed: true;
+  cleanupWarnings: ExtensionRepositoryCleanupWarning[];
+}
+
+/** Return-only facts: never store the receipt as extension metadata. */
+export interface ExtensionRepositoryMutationResult extends ExtensionRepositoryEntry {
+  repositoryCommit: ExtensionRepositoryCommitReceipt;
+}
+
+export class ExtensionRepositoryRecoveryRequiredError extends Error {
+  readonly code = "EXTENSION_REPOSITORY_RECOVERY_REQUIRED";
+  constructor(
+    readonly extensionId: string,
+    readonly recoveryPaths: string[],
+    readonly recoveryReceiptPath: string,
+    detail: string,
+    cause?: unknown,
+  ) {
+    super(`EXTENSION_REPOSITORY_RECOVERY_REQUIRED: ${cause === undefined ? "Unfinished extension update" : errorMessage(cause)}; recovery required for ${extensionId}: ${detail}. Retained paths: ${recoveryPaths.join(", ")}; receipt: ${recoveryReceiptPath}`, { cause });
+    this.name = "ExtensionRepositoryRecoveryRequiredError";
+  }
 }
 
 const EXTENSION_ID_RE = /^(?:[a-p]{32}|local_[a-z0-9]{8,40})$/;
@@ -51,15 +83,15 @@ export function getRepositoryExtension(extId: string): ExtensionRepositoryEntry 
   return cfg.extensionRepository?.[extId] || null;
 }
 
-export async function addOrUpdateChromeStoreExtension(extId: string, opts: { shared?: boolean; tags?: string[] } = {}): Promise<ExtensionRepositoryEntry> {
+export async function addOrUpdateChromeStoreExtension(extId: string, opts: { shared?: boolean; tags?: string[] } = {}): Promise<ExtensionRepositoryMutationResult> {
   validateExtensionId(extId);
-  const repoDir = getExtensionRepoEntryDir(extId);
-  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
+  const repoDir = prepareRepositoryEntryDir(extId);
   const tempDir = fs.mkdtempSync(path.join(repoDir, ".tmp-"));
   fs.chmodSync(tempDir, 0o700);
   const stagingDir = path.join(tempDir, "extract");
   const tmpCrx = path.join(tempDir, "package.crx");
   const tmpZip = path.join(tempDir, "package.zip");
+  let repositoryCommit: ExtensionRepositoryCommitReceipt | undefined;
 
   try {
     const crxUrl = buildChromeCrxUrl(extId);
@@ -116,12 +148,10 @@ export async function addOrUpdateChromeStoreExtension(extId: string, opts: { sha
       updatedAt: now,
     };
 
-    const _entry = entry;
-    const _extId = extId;
-    commitRepositoryUpdate(stagingDir, finalUnpackedDir, tmpCrx, finalPackagePath, () => { if (!__extTransact((d:any)=>{ d.extensionRepository=d.extensionRepository||{}; d.extensionRepository[_extId]=_entry; })) { const cfg = structuredClone(getConfig()) as any; cfg.extensionRepository=cfg.extensionRepository||{}; cfg.extensionRepository[_extId]=_entry; saveConfig(cfg); } });
-    return entry;
+    repositoryCommit = commitRepositoryUpdate(stagingDir, finalUnpackedDir, tmpCrx, finalPackagePath, () => saveRepositoryEntry(entry));
+    return { ...entry, repositoryCommit };
   } finally {
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+    cleanupRepositoryStaging(tempDir, repositoryCommit);
   }
 }
 
@@ -131,7 +161,7 @@ export async function addOrUpdateChromeStoreExtension(extId: string, opts: { sha
  * Generates a random local ID (local_<hex>) since local packages don't carry a
  * Chrome Web Store 32-char ID. Local extensions cannot auto-update.
  */
-export async function installLocalExtension(localPath: string, opts: { shared?: boolean; tags?: string[]; signal?: AbortSignal } = {}): Promise<ExtensionRepositoryEntry> {
+export async function installLocalExtension(localPath: string, opts: { shared?: boolean; tags?: string[]; signal?: AbortSignal } = {}): Promise<ExtensionRepositoryMutationResult> {
   const signal = opts.signal;
   assertExtensionNotAborted(signal);
   const resolved = path.resolve(String(localPath || "").trim());
@@ -145,16 +175,18 @@ export async function installLocalExtension(localPath: string, opts: { shared?: 
   }
   if (!fs.existsSync(resolved)) throw new Error(`Local extension path does not exist: ${resolved}`);
 
-  const isDir = fs.statSync(resolved).isDirectory();
+  const localStat = fs.lstatSync(resolved);
+  if (localStat.isSymbolicLink()) throw new Error("Local extension source must not be a symlink");
+  const isDir = localStat.isDirectory();
   const extId = "local_" + crypto.randomBytes(12).toString("hex");
   validateExtensionId(extId);
 
-  const repoDir = getExtensionRepoEntryDir(extId);
-  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
+  const repoDir = prepareRepositoryEntryDir(extId);
   const tempDir = fs.mkdtempSync(path.join(repoDir, ".tmp-"));
   fs.chmodSync(tempDir, 0o700);
   const stagingDir = path.join(tempDir, "extract");
   const tmpZip = path.join(tempDir, "package.zip");
+  let repositoryCommit: ExtensionRepositoryCommitReceipt | undefined;
 
   try {
     let archivePath = "";
@@ -224,19 +256,11 @@ export async function installLocalExtension(localPath: string, opts: { shared?: 
     };
 
     assertExtensionNotAborted(signal);
-    const cfg = structuredClone(getConfig()) as any;
-    cfg.extensionRepository = cfg.extensionRepository || {};
-    cfg.extensionRepository[extId] = entry;
     // For directories there's no package file; commit only the unpacked dir.
-    assertExtensionNotAborted(signal);
-    if (isDir) {
-      commitRepositoryUpdate(stagingDir, finalUnpackedDir, "", "", () => saveConfig(cfg));
-    } else {
-      commitRepositoryUpdate(stagingDir, finalUnpackedDir, archivePath, finalPackagePath, () => saveConfig(cfg));
-    }
-    return entry;
+    repositoryCommit = commitRepositoryUpdate(stagingDir, finalUnpackedDir, isDir ? "" : archivePath, isDir ? "" : finalPackagePath, () => saveRepositoryEntry(entry));
+    return { ...entry, repositoryCommit };
   } finally {
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+    cleanupRepositoryStaging(tempDir, repositoryCommit);
   }
 }
 
@@ -251,10 +275,9 @@ function copyDirContents(src: string, dest: string, signal?: AbortSignal): void 
     const d = path.join(dest, entry.name);
     if (entry.isDirectory()) copyDirContents(s, d, signal);
     else if (entry.isFile()) {
-      // Reject symlinks (zip-slip style safety for unpacked-dir import).
-      let isLink = false;
-      try { isLink = fs.lstatSync(s).isSymbolicLink(); } catch { /* ignore */ }
-      if (!isLink) fs.copyFileSync(s, d);
+      // Fail closed if the entry changed or cannot be checked while copying.
+      if (fs.lstatSync(s).isSymbolicLink()) throw new Error("Extension source contains symlinks");
+      fs.copyFileSync(s, d);
     }
   }
 }
@@ -264,7 +287,7 @@ function copyDirContents(src: string, dest: string, signal?: AbortSignal): void 
  *  - chrome-web-store: re-download from Chrome Web Store
  *  - local: no remote source → cannot auto-update; caller should re-import.
  */
-export async function updateRepositoryExtension(extId: string): Promise<ExtensionRepositoryEntry> {
+export async function updateRepositoryExtension(extId: string): Promise<ExtensionRepositoryMutationResult> {
   const entry = getRepositoryExtension(extId);
   if (!entry) throw new Error("Extension is not in the repository");
   if (entry.source === "chrome-web-store") {
@@ -276,90 +299,331 @@ export async function updateRepositoryExtension(extId: string): Promise<Extensio
 
 export function deleteRepositoryExtension(extId: string): boolean {
   validateExtensionId(extId);
-  let deleted=false;
-  try {
-    const { transact } = require("./config/store.js");
-    transact((draft:any)=>{ if (!draft.extensionRepository?.[extId]) return; delete draft.extensionRepository[extId]; for(const profile of Object.values(draft.browserProfiles||{}) as any[]) if(profile.extensions) delete profile.extensions[extId]; deleted=true; });
-    if (deleted) { const repoDir = getExtensionRepoEntryDir(extId); if (fs.existsSync(repoDir)) fs.rmSync(repoDir, { recursive: true, force: true }); return true; }
-    return false;
-  } catch {}
-  const cfg = structuredClone(getConfig()) as any;
-  if (!cfg.extensionRepository?.[extId]) return false;
-  delete cfg.extensionRepository[extId];
-  for (const profile of Object.values(cfg.browserProfiles || {}) as any[]) {
-    if (profile.extensions) delete profile.extensions[extId];
-  }
-  saveConfig(cfg);
   const repoDir = getExtensionRepoEntryDir(extId);
-  if (fs.existsSync(repoDir)) fs.rmSync(repoDir, { recursive: true, force: true });
-  return true;
+  assertRepositoryTargetWritable(extId);
+  getConfig();
+  const deleted = transact((draft) => {
+    if (!draft.extensionRepository?.[extId]) return false;
+    delete draft.extensionRepository[extId];
+    for (const profile of Object.values(draft.browserProfiles || {}) as any[]) {
+      if (profile.extensions) delete profile.extensions[extId];
+    }
+    return true;
+  });
+  if (deleted && fs.existsSync(repoDir)) fs.rmSync(repoDir, { recursive: true, force: true });
+  return deleted;
 }
 
-export async function restoreSyncedExtensionPackage(extId: string, packagePath: string, remoteEntry: Partial<ExtensionRepositoryEntry>, signal?: AbortSignal): Promise<ExtensionRepositoryEntry> {
+export interface PreparedSyncedExtensionPackage {
+  stagedDir: string;
+  archivePath: string;
+  packagePath: string;
+  manifest: { name?: string; version?: string; description?: string; manifest_version?: number };
+  packageHash: string;
+  manifestHash: string;
+}
+
+/** Prepare only: stagingRoot must be absent under a caller-owned temporary
+ * directory. The caller owns its cleanup, including on validation failure.
+ * No repository/config mutation; Pull can preflight every package first. */
+export function prepareSyncedExtensionPackage(extId: string, packagePath: string, remoteEntry: Partial<ExtensionRepositoryEntry>, stagingRoot: string, signal?: AbortSignal): PreparedSyncedExtensionPackage {
   validateExtensionId(extId);
   assertExtensionNotAborted(signal);
   const resolved = path.resolve(String(packagePath || "").trim());
   if (!fs.existsSync(resolved)) throw new Error(`Synced extension package does not exist: ${resolved}`);
-  const stat = fs.statSync(resolved);
+  const stat = fs.lstatSync(resolved);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Synced extension package must be a regular file, not a symlink");
   if (stat.size < 100) throw new Error("Synced extension package is too small");
   if (stat.size > MAX_EXTENSION_PACKAGE_BYTES) throw new Error("Synced extension package is too large");
-
-  const repoDir = getExtensionRepoEntryDir(extId);
-  fs.mkdirSync(repoDir, { recursive: true, mode: 0o700 });
-  const tempDir = fs.mkdtempSync(path.join(repoDir, ".tmp-"));
-  fs.chmodSync(tempDir, 0o700);
-  const stagingDir = path.join(tempDir, "extract");
-  const tmpZip = path.join(tempDir, "package.zip");
-
+  const parent = fs.lstatSync(path.dirname(path.resolve(stagingRoot)));
+  if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error("Extension staging parent must be a real directory");
+  fs.mkdirSync(stagingRoot, { mode: 0o700 }); // exclusive: never merge with existing staging
+  const stagedDir = path.join(stagingRoot, "extract");
+  const tmpZip = path.join(stagingRoot, "package.zip");
+  const snapshotPath = path.join(stagingRoot, "downloaded-package");
+  fs.copyFileSync(resolved, snapshotPath, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(snapshotPath, 0o600);
+  const snapshotSize = fs.statSync(snapshotPath).size;
+  if (snapshotSize < 100 || snapshotSize > MAX_EXTENSION_PACKAGE_BYTES) throw new Error("Synced extension package snapshot has an invalid size");
+  let archivePath = snapshotPath;
   try {
-    let archivePath = resolved;
-    try {
-      assertSafeZipEntries(archivePath);
-    } catch (_zipError) {
-      assertExtensionNotAborted(signal);
-      const crxData = fs.readFileSync(resolved);
-      const zipStart = crxData.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-      if (zipStart <= 0) throw new Error("Could not find ZIP payload in synced extension package");
-      fs.writeFileSync(tmpZip, crxData.subarray(zipStart), { mode: 0o600 });
-      archivePath = tmpZip;
-      assertSafeZipEntries(archivePath);
-    }
-    extractZipSafely(archivePath, stagingDir, signal);
+    assertSafeZipEntries(archivePath);
+  } catch (_zipError) {
     assertExtensionNotAborted(signal);
-    const manifestDir = findManifestDir(stagingDir);
-    if (!manifestDir) throw new Error("Extension manifest.json not found after extraction");
-    validateExtractedExtension(stagingDir);
+    const crxData = fs.readFileSync(snapshotPath);
+    const zipStart = crxData.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    if (zipStart <= 0) throw new Error("Could not find ZIP payload in synced extension package");
+    fs.writeFileSync(tmpZip, crxData.subarray(zipStart), { mode: 0o600, flag: "wx" });
+    archivePath = tmpZip;
+    assertSafeZipEntries(archivePath);
+  }
+  extractZipSafely(archivePath, stagedDir, signal);
+  assertExtensionNotAborted(signal);
+  const manifestDir = findManifestDir(stagedDir);
+  if (!manifestDir) throw new Error("Extension manifest.json not found after extraction");
+  validateExtractedExtension(stagedDir);
+  const manifestRaw = fs.readFileSync(path.join(manifestDir, "manifest.json"), "utf-8");
+  const manifest = JSON.parse(manifestRaw) as PreparedSyncedExtensionPackage["manifest"];
+  if (!manifest.name) throw new Error("Extension manifest must declare a name");
+  if (manifest.manifest_version !== 2 && manifest.manifest_version !== 3) throw new Error("Extension manifest_version must be 2 or 3");
+  const manifestHash = crypto.createHash("sha512").update(manifestRaw).digest("hex");
+  const publishedPackage = remoteEntry.source === "chrome-web-store" ? snapshotPath : archivePath;
+  const packageHash = hashFile(publishedPackage);
+  if (!/^[0-9a-f]{128}$/i.test(String(remoteEntry.manifestHash || ""))) throw new Error("Synced extension manifest hash is required");
+  if (!/^[0-9a-f]{128}$/i.test(String(remoteEntry.packageHash || ""))) throw new Error("Synced extension package hash is required");
+  if (remoteEntry.manifestHash !== manifestHash) throw new Error("Synced extension manifest hash does not match package contents");
+  if (remoteEntry.packageHash !== packageHash) throw new Error("Synced extension package hash does not match downloaded package");
+  return { stagedDir, archivePath, packagePath: publishedPackage, manifest, packageHash, manifestHash };
+}
 
-    const manifestPath = path.join(manifestDir, "manifest.json");
-    const manifestRaw = fs.readFileSync(manifestPath, "utf-8");
-    const manifest = JSON.parse(manifestRaw) as { name?: string; version?: string; description?: string; manifest_version?: number };
-    if (!manifest.name) throw new Error("Extension manifest must declare a name");
-    if (manifest.manifest_version !== 2 && manifest.manifest_version !== 3) throw new Error("Extension manifest_version must be 2 or 3");
+export interface ExtensionSyncSnapshot {
+  /** Portable metadata. No local path or transient repository commit receipt. */
+  entry: ExtensionRepositoryEntry;
+  /** Owned, read-only package bytes; never a live repository/source path. */
+  packagePath: string;
+  /** Invoke ONLY after the authoritative cloud manifest has been published.
+   * Null means the original source diverged; preserve it as locally dirty. */
+  commitLocalRepair?: () => Promise<ExtensionRepositoryMutationResult | null>;
+}
 
+interface ExtensionTreeNode {
+  name: string;
+  directory: boolean;
+  stat: fs.Stats;
+  hash?: string;
+}
+
+class ExtensionSyncSourceChangedError extends Error {
+  constructor(detail: string) { super(`Extension sync source changed or is unsafe: ${detail}`); }
+}
+
+function sameExtensionSourceStat(a: fs.Stats, b: fs.Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.size === b.size
+    && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+/** Bounded, no-follow reads. When copying, bind the hash and copied bytes to
+ * the same opened source, rather than hashing one path and copying another. */
+function readExtensionSnapshotFile(file: string, expected: fs.Stats, signal?: AbortSignal, copyTo?: string): string {
+  ensureArchiveDirectory(path.dirname(file));
+  const input = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  let output: number | undefined;
+  try {
+    if (!expected.isFile() || !sameExtensionSourceStat(fs.fstatSync(input), expected)) throw new ExtensionSyncSourceChangedError(file);
+    if (copyTo) output = fs.openSync(copyTo, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+    const hash = crypto.createHash("sha512");
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (position < expected.size) {
+      assertExtensionNotAborted(signal);
+      const wanted = Math.min(chunk.length, expected.size - position);
+      const count = fs.readSync(input, chunk, 0, wanted, position);
+      if (!Number.isInteger(count) || count <= 0 || count > wanted) throw new ExtensionSyncSourceChangedError(file);
+      hash.update(chunk.subarray(0, count));
+      if (output !== undefined) {
+        let written = 0;
+        while (written < count) {
+          const amount = fs.writeSync(output, chunk, written, count - written, position + written);
+          if (!Number.isInteger(amount) || amount <= 0 || amount > count - written) throw new Error("Extension snapshot write made no valid progress");
+          written += amount;
+        }
+      }
+      position += count;
+    }
+    if (fs.readSync(input, chunk, 0, 1, expected.size) !== 0) throw new ExtensionSyncSourceChangedError(file);
+    ensureArchiveDirectory(path.dirname(file));
+    if (!sameExtensionSourceStat(fs.fstatSync(input), expected) || !sameExtensionSourceStat(fs.lstatSync(file), expected)) throw new ExtensionSyncSourceChangedError(file);
+    if (output !== undefined) fs.fsyncSync(output);
+    return hash.digest("hex");
+  } finally {
+    try { fs.closeSync(input); } finally { if (output !== undefined) fs.closeSync(output); }
+  }
+}
+
+function captureExtensionTree(root: string, signal?: AbortSignal): ExtensionTreeNode[] {
+  const nodes: ExtensionTreeNode[] = [];
+  let totalBytes = 0;
+  function visit(directory: string, relative: string): void {
+    assertExtensionNotAborted(signal);
+    ensureArchiveDirectory(directory);
+    const before = fs.lstatSync(directory);
+    nodes.push({ name: relative, directory: true, stat: before });
+    if (nodes.length - 1 > MAX_ZIP_ENTRIES) throw new ExtensionSyncSourceChangedError("too many extension files");
+    const names = fs.readdirSync(directory).sort();
+    for (const name of names) {
+      assertExtensionNotAborted(signal);
+      const file = path.join(directory, name);
+      const entryName = relative ? `${relative}/${name}` : name;
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) throw new ExtensionSyncSourceChangedError(`symlink or non-regular entry: ${entryName}`);
+      validateZipEntryName(entryName);
+      if (stat.isDirectory()) visit(file, entryName);
+      else {
+        totalBytes += stat.size;
+        if (stat.size > MAX_ZIP_ENTRY_BYTES || totalBytes > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES) throw new ExtensionSyncSourceChangedError("extension contents exceed size limits");
+        nodes.push({ name: entryName, directory: false, stat, hash: readExtensionSnapshotFile(file, stat, signal) });
+        if (nodes.length - 1 > MAX_ZIP_ENTRIES) throw new ExtensionSyncSourceChangedError("too many extension files");
+      }
+    }
+    ensureArchiveDirectory(directory);
+    if (!sameExtensionSourceStat(fs.lstatSync(directory), before) || !isDeepStrictEqual(fs.readdirSync(directory).sort(), names)) throw new ExtensionSyncSourceChangedError(directory);
+  }
+  visit(root, "");
+  return nodes;
+}
+
+function sameExtensionTree(a: ExtensionTreeNode[], b: ExtensionTreeNode[], identities = false): boolean {
+  return a.length === b.length && a.every((node, i) => {
+    const other = b[i];
+    return node.name === other.name && node.directory === other.directory && node.hash === other.hash
+      && (node.directory || node.stat.size === other.stat.size) && (!identities || sameExtensionSourceStat(node.stat, other.stat));
+  });
+}
+
+function portableExtensionSnapshotEntry(entry: ExtensionRepositoryEntry, packageHash: string, manifestHash: string): ExtensionRepositoryEntry {
+  return {
+    id: entry.id, name: entry.name, version: entry.version, description: entry.description, source: entry.source,
+    ...(entry.chromeStoreUrl !== undefined ? { chromeStoreUrl: entry.chromeStoreUrl } : {}),
+    ...(entry.updateUrl !== undefined ? { updateUrl: entry.updateUrl } : {}),
+    unpackedPath: "", packageHash, manifestHash, shared: entry.shared, tags: [...entry.tags],
+    addedAt: entry.addedAt, updatedAt: entry.updatedAt,
+  };
+}
+
+/** Snapshot only: stagingRoot must be absent below a caller-owned temporary
+ * directory, outside the repository. The caller cleans it even on failure.
+ * Existing packages must match ALL current unpacked files, not just manifest.
+ * Legacy unpacked installations become verified ZIPs without publishing locally. */
+export async function captureRepositoryExtensionForSync(entry: ExtensionRepositoryEntry, stagingRoot: string, signal?: AbortSignal): Promise<ExtensionSyncSnapshot> {
+  validateExtensionId(entry.id);
+  assertExtensionNotAborted(signal);
+  const original = getRepositoryExtension(entry.id);
+  if (!original || !isDeepStrictEqual(portableExtensionSnapshotEntry(entry, entry.packageHash, entry.manifestHash), portableExtensionSnapshotEntry(original, original.packageHash, original.manifestHash))
+    || path.resolve(entry.unpackedPath) !== path.resolve(original.unpackedPath)) throw new ExtensionSyncSourceChangedError("repository metadata");
+  const source = structuredClone(original);
+  assertRepositoryTargetWritable(source.id);
+  const repository = getExtensionRepoEntryDir(source.id);
+  ensureArchiveDirectory(repository);
+  const sourceDirectories = [getAppDataDir(), path.dirname(repository), repository].map((directory) => ({ directory, stat: fs.lstatSync(directory) }));
+  const current = path.join(repository, "current");
+  if (path.resolve(source.unpackedPath) !== current) throw new ExtensionSyncSourceChangedError("unexpected unpacked path");
+  stagingRoot = path.resolve(stagingRoot);
+  ensureArchiveDirectory(path.dirname(stagingRoot));
+  const realStaging = path.join(fs.realpathSync(path.dirname(stagingRoot)), path.basename(stagingRoot));
+  if (isPathInside(realStaging, fs.realpathSync(path.dirname(repository)))) throw new Error("Extension sync staging must be outside the repository");
+  if (statIfPresent(stagingRoot)) throw new Error("Extension sync staging already exists");
+  const packages = ["package.zip", "package.crx"].map((name) => ({ file: path.join(repository, name), stat: statIfPresent(path.join(repository, name)) }));
+  for (const pkg of packages) if (pkg.stat && (!pkg.stat.isFile() || pkg.stat.isSymbolicLink())) throw new ExtensionSyncSourceChangedError("package must be a regular file, not a symlink");
+  const packaged = packages.find((pkg) => pkg.stat && pkg.file.endsWith(source.source === "chrome-web-store" ? ".crx" : ".zip")) || packages.find((pkg) => pkg.stat);
+  if (!packaged && (source.source !== "local" || source.packageHash !== source.manifestHash)) throw new Error("Repository extension package is missing");
+  if (packaged && (packaged.stat!.size < 100 || packaged.stat!.size > MAX_EXTENSION_PACKAGE_BYTES)) throw new Error("Repository extension package has an invalid size");
+  const tree = captureExtensionTree(current, signal);
+  fs.mkdirSync(stagingRoot, { mode: 0o700 });
+  let prepared: PreparedSyncedExtensionPackage;
+  let sourcePackageHash: string | undefined;
+  if (packaged) {
+    const pinned = path.join(stagingRoot, "source-package");
+    sourcePackageHash = readExtensionSnapshotFile(packaged.file, packaged.stat!, signal, pinned);
+    prepared = prepareSyncedExtensionPackage(source.id, pinned, source, path.join(stagingRoot, "verified"), signal);
+  } else {
+    // The store-method writer streams bytes; preflight its precise package size
+    // against the extension cap, not zip-writer's more permissive generic cap.
+    const entries = tree.filter((node) => node.name).map((node) => node.directory
+      ? { name: `${node.name}/`, isDirectory: true as const }
+      : { name: node.name, filePath: path.join(current, ...node.name.split("/")) });
+    const packageBytes = tree.reduce((sum, node) => !node.name ? sum : sum + 76 + 2 * Buffer.byteLength(node.name + (node.directory ? "/" : ""), "utf8") + (node.directory ? 0 : node.stat.size), 22);
+    if (packageBytes > MAX_EXTENSION_PACKAGE_BYTES) throw new Error("Extension sync package is too large");
+    const manifest = tree.filter((node) => node.directory && node.name.split("/").filter(Boolean).length <= 4)
+      .map((node) => tree.find((file) => !file.directory && file.name === (node.name ? `${node.name}/manifest.json` : "manifest.json"))).find(Boolean);
+    if (!manifest?.hash) throw new Error("Extension manifest.json not found in directory");
+    const zip = path.join(stagingRoot, "package.zip");
+    await writeZipArchive(zip, entries);
+    assertExtensionNotAborted(signal);
+    prepared = prepareSyncedExtensionPackage(source.id, zip, { ...source, packageHash: hashFile(zip), manifestHash: manifest.hash }, path.join(stagingRoot, "verified"), signal);
+  }
+  if (!sameExtensionTree(tree, captureExtensionTree(prepared.stagedDir, signal))) throw new Error("Repository extension current contents do not match its package");
+  if (!sameExtensionTree(tree, captureExtensionTree(current, signal), true) || !isDeepStrictEqual(getRepositoryExtension(source.id), source)) throw new ExtensionSyncSourceChangedError("repository content or metadata during capture");
+  for (const pkg of packages) {
+    const now = statIfPresent(pkg.file);
+    if (pkg.stat ? !now || !sameExtensionSourceStat(pkg.stat, now) : now !== null) throw new ExtensionSyncSourceChangedError("repository package during capture");
+  }
+  if (packaged && readExtensionSnapshotFile(packaged.file, packaged.stat!, signal) !== sourcePackageHash) throw new ExtensionSyncSourceChangedError("repository package bytes during capture");
+  assertExtensionNotAborted(signal);
+  fs.chmodSync(prepared.packagePath, 0o400);
+  const captured = portableExtensionSnapshotEntry(source, prepared.packageHash, prepared.manifestHash);
+  const snapshot: ExtensionSyncSnapshot = { entry: structuredClone(captured), packagePath: prepared.packagePath };
+  if (!packaged) {
+    const sourceUnchanged = (activeUpdateDir?: string): boolean => {
+      if (!isDeepStrictEqual(getRepositoryExtension(source.id), source)) return false;
+      for (const original of sourceDirectories) {
+        const stat = statIfPresent(original.directory);
+        if (!stat?.isDirectory() || stat.isSymbolicLink() || stat.dev !== original.stat.dev || stat.ino !== original.stat.ino) return false;
+      }
+      assertRepositoryTargetWritable(source.id, activeUpdateDir);
+      const currentStat = statIfPresent(current);
+      if (!currentStat || !sameExtensionSourceStat(currentStat, tree[0].stat)) return false;
+      if (packages.some((pkg) => statIfPresent(pkg.file) !== null)) return false;
+      try { return sameExtensionTree(tree, captureExtensionTree(current, signal), true) && isDeepStrictEqual(getRepositoryExtension(source.id), source); }
+      catch (error) {
+        if (error instanceof ExtensionSyncSourceChangedError || ["ENOENT", "ENOTDIR", "ELOOP"].includes((error as NodeJS.ErrnoException).code || "")) return false;
+        throw error;
+      }
+    };
+    snapshot.commitLocalRepair = async () => {
+      assertExtensionNotAborted(signal);
+      if (!sourceUnchanged()) return null;
+      try {
+        const repair = prepareSyncedExtensionPackage(source.id, prepared.packagePath, captured, path.join(stagingRoot, "repair"), signal);
+        const repaired: ExtensionRepositoryEntry = { ...source, packageHash: captured.packageHash, manifestHash: captured.manifestHash };
+        const repositoryCommit = commitRepositoryUpdate(repair.stagedDir, current, repair.packagePath, path.join(repository, "package.zip"), (originalDirectory) => {
+          // A filesystem writer can edit the original after the prepublication
+          // guard. Recheck the moved original before its rescue copy is retired;
+          // compensation then restores those edits instead of deleting them.
+          const moved = originalDirectory ? captureExtensionTree(originalDirectory, signal) : [];
+          if (!sameExtensionTree(tree, moved) || tree.some((node, i) => node.name
+            ? !sameExtensionSourceStat(node.stat, moved[i].stat)
+            : node.stat.dev !== moved[i].stat.dev || node.stat.ino !== moved[i].stat.ino || node.stat.mode !== moved[i].stat.mode
+              || node.stat.size !== moved[i].stat.size || node.stat.mtimeMs !== moved[i].stat.mtimeMs)) {
+            throw new ExtensionSyncSourceChangedError("original repository content before repair commit");
+          }
+          // The guard belongs INSIDE the live draft transaction: never reinsert
+          // a deleted record or overwrite tags changed during publication.
+          transact((draft) => {
+            if (!isDeepStrictEqual(draft.extensionRepository?.[source.id], source)) throw new ExtensionSyncSourceChangedError("repository metadata before repair commit");
+            draft.extensionRepository[source.id] = repaired;
+          });
+        }, (activeUpdateDir) => {
+          assertExtensionNotAborted(signal);
+          if (!sourceUnchanged(activeUpdateDir)) throw new ExtensionSyncSourceChangedError("repository before repair publication");
+        });
+        return { ...repaired, repositoryCommit };
+      } catch (error) {
+        if (error instanceof ExtensionSyncSourceChangedError) return null;
+        throw error;
+      }
+    };
+  }
+  return snapshot;
+}
+
+export async function restoreSyncedExtensionPackage(extId: string, packagePath: string, remoteEntry: Partial<ExtensionRepositoryEntry>, signal?: AbortSignal): Promise<ExtensionRepositoryMutationResult> {
+  validateExtensionId(extId);
+  assertExtensionNotAborted(signal);
+  const repoDir = prepareRepositoryEntryDir(extId);
+  const tempDir = fs.mkdtempSync(path.join(repoDir, ".tmp-"));
+  let repositoryCommit: ExtensionRepositoryCommitReceipt | undefined;
+  try {
+    const prepared = prepareSyncedExtensionPackage(extId, packagePath, remoteEntry, path.join(tempDir, "prepared"), signal);
+    const { stagedDir, manifest, manifestHash, packageHash } = prepared;
     const finalUnpackedDir = path.join(repoDir, "current");
-    const isChromeStorePackage = remoteEntry.source === "chrome-web-store";
-    const finalPackagePath = path.join(repoDir, isChromeStorePackage ? "package.crx" : "package.zip");
+    const finalPackagePath = path.join(repoDir, remoteEntry.source === "chrome-web-store" ? "package.crx" : "package.zip");
     const previous = getRepositoryExtension(extId);
     const now = Date.now();
-    const manifestHash = crypto.createHash("sha512").update(manifestRaw).digest("hex");
-    const packageHash = hashFile(isChromeStorePackage ? resolved : (archivePath || resolved));
-    if (!/^[0-9a-f]{128}$/i.test(String(remoteEntry.manifestHash || ""))) {
-      throw new Error("Synced extension manifest hash is required");
-    }
-    if (!/^[0-9a-f]{128}$/i.test(String(remoteEntry.packageHash || ""))) {
-      throw new Error("Synced extension package hash is required");
-    }
-    if (remoteEntry.manifestHash !== manifestHash) {
-      throw new Error("Synced extension manifest hash does not match package contents");
-    }
-    if (remoteEntry.packageHash !== packageHash) {
-      throw new Error("Synced extension package hash does not match downloaded package");
-    }
     const entry: ExtensionRepositoryEntry = {
       id: extId,
-      name: typeof remoteEntry.name === "string" ? remoteEntry.name : resolveManifestText(stagingDir, manifest, "name") || manifest.name || extId,
+      name: typeof remoteEntry.name === "string" ? remoteEntry.name : resolveManifestText(stagedDir, manifest, "name") || manifest.name || extId,
       version: typeof remoteEntry.version === "string" ? remoteEntry.version : manifest.version || "?",
-      description: typeof remoteEntry.description === "string" ? remoteEntry.description : resolveManifestText(stagingDir, manifest, "description") || manifest.description || "",
+      description: typeof remoteEntry.description === "string" ? remoteEntry.description : resolveManifestText(stagedDir, manifest, "description") || manifest.description || "",
       source: remoteEntry.source === "chrome-web-store" ? "chrome-web-store" : "local",
       ...(typeof remoteEntry.chromeStoreUrl === "string" ? { chromeStoreUrl: remoteEntry.chromeStoreUrl } : {}),
       ...(typeof remoteEntry.updateUrl === "string" ? { updateUrl: remoteEntry.updateUrl } : {}),
@@ -371,35 +635,26 @@ export async function restoreSyncedExtensionPackage(extId: string, packagePath: 
       addedAt: previous?.addedAt || now,
       updatedAt: now,
     };
-
     assertExtensionNotAborted(signal);
-    const cfg = structuredClone(getConfig()) as any;
-    cfg.extensionRepository = cfg.extensionRepository || {};
-    cfg.extensionRepository[extId] = entry;
-    assertExtensionNotAborted(signal);
-    commitRepositoryUpdate(stagingDir, finalUnpackedDir, isChromeStorePackage ? resolved : archivePath, finalPackagePath, () => saveConfig(cfg));
-    return entry;
+    repositoryCommit = commitRepositoryUpdate(stagedDir, finalUnpackedDir, prepared.packagePath, finalPackagePath, () => saveRepositoryEntry(entry));
+    return { ...entry, repositoryCommit };
   } finally {
-    if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+    cleanupRepositoryStaging(tempDir, repositoryCommit);
   }
 }
 
 export function setRepositoryExtensionMeta(extId: string, opts: { shared?: boolean; tags?: string[] }): ExtensionRepositoryEntry {
   validateExtensionId(extId);
-  let result: any =null;
-  try {
-    const { transact } = require("./config/store.js");
-    transact((draft:any)=>{ const e=draft.extensionRepository?.[extId]; if(!e) throw new Error("Extension is not in the repository"); if(opts.shared!==undefined) e.shared=Boolean(opts.shared); if(opts.tags!==undefined) e.tags=normalizeTags(opts.tags); e.updatedAt=Date.now(); result=e; });
-    return result as ExtensionRepositoryEntry;
-  } catch(e:any){ if(e.message==="Extension is not in the repository") throw e; }
-  const cfg = structuredClone(getConfig()) as any;
-  const entry = cfg.extensionRepository?.[extId];
-  if (!entry) throw new Error("Extension is not in the repository");
-  if (opts.shared !== undefined) entry.shared = Boolean(opts.shared);
-  if (opts.tags !== undefined) entry.tags = normalizeTags(opts.tags);
-  entry.updatedAt = Date.now();
-  saveConfig(cfg);
-  return entry;
+  assertRepositoryTargetWritable(extId);
+  getConfig();
+  return transact((draft) => {
+    const entry = draft.extensionRepository?.[extId];
+    if (!entry) throw new Error("Extension is not in the repository");
+    if (opts.shared !== undefined) entry.shared = Boolean(opts.shared);
+    if (opts.tags !== undefined) entry.tags = normalizeTags(opts.tags);
+    entry.updatedAt = Date.now();
+    return entry as ExtensionRepositoryEntry;
+  });
 }
 
 export function exportSharedExtensionRepository(): Array<Pick<ExtensionRepositoryEntry, "id" | "name" | "version" | "description" | "source" | "chromeStoreUrl" | "shared" | "tags">> {
@@ -419,6 +674,20 @@ export const __extensionRepositoryTestHooks = {
   assertSafeZipEntries,
   extractZipSafely,
 };
+
+/** An archive may carry an enabled ID while the destination only has a stale
+ * repository record. Use the same launch-path checks as the browser, not just
+ * the presence of an entry in config.json, when reporting missing packages. */
+export function hasInstalledRepositoryExtension(extId: string): boolean {
+  const entry = getRepositoryExtension(extId);
+  if (!entry?.unpackedPath) return false;
+  try {
+    return isValidRepositoryLaunchPath(extId, entry.unpackedPath);
+  } catch (error) {
+    console.warn(`Extension repository package unavailable for ${extId}:`, error);
+    return false;
+  }
+}
 
 export function getEnabledRepositoryExtensionPaths(dirId: string): string[] {
   const cfg = getConfig() as any;
@@ -446,6 +715,11 @@ export function getExtensionRepoEntryDir(extId: string): string {
 
 function isValidRepositoryLaunchPath(extId: string, unpackedPath: string): boolean {
   validateExtensionId(extId);
+  try { assertRepositoryTargetWritable(extId); }
+  catch (error) {
+    if (error instanceof ExtensionRepositoryRecoveryRequiredError) return false;
+    throw error;
+  }
   const repoRoot = path.join(getAppDataDir(), "extension-repository");
   const entryDir = getExtensionRepoEntryDir(extId);
   const expectedPath = path.join(entryDir, "current");
@@ -603,36 +877,177 @@ function validateZipEntryName(entry: string): void {
   }
 }
 
-function commitRepositoryUpdate(stagedDir: string, finalDir: string, stagedPackage: string, finalPackage: string, save: () => void): void {
-  const suffix = `.backup-${process.pid}-${Date.now()}`;
-  const backupDir = `${finalDir}${suffix}`;
-  const backupPackage = `${finalPackage}${suffix}`;
-  let backupDirCreated = false;
-  let backupPackageCreated = false;
-  try {
-    if (fs.existsSync(finalDir)) {
-      fs.renameSync(finalDir, backupDir);
-      backupDirCreated = true;
-    }
-    if (fs.existsSync(finalPackage)) {
-      fs.renameSync(finalPackage, backupPackage);
-      backupPackageCreated = true;
-    }
-    fs.renameSync(stagedDir, finalDir);
-    if (stagedPackage && finalPackage) {
-      fs.copyFileSync(stagedPackage, finalPackage);
-      fs.chmodSync(finalPackage, 0o600);
-    }
-    save();
-    if (backupDirCreated) fs.rmSync(backupDir, { recursive: true, force: true });
-    if (backupPackageCreated) fs.rmSync(backupPackage, { force: true });
-  } catch (e) {
-    if (fs.existsSync(finalDir)) fs.rmSync(finalDir, { recursive: true, force: true });
-    if (fs.existsSync(finalPackage)) fs.rmSync(finalPackage, { force: true });
-    if (backupDirCreated && fs.existsSync(backupDir)) fs.renameSync(backupDir, finalDir);
-    if (backupPackageCreated && fs.existsSync(backupPackage)) fs.renameSync(backupPackage, finalPackage);
-    throw e;
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function statIfPresent(file: string): fs.Stats | null {
+  try { return fs.lstatSync(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
+}
+
+function assertRealDirectory(directory: string): void {
+  const stat = statIfPresent(directory);
+  if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw new Error(`Extension repository path is not a real directory: ${directory}`);
+}
+
+/** No writes, and no following an entry/root symlink while looking for rescue data. */
+function assertRepositoryTargetWritable(extId: string, activeUpdateDir?: string): void {
+  const entryDir = getExtensionRepoEntryDir(extId);
+  for (const directory of [getAppDataDir(), path.dirname(entryDir), entryDir]) assertRealDirectory(directory);
+  if (!statIfPresent(entryDir)) return;
+  for (const name of fs.readdirSync(entryDir)) {
+    if (!name.startsWith(".update-")) continue;
+    const updateDir = path.join(entryDir, name);
+    // Only the snapshot repair's own currently executing commit may be pending.
+    // All other rescue receipts retain the ordinary durable recovery guard.
+    if (updateDir === activeUpdateDir) continue;
+    const receiptPath = path.join(updateDir, "receipt.json");
+    let problem: string;
+    try {
+      const updateStat = fs.lstatSync(updateDir);
+      if (!updateStat.isDirectory() || updateStat.isSymbolicLink()) throw new Error("Update rescue path is not a real directory");
+      const receiptStat = fs.lstatSync(receiptPath);
+      if (!receiptStat.isFile() || receiptStat.isSymbolicLink() || receiptStat.size > 4096) throw new Error("Invalid extension update receipt");
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      if (receipt.version === 1 && receipt.extensionId === extId && receipt.state === "committed") continue;
+      problem = "An unfinished extension update needs manual review";
+    } catch (error) {
+      problem = `Cannot verify extension update receipt: ${errorMessage(error)}`;
+    }
+    throw new ExtensionRepositoryRecoveryRequiredError(extId, recoveryPaths(entryDir, updateDir), receiptPath, problem);
+  }
+}
+
+function prepareRepositoryEntryDir(extId: string): string {
+  assertRepositoryTargetWritable(extId);
+  const entryDir = getExtensionRepoEntryDir(extId);
+  fs.mkdirSync(getAppDataDir(), { recursive: true, mode: 0o700 });
+  for (const directory of [path.dirname(entryDir), entryDir]) {
+    if (!statIfPresent(directory)) fs.mkdirSync(directory, { mode: 0o700 });
+    assertRealDirectory(directory);
+  }
+  return entryDir;
+}
+
+function recoveryPaths(entryDir: string, updateDir: string): string[] {
+  return [path.join(entryDir, "current"), path.join(entryDir, "package.zip"), path.join(entryDir, "package.crx"),
+    path.join(updateDir, "current.backup"), path.join(updateDir, "package.backup"), updateDir];
+}
+
+function writeUpdateReceipt(updateDir: string, extensionId: string, state: "pending" | "committed" | "recovery-required"): void {
+  const temporary = path.join(updateDir, `receipt.tmp-${crypto.randomUUID()}`);
+  fs.writeFileSync(temporary, JSON.stringify({ version: 1, extensionId, state }), { mode: 0o600, flag: "wx" });
+  fs.renameSync(temporary, path.join(updateDir, "receipt.json"));
+}
+
+function cleanupWarning(file: string, error: unknown, receipt?: ExtensionRepositoryCommitReceipt): void {
+  const warning: ExtensionRepositoryCleanupWarning = {
+    code: "EXTENSION_REPOSITORY_CLEANUP_FAILED", path: file,
+    message: `Extension repository cleanup failed${receipt ? " after commit (installation remains committed)" : ""}: ${errorMessage(error)}`,
+  };
+  receipt?.cleanupWarnings.push(warning);
+  console.warn(`${warning.code}: ${warning.message}; retained path: ${file}`);
+}
+
+function cleanupRepositoryStaging(tempDir: string, receipt?: ExtensionRepositoryCommitReceipt): void {
+  // Rescue copies live in a separate exclusive .update-* sibling, never here.
+  // Cleanup cannot mask a primary error or turn committed success into failure.
+  try { fs.rmSync(tempDir, { recursive: true, force: true }); }
+  catch (error) { cleanupWarning(tempDir, error, receipt); }
+}
+
+function saveRepositoryEntry(entry: ExtensionRepositoryEntry): void {
+  transact((draft) => {
+    draft.extensionRepository = draft.extensionRepository || {};
+    draft.extensionRepository[entry.id] = entry;
+  });
+}
+
+function removePublishedResource(file: string, publishedStat: fs.Stats, directory: boolean): void {
+  const current = statIfPresent(file);
+  if (!current) return;
+  if (current.isSymbolicLink() || current.dev !== publishedStat.dev || current.ino !== publishedStat.ino) {
+    throw new Error(`Published extension resource changed identity; refusing to remove ${file}`);
+  }
+  fs.rmSync(file, { recursive: directory, force: true });
+}
+
+function restoreBackup(backup: string, destination: string): void {
+  if (statIfPresent(destination)) throw new Error(`Extension recovery destination is occupied: ${destination}`);
+  fs.renameSync(backup, destination);
+}
+
+function commitRepositoryUpdate(stagedDir: string, finalDir: string, stagedPackage: string, finalPackage: string, save: (originalDirectory?: string) => void, beforePublish?: (activeUpdateDir: string) => void): ExtensionRepositoryCommitReceipt {
+  const entryDir = path.dirname(finalDir);
+  const extId = path.basename(entryDir);
+  assertRepositoryTargetWritable(extId);
+  const oldDir = statIfPresent(finalDir);
+  const oldPackage = finalPackage ? statIfPresent(finalPackage) : null;
+  if (oldDir && (!oldDir.isDirectory() || oldDir.isSymbolicLink())) throw new Error("Extension current path is not a real directory");
+  if (oldPackage && (!oldPackage.isFile() || oldPackage.isSymbolicLink())) throw new Error("Extension package path is not a regular file");
+  const publishedDirStat = fs.lstatSync(stagedDir);
+  // Dedicated sibling of extraction staging: outer finally must never delete
+  // the only original copy following a failed compensation.
+  const updateDir = fs.mkdtempSync(path.join(entryDir, ".update-"));
+  const backupDir = path.join(updateDir, "current.backup");
+  const backupPackage = path.join(updateDir, "package.backup");
+  const preparedPackage = path.join(updateDir, "package.new");
+  let publishedPackageStat: fs.Stats | undefined;
+  let oldDirMoved = false;
+  let oldPackageMoved = false;
+  let newDirPublished = false;
+  let newPackagePublished = false;
+  try {
+    writeUpdateReceipt(updateDir, extId, "pending");
+    if (stagedPackage && finalPackage) {
+      // Copy/chmod before moving originals. Even a partially failed copy is
+      // isolated, and publication itself is an ownership-tracked rename.
+      fs.copyFileSync(stagedPackage, preparedPackage, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(preparedPackage, 0o600);
+      publishedPackageStat = fs.lstatSync(preparedPackage);
+    }
+    // Optional snapshot CAS guard runs after fallible staging, before originals
+    // move. Existing install/restore callers retain their R1 commit semantics.
+    beforePublish?.(updateDir);
+    if (oldDir) { fs.renameSync(finalDir, backupDir); oldDirMoved = true; }
+    if (oldPackage) { fs.renameSync(finalPackage, backupPackage); oldPackageMoved = true; }
+    fs.renameSync(stagedDir, finalDir);
+    newDirPublished = true;
+    if (publishedPackageStat) { fs.renameSync(preparedPackage, finalPackage); newPackagePublished = true; }
+    save(oldDirMoved ? backupDir : undefined);
+  } catch (error) {
+    const failures: string[] = [];
+    const compensate = (label: string, action: () => void) => {
+      try { action(); } catch (compensationError) { failures.push(`${label}: ${errorMessage(compensationError)}`); }
+    };
+    if (newDirPublished) compensate("remove published directory", () => removePublishedResource(finalDir, publishedDirStat, true));
+    if (newPackagePublished) compensate("remove published package", () => removePublishedResource(finalPackage, publishedPackageStat!, false));
+    if (oldDirMoved) compensate("restore original directory", () => restoreBackup(backupDir, finalDir));
+    if (oldPackageMoved) compensate("restore original package", () => restoreBackup(backupPackage, finalPackage));
+    if (failures.length === 0) compensate("remove rolled-back update staging", () => fs.rmSync(updateDir, { recursive: true, force: true }));
+    if (failures.length > 0) {
+      // Leave both the old bytes and the pending receipt in place if even the
+      // recovery-state write fails. Any unfinished/invalid receipt blocks retry.
+      compensate("record recovery state", () => writeUpdateReceipt(updateDir, extId, "recovery-required"));
+      throw new ExtensionRepositoryRecoveryRequiredError(extId, recoveryPaths(entryDir, updateDir), path.join(updateDir, "receipt.json"), failures.join("; "), error);
+    }
+    throw error;
+  }
+
+  // Config's successful transaction is the boundary. Nothing below may enter
+  // compensation, retry a failed cleanup, or remove a still-needed old copy.
+  const receipt: ExtensionRepositoryCommitReceipt = { committed: true, cleanupWarnings: [] };
+  try { writeUpdateReceipt(updateDir, extId, "committed"); }
+  catch (error) { cleanupWarning(updateDir, error, receipt); return receipt; }
+  for (const file of [...(oldDirMoved ? [backupDir] : []), ...(oldPackageMoved ? [backupPackage] : []), updateDir]) {
+    try { fs.rmSync(file, { recursive: true, force: true }); }
+    catch (error) { cleanupWarning(file, error, receipt); break; }
+  }
+  return receipt;
 }
 
 function validateExtractedExtension(rootDir: string): void {
@@ -642,9 +1057,9 @@ function validateExtractedExtension(rootDir: string): void {
     const current = stack.pop()!;
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const entryPath = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("Extension archive contains symlinks");
       const entryReal = fs.realpathSync(entryPath);
       if (!isPathInside(entryReal, rootReal)) throw new Error("Extension archive contains files outside target directory");
-      if (entry.isSymbolicLink()) throw new Error("Extension archive contains symlinks");
       if (entry.isDirectory()) stack.push(entryPath);
     }
   }

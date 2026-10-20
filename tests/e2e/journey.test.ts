@@ -5,16 +5,22 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { _electron as electron, ElectronApplication, Page } from "playwright";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { clickCardAction, clickCmd } from "./helpers/find.js";
+import * as os from "node:os";
+import { acceptConfirm, clickCmd } from "./helpers/find.js";
+import { resolveElectronBinary } from "./helpers/app.js";
+import { buildIsolatedTestLaunchEnv } from "./helpers/launch-env.js";
+import type { AccountReference } from "../../src/renderer/api.js";
 
 const REPO = path.resolve(__dirname, "../..");
-const MAIN = path.join(REPO, "dist", "main", "index.js");
-const SHOTS = path.join(REPO, "tests", "e2e", "screenshots");
-fs.mkdirSync(SHOTS, { recursive: true });
+const SANDBOX_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "abs-journey-"));
+const SHOTS = path.join(SANDBOX_ROOT, "screenshots");
+const SANDBOX_USER_DATA = path.join(SANDBOX_ROOT, "userdata");
+fs.mkdirSync(SHOTS);
+fs.mkdirSync(SANDBOX_USER_DATA);
 
-const SANDBOX_USER_DATA = path.join(REPO, "tests", "e2e", "userdata");
-fs.rmSync(SANDBOX_USER_DATA, { recursive: true, force: true });
-fs.mkdirSync(SANDBOX_USER_DATA, { recursive: true });
+function storedConfig() {
+  return JSON.parse(fs.readFileSync(path.join(SANDBOX_USER_DATA, "config.json"), "utf8"));
+}
 
 let app: ElectronApplication;
 let page: Page;
@@ -27,10 +33,17 @@ async function shot(name: string) {
 
 async function closeAllDialogs() {
   await page.evaluate(() => {
-    document.querySelectorAll("dialog").forEach((d) => {
-      try { if ((d as HTMLDialogElement).open) (d as HTMLDialogElement).close(); } catch (_) {}
+    document.querySelectorAll<HTMLDialogElement>("dialog:not([data-no-close])").forEach((d) => {
+      if (d.open) d.close();
     });
   });
+}
+
+async function clickProfileMenuAction(action: string) {
+  const card = page.locator("#profile-list .profile-card").first();
+  const button = card.locator(`[data-action="${action}"]`).first();
+  if (!await button.isVisible()) await card.locator("details.card-menu > summary").click();
+  await button.click({ timeout: 5000 });
 }
 
 // All 8 tabs by their data-tab attribute
@@ -40,17 +53,11 @@ describe("E2E — Agent Browser Studio user journey", () => {
   beforeAll(async () => {
     app = await electron.launch({
       args: [REPO, `--user-data-dir=${SANDBOX_USER_DATA}`],
-      executablePath: path.join(
-        REPO,
-        "node_modules",
-        "electron",
-        "dist",
-        "Electron.app",
-        "Contents",
-        "MacOS",
-        "Electron",
-      ),
-      env: { ...process.env, ELECTRON_DISABLE_GPU: "1" },
+      executablePath: resolveElectronBinary(REPO),
+      env: buildIsolatedTestLaunchEnv({
+        userDataDir: SANDBOX_USER_DATA,
+        fixtureEnv: { AGENT_BROWSER_SECRET_BACKEND: "file" },
+      }),
       timeout: 30000,
     });
     page = await app.firstWindow({ timeout: 20000 });
@@ -70,6 +77,20 @@ describe("E2E — Agent Browser Studio user journey", () => {
       (window as any).wizardDismissed = true;
       try { localStorage.setItem("agent-browser-studio-wizard-dismissed", "1"); } catch (_) {}
     });
+
+    // This is a fresh owned fixture, so mandatory terms must appear. A one-shot
+    // isVisible() races the async status load and leaves the modal over all tabs.
+    // Wait for the actual UI and accept it; never force-close or bypass terms.
+    const terms = page.locator("#dlg-terms");
+    await terms.waitFor({ state: "visible", timeout: 20000 });
+    await page.locator("#terms-ack").check();
+    await page.locator("#terms-accept-btn").click();
+    await terms.waitFor({ state: "hidden", timeout: 5000 });
+    expect(await page.evaluate(() => ({
+      stored: localStorage.getItem("agent-browser-studio-terms-accepted-v1"),
+      accepted: (window as any).agentBrowser.termsAccepted(),
+      open: (document.getElementById("dlg-terms") as HTMLDialogElement).open,
+    }))).toEqual({ stored: "1", accepted: true, open: false });
 
     // First-run wizard may auto-open — dismiss it so it doesn't intercept clicks
     try {
@@ -273,7 +294,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
     // A profile card must exist from the earlier save test
     const noteCard = page.locator("#profile-list .profile-card").first();
     expect(await noteCard.count(), "profile card missing before adding a note").toBeGreaterThan(0);
-    await clickCardAction(noteCard, "note");
+    await clickProfileMenuAction("note");
     await page.waitForSelector("#dlg-note", { state: "visible", timeout: 5000 });
 
     const noteText = "E2E journey note " + Date.now();
@@ -286,6 +307,11 @@ describe("E2E — Agent Browser Studio user journey", () => {
     const profiles = await page.evaluate(() => (window as any).agentBrowser.api.browser.list());
     const withNote = (profiles || []).filter((p: any) => p.note === noteText);
     expect(withNote.length, "note was not persisted to the profile").toBe(1);
+    expect(storedConfig().browserProfiles[withNote[0].dirId].note).toBe(noteText);
+    await page.reload();
+    await page.waitForFunction(() => (window as any).agentBrowser?.api?.browser);
+    const reloaded = await page.evaluate(() => (window as any).agentBrowser.api.browser.list());
+    expect(reloaded.find((p: any) => p.dirId === withNote[0].dirId)?.note).toBe(noteText);
     await shot("12-note-saved");
   });
 
@@ -296,7 +322,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
     await page.waitForTimeout(300);
     const cookieCard = page.locator("#profile-list .profile-card").first();
     expect(await cookieCard.count(), "profile card missing before opening cookies").toBeGreaterThan(0);
-    await clickCardAction(cookieCard, "cookies");
+    await clickProfileMenuAction("cookies");
     await page.waitForSelector("#dlg-cookies", { state: "visible", timeout: 5000 });
     // The search input should be present and focusable
     await page.locator("#cookie-search").fill("example", { timeout: 5000 });
@@ -342,22 +368,35 @@ describe("E2E — Agent Browser Studio user journey", () => {
       (a: any) => a.platformUrl === "https://example-shop.test",
     );
     expect(idx, "account to delete not found").toBeGreaterThanOrEqual(0);
+    const selected = before[idx];
+    if (!selected) throw new Error("account missing before deleting selected row");
+    const ref: AccountReference = selected.ref;
 
-    // Drive deletion through the real product path (page dialog confirm handler)
-    await page.evaluate(async (i: number) => {
-      // Bypass the JS confirm() prompt by directly invoking the IPC delete,
-      // which is what the confirm handler does after the user clicks OK.
-      const api = (window as any).agentBrowser.api;
-      await api.agent.accounts.delete(i);
-      await (window as any).agentBrowser.agentLoadAccounts();
-    }, idx);
-    await page.waitForTimeout(500);
+    // Use the displayed row's original reference and the actual confirmation UI.
+    const deleteButton = page.locator(
+      `#accounts-tab-list [data-cmd="agentDeleteAccount"][data-cmd-arg='${JSON.stringify(ref)}']`,
+    );
+    expect(await deleteButton.count()).toBe(1);
+    await deleteButton.click({ timeout: 5000 });
+    await page.locator("#dlg-confirm[open]").waitFor({ state: "visible" });
+    expect(storedConfig().accounts.some((a: any) => a.platformUrl === "https://example-shop.test")).toBe(true);
+    await acceptConfirm(page);
+    await page.waitForFunction(async () => {
+      const accounts = await (window as any).agentBrowser.api.agent.accounts.list();
+      return !accounts.some((a: any) => a.platformUrl === "https://example-shop.test");
+    });
 
     const after = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
     const stillThere = (after || []).some(
       (a: any) => a.platformUrl === "https://example-shop.test",
     );
     expect(stillThere, "account was not deleted").toBe(false);
+    expect(storedConfig().accounts.some((a: any) => a.platformUrl === "https://example-shop.test")).toBe(false);
+    await page.reload();
+    await page.waitForFunction(() => (window as any).agentBrowser?.api?.agent);
+    await page.locator('.nav-item[data-tab="accounts"]').click();
+    const reloaded = await page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.list());
+    expect(reloaded.some((a: any) => a.platformUrl === "https://example-shop.test")).toBe(false);
     await shot("15-account-deleted");
   });
 
@@ -414,6 +453,7 @@ describe("E2E — Agent Browser Studio user journey", () => {
     if (!(await page.locator("#sync-enabled").isChecked())) {
       await page.locator("#sync-enabled").check();
     }
+    await page.locator("#sync-custody-consent").check();
     await page.locator("#sync-endpoint-input").fill("https://s3.example.test", { timeout: 5000 });
     await page.locator("#sync-bucket-input").fill("e2e-bucket", { timeout: 5000 });
     await page.locator('#tab-sync [data-cmd="syncSave"]').click({ timeout: 5000 });
@@ -423,9 +463,26 @@ describe("E2E — Agent Browser Studio user journey", () => {
     expect(status?.enabled, "sync not enabled after save").toBe(true);
     expect(status?.endpoint, "endpoint not persisted").toBe("https://s3.example.test");
     expect(status?.bucket, "bucket not persisted").toBe("e2e-bucket");
-    // The status text in the UI should reflect enabled
+    const persisted = storedConfig().sync;
+    expect(persisted.enabled).toBe(true);
+    expect(persisted.endpoint).toBe("https://s3.example.test");
+    expect(persisted.bucket).toBe("e2e-bucket");
+    expect(persisted.custodyConsentAt).toBeGreaterThan(0);
+    await page.reload();
+    await page.waitForFunction(() => (window as any).agentBrowser?.api?.sync);
+    await page.locator('.nav-item[data-tab="sync"]').click();
+    await page.waitForFunction(() =>
+      (document.getElementById("sync-endpoint-input") as HTMLInputElement | null)?.value === "https://s3.example.test",
+    );
+    const reloaded = await page.evaluate(() => (window as any).agentBrowser.api.sync.status());
+    expect(reloaded.enabled).toBe(true);
+    expect(reloaded.endpoint).toBe("https://s3.example.test");
+    expect(reloaded.bucket).toBe("e2e-bucket");
+    expect(await page.locator("#sync-custody-consent").isChecked()).toBe(true);
+    // Compare with the active locale rather than requiring English UI text.
     const enabledText = await page.locator("#sync-enabled-text").innerText();
-    expect(enabledText.toLowerCase()).toContain("enabled");
+    const expectedText = await page.evaluate(() => (window as any).i18n.t("sync.status.enabled"));
+    expect(enabledText).toBe(expectedText);
     await shot("18-sync-saved");
 
     // Disable sync again to leave a clean state

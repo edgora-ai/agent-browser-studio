@@ -195,7 +195,7 @@ function makeHarness() {
       })),
       exportWrite: vi.fn(async (args: any) => { exportWriteCalls.push(args); return { ok: true, bytes: 2048, path: "/tmp/out.csv" }; }),
       delete: vi.fn(async () => ({ success: true })),
-      clear: vi.fn(async () => ({ success: true, deleted: 0 })),
+      clear: vi.fn(async () => ({ success: true, deleted: 0, skipped: 0 })),
     },
     automation: { retryRun: vi.fn(async () => ({ ok: true, runId: "run-new" })), retryJob: vi.fn(async () => ({ attempted: 0, failed: [], succeeded: 0 })) },
     on(channel: string, cb: (payload: any) => void) {
@@ -773,6 +773,52 @@ describe("M2 renderer: id space", () => {
   });
 });
 
+describe("F05 renderer: live run protection", () => {
+  it("omits delete for running standalone and grouped rows, but retains terminal delete", async () => {
+    const h = makeHarness();
+    const group = { type: "automation", jobId: "job-f05", ruleId: "rule-f05" };
+    h.api.agentRuns.list.mockResolvedValue([
+      makeRun({ id: "run-live", status: "running", finishedAt: undefined, source: { type: "chat" } }),
+      makeRun({ id: "group-live", status: "running", finishedAt: undefined, source: group }),
+      makeRun({ id: "group-done", status: "done", source: group }),
+    ]);
+    h.agentBrowser.loadRunsTab();
+    await flush();
+    const html = h.elements["agent-run-list"].innerHTML;
+    expect(html.match(/data-run-action="delete"/g)).toHaveLength(1);
+    expect(html).toContain('data-run-id="run-live"');
+    expect(html).toContain('data-run-id="group-live"');
+    expect(html).toContain('data-run-id="group-done"');
+    h.agentBrowser.runsDelete("run-live");
+    expect(h.api.agentRuns.delete).not.toHaveBeenCalled();
+    expect(h.agentBrowser.confirm).not.toHaveBeenCalled();
+    expect(h.agentBrowser.helpers.toast).toHaveBeenCalledWith(label("runs.toast.active-delete"), "info");
+    h.agentBrowser.runsDelete("group-done");
+    await flush();
+    expect(h.api.agentRuns.delete).toHaveBeenCalledWith("group-done");
+  });
+
+  it("reports real cleared/skipped counts and refuses false success on stale deletes", async () => {
+    const h = makeHarness();
+    h.api.agentRuns.list.mockResolvedValue([makeRun({ id: "race-run" })]);
+    h.agentBrowser.loadRunsTab();
+    await flush();
+    h.api.agentRuns.delete.mockResolvedValue({ success: false, reasonCode: "active", error: "Cannot delete a running run" });
+    h.agentBrowser.runsDelete("race-run");
+    await flush();
+    expect(h.agentBrowser.helpers.toast).toHaveBeenCalledWith("Cannot delete a running run", "error");
+    expect(h.agentBrowser.helpers.toast).not.toHaveBeenCalledWith(label("runs.toast.deleted"), "success");
+    h.api.agentRuns.clear.mockResolvedValue({ success: true, deleted: 1, skipped: 2 });
+    h.agentBrowser.runsClear();
+    await flush();
+    expect(h.agentBrowser.confirm.mock.calls.at(-1)?.[0]).toBe(label("runs.confirm.clear-all"));
+    expect(h.agentBrowser.helpers.toast).toHaveBeenCalledWith(
+      label("runs.toast.cleared-n").replace("{n}", "1") + "; " + label("runs.toast.clear-skipped").replace("{n}", "2"),
+      "success",
+    );
+  });
+});
+
 describe("M2 renderer: i18n wiring", () => {
   const M2_KEY = /^(runs\.|agent\.run\.(passed|partial|failed|manual-review|unverified)$|agent\.end\.|common\.(prev|next)$)/;
 
@@ -841,5 +887,70 @@ describe("M2 renderer: i18n wiring", () => {
     // silently reverts in the packaged app.
     const root = fs.readFileSync(path.join(ROOT, "i18n.js"));
     expect(root.equals(Buffer.from(I18N_RENDERER))).toBe(true);
+  });
+});
+
+// Retention is not a newest-N slice: an old active run survives ahead of newer
+// finished runs, and an entirely protected history can temporarily exceed 200.
+describe("M2 renderer: truthful retention disclosure", () => {
+  it("matches oldest-finished-first retention without promising a hard maximum", async () => {
+    const { retainAgentRuns } = await import("../../src/main/services/agent-run-retention.js");
+    const finished = Array.from({ length: 200 }, (_, i) => makeRun({ id: `finished-${i}`, startedAt: i + 1 }));
+    const active = makeRun({ id: "old-active", status: "running", startedAt: 0, finishedAt: undefined, endReason: undefined });
+    const mixed = retainAgentRuns([active, ...finished], 200);
+    expect(mixed.kept.map((run) => run.id)).toEqual(["old-active", ...finished.slice(1).map((run) => run.id)]);
+    expect(mixed.dropped.map((run) => run.id)).toEqual(["finished-0"]);
+    const terminal = retainAgentRuns([makeRun({ id: "old-finished", startedAt: 0 }), ...finished], 200);
+    expect(terminal.kept.map((run) => run.id)).toEqual(finished.map((run) => run.id));
+    expect(terminal.dropped.map((run) => run.id)).toEqual(["old-finished"]);
+    const protectedRuns = Array.from({ length: 201 }, (_, i) => makeRun({ id: `active-${i}`, status: "running", finishedAt: undefined }));
+    expect(retainAgentRuns(protectedRuns, 200)).toEqual({ kept: protectedRuns, dropped: [] });
+
+    // Use actual retained rows with the existing whole Runs module. Copy-only
+    // repair must not change the list, filtering, or truthful visible counts.
+    const h = makeHarness();
+    h.api.agentRuns.list.mockResolvedValue(mixed.kept);
+    await h.agentBrowser.loadRunsTab();
+    await flush();
+    expect([...h.elements["agent-run-list"].innerHTML.matchAll(/data-run-id="([^"]+)"/g)].map((m) => m[1]).sort())
+      .toEqual(mixed.kept.map((run) => run.id).sort());
+    expect(h.elements["run-filter-summary"].textContent).toBe(label("runs.filter.all-shown").replace("{n}", "200"));
+    h.elements["run-filter-name"].value = "no-such-retained-run";
+    await h.agentBrowser.loadRunsTab();
+    await flush();
+    expect(h.elements["run-filter-summary"].textContent).toBe(label("runs.filter.filtered").replace("{shown}", "0").replace("{total}", "200"));
+  });
+
+  it("renders the qualified policy from both real merged locales and the fallback", () => {
+    const expected: Record<string, string> = {
+      "en-US": "Normally up to 200 runs are kept; oldest finished runs are removed first, active runs are protected",
+      "zh-CN": "通常保留最多 200 条运行记录；优先移除最早已结束的记录，保护运行中的记录",
+    };
+    const match = INDEX_HTML.match(/<span class="run-filter-retention" data-i18n="runs\.filter\.retention">([^<]+)<\/span>/);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe(expected["zh-CN"]);
+    for (const source of [I18N_RENDERER, fs.readFileSync(path.join(ROOT, "i18n.js"), "utf8")]) {
+      const notice = new FakeElement("retention-notice");
+      notice.setAttribute("data-i18n", "runs.filter.retention");
+      notice.textContent = match![1];
+      const dom: any = {
+        documentElement: { lang: "" },
+        querySelectorAll: (selector: string) => selector === "[data-i18n]" ? [notice] : [],
+        querySelector: () => null, addEventListener: () => {}, dispatchEvent: () => true,
+      };
+      const window: any = { document: dom, navigator: { language: "en-US" }, localStorage: { getItem: () => null, setItem: () => {} } };
+      const ctx: any = { window, document: dom, navigator: window.navigator, localStorage: window.localStorage, CustomEvent: class {}, setTimeout, console };
+      vm.createContext(ctx);
+      vm.runInContext(source, ctx);
+      for (const lang of ["en-US", "zh-CN", "en-US"]) {
+        window.i18n.set(lang);
+        expect(window.i18n.t("runs.filter.retention", "missing-translation")).toBe(expected[lang]);
+        expect(notice.textContent).toBe(expected[lang]);
+        expect(window.i18n.t("runs.filter.all-shown")).toBe(lang === "en-US" ? "{n} record(s)" : "共 {n} 条");
+        expect(window.i18n.t("runs.filter.filtered")).toBe(lang === "en-US" ? "Showing {shown} / {total}" : "筛选出 {shown} / {total} 条");
+        expect(window.i18n.t("common.next")).toBe(lang === "en-US" ? "Next" : "下一页");
+        expect(window.i18n.t("runs.toast.active-delete")).not.toBe("runs.toast.active-delete");
+      }
+    }
   });
 });

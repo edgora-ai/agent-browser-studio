@@ -4,6 +4,7 @@ import * as net from "node:net";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { getPath: () => process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}` },
+  app: { getPath: () => process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`) },
   BrowserWindow: { getAllWindows: () => [] },
   safeStorage: {
     isEncryptionAvailable: () => false,
@@ -22,13 +23,20 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../src/main/services/config-manager.js", () => ({
-  getAppDataDir: () => process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}`,
+  getAppDataDir: () => process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`),
   getConfig: () => ({ accounts: mocks.accounts, agentFs: { mode: "sandbox", allowlist: [] }, automation: [], browserProfiles: {} }),
   saveConfig: vi.fn(),
   getProfileMeta: (dirId: string) => {
     const profile = mocks.profiles.find((candidate) => candidate.dirId === dirId);
     return profile ? { name: profile.name, engine: profile.engine } : null;
   },
+}));
+vi.mock("../../src/main/services/config/store.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/main/services/config/store.js")>(),
+  readAccountSnapshot: () => ({
+    accounts: structuredClone(mocks.accounts),
+    revision: "24600000-0000-4000-8000-000000000001",
+  }),
 }));
 vi.mock("../../src/main/services/browser-manager.js", () => ({
   launchBrowser: vi.fn(),
@@ -240,8 +248,10 @@ async function startMockCdp(options: {
         mock.beforeRespond?.(call);
         if (ws.readyState !== ws.OPEN) return;
         const result = message.method === "Runtime.evaluate"
-          ? { result: { value: message.params?.expression === "document.title" ? "Mock title" : 1 } }
-          : {};
+          ? { result: { value: message.params?.expression === "document.title" ? "Mock title" : message.params?.expression === "document.readyState" ? "loading" : 1 } }
+          : message.method === "Page.getFrameTree" ? { frameTree: { frame: { id: "fake-root", loaderId: "fake-loader" } } }
+            : message.method === "Page.createIsolatedWorld" ? { executionContextId: 1 }
+              : {};
         ws.send(JSON.stringify({ id: message.id, result }));
       };
       if (CONNECT_METHODS.has(message.method)) {
@@ -282,7 +292,9 @@ function fakeCdpClient(port: number): { client: CdpClient; sent: WireCall[] } {
         if (!callback) return;
         client.callbacks.delete(message.id);
         clearTimeout(callback.timer);
-        callback.resolve({});
+        callback.resolve(message.method === "Page.getFrameTree" ? { frameTree: { frame: { id: "fake-root", loaderId: "fake-loader" } } }
+          : message.method === "Page.createIsolatedWorld" ? { executionContextId: 1 }
+            : message.method === "Runtime.evaluate" && message.params?.expression === "document.readyState" ? { result: { value: "loading" } } : {});
       });
     },
   });
@@ -314,7 +326,7 @@ afterEach(async () => {
 
 describe("M1 local-agent message metadata wrapper", () => {
   it("writes metadata, verifies the file, and returns the committed readback", () => {
-    const dataDir = process.env.M1_AGENT_TEST_DATA || `/tmp/m1-agent-scope-test-${process.pid}`;
+    const dataDir = process.env.M1_AGENT_TEST_DATA || path.join(os.tmpdir(), `m1-agent-scope-test-${process.pid}`);
     const historyPath = path.join(dataDir, "agent-conversations.json");
     fs.mkdirSync(dataDir, { recursive: true });
     fs.rmSync(historyPath, { force: true });
@@ -421,9 +433,9 @@ describe("M1 scoped tool catalog and backend enforcement", () => {
     registerProfile("profile-a", "A", 42001);
     registerProfile("profile-b", "B", 42002);
     mocks.accounts = [
+      { platformUrl: "https://b.example", platformUserName: "bob", platformPassword: "v2:SYNTHETIC_BOB", profileIds: ["profile-b"] },
       { platformUrl: "https://shared.example", platformUserName: "shared" },
-      { platformUrl: "https://a.example", platformUserName: "alice", profileIds: ["profile-a"] },
-      { platformUrl: "https://b.example", platformUserName: "bob", profileIds: ["profile-b"] },
+      { platformUrl: "https://a.example", platformUserName: "alice", platformPassword: "v2:SYNTHETIC_ALICE", profileIds: ["profile-a"], tags: ["synthetic"] },
     ];
     const scope = captureChatBrowserScope("profile-a")!;
 
@@ -431,6 +443,15 @@ describe("M1 scoped tool catalog and backend enforcement", () => {
     expect(profiles.profiles.map((profile: any) => profile.dirId)).toEqual(["profile-a"]);
     const accounts = await executeToolCall("list_accounts", {}, undefined, { browserScope: scope });
     expect(accounts.accounts.map((account: any) => account.username)).toEqual(["shared", "alice"]);
+    expect(accounts.accounts.map((account: any) => account.ref)).toEqual([
+      { index: 1, revision: "24600000-0000-4000-8000-000000000001" },
+      { index: 2, revision: "24600000-0000-4000-8000-000000000001" },
+    ]);
+    expect(accounts.accounts.map((account: any) => account.hasPassword)).toEqual([false, true]);
+    expect(accounts.accounts.every((account: any) => !("platformPassword" in account))).toBe(true);
+    expect(JSON.stringify(accounts)).not.toContain("SYNTHETIC_");
+    accounts.accounts[1].tags.push("detached");
+    expect(mocks.accounts[2].tags).toEqual(["synthetic"]);
     expect(await executeToolCall("list_profiles", {}, undefined, { browserScope: null })).toEqual({ profiles: [] });
     expect(await executeToolCall("list_accounts", {}, undefined, { browserScope: null })).toEqual({ accounts: [] });
   });
@@ -666,7 +687,7 @@ describe("M1 CDP dispatch boundary", () => {
   });
 
   it("keeps each load-event wait bound to the guard that started it", async () => {
-    const loadEvent = Buffer.from(JSON.stringify({ method: "Page.loadEventFired", params: {} }));
+    const loadEvent = Buffer.from(JSON.stringify({ method: "Page.lifecycleEvent", params: { name: "load", frameId: "fake-root", loaderId: "fake-loader" } }));
 
     const { client: healthyB } = fakeCdpClient(42010);
     const waitForHealthyB = runWithProtocolDispatchGuard(() => {}, () => cdpWaitForLoad(healthyB, 1000));

@@ -6,6 +6,7 @@
 // display stays fixed — no stale emulated viewport overlay.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import type { LaunchResult } from "../../src/main/types.js";
 import {
   setupTestApp,
   closeApp,
@@ -23,6 +24,24 @@ import { shot, closeAllDialogs, filterKnownConsoleErrors } from "./helpers/diag.
 
 const REPO = path.resolve(__dirname, "..", "..");
 const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j71");
+
+type BrowserLaunchResponse =
+  | ({ success: true; error?: string } & LaunchResult)
+  | { success: false; error?: string };
+
+function assertBrowserLaunchResponse(value: unknown): asserts value is BrowserLaunchResponse {
+  if (typeof value !== "object" || value === null
+      || !("success" in value) || typeof value.success !== "boolean"
+      || ("error" in value && value.error !== undefined && typeof value.error !== "string")) {
+    throw new Error("Malformed browser launch response");
+  }
+  if (value.success
+      && (!("pid" in value) || typeof value.pid !== "number" || !Number.isInteger(value.pid) || value.pid <= 0
+          || !("cdpPort" in value) || typeof value.cdpPort !== "number"
+          || !Number.isInteger(value.cdpPort) || value.cdpPort <= 0 || value.cdpPort > 65535)) {
+    throw new Error("Successful browser launch response must include a valid pid and cdpPort");
+  }
+}
 
 interface Geo {
   innerWidth: number;
@@ -66,11 +85,13 @@ describe("J71 — window-geometry self-consistency", () => {
     });
     expect(r.dirId).toBeTruthy();
     dirId = r.dirId;
-    const lr = (await h.page.evaluate(
+    const lr: unknown = await h.page.evaluate(
       async (id: string) => (window as any).agentBrowser.api.browser.launch(id),
       dirId,
-    )) as { success: boolean; cdpPort: number; error?: string };
+    );
+    assertBrowserLaunchResponse(lr);
     expect(lr.success, lr.error || "launch failed").toBe(true);
+    if (!lr.success) throw new Error(lr.error || "launch failed");
     cdpPort = lr.cdpPort;
     h.cdpPort = cdpPort;
     h.cdpPids.push(lr.pid);

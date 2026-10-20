@@ -5,13 +5,14 @@
 // message reports how many entries were adopted from remote.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j62");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j62-sync-merge-"));
 const CONFIG_KEY = "agent-browser-studio-config.json";
 
 function startMockS3(): Promise<{ port: number; get: (key: string) => Buffer | undefined; put: (key: string, body: Buffer) => void; close: () => Promise<void> }> {
@@ -60,6 +61,11 @@ function readRemoteData(s3: any): { payload: any; data: any } {
 }
 
 function writeRemoteData(s3: any, payload: any, data: any): void {
+  // Simulate a legacy writer for these hand-authored merge fixtures. New-format
+  // proof cannot survive arbitrary edits; real V2 publishers are tested separately.
+  delete payload.artifactVersion;
+  delete payload.snapshotId;
+  for (const profile of Object.values(data.browserProfiles || {}) as any[]) delete profile.syncBaseline;
   payload.data = zlib.gzipSync(JSON.stringify(data, null, 2)).toString("base64");
   payload.timestamp = Date.now() + 1000;
   s3.put(CONFIG_KEY, Buffer.from(JSON.stringify(payload)));
@@ -73,13 +79,15 @@ describe("J62 — sync pull merge strategy", () => {
   beforeAll(async () => {
     s3 = await startMockS3();
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
+    const configured = await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
       enabled: true,
       endpoint: "http://127.0.0.1:" + s3.port,
       bucket: "bucket",
       accessKey: "testak",
       secretKey: "testsk",
+      custodyConsent: true,
     });
+    expect(configured.success).toBe(true);
     const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J62", platform: "windows", fingerprintSeed: 62626 }));
     dirId = r.dirId;
     const push = await h.page.evaluate(() => (window as any).agentBrowser.api.sync.push());
@@ -90,6 +98,8 @@ describe("J62 — sync pull merge strategy", () => {
   afterAll(async () => {
     if (h) await closeApp(h);
     if (s3) await s3.close();
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j62-sync-merge-")) throw new Error("Unsafe J62 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("default pull is local-wins: conflict keeps local, remote-only data imported", async () => {

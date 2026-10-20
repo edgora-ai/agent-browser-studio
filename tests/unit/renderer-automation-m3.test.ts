@@ -72,6 +72,7 @@ class FakeElement {
   children: FakeElement[] = [];
   parentNode: FakeElement | null = null;
   listeners: Record<string, Array<(event: any) => void>> = {};
+  onchange?: (event: any) => void;
   classList = { add: vi.fn(), remove: vi.fn(), contains: vi.fn(() => false), toggle: vi.fn() };
 
   constructor(id: string) { this.id = id; }
@@ -346,16 +347,49 @@ describe("M3 renderer: the card renders the scheduler's phase", () => {
     expect(h.elements["automation-list"].innerHTML).toContain(ZH.t("auto.row.plan-none"));
   });
 
-  it("still renders the rules when the state call fails", async () => {
-    // A state failure must degrade to "no badge", never hide the rules — the
-    // user still needs to edit or delete them.
+  it("still renders the rules with an unavailable phase when the state call fails", async () => {
+    // A rejected read is terminal, not ongoing Loading. Keep edit/delete
+    // usable, but do not invent a phase or unlock reschedule without state.
     const h = makeHarness({ rules: [rule({ name: "Still here" })] });
+    const before = JSON.stringify(h.rules);
+    h.api.automation.update = vi.fn();
     h.api.automation.scheduleState = vi.fn(async () => { throw new Error("boom"); });
     h.agentBrowser.loadAutomationTab();
     await flush();
     const html = h.elements["automation-list"].innerHTML;
     expect(html).toContain("Still here");
-    expect(html).toContain(EN.t("auto.loading", "Loading..."));
+    expect(html).not.toContain(EN.t("auto.loading", "Loading..."));
+    expect(html).toContain(EN.t("auto.schedule-unavailable", "Schedule unavailable"));
+    expect(html).toContain('data-rule-action="edit"');
+    expect(html).toContain('data-rule-action="delete"');
+    expect(html).not.toContain('data-rule-action="reschedule"');
+    expect(h.toasts).toEqual(expect.arrayContaining([expect.objectContaining({ msg: expect.stringContaining("boom"), type: "error" })]));
+    expect(h.api.automation.rescheduleOnce).not.toHaveBeenCalled();
+    expect(h.api.automation.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(h.rules)).toBe(before);
+  });
+
+  it("shows Loading only while schedule state is pending, then recovers late missed-once actions", async () => {
+    const h = makeHarness({ rules: [rule({ trigger: { type: "once", at: 1 } })] });
+    const before = JSON.stringify(h.rules);
+    let release!: (value: any) => void;
+    h.api.automation.scheduleState = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    h.api.automation.update = vi.fn();
+    h.agentBrowser.loadAutomationTab();
+    await flush();
+    const pending = h.elements["automation-list"].innerHTML;
+    expect(pending).toContain(EN.t("auto.loading", "Loading..."));
+    expect(pending).not.toContain('data-rule-action="reschedule"');
+    release({ success: true, states: [state({ phase: "missed-once", onceAt: 1 })] });
+    await flush();
+    const loaded = h.elements["automation-list"].innerHTML;
+    expect(loaded).not.toContain(EN.t("auto.loading", "Loading..."));
+    expect(loaded).toContain(EN.t("auto.phase.missed-once"));
+    expect(loaded).toContain('data-rule-action="reschedule"');
+    expect(h.toasts).toHaveLength(0);
+    expect(h.api.automation.rescheduleOnce).not.toHaveBeenCalled();
+    expect(h.api.automation.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(h.rules)).toBe(before);
   });
 });
 

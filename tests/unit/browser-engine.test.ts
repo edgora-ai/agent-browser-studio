@@ -1,4 +1,14 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
+import { firefoxFixturePlistJson, writeFirefoxFixturePlist, writeFirefoxRuntimeFixture } from "../helpers/firefox-runtime-package.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], options: object) => file === "/usr/bin/plutil"
+      ? firefoxFixturePlistJson(args) : actual.execFileSync(file, args, options),
+  };
+});
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,7 +26,9 @@ import {
   spawnFirefoxWithDebugInfo,
 } from "../../src/main/services/browser-engine.js";
 
-const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "fx-engine-test-"));
+// Resolve the OS-owned /var -> /private/var alias before creating profile
+// children; the prefs writer deliberately refuses caller-supplied symlinks.
+const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fx-engine-test-")));
 afterAll(() => {
   try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
@@ -32,9 +44,12 @@ function makeFakeFirefox(version = "137.0"): string {
     fs.writeFileSync(cmdPath, `@node "${jsPath}" %*\n`, "utf8");
     return cmdPath;
   }
-  const bin = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_"));
+  const directory = path.join(tempDir, "fake-firefox-" + version.replace(/\./g, "_"));
+  const bin = process.platform === "darwin" ? path.join(directory + ".app", "Contents", "MacOS", "firefox") : directory;
+  fs.mkdirSync(path.dirname(bin), { recursive: true });
   fs.writeFileSync(bin, `#!/usr/bin/env node\nconsole.log("Mozilla Firefox ${version}");\n`, "utf8");
   fs.chmodSync(bin, 0o755);
+  if (process.platform === "darwin") writeFirefoxRuntimeFixture(bin, version);
   return bin;
 }
 
@@ -58,7 +73,17 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
   it("finds the Firefox binary via the env override (only when the path exists)", () => {
     const real = makeFakeFirefox();
     expect(findFirefoxBinary({ AGENT_BROWSER_FIREFOX_BINARY_PATH: real } as any)).toBe(real);
-    expect(findFirefoxBinary({ AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(tempDir, "missing-firefox") } as any)).toBeNull();
+    const missing = () => findFirefoxBinary({ AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(tempDir, "missing-firefox") });
+    if (process.platform === "darwin") expect(missing).toThrow(/Firefox.*runtime package/i);
+    else expect(missing()).toBeNull();
+  });
+
+  it.skipIf(process.platform !== "darwin")("rejects an existing developer override explicitly instead of treating existence as launchability", () => {
+    const binary = makeFakeFirefox("137.0");
+    writeFirefoxFixturePlist(path.join(path.dirname(path.dirname(binary)), "Info.plist"), {
+      CFBundleShortVersionString: "137.0", MozillaDeveloperObjPath: "/missing/objdir",
+    });
+    expect(() => findFirefoxBinary({ AGENT_BROWSER_FIREFOX_BINARY_PATH: binary })).toThrow(/Firefox.*runtime package/i);
   });
 
   it("detectFirefoxVersion parses `Mozilla Firefox x.y.z`", () => {
@@ -78,14 +103,19 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
   });
 
   it("getFirefoxStatus reports not-installed gracefully, and installed with version when present", () => {
-    const missing = getFirefoxStatus({ AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(tempDir, "nope") } as any);
-    expect(missing.installed).toBe(false);
-    expect(missing.path).toBeNull();
-    expect(missing.fingerprintParity).toBe(false);
-    expect(missing.nativeConfig).toBe(false);
-    expect(missing.nativeCapabilities).toEqual([]);
-    expect(missing.sourceStamp).toBeNull();
-    expect(missing.hint).toContain("Firefox binary not found");
+    const missingEnv = { AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(tempDir, "nope") };
+    if (process.platform === "darwin") {
+      expect(() => getFirefoxStatus(missingEnv)).toThrow(/Firefox.*runtime package/i);
+    } else {
+      const missing = getFirefoxStatus(missingEnv);
+      expect(missing.installed).toBe(false);
+      expect(missing.path).toBeNull();
+      expect(missing.fingerprintParity).toBe(false);
+      expect(missing.nativeConfig).toBe(false);
+      expect(missing.nativeCapabilities).toEqual([]);
+      expect(missing.sourceStamp).toBeNull();
+      expect(missing.hint).toContain("Firefox binary not found");
+    }
 
     const real = makeFakeFirefox("139.0");
     const ok = getFirefoxStatus({ AGENT_BROWSER_FIREFOX_BINARY_PATH: real } as any);
@@ -200,8 +230,8 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     expect(explicitOff).not.toContain("network.cookie.cookieBehavior");
   });
 
-  it("buildFirefoxUserJs writes Roxy's managed prefs family (automation base, GPU, sandbox, color scheme/theme)", () => {
-    const prefs = buildFirefoxUserJs({ useGpu: false, sandboxPermission: false, colorScheme: "dark" });
+  it("buildFirefoxUserJs keeps the automation/GPU/theme family without weakening Gecko's sandbox", () => {
+    const prefs = buildFirefoxUserJs({ useGpu: false, sandboxPermission: true, colorScheme: "dark" });
     // automation-friendly base
     expect(prefs).toContain('user_pref("focusmanager.testmode", true)');
     expect(prefs).toContain('user_pref("dom.timeout.enable_budget_timer_throttling", false)');
@@ -209,8 +239,8 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
     // GPU off
     expect(prefs).toContain('user_pref("layers.acceleration.disabled", true)');
     expect(prefs).toContain('user_pref("gfx.webrender.disabled", true)');
-    // sandbox disabled
-    expect(prefs).toContain('user_pref("security.sandbox.content.level", -1)');
+    // Gecko chooses its platform/build sandbox default; 0 is not "enabled".
+    expect(prefs).not.toContain("security.sandbox.content.level");
     // dark scheme
     expect(prefs).toContain('user_pref("layout.css.prefers-color-scheme.content-override", 0)');
     expect(prefs).toContain('user_pref("ui.systemUsesDarkTheme", true)');
@@ -218,7 +248,7 @@ describe("browser engine (Slice 77 — Firefox capability)", () => {
 
     const gpuOn = buildFirefoxUserJs({ useGpu: true, sandboxPermission: true, colorScheme: "light" });
     expect(gpuOn).toContain('user_pref("layers.acceleration.disabled", false)');
-    expect(gpuOn).toContain('user_pref("security.sandbox.content.level", 0)');
+    expect(gpuOn).not.toContain("security.sandbox.content.level");
     expect(gpuOn).toContain('user_pref("layout.css.prefers-color-scheme.content-override", 1)');
     expect(gpuOn).toContain('user_pref("extensions.activeThemeID", "firefox-compact-light@mozilla.org")');
 

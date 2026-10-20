@@ -1,3 +1,4 @@
+/// <reference path="./js-yaml.d.ts" />
 // Smoke tests — multi-platform production verification (Slice 52):
 // Windows engine build path + the CI workflows that close the last
 // alignment row (signed multi-platform distribution).
@@ -42,13 +43,46 @@ describe("Smoke — Windows engine build path", () => {
 });
 
 describe("Smoke — Multi-platform CI workflows", () => {
-  function loadWorkflow(name: string): any {
+  interface WorkflowStep {
+    name?: string;
+    uses?: string;
+    run?: string;
+  }
+  interface WorkflowJob {
+    "runs-on": string;
+    steps: WorkflowStep[];
+  }
+  interface Workflow { jobs: Record<string, WorkflowJob> }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  // Validate the consumed workflow contract at the YAML/unknown boundary.
+  // Additional GitHub Actions fields remain untouched; missing/malformed jobs
+  // or steps must fail rather than being converted to an empty fixture.
+  function assertWorkflow(value: unknown, name: string): asserts value is Workflow {
+    if (!isRecord(value) || !isRecord(value.jobs)) throw new Error(name + ": expected jobs mapping");
+    for (const [id, job] of Object.entries(value.jobs)) {
+      if (!isRecord(job) || typeof job["runs-on"] !== "string" || !Array.isArray(job.steps)) {
+        throw new Error(name + ": invalid job " + id);
+      }
+      for (const step of job.steps) {
+        if (!isRecord(step)) throw new Error(name + ": invalid step in " + id);
+        for (const key of ["name", "uses", "run"]) {
+          if (key in step && typeof step[key] !== "string") throw new Error(name + ": invalid " + key + " in " + id);
+        }
+      }
+    }
+  }
+  function loadWorkflow(name: string): Workflow {
     const file = path.join(ROOT, ".github", "workflows", name);
     expect(fs.existsSync(file), name + " must exist").toBe(true);
-    return yaml.load(fs.readFileSync(file, "utf8"));
+    const value: unknown = yaml.load(fs.readFileSync(file, "utf8"));
+    assertWorkflow(value, name);
+    return value;
   }
-  function stepNames(job: any): string[] {
-    return (job.steps || []).map((s: any) => s.name || "");
+  function stepNames(job: WorkflowJob): string[] {
+    return job.steps.map((s) => s.name || "");
   }
 
   it("ci.yml gates on Linux and Windows; macOS e2e requires an engine", () => {
@@ -72,7 +106,7 @@ describe("Smoke — Multi-platform CI workflows", () => {
       expect(steps).toContain("Strict native verifier (53 surfaces)");
       expect(steps.some((n) => /^E2E suite/.test(n))).toBe(true);
       expect(steps.some((n) => /Package/.test(n))).toBe(true);
-      expect(job.steps.some((s: any) => s.uses === "actions/upload-artifact@v4")).toBe(true);
+      expect(job.steps.some((s) => s.uses === "actions/upload-artifact@v4")).toBe(true);
     }
   });
 });

@@ -56,6 +56,11 @@ jobs:
       - name: npm ci + controller build (bash)
         run: |
           npm ci
+          # electron-builder needs node_modules/electron/dist, but npm ci
+          # does not download the Electron binary (postinstall only runs
+          # install-app-deps). `electron --version` triggers the download
+          # (ELECTRON_MIRROR points at npmmirror, see job env).
+          npx --no-install electron --version
           rm -rf dist
           npx tsc
           mkdir -p dist/renderer dist/resources
@@ -73,7 +78,9 @@ jobs:
       - name: Package NSIS + checksums (bash)
         run: |
           rm -rf release
-          npx electron-builder --win nsis --x64
+          # -p never: artifacts go to upload-artifact (manual release
+          # afterwards). Otherwise builder demands GH_TOKEN for auto-publish.
+          npx electron-builder --win nsis --x64 -p never
           cd release
           sha256sum *.exe > SHA256SUMS.txt
           printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt
@@ -107,6 +114,11 @@ jobs:
       - name: npm ci + controller build
         run: |
           npm ci
+          # Same electronDist bootstrap as Windows: npm ci does not fetch
+          # the Electron binary (ELECTRON_MIRROR points at npmmirror).
+          # ELECTRON_DISABLE_SANDBOX: --version must not hit the SUID
+          # sandbox helper (not configured on stock runners).
+          ELECTRON_DISABLE_SANDBOX=1 npx --no-install electron --version
           npm run build
       - name: Stage stock browsers
         run: >
@@ -116,7 +128,7 @@ jobs:
       - name: Package AppImage + checksums
         run: |
           rm -rf release
-          npx electron-builder --linux AppImage --x64
+          npx electron-builder --linux AppImage --x64 -p never
           cd release
           sha256sum *.AppImage > SHA256SUMS.txt
           printf 'engine=stock-chromium\ncommit=%s\n' "${{ github.sha }}" > BUILD.txt

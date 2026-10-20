@@ -4,12 +4,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   NATIVE_GOOGLE_API_KEY_INFOBAR_CAPABILITY,
+  NATIVE_LOCAL_DNS_POLICY_CAPABILITY,
   NATIVE_PROXY_AUTH_CAPABILITY,
   NATIVE_QUIC_PROXY_CAPABILITY,
   readNativeChromiumCapabilities,
   supportsNativeProxyAuth,
   supportsNativeQuicProxy,
   supportsGoogleApiKeyInfoBarSuppression,
+  supportsNativeLocalDnsPolicy,
   writeNativeProxyAuthFile,
 } from "../../src/main/services/native-proxy-auth.js";
 
@@ -69,5 +71,39 @@ describe("native proxy authentication handoff", () => {
     expect(supportsNativeQuicProxy("/bin/echo")).toBe(false);
     expect(supportsGoogleApiKeyInfoBarSuppression("/bin/echo")).toBe(false);
     expect(supportsNativeProxyAuth(path.join(root, "missing"))).toBe(false);
+    expect(supportsNativeLocalDnsPolicy(capable)).toBe(false);
+  });
+
+  it.each([false, true])("invalidates cached macOS Framework capabilities through directory aliases (%s)", (useAlias) => {
+    if (process.platform === "win32") return; // shell-script capability probe is POSIX-only
+    const root = makeRoot();
+    const contents = path.join(root, "Chromium.app", "Contents");
+    const executable = path.join(contents, "MacOS", "Chromium");
+    const framework = path.join(contents, "Frameworks", "Chromium Framework.framework", "Versions", "Current", "Chromium Framework");
+    fs.mkdirSync(path.dirname(executable), { recursive: true });
+    fs.mkdirSync(path.dirname(framework), { recursive: true });
+    fs.writeFileSync(framework, NATIVE_LOCAL_DNS_POLICY_CAPABILITY + "\n");
+    fs.writeFileSync(executable, `#!/bin/sh\nif /usr/bin/grep -q '${NATIVE_LOCAL_DNS_POLICY_CAPABILITY}' ${JSON.stringify(framework)}; then\n  printf '%s\\n' '${NATIVE_LOCAL_DNS_POLICY_CAPABILITY}'\nfi\n`, { mode: 0o700 });
+    fs.chmodSync(executable, 0o700);
+    const original = fs.statSync(executable);
+    const alias = path.join(root, "browser-bin");
+    if (useAlias) fs.symlinkSync(path.dirname(executable), alias, "dir");
+    const selected = useAlias ? path.join(alias, "Chromium") : executable;
+    expect(supportsNativeLocalDnsPolicy(selected)).toBe(true);
+    fs.writeFileSync(framework, "not-capable\n");
+    expect(fs.statSync(executable).mtimeMs).toBe(original.mtimeMs);
+    expect(supportsNativeLocalDnsPolicy(selected)).toBe(false);
+  });
+
+  it("does not infer restricted DNS support from other native capabilities", () => {
+    if (process.platform === "win32") return; // shell-script capability probe is POSIX-only
+    const root = makeRoot();
+    const capable = path.join(root, "dns-policy-browser");
+    fs.writeFileSync(capable, `#!/bin/sh\nprintf '%s\\n' '${NATIVE_LOCAL_DNS_POLICY_CAPABILITY}'\n`, { mode: 0o700 });
+    fs.chmodSync(capable, 0o700);
+    expect(supportsNativeLocalDnsPolicy(capable)).toBe(true);
+    expect(supportsNativeLocalDnsPolicy("/bin/echo")).toBe(false);
+    expect(supportsNativeLocalDnsPolicy(path.join(root, "missing"))).toBe(false);
+    expect(supportsNativeProxyAuth(capable)).toBe(false);
   });
 });

@@ -128,6 +128,7 @@ describe("team service (real config)", () => {
     setLocalRole("admin");
     const r = addMember("device-admin-003", "Admin 3", "admin");
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("Expected role check to reject the operation");
     expect(r.error).toContain("owner");
     // Admin can still add a plain member.
     expect(addMember("device-member-004", "M", "member").ok).toBe(true);
@@ -138,6 +139,7 @@ describe("team service (real config)", () => {
     addMember("device-member-004", "M", "member");
     const r = addMember("device-member-004", "M2", "viewer");
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("Expected role check to reject the operation");
     expect(r.error).toContain("already");
   });
 
@@ -145,6 +147,7 @@ describe("team service (real config)", () => {
     initTeam("Ops");
     const r = removeMember("device-owner-001");
     expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("Expected role check to reject the operation");
     expect(r.error).toContain("owner");
   });
 

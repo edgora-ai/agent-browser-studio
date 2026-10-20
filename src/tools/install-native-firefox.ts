@@ -2,12 +2,14 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   FIREFOX_EXPECTED_SOURCE_STAMP,
   readFirefoxNativeCapabilityReport,
   supportsFirefoxNativeConfig,
 } from "../main/services/firefox-native-capabilities.js";
 import { getManagedFirefoxRoot } from "../main/services/native-firefox-manager.js";
+import { assertFirefoxRuntimePackage } from "../main/services/firefox-runtime-package.js";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -32,11 +34,13 @@ function executableFor(app: string): string {
 }
 
 function detectVersion(executable: string): string {
+  // Reject developer/incomplete packages before executing even a version probe.
+  assertFirefoxRuntimePackage(executable, "darwin");
   const output = execFileSync(executable, ["--version"], {
     encoding: "utf8",
     timeout: 10_000,
   });
-  return output.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)/i)?.[1]
+  return output.match(/Mozilla Firefox\s*(\d+\.\d+(?:\.\d+)?)(?=\s|$)/i)?.[1]
     ?? fail(`Could not detect Firefox version from: ${output.trim()}`);
 }
 
@@ -101,7 +105,8 @@ function signAndVerifyMacBundle(app: string): void {
   verifyMacBundle(app);
 }
 
-function validateNativeBinary(executable: string, version: string): void {
+export function validateNativeBinary(executable: string, version: string): void {
+  assertFirefoxRuntimePackage(executable, "darwin", version);
   const report = readFirefoxNativeCapabilityReport(executable, "darwin");
   if (!report || !supportsFirefoxNativeConfig(executable, "darwin")) {
     fail("Firefox binary lacks a valid config-v1/native-required-v1/snapshot-v1 capability report");
@@ -211,9 +216,12 @@ function main(): void {
   }, null, 2)}\n`);
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`[install:firefox] ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
+// Importing the validator must not install, sign, or inspect the user's cache.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`[install:firefox] ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

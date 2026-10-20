@@ -14,20 +14,70 @@
 // drivers and are imported lazily so this module stays dependency-free.
 
 export class AgentBrowserError extends Error {
-  constructor(message) {
+  constructor(message, options = {}) {
     super(message);
     this.name = 'AgentBrowserError';
+    this.status = options.status;
+    this.body = options.body;
+    this.bodyTruncated = options.bodyTruncated === true;
+    if (options.bodyReadError) this.bodyReadError = options.bodyReadError;
   }
 }
 
-async function readJson(resp) {
-  const text = await resp.text();
+const MAX_ERROR_BODY_BYTES = 2 * 1024 * 1024;
+
+function parseJsonText(text) {
   if (!text) return {};
   try {
     return JSON.parse(text);
   } catch {
     return { raw: text };
   }
+}
+
+async function readJson(resp) {
+  return parseJsonText(await resp.text());
+}
+
+// Keep complete bounded receipts, not a clipped JSON object that could look
+// like authoritative success/commit evidence. Native fetch bodies are streamed;
+// the text-only fallback retains compatibility with custom fetch adapters.
+async function readErrorJson(resp) {
+  let text = '', truncated = false, readError;
+  if (resp.body && typeof resp.body.getReader === 'function') {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const parts = [];
+    let kept = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        const remaining = MAX_ERROR_BODY_BYTES - kept;
+        const take = Math.min(remaining, chunk.value.byteLength);
+        if (take) parts.push(decoder.decode(chunk.value.subarray(0, take), { stream: true }));
+        kept += take;
+        if (take < chunk.value.byteLength) {
+          truncated = true;
+          try { await reader.cancel(); }
+          catch (error) { readError = error && error.message ? error.message : String(error); }
+          break;
+        }
+      }
+      parts.push(decoder.decode());
+      text = parts.join('');
+    } finally {
+      reader.releaseLock();
+    }
+  } else {
+    text = await resp.text();
+    const bytes = Buffer.from(text, 'utf8');
+    if (bytes.length > MAX_ERROR_BODY_BYTES) {
+      truncated = true;
+      text = bytes.subarray(0, MAX_ERROR_BODY_BYTES).toString('utf8');
+    }
+  }
+  return { data: truncated ? undefined : parseJsonText(text), prefix: text.slice(0, 500), truncated, readError };
 }
 
 export class AgentBrowserClient {
@@ -37,48 +87,75 @@ export class AgentBrowserClient {
     this.timeout = options.timeout ?? 15000;
   }
 
-  headers(hasBody) {
+  headers(hasBody, requestHeaders = {}) {
     const headers = {};
+    for (const [name, value] of Object.entries(requestHeaders)) {
+      const key = name.toLowerCase();
+      if (['authorization', 'x-agent-browser-token', 'x-cloak-token'].includes(key)) {
+        throw new AgentBrowserError('Custom request headers cannot override authentication');
+      }
+      headers[key] = value;
+    }
     if (hasBody) headers['content-type'] = 'application/json';
     if (this.token) headers['authorization'] = 'Bearer ' + this.token;
     return headers;
   }
 
-  async request(method, path, body) {
+  // Account targeting: pass { 'If-Match': '"' + selectedRevision + '"' }
+  // from the original GET /api/accounts body. Never auto-refresh/retry writes.
+  async request(method, path, body, requestHeaders = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
     let resp;
     try {
-      resp = await fetch(this.baseUrl + path, {
-        method,
-        headers: this.headers(body !== undefined),
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      const detail = error && error.message ? error.message : String(error);
-      throw new AgentBrowserError(method + ' ' + path + ' -> network error: ' + detail);
+      try {
+        resp = await fetch(this.baseUrl + path, {
+          method,
+          headers: this.headers(body !== undefined, requestHeaders),
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const detail = error && error.message ? error.message : String(error);
+        throw new AgentBrowserError(method + ' ' + path + ' -> network error: ' + detail);
+      }
+      if (!resp.ok) {
+        let received;
+        try { received = await readErrorJson(resp); }
+        catch (error) {
+          const detail = error && error.message ? error.message : String(error);
+          throw new AgentBrowserError(method + ' ' + path + ' -> ' + resp.status + ': response body unavailable: ' + detail,
+            { status: resp.status, bodyReadError: detail });
+        }
+        const data = received.data;
+        const detail = received.truncated ? received.prefix : data && data.error ? data.error : JSON.stringify(data).slice(0, 500);
+        throw new AgentBrowserError(method + ' ' + path + ' -> ' + resp.status + ': ' + detail + (received.truncated ? ' [response body truncated]' : ''),
+          { status: resp.status, body: data, bodyTruncated: received.truncated, bodyReadError: received.readError });
+      }
+      return await readJson(resp);
     } finally {
+      // The request deadline also owns body consumption, not just headers.
       clearTimeout(timer);
     }
-    const data = await readJson(resp);
-    if (!resp.ok) {
-      const detail = data && data.error ? data.error : JSON.stringify(data).slice(0, 500);
-      throw new AgentBrowserError(method + ' ' + path + ' -> ' + resp.status + ': ' + detail);
-    }
-    return data;
   }
 
-  get(path) { return this.request('GET', path, undefined); }
-  post(path, body) { return this.request('POST', path, body); }
-  delete(path) { return this.request('DELETE', path, undefined); }
+  get(path, headers) { return this.request('GET', path, undefined, headers); }
+  post(path, body, headers) { return this.request('POST', path, body, headers); }
+  delete(path, headers) { return this.request('DELETE', path, undefined, headers); }
 
-  put(path, body) { return this.request('PUT', path, body); }
-  patch(path, body) { return this.request('PATCH', path, body); }
+  put(path, body, headers) { return this.request('PUT', path, body, headers); }
+  patch(path, body, headers) { return this.request('PATCH', path, body, headers); }
 
   health() { return this.request('GET', '/health'); }
   version() { return this.request('GET', '/version'); }
   openapi() { return this.request('GET', '/openapi.json'); }
+
+  // History is independently consented/scoped; never default it to true here.
+  syncStatus() { return this.get('/api/sync/status'); }
+  configureSync(settings) { return this.post('/api/sync/config', settings); }
+  syncPush(options = {}) { return this.post('/api/sync/push', options); }
+  syncPull(options = {}) { return this.post('/api/sync/pull', options); }
+  syncHistoryState(dirId) { return this.get('/api/sync/history/' + encodeURIComponent(dirId)); }
 
   listProfiles() {
     return this.request('GET', '/api/profiles').then((d) => d.profiles || []);

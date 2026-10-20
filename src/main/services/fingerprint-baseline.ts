@@ -9,6 +9,10 @@ import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
 import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
 import { captureFontCorpusInPage } from "../../tools/font-corpus.js";
 import type { BrowserEngine } from "./browser-engine.js";
+import { classifyFingerprintDrift, diffFingerprintSnapshots } from "./fingerprint-drift-policy.js";
+import type { FingerprintDrift } from "./fingerprint-drift-policy.js";
+export type { FingerprintDrift, FingerprintChange, FingerprintDriftAnalysis } from "./fingerprint-drift-policy.js";
+export { analyzeFingerprintDrift, classifyFingerprintDrift, diffFingerprintSnapshots, isFingerprintSnapshotEquivalent } from "./fingerprint-drift-policy.js";
 
 const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
 const WEBGPU_CORPUS_CAPTURE_SOURCE = captureWebGpuCorpusInPage.toString();
@@ -87,7 +91,10 @@ export const CAPTURE_EXPRESSION = `(async function(){
     }
   } catch(e){}
   try {
-    var fontCorpus = await (${FONT_CORPUS_CAPTURE_SOURCE})();
+    // Local Font Access can wait for a permission prompt. The baseline hashes
+    // window/Worker metrics and rasters, not localAccess; do not request an
+    // unused permission or replace any of the captured font measurements.
+    var fontCorpus = await (${FONT_CORPUS_CAPTURE_SOURCE})({ includeLocalAccess: false });
     o.fontAvailability = Object.keys(fontCorpus.window.availability).sort().map(function(name){
       return name + "|" + fontCorpus.window.availability[name];
     }).join(";");
@@ -198,6 +205,41 @@ export const CAPTURE_EXPRESSION = `(async function(){
 
 export type Fingerprint = Record<string, string | number | null | boolean>;
 
+// Keys produced by CAPTURE_EXPRESSION above. The JSON-encoded sub-signatures
+// (e.g. systemColors/workerIdentity) are strings, not arbitrary nested config.
+const CAPTURED_FIELDS = new Set([
+  "userAgent", "appVersion", "platform", "language", "languages", "hardwareConcurrency",
+  "deviceMemory", "maxTouchPoints", "doNotTrack", "screenW", "screenH", "availW", "availH",
+  "availLeft", "availTop", "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth",
+  "innerHeight", "colorDepth", "pixelDepth", "devicePixelRatio", "preferredColorScheme",
+  "systemColors", "tz", "tzOffset", "uaPlatform", "uaHighEntropy", "webglCapabilityHash",
+  "plugins", "mimeTypes", "glVendor", "glUnmaskedVendor", "glRenderer", "fontAvailability",
+  "fontCapabilityHash", "audioHash", "canvasLen", "canvasHash", "clientRect", "speechVoices",
+  "mediaDevices", "storageQuota", "webgpuVendor", "webgpuArchitecture", "webgpuDevice",
+  "webgpuDescription", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
+  "webgpuIsFallbackAdapter", "webgpuCapabilityHash", "workerIdentity",
+]);
+
+/** Only transfer actual captured scalar surfaces, with bounded snapshot size. */
+export function sanitizePortableFingerprintBaseline(value: unknown): Fingerprint | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid fingerprint baseline");
+  const baseline: Fingerprint = Object.create(null);
+  let bytes = 0;
+  for (const [key, field] of Object.entries(value)) {
+    if (!CAPTURED_FIELDS.has(key)) continue;
+    if (field !== null && typeof field !== "string" && typeof field !== "boolean" &&
+        !(typeof field === "number" && Number.isFinite(field))) {
+      throw new Error(`Invalid fingerprint baseline field: ${key}`);
+    }
+    const fieldBytes = Buffer.byteLength(JSON.stringify(field), "utf8");
+    bytes += fieldBytes;
+    if (fieldBytes > 64 * 1024 || bytes > 256 * 1024) throw new Error("Fingerprint baseline exceeds size limit");
+    baseline[key] = field;
+  }
+  return Object.keys(baseline).length ? baseline : undefined;
+}
+
 /** Capture the live fingerprint from a running profile (CDP or BiDi by engine). */
 export async function captureFingerprint(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<Fingerprint> {
   // Keep the probe importable by the standalone Chromium verifier without
@@ -208,57 +250,14 @@ export async function captureFingerprint(cdpPort: number, engine: BrowserEngine 
   return typeof value === "string" ? JSON.parse(value) : (value || {});
 }
 
-export interface FingerprintDrift {
-  field: string;
-  baseline: unknown;
-  current: unknown;
-}
-
-/**
- * Window-frame fields measured from the OS window server. On macOS the
- * compositor rounds the window top / content height by 1 px between captures
- * (menu-bar/decoration rounding, the same stock-matched variance recorded in
- * ALIGNMENT_MATRIX). A ±1 change here is placement noise, not identity: the
- * declared screen.* surfaces, DPR and every seeded field still match exactly.
- */
-const FRAME_NOISE_FIELDS = new Set(["screenX", "screenY", "innerWidth", "innerHeight"]);
-
-/** Compare two fingerprints; return the changed fields (drift). */
+/** Compatibility entry point; policy and semantic comparison live in one pure module. */
 export function diffFingerprints(baseline: Fingerprint | null | undefined, current: Fingerprint): FingerprintDrift[] {
-  if (!baseline) return [];
-  const drift: FingerprintDrift[] = [];
-  const keys = new Set([...Object.keys(baseline), ...Object.keys(current)]);
-  for (const k of keys) {
-    const b = (baseline as any)[k];
-    const c = (current as any)[k];
-    if (b === undefined && c === undefined) continue;
-    if (String(b ?? "") !== String(c ?? "")) {
-      const bn = Number(b);
-      const cn = Number(c);
-      if (FRAME_NOISE_FIELDS.has(k) && Number.isFinite(bn) && Number.isFinite(cn) && Math.abs(bn - cn) <= 1) {
-        continue;
-      }
-      drift.push({ field: k, baseline: b ?? null, current: c ?? null });
-    }
-  }
-  return drift;
+  return diffFingerprintSnapshots(baseline, current);
 }
 
-/** True if the drift contains a high-risk signal field. */
+/** Availability is incomplete evidence, never an observed high-risk identity change. */
 export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
-  const risky = new Set([
-    "userAgent", "platform", "uaPlatform", "uaHighEntropy", "tz", "tzOffset",
-    "glVendor", "glUnmaskedVendor", "glRenderer", "webglCapabilityHash", "webgpuVendor", "webgpuArchitecture",
-    "webgpuDevice", "webgpuDescription", "webgpuCapabilityHash", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
-    "webgpuIsFallbackAdapter", "hardwareConcurrency", "deviceMemory",
-    "maxTouchPoints", "screenW", "screenH", "availLeft", "availTop",
-    "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight",
-    "devicePixelRatio", "canvasHash",
-    "clientRect", "workerIdentity", "plugins", "mimeTypes", "speechVoices",
-    "fontAvailability", "fontCapabilityHash", "audioHash",
-    "mediaDevices", "storageQuota", "doNotTrack", "systemColors", "preferredColorScheme",
-  ]);
-  return drift.some((d) => risky.has(d.field));
+  return drift.some((row) => classifyFingerprintDrift(row).severity === "risk");
 }
 
 /** Human-readable summary of drifted fields (capped for UI/audit). */
@@ -305,8 +304,8 @@ export function checkPersonaConsistency(
     out.push({ field: "persona.platform", expected: expectedPlat, actual: plat });
   }
   const isMobile = persona.platform === "android";
-  const pluginsStr = String(current.plugins ?? "");
-  if (isMobile && pluginsStr !== "") {
+  const pluginsStr = typeof current.plugins === "string" ? current.plugins : undefined;
+  if (isMobile && pluginsStr !== undefined && pluginsStr !== "") {
     out.push({ field: "persona.plugins", expected: "empty (mobile)", actual: pluginsStr.slice(0, 80) });
   }
   if (!isMobile && pluginsStr === "") {

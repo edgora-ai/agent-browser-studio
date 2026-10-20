@@ -26,7 +26,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const PRODUCT = "agent-browser-studio";
-const VERSION_RE = /^\d+(\.\d+)+$/;
+const VERSION_RE = /^\d+(\.\d+){1,4}$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
 export function sha256File(filePath) {
@@ -64,7 +64,10 @@ export function buildManifest(opts) {
     throw new Error("Payload file not found: " + file);
   }
   if (!version || !VERSION_RE.test(version.trim())) {
-    throw new Error("Invalid --version: expected dot-separated numerics like 1.0.1, got " + JSON.stringify(version));
+    throw new Error("Invalid --version: expected 2 to 5 dot-separated numeric components like 1.0.1, got " + JSON.stringify(version));
+  }
+  if (typeof opts.minSupported === "string" && opts.minSupported.trim() && !VERSION_RE.test(opts.minSupported.trim())) {
+    throw new Error("Invalid --min-supported: expected 2 to 5 dot-separated numeric components like 1.0.1, got " + JSON.stringify(opts.minSupported));
   }
   const sha256 = sha256File(file);
   if (!SHA256_RE.test(sha256)) throw new Error("Internal error: computed sha256 is malformed");

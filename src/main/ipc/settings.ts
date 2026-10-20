@@ -19,6 +19,19 @@ import {
   setRepositoryExtensionMeta,
 } from "../services/extension-repository.js";
 import { validateDirId } from "../services/utils.js";
+import { requireSettingsMutation } from "../services/team.js";
+
+type SettingsIpcHandler = Parameters<typeof ipcMain.handle>[1];
+
+/** Authorize before argument decoding, filesystem reads, staging or downloads. */
+function handleSettingsMutation(channel: string, handler: SettingsIpcHandler): void {
+  ipcMain.handle(channel, async (event, ...args) => {
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { success: false, error: gate.error };
+    try { return await handler(event, ...args); }
+    catch (error: any) { return { success: false, error: error?.message || String(error) }; }
+  });
+}
 
 export function registerSettingsHandlers(): void {
 
@@ -34,6 +47,11 @@ export function registerSettingsHandlers(): void {
   });
 
   ipcMain.handle("settings:launch-gates:set", async (_event, gates: { blockOnConsistencyConflict?: boolean; blockOnProxyRisk?: boolean; blockOnFingerprintDrift?: boolean; blockOnEnvironmentRisk?: boolean }) => {
+    // R0925-05: launch safety gates are a local SECURITY policy, not a UI
+    // preference — same member+ rule as other settings mutations when a team
+    // workspace is enabled. A viewer denial must not touch the stored values.
+    const gate = requireSettingsMutation();
+    if (!gate.ok) return { success: false, error: gate.error };
     const cfg = getConfig() as any;
     if (typeof gates.blockOnConsistencyConflict === "boolean") cfg.blockOnConsistencyConflict = gates.blockOnConsistencyConflict;
     if (typeof gates.blockOnProxyRisk === "boolean") cfg.blockOnProxyRisk = gates.blockOnProxyRisk;
@@ -77,7 +95,7 @@ export function registerSettingsHandlers(): void {
     return listExtensionRepository(filter);
   });
 
-  ipcMain.handle("settings:add-repository-extension", async (_event, params: { extId: string; shared?: boolean; tags?: string[] }) => {
+  handleSettingsMutation("settings:add-repository-extension", async (_event, params: { extId: string; shared?: boolean; tags?: string[] }) => {
     try {
       return { success: true, entry: await addOrUpdateChromeStoreExtension(params.extId, { shared: params.shared, tags: params.tags }) };
     } catch (e: any) {
@@ -85,7 +103,7 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  ipcMain.handle("settings:update-repository-extension", async (_event, extId: string) => {
+  handleSettingsMutation("settings:update-repository-extension", async (_event, extId: string) => {
     try {
       return { success: true, entry: await updateRepositoryExtension(extId) };
     } catch (e: any) {
@@ -93,7 +111,7 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  ipcMain.handle("settings:delete-repository-extension", async (_event, extId: string) => {
+  handleSettingsMutation("settings:delete-repository-extension", async (_event, extId: string) => {
     try {
       return { success: deleteRepositoryExtension(extId) };
     } catch (e: any) {
@@ -101,7 +119,7 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  ipcMain.handle("settings:set-repository-extension-meta", async (_event, params: { extId: string; shared?: boolean; tags?: string[] }) => {
+  handleSettingsMutation("settings:set-repository-extension-meta", async (_event, params: { extId: string; shared?: boolean; tags?: string[] }) => {
     try {
       return { success: true, entry: setRepositoryExtensionMeta(params.extId, { shared: params.shared, tags: params.tags }) };
     } catch (e: any) {
@@ -113,7 +131,7 @@ export function registerSettingsHandlers(): void {
     return exportSharedExtensionRepository();
   });
 
-  ipcMain.handle("settings:delete-extension", async (_event, {
+  handleSettingsMutation("settings:delete-extension", async (_event, {
     dirId, extId,
   }: { dirId: string; extId: string }): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -123,7 +141,7 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  ipcMain.handle("settings:install-extension", async (_event, {
+  handleSettingsMutation("settings:install-extension", async (_event, {
     dirId, extId,
   }: { dirId: string; extId: string }): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -135,7 +153,7 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  ipcMain.handle("settings:toggle-extension", async (_event, {
+  handleSettingsMutation("settings:toggle-extension", async (_event, {
     dirId, extId, enabled,
   }: { dirId: string; extId: string; enabled: boolean }): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -171,7 +189,7 @@ export function registerSettingsHandlers(): void {
   });
 
   // Install a local CRX/ZIP file or unpacked directory into the repository
-  ipcMain.handle("settings:install-local-extension", async (_event, params: { path: string; shared?: boolean; tags?: string[] }) => {
+  handleSettingsMutation("settings:install-local-extension", async (_event, params: { path: string; shared?: boolean; tags?: string[] }) => {
     try {
       const entry = await installLocalExtension(params.path, { shared: params.shared, tags: params.tags });
       return { success: true, entry };
@@ -188,7 +206,7 @@ export function registerSettingsHandlers(): void {
     return meta?.extensions || {};
   });
 
-  ipcMain.handle("settings:set-profile-extensions", async (_event, params: {
+  handleSettingsMutation("settings:set-profile-extensions", async (_event, params: {
     dirId: string; extensions: Record<string, boolean>;
   }) => {
     validateDirId(params.dirId);
@@ -210,7 +228,7 @@ export function registerSettingsHandlers(): void {
     return cfg.agentFs || { mode: "sandbox", allowlist: [] };
   });
 
-  ipcMain.handle("settings:agent-fs-set", async (_event, params: { mode: string; allowlist?: string[] }) => {
+  handleSettingsMutation("settings:agent-fs-set", async (_event, params: { mode: string; allowlist?: string[] }) => {
     const cfg = structuredClone(getConfig()) as any;
     cfg.agentFs = { mode: params.mode, allowlist: Array.isArray(params.allowlist) ? params.allowlist : [] };
     saveConfig(cfg); // normalizes via normalizeAgentFs

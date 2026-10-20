@@ -1,11 +1,19 @@
 // Proxy geo-IP detection cache + short-circuit (Slice 57 — launch speed).
 // Successful detections are cached per proxy identity (10 min TTL) so repeat
 // launches skip the network round-trip; failures are never cached.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+vi.mock("node:child_process", () => ({ spawn: () => { throw new Error("Unexpected child"); }, execFileSync: () => { throw new Error("Unexpected child"); } }));
+vi.mock("node:fs", () => ({ writeFileSync: () => { throw new Error("Unexpected file write"); }, unlinkSync: () => { throw new Error("Unexpected file unlink"); } }));
+vi.mock("node:os", () => ({ tmpdir: () => process.env.TMPDIR, homedir: () => process.env.TMPDIR, hostname: () => "inert-cache-fixture" }));
+vi.mock("node:net", async original => ({ isIP: (await original<typeof import("node:net")>()).isIP, connect: () => { throw new Error("Unexpected network"); } }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("Unexpected DNS"); }, resolve: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("../../src/main/services/config-manager.js", () => ({ getConfig: () => { throw new Error("Unexpected app config"); } }));
 import {
   rememberProxyDetectionForTests,
   cachedProxyDetectionForTests,
   resetProxyDetectionCacheForTests,
+  proxyDetectionObservedAt,
 } from "../../src/main/services/proxy-detector.js";
 
 const PROXY = { type: "socks5", host: "127.0.0.1", port: 7890 } as any;
@@ -19,7 +27,10 @@ function successResult(): any {
   };
 }
 
-afterEach(() => resetProxyDetectionCacheForTests());
+afterEach(() => {
+  resetProxyDetectionCacheForTests();
+  vi.useRealTimers();
+});
 
 describe("proxy geo-IP detection cache (Slice 57)", () => {
   it("returns a cached successful detection for the same proxy identity", () => {
@@ -32,6 +43,7 @@ describe("proxy geo-IP detection cache (Slice 57)", () => {
 
   it("keys the cache by proxy identity (type/host/port/username)", () => {
     rememberProxyDetectionForTests(PROXY, successResult());
+    expect(cachedProxyDetectionForTests({ ...PROXY, host: "proxy.example.test" })).toBeNull();
     expect(cachedProxyDetectionForTests({ type: "socks5", host: "127.0.0.1", port: 7891 } as any)).toBeNull();
     expect(cachedProxyDetectionForTests({ type: "http", host: "127.0.0.1", port: 7890 } as any)).toBeNull();
     expect(cachedProxyDetectionForTests({ type: "socks5", host: "127.0.0.1", port: 7890, username: "u" } as any)).toBeNull();
@@ -46,13 +58,61 @@ describe("proxy geo-IP detection cache (Slice 57)", () => {
     expect(cachedProxyDetectionForTests(PROXY)).toBeNull();
   });
 
-  it("expires entries after the TTL", () => {
+  it("isolates geo detections when only proxy authentication changes", () => {
+    const west = { ...PROXY, username: "route", password: "west" };
+    const east = { ...west, password: "east" };
+    rememberProxyDetectionForTests(west, { ...successResult(), timezone: "America/Los_Angeles" });
+    expect(cachedProxyDetectionForTests(east)).toBeNull();
+    rememberProxyDetectionForTests(east, successResult());
+    expect(cachedProxyDetectionForTests(west)!.timezone).toBe("America/Los_Angeles");
+    expect(cachedProxyDetectionForTests(east)!.timezone).toBe("America/New_York");
+  });
+
+  it("expires entries after ten minutes without clearing the cache", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.parse("2026-10-17T00:00:00Z");
+    vi.setSystemTime(start);
     rememberProxyDetectionForTests(PROXY, successResult());
+    vi.setSystemTime(start + 10 * 60 * 1000 - 1);
     expect(cachedProxyDetectionForTests(PROXY)).not.toBeNull();
-    // Simulate expiry by re-seeding with an old timestamp via the module cache
-    // (we cannot freeze time across the private Map, so verify the guard path
-    // by clearing — the TTL check is exercised in production with Date.now()).
-    resetProxyDetectionCacheForTests();
+    vi.setSystemTime(start + 10 * 60 * 1000 + 1);
     expect(cachedProxyDetectionForTests(PROXY)).toBeNull();
+  });
+
+  it("does not refresh the observation age when a cached result is read", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.parse("2026-10-17T00:00:00Z");
+    vi.setSystemTime(start);
+    rememberProxyDetectionForTests(PROXY, successResult());
+    vi.setSystemTime(start + 9 * 60 * 1000);
+    expect(cachedProxyDetectionForTests(PROXY)).not.toBeNull();
+    vi.setSystemTime(start + 10 * 60 * 1000 + 1);
+    expect(cachedProxyDetectionForTests(PROXY)).toBeNull();
+  });
+
+  it("exposes the original observation time rather than a cached read time", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.parse("2026-10-17T00:00:00Z");
+    vi.setSystemTime(start);
+    const original = successResult();
+    rememberProxyDetectionForTests(PROXY, original);
+    vi.setSystemTime(start + 9 * 60 * 1000);
+    const cached = cachedProxyDetectionForTests(PROXY)!;
+    // The old shared-object expectation was unsafe: cache DTOs are detached,
+    // while explicit metadata (not object identity) preserves original age.
+    expect(cached).not.toBe(original);
+    expect(cached).toMatchObject({ source: "cache", observationId: original.observationId });
+    expect(proxyDetectionObservedAt(structuredClone(cached))).toBe(start);
+    rememberProxyDetectionForTests(PROXY, successResult());
+    expect(proxyDetectionObservedAt(cachedProxyDetectionForTests(PROXY)!)).toBe(start + 9 * 60 * 1000);
+    expect(proxyDetectionObservedAt(original)).toBe(start);
+  });
+
+  it("does not invent an observation time for unobserved or failed results", () => {
+    const synthetic = successResult();
+    const failed = { ...successResult(), success: false, exitIp: null };
+    rememberProxyDetectionForTests(PROXY, failed);
+    expect(proxyDetectionObservedAt(synthetic)).toBeNull();
+    expect(proxyDetectionObservedAt(failed)).toBeNull();
   });
 });

@@ -43,6 +43,21 @@ export interface SecureDnsConfig {
   templates: string[];
 }
 
+/** Trusted launch facts supplied by the caller, never inferred from the persona. */
+export interface ChromiumGpuContext {
+  readonly hostPlatform: string;
+  readonly hostArchitecture: string;
+  readonly kernelArchitecture: string | null;
+}
+
+interface ChromiumManagedGpuIdentity {
+  policy: "macos-arm64-apple-model-v1";
+  hostPlatform: "darwin";
+  hostArchitecture: "arm64";
+  kernelArchitecture: "arm64";
+  webgl: { vendor: string; renderer: string };
+}
+
 interface HardwarePersona {
   id: string;
   deviceModel: string | null;
@@ -60,15 +75,17 @@ interface HardwarePersona {
    * string (`ANGLE (Intel, … UHD Graphics 620 (0x00003EA0) Direct3D11 …)`).
    * Firefox strips the device id for privacy, so its observable form is the
    * base `gpuRenderer` string. Null on Metal/Android where neither engine
-   * embeds one. Composed per engine at config build time.
+   * embeds one. Retained for legacy renderer composition; Chromium never
+   * emits the Windows tuple and projects supported Mac models separately.
    */
   gpuDeviceId: string | null;
 }
 
 // Publicly common hardware combinations, kept as whole tuples so the default
-// seed path cannot independently combine an entry-level GPU, workstation CPU,
-// unusual RAM size, and unrelated display. Explicit advanced profile fields
-// still override individual values for controlled testing and migration.
+// seed path cannot independently combine CPU, RAM, and unrelated displays.
+// GPU fields retain the legacy Firefox spellings and exact Mac aliases.
+// Chromium projects bare Apple models only with a supported launch context;
+// other platforms keep native GPUs. Overrides constrain whole tuples.
 const WINDOWS_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
     id: "win-intel-uhd620-8c-8gb-1080p",
@@ -201,6 +218,14 @@ const MAC_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   },
 ];
 
+// Identity-only projection: do not expand or reorder the seed-owned catalog.
+const CHROMIUM_MAC_GPU_MODELS: ReadonlyMap<string, string> = new Map([
+  ["mac-apple-m1-8c-8gb-1440x900", "Apple M1"],
+  ["mac-apple-m2-8c-16gb-1512x982", "Apple M2"],
+  ["mac-apple-m3-8c-16gb-1710x1107", "Apple M3"],
+  ["mac-apple-m2pro-12c-16gb-1728x1117", "Apple M2 Pro"],
+]);
+
 const ANDROID_HARDWARE_PERSONAS: readonly HardwarePersona[] = [
   {
     id: "android-pixel7-tensor-8c-8gb-412x915",
@@ -297,9 +322,10 @@ export interface BrowserFingerprintConfig {
   storageQuotaBytes: number;
   canvas: { enabled: boolean; seed: string };
   audio: { enabled: boolean; seed: string; amplitude: number };
+  /** Empty strings leave WebGL identity native; managed Mac models do not alter capabilities. */
   webgl: { vendor: string; renderer: string };
   webgpu: {
-    mode: "webgl";
+    mode: "native" | "webgl";
     vendor: string;
     architecture: string;
     device: string;
@@ -350,13 +376,10 @@ export interface BrowserFingerprintConfig {
 }
 
 /**
- * Compose the engine-appropriate ANGLE renderer string for a persona.
- * Chrome embeds the PCI device id in its Windows D3D11 renderer string while
- * Firefox strips it (Mozilla privacy policy), so one persona base string
- * cannot serve both engines: a Chrome-150 UA reporting the Firefox form
- * (no device id) is detectably inconsistent, and vice versa. macOS Metal and
- * Android Vulkan forms carry no device id and are shared verbatim. Strings
- * that already embed a device id pass through untouched.
+ * Preserve the legacy engine-shaped renderer composer for compatibility.
+ * Windows Chrome tuples embed a PCI device id while Firefox tuples omit it;
+ * Metal/Android tuples carry no id. Existing ids pass through untouched.
+ * Chromium's supported Mac policy projects bare models, not these tuple strings.
  */
 export function composeGpuRenderer(baseRenderer: string, gpuDeviceId: string | null, engine: BrowserEngine): string {
   if (engine !== "chromium" || !gpuDeviceId) return baseRenderer;
@@ -370,14 +393,16 @@ export function composeGpuRenderer(baseRenderer: string, gpuDeviceId: string | n
 /**
  * Build the versioned, public configuration consumed by our native engines.
  * This deliberately does not reuse RoxyChrome's encrypted lumi.conf format.
- * `engine` selects engine-shaped UA/appVersion and WebGL renderer composition
- * (device-id embedding is Chrome-only; see composeGpuRenderer).
+ * `engine` selects engine-shaped UA/appVersion and GPU policy. Chromium only
+ * projects Apple model identity for supported Mac launch contexts; capabilities
+ * and WebGPU stay native. Firefox keeps its legacy seeded tuple.
  */
 export function buildBrowserFingerprintConfig(
   meta: BrowserFingerprintMeta,
   chromiumVersion: string | null,
   secureDns: SecureDnsConfig | null = null,
   engine: BrowserEngine = "chromium",
+  gpuContext?: ChromiumGpuContext,
 ): BrowserFingerprintConfig {
   const seed = normalizeSeed(meta.fingerprintSeed);
   const platform = normalizePlatform(meta.platform);
@@ -386,7 +411,8 @@ export function buildBrowserFingerprintConfig(
     : normalizeChromiumVersion(chromiumVersion);
   const locale = normalizeLocale(meta.locale);
   const languages = locale.includes("-") ? [locale, locale.split("-")[0]] : [locale];
-  const { persona, source: personaSource } = selectHardwarePersona(seed, platform, meta);
+  if (engine === "chromium") validateChromiumGpuSupport(meta, gpuContext);
+  const { persona, source: personaSource } = selectHardwarePersona(seed, platform, meta, engine);
   const isAndroid = platform === "Linux armv81";
   const screenWidth = persona.screenWidth;
   const screenHeight = persona.screenHeight;
@@ -422,10 +448,18 @@ export function buildBrowserFingerprintConfig(
         ? "5.0 (Android)"
         : "5.0 (Windows)"
     : ua.replace(/^Mozilla\//, "");
-  const webgl = {
-    vendor: persona.gpuVendor,
-    renderer: composeGpuRenderer(persona.gpuRenderer, persona.gpuDeviceId, engine),
-  };
+  const webgl = engine === "chromium"
+    ? supportsChromiumManagedGpu(meta, gpuContext)
+      ? projectChromiumMacGpu(persona)
+      : { vendor: "", renderer: "" }
+    // Gecko coarsens the Apple family to this native privacy bucket. It is
+    // not Chromium's ANGLE/Metal label and does not identify a physical model.
+    : platform === "MacIntel" && persona.gpuVendor === "Google Inc. (Apple)"
+      ? { vendor: "Apple", renderer: "Apple M1, or similar" }
+      : {
+        vendor: persona.gpuVendor,
+        renderer: composeGpuRenderer(persona.gpuRenderer, persona.gpuDeviceId, engine),
+      };
 
   return {
     schemaVersion: AGENT_BROWSER_FINGERPRINT_SCHEMA_VERSION,
@@ -465,7 +499,17 @@ export function buildBrowserFingerprintConfig(
     canvas: { enabled: true, seed: deriveSeed(seed, "canvas") },
     audio: { enabled: true, seed: deriveSeed(seed, "audio"), amplitude: 0.0000001 },
     webgl,
-    webgpu: deriveWebGpuIdentity(webgl.vendor, persona.gpuRenderer),
+    // Native consumers currently use non-empty strings/non-zero sizes as
+    // overrides, not mode. Empty/zero is therefore required for fall-through.
+    webgpu: engine === "chromium" ? {
+      mode: "native",
+      vendor: "",
+      architecture: "",
+      device: "",
+      description: "",
+      subgroupMinSize: 0,
+      subgroupMaxSize: 0,
+    } : deriveWebGpuIdentity(webgl.vendor, persona.gpuRenderer),
     webauthn: {
       enabled: true,
       conditionalGet: true,
@@ -499,16 +543,73 @@ export function buildBrowserFingerprintArg(
   switchPrefix = AGENT_BROWSER_FINGERPRINT_SWITCH,
   secureDns: SecureDnsConfig | null = null,
   engine: BrowserEngine = "chromium",
+  gpuContext?: ChromiumGpuContext,
 ): string {
   if (switchPrefix !== AGENT_BROWSER_FINGERPRINT_SWITCH && switchPrefix !== LEGACY_FINGERPRINT_SWITCH) {
     throw new Error(`Unsupported fingerprint switch: ${switchPrefix}`);
   }
-  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion, secureDns, engine));
+  return switchPrefix + encodeBrowserFingerprintConfig(buildBrowserFingerprintConfig(meta, chromiumVersion, secureDns, engine, gpuContext));
 }
 
-/** Validate that advanced fields can resolve to one complete hardware tuple. */
-export function validateBrowserHardwareProfile(meta: BrowserFingerprintMeta): void {
-  selectHardwarePersona(normalizeSeed(meta.fingerprintSeed), normalizePlatform(meta.platform), meta);
+/** Without context, validate the save-time catalog only; with context, enforce launch support too. */
+export function validateBrowserHardwareProfile(
+  meta: BrowserFingerprintMeta,
+  engine: BrowserEngine = "chromium",
+  gpuContext?: ChromiumGpuContext,
+): void {
+  if (engine === "chromium" && gpuContext !== undefined) validateChromiumGpuSupport(meta, gpuContext);
+  selectHardwarePersona(normalizeSeed(meta.fingerprintSeed), normalizePlatform(meta.platform), meta, engine);
+}
+
+/** Pure, versioned request-hash projection; unsupported/off contexts have no managed GPU identity. */
+export function getChromiumManagedGpuIdentity(
+  meta: BrowserFingerprintMeta,
+  context?: ChromiumGpuContext,
+): ChromiumManagedGpuIdentity | null {
+  if (!supportsChromiumManagedGpu(meta, context)) return null;
+  const { persona } = selectHardwarePersona(normalizeSeed(meta.fingerprintSeed), "MacIntel", meta, "chromium");
+  return {
+    policy: "macos-arm64-apple-model-v1",
+    hostPlatform: context.hostPlatform,
+    hostArchitecture: context.hostArchitecture,
+    kernelArchitecture: context.kernelArchitecture,
+    webgl: projectChromiumMacGpu(persona),
+  };
+}
+
+function supportsChromiumManagedGpu(
+  meta: BrowserFingerprintMeta,
+  context?: ChromiumGpuContext,
+): context is ChromiumGpuContext & Pick<ChromiumManagedGpuIdentity, "hostPlatform" | "hostArchitecture" | "kernelArchitecture"> {
+  return meta.platform === "macos" && meta.fingerprintMode !== "off" &&
+    context?.hostPlatform === "darwin" && context.hostArchitecture === "arm64" && context.kernelArchitecture === "arm64";
+}
+
+function projectChromiumMacGpu(persona: HardwarePersona): BrowserFingerprintConfig["webgl"] {
+  const renderer = CHROMIUM_MAC_GPU_MODELS.get(persona.id);
+  if (!renderer) throw new Error(`Unsupported Chromium macOS GPU profile: ${persona.id}`);
+  return { vendor: persona.gpuVendor, renderer };
+}
+
+function hasHardwareOverride(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== "";
+}
+
+function gpuOverrideFields(meta: BrowserFingerprintMeta): Array<"gpuVendor" | "gpuRenderer"> {
+  return (["gpuVendor", "gpuRenderer"] as const).filter((key) => hasHardwareOverride(meta[key]));
+}
+
+function unsupportedChromiumGpuOverrides(fields: readonly string[]): Error {
+  return new Error(
+    `Unsupported GPU overrides for Chromium: ${fields.join(", ")}. ` +
+    "Managed GPU overrides require platform=macos, hostPlatform=darwin, hostArchitecture=arm64 and kernelArchitecture=arm64, " +
+    "with fingerprintMode not off. Other contexts expose the native host GPU; clear gpuVendor and gpuRenderer.",
+  );
+}
+
+function validateChromiumGpuSupport(meta: BrowserFingerprintMeta, context?: ChromiumGpuContext): void {
+  const fields = gpuOverrideFields(meta);
+  if (fields.length > 0 && !supportsChromiumManagedGpu(meta, context)) throw unsupportedChromiumGpuOverrides(fields);
 }
 
 function normalizeSeed(value: unknown): number {
@@ -718,6 +819,7 @@ function selectHardwarePersona(
   seed: number,
   platform: "Win32" | "MacIntel" | "Linux armv81",
   meta: BrowserFingerprintMeta,
+  engine: BrowserEngine,
 ): { persona: HardwarePersona; source: "seeded" | "validated-override" } {
   const personas = platform === "MacIntel"
     ? MAC_HARDWARE_PERSONAS
@@ -731,9 +833,11 @@ function selectHardwarePersona(
     ["screenHeight", "screenHeight"],
     ["taskbarHeight", "taskbarHeight"],
   ] as const;
-  const hasValue = (value: unknown): boolean => value !== undefined && value !== null && value !== "";
-  const hasOverrides = numericConstraints.some(([metaKey]) => hasValue(meta[metaKey])) ||
-    hasValue(meta.gpuVendor) || hasValue(meta.gpuRenderer);
+  const gpuOverrides = gpuOverrideFields(meta);
+  if (engine === "chromium" && platform !== "MacIntel" && gpuOverrides.length > 0) {
+    throw unsupportedChromiumGpuOverrides(gpuOverrides);
+  }
+  const hasOverrides = numericConstraints.some(([metaKey]) => hasHardwareOverride(meta[metaKey])) || gpuOverrides.length > 0;
   if (!hasOverrides) {
     return { persona: personas[Math.abs(seed) % personas.length], source: "seeded" };
   }
@@ -741,20 +845,27 @@ function selectHardwarePersona(
   const candidates = personas.filter((persona) => {
     for (const [metaKey, personaKey] of numericConstraints) {
       const requested = meta[metaKey];
-      if (!hasValue(requested)) continue;
+      if (!hasHardwareOverride(requested)) continue;
       if (!Number.isInteger(requested) || Number(requested) !== persona[personaKey]) return false;
     }
-    if (hasValue(meta.gpuVendor) && String(meta.gpuVendor).trim() !== persona.gpuVendor) return false;
-    if (hasValue(meta.gpuRenderer) && String(meta.gpuRenderer).trim() !== persona.gpuRenderer) return false;
+    if (hasHardwareOverride(meta.gpuVendor)) {
+      const requested = engine === "chromium" ? meta.gpuVendor : String(meta.gpuVendor).trim();
+      if (requested !== persona.gpuVendor) return false;
+    }
+    if (hasHardwareOverride(meta.gpuRenderer)) {
+      const requested = engine === "chromium" ? meta.gpuRenderer : String(meta.gpuRenderer).trim();
+      if (requested !== persona.gpuRenderer &&
+          (engine !== "chromium" || requested !== CHROMIUM_MAC_GPU_MODELS.get(persona.id))) return false;
+    }
     return true;
   });
   if (candidates.length === 0) {
     const requested = [
       ...numericConstraints
-        .filter(([metaKey]) => hasValue(meta[metaKey]))
+        .filter(([metaKey]) => hasHardwareOverride(meta[metaKey]))
         .map(([metaKey]) => `${metaKey}=${JSON.stringify(meta[metaKey])}`),
-      ...(hasValue(meta.gpuVendor) ? [`gpuVendor=${JSON.stringify(meta.gpuVendor)}`] : []),
-      ...(hasValue(meta.gpuRenderer) ? [`gpuRenderer=${JSON.stringify(meta.gpuRenderer)}`] : []),
+      ...(hasHardwareOverride(meta.gpuVendor) ? [`gpuVendor=${JSON.stringify(meta.gpuVendor)}`] : []),
+      ...(hasHardwareOverride(meta.gpuRenderer) ? [`gpuRenderer=${JSON.stringify(meta.gpuRenderer)}`] : []),
     ];
     throw new Error(
       `Incoherent advanced hardware overrides for ${platform}: ${requested.join(", ")}. ` +

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { getHostBrowserPlatform } from "../../src/main/services/browser-platform-policy.js";
 import {
   listBusinessPresets,
   resolveBusinessPreset,
@@ -47,8 +48,45 @@ describe("business-presets catalog", () => {
     expect(() => resolveBusinessPreset("no-such-preset")).toThrow(/Unknown business preset/);
   });
 
+  it.each([
+    ["darwin", "macos"],
+    ["win32", "windows"],
+  ] as const)("resolves every listed and directly selected preset for %s without changing its region", (host, platform) => {
+    const portable = listBusinessPresets("linux");
+    const presets = listBusinessPresets(host);
+    expect(presets).toHaveLength(8);
+    for (const [index, preset] of presets.entries()) {
+      expect(preset.profile.platform).toBe(platform);
+      expect(resolveBusinessPreset(preset.id, host)).toEqual(preset);
+      expect({ ...preset, profile: { ...preset.profile, platform: portable[index].profile.platform } }).toEqual(portable[index]);
+    }
+  });
+
+  it("keeps list/resolve results, nested arrays and gates independent across hosts and calls", () => {
+    const mac = listBusinessPresets("darwin");
+    const windows = resolveBusinessPreset(mac[0].id, "win32");
+    const expectedMac = structuredClone(mac[0]);
+    const expectedWindows = structuredClone(windows);
+    mac[0].profile.platform = "android";
+    mac[0].profile.tags.push("mutated-list");
+    mac[0].recommendedGates.blockOnConsistencyConflict = false;
+    mac[0].region = "mutated-region";
+    windows.profile.tags.push("mutated-resolve");
+    windows.recommendedGates.blockOnEnvironmentRisk = false;
+    expect(listBusinessPresets("darwin")[0]).toEqual(expectedMac);
+    expect(resolveBusinessPreset(expectedMac.id, "darwin")).toEqual(expectedMac);
+    expect(listBusinessPresets("win32")[0]).toEqual(expectedWindows);
+    expect(resolveBusinessPreset(expectedMac.id, "win32")).toEqual(expectedWindows);
+  });
+
+  it("retains the portable catalog on unsupported hosts without treating them as supported hosts", () => {
+    for (const host of ["linux", "freebsd"]) expect(getHostBrowserPlatform(host)).toBeNull();
+    expect(listBusinessPresets("linux")).toEqual(listBusinessPresets("freebsd"));
+    expect(listBusinessPresets("linux").map(p => p.profile.platform)).toEqual(Array(8).fill("windows"));
+  });
+
   it("presetProfileToCreateOpts maps the identity fields for create", () => {
-    const opts = presetProfileToCreateOpts(resolveBusinessPreset("ebay-uk"));
+    const opts = presetProfileToCreateOpts(resolveBusinessPreset("ebay-uk", "win32"));
     expect(opts).toMatchObject({
       platform: "windows",
       timezone: "Europe/London",

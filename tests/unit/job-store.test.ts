@@ -8,6 +8,12 @@ import {
   recordNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
 } from "../../src/main/services/job-store.js";
 
+function requireJob(id: string) {
+  const job = getJob(id);
+  if (job === null) throw new Error(`Expected persisted job ${id}`);
+  return job;
+}
+
 beforeEach(() => {
   const db = new DatabaseSync(":memory:");
   _setDbForTesting(db);
@@ -28,26 +34,27 @@ describe("job-store", () => {
     const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
     markRunning(j.id, 0);
     markDone(j.id, "agent done");
-    const got = getJob(j.id);
+    const got = requireJob(j.id);
     expect(got.status).toBe("done");
     expect(got.result).toBe("agent done");
     expect(got.startedAt).toBeGreaterThan(0);
-    expect(got.finishedAt).toBeGreaterThanOrEqual(got.startedAt!);
+    if (got.startedAt === null) throw new Error("Expected running job start timestamp");
+    expect(got.finishedAt).toBeGreaterThanOrEqual(got.startedAt);
   });
 
   it("records failure with error text", () => {
     const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "test" });
     markRunning(j.id, 0);
     markFailed(j.id, "boom");
-    expect(getJob(j.id).status).toBe("failed");
-    expect(getJob(j.id).error).toBe("boom");
+    expect(requireJob(j.id).status).toBe("failed");
+    expect(requireJob(j.id).error).toBe("boom");
   });
 
   it("records a skip with a reason", () => {
     const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
     markSkipped(j.id, "skipped: cooldown");
-    expect(getJob(j.id).status).toBe("skipped");
-    expect(getJob(j.id).result).toContain("cooldown");
+    expect(requireJob(j.id).status).toBe("skipped");
+    expect(requireJob(j.id).result).toContain("cooldown");
   });
 
   it("persists runId on jobs and exposes it through getJob/listJobs", () => {
@@ -93,7 +100,7 @@ describe("job-store", () => {
   it("cancels a queued/running job; ignores a finished one", () => {
     const a = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron" });
     expect(markCancelled(a.id)).toBe(true);
-    expect(getJob(a.id).status).toBe("cancelled");
+    expect(requireJob(a.id).status).toBe("cancelled");
     // Already cancelled → no-op.
     expect(markCancelled(a.id)).toBe(false);
   });
@@ -103,8 +110,8 @@ describe("job-store", () => {
     markRunning(j.id, 0);
     expect(markCancelled(j.id)).toBe(true);
     markDone(j.id, "late success");
-    expect(getJob(j.id).status).toBe("cancelled");
-    expect(getJob(j.id).result).toBeNull();
+    expect(requireJob(j.id).status).toBe("cancelled");
+    expect(requireJob(j.id).result).toBeNull();
   });
 
   it("does not let late failure overwrite a cancelled running job", () => {
@@ -112,8 +119,8 @@ describe("job-store", () => {
     markRunning(j.id, 0);
     expect(markCancelled(j.id)).toBe(true);
     markFailed(j.id, "late error");
-    expect(getJob(j.id).status).toBe("cancelled");
-    expect(getJob(j.id).error).toBeNull();
+    expect(requireJob(j.id).status).toBe("cancelled");
+    expect(requireJob(j.id).error).toBeNull();
   });
 
   it("listJobs filters by status and ruleId, newest-first", () => {
@@ -143,9 +150,9 @@ describe("job-store", () => {
     markDone(b.id, "ok"); // finished cleanly
     const n = recoverInterruptedJobs();
     expect(n).toBe(1);
-    expect(getJob(a.id).status).toBe("failed");
-    expect(getJob(a.id).error).toContain("interrupted");
-    expect(getJob(b.id).status).toBe("done"); // untouched
+    expect(requireJob(a.id).status).toBe("failed");
+    expect(requireJob(a.id).error).toContain("interrupted");
+    expect(requireJob(b.id).status).toBe("done"); // untouched
   });
 
   it("getJob returns null for an unknown id", () => {
@@ -205,19 +212,22 @@ describe("job-store M3 retry-waiting", () => {
   it("parks a running job as retry-waiting and then reuses the SAME row", () => {
     const j = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron", planId: "plan_x" });
     markRunning(j.id, 0);
-    const firstStart = getJob(j.id)!.startedAt;
-    expect(markRetryWaiting(j.id, 5_000)).toBe(true);
-    const waiting = getJob(j.id)!;
+    const firstStart = requireJob(j.id).startedAt;
+    expect(markRetryWaiting(j.id, 5_000, "first attempt failed")).toBe(true);
+    const waiting = requireJob(j.id);
     expect(waiting.status).toBe("retry-waiting");
     expect(waiting.retryAt).toBe(5_000);
+    expect(waiting.error).toBe("first attempt failed");
 
     markRunningAttempt(j.id, 1);
-    const retried = getJob(j.id)!;
+    const retried = requireJob(j.id);
     expect(retried.status).toBe("running");
     expect(retried.attempt).toBe(1);
     expect(retried.retryAt).toBeNull();
     // The execution began at attempt 0; a retry must not look like a new run.
     expect(retried.startedAt).toBe(firstStart);
+    markDone(j.id, "retry succeeded");
+    expect(getJob(j.id)).toMatchObject({ status: "done", result: "retry succeeded", error: null, attempt: 1 });
     // One logical execution, one row.
     expect(listJobs({ ruleId: "r" })).toHaveLength(1);
   });
@@ -228,7 +238,7 @@ describe("job-store M3 retry-waiting", () => {
     markCancelled(j.id);
     // A late retry callback must not reopen a cancelled execution.
     expect(markRetryWaiting(j.id, 9_000)).toBe(false);
-    expect(getJob(j.id)!.status).toBe("cancelled");
+    expect(requireJob(j.id).status).toBe("cancelled");
   });
 
   it("refuses to park a job that already finished", () => {
@@ -236,7 +246,7 @@ describe("job-store M3 retry-waiting", () => {
     markRunning(j.id, 0);
     markDone(j.id, "ok");
     expect(markRetryWaiting(j.id, 9_000)).toBe(false);
-    expect(getJob(j.id)!.status).toBe("done");
+    expect(requireJob(j.id).status).toBe("done");
   });
 });
 
@@ -250,12 +260,12 @@ describe("job-store M3 reconciliation", () => {
     markDone(done.id, "ok");
 
     expect(recoverOrphanedQueuedJobs()).toBe(1);
-    const got = getJob(orphan.id)!;
+    const got = requireJob(orphan.id);
     expect(got.status).toBe("cancelled");
     // Cancelled, not failed: the work never started and no side effect occurred.
     expect(got.error).toContain("orphaned");
-    expect(getJob(running.id)!.status).toBe("running");
-    expect(getJob(done.id)!.status).toBe("done");
+    expect(requireJob(running.id).status).toBe("running");
+    expect(requireJob(done.id).status).toBe("done");
   });
 
   it("converges orphaned retry-waiting rows to failed with a truthful reason", () => {
@@ -263,7 +273,7 @@ describe("job-store M3 reconciliation", () => {
     markRunning(j.id, 0);
     markRetryWaiting(j.id, 9_000);
     expect(recoverOrphanedRetryWaitingJobs()).toBe(1);
-    const got = getJob(j.id)!;
+    const got = requireJob(j.id);
     expect(got.status).toBe("failed");
     expect(got.error).toContain("retry was not rescheduled");
     expect(got.retryAt).toBeNull();
@@ -273,10 +283,10 @@ describe("job-store M3 reconciliation", () => {
     const interrupted = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron", runId: "run_a" });
     markRunning(interrupted.id, 0);
     recoverInterruptedJobs();
-    expect(getJob(interrupted.id)!.status).toBe("failed");
+    expect(requireJob(interrupted.id).status).toBe("failed");
 
     expect(replayJobTerminalFromRun(interrupted.id, "done", "recovered", 1_000)).toBe(true);
-    const got = getJob(interrupted.id)!;
+    const got = requireJob(interrupted.id);
     expect(got.status).toBe("done");
     expect(got.result).toBe("recovered");
     expect(got.finishedAt).toBe(1_000);
@@ -288,13 +298,13 @@ describe("job-store M3 reconciliation", () => {
     markCancelled(cancelled.id);
     // The guard is the safety property: only rows this reconcile path created.
     expect(replayJobTerminalFromRun(cancelled.id, "done", "should not apply", 1_000)).toBe(false);
-    expect(getJob(cancelled.id)!.status).toBe("cancelled");
+    expect(requireJob(cancelled.id).status).toBe("cancelled");
 
     const realFail = enqueueJob({ ruleId: "r", ruleName: "n", source: "cron", runId: "run_c" });
     markRunning(realFail.id, 0);
     markFailed(realFail.id, "genuine product error");
     expect(replayJobTerminalFromRun(realFail.id, "done", "should not apply", 1_000)).toBe(false);
-    expect(getJob(realFail.id)!.error).toBe("genuine product error");
+    expect(requireJob(realFail.id).error).toBe("genuine product error");
   });
 
   it("lists only interrupted jobs that carry a runId", () => {

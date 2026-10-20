@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   classifyResolver, scanSystemFonts, proxyDnsLeak, classifyRaf,
   checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, classifyCnFontDisplayName,
+  type EnvRiskFinding,
 } from "../../src/main/services/environment-risk.js";
 
 const TMP = path.join(os.tmpdir(), "agent-browser-envrisk-test-" + Date.now());
@@ -205,16 +206,18 @@ describe("environment risk — launch gate helpers", () => {
   });
 
   it("summarizeEnvFindings filters by severity and caps output", () => {
-    const findings = [
-      { severity: "high", code: "a" },
-      { severity: "high", code: "b" },
-      { severity: "medium", code: "c" },
-      { severity: "info", code: "d" },
+    const findings: EnvRiskFinding[] = [
+      { severity: "high", code: "a", message: "finding a", fix: "remediation a" },
+      { severity: "high", code: "b", message: "finding b", fix: "remediation b" },
+      { severity: "medium", code: "c", message: "finding c", fix: "remediation c" },
+      { severity: "info", code: "d", message: "finding d", fix: "remediation d" },
     ];
     expect(summarizeEnvFindings(findings)).toBe("a, b, c, d");
     expect(summarizeEnvFindings(findings, "high")).toBe("a, b");
     expect(summarizeEnvFindings(findings, "medium")).toBe("c");
-    const many = Array.from({ length: 12 }, (_, i) => ({ severity: "high", code: "f" + i }));
+    const many = Array.from({ length: 12 }, (_, i): EnvRiskFinding => ({
+      severity: "high", code: "f" + i, message: "finding " + i, fix: "remediation " + i,
+    }));
     expect(summarizeEnvFindings(many)).toBe("f0, f1, f2, f3, f4, f5, f6, f7 (+4 more)");
   });
 });

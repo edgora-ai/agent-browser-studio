@@ -6,10 +6,11 @@ import { launchBrowser, stopBrowser, statusBrowser, touchProfileActivity } from 
 import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
+import { syncMayRetryAutomatically } from "./sync/operation-result.js";
 import { onEvent } from "./event-bus.js";
 import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
-import { enqueueJob, markRunning, markRunningAttempt, markRetryWaiting, markRetryAbandoned, markDone, markFailed, markSkipped, markCancelled, markJobRunId, recoverInterruptedJobs, pruneJobs, getJob, listJobs } from "./job-store.js";
+import { enqueueJob, markRunning, markRunningAttempt, markRetryWaiting, markRetryAbandoned, markDone, markFailed, markSkipped, markCancelled, markJobRunId, getJob, listJobs } from "./job-store.js";
 import { runSandboxedWithHandle } from "./script-sandbox.js";
 import { validateCron } from "./cron-validate.js";
 // nextCronTime lives in the pure classifier so the scheduler and the card
@@ -40,11 +41,10 @@ function runTimeoutMsFor(rule: AutomationRule): number {
 interface ArmedTimer {
   handle: NodeJS.Timeout;
   /**
-   * True fire time, or null when the armed wait is only a ≤24h re-arm chunk
-   * (see MAX_ARM_MS below). Null is the honest answer there: the timer is real
-   * but its deadline is not when the rule runs, and reporting the chunk as a
-   * next-run time would be a fabrication. The classifier reads null as "no
-   * observation available" and recomputes.
+   * A once rule always reports its actual execution deadline, including while
+   * waiting through intermediate chunks. Cron uses null for a ≤24h re-arm
+   * chunk because its next occurrence may change with the clock/timezone;
+   * reporting that chunk as its fire time would be a fabrication.
    */
   at: number | null;
   kind: "once" | "cron";
@@ -54,7 +54,6 @@ const retryTimers = new Map<string, NodeJS.Timeout>(); // ruleId -> retry timer
 let started = false;
 let stopping = false;
 let schedulerGeneration = 0;
-let recoveredInterruptedJobsOnStartup = false;
 
 // ── 执行硬化(超时/防重入/失败计数/冷却/重试) ──
 export const jobGuard = new JobGuard();
@@ -180,14 +179,14 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         assertActionNotAborted(context.signal);
         const r = await syncService.push(context.signal);
         assertActionNotAborted(context.signal);
-        if (!r.success) throw new Error(`push failed: ${r.message}`);
+        if (!r.success) throw Object.assign(new Error(`push failed: ${r.message}`), { automaticRetry: syncMayRetryAutomatically(r), syncResult: r });
         return `pushed: ${r.message}`;
       }
       case "sync-pull": {
         assertActionNotAborted(context.signal);
         const r = await syncService.pull(context.signal);
         assertActionNotAborted(context.signal);
-        if (!r.success) throw new Error(`pull failed: ${r.message}`);
+        if (!r.success) throw Object.assign(new Error(`pull failed: ${r.message}`), { automaticRetry: syncMayRetryAutomatically(r), syncResult: r });
         return `pulled: ${r.message}`;
       }
       case "custom-js": {
@@ -213,6 +212,9 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         throw new Error(`unknown action type: ${a.type}`);
     }
   } catch (e: any) {
+    if ((a.type === "sync-push" || a.type === "sync-pull") && typeof e?.automaticRetry !== "boolean") {
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { automaticRetry: false });
+    }
     throw e;
   }
 }
@@ -325,11 +327,10 @@ async function runAgentTaskOnProfile(
             });
             if (commit.ok) {
               artifacts = commit.artifacts;
-              // A truncated snapshot means the persisted copy is not complete:
-              // honest manual_review instead of a pass over partial evidence.
-              verification = commit.artifacts.some((a) => a.truncated)
-                ? manual("artifact_limit", "snapshot truncated to fit the per-run budget")
-                : outcome.verification;
+              // R0925-03: the store is the single source of truth for the
+              // verdict — it already downgraded to manual_review when the
+              // snapshot had to be truncated, so manifest and config agree.
+              verification = commit.verification;
             } else {
               verification = manual(commit.reasonCode === "artifact_limit" ? "artifact_limit" : "integrity_error", commit.detail);
             }
@@ -459,6 +460,12 @@ async function runRule(
       const j = enqueueJob({ ruleId: rule.id, ruleName: rule.name, source, planId: rule.planId ?? null });
       markSkipped(j.id, `skipped: ${decision.reason}`);
     } catch { /* ignore */ }
+    // A cooldown refusal consumes the only timer for this once. Persist the
+    // missed plan NOW, before a clock rollback can make its old at-time look
+    // future again during a live refresh. A running refusal is different: an
+    // execution may still own this plan, so leave its pending-work boundary
+    // intact instead of prematurely marking it missed.
+    if (source === "once" && decision.reason === "cooldown") markMissedOnceRules([rule]);
     console.log(`[automation] ⏭️ ${rule.name}: skipped (${decision.reason})`);
     return;
   }
@@ -466,10 +473,9 @@ async function runRule(
   let slotAcquired = false;
   let job: { id: string } | null = null;
   try {
-    // M3: the row is created BEFORE the slot wait, so "queued" is visible. It
-    // is cancelled on both early-exit paths below — without those cancels this
-    // change would leak a permanently-queued row, i.e. invent the very defect
-    // the milestone exists to remove.
+    // M3: the row is created BEFORE the slot wait, so "queued" is visible.
+    // Both early exits converge it: cancel an unstarted first attempt, or fail
+    // an abandoned retry of an execution that already started.
     if (resumeJobId) {
       job = { id: resumeJobId };
     } else {
@@ -479,13 +485,31 @@ async function runRule(
     try {
       await acquireRunSlot(rule.id, job?.id ?? null);
     } catch (e: any) {
-      if (job?.id) { try { markCancelled(job.id); } catch { /* ignore */ } }
-      console.log(`[automation] ⏹️ ${rule.name}: ${e?.message || String(e)}`);
+      const reason = e?.message || String(e);
+      if (job?.id) {
+        try {
+          if (resumeJobId) markRetryAbandoned(resumeJobId, `retry abandoned: ${reason}`);
+          else markCancelled(job.id);
+        } catch (error) {
+          console.error(`[automation] failed to finalize unstarted job ${job.id}:`, error);
+        }
+      }
+      console.log(`[automation] ⏹️ ${rule.name}: ${reason}`);
       return;
     }
     slotAcquired = true;
     if (generation !== schedulerGeneration || stopping || !isRuleStillRunnable(rule.id)) {
-      if (job?.id) { try { markCancelled(job.id); } catch { /* ignore */ } }
+      if (job?.id) {
+        try {
+          const reason = stopping ? "retry abandoned: scheduler stopped"
+            : generation !== schedulerGeneration ? "retry abandoned: schedule reloaded"
+            : "retry abandoned: rule no longer runnable";
+          if (resumeJobId) markRetryAbandoned(resumeJobId, reason);
+          else markCancelled(job.id);
+        } catch (error) {
+          console.error(`[automation] failed to finalize unstarted job ${job.id}:`, error);
+        }
+      }
       jobGuard.cancel(rule.id, Date.now());
       return;
     }
@@ -497,6 +521,7 @@ async function runRule(
     let ok = false;
     let resultText = "";
     let errMsg: string | undefined;
+    let retryAllowed = true;
     try {
       resultText = await withTimeout((signal) => {
         const controller = new AbortController();
@@ -519,6 +544,7 @@ async function runRule(
       console.log(`[automation] ✅ ${rule.name}: ${resultText}`);
     } catch (e: any) {
       errMsg = e.message || String(e);
+      retryAllowed = e?.automaticRetry !== false;
       resultText = `error: ${errMsg}`;
       console.error(`[automation] ❌ ${rule.name} (attempt ${attempt + 1}):`, errMsg);
     }
@@ -526,17 +552,21 @@ async function runRule(
     const end = cancelled
       ? jobGuard.cancel(rule.id, Date.now())
       : jobGuard.end(rule.id, ok, errMsg, attempt, {
-        maxRetries: cfg.maxRetries,
+        maxRetries: retryAllowed ? cfg.maxRetries : 0,
         cooldownAfterFailures: DEFAULT_JOB_GUARD_CONFIG.cooldownAfterFailures,
         cooldownMs: DEFAULT_JOB_GUARD_CONFIG.cooldownMs,
         retryBaseMs: DEFAULT_JOB_GUARD_CONFIG.retryBaseMs,
         retryMaxMs: DEFAULT_JOB_GUARD_CONFIG.retryMaxMs,
       }, Date.now());
+    const stillRunnable = !cancelled && generation === schedulerGeneration && !stopping && isRuleStillRunnable(rule.id);
     if (job) {
       try {
         if (ok) markDone(job.id, resultText);
         else if (cancelled) markCancelled(job.id);
-        else markFailed(job.id, errMsg || resultText);
+        // A retry is still this same logical execution: park the RUNNING row
+        // below, rather than marking it failed first (the store deliberately
+        // refuses to reopen a terminal row as retry-waiting).
+        else if (!end.scheduleRetry || !stillRunnable) markFailed(job.id, errMsg || resultText);
       } catch { /* ignore */ }
     }
     persistRunState(rule, ok, ok ? resultText : resultText, errMsg);
@@ -547,7 +577,6 @@ async function runRule(
       activeJobIds.delete(job.id);
       cancelledJobIds.delete(job.id);
     }
-    const stillRunnable = !cancelled && generation === schedulerGeneration && !stopping && isRuleStillRunnable(rule.id);
     if (end.scheduleRetry && stillRunnable) {
       console.log(`[automation] 🔁 ${rule.name}: retry ${attempt + 2}/${cfg.maxRetries + 1} in ${end.retryDelayMs}ms`);
       clearRetry(rule.id);
@@ -559,7 +588,7 @@ async function runRule(
       retryAtByRule.set(rule.id, retryAt);
       if (resumeId) {
         retryJobByRule.set(rule.id, resumeId);
-        try { markRetryWaiting(resumeId, retryAt); } catch { /* ignore */ }
+        try { markRetryWaiting(resumeId, retryAt, errMsg); } catch { /* ignore */ }
       }
       const t = setTimeout(() => {
         if (retryTimers.get(rule.id) === t) {
@@ -695,27 +724,47 @@ function clearAllRetries(reason?: string): void {
 
 // ── cron 解析(轻量,5 字段: min hour dom mon dow) ──
 // 算 cron 下次触发时间(从 now 之后)
+// A day is below Node's 2^31-1 ms timeout limit, even for yearly rules.
+const MAX_ARM_MS = 24 * 3600 * 1000;
 // ── 调度单个规则 ──
 function scheduleRule(rule: AutomationRule): void {
-  clearRule(rule.id);
+  clearArmedTimer(rule.id);
   if (!rule.enabled) return;
   if (rule.trigger.type === "event") return; // 事件触发由总线处理,不主动调度
 
   const now = Date.now();
   if (rule.trigger.type === "once") {
+    // A missed mark belongs to this plan until an explicit semantic edit or
+    // reschedule clears it. A clock rollback must not make the old at-time live.
+    if (rule.missedAt) return;
     const at = rule.trigger.at || 0;
-    const delay = at - now;
-    if (delay < 0) return; // expired — surfaced as missed-once by the classifier, never silently re-armed
+    if (at < now) return; // expired — surfaced as missed-once by the classifier, never silently re-armed
     const generation = schedulerGeneration;
-    const entry: ArmedTimer = { handle: null as any, at, kind: "once" };
-    entry.handle = setTimeout(() => {
-      if (timers.get(rule.id) === entry) timers.delete(rule.id);
-      if (generation !== schedulerGeneration || stopping || !isRuleStillRunnable(rule.id)) return;
-      void runRule(rule, 0, "once", generation).catch((e) => {
-        console.error(`[automation] once run failed for ${rule.name}:`, e);
-      });
-    }, delay);
-    timers.set(rule.id, entry);
+    const armOnce = () => {
+      // Recompute against wall time on EVERY wake. A clock rollback must extend
+      // the wait, and a forward jump cannot fire before the actual deadline.
+      const remaining = at - Date.now();
+      const entry: ArmedTimer = { handle: null as any, at, kind: "once" };
+      entry.handle = setTimeout(() => {
+        if (timers.get(rule.id) !== entry) return;
+        timers.delete(rule.id);
+        const current = getRunnableRule(rule.id);
+        // Rule edits, stop/reload, live refresh and persisted missed marks must
+        // invalidate even an already-dispatched chunk callback.
+        if (generation !== schedulerGeneration || stopping || !current
+          || current.trigger.type !== "once" || current.trigger.at !== at
+          || current.planId !== rule.planId || current.missedAt) return;
+        if (Date.now() < at) {
+          armOnce();
+          return;
+        }
+        void runRule(rule, 0, "once", generation).catch((e) => {
+          console.error(`[automation] once run failed for ${rule.name}:`, e);
+        });
+      }, Math.min(Math.max(remaining, 0), MAX_ARM_MS));
+      timers.set(rule.id, entry);
+    };
+    armOnce();
   } else if (rule.trigger.type === "cron") {
     if (!rule.trigger.cron) return;
     try {
@@ -732,17 +781,27 @@ function scheduleRule(rule: AutomationRule): void {
       // setTimeout overflows past ~24.8 days (2^31-1 ms) and fires immediately,
       // which would spin a monthly/yearly cron in a tight loop. Cap each armed
       // wait at one day and re-evaluate; the final day arms the real fire.
-      const MAX_ARM_MS = 24 * 3600 * 1000;
       if (remaining <= MAX_ARM_MS) {
         // A real deadline: the timer fires at the rule's actual next run.
         const entry: ArmedTimer = { handle: null as any, at: next, kind: "cron" };
-        entry.handle = setTimeout(() => { runRule(rule, 0, "cron", generation); if (generation === schedulerGeneration && !stopping) armNext(); }, Math.max(remaining, 0));
+        entry.handle = setTimeout(() => {
+          if (timers.get(rule.id) !== entry) return;
+          timers.delete(rule.id);
+          void runRule(rule, 0, "cron", generation).catch((e) => {
+            console.error(`[automation] cron run failed for ${rule.name}:`, e);
+          });
+          if (generation === schedulerGeneration && !stopping) armNext();
+        }, Math.max(remaining, 0));
         timers.set(rule.id, entry);
       } else {
         // A re-arm chunk, not a deadline: `at: null` so nobody mistakes the
         // chunk boundary for the fire time.
         const entry: ArmedTimer = { handle: null as any, at: null, kind: "cron" };
-        entry.handle = setTimeout(() => { if (generation === schedulerGeneration && !stopping) armNext(); }, MAX_ARM_MS);
+        entry.handle = setTimeout(() => {
+          if (timers.get(rule.id) !== entry) return;
+          timers.delete(rule.id);
+          if (generation === schedulerGeneration && !stopping) armNext();
+        }, MAX_ARM_MS);
         timers.set(rule.id, entry);
       }
     };
@@ -750,10 +809,9 @@ function scheduleRule(rule: AutomationRule): void {
   }
 }
 
-function clearRule(ruleId: string): void {
+function clearArmedTimer(ruleId: string): void {
   const t = timers.get(ruleId);
   if (t) { clearTimeout(t.handle); timers.delete(ruleId); }
-  clearRetry(ruleId);
 }
 
 // ── 事件触发注册 ──
@@ -788,19 +846,8 @@ export function startScheduler(): void {
   if (started) return;
   stopping = false;
   started = true;
-  // Recover jobs interrupted by a prior crash/quit once per process. A stop/start
-  // inside the same process may still have async cancellations unwinding.
-  if (!recoveredInterruptedJobsOnStartup) {
-    recoveredInterruptedJobsOnStartup = true;
-    try {
-      const n = recoverInterruptedJobs();
-      if (n > 0) console.log(`[automation] recovered ${n} interrupted job(s)`);
-    } catch (e) { console.error("[automation] job recovery failed:", e); }
-    try {
-      const pruned = pruneJobs();
-      if (pruned > 0) console.log(`[automation] pruned ${pruned} old job row(s)`);
-    } catch (e) { console.error("[automation] job prune failed:", e); }
-  }
+  // Startup-only job recovery belongs to index.ts, before handlers and this
+  // scheduler are started. A same-process stop/start must not recover live rows.
   registerEventTriggers();
   reloadSchedule();
   console.log("[automation] scheduler started");
@@ -812,7 +859,7 @@ export function reloadSchedule(): void {
   const rules: AutomationRule[] = cfg.automation || [];
   // 清掉所有定时器/队列,重新调度；已在运行的 job 继续由自身 guard 收尾。
   rejectQueuedRunSlots("automation schedule reloaded");
-  for (const id of [...timers.keys()]) clearRule(id);
+  for (const id of [...timers.keys()]) clearArmedTimer(id);
   clearAllRetries();
   // Hydrate the guard from persisted runtime state so failure counts /
   // cooldowns survive a restart.
@@ -826,9 +873,38 @@ export function reloadSchedule(): void {
 }
 
 /**
+ * Recompute only future timer deadlines after focus/resume/unlock or a manual
+ * live reconcile. Rule edits and stop use reloadSchedule instead: they DO
+ * invalidate queued slots, retries and running executions via the generation.
+ * A live clock/timezone refresh must not do any of those things. The old timer
+ * entries are displaced even if a cleared callback was already dispatched;
+ * their identity gate prevents them from firing or re-arming afterward.
+ * Returns the number of timers actually armed (not jobs created/replayed).
+ */
+export function refreshScheduleTimers(): number {
+  if (!started || stopping) return 0;
+  const rules: AutomationRule[] = (getConfig() as any).automation || [];
+  for (const id of [...timers.keys()]) clearArmedTimer(id);
+  let armed = 0;
+  for (const rule of rules) {
+    // An already-fired once is still enabled while it runs, queues or waits for
+    // retry. At equality it could otherwise get a second zero-delay timer.
+    if (rule.trigger.type === "once" && (
+      jobGuard.getState(rule.id).running || retryTimers.has(rule.id)
+      || slotQueue.some((q) => q.ruleId === rule.id)
+    )) continue;
+    scheduleRule(rule);
+    if (timers.has(rule.id)) armed++;
+  }
+  markMissedOnceRules(rules);
+  return armed;
+}
+
+/**
  * M3: stamp `missedAt` on enabled `once` rules that are past due with no
- * pending work. Display-only — it never disables the rule, never rewrites
- * `trigger.at`, and never re-arms anything.
+ * pending work. The mark never disables the rule or rewrites `trigger.at`;
+ * it prevents that original plan from being armed after a clock rollback.
+ * A semantic edit/reschedule creates a new plan and clears the mark.
  *
  * Guarded on "not already marked" so a reload (which happens on every edit)
  * does not keep rewriting the timestamp, and so the mark records when the
@@ -882,7 +958,8 @@ function markMissedOnceRules(rules: AutomationRule[]): void {
  * This is the single meeting point between the scheduler and the status card.
  * Everything returned is observed (map lookups), not recomputed — except
  * `armedAt` for a chunked cron, which is null precisely because there is no
- * observation to make there.
+ * fixed next occurrence at that intermediate timer boundary. A chunked once
+ * instead retains its fixed execution deadline.
  */
 export function getSchedulerLiveState(ruleId: string): SchedulerLiveState {
   const timer = timers.get(ruleId);
@@ -890,9 +967,8 @@ export function getSchedulerLiveState(ruleId: string): SchedulerLiveState {
   const guard = jobGuard.getState(ruleId);
   return {
     executing: Boolean(guard.running),
-    // The timer's own delay is not readable, so the recorded `at` is what we
-    // report; it is written when the timer is armed and never read back by any
-    // scheduling decision.
+    // Report the recorded execution deadline, not the intermediate chunk
+    // boundary. The value is never read back by a scheduling decision.
     retryAt: retry ? retryAtFor(ruleId) : null,
     waitingForSlot: slotQueue.some((q) => q.ruleId === ruleId),
     armedAt: timer ? timer.at : null,
@@ -978,7 +1054,7 @@ export function stopScheduler(): void {
   schedulerGeneration++;
   stopping = true;
   rejectQueuedRunSlots("automation scheduler stopping");
-  for (const id of [...timers.keys()]) clearRule(id);
+  for (const id of [...timers.keys()]) clearArmedTimer(id);
   clearAllRetries("retry abandoned: scheduler stopped");
   for (const id of activeJobIds) {
     cancelledJobIds.add(id);

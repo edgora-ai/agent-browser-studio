@@ -4,11 +4,15 @@ import * as net from "node:net";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { validateBrowserHardwareProfile } from "./browser-fingerprint-config.js";
+import { sanitizePortableFingerprintBaseline } from "./fingerprint-baseline.js";
+import { PORTABLE_PROFILE_FIELDS, parseProfileSyncBaseline, parseProfileHistoryBaseline, parseHistoryCoverage, type PortableProfileContent } from "./profile-portability.js";
 import { app } from "electron";
 import { validateDirId } from "./utils.js";
 import { tMain } from "./main-i18n.js";
-import { transact as storeTransact, readSnapshot, setAfterTransactHook, setConfigBaseProvider, setNormalizer } from "./config/store.js";
+import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommittedConfig, adoptLoadedConfig, setNormalizer, setProxyWitnessAdapter, captureProxyTarget, type ProxyDetectionTarget } from "./config/store.js";
+import { createProxyWitness, proxyObservationTime } from "./proxy-observation.js";
 import { assertConfigSize } from "./config/limits.js";
+import { invalidateSyncSettings } from "./sync/operation-state.js";
 import {
   clearLegacySecretMigrationCache,
   decryptSecretOr,
@@ -19,6 +23,7 @@ import {
 } from "./secrets.js";
 import type { MgmtConfig, ProxyConfig, ProxyDetectionCacheEntry, ProxyHealthEntry, BrowserFingerprintMeta, BrowserProfileMeta, ProxyMode, ResolvedProfileProxy, ExtensionRepositoryEntry, SkillRepositoryEntry, SkillCatalogSource, LlmConfig, PlatformAccount, AutomationRule, AutomationTrigger, AutomationAction, AutomationTriggerType, AutomationActionType, AgentRun, AgentRunEndReason, AgentRunStep, AgentRunSource, AgentRunStatus, AgentRunVerification, AgentRunVerificationCounts, AgentRunVerificationIssue, AgentRunArtifactRef, AgentFsConfig, AgentFsMode, DrmConfig, TeamConfig } from "../types.js";
 import { normalizeManagedFirefoxVersion, sanitizeBrowserEngine } from "./browser-engine.js";
+import { cleanupNormalizedRunEvictions, isOwnedRun, retainAgentRuns } from "./agent-run-retention.js";
 
 /** Engine-aware version-pin normalization (R5): Firefox pins ("154.0") must
  * not go through the Chromium 4-segment validator. Engine is resolved first
@@ -30,7 +35,8 @@ function normalizeProfileBrowserVersion(profile: { engine?: unknown; browserVers
     : normalizeManagedChromiumVersion((profile as any)?.browserVersion);
 }
 import { normalizeManagedChromiumVersion } from "./native-chromium-manager.js";
-import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry } from "../types.js";
+import type { WebRtcDiagnosticsEntry, EnvRiskDiagnosticsEntry, ProfileHealthEntry, ProfileHealthKind } from "../types.js";
+import { normalizeNetworkObservationSummary } from "./network-diagnostics-contract.js";
 import { PROFILE_DIR_NAME } from "../branding.js";
 
 // ── Paths (lazy — resolved on first access so app.setName() can run first) ──
@@ -58,6 +64,7 @@ const DefaultConfig: MgmtConfig = {
   proxyHealth: {},
   webrtcDiagnostics: {},
   envRiskDiagnostics: {},
+  profileHealthHistory: {},
   sync: {
     enabled: false,
     endpoint: "",
@@ -76,21 +83,13 @@ const DefaultConfig: MgmtConfig = {
   automationNotify: { system: false, sound: false },
 };
 
-// ── In-memory config cache ──
-let config: MgmtConfig | null = null;
-
 // ── Public API ──
-
+// The store owns one config/witness/revision bundle; no second config cache.
 export function getConfig(): MgmtConfig {
-  if (!config) {
-    config = loadConfig();
-  }
-  // Sale-90: always ensure, not just on first load. The missing-file branch
-  // of loadConfig seeds the cache via saveConfig's afterTransact hook BEFORE
-  // identity is assigned, so a reloadConfig() over a deleted config.json used
-  // to leave deviceId empty forever (license device binding then failed).
-  ensureDeviceIdentity(config);
-  return config;
+  if (!getCommittedConfig()) adoptLoadedConfig(loadConfig());
+  // Always ensure identity, including a reload over a deleted config file.
+  ensureDeviceIdentity(getCommittedConfig()!);
+  return getCommittedConfig()!;
 }
 
 /** Assign a stable per-install device identity (used for team profile locks). */
@@ -117,12 +116,13 @@ export function getProfilesDir(): string {
 
 // ── Proxy management ──
 
-export function getProxyList(): Array<{ name: string; config: ProxyConfig & { hasAuth?: boolean }; isDefault: boolean }> {
+export function getProxyList(): Array<{ name: string; config: ProxyConfig & { hasAuth?: boolean }; isDefault: boolean; detection?: ProxyDetectionCacheEntry }> {
   const cfg = getConfig();
   return Object.entries(cfg.proxies).map(([name, c]) => ({
     name,
     config: redactProxyConfig(c),
     isDefault: name === cfg.defaultProxy,
+    ...(cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? { detection: structuredClone(cfg.proxyDetections[name]) } : {}),
   }));
 }
 
@@ -137,110 +137,204 @@ export function getProxySecret(name: string): ProxyConfig | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return null;
-  const proxy = cfg.proxies[name];
+  const proxy = structuredClone(cfg.proxies[name]);
   return proxy.username && proxy.password
     ? { ...proxy, password: decryptSecretOr(proxy.password) }
-    : { ...proxy };
+    : proxy;
+}
+
+/** Capture from committed state before dedupe or any asynchronous dispatch.
+ * An optional launch snapshot must still describe this exact committed route. */
+export function captureProxyDetectionTarget(name: string, expected?: ProxyConfig): ProxyDetectionTarget | null {
+  if (!isValidProxyName(name)) return null;
+  const cfg = getConfig();
+  if (!Object.hasOwn(cfg.proxies, name) || expected && !proxyConfigEquivalent(cfg.proxies[name], expected)) return null;
+  return captureProxyTarget(name);
 }
 
 export function getProxyDetection(name: string): ProxyDetectionCacheEntry | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
-  return cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? cfg.proxyDetections[name] : null;
+  return cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, name) ? structuredClone(cfg.proxyDetections[name]) : null;
 }
 
 export function setProxyDetection(name: string, entry: ProxyDetectionCacheEntry): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
-  cfg.proxyDetections = cfg.proxyDetections || {};
-  cfg.proxyDetections[name] = normalizeProxyDetection(entry);
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+    draft.proxyDetections = draft.proxyDetections || {};
+    draft.proxyDetections[name] = normalizeProxyDetection(entry);
+  });
 }
 
+// Legacy synchronous CAS for main-only callers. Async detectors use the opaque
+// lifecycle target instead; a mismatch exits BEFORE any persistence attempt.
 export function setProxyDetectionIfCurrent(name: string, expectedConfig: ProxyConfig, entry: ProxyDetectionCacheEntry): boolean {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) return false;
-  if (!proxyConfigEquivalent(cfg.proxies[name], normalizeProxyConfig(expectedConfig, cfg.proxies[name]))) return false;
-  cfg.proxyDetections = cfg.proxyDetections || {};
-  cfg.proxyDetections[name] = normalizeProxyDetection(entry);
-  saveConfig(cfg);
-  return true;
+  getConfig();
+  const conflict = {};
+  try {
+    storeTransact((draft: MgmtConfig) => {
+      if (!Object.hasOwn(draft.proxies, name) || !proxyConfigEquivalent(draft.proxies[name], normalizeProxyConfig(expectedConfig, draft.proxies[name]))) throw conflict;
+      draft.proxyDetections = draft.proxyDetections || {};
+      draft.proxyDetections[name] = normalizeProxyDetection(entry);
+    });
+    return true;
+  } catch (error) { if (error === conflict) return false; throw error; }
 }
 
 export function getProxyHealthEntry(name: string): ProxyHealthEntry | null {
   if (!isValidProxyName(name)) return null;
   const cfg = getConfig();
-  return cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
+  return cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? structuredClone(cfg.proxyHealth[name]) : null;
 }
 
 export function setProxyHealth(name: string, entry: ProxyHealthEntry): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  if (!Object.hasOwn(cfg.proxies, name)) throw new Error(`Proxy not found: ${name}`);
-  cfg.proxyHealth = cfg.proxyHealth || {};
-  cfg.proxyHealth[name] = normalizeProxyHealthEntry(entry);
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, name)) throw new Error(`Proxy not found: ${name}`);
+    draft.proxyHealth = draft.proxyHealth || {};
+    draft.proxyHealth[name] = normalizeProxyHealthEntry(entry);
+  });
 }
 
 const MAX_WEBRTC_DIAG_HISTORY = 20;
+const MAX_ENV_RISK_DIAG_HISTORY = 20;
+const MAX_PROFILE_HEALTH_HISTORY = 20;
+const HEALTH_KINDS = new Set(["env", "webrtc", "drift", "consistency", "network"]);
+const HEALTH_OUTCOMES = new Set(["pass", "warn", "risk", "error", "unavailable", "inconclusive", "cancelled", "baseline-established"]);
+const HEALTH_SOURCES = new Set(["runtime", "host", "baseline", "cached", "legacy"]);
+
+function normalizeProfileHealthEntry(raw: unknown): ProfileHealthEntry | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as ProfileHealthEntry;
+  if (!HEALTH_KINDS.has(value.kind) || !HEALTH_OUTCOMES.has(value.outcome) || !HEALTH_SOURCES.has(value.source)
+    || !Number.isSafeInteger(value.at) || value.at < 0 || typeof value.summary !== "string"
+    || value.requestId !== undefined && (typeof value.requestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(value.requestId))) return null;
+  if (value.kind === "network") {
+    const networkSummary = normalizeNetworkObservationSummary(value.networkSummary);
+    if (!networkSummary) return null;
+    // Network details never enter canonical history. Even a forged native PASS
+    // cannot turn one finite observation into website/proxy availability proof.
+    return {
+      kind: "network", at: value.at,
+      outcome: value.outcome === "pass" || value.outcome === "baseline-established" ? "inconclusive" : value.outcome,
+      summary: "NETWORK_OBSERVATION_V1", source: value.source,
+      ...(value.requestId !== undefined ? { requestId: value.requestId } : {}), networkSummary,
+    };
+  }
+  return {
+    kind: value.kind, at: value.at,
+    outcome: value.source === "legacy" && value.outcome === "pass" ? "inconclusive" : value.outcome,
+    summary: value.summary.slice(0, 2048), source: value.source,
+    ...(value.requestId !== undefined ? { requestId: value.requestId } : {}),
+  };
+}
+
+function appendProfileHealthDraft(draft: MgmtConfig, dirId: string, raw: ProfileHealthEntry): void {
+  const entry = normalizeProfileHealthEntry(raw);
+  if (!entry) throw new Error("Invalid profile health result");
+  if (!Object.hasOwn(draft.browserProfiles || {}, dirId)) throw new Error("PROFILE_NOT_FOUND: Profile not found");
+  const previous = draft.profileHealthHistory && Object.hasOwn(draft.profileHealthHistory, dirId) ? draft.profileHealthHistory[dirId] : [];
+  draft.profileHealthHistory = { ...draft.profileHealthHistory,
+    [dirId]: [...(Array.isArray(previous) ? previous : []), entry].sort((a, b) => a.at - b.at).slice(-MAX_PROFILE_HEALTH_HISTORY) };
+}
+
+export function getProfileHealthHistory(dirId: string): ProfileHealthEntry[] {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  const list = cfg.profileHealthHistory && Object.hasOwn(cfg.profileHealthHistory, dirId) ? cfg.profileHealthHistory[dirId] : null;
+  return Array.isArray(list) ? structuredClone(list) : [];
+}
+
+export function appendProfileHealthResult(dirId: string, entry: ProfileHealthEntry): void {
+  validateDirId(dirId);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => appendProfileHealthDraft(draft, dirId, entry));
+}
+
+type HealthClearListener = (dirId: string, kind?: ProfileHealthKind) => void;
+const healthClearListeners = new Set<HealthClearListener>();
+
+/** Keep in-flight diagnostic invalidation independent of the storage module. */
+export function onProfileHealthRecordsCleared(listener: HealthClearListener): () => void {
+  healthClearListeners.add(listener);
+  return () => { healthClearListeners.delete(listener); };
+}
+
+/** Clear the canonical summary and its corresponding detailed facts together. */
+export function clearProfileHealthRecords(dirId: string, kind?: ProfileHealthKind): void {
+  validateDirId(dirId);
+  if (kind !== undefined && !HEALTH_KINDS.has(kind)) throw new Error("Invalid profile health kind");
+  getConfig();
+  for (const listener of healthClearListeners) listener(dirId, kind);
+  storeTransact((draft: MgmtConfig) => {
+    if (draft.profileHealthHistory && Object.hasOwn(draft.profileHealthHistory, dirId)) {
+      if (kind === undefined) delete draft.profileHealthHistory[dirId];
+      else draft.profileHealthHistory[dirId] = draft.profileHealthHistory[dirId].filter((entry) => entry.kind !== kind);
+    }
+    if (kind === undefined || kind === "webrtc") {
+      if (draft.webrtcDiagnostics) delete draft.webrtcDiagnostics[dirId];
+    }
+    if (kind === undefined || kind === "env") {
+      if (draft.envRiskDiagnostics) delete draft.envRiskDiagnostics[dirId];
+    }
+  });
+}
 
 export function getWebRtcDiagnostics(dirId: string): WebRtcDiagnosticsEntry[] {
   const cfg = getConfig();
   const list = cfg.webrtcDiagnostics && Object.hasOwn(cfg.webrtcDiagnostics, dirId) ? cfg.webrtcDiagnostics[dirId] : null;
-  return Array.isArray(list) ? list : [];
+  return Array.isArray(list) ? structuredClone(list) : [];
 }
 
-export function setWebRtcDiagnostics(dirId: string, entries: WebRtcDiagnosticsEntry[]): void {
+export function setWebRtcDiagnostics(dirId: string, entries: WebRtcDiagnosticsEntry[], health?: ProfileHealthEntry): void {
   validateDirId(dirId);
-  const cfg = getConfig();
-  cfg.webrtcDiagnostics = cfg.webrtcDiagnostics || {};
-  cfg.webrtcDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_WEBRTC_DIAG_HISTORY);
-  saveConfig(cfg);
+  getConfig();
+  const stored = structuredClone((Array.isArray(entries) ? entries : []).slice(-MAX_WEBRTC_DIAG_HISTORY));
+  storeTransact((draft: MgmtConfig) => {
+    draft.webrtcDiagnostics = { ...draft.webrtcDiagnostics, [dirId]: stored };
+    if (health) appendProfileHealthDraft(draft, dirId, health);
+  });
 }
 
 export function clearWebRtcDiagnostics(dirId: string): void {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  if (cfg.webrtcDiagnostics) delete cfg.webrtcDiagnostics[dirId];
-  saveConfig(cfg);
+  clearProfileHealthRecords(dirId, "webrtc");
 }
-
-const MAX_ENV_RISK_DIAG_HISTORY = 20;
 
 export function getEnvRiskDiagnostics(dirId: string): EnvRiskDiagnosticsEntry[] {
   const cfg = getConfig();
   const list = cfg.envRiskDiagnostics && Object.hasOwn(cfg.envRiskDiagnostics, dirId) ? cfg.envRiskDiagnostics[dirId] : null;
-  return Array.isArray(list) ? list : [];
+  return Array.isArray(list) ? structuredClone(list) : [];
 }
 
-export function setEnvRiskDiagnostics(dirId: string, entries: EnvRiskDiagnosticsEntry[]): void {
+export function setEnvRiskDiagnostics(dirId: string, entries: EnvRiskDiagnosticsEntry[], health?: ProfileHealthEntry): void {
   validateDirId(dirId);
-  const cfg = getConfig();
-  cfg.envRiskDiagnostics = cfg.envRiskDiagnostics || {};
-  cfg.envRiskDiagnostics[dirId] = (Array.isArray(entries) ? entries : []).slice(-MAX_ENV_RISK_DIAG_HISTORY);
-  saveConfig(cfg);
+  getConfig();
+  const stored = structuredClone((Array.isArray(entries) ? entries : []).slice(-MAX_ENV_RISK_DIAG_HISTORY));
+  storeTransact((draft: MgmtConfig) => {
+    draft.envRiskDiagnostics = { ...draft.envRiskDiagnostics, [dirId]: stored };
+    if (health) appendProfileHealthDraft(draft, dirId, health);
+  });
 }
 
 export function clearEnvRiskDiagnostics(dirId: string): void {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  if (cfg.envRiskDiagnostics) delete cfg.envRiskDiagnostics[dirId];
-  saveConfig(cfg);
+  clearProfileHealthRecords(dirId, "env");
 }
 
 export function addProxy(name: string, config: ProxyConfig): void {
   validateProxyName(name);
-  const cfg = getConfig();
-  cfg.proxies[name] = normalizeProxyConfig(config);
-  cfg.proxies[name].updatedAt = Date.now();
-  if (cfg.proxies[name].fallbacks && cfg.proxies[name].fallbacks.includes(name)) {
-    cfg.proxies[name].fallbacks = cfg.proxies[name].fallbacks.filter((f) => f !== name);
-  }
-  if (cfg.proxyDetections) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
-  saveConfig(cfg);
+  getConfig();
+  storeTransact((draft: MgmtConfig) => {
+    const proxy = normalizeProxyConfig(config);
+    proxy.updatedAt = Date.now();
+    if (proxy.fallbacks?.includes(name)) proxy.fallbacks = proxy.fallbacks.filter(f => f !== name);
+    draft.proxies[name] = proxy;
+    if (draft.proxyDetections) delete draft.proxyDetections[name];
+    if (draft.proxyHealth) delete draft.proxyHealth[name];
+  }, undefined, { invalidateProxyTargets: [name] });
 }
 
 export function renameProxy(oldName: string, newName: string, config: ProxyConfig): boolean {
@@ -249,45 +343,35 @@ export function renameProxy(oldName: string, newName: string, config: ProxyConfi
   const cfg = getConfig();
   if (oldName === "default") throw new Error("Default proxy cannot be renamed");
   if (!Object.hasOwn(cfg.proxies, oldName)) return false;
-  if (oldName !== newName && Object.hasOwn(cfg.proxies, newName)) throw new Error(`Proxy already exists: ${newName}`);
-
-  const previous = cfg.proxies[oldName];
-  const normalized = normalizeProxyConfig(config, previous);
-  normalized.updatedAt = Date.now();
-  cfg.proxies[newName] = normalized;
-
-  if (oldName === newName) {
-    if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName) && !proxyConfigEquivalent(previous, normalized)) {
-      delete cfg.proxyDetections[oldName];
+  storeTransact((draft: MgmtConfig) => {
+    if (!Object.hasOwn(draft.proxies, oldName)) throw new Error(`Proxy not found: ${oldName}`);
+    if (oldName !== newName && Object.hasOwn(draft.proxies, newName)) throw new Error(`Proxy already exists: ${newName}`);
+    const previous = draft.proxies[oldName];
+    const normalized = normalizeProxyConfig(config, previous);
+    normalized.updatedAt = Date.now();
+    draft.proxies[newName] = normalized;
+    if (oldName === newName) {
+      // The shared store compares endpoint/auth/bypass once and resets only
+      // genuinely changed identities; fallback-only edits remain equivalent.
+      if (normalized.fallbacks?.includes(oldName)) normalized.fallbacks = normalized.fallbacks.filter(f => f !== oldName);
+      return;
     }
-    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName) && !proxyConfigEquivalent(previous, normalized)) {
-      delete cfg.proxyHealth[oldName];
+    const equivalent = proxyConfigEquivalent(previous, normalized);
+    delete draft.proxies[oldName];
+    replaceFallbackReference(draft, oldName, newName);
+    if (draft.proxyDetections && Object.hasOwn(draft.proxyDetections, oldName)) {
+      if (equivalent) draft.proxyDetections[newName] = draft.proxyDetections[oldName];
+      delete draft.proxyDetections[oldName];
     }
-    if (normalized.fallbacks && normalized.fallbacks.includes(oldName)) {
-      normalized.fallbacks = normalized.fallbacks.filter((f) => f !== oldName);
+    if (draft.proxyHealth && Object.hasOwn(draft.proxyHealth, oldName)) {
+      if (equivalent) draft.proxyHealth[newName] = { ...draft.proxyHealth[oldName], proxyName: newName };
+      delete draft.proxyHealth[oldName];
     }
-  } else {
-    delete cfg.proxies[oldName];
-    replaceFallbackReference(cfg, oldName, newName);
-    if (cfg.proxyDetections && Object.hasOwn(cfg.proxyDetections, oldName)) {
-      if (proxyConfigEquivalent(previous, normalized)) cfg.proxyDetections[newName] = cfg.proxyDetections[oldName];
-      delete cfg.proxyDetections[oldName];
+    if (draft.defaultProxy === oldName) draft.defaultProxy = newName;
+    for (const profile of Object.values(draft.browserProfiles || {})) {
+      if (profile.proxyMode === "named" && profile.proxyName === oldName) profile.proxyName = newName;
     }
-    if (cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, oldName)) {
-      if (proxyConfigEquivalent(previous, normalized)) {
-        cfg.proxyHealth[newName] = { ...cfg.proxyHealth[oldName], proxyName: newName };
-      }
-      delete cfg.proxyHealth[oldName];
-    }
-    if (cfg.defaultProxy === oldName) cfg.defaultProxy = newName;
-    for (const profile of Object.values(cfg.browserProfiles || {})) {
-      if (profile.proxyMode === "named" && profile.proxyName === oldName) {
-        profile.proxyName = newName;
-      }
-    }
-  }
-
-  saveConfig(cfg);
+  });
   return true;
 }
 
@@ -340,18 +424,14 @@ export function deleteProxy(name: string): boolean {
     }
   }
 
-  delete cfg.proxies[name];
-  if (cfg.proxyDetections) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth) delete cfg.proxyHealth[name];
-  removeFallbackReference(cfg, name);
-
-  if (cfg.defaultProxy === name) {
-    // No built-in fallback proxy exists anymore: unset so default-mode
-    // profiles resolve to a direct connection instead of a missing proxy.
-    cfg.defaultProxy = "";
-  }
-
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => {
+    delete draft.proxies[name];
+    if (draft.proxyDetections) delete draft.proxyDetections[name];
+    if (draft.proxyHealth) delete draft.proxyHealth[name];
+    removeFallbackReference(draft, name);
+    // No built-in fallback: default-mode profiles resolve to direct.
+    if (draft.defaultProxy === name) draft.defaultProxy = "";
+  });
   return true;
 }
 
@@ -359,8 +439,7 @@ export function setDefaultProxyName(name: string): boolean {
   validateProxyName(name);
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return false;
-  cfg.defaultProxy = name;
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => { draft.defaultProxy = name; });
   return true;
 }
 
@@ -368,18 +447,15 @@ export function updateProxy(name: string, config: ProxyConfig): boolean {
   validateProxyName(name);
   const cfg = getConfig();
   if (!Object.hasOwn(cfg.proxies, name)) return false;
-  const previous = cfg.proxies[name];
-  const normalized = normalizeProxyConfig(config, previous);
-  normalized.updatedAt = Date.now();
-  cfg.proxies[name] = normalized;
-  if (cfg.proxyDetections && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyDetections[name];
-  if (cfg.proxyHealth && !proxyConfigEquivalent(previous, normalized)) delete cfg.proxyHealth[name];
-  saveConfig(cfg);
+  storeTransact((draft: MgmtConfig) => {
+    const normalized = normalizeProxyConfig(config, draft.proxies[name]);
+    normalized.updatedAt = Date.now();
+    draft.proxies[name] = normalized;
+  });
   return true;
 }
 
-function isProxyUnhealthyForRotation(name: string): boolean {
-  const cfg = getConfig();
+function isProxyUnhealthyForRotation(name: string, cfg: MgmtConfig = getConfig()): boolean {
   const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
   if (!health) return false;
   const now = Date.now();
@@ -388,8 +464,7 @@ function isProxyUnhealthyForRotation(name: string): boolean {
   return false;
 }
 
-function rotationReasonFor(name: string): string | null {
-  const cfg = getConfig();
+function rotationReasonFor(name: string, cfg: MgmtConfig = getConfig()): string | null {
   const health = cfg.proxyHealth && Object.hasOwn(cfg.proxyHealth, name) ? cfg.proxyHealth[name] : null;
   if (!health) return null;
   const now = Date.now();
@@ -404,13 +479,12 @@ function rotationReasonFor(name: string): string | null {
   return null;
 }
 
-function pickRotationFallback(name: string): string | null {
-  const cfg = getConfig();
+function pickRotationFallback(name: string, cfg: MgmtConfig = getConfig()): string | null {
   const fallbacks = cfg.proxies[name]?.fallbacks || [];
   for (const fb of fallbacks) {
     if (!isValidProxyName(fb) || fb === name) continue;
     if (!Object.hasOwn(cfg.proxies, fb)) continue;
-    if (isProxyUnhealthyForRotation(fb)) continue;
+    if (isProxyUnhealthyForRotation(fb, cfg)) continue;
     return fb;
   }
   return null;
@@ -450,17 +524,17 @@ function removeFallbackReference(cfg: MgmtConfig, name: string): void {
   }
 }
 
-export function resolveProfileProxy(dirId: string): ResolvedProfileProxy {
-  return resolveProfileProxyInternal(dirId, true);
+export function resolveProfileProxy(dirId: string, snapshot?: MgmtConfig): ResolvedProfileProxy {
+  return resolveProfileProxyInternal(dirId, true, snapshot);
 }
 
-export function resolveProfileProxySecret(dirId: string): ResolvedProfileProxy {
-  return resolveProfileProxyInternal(dirId, false);
+export function resolveProfileProxySecret(dirId: string, snapshot?: MgmtConfig): ResolvedProfileProxy {
+  return resolveProfileProxyInternal(dirId, false, snapshot);
 }
 
-function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedProfileProxy {
+function resolveProfileProxyInternal(dirId: string, redact: boolean, snapshot?: MgmtConfig): ResolvedProfileProxy {
   validateDirId(dirId);
-  const cfg = getConfig();
+  const cfg = snapshot ?? getConfig();
   const meta = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
   const mode = normalizeProxyMode(meta?.proxyMode, meta?.proxyName ?? null);
 
@@ -483,9 +557,9 @@ function resolveProfileProxyInternal(dirId: string, redact: boolean): ResolvedPr
   let effectiveName = proxyName;
   let rotatedFrom: string | null = null;
   let rotationReason: string | null = null;
-  if (isProxyUnhealthyForRotation(proxyName)) {
-    rotationReason = rotationReasonFor(proxyName);
-    const fallback = pickRotationFallback(proxyName);
+  if (isProxyUnhealthyForRotation(proxyName, cfg)) {
+    rotationReason = rotationReasonFor(proxyName, cfg);
+    const fallback = pickRotationFallback(proxyName, cfg);
     if (fallback) {
       effectiveName = fallback;
       rotatedFrom = proxyName;
@@ -573,6 +647,14 @@ function sanitizeOptionalText(value: unknown, maxLength: number): string | null 
   if (!trimmed) return null;
   if (trimmed.length > maxLength || /[\x00-\x1f\x7f]/.test(trimmed)) throw new Error("Invalid fingerprint text value");
   return trimmed;
+}
+
+function sanitizePortableProfileNote(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  // Notes allow TAB/LF/CR, but validate before trim/truncation so other
+  // controls cannot disappear at the boundaries of the retained text.
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error("Invalid profile note text value");
+  return value.slice(0, 2000).trim() || null;
 }
 
 function sanitizeOptionalFontsDir(value: unknown): string | null {
@@ -915,23 +997,33 @@ function isRealDirectoryInside(candidate: string, parent: string): boolean {
 
 function proxyConfigEquivalent(a: ProxyConfig | undefined, b: ProxyConfig | undefined): boolean {
   if (!a || !b) return false;
-  const bypassA = [...(a.bypassList || [])].sort();
-  const bypassB = [...(b.bypassList || [])].sort();
+  const bypassA = (a.bypassList || []).map(entry => entry.trim()).filter(Boolean).sort();
+  const bypassB = (b.bypassList || []).map(entry => entry.trim()).filter(Boolean).sort();
   return a.type === b.type && a.host === b.host && a.port === b.port &&
-    (a.username || "") === (b.username || "") && comparableProxyPassword(a.password) === comparableProxyPassword(b.password) &&
-    bypassA.length === bypassB.length && bypassA.every((entry, index) => entry === bypassB[index]);
+    (a.username || "") === (b.username || "") &&
+    bypassA.length === bypassB.length && bypassA.every((entry, index) => entry === bypassB[index]) &&
+    ((a.password || "") === (b.password || "") || comparableProxyPassword(a.password) === comparableProxyPassword(b.password));
 }
 
 function comparableProxyPassword(value: string | undefined): string {
   if (!value) return "";
   if (!isEncrypted(value)) return value;
-  const decrypted = decryptSecretOr(value, "");
-  return decrypted || value;
+  try {
+    // A successfully decrypted empty string IS the real empty credential;
+    // only the helper's thrown failure below preserves the encoded identity.
+    return decryptSecretOr(value, value);
+  } catch {
+    // Equality must not turn failed decryption into a real empty credential.
+    // Preserve the original encoded value only for comparison, never for use.
+    return value;
+  }
 }
 
 function normalizeProxyDetection(entry: ProxyDetectionCacheEntry): ProxyDetectionCacheEntry {
   return {
-    detectedAt: sanitizeTimestamp(entry.detectedAt),
+    detectedAt: proxyObservationTime(entry.detectedAt),
+    source: entry.source === "network" || entry.source === "cache" ? entry.source : "unknown",
+    observationId: sanitizeOptionalText(entry.observationId, 80),
     success: Boolean(entry.success),
     exitIp: sanitizeOptionalText(entry.exitIp, 80),
     country: sanitizeOptionalText(entry.country, 120),
@@ -965,7 +1057,9 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
   const history: ProxyHealthEntry["history"] = (Array.isArray(entry.history) ? entry.history : [])
     .slice(-20)
     .map((h) => ({
-      at: sanitizeTimestamp(h.at),
+      at: proxyObservationTime(h.at),
+      source: h.source === "network" || h.source === "cache" ? h.source : "unknown",
+      observationId: sanitizeOptionalText(h.observationId, 80),
       success: Boolean(h.success),
       exitIp: sanitizeOptionalText(h.exitIp, 80),
       countryCode: sanitizeOptionalText(h.countryCode, 8),
@@ -982,9 +1076,9 @@ function normalizeProxyHealthEntry(entry: ProxyHealthEntry): ProxyHealthEntry {
   const risk = entry.risk === "good" || entry.risk === "watch" || entry.risk === "poor" ? entry.risk : "poor";
   return {
     proxyName: sanitizeOptionalText(entry.proxyName, 80) || "unknown",
-    firstSeenAt: sanitizeTimestamp(entry.firstSeenAt),
-    lastCheckedAt: sanitizeTimestamp(entry.lastCheckedAt),
-    lastSuccessAt: entry.lastSuccessAt ? sanitizeTimestamp(entry.lastSuccessAt) : null,
+    firstSeenAt: proxyObservationTime(entry.firstSeenAt),
+    lastCheckedAt: proxyObservationTime(entry.lastCheckedAt),
+    lastSuccessAt: proxyObservationTime(entry.lastSuccessAt),
     checks: Math.max(0, Math.floor(Number(entry.checks) || 0)),
     successes: Math.max(0, Math.floor(Number(entry.successes) || 0)),
     consecutiveFailures: Math.max(0, Math.floor(Number(entry.consecutiveFailures) || 0)),
@@ -1121,29 +1215,38 @@ function isUnsafeBypassHost(host: string): boolean {
 
 // ── Profile metadata ──
 
-export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
-  validateDirId(dirId);
-  const cfg = getConfig();
-  const cp = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
-  if (!cp) return null;
-  return {
+/** Deterministic content projection shared by store/getters/archive/sync.
+ * Never use the import normalizer here: imported IDs/seeds/times are generated
+ * policy, not profile content. Local paths and markers are not even inspected. */
+export function portableProfileContent(raw: unknown): PortableProfileContent {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid portable profile metadata");
+  const cp = raw as BrowserProfileMeta;
+  const rawProxyName = typeof cp.proxyName === "string" ? cp.proxyName : null;
+  let proxyMode = normalizeProxyMode(cp.proxyMode, rawProxyName, true);
+  if (proxyMode === "named" && (!rawProxyName || !isValidProxyName(rawProxyName))) proxyMode = "none";
+  const webrtcMode = sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp);
+  const fingerprintBaseline = sanitizePortableFingerprintBaseline(cp.fingerprintBaseline);
+  const profile: PortableProfileContent = {
     name: cp.name,
     fingerprintMode: sanitizeFingerprintMode(cp.fingerprintMode),
     engine: sanitizeBrowserEngine(cp.engine),
     browserVersion: normalizeProfileBrowserVersion(cp),
     allowThirdPartyCookies: sanitizeBoolean(cp.allowThirdPartyCookies, "third-party cookie compatibility"),
-    proxyMode: normalizeProxyMode(cp.proxyMode, cp.proxyName || null),
-    proxyName: cp.proxyName || null,
-    syncedAt: cp.syncedAt,
-    syncedHash: cp.syncedHash,
+    proxyMode,
+    proxyName: proxyMode === "named" ? rawProxyName : null,
     note: cp.note || null,
     tags: normalizeProfileTags(cp.tags),
     preset: sanitizeOptionalText(cp.preset, 64),
+    drm: sanitizeBoolean(cp.drm, "drm"),
+    appUrl: sanitizeAppUrl(cp.appUrl),
+    renderScaleMode: sanitizeRenderScaleMode(cp.renderScaleMode),
+    ...(cp.windowTitlePrefix === undefined ? {} : { windowTitlePrefix: sanitizeWindowTitlePrefix(cp.windowTitlePrefix) }),
+    ...(fingerprintBaseline ? { fingerprintBaseline: { ...fingerprintBaseline } } : {}),
     platform: cp.platform === "windows" || cp.platform === "macos" || cp.platform === "android" ? cp.platform : "windows",
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
-    webrtcMode: sanitizeWebRtcMode(cp.webrtcMode, cp.webrtcIp),
-    webrtcIp: sanitizeOptionalIp(cp.webrtcIp),
+    webrtcMode,
+    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : sanitizeOptionalIp(cp.webrtcIp),
     geolocationMode: sanitizeGeolocationMode(cp.geolocationMode),
     geolocationLatitude: sanitizeOptionalNumber(cp.geolocationLatitude, -90, 90),
     geolocationLongitude: sanitizeOptionalNumber(cp.geolocationLongitude, -180, 180),
@@ -1157,9 +1260,91 @@ export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
     screenHeight: sanitizeOptionalInteger(cp.screenHeight, 240, 10000),
     storageQuota: sanitizeOptionalInteger(cp.storageQuota, 1, 1048576),
     taskbarHeight: sanitizeOptionalInteger(cp.taskbarHeight, 0, 500),
-    fontsDir: sanitizeOptionalFontsDir(cp.fontsDir),
-    extensions: normalizeExtensionMap(cp.extensions),
+    extensions: { ...normalizeExtensionMap(cp.extensions) },
   };
+  validateGeolocationMeta(profile);
+  return profile;
+}
+
+export function getProfileMeta(dirId: string): BrowserProfileMeta | null {
+  validateDirId(dirId);
+  const cfg = getConfig();
+  const cp = Object.hasOwn(cfg.browserProfiles || {}, dirId) ? cfg.browserProfiles[dirId] : undefined;
+  if (!cp) return null;
+  const syncBaseline = parseProfileSyncBaseline(cp.syncBaseline);
+  return {
+    ...portableProfileContent(cp),
+    syncedAt: cp.syncedAt,
+    syncedHash: cp.syncedHash,
+    ...(syncBaseline ? { syncBaseline } : {}),
+    ...(parseProfileHistoryBaseline(cp.historySyncBaseline) ? { historySyncBaseline: parseProfileHistoryBaseline(cp.historySyncBaseline)! } : {}),
+    ...(parseHistoryCoverage(cp.historySyncCoverage) ? { historySyncCoverage: parseHistoryCoverage(cp.historySyncCoverage)! } : {}),
+    fontsDir: sanitizeOptionalFontsDir(cp.fontsDir),
+  };
+}
+
+/** Validate only transferable fields from a version-1 profile archive. No
+ * device paths, sync markers, lock, repository packages or credentials enter
+ * this object; the archive's field selection is also explicit on export. */
+export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid archive profile metadata");
+  const p = raw as Record<string, unknown>;
+  const fallbackText = (value: unknown, max: number, fallback: string | null): string | null =>
+    typeof value === "string" ? value.slice(0, max) : fallback;
+  const pickMode = <T extends string>(value: unknown, allowed: readonly T[], fallback: T): T =>
+    typeof value === "string" && allowed.includes(value as T) ? value as T : fallback;
+  const engine = sanitizeBrowserEngine(p.engine);
+  const proxyMode = pickMode(p.proxyMode, ["none", "default", "named"] as const, "default");
+  const proxyName = proxyMode === "named" ? fallbackText(p.proxyName, 120, null) : null;
+  if (proxyMode === "named" && (!proxyName || !isValidProxyName(proxyName))) {
+    throw new Error("Invalid named proxy reference in archive");
+  }
+  if (p.extensions !== undefined && (p.extensions === null || typeof p.extensions !== "object" || Array.isArray(p.extensions))) {
+    throw new Error("Invalid profile extension references in archive");
+  }
+  const extensions = normalizeProfileExtensionMap(p.extensions as Record<string, boolean> | undefined);
+  if (Object.keys(extensions).length > 200) throw new Error("Too many profile extension references in archive");
+  const profile: BrowserProfileMeta = {
+    name: sanitizeOptionalText(fallbackText(p.name, 120, "Imported profile"), 120) || "Imported profile",
+    fingerprintMode: sanitizeFingerprintMode(pickMode(p.fingerprintMode, ["managed", "off"] as const, "managed")),
+    engine,
+    browserVersion: normalizeProfileBrowserVersion({ engine, browserVersion: p.browserVersion }),
+    allowThirdPartyCookies: sanitizeBoolean(p.allowThirdPartyCookies, "third-party cookie compatibility"),
+    fingerprintSeed: p.fingerprintSeed === undefined ? Math.floor(Math.random() * 90000) + 10000 : sanitizeFingerprintSeed(p.fingerprintSeed),
+    platform: sanitizeBrowserPlatform(pickMode(p.platform, ["windows", "macos", "android"] as const, "windows")),
+    timezone: sanitizeOptionalTimezone(p.timezone),
+    locale: sanitizeOptionalLocale(p.locale),
+    webrtcMode: sanitizeWebRtcMode(pickMode(p.webrtcMode, ["auto", "altered", "disable", "real"] as const, "auto")),
+    webrtcIp: sanitizeOptionalIp(p.webrtcIp),
+    geolocationMode: sanitizeGeolocationMode(pickMode(p.geolocationMode, ["real", "disable", "custom"] as const, "real")),
+    geolocationLatitude: sanitizeOptionalNumber(p.geolocationLatitude, -90, 90),
+    geolocationLongitude: sanitizeOptionalNumber(p.geolocationLongitude, -180, 180),
+    geolocationAccuracy: sanitizeOptionalNumber(p.geolocationAccuracy, 0, 100000),
+    gpuVendor: sanitizeOptionalText(p.gpuVendor, 80),
+    gpuRenderer: sanitizeOptionalText(p.gpuRenderer, 160),
+    hardwareConcurrency: sanitizeOptionalInteger(p.hardwareConcurrency, 1, 64),
+    deviceMemory: sanitizeOptionalInteger(p.deviceMemory, 1, 128),
+    screenWidth: sanitizeOptionalInteger(p.screenWidth, 320, 10000),
+    screenHeight: sanitizeOptionalInteger(p.screenHeight, 240, 10000),
+    storageQuota: sanitizeOptionalInteger(p.storageQuota, 1, 1048576),
+    taskbarHeight: sanitizeOptionalInteger(p.taskbarHeight, 0, 500),
+    renderScaleMode: sanitizeRenderScaleMode(pickMode(p.renderScaleMode, ["native", "strict"] as const, "native")),
+    windowTitlePrefix: p.windowTitlePrefix === undefined ? undefined : sanitizeWindowTitlePrefix(p.windowTitlePrefix),
+    appUrl: sanitizeAppUrl(p.appUrl),
+    drm: sanitizeBoolean(p.drm, "drm"),
+    proxyMode,
+    proxyName,
+    note: sanitizePortableProfileNote(p.note),
+    tags: normalizeProfileTags(p.tags),
+    preset: sanitizeOptionalText(p.preset, 64),
+    extensions,
+    fingerprintBaseline: sanitizePortableFingerprintBaseline(p.fingerprintBaseline),
+    updatedAt: Date.now(),
+  };
+  if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
+  validateGeolocationMeta(profile);
+  if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile, engine);
+  return profile;
 }
 
 /**
@@ -1210,6 +1395,10 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.tags !== undefined) next.tags = normalizeProfileTags(meta.tags);
   if (meta.syncedAt !== undefined) next.syncedAt = meta.syncedAt;
   if (meta.syncedHash !== undefined) next.syncedHash = meta.syncedHash;
+  // syncBaseline is trusted sync-commit evidence, not a public patch field.
+  // Preserve the current marker; only the store's sync transaction creates it.
+  if (meta.preset !== undefined) next.preset = sanitizeOptionalText(meta.preset, 64);
+  if (meta.fingerprintBaseline !== undefined) next.fingerprintBaseline = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
   if (meta.engine !== undefined) {
     const currentEngine = sanitizeBrowserEngine(current.engine);
     next.engine = sanitizeBrowserEngine(meta.engine);
@@ -1247,7 +1436,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
 
   next.updatedAt = Date.now();
   validateGeolocationMeta(next);
-  if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next);
+  if (next.fingerprintMode !== "off") validateBrowserHardwareProfile(next, sanitizeBrowserEngine(next.engine));
 
   cp[dirId] = next;
   cfg.browserProfiles = cp;
@@ -1267,33 +1456,40 @@ export function getSyncConfig() {
   return { ...getConfig().sync };
 }
 
-export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean }): void {
-  const cfg = getConfig();
-  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey"];
-  // Sale-93 custody consent: renderer passes custodyConsent: true from a
-  // SEPARATE checkbox; main stamps Date.now() itself so a compromised
-  // renderer cannot backdate consent. The raw timestamp field is never taken
-  // from the caller. Consent is append-only (disabling sync keeps the record
-  // for audit; re-enabling needs no re-consent).
-  if ((sync as any)?.custodyConsent === true) {
-    (cfg.sync as any).custodyConsentAt = Date.now();
+export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean }): void {
+  if (!sync || typeof sync !== "object" || Array.isArray(sync)) throw new Error("Sync settings must be an object");
+  for (const key of ["enabled", "custodyConsent", "includeHistory", "historyConsent"] as const) {
+    if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`Sync ${key} must be a boolean`);
   }
-  const next = { ...cfg.sync };
-  for (const key of allowed) {
-    const value = sync[key];
-    if (value === undefined) continue;
-    if ((key === "accessKey" || key === "secretKey") && value === "") continue;
-    // Encrypt the secret key at rest.
-    if (key === "secretKey" && typeof value === "string" && value && !isEncrypted(value)) {
-      (next as any)[key] = encryptSecret(value);
-    } else {
-      (next as any)[key] = value;
+  for (const key of ["endpoint", "bucket", "accessKey", "secretKey"] as const) {
+    if (sync[key] !== undefined && typeof sync[key] !== "string") throw new Error(`Sync ${key} must be a string`);
+  }
+  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey", "includeHistory"];
+  storeTransact((cfg) => {
+    const next = { ...cfg.sync };
+    // Custody consent is stamped by main, but published only if validation and
+    // the configuration rename commit both succeed. Never mutate live state.
+    if (sync?.custodyConsent === true) next.custodyConsentAt = Date.now();
+    if (sync.historyConsent === true) next.historyConsentAt = Date.now();
+    else if (sync.historyConsent === false) { next.historyConsentAt = null; next.includeHistory = false; }
+    if (sync.includeHistory === true && !(Number.isSafeInteger(next.historyConsentAt) && next.historyConsentAt! > 0)) {
+      throw Object.assign(new Error("History scope consent required (includes Firefox Places bookmarks)"), { code: "HISTORY_CONSENT_REQUIRED" });
     }
-  }
-  next.endpoint = normalizeSyncEndpoint(next.endpoint || "");
-  next.bucket = normalizeSyncBucket(next.bucket || "");
-  cfg.sync = next;
-  saveConfig(cfg);
+    for (const key of allowed) {
+      const value = sync[key];
+      if (value === undefined) continue;
+      if ((key === "accessKey" || key === "secretKey") && value === "") continue;
+      if (key === "secretKey" && typeof value === "string" && value && !isEncrypted(value)) {
+        (next as any)[key] = encryptSecret(value);
+      } else {
+        (next as any)[key] = value;
+      }
+    }
+    next.endpoint = normalizeSyncEndpoint(next.endpoint || "");
+    next.bucket = normalizeSyncBucket(next.bucket || "");
+    cfg.sync = next;
+  });
+  invalidateSyncSettings();
 }
 
 function normalizeSyncEndpoint(value: string): string {
@@ -1328,7 +1524,7 @@ function normalizeSyncBucket(value: string): string {
 }
 
 export function reloadConfig(): void {
-  config = loadConfig();
+  adoptLoadedConfig(loadConfig());
 }
 
 // ── Internal ──
@@ -1374,27 +1570,25 @@ function loadConfig(): MgmtConfig {
   }
 }
 
-// Single ownership (AR-1): config-manager holds the in-memory cache that all
-// getConfig() consumers share; config/store.ts is the ONLY write path
-// (atomic tmp+rename+fsync). There is deliberately no fallback: if the
-// transactional write fails, the error propagates instead of silently leaving
-// memory and disk divergent. Direct store.transact writers elsewhere (skills,
-// team, automation rules, trace trimming) re-sync this cache via the hook
-// below, so no write path can leave getConfig() stale.
-setConfigBaseProvider(() => config);
+// The store publishes config and account identity state at the rename commit
+// point. This hook owns ONLY best-effort run-eviction cleanup, not publication.
+setProxyWitnessAdapter((proxy, previous) => createProxyWitness(proxy, previous, comparableProxyPassword));
 setNormalizer((draft, mode) => mergeConfig(DefaultConfig, draft, mode));
-setAfterTransactHook((normalized) => { config = normalized; });
+setAfterTransactHook((normalized, draft) => {
+  // Only normalization-evicted terminal IDs, not every run omitted by a
+  // caller. Result files and controlled-table rows are removed after rename,
+  // regardless of whether the writer was the recorder or an unrelated setting.
+  cleanupNormalizedRunEvictions(draft.agentRuns, normalized.agentRuns);
+});
 
 export function saveConfig(cfg: MgmtConfig): void {
   const snap = structuredClone(cfg) as any;
-  // cfg IS the full new content, so it also serves as the draft base — this
-  // keeps the bootstrap path (first load, before `config` exists) deadlock-free.
+  // cfg is full replacement content and a bootstrap base before initial load.
   storeTransact((draft: any) => {
     // Replace draft with snap's normalized content via shallow assign of enumerable domains
     for (const k of Object.keys(snap)) (draft as any)[k] = (snap as any)[k];
   }, snap);
-  // The afterTransact hook has already re-synced `config` from the store
-  // (exactly what was normalized and written to disk).
+  // The store has already published exactly what was normalized and written.
 }
 
 function ensureAppDir(): void {
@@ -1446,6 +1640,16 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
       merged.envRiskDiagnostics[dirId] = (entries as EnvRiskDiagnosticsEntry[]).slice(-MAX_ENV_RISK_DIAG_HISTORY);
     }
   }
+  if (parsed.profileHealthHistory && typeof parsed.profileHealthHistory === "object" && !Array.isArray(parsed.profileHealthHistory)) {
+    merged.profileHealthHistory = Object.create(null);
+    for (const [dirId, entries] of Object.entries(parsed.profileHealthHistory)) {
+      try { validateDirId(dirId); } catch { continue; }
+      if (!Array.isArray(entries)) continue;
+      merged.profileHealthHistory![dirId] = entries.map(normalizeProfileHealthEntry)
+        .filter((entry): entry is ProfileHealthEntry => entry !== null)
+        .sort((a, b) => a.at - b.at).slice(-MAX_PROFILE_HEALTH_HISTORY);
+    }
+  }
   if (parsed.sync) {
     merged.sync = { ...merged.sync, ...parsed.sync };
     try {
@@ -1486,45 +1690,21 @@ function mergeConfig(defaults: MgmtConfig, parsed: Partial<MgmtConfig> | any, mo
     for (const [dirId, rawProfile] of Object.entries(parsedProfiles)) {
       validateDirId(dirId);
       const profile = { ...(rawProfile as BrowserProfileMeta) };
-      profile.proxyMode = normalizeProxyMode(profile.proxyMode, profile.proxyName || null, true);
-      if (profile.proxyMode === "named") {
-        if (!profile.proxyName || !isValidProxyName(profile.proxyName)) {
-          profile.proxyMode = "none";
-          profile.proxyName = null;
-        }
-      } else {
-        profile.proxyName = null;
-      }
-      profile.fingerprintMode = sanitizeFingerprintMode(profile.fingerprintMode);
-      profile.engine = sanitizeBrowserEngine(profile.engine);
-      profile.browserVersion = normalizeProfileBrowserVersion(profile);
-      profile.allowThirdPartyCookies = sanitizeBoolean(profile.allowThirdPartyCookies, "third-party cookie compatibility");
-      profile.platform = profile.platform === "windows" || profile.platform === "macos" || profile.platform === "android"
-        ? profile.platform : "windows";
-      profile.fingerprintSeed = sanitizeFingerprintSeed(profile.fingerprintSeed || 12345);
-      profile.timezone = sanitizeOptionalTimezone(profile.timezone);
-      profile.locale = sanitizeOptionalLocale(profile.locale);
-      profile.webrtcMode = sanitizeWebRtcMode(profile.webrtcMode, profile.webrtcIp);
-      profile.webrtcIp = sanitizeOptionalIp(profile.webrtcIp);
-      if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
-      profile.geolocationMode = sanitizeGeolocationMode(profile.geolocationMode);
-      profile.geolocationLatitude = sanitizeOptionalNumber(profile.geolocationLatitude, -90, 90);
-      profile.geolocationLongitude = sanitizeOptionalNumber(profile.geolocationLongitude, -180, 180);
-      profile.geolocationAccuracy = sanitizeOptionalNumber(profile.geolocationAccuracy, 0, 100000);
-      validateGeolocationMeta(profile);
-      profile.gpuVendor = sanitizeOptionalText(profile.gpuVendor, 80);
-      profile.gpuRenderer = sanitizeOptionalText(profile.gpuRenderer, 160);
-      profile.hardwareConcurrency = sanitizeOptionalInteger(profile.hardwareConcurrency, 1, 64);
-      profile.deviceMemory = sanitizeOptionalInteger(profile.deviceMemory, 1, 128);
-      profile.screenWidth = sanitizeOptionalInteger(profile.screenWidth, 320, 10000);
-      profile.screenHeight = sanitizeOptionalInteger(profile.screenHeight, 240, 10000);
-      profile.storageQuota = sanitizeOptionalInteger(profile.storageQuota, 1, 1048576);
-      profile.taskbarHeight = sanitizeOptionalInteger(profile.taskbarHeight, 0, 500);
+      // Close the same portable representation across raw/store/get/JSON/reload.
+      // Keep local-only fields separately, never feed them into content hashing.
+      const portable = portableProfileContent(rawProfile);
+      for (const field of PORTABLE_PROFILE_FIELDS) delete (profile as any)[field];
+      Object.assign(profile, portable);
       profile.fontsDir = sanitizeOptionalFontsDir(profile.fontsDir);
-      profile.tags = normalizeProfileTags(profile.tags);
-      profile.preset = sanitizeOptionalText(profile.preset, 64);
-      profile.extensions = normalizeExtensionMap(profile.extensions);
-      profile.appUrl = sanitizeAppUrl(profile.appUrl);
+      const syncBaseline = parseProfileSyncBaseline(profile.syncBaseline);
+      if (syncBaseline) profile.syncBaseline = syncBaseline;
+      else delete profile.syncBaseline;
+      const historyBaseline = parseProfileHistoryBaseline(profile.historySyncBaseline);
+      if (historyBaseline && historyBaseline.engine === (profile.engine || "chromium")) profile.historySyncBaseline = historyBaseline;
+      else delete profile.historySyncBaseline;
+      const historyCoverage = parseHistoryCoverage(profile.historySyncCoverage);
+      if (historyCoverage && historyCoverage.dirId === dirId && historyCoverage.engine === (profile.engine || "chromium")) profile.historySyncCoverage = historyCoverage;
+      else delete profile.historySyncCoverage;
       merged.browserProfiles[dirId] = profile;
     }
   }
@@ -2031,11 +2211,10 @@ export function normalizeTemplateInputs(raw: unknown): Record<string, string> | 
 
 function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[] {
   if (!Array.isArray(raw)) return [];
-  // Keep the NEWEST 200 runs (drop oldest).
-  if (raw.length > MERGE_CAPS.agentRuns) {
-    console.warn(`[config] agentRuns truncated: ${raw.length} -> ${MERGE_CAPS.agentRuns} newest kept`);
+  const { kept: recent, dropped } = retainAgentRuns(raw, MERGE_CAPS.agentRuns);
+  if (dropped.length) {
+    console.warn(`[config] agentRuns truncated: ${raw.length} -> ${recent.length}, oldest terminal runs dropped`);
   }
-  const recent = raw.length > MERGE_CAPS.agentRuns ? raw.slice(raw.length - MERGE_CAPS.agentRuns) : raw;
   return recent.map((r: any): AgentRun | null => {
     if (!r || typeof r !== "object") return null;
     const id = String(r.id || "").trim();
@@ -2044,8 +2223,10 @@ function normalizeAgentRuns(raw: any, mode: "load" | "save" = "load"): AgentRun[
     const startedAt = typeof r.startedAt === "number" ? r.startedAt : 0;
     const rawStatus = String(r.status) as string;
     const isKnown = AGENT_RUN_STATUSES.has(rawStatus as AgentRunStatus);
-    // Crash-recovery: stale running on load → error; on save preserve caller status.
-    const shouldRecover = mode === "load" && rawStatus === "running";
+    // Crash-recovery applies only to runs no longer owned by this process.
+    // Sync Pull also reloads config while execution is live; marking its run
+    // interrupted would wrongly expose terminal actions in the Runs UI.
+    const shouldRecover = mode === "load" && rawStatus === "running" && !isOwnedRun(id);
     const status: AgentRunStatus = (shouldRecover || !isKnown) ? "error" : (rawStatus as AgentRunStatus);
     const persistedEndReason = normalizeAgentRunEndReason(r.endReason);
     // A live run has no terminal reason. Only load-time crash recovery creates a

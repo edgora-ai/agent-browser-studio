@@ -9,7 +9,10 @@ import * as net from "node:net";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as dns from "node:dns/promises";
-import { getAppDataDir, getConfig, saveConfig } from "./config-manager.js";
+import { getAppDataDir, getConfig, saveConfig, MERGE_CAPS } from "./config-manager.js";
+import { AccountOperationError, assertAccountReference, readAccountSnapshot, transactAccounts } from "./config/store.js";
+import type { AccountReference, ReferencedPlatformAccount, RedactedPlatformAccount } from "../types.js";
+export type { RedactedPlatformAccount } from "../types.js";
 import { encryptSecret, isEncrypted } from "./secrets.js";
 import { recordAudit } from "./audit-log.js";
 import { BUILTIN_SKILLS, getEnabledSkillPrompts } from "./skill-repository.js";
@@ -136,6 +139,9 @@ export function saveLlmConfig(config: LlmConfig): void {
 import type { CdpClient } from "./agent/cdp-transport.js";
 import { cdpConnect as _cdpConnect, cdpSendRaw as _cdpSendRaw, cdpDisconnect as _cdpDisconnect, cdpNavigate as _cdpNavigate, cdpWaitForLoad as _cdpWaitForLoad, cdpGetContent as _cdpGetContent, cdpGetTitle as _cdpGetTitle, cdpGetUrl as _cdpGetUrl, cdpSnapshot as _cdpSnapshot, cdpTextSnapshot as _cdpTextSnapshot } from "./agent/cdp-transport.js";
 import { assertProtocolDispatchAllowed, runWithProtocolDispatchGuard, waitForProtocolDelay } from "./agent/dispatch-guard.js";
+import { BrowserLoadTimeoutError, BrowserNavigationError } from "./agent/cdp-navigation-errors.js";
+import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
+import { classifyAgentToolOutcome } from "./agent/tool-outcome.js";
 import {
   assertCapturedChatBrowserScope,
   assertChatBrowserScopeBidiSession,
@@ -155,6 +161,7 @@ import {
   listConversations as _listConversations,
   deleteConversation as _deleteConversation,
   renameConversation as _renameConversation,
+  addMessage as _addConversationMessage,
 } from "./agent/conversation-store.js";
 export type { Conversation, ConversationMessage } from "./agent/conversation-store.js";
 export const loadConversations = _loadConversations;
@@ -232,9 +239,6 @@ export function addMessage(
   toolResults?: any[],
   metadata?: ConversationMessageMetadata,
 ): { conv: Conversation; msgId: string } | null {
-  const convs = loadConversations();
-  const c = convs.find((x: Conversation) => x.id === convId);
-  if (!c) return null;
   const msgId = "msg_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
   const message: ConversationMessage = {
     role,
@@ -246,17 +250,11 @@ export function addMessage(
     ...(metadata?.endReason !== undefined ? { endReason: metadata.endReason } : {}),
     ...(metadata?.verification !== undefined ? { verification: metadata.verification } : {}),
   };
-  c.messages.push(message);
-  c.updatedAt = Date.now();
-  // Auto-title from first user message
-  if (role === "user" && c.title === "New Chat" && content.length > 0) {
-    c.title = content.slice(0, 40) + (content.length > 40 ? "..." : "");
-  }
-  saveConversations(convs);
+  if (!_addConversationMessage(convId, message, true)) return null;
   // Return a direct readback, not the mutable pre-write object. Desktop run
   // lifecycle code uses this result as proof that the message actually landed.
   const committed = getConversation(convId);
-  if (!committed) throw new Error(`Conversation message committed but could not be read back: ${convId}`);
+  if (!committed) throw new Error("Conversation message committed but could not be read back.");
   return { conv: committed, msgId };
 }
 
@@ -264,93 +262,131 @@ export function addMessage(
 // 2. Account Management
 // ═══════════════════════════════════════════════════════════════
 
-export interface RedactedPlatformAccount extends Omit<PlatformAccount, "platformPassword"> {
-  hasPassword?: boolean;
+function accountValidation(detail: string): never {
+  throw new AccountOperationError("ACCOUNT_VALIDATION_FAILED", detail);
 }
-
-export function getAccounts(): PlatformAccount[] {
-  const cfg = getConfig();
-  return cfg.accounts || [];
+const ACCOUNT_EDIT_FIELDS = new Set(["platformUrl", "platformUserName", "platformPassword", "profileIds", "tags"]);
+function validateAccountFields(value: unknown, partial: boolean, timestamps = false): asserts value is PlatformAccount {
+  if (!value || typeof value !== "object" || Array.isArray(value)) accountValidation("Account must be an object");
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (!ACCOUNT_EDIT_FIELDS.has(key) && !(timestamps && (key === "createdAt" || key === "updatedAt"))) accountValidation(`Account field is not editable: ${key}`);
+  }
+  for (const [key, limit] of [["platformUrl", 1000], ["platformUserName", 200]] as const) {
+    if (partial && !(key in raw)) continue;
+    const text = raw[key];
+    if (typeof text !== "string" || !text.trim() || text.trim().length > limit || /[\x00-\x1f\x7f]/.test(text.trim())) accountValidation(`Invalid ${key}`);
+  }
+  // Ciphertext includes encoding/nonce/tag overhead and can exceed the plain
+  // import limit; do not reject a valid committed value during replacement.
+  if (raw.platformPassword !== undefined && (typeof raw.platformPassword !== "string" || raw.platformPassword.length > (isEncrypted(raw.platformPassword) ? 2 * 1024 * 1024 : 4096))) accountValidation("Invalid platformPassword");
+  if (raw.profileIds !== undefined && (!Array.isArray(raw.profileIds) || raw.profileIds.length > 200 || raw.profileIds.some(p => typeof p !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(p)))) accountValidation("Invalid profileIds");
+  if (raw.tags !== undefined && (!Array.isArray(raw.tags) || raw.tags.length > 20 || raw.tags.some(t => typeof t !== "string" || t.trim().length > 40 || /[\x00-\x1f\x7f]/.test(t.trim())))) accountValidation("Invalid tags");
+  for (const key of ["createdAt", "updatedAt"]) {
+    if (raw[key] !== undefined && (typeof raw[key] !== "number" || !Number.isFinite(raw[key]))) accountValidation(`Invalid ${key}`);
+  }
 }
-
-export function getRedactedAccounts(): RedactedPlatformAccount[] {
-  return getAccounts().map(({ platformPassword: _platformPassword, ...account }) => ({
-    ...account,
-    hasPassword: Boolean(_platformPassword),
-  }));
+function requireAccountCapacity(length: number): void {
+  if (length > MERGE_CAPS.accounts) accountValidation(`Account capacity is ${MERGE_CAPS.accounts}`);
 }
-
-export function saveAccounts(accounts: PlatformAccount[]): void {
-  const cfg = getConfig();
-  cfg.accounts = accounts;
-  saveConfig(cfg);
+/** Private-service read snapshot, including ciphertext. Never expose this raw
+ * DTO to renderer/REST. Global indices are attached BEFORE profile filtering. */
+export function getAccountsSnapshot(): { accounts: ReferencedPlatformAccount[]; revision: string } {
+  getConfig();
+  const { accounts, revision } = readAccountSnapshot();
+  return { accounts: accounts.map((account, index) => ({ ...account, ref: { index, revision } })), revision };
 }
-
-export function addAccount(account: PlatformAccount): PlatformAccount {
+export function getAccounts(): ReferencedPlatformAccount[] { return getAccountsSnapshot().accounts; }
+function redactAccount(account: ReferencedPlatformAccount): RedactedPlatformAccount {
+  const { platformPassword, ...safe } = account;
+  return { ...safe, hasPassword: Boolean(platformPassword) };
+}
+export function getRedactedAccounts(): RedactedPlatformAccount[] { return getAccounts().map(redactAccount); }
+/** Guarded synchronous selected-row read for copy/reveal/edit refetch. It does
+ * not write, rotate, authorize or touch clipboard. References are NOT capabilities. */
+export function getAccount(index: number, reference?: AccountReference): ReferencedPlatformAccount {
   const accounts = getAccounts();
-  const next: PlatformAccount = {
-    ...account,
-    platformPassword: encryptSecret(account.platformPassword || ""),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  accounts.push(next);
-  saveAccounts(accounts);
-  return next;
-}
-
-export function updateAccount(index: number, account: Partial<PlatformAccount>): PlatformAccount | null {
-  const accounts = getAccounts();
-  if (index < 0 || index >= accounts.length) return null;
-  const { platformPassword, ...rest } = account;
-  const next: PlatformAccount = {
-    ...accounts[index],
-    ...rest,
-    // An omitted/empty password keeps the stored value (already encrypted);
-    // a new one is encrypted at rest like the bulk path.
-    platformPassword: platformPassword ? encryptSecret(platformPassword) : accounts[index].platformPassword,
-    updatedAt: Date.now(),
-  };
-  accounts[index] = next;
-  saveAccounts(accounts);
+  assertAccountReference(index, reference, accounts.map(({ ref: _ref, ...account }) => account));
   return accounts[index];
 }
-
-export function deleteAccount(index: number): boolean {
-  const accounts = getAccounts();
-  if (index < 0 || index >= accounts.length) return false;
-  accounts.splice(index, 1);
-  saveAccounts(accounts);
+export function getRedactedAccount(index: number, reference?: AccountReference): RedactedPlatformAccount {
+  return redactAccount(getAccount(index, reference));
+}
+export function saveAccounts(accounts: PlatformAccount[]): void {
+  getConfig();
+  transactAccounts((draft) => {
+    if (!Array.isArray(accounts)) accountValidation("Accounts must be an array");
+    requireAccountCapacity(accounts.length);
+    accounts.forEach(account => validateAccountFields(account, false, true));
+    draft.accounts = structuredClone(accounts);
+  });
+}
+export function addAccount(account: PlatformAccount): RedactedPlatformAccount {
+  getConfig();
+  const index = transactAccounts((draft) => {
+    validateAccountFields(account, false, true);
+    const accounts = draft.accounts ||= [];
+    requireAccountCapacity(accounts.length + 1);
+    const now = Date.now();
+    accounts.push({
+      platformUrl: account.platformUrl, platformUserName: account.platformUserName,
+      platformPassword: encryptSecret(account.platformPassword || ""),
+      profileIds: structuredClone(account.profileIds), tags: structuredClone(account.tags),
+      createdAt: now, updatedAt: now,
+    });
+    return accounts.length - 1;
+  });
+  return getRedactedAccounts()[index];
+}
+/** The optional TS argument is an integration aid only: omission ALWAYS throws,
+ * never positional fallback. Validation happens inside one live-base transaction. */
+export function updateAccount(index: number, account: Partial<PlatformAccount>, reference?: AccountReference): RedactedPlatformAccount {
+  getConfig();
+  transactAccounts((draft) => {
+    const accounts = draft.accounts || [];
+    assertAccountReference(index, reference, accounts);
+    validateAccountFields(account, true);
+    const { platformPassword, ...rest } = account;
+    accounts[index] = {
+      ...accounts[index], ...structuredClone(rest),
+      // Omitted/empty passwords retain the committed ciphertext.
+      platformPassword: platformPassword ? encryptSecret(platformPassword) : accounts[index].platformPassword,
+      // PATCH/bind [] clears to global. Direct replacement [] matches nowhere.
+      ...("profileIds" in rest ? { profileIds: rest.profileIds?.length ? [...new Set(rest.profileIds)] : undefined } : {}),
+      updatedAt: Date.now(),
+    };
+  });
+  return getRedactedAccounts()[index];
+}
+export function deleteAccount(index: number, reference?: AccountReference): boolean {
+  getConfig();
+  transactAccounts((draft) => {
+    const accounts = draft.accounts || [];
+    assertAccountReference(index, reference, accounts);
+    accounts.splice(index, 1);
+  });
   return true;
 }
-
-export function getProfileAccounts(dirId: string): PlatformAccount[] {
+export function getProfileAccounts(dirId: string): ReferencedPlatformAccount[] {
   return getAccounts().filter(a => !a.profileIds || a.profileIds.includes(dirId));
 }
-
-/** Reveal a single account's decrypted password (never serialized to config). */
-export function getAccountPassword(index: number): string | null {
-  const accounts = getAccounts();
-  if (index < 0 || index >= accounts.length) return null;
-  const stored = accounts[index].platformPassword;
+/** Guarded reveal, no intervening await and no validation write. */
+export function getAccountPassword(index: number, reference?: AccountReference): string | null {
+  const stored = getAccount(index, reference).platformPassword;
   if (!stored) return null;
-  const plain = decryptSecretOr(stored, "");
-  return plain || null;
+  return decryptSecretOr(stored, "") || null;
 }
-
-/** Rebind an account to a set of profiles (replaces profileIds, dedupes). */
-export function setAccountProfileIds(index: number, profileIds: string[]): PlatformAccount | null {
-  const accounts = getAccounts();
-  if (index < 0 || index >= accounts.length) return null;
-  const seen = new Set<string>();
-  const clean = (Array.isArray(profileIds) ? profileIds : [])
-    .filter((p) => typeof p === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(p))
-    .filter((p) => !seen.has(p) && (seen.add(p), true))
-    .slice(0, 200);
-  const next = { ...accounts[index], profileIds: clean.length ? clean : undefined, updatedAt: Date.now() };
-  accounts[index] = next;
-  saveAccounts(accounts);
-  return accounts[index];
+/** Preserve the existing binding sanitizer/deduper and [] -> global contract. */
+export function setAccountProfileIds(index: number, profileIds: string[], reference?: AccountReference): RedactedPlatformAccount {
+  getConfig();
+  transactAccounts((draft) => {
+    const accounts = draft.accounts || [];
+    assertAccountReference(index, reference, accounts);
+    if (!Array.isArray(profileIds)) accountValidation("profileIds must be an array");
+    const clean = [...new Set(profileIds.filter(p => typeof p === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(p)))].slice(0, 200);
+    accounts[index] = { ...accounts[index], profileIds: clean.length ? clean : undefined, updatedAt: Date.now() };
+  });
+  return getRedactedAccounts()[index];
 }
 
 export interface ParsedAccountLine {
@@ -416,29 +452,36 @@ export interface BulkAccountResult {
 }
 
 /** Bulk add parsed account lines; passwords are encrypted at rest. */
+function bulkAccountEntry(item: ParsedAccountLine): PlatformAccount {
+  if (!item || typeof item.url !== "string" || typeof item.username !== "string") accountValidation("missing url or username");
+  const entry: PlatformAccount = {
+    platformUrl: item.url.trim().slice(0, 1000), platformUserName: item.username.trim().slice(0, 200),
+    platformPassword: item.password || "", tags: structuredClone(item.tags),
+    createdAt: Date.now(), updatedAt: Date.now(),
+  };
+  validateAccountFields(entry, false, true);
+  return entry;
+}
+function appendBulkAccounts(entries: PlatformAccount[]): void {
+  if (!entries.length) return;
+  getConfig();
+  transactAccounts((draft) => {
+    const accounts = draft.accounts ||= [];
+    requireAccountCapacity(accounts.length + entries.length);
+    // Clone caller-owned rows into the live-base draft. Normalization performs
+    // encryption and the store rejects any dropped/truncated account row.
+    accounts.push(...structuredClone(entries));
+  });
+}
 export function bulkAddAccounts(items: ParsedAccountLine[]): BulkAccountResult {
-  const accounts = getAccounts();
   const errors: BulkAccountResult["errors"] = [];
-  let added = 0;
+  const entries: PlatformAccount[] = [];
   for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (!it || !it.url || !it.username) {
-      errors.push({ line: i + 1, error: "missing url or username" });
-      continue;
-    }
-    const entry: PlatformAccount = {
-      platformUrl: it.url.slice(0, 1000),
-      platformUserName: it.username.slice(0, 200),
-      platformPassword: it.password ? encryptSecret(it.password) : "",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } as PlatformAccount;
-    if (Array.isArray(it.tags) && it.tags.length) entry.tags = it.tags;
-    accounts.push(entry);
-    added++;
+    try { entries.push(bulkAccountEntry(items[i])); }
+    catch (e) { errors.push({ line: i + 1, error: e instanceof Error ? e.message : String(e) }); }
   }
-  if (added) saveAccounts(accounts);
-  return { added, skipped: items.length - added, errors };
+  appendBulkAccounts(entries);
+  return { added: entries.length, skipped: items.length - entries.length, errors };
 }
 
 export interface BulkCreateProfilesOptions {
@@ -464,7 +507,7 @@ export function bulkCreateProfilesWithAccounts(
   items: ParsedAccountLine[],
   options: BulkCreateProfilesOptions = {},
 ): BulkAccountResult & { created: number } {
-  const accounts = getAccounts();
+  const entries: PlatformAccount[] = [];
   const errors: BulkAccountResult["errors"] = [];
   const existingNames = new Set<string>();
   for (const p of listBrowserProfiles()) existingNames.add(p.name);
@@ -472,16 +515,17 @@ export function bulkCreateProfilesWithAccounts(
   let created = 0;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (!it || !it.url || !it.username) {
-      errors.push({ line: i + 1, error: "missing url or username" });
-      continue;
-    }
+    let entry: PlatformAccount;
+    try { entry = bulkAccountEntry(it); }
+    catch (e) { errors.push({ line: i + 1, error: e instanceof Error ? e.message : String(e) }); continue; }
+    // Reject known capacity overflow before creating any further profile.
+    requireAccountCapacity(getAccounts().length + entries.length + 1);
     let dirId: string;
     try {
       const name = deriveProfileName(it.url, it.username, existingNames);
       const r = createBrowserProfile({
         name,
-        platform: options.platform || "windows",
+        platform: options.platform,
         ...(Array.isArray(it.tags) && it.tags.length ? { tags: it.tags } : {}),
       });
       dirId = r.dirId;
@@ -490,19 +534,11 @@ export function bulkCreateProfilesWithAccounts(
       errors.push({ line: i + 1, error: (e instanceof Error ? e.message : String(e)) });
       continue;
     }
-    accounts.push({
-      platformUrl: it.url.slice(0, 1000),
-      platformUserName: it.username.slice(0, 200),
-      platformPassword: it.password ? encryptSecret(it.password) : "",
-      profileIds: [dirId],
-      ...(Array.isArray(it.tags) && it.tags.length ? { tags: it.tags } : {}),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } as PlatformAccount);
+    entries.push({ ...entry, profileIds: [dirId] });
     added++;
     created++;
   }
-  if (added) saveAccounts(accounts);
+  appendBulkAccounts(entries);
   return { added, skipped: items.length - added, created, errors };
 }
 
@@ -1404,12 +1440,12 @@ export async function cdpUploadFile(client: CdpClient, selector: string, filePat
 
 // ── Evaluate & Extract ──
 
-export async function cdpEvaluate(client: CdpClient, expression: string): Promise<any> {
+export async function cdpEvaluate(client: CdpClient, expression: string, timeoutMs?: number): Promise<any> {
   const result = await cdpSendRaw(client, "Runtime.evaluate", {
     expression,
     returnByValue: true,
     awaitPromise: true,
-  });
+  }, undefined, timeoutMs);
   // Surface page exceptions (R6 #74): without this a throwing page resolves
   // undefined — silent data loss, and inconsistent with the BiDi path which
   // rejects (bidi-client throws "BiDi evaluate failed in page:").
@@ -2552,8 +2588,17 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
     // ── Browser tools (engine-aware: CDP for Chromium, BiDi for Firefox) ──
     case "browser_navigate": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
-      const url = await assertSafeNavigationUrl(args.url);
-      return runBrowserTool(port, context, (c) => cdpNavigate(c, url), (conn) => firefoxNavigate(conn, url));
+      const budget = new NavigationBudget(15000, port,
+        () => new BrowserNavigationError("BROWSER_NAVIGATION_TIMEOUT", "Browser navigation acceptance timed out"),
+        () => assertNotAborted(context.signal));
+      try {
+        const url = await budget.run(() => assertSafeNavigationUrl(args.url));
+        return await budget.run(() => runBrowserTool(port, { ...context, signal: budget.signal },
+          (c) => cdpNavigate(c, url, budget.remaining()), (conn) => firefoxNavigate(conn, url)));
+      } catch (error) {
+        budget.fail(error);
+        throw error;
+      } finally { budget.close(); }
     }
     case "browser_snapshot": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
@@ -2617,10 +2662,17 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
     case "browser_wait_for_load": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
       const timeout = normalizeToolNumber(args.timeout, 10000, 100, 30000, "load timeout");
-      return runBrowserTool(port, context, async (c) => {
-        await cdpWaitForLoad(c, timeout);
-        return { loaded: true };
-      }, (conn) => firefoxWaitForLoad(conn, timeout));
+      const budget = new NavigationBudget(timeout, port, () => new BrowserLoadTimeoutError(), () => assertNotAborted(context.signal));
+      try {
+        return await budget.run(() => runBrowserTool(port, { ...context, signal: budget.signal }, async (c) => {
+          await cdpWaitForLoad(c, budget.remaining());
+          return { loaded: true };
+        }, (conn) => firefoxWaitForLoad(conn, budget.remaining())));
+      } catch (error) {
+        budget.fail(error);
+        if (error instanceof BrowserLoadTimeoutError) return { loaded: false };
+        throw error;
+      } finally { budget.close(); }
     }
     case "browser_get_text": {
       const port = normalizeToolNumber(args.port, 0, 1, 65535, "CDP port");
@@ -2675,6 +2727,10 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           name: p.name,
           running: p.running,
           proxy: p.proxy || "(default)",
+          syncedAt: p.syncedAt,
+          syncStatus: p.syncStatus,
+          syncScope: p.syncScope,
+          syncReason: p.syncReason,
         })),
       };
     }
@@ -2688,7 +2744,10 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
         : context.browserScope === undefined
           ? getAccounts()
           : getProfileAccounts(context.browserScope.dirId);
-      return { accounts: accounts.map(a => ({ url: a.platformUrl, username: a.platformUserName, tags: a.tags })) };
+      return { accounts: accounts.map(a => ({
+        url: a.platformUrl, username: a.platformUserName, tags: a.tags,
+        ref: a.ref, hasPassword: Boolean(a.platformPassword),
+      })) };
     }
     case "list_automation_rules": {
       const cfg = getConfig();
@@ -2725,10 +2784,14 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           context.webContents,
           context.signal,
         );
+        // Approval cancellation and an explicit user refusal are different
+        // execution facts even though the gate denies both dispatches.
+        if (context.signal?.aborted) {
+          return { skipped: true, cancelled: true, reason: "HTTP 写入操作已取消", decision: appr.decision };
+        }
         if (!appr.allowed) {
           return { skipped: true, reason: "用户拒绝了该 HTTP 写入操作", decision: appr.decision };
         }
-        if (context.signal?.aborted) return { skipped: true, reason: "HTTP 写入操作已超时取消", decision: appr.decision };
       }
       return await agentHttpRequest(args, context.signal);
     }
@@ -2770,6 +2833,9 @@ export async function executeToolCall(name: string, args: any, allowedToolNames?
           context.webContents,
           context.signal,
         );
+        if (context.signal?.aborted) {
+          return { skipped: true, cancelled: true, reason: "数据库操作已取消", decision: appr.decision };
+        }
         if (!appr.allowed) {
           return { skipped: true, reason: "用户拒绝了该操作", decision: appr.decision };
         }
@@ -3466,8 +3532,6 @@ export async function agentChat(
 
       let result: any;
       const stepStart = Date.now();
-      let stepOk = true;
-      let stepError: string | undefined;
       try {
         console.log(`[agent] Tool call: ${tc.function.name}`);
         result = await executeToolCall(tc.function.name, args, allowedToolNames, {
@@ -3476,11 +3540,12 @@ export async function agentChat(
           signal: options.signal,
           browserScope: options.browserScope,
         });
-      } catch (e: any) {
-        stepOk = false;
-        stepError = e.message;
-        result = { error: e.message };
+      } catch (error) {
+        result = { error: error instanceof Error ? error.message : String(error) };
       }
+      // A non-throwing denial/skip is still an unsuccessful operation. Model
+      // loop completion is independent of each tool's execution facts.
+      const outcome = classifyAgentToolOutcome(tc.function.name, result);
 
       // Record the step in the run trace (if a run is active).
       if (options.runId) {
@@ -3488,8 +3553,8 @@ export async function agentChat(
           tool: tc.function.name,
           args,
           result,
-          ok: stepOk,
-          error: stepError,
+          ok: outcome.ok,
+          error: outcome.error,
           durationMs: Date.now() - stepStart,
         });
       }

@@ -304,6 +304,7 @@ dialog,
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 /* R177: the brand mark eats 42px of a 208px sidebar, which pushed the 20px
@@ -341,6 +342,8 @@ dialog,
   list-style: none;
   padding: 8px;
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Section label inside the nav list. Not a tab: no role, no id, not
@@ -451,6 +454,7 @@ svg { vertical-align: middle; }
 }
 
 .sidebar-footer {
+  flex-shrink: 0;
   padding: 12px 18px;
   border-top: none;
   font-size: var(--fs-micro);
@@ -474,7 +478,12 @@ svg { vertical-align: middle; }
   white-space: nowrap;
 }
 .sidebar-controls { flex-wrap: wrap; }
-.sidebar-controls .theme-toggle { min-width: 0; flex: 1 1 auto; }
+.sidebar-controls .theme-toggle {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 4px 0;
+}
 
 /* ═══════ Main Content ═══════ */
 #content {
@@ -545,7 +554,12 @@ svg { vertical-align: middle; }
    gray bars inside the first card of automation/runs/extensions/accounts move
    under the page title — one scanning rhythm for every page: what it is, then
    what it does, then the actions. */
-.tab-title { min-width: 0; }
+.tab-title { min-width: 0; max-width: 100%; }
+.tab-header h2[data-icon] > span {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .tab-sub {
   margin-top: 3px;
   font-size: 13px;
@@ -884,6 +898,9 @@ dialog h4[data-icon] > svg {
   gap: 8px;
 }
 .profile-card .card-header.proxy-head .status-badge { flex: 0 0 auto; }
+/* A long proxy name raises the flex header's min-content contribution. Let the
+   grid item shrink so name ellipsis and existing action wrapping can apply. */
+#proxy-list > .profile-card { min-width: 0; }
 
 /* R147: R141b described a general defect and fixed one instance of it. The grid
    above is a *two-slot* template (select|name, then badges) and only holds
@@ -1349,6 +1366,20 @@ dialog h4[data-icon] > svg {
   flex-wrap: wrap;
 }
 .batch-actions select { font-size: 12px; line-height: 1.5; padding: 4px 12px; background: var(--surface); border: 1px solid transparent; border-radius: 999px; color: var(--text); min-height: 26px; }
+/* Profiles only: keep wrapping bars inside the content column. A native select
+   sizes to its longest option even while closed; cap its border box without
+   replacing native option/text access or forcing short selections full-width. */
+#profile-batch-bar, #profile-batch-actions {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+#batch-assign-proxy {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex: 0 1 auto;
+}
 .profile-select-checkbox { margin-right: 8px; }
 
 /* ═══════ Tabs ═══════ */
@@ -1385,6 +1416,8 @@ dialog { line-height: 1.6; }
   width: 100%;
   height: 100%;
   min-height: 0;
+  container-type: inline-size;
+  container-name: agent-pane;
 }
 #tab-agent.active { display: flex !important; flex-direction: column; flex: 1; }
 
@@ -1398,6 +1431,11 @@ dialog { line-height: 1.6; }
 }
 
 #agent-sidebar {
+  width: 210px;
+  min-width: 160px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
   background: var(--sidebar-bg);
   height: 100%;
   min-height: 0;
@@ -1428,9 +1466,21 @@ dialog { line-height: 1.6; }
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
+.agent-sidebar-head {
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-action-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+#agent-chat-title { min-width: 0; overflow-wrap: anywhere; }
+#agent-chat-header > button { flex-shrink: 0; }
 #agent-conv-list::-webkit-scrollbar { width: 4px; }
 /* R7-34: superseded by the border-hover rule below — removed. */
 #agent-conv-list::-webkit-scrollbar { width: 5px; }
@@ -1455,6 +1505,11 @@ dialog { line-height: 1.6; }
   scroll-behavior: smooth;
 }
 #agent-scroll-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 180px;
+  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
   backdrop-filter: blur(6px);
 }
 #agent-chat-messages::-webkit-scrollbar { width: 5px; }
@@ -2118,6 +2173,38 @@ dialog { line-height: 1.6; }
 }
 .agent-subnav .btn-icon:hover { color: var(--text); background: var(--sidebar-hover); }
 
+/* A second full-height rail leaves no composer at high zoom. Reflow by the
+   Agent pane's available width, keeping conversations and all actions present. */
+@container agent-pane (max-width: 560px) {
+  .agent-layout { flex-direction: column; }
+  #agent-sidebar {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .agent-sidebar-head { padding: 8px; }
+  #agent-conv-list { min-height: 0; max-height: 96px; }
+  .agent-subnav { grid-column: 1 / -1; padding: 4px 8px; }
+  .agent-subnav .btn-icon { aspect-ratio: auto; height: 28px; min-height: 28px; }
+  #agent-chat-messages { min-height: 104px; }
+  .agent-scope-label { min-width: 0; max-width: 100%; flex: 0 1 auto; white-space: normal; }
+  .agent-scope-label > span { min-width: 0; overflow-wrap: anywhere; }
+  #agent-env-select { min-width: 0; max-width: 100%; }
+  #agent-env-start { max-width: 100%; white-space: normal; }
+  .agent-run-strip { flex-wrap: wrap; }
+  #agent-scroll-bottom {
+    position: static;
+    align-self: flex-end;
+    flex: 0 0 auto;
+    margin: 0 16px 4px;
+  }
+}
+
 /* ── Chat empty state ── */
 /* R139: an empty conversation is the agent tab's default state, not an error,
    so it gets a composed panel instead of a ghosted icon. The old rules leaned
@@ -2188,6 +2275,7 @@ dialog { line-height: 1.6; }
 .theme-toggle > span { white-space: nowrap; }
 /* R85: toggle transitions gain easing (were bare 0.2s without curve). */
 .theme-toggle .toggle-track {
+  flex-shrink: 0;
   width: 36px; height: 20px;
   background: var(--border);
   border-radius: 10px;
@@ -2435,6 +2523,67 @@ dialog h3 {
 }
 .dialog-close:hover { background: var(--pill-bg); color: var(--text); }
 .dialog-close:active { transform: scale(0.94); }
+
+/* Snapshot ledger: neutral information is deliberately not styled as a warning.
+   All rules stay inside this dialog; technical values must survive narrow views. */
+#dlg-fingerprint-drift { max-width: min(860px, calc(100vw - 32px)); width: 94%; }
+#dlg-fingerprint-drift [hidden] { display: none; }
+#dlg-fingerprint-drift h3 { margin-bottom: 4px; }
+#dlg-fingerprint-drift .fingerprint-drift-profile { margin: 0 0 12px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-scope { margin-bottom: 18px; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-body { min-width: 0; }
+#dlg-fingerprint-drift h4 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+#dlg-fingerprint-drift h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-summary { padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+#dlg-fingerprint-drift .fingerprint-drift-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0; margin: 8px 0 0; list-style: none; font-size: 12px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-counts b { margin-left: 4px; font-variant-numeric: tabular-nums; }
+#dlg-fingerprint-drift [data-fingerprint-severity="risk"] .fingerprint-drift-severity,
+#dlg-fingerprint-drift li[data-fingerprint-severity="risk"] { color: var(--danger-text); }
+#dlg-fingerprint-drift [data-fingerprint-severity="review"] .fingerprint-drift-severity,
+#dlg-fingerprint-drift li[data-fingerprint-severity="review"] { color: var(--warning-text); }
+#dlg-fingerprint-drift .fingerprint-drift-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; margin: 14px 0; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-meta div { min-width: 0; }
+#dlg-fingerprint-drift dt { color: var(--text-muted); }
+#dlg-fingerprint-drift dd { margin: 2px 0 0; color: var(--text); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-boundary,
+#dlg-fingerprint-drift .fingerprint-drift-notice { margin: 8px 0; padding: 10px 12px; border-left: 2px solid var(--border); background: var(--surface2); font-size: 12px; overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-boundary > svg { vertical-align: -2px; }
+#dlg-fingerprint-drift .fingerprint-drift-notice { border-left-color: var(--warning-text); }
+#dlg-fingerprint-drift .fingerprint-drift-next { margin: 16px 0 20px; }
+#dlg-fingerprint-drift .fingerprint-drift-next p { margin: 0; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-group { margin-top: 20px; }
+#dlg-fingerprint-drift .fingerprint-drift-row { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+#dlg-fingerprint-drift .fingerprint-drift-row > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--surface2); }
+#dlg-fingerprint-drift .fingerprint-drift-row > header > div { min-width: 0; }
+#dlg-fingerprint-drift .fingerprint-drift-key { display: block; margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-severity { flex: 0 0 auto; max-width: 40%; font-size: 11px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); }
+#dlg-fingerprint-drift .fingerprint-drift-value-cell { min-width: 0; padding: 12px 14px; background: var(--surface); }
+#dlg-fingerprint-drift .fingerprint-drift-value-label { margin-bottom: 6px; font-size: 11px; color: var(--text-muted); }
+#dlg-fingerprint-drift .fingerprint-drift-value,
+#dlg-fingerprint-drift .fingerprint-drift-preview { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-family: var(--mono); font-size: 12px; color: var(--text); }
+#dlg-fingerprint-drift .fingerprint-drift-value { max-height: 300px; overflow-y: auto; }
+#dlg-fingerprint-drift .fingerprint-drift-value-cell summary { cursor: pointer; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-expand { display: block; margin: 8px 0; color: var(--primary-text); font-size: 11px; }
+#dlg-fingerprint-drift .fingerprint-drift-reason { padding: 10px 14px; margin: 0; border-top: 1px solid var(--border); font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-reason code { font-size: 11px; overflow-wrap: anywhere; color: var(--text-muted); }
+#dlg-fingerprint-drift .fingerprint-drift-empty { padding: 20px 0; margin: 0; color: var(--text-secondary); font-size: 13px; }
+#dlg-fingerprint-drift .fingerprint-drift-status,
+#dlg-fingerprint-drift .fingerprint-drift-close-boundary { font-size: 11px; color: var(--text-muted); margin: 12px 0 0; }
+#dlg-fingerprint-drift .fingerprint-drift-advanced { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border-light); font-size: 12px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-advanced > summary { cursor: pointer; }
+#dlg-fingerprint-drift .fingerprint-drift-advanced p { font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-light); }
+#dlg-fingerprint-drift .fingerprint-drift-actions .btn { max-width: 100%; white-space: normal; text-align: center; }
+#dlg-fingerprint-drift :is(button, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--primary-text); outline-offset: 3px; }
+@media (max-width: 600px) {
+  #dlg-fingerprint-drift { padding: 20px; }
+  #dlg-fingerprint-drift .fingerprint-drift-meta,
+  #dlg-fingerprint-drift .fingerprint-drift-values { grid-template-columns: minmax(0, 1fr); }
+  #dlg-fingerprint-drift .fingerprint-drift-row > header { flex-wrap: wrap; }
+  #dlg-fingerprint-drift .fingerprint-drift-severity { max-width: 100%; }
+  #dlg-fingerprint-drift .fingerprint-drift-actions .btn { flex: 1 1 100%; }
+}
 /* R68: titles inside flex card headers must not carry the 10px block
    margin — the header row owns spacing. Covers team/preview/jobs cards. */
 .card div[style*="justify-content:space-between"] h3,
@@ -2465,11 +2614,16 @@ dialog p {
 .health-text-watch { color: var(--warning-text); }
 .health-text-poor { color: var(--danger-text); }
 /* R75: skill card layout — 5 inline styles converged. */
-.skill-layout { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.skill-main { min-width: 0; flex: 1; }
+/* Wrap actions before they squeeze the summary into a word-wide column. */
+.skill-layout { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.skill-main { min-width: 0; flex: 1 1 240px; overflow-wrap: anywhere; }
 .skill-desc { font-size: 12px; line-height: 1.6; color: var(--text-muted); margin-bottom: 6px; }
-.skill-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 180px; }
+.skill-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; max-width: 100%; flex: 0 1 auto; }
+.skill-actions .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .skill-tags { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0 0; }
+.skill-view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; flex-wrap: wrap; }
+.skill-view-header > h4 { flex-shrink: 0; white-space: nowrap; }
+.skill-view-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; max-width: 100%; }
 /* R72: shared code-block — adapter recipes, run JSON, logs converge here. */
 .code-block {
   white-space: pre-wrap;
@@ -2705,7 +2859,39 @@ dialog p {
   font-weight: 500;
   opacity: 0.92;
   word-break: break-word;
+  white-space: pre-wrap;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
 }
+/* Trash warnings must never compete with the name or recovery controls. */
+#trash-list .trash-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+#trash-list .trash-row-identity { min-width: 0; overflow-wrap: anywhere; }
+#trash-list .trash-row-name { font-size: 12.5px; font-weight: 600; }
+#trash-list .trash-row-time { font-size: 11px; color: var(--text-muted); }
+#trash-list .trash-row-actions { display: flex; align-items: center; gap: 8px; }
+#trash-list .trash-row-actions .btn { white-space: nowrap; }
+#trash-list .trash-row-warning {
+  grid-column: 1 / -1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  #trash-list .trash-row { grid-template-columns: minmax(0, 1fr); }
+  #trash-list .trash-row-actions { flex-wrap: wrap; }
+}
+
+#trash-action-error { margin-bottom: 12px; }
+#trash-action-error .trash-action-summary { color: var(--danger-text); font-weight: 600; }
+#trash-action-error .toast-detail { margin-top: 4px; }
 .toast-action {
   align-self: flex-start;
   margin-top: 2px;
@@ -2848,6 +3034,23 @@ dialog p {
   display: flex;
   flex-direction: column;
 }
+.card-menu-list[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Overlay scrollbars can ignore scrollbar-gutter. Keep their trailing lane
+     outside every button, including right-edge hit targets during wheel input.
+     max-content includes this space; narrow labels wrap, not clip. */
+  padding-inline-end: 24px;
+}
+/* Author display:flex overrides the UA popover hiding rule without this. */
+.card-menu-list[popover]:not(:popover-open) { display: none; }
 .card-menu-list button {
   text-align: left;
   background: transparent;
@@ -2859,7 +3062,10 @@ dialog p {
   min-height: 28px;
   border-radius: 8px;
   cursor: pointer;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex: 0 0 auto;
+  min-width: 0;
   /* R127: icon + label rows. The muted icon keeps the menu from reading as a
      wall of ink; the label stays the only high-contrast element. */
   display: flex;

@@ -3,13 +3,14 @@
 // config accordingly, round-tripped over the loopback REST API with a mock S3.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j64");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j64-rest-sync-"));
 const CONFIG_KEY = "agent-browser-studio-config.json";
 
 function startMockS3(): Promise<{ port: number; get: (key: string) => Buffer | undefined; put: (key: string, body: Buffer) => void; close: () => Promise<void> }> {
@@ -53,6 +54,10 @@ function readRemoteData(s3: any): { payload: any; data: any } {
   return { payload, data: JSON.parse(zlib.gunzipSync(Buffer.from(payload.data, "base64")).toString("utf8")) };
 }
 function writeRemoteData(s3: any, payload: any, data: any): void {
+  // Hand-authored legacy merge fixture, not a new-format publisher proof.
+  delete payload.artifactVersion;
+  delete payload.snapshotId;
+  for (const profile of Object.values(data.browserProfiles || {}) as any[]) delete profile.syncBaseline;
   payload.data = zlib.gzipSync(JSON.stringify(data, null, 2)).toString("base64");
   payload.timestamp = Date.now() + 1000;
   s3.put(CONFIG_KEY, Buffer.from(JSON.stringify(payload)));
@@ -100,13 +105,15 @@ describe("J64 — REST sync pull merge strategy", () => {
     token = tok.token;
     expect(token).toBeTruthy();
 
-    await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
+    const configured = await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
       enabled: true,
       endpoint: "http://127.0.0.1:" + s3.port,
       bucket: "bucket",
       accessKey: "testak",
       secretKey: "testsk",
+      custodyConsent: true,
     });
+    expect(configured.success).toBe(true);
     const created = await apiRequest(port, token, "POST", "/api/profiles", { name: "J64", platform: "windows", fingerprintSeed: 64646 });
     expect(created.status).toBe(201);
     dirId = created.body.dirId;
@@ -118,6 +125,8 @@ describe("J64 — REST sync pull merge strategy", () => {
   afterAll(async () => {
     if (h) await closeApp(h);
     if (s3) await s3.close();
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j64-rest-sync-")) throw new Error("Unsafe J64 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("REST pull with remote strategy adopts the remote entry and reports the merge", async () => {

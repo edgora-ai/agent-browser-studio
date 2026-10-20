@@ -19,7 +19,24 @@ from typing import Any, Optional
 
 
 class AgentBrowserError(RuntimeError):
-    """Raised when the controller returns a non-2xx response."""
+    """Non-2xx response with status and a complete bounded JSON body.
+
+    body_truncated is explicit when the 2 MiB error-body limit is exceeded;
+    body is then None, never a clipped object presented as commit evidence.
+    Existing RuntimeError positional arguments and string messages remain valid.
+    """
+
+    def __init__(self, *args: object, status: Optional[int] = None,
+                 body: Any = None, body_truncated: bool = False,
+                 body_read_error: Optional[str] = None) -> None:
+        super().__init__(*args)
+        self.status = status
+        self.body = body
+        self.body_truncated = body_truncated
+        self.body_read_error = body_read_error
+
+
+_MAX_ERROR_BODY_BYTES = 2 * 1024 * 1024
 
 
 class AgentBrowserClient:
@@ -29,10 +46,22 @@ class AgentBrowserClient:
         self.timeout = timeout
 
     # ── low-level ──────────────────────────────────────────────────────────
-    def request(self, method: str, path: str, body: Any = None, auth: bool = True) -> Any:
+    def request(self, method: str, path: str, body: Any = None, auth: bool = True,
+                headers: Optional[dict[str, str]] = None) -> Any:
+        """Optional custom headers are additive; auth keeps its positional slot.
+
+        Accounts require {'If-Match': '"' + selected_revision + '"'} from the
+        original /api/accounts list. No automatic fresh-revision retry occurs.
+        """
         url = self.base_url + path
         data = None
-        headers: dict[str, str] = {}
+        custom = headers or {}
+        headers = {}
+        for name, value in custom.items():
+            key = name.lower()
+            if key in ("authorization", "x-agent-browser-token", "x-cloak-token"):
+                raise AgentBrowserError("Custom request headers cannot override authentication")
+            headers[key] = value
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["content-type"] = "application/json"
@@ -47,26 +76,52 @@ class AgentBrowserClient:
                 return json.loads(raw)
         except urllib.error.HTTPError as exc:
             detail = ""
+            parsed: Any = None
+            truncated = False
+            read_error: Optional[str] = None
             try:
-                detail = exc.read().decode("utf-8")
-            except Exception:
-                pass
-            raise AgentBrowserError(f"{method} {path} -> {exc.code}: {detail[:500]}") from exc
+                try:
+                    raw = exc.read(_MAX_ERROR_BODY_BYTES + 1)
+                finally:
+                    exc.close()
+                truncated = len(raw) > _MAX_ERROR_BODY_BYTES
+                detail = raw[:_MAX_ERROR_BODY_BYTES].decode("utf-8", errors="replace")
+                if not truncated:
+                    if not detail:
+                        parsed = {}
+                    else:
+                        try:
+                            parsed = json.loads(detail)
+                        except (ValueError, TypeError):
+                            parsed = {"raw": detail}
+            except Exception as error:
+                read_error = str(error)
+            message = f"{method} {path} -> {exc.code}: {detail[:500]}"
+            if truncated:
+                message += " [response body truncated]"
+            elif read_error:
+                message += " [response body unavailable: " + read_error + "]"
+            raise AgentBrowserError(message, status=exc.code, body=parsed,
+                                    body_truncated=truncated,
+                                    body_read_error=read_error) from exc
 
-    def get(self, path: str, auth: bool = True) -> Any:
-        return self.request("GET", path, auth=auth)
+    def get(self, path: str, auth: bool = True, headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("GET", path, auth=auth, headers=headers)
 
-    def post(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("POST", path, body, auth=auth)
+    def post(self, path: str, body: Any = None, auth: bool = True,
+             headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("POST", path, body, auth=auth, headers=headers)
 
-    def delete(self, path: str, auth: bool = True) -> Any:
-        return self.request("DELETE", path, auth=auth)
+    def delete(self, path: str, auth: bool = True, headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("DELETE", path, auth=auth, headers=headers)
 
-    def put(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("PUT", path, body, auth=auth)
+    def put(self, path: str, body: Any = None, auth: bool = True,
+            headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("PUT", path, body, auth=auth, headers=headers)
 
-    def patch(self, path: str, body: Any = None, auth: bool = True) -> Any:
-        return self.request("PATCH", path, body, auth=auth)
+    def patch(self, path: str, body: Any = None, auth: bool = True,
+              headers: Optional[dict[str, str]] = None) -> Any:
+        return self.request("PATCH", path, body, auth=auth, headers=headers)
 
     # ── system ─────────────────────────────────────────────────────────────
     def health(self) -> dict[str, Any]:
@@ -77,6 +132,25 @@ class AgentBrowserClient:
 
     def openapi(self) -> dict[str, Any]:
         return self.get("/openapi.json", auth=False)
+
+    # ── sync: history is separately consented and never enabled implicitly ──
+    def sync_status(self) -> dict[str, Any]:
+        return self.get("/api/sync/status")
+
+    def configure_sync(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """historyConsent=True explicitly includes Firefox Places bookmarks;
+        includeHistory=True selects that consented scope for automatic sync."""
+        return self.post("/api/sync/config", settings)
+
+    def sync_push(self, options: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return self.post("/api/sync/push", {} if options is None else options)
+
+    def sync_pull(self, options: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return self.post("/api/sync/pull", {} if options is None else options)
+
+    def sync_history_state(self, dir_id: str) -> dict[str, Any]:
+        from urllib.parse import quote
+        return self.get("/api/sync/history/" + quote(dir_id, safe=""))
 
     # ── profiles ───────────────────────────────────────────────────────────
     def list_profiles(self) -> list[dict[str, Any]]:

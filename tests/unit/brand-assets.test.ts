@@ -57,6 +57,19 @@ describe("brand assets", () => {
     }
   });
 
+  it("stages the optional issuer public key at the packaged resources root", () => {
+    const config = readFileSync(path.join(repoRoot, "electron-builder.yml"), "utf8");
+    const extraResources = config.split(/^extraResources:\s*$/m)[1]?.split(/^\S/m)[0] ?? "";
+    // The license reader uses process.resourcesPath, not a file inside app.asar.
+    // A filtered existing directory also permits intentional no-key trial builds.
+    expect(extraResources).toMatch(
+      /from: dist\/resources\s+to: \.\s+filter:\s+- license-pubkey\.txt(?:\s|$)/
+    );
+    const reader = readFileSync(path.join(repoRoot, "src/main/services/license.ts"), "utf8");
+    expect(reader).toContain('const PUBKEY_FILE = "license-pubkey.txt"');
+    expect(reader).toContain("path.join(resPath, PUBKEY_FILE)");
+  });
+
   it("tray-manager resolves the template from the compiled layout", () => {
     // Read the real source so a revert to the single-".." form fails here —
     // restating the logic in the test would pass no matter what the service

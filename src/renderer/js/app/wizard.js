@@ -79,10 +79,28 @@
     if (dlg && dlg.open) dlg.close();
     maybeShowWizard();
   };
-  agentBrowser.termsDecline = function() {
-    // No quit IPC exists — close the window; the app quits when its last
-    // window closes. Re-shown on next launch until accepted (sale-93).
-    try { window.close(); } catch (e) { /* ok */ }
+  var termsQuitPending = false;
+  agentBrowser.termsDecline = async function() {
+    if (termsQuitPending) return;
+    termsQuitPending = true;
+    var button = document.querySelector('#dlg-terms [data-cmd="termsDecline"]');
+    var errorEl = document.getElementById('terms-quit-error');
+    if (button) button.disabled = true;
+    if (errorEl) { errorEl.hidden = true; errorEl.textContent = ''; }
+    try {
+      var result = await api.app.quit();
+      // The IPC reply only acknowledges the request; keep the terms dialog
+      // open until Electron actually exits, and never persist acceptance here.
+      if (!result || result.success !== true) throw new Error('Exit request refused');
+    } catch (e) {
+      var message = window.i18n ? window.i18n.t('terms.quit-failed', 'Unable to quit the app. Please try again.') : 'Unable to quit the app. Please try again.';
+      // A body-level toast is behind a showModal() dialog's top layer.
+      if (errorEl) { errorEl.textContent = message; errorEl.hidden = false; }
+      else toast(message, 'error');
+    } finally {
+      termsQuitPending = false;
+      if (button) button.disabled = false;
+    }
   };
   function maybeShowWizard() {
     // Terms first (sale-93): no onboarding until accepted.
@@ -97,35 +115,40 @@
       }
     } catch (e) { /* localStorage disabled — show wizard */ }
 
-    // Only show if no managed Chromium is installed or no profiles exist.
-    var installed = false;
-    try {
-      installed = api.browser.binary().then(function(info) {
-        if (info && info.installed) {
-          // Check if there are already profiles
-          return api.browser.list().then(function(profiles) {
-            if (profiles && profiles.length > 0) return; // already has profiles, skip
-            showWizard();
-          });
-        } else {
-          showWizard();
-        }
-      });
-    } catch (e) {
-      // Fallback: show wizard
-      showWizard();
-    }
+    // A real checkpoint takes precedence over first-run detection. Without
+    // one, established installs still skip onboarding as before.
+    if (loadWizardProgress()) { showWizard(); return; }
+    var generation = wizardGeneration;
+    Promise.resolve().then(function() { return api.browser.binary(); }).then(function(info) {
+      if (info && info.installed) {
+        return api.browser.list().then(function(profiles) {
+          if (profiles && profiles.length > 0) return;
+          if (generation === wizardGeneration && !window.wizardDismissed) showWizard();
+        });
+      }
+      if (generation === wizardGeneration && !window.wizardDismissed) showWizard();
+    }).catch(function() {
+      if (generation === wizardGeneration && !window.wizardDismissed) showWizard();
+    });
   }
 
   // R11 P2-3: wizard checkpoint — persist completed step + created profile so
   // a refresh/close mid-onboarding resumes instead of restarting from step 1.
   var WIZARD_PROGRESS_KEY = 'agent-browser-studio-wizard-progress';
-  function saveWizardProgress(step) {
+  var wizardGeneration = 0;
+  var wizardCreatePending = false;
+  // Dialog generations own UI; an onboarding epoch owns checkpoint writes.
+  // A committed create receipt survives close/reopen and explicit dismissal,
+  // but dismissal must not resurrect the removed checkpoint.
+  var wizardEpoch = 0;
+  var wizardCreateReceipt = null;
+  var wizardCompletedStep = 0;
+  function saveWizardProgress(step, profile) {
     try {
       localStorage.setItem(WIZARD_PROGRESS_KEY, JSON.stringify({
         step: step,
-        dirId: state.wizardDirId || null,
-        profileName: state.wizardProfileName || null,
+        dirId: (profile ? profile.dirId : state.wizardDirId) || null,
+        profileName: (profile ? profile.profileName : state.wizardProfileName) || null,
       }));
     } catch (e) { /* storage disabled */ }
   }
@@ -134,8 +157,12 @@
       var raw = localStorage.getItem(WIZARD_PROGRESS_KEY);
       if (!raw) return null;
       var p = JSON.parse(raw);
-      if (!p || typeof p.step !== "number") return null;
-      return p;
+      if (!p || !Number.isInteger(p.step) || p.step < 1 || p.step > 3) return null;
+      return {
+        step: p.step,
+        dirId: typeof p.dirId === 'string' && p.dirId ? p.dirId : null,
+        profileName: typeof p.profileName === 'string' ? p.profileName : null,
+      };
     } catch (e) { return null; }
   }
   function clearWizardProgress() {
@@ -145,56 +172,85 @@
   function showWizard() {
     var dlg = document.getElementById('dlg-wizard');
     if (!dlg) return;
-    // Resume from checkpoint when present (R11 P2-3).
+    var generation = ++wizardGeneration;
     var saved = loadWizardProgress();
-    if (saved && saved.step > 0) {
-      state.wizardDirId = saved.dirId || null;
-      state.wizardProfileName = saved.profileName || null;
-      var steps = dlg.querySelectorAll('.wizard-step');
-      for (var i = 0; i < steps.length; i++) {
-        var s = steps[i];
-        var num = Number(s.getAttribute("data-step")) || (i + 1);
-        var done = num <= saved.step;
-        s.style.opacity = done || num === saved.step + 1 ? '1' : '0.45';
-        var btns = s.querySelectorAll('button');
-        for (var j = 0; j < btns.length; j++) btns[j].disabled = !(done || num === saved.step + 1);
-      }
-      if (saved.profileName) {
-        try { document.getElementById('wizard-profile-name').value = saved.profileName; } catch (e) { /* ok */ }
-      }
-      dlg.showModal();
-      return;
+    if (wizardCreateReceipt && (!saved || saved.step === 1)) {
+      saved = { step: 2, dirId: wizardCreateReceipt.dirId, profileName: wizardCreateReceipt.profileName };
     }
-    // Reset wizard state
     state.wizardDirId = null;
     state.wizardProfileName = null;
-    // Reset steps
-    var steps0 = dlg.querySelectorAll('.wizard-step');
-    for (var k = 0; k < steps0.length; k++) {
-      var s0 = steps0[k];
-      s0.style.opacity = k === 0 ? '1' : '0.45';
-      var btns0 = s0.querySelectorAll('button');
-      for (var m = 0; m < btns0.length; m++) btns0[m].disabled = k > 0;
+    for (var k = 1; k <= 3; k++) {
+      var statusEl = document.getElementById('wizard-step' + k + '-status');
+      if (statusEl) statusEl.textContent = '';
     }
-    document.getElementById('wizard-step1-status').textContent = '';
-    document.getElementById('wizard-profile-name').value = '';
-    document.getElementById('wizard-profile-name').disabled = true;
-    document.getElementById('wizard-step2-status') && (document.getElementById('wizard-step2-status').textContent = '');
-    dlg.showModal();
+    renderWizardProgress(saved && saved.step === 1 ? 1 : 0);
+    if (!dlg.open) dlg.showModal();
+    if (!saved) return;
+    if (saved.step === 1) return;
+    // Never restore a launch target from localStorage alone: profiles may
+    // have been deleted, trashed or renamed while the wizard was closed.
+    renderWizardProgress(-1);
+    Promise.resolve().then(function() { return api.browser.list(); }).then(function(profiles) {
+      if (generation !== wizardGeneration || !dlg.open) return;
+      if (!Array.isArray(profiles)) throw new Error('Profile list unavailable');
+      var profile = profiles.find(function(p) { return p.dirId === saved.dirId; });
+      if (!profile) {
+        if (wizardCreateReceipt && wizardCreateReceipt.dirId === saved.dirId) wizardCreateReceipt = null;
+        renderWizardProgress(1);
+        saveWizardProgress(1);
+        return;
+      }
+      state.wizardDirId = profile.dirId;
+      state.wizardProfileName = profile.name || saved.profileName;
+      renderWizardProgress(saved.step);
+      saveWizardProgress(saved.step);
+    }).catch(function(e) {
+      if (generation !== wizardGeneration || !dlg.open) return;
+      // Lookup failure is not proof of deletion. Keep the checkpoint and
+      // disable creation/launch; Verify remains a safe retry entry point.
+      renderWizardProgress(0);
+      var statusEl = document.getElementById('wizard-step1-status');
+      if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || 'Error') + '</span>';
+    });
+  }
+
+  function renderWizardProgress(completedStep) {
+    wizardCompletedStep = completedStep;
+    var dlg = document.getElementById('dlg-wizard');
+    var steps = dlg.querySelectorAll('.wizard-step');
+    for (var i = 0; i < steps.length; i++) {
+      var s = steps[i];
+      var num = Number(s.getAttribute('data-step')) || (i + 1);
+      var active = num === completedStep + 1;
+      s.style.opacity = active ? '1' : num <= completedStep ? '0.6' : '0.45';
+      var btns = s.querySelectorAll('button');
+      for (var j = 0; j < btns.length; j++) btns[j].disabled = !active || (num === 2 && wizardCreatePending);
+    }
+    var input = document.getElementById('wizard-profile-name');
+    if (input) {
+      input.value = state.wizardProfileName || '';
+      input.disabled = completedStep !== 1 || wizardCreatePending;
+    }
   }
 
   // Wizard step 1: verify the independently installed browser engine.
   agentBrowser.wizardVerifyBinary = function() {
+    var generation = wizardGeneration;
+    var dlg = document.getElementById('dlg-wizard');
     var statusEl = document.getElementById('wizard-step1-status');
     statusEl.innerHTML = '<span style="color: var(--primary-text);">' + (window.i18n ? window.i18n.t('wizard.step1.in-progress', 'Verifying managed Chromium…') : 'Verifying managed Chromium…') + '</span>';
     api.browser.verifyBinary().then(function(r) {
+      if (generation !== wizardGeneration || !dlg || !dlg.open) return;
       if (r && r.success) {
         statusEl.innerHTML = '<span style="color: var(--success-text);">' + (window.i18n ? window.i18n.t('wizard.step1.done', 'Installed') : 'Installed') + '</span>';
-        advanceWizardStep(1);
+        var saved = loadWizardProgress();
+        if (wizardCreateReceipt || (saved && saved.step >= 2)) showWizard();
+        else advanceWizardStep(1);
       } else {
         wizardEngineMissing(statusEl, (r && r.error) || (window.i18n ? window.i18n.t('wizard.step1.failed', 'Install failed') : 'Install failed'));
       }
     }).catch(function(e) {
+      if (generation !== wizardGeneration || !dlg || !dlg.open) return;
       wizardEngineMissing(statusEl, e.message || 'Install failed');
     });
   };
@@ -214,6 +270,11 @@
 
   // Wizard step 2: create first profile
   agentBrowser.wizardCreateProfile = function() {
+    var dlg = document.getElementById('dlg-wizard');
+    if (!dlg || !dlg.open || wizardCompletedStep !== 1 || wizardCreatePending || wizardCreateReceipt || state.wizardDirId) return;
+    var generation = wizardGeneration;
+    var epoch = wizardEpoch;
+    var btn = document.querySelector('#dlg-wizard [data-cmd="wizardCreateProfile"]');
     var nameInput = document.getElementById('wizard-profile-name');
     var name = nameInput.value.trim();
     if (!name) name = (window.i18n ? window.i18n.t('wizard.default-name', 'My First Profile') : 'My First Profile');
@@ -226,7 +287,21 @@
       return el;
     })();
     statusEl.innerHTML = '<span style="color: var(--primary-text);">' + (window.i18n ? window.i18n.t('wizard.step2.in-progress', 'Creating profile…') : 'Creating profile…') + '</span>';
-    api.browser.create({ name: name }).then(function(r) {
+    wizardCreatePending = true;
+    if (btn) btn.disabled = true;
+    nameInput.disabled = true;
+    Promise.resolve().then(function() { return api.browser.create({ name: name }); }).then(function(r) {
+      if (r && r.dirId) {
+        wizardCreateReceipt = { dirId: r.dirId, profileName: name };
+        // Closing is not cancellation of a committed backend mutation. Save
+        // the receipt without touching old DOM/state; Skip is different.
+        if (epoch === wizardEpoch) saveWizardProgress(2, wizardCreateReceipt);
+        if (generation !== wizardGeneration || !dlg.open) {
+          if (epoch === wizardEpoch && dlg.open) showWizard();
+          return;
+        }
+      }
+      if (generation !== wizardGeneration || !dlg.open || epoch !== wizardEpoch) return;
       // Round 3 follow-up: a trial-exhausted first run opens the paywall
       // instead of a red ✗ the user cannot act on.
       if (r && typeof agentBrowser.interceptLicenseGate === "function") {
@@ -241,7 +316,14 @@
         statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc((r && r.error) || (window.i18n ? window.i18n.t('wizard.step2.failed', 'Create failed') : 'Create failed')) + '</span>';
       }
     }).catch(function(e) {
+      if (generation !== wizardGeneration || !dlg || !dlg.open) return;
       statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || 'Create failed') + '</span>';
+    }).finally(function() {
+      wizardCreatePending = false;
+      if (dlg.open && wizardCompletedStep === 1 && !state.wizardDirId && !wizardCreateReceipt) {
+        if (btn) btn.disabled = false;
+        nameInput.disabled = false;
+      }
     });
   };
 
@@ -256,38 +338,49 @@
   var lastWizardCheckAt = 0;
   agentBrowser.wizardLaunchAndCheck = function() {
     var dirId = state.wizardDirId;
-    if (!dirId) { advanceWizardStep(3); return; }
+    if (!dirId) return;
     var now = Date.now();
     if (now - lastWizardCheckAt < 1500) return;
     lastWizardCheckAt = now;
+    var generation = wizardGeneration;
     if (typeof agentBrowser.ensureExternalRiskConsent === "function") {
-      agentBrowser.ensureExternalRiskConsent(dirId, function () { wizardRiskCheckAfterConsent(dirId); });
+      agentBrowser.ensureExternalRiskConsent(dirId, function () { wizardRiskCheckAfterConsent(dirId, generation); });
       return;
     }
-    wizardRiskCheckAfterConsent(dirId);
+    wizardRiskCheckAfterConsent(dirId, generation);
   };
 
-  function wizardRiskCheckAfterConsent(dirId) {
+  function wizardRiskCurrent(dirId, generation) {
+    var dlg = document.getElementById('dlg-wizard');
+    return generation === wizardGeneration && dlg && dlg.open && state.wizardDirId === dirId;
+  }
+
+  function wizardRiskCheckAfterConsent(dirId, generation) {
+    if (!wizardRiskCurrent(dirId, generation)) return;
     var btn = document.querySelector('.wizard-step[data-step="3"] button');
     if (btn) btn.disabled = true;
     api.browser.status(dirId).then(function (s) {
-      if (s && s.running) { wizardOpenRiskCheck(dirId); return; }
+      if (!wizardRiskCurrent(dirId, generation)) return;
+      if (s && s.running) { wizardOpenRiskCheck(dirId, generation); return; }
       agentBrowser.confirm(
         window.i18n ? window.i18n.t("risk.launch.msg", "This check needs a running browser. Start the profile now?") : "This check needs a running browser. Start the profile now?",
-        function () { wizardOpenRiskCheck(dirId, true); },
+        function () { wizardOpenRiskCheck(dirId, generation, true); },
         { title: window.i18n ? window.i18n.t("risk.launch.title", "Start profile for check") : "Start profile for check" },
       );
       if (btn) btn.disabled = false;
     }).catch(function (e) {
+      if (!wizardRiskCurrent(dirId, generation)) return;
       toast(e.message || "Error", "error");
       if (btn) btn.disabled = false;
     });
   }
 
-  function wizardOpenRiskCheck(dirId, allowLaunch) {
+  function wizardOpenRiskCheck(dirId, generation, allowLaunch) {
+    if (!wizardRiskCurrent(dirId, generation)) return;
     var btn = document.querySelector('.wizard-step[data-step="3"] button');
     if (btn) btn.disabled = true;
     api.browser.openRiskCheck(dirId, { allowLaunch: !!allowLaunch }).then(function(r) {
+      if (!wizardRiskCurrent(dirId, generation)) return;
       var statusEl = document.getElementById('wizard-step3-status') || (function() {
         var el = document.createElement('div');
         el.id = 'wizard-step3-status';
@@ -306,6 +399,7 @@
         if (btn) btn.disabled = false;
       }
     }).catch(function(e) {
+      if (!wizardRiskCurrent(dirId, generation)) return;
       var statusEl = document.getElementById('wizard-step3-status');
       if (statusEl) statusEl.innerHTML = '<span style="color: var(--danger-text);">' + esc(e.message || 'Error') + '</span>';
       if (btn) btn.disabled = false;
@@ -315,6 +409,7 @@
   function advanceWizardStep(completedStep) {
     var dlg = document.getElementById('dlg-wizard');
     if (!dlg) return;
+    wizardCompletedStep = completedStep;
     saveWizardProgress(completedStep);
     var nextStep = completedStep + 1;
     var thisStep = dlg.querySelector('.wizard-step[data-step="' + completedStep + '"]');
@@ -334,6 +429,8 @@
   }
 
   agentBrowser.wizardSkip = function() {
+    wizardGeneration++;
+    wizardEpoch++;
     document.getElementById('dlg-wizard').close();
     clearWizardProgress();
     // "Skip for now" only hides the wizard for the current session — it does
@@ -343,6 +440,8 @@
   };
 
   agentBrowser.wizardNeverShow = function() {
+    wizardGeneration++;
+    wizardEpoch++;
     document.getElementById('dlg-wizard').close();
     clearWizardProgress();
     try { localStorage.setItem('agent-browser-studio-wizard-dismissed', '1'); } catch (e) { /* ok */ }
@@ -359,6 +458,8 @@
   // Step 4 (optional): jump to the Agent config view so the user can wire up
   // an LLM provider after their first profile is ready.
   agentBrowser.wizardConfigureAgent = function() {
+    wizardGeneration++;
+    wizardEpoch++;
     document.getElementById('dlg-wizard').close();
     clearWizardProgress();
     window.wizardDismissed = true;

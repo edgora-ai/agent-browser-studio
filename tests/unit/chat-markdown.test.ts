@@ -1,28 +1,71 @@
-// Markdown rendering tests.
-//
-// The renderer (core.js) wraps `marked.parse` + a sanitizer. Rather than load
-// the whole core.js into a vm sandbox (fragile), we verify the two contracts
-// that matter: (1) marked produces the expected HTML for common inputs, and
-// (2) the sanitizer regex used as the DOMPurify fallback strips XSS vectors.
-// The sanitizer regex is mirrored from core.js::sanitizeMdHtml fallback.
+// Markdown rendering tests — run the REAL production pipeline from core.js
+// (sanitizeMdHtml allowlist + wrapMdCodeBlocks + renderChatMarkdown), not a
+// mirrored regex. R0925-06: the previous version of this file copied an old
+// sanitizer and forced `breaks: true`, so it kept passing while production
+// rendered differently. Extraction markers are asserted so a refactor of
+// core.js fails here loudly instead of silently testing stale code.
 import { describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as vm from "node:vm";
 import { marked } from "marked";
 
-// Mirror of the DOMPurify-absent fallback sanitizer in core.js::sanitizeMdHtml.
-function sanitizeMdHtml(html: string): string {
-  return String(html || "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, "")
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, "")
-    .replace(/(href|src)\s*=\s*("\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '$1="#"');
+const CORE = fs.readFileSync(path.join(__dirname, "../../src/renderer/js/app/core.js"), "utf8");
+
+interface Pipeline {
+  render: (text: string) => string;
+  markedOptions: () => Record<string, unknown>;
 }
 
-function render(text: string): string {
-  marked.setOptions({ breaks: true, gfm: true, headerIds: false, mangle: false });
-  return sanitizeMdHtml(marked.parse(text) as string);
+function loadProductionPipeline(): Pipeline {
+  const start = CORE.indexOf("function safeCodeLanguage");
+  const end = CORE.indexOf("function shortPath");
+  if (start === -1 || end === -1 || end <= start) throw new Error("markdown pipeline block not found in core.js");
+  const src = CORE.slice(start, end);
+  for (const marker of ["function sanitizeMdHtml", "function wrapMdCodeBlocks", "function renderChatMarkdown"]) {
+    if (!src.includes(marker)) throw new Error(`extraction lost ${marker} — update the test boundaries`);
+  }
+
+  let lastOptions: Record<string, unknown> = {};
+  const esc = (v: unknown) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const sandbox: any = {
+    window: {
+      marked: {
+        setOptions: (opts: Record<string, unknown>) => { lastOptions = opts; marked.setOptions(opts as any); },
+        parse: (text: string) => marked.parse(text),
+      },
+    },
+    pi18n: (_key: string, fallback: string) => fallback,
+    esc,
+    escAttr: (v: unknown) => esc(v).replace(/"/g, "&quot;"),
+    icon: () => "",
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(src + "\nthis.__render = renderChatMarkdown;", sandbox);
+  if (typeof sandbox.__render !== "function") throw new Error("renderChatMarkdown not exported from extraction");
+  return { render: sandbox.__render as (text: string) => string, markedOptions: () => lastOptions };
 }
+
+const pipeline = loadProductionPipeline();
+const render = pipeline.render;
+
+describe("chat markdown — production pipeline wiring", () => {
+  it("configures marked with the production options (breaks OFF)", () => {
+    render("# Title");
+    expect(pipeline.markedOptions()).toMatchObject({ breaks: false, gfm: true, headerIds: false, mangle: false });
+  });
+
+  it("wraps fenced code blocks in the card anatomy with a copy action", () => {
+    const html = render("```js\nconst x = 1;\n```");
+    expect(html).toContain("md-codeblock");
+    expect(html).toContain("data-code-copy");
+    expect(html).toContain("language-js");
+    expect(html).toContain("const x = 1;");
+    // The copy button label must not leak into the code body.
+    const body = html.match(/<pre><code[^>]*>([\s\S]*?)<\/code><\/pre>/)?.[1] || "";
+    expect(body).not.toContain("Copy");
+  });
+});
 
 describe("chat markdown — marked output", () => {
   it("renders headings", () => {
@@ -32,18 +75,11 @@ describe("chat markdown — marked output", () => {
   });
 
   it("renders bullet and ordered lists", () => {
-    const html = render("- a\n- b\n1. one\n2. two");
+    const html = render("- a\n- b\n\n1. one\n2. two");
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>a</li>");
     expect(html).toContain("<ol>");
     expect(html).toContain("<li>one</li>");
-  });
-
-  it("renders fenced code blocks with language class", () => {
-    const html = render("```js\nconst x = 1;\n```");
-    expect(html).toContain("<pre>");
-    expect(html).toContain("language-js");
-    expect(html).toContain("const x = 1;");
   });
 
   it("renders inline code", () => {
@@ -57,9 +93,11 @@ describe("chat markdown — marked output", () => {
     expect(html).toContain("<em>italic</em>");
   });
 
-  it("renders links with safe href", () => {
+  it("renders links with safe href and forces noopener target", () => {
     const html = render("[Anthropic](https://www.anthropic.com)");
     expect(html).toMatch(/<a [^>]*href="https:\/\/www\.anthropic\.com"/);
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
   });
 
   it("renders tables", () => {
@@ -90,17 +128,21 @@ describe("chat markdown — marked output", () => {
     expect(html).toContain("<ul>");
     expect(html).toContain("nested");
   });
+
+  it("does NOT soft-break single newlines into <br> (production breaks:false)", () => {
+    const html = render("line one\nline two");
+    expect(html).not.toContain("line one<br>");
+  });
 });
 
-describe("chat markdown — XSS sanitization", () => {
+describe("chat markdown — XSS sanitization (production allowlist)", () => {
   it("strips <script> blocks", () => {
     const html = render("<script>alert(1)</script>");
     expect(html).not.toMatch(/<script/i);
   });
 
   it("strips inline event handlers", () => {
-    // marked escapes raw HTML, but be defensive: if a handler survives, kill it.
-    const html = sanitizeMdHtml('<a href="#" onclick="alert(1)">x</a>');
+    const html = render('<a href="#" onclick="alert(1)">x</a>');
     expect(html).not.toMatch(/onclick=/i);
   });
 
@@ -123,5 +165,9 @@ describe("chat markdown — XSS sanitization", () => {
   it("keeps legitimate https links intact", () => {
     const html = render("[docs](https://example.com/docs)");
     expect(html).toMatch(/href="https:\/\/example\.com\/docs"/);
+  });
+
+  it("drops data:text/html and srcdoc vectors", () => {
+    expect(render('<a href="data:text/html,<script>alert(1)</script>">x</a>')).not.toMatch(/data:text\/html/i);
   });
 });

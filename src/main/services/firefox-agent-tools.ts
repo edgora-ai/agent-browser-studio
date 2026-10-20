@@ -14,6 +14,9 @@
 // than the Chromium stack and reported as errors rather than faked.
 
 import type { BidiConnection } from "./bidi-client.js";
+import { NavigationBudget } from "./agent/cdp-navigation-budget.js";
+import { BrowserLoadTimeoutError, navigationConnectionClosed } from "./agent/cdp-navigation-errors.js";
+import { waitForProtocolDelay } from "./agent/dispatch-guard.js";
 import {
   bidiGetTopContext,
   bidiEvaluateInContext,
@@ -133,14 +136,22 @@ export async function firefoxWaitForSelector(conn: BidiConnection, selector: str
 }
 
 export async function firefoxWaitForLoad(conn: BidiConnection, timeoutMs: number): Promise<{ loaded: boolean }> {
-  const context = await topContext(conn);
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const state = await bidiEvaluateInContext(conn, "document.readyState", context, 8000);
-    if (state === "complete") return { loaded: true };
-    if (Date.now() > deadline) return { loaded: false };
-    await sleep(200);
-  }
+  const endpoint = new URL(conn.wsUrl);
+  const port = endpoint.port ? Number(endpoint.port) : 80;
+  const budget = new NavigationBudget(timeoutMs, port, () => new BrowserLoadTimeoutError(), () => {
+    if (conn.closed) throw navigationConnectionClosed();
+  });
+  try {
+    const context = await budget.run(() => bidiGetTopContext(conn, budget.remaining(), budget.signal));
+    budget.check();
+    for (;;) {
+      const state = await budget.run(() => bidiEvaluateInContext(conn, "document.readyState", context, budget.remaining(), budget.signal));
+      budget.check();
+      if (state === "complete") return { loaded: true };
+      await budget.run(() => waitForProtocolDelay(Math.min(200, budget.remaining()), port));
+      budget.check();
+    }
+  } finally { budget.close(); }
 }
 
 // ── input interactions (native BiDi input actions) ──

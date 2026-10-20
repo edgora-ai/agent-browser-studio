@@ -1,11 +1,16 @@
 // Unit tests for proxy health tracking (score / risk / drift / cooldown / bindings).
-import { describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-proxy-health-test");
 
+vi.mock("node:os", async original => ({ tmpdir: (await original<typeof import("node:os")>()).tmpdir, homedir: () => process.env.TMPDIR, hostname: () => "synthetic-health-fixture" }));
+vi.mock("node:child_process", () => ({ spawn: () => { throw new Error("Unexpected child"); }, execFileSync: () => { throw new Error("Unexpected child"); } }));
+vi.mock("node:dns", () => ({ lookup: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:dns/promises", () => ({ lookup: () => { throw new Error("Unexpected DNS"); }, resolve: () => { throw new Error("Unexpected DNS"); } }));
+vi.mock("node:net", async original => ({ isIP: (await original<typeof import("node:net")>()).isIP, connect: () => { throw new Error("Unexpected network"); } }));
 vi.mock("electron", () => {
   const nodePath = require("node:path");
   const nodeOs = require("node:os");
@@ -20,14 +25,24 @@ vi.mock("electron", () => {
   };
 });
 
-import { addProxy, reloadConfig, saveConfig, getConfig } from "../../src/main/services/config-manager.js";
+import { addProxy, reloadConfig, saveConfig, getConfig, getConfigPath } from "../../src/main/services/config-manager.js";
+import type { BrowserProfileMeta } from "../../src/main/types.js";
+
+// Deliberately outside BrowserProfileMeta: old on-disk fixtures used null for
+// an unsynced profile. Keep this negative boundary distinct from valid metadata.
+type LegacyNullSyncedProfile = Omit<BrowserProfileMeta, "syncedAt"> & {
+  syncedAt: null;
+  syncStatus: "never";
+  lastModified: number;
+};
 // R146: suggestionFor() is localized, so the assertions below are written in
 // Chinese. Pin the language rather than relying on the ambient default — the
 // main process starts in en-US, and a test that depends on that would flip
 // meaning the moment the default changed.
 import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 import {
-  recordProxyDetection,
+  recordProxyDetection as recordExplicitProxyDetection,
+  type ProxyHealthObservation,
   computeScore,
   riskFromScore,
   listProxyHealth,
@@ -36,6 +51,11 @@ import {
   computeBindings,
 } from "../../src/main/services/proxy-health.js";
 
+// This suite supplies explicit synthetic measurement authority/time. The
+// production writer must no longer invent "now" for an unobserved DTO.
+function recordProxyDetection(name: string, obs: ProxyHealthObservation) {
+  return recordExplicitProxyDetection(name, { ...obs, observedAt: Date.now(), source: "network" });
+}
 const BASE = {
   success: true,
   exitIp: "1.2.3.4",
@@ -112,10 +132,20 @@ describe("proxy health", () => {
   it("computes bindings from named and default profile routing", () => {
     const cfg = getConfig();
     const now = Date.now();
-    cfg.browserProfiles["prof_a"] = { name: "A", proxyMode: "named", proxyName: "p1", fingerprintSeed: 1, platform: "windows", syncedAt: null, syncStatus: "never", lastModified: now };
-    cfg.browserProfiles["prof_b"] = { name: "B", proxyMode: "default", proxyName: null, fingerprintSeed: 2, platform: "macos", syncedAt: null, syncStatus: "never", lastModified: now };
+    const legacyNamed: LegacyNullSyncedProfile = { name: "A", proxyMode: "named", proxyName: "p1", fingerprintSeed: 1, platform: "windows", syncedAt: null, syncStatus: "never", lastModified: now };
+    const legacyDefault: LegacyNullSyncedProfile = { name: "B", proxyMode: "default", proxyName: null, fingerprintSeed: 2, platform: "macos", syncedAt: null, syncStatus: "never", lastModified: now };
+    // Runtime-only legacy boundary injection, not a cast to the current DTO.
+    if (!Reflect.set(cfg.browserProfiles, "prof_a", legacyNamed) ||
+        !Reflect.set(cfg.browserProfiles, "prof_b", legacyDefault)) {
+      throw new Error("Failed to install legacy-null profile fixtures");
+    }
     cfg.defaultProxy = "p2";
     saveConfig(cfg);
+    const persisted: unknown = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(persisted).toMatchObject({ browserProfiles: { prof_a: legacyNamed, prof_b: legacyDefault }, defaultProxy: "p2" });
+    reloadConfig();
+    expect(getConfig().browserProfiles["prof_a"].syncedAt).toBeNull();
+    expect(getConfig().browserProfiles["prof_b"].syncedAt).toBeNull();
     const p1Bindings = computeBindings("p1");
     expect(p1Bindings).toEqual(["prof_a"]);
     const p2Bindings = computeBindings("p2");
@@ -160,17 +190,19 @@ describe("proxy health", () => {
     const entries = listProxyHealth();
     const p1 = entries.find((e) => e.proxyName === "p1");
     expect(p1).toBeTruthy();
-    expect(p1!.history[0].hosting).toBe(true);
-    expect(p1!.suggestion).toContain("机房/IDC");
-    expect(p1!.suggestion).toContain("Oracle Corporation");
+    if (!p1) throw new Error("Expected health entry for p1");
+    expect(p1.history[0].hosting).toBe(true);
+    expect(p1.suggestion).toContain("机房/IDC");
+    expect(p1.suggestion).toContain("Oracle Corporation");
   });
 
   it("records the public-proxy flag in history without an IDC suggestion (Slice 73)", () => {
     recordProxyDetection("p1", { ...BASE, hosting: false, isProxy: true });
     const p1 = listProxyHealth().find((e) => e.proxyName === "p1");
-    expect(p1!.history[0].isProxy).toBe(true);
-    expect(p1!.history[0].hosting).toBe(false);
-    expect(p1!.suggestion).not.toContain("机房/IDC");
+    if (!p1) throw new Error("Expected health entry for p1");
+    expect(p1.history[0].isProxy).toBe(true);
+    expect(p1.history[0].hosting).toBe(false);
+    expect(p1.suggestion).not.toContain("机房/IDC");
   });
 
   // R146: the suggestion used to be hardcoded Chinese, so the English UI showed
@@ -180,13 +212,17 @@ describe("proxy health", () => {
     recordProxyDetection("p1", { ...BASE, hosting: true, isProxy: false, org: "Oracle Corporation", as: "AS31898" });
 
     setMainLanguage("en-US");
-    const en = listProxyHealth().find((e) => e.proxyName === "p1")!.suggestion!;
+    const enEntry = listProxyHealth().find((e) => e.proxyName === "p1");
+    if (!enEntry || typeof enEntry.suggestion !== "string") throw new Error("Expected English suggestion for p1");
+    const en = enEntry.suggestion;
     expect(en).toContain("datacenter");
     expect(en).toContain("Oracle Corporation");
     expect(en).not.toMatch(/[一-鿿]/);
 
     setMainLanguage("zh-CN");
-    const zh = listProxyHealth().find((e) => e.proxyName === "p1")!.suggestion!;
+    const zhEntry = listProxyHealth().find((e) => e.proxyName === "p1");
+    if (!zhEntry || typeof zhEntry.suggestion !== "string") throw new Error("Expected Chinese suggestion for p1");
+    const zh = zhEntry.suggestion;
     expect(zh).toContain("机房/IDC");
     expect(zh).toContain("Oracle Corporation");
   });

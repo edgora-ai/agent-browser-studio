@@ -153,6 +153,17 @@ describe("classifyRuleState phases", () => {
     expect(s.missedAt).toBe(NOW - 1_000);
   });
 
+  it("keeps a marked once missed after clock rollback, even while its cooldown remains active", () => {
+    const s = classify({
+      rule: rule({ missedAt: NOW + 100, cooldownUntil: NOW + 60_000 }),
+      jobs: [job({ status: "skipped", result: "skipped: cooldown" })],
+    });
+    expect(s.phase).toBe("missed-once");
+    expect(s.missedAt).toBe(NOW + 100);
+    expect(s.nextRunAt).toBeNull();
+    expect(s.lastOutcome?.status).toBe("skipped");
+  });
+
   it("an armed timer beats recomputation for a once", () => {
     const armedAt = NOW + 5_000;
     const s = classify({ rule: rule({ trigger: { type: "once", at: FUTURE } }), live: { armed: true, armedAt } });

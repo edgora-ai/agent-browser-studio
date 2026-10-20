@@ -4,10 +4,10 @@
 //   - page-eval: engine routing (firefox → BiDi, chromium → CDP error path).
 // A real local WebSocket server stands in for Firefox so the wire protocol
 // (JSON-RPC-ish {id, method, params} + {id, result}) is exercised for real.
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import * as http from "node:http";
 import * as net from "node:net";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 
 import {
   connectBidi,
@@ -16,6 +16,7 @@ import {
   bidiSetCookie,
   bidiDeleteCookies,
   bidiGetTopContext,
+  bidiNavigate,
   bidiEvaluateInContext,
   normalizeBidiWebSocketUrl,
   registerFirefoxSession,
@@ -32,6 +33,8 @@ let port = 0;
 
 /** Fake BiDi responder table; tests may mutate `behaviors` before a call. */
 const wireCalls: Array<{ method: string; params: any }> = [];
+const wireOverrides = new Map<string, (ws: WebSocket, id: number) => void>();
+afterEach(() => { wireOverrides.clear(); vi.restoreAllMocks(); });
 const behaviors: Record<string, (params: any) => any> = {
   "session.new": () => ({ sessionId: "fake-session-1", capabilities: { webSocketUrl: "ws://127.0.0.1:0/session" } }),
   "browsingContext.getTree": () => ({ contexts: [{ context: "ctx-1", url: "about:blank", children: [], parent: null }] }),
@@ -66,6 +69,8 @@ beforeAll(async () => {
       try { msg = JSON.parse(data.toString()); } catch { return; }
       if (!msg || typeof msg.id !== "number") return;
       wireCalls.push({ method: msg.method, params: msg.params });
+      const override = wireOverrides.get(msg.method);
+      if (override) { override(ws, msg.id); return; }
       try {
         const handler = behaviors[msg.method];
         if (!handler) {
@@ -94,6 +99,142 @@ describe("bidi-client wire protocol", () => {
     conn.close();
     expect(conn.closed).toBe(true);
   }, 15000);
+
+  it("cancels only one caller's command without closing or poisoning the shared session", async () => {
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`);
+    let lateReply!: () => void;
+    wireOverrides.set("browsingContext.getTree", (ws, id) => { lateReply = () => ws.send(JSON.stringify({ id, result: { contexts: [{ context: "late-context" }] } })); });
+    try {
+      const controller = new AbortController();
+      const pending = conn.send("browsingContext.getTree", {}, 300, controller.signal);
+      const rejected = expect(pending).rejects.toThrow("only the navigation caller cancelled");
+      await vi.waitFor(() => expect(lateReply).toBeTypeOf("function"));
+      controller.abort(new Error("only the navigation caller cancelled"));
+      await rejected;
+      expect(conn.closed).toBe(false);
+      lateReply(); wireOverrides.clear();
+      expect(await bidiGetTopContext(conn, 300)).toBe("ctx-1");
+    } finally { conn.close(); }
+  });
+
+  it("bounds complete-navigation context preparation inside the same deadline", async () => {
+    const sent: string[] = [];
+    const fake = {
+      wsUrl: `ws://127.0.0.1:${port}/session`, closed: false, close: vi.fn(),
+      async send(method: string) {
+        sent.push(method);
+        if (method === "browsingContext.getTree") { await new Promise<void>((resolve) => setTimeout(resolve, 40)); return { contexts: [{ context: "late" }] }; }
+        return { navigation: "late-navigation" };
+      },
+    };
+    await expect(bidiNavigate(fake, "https://navigation.fixture.test/", null, 20, "complete")).rejects.toMatchObject({ code: "BROWSER_LOAD_TIMEOUT" });
+    expect(sent).toEqual(["browsingContext.getTree"]);
+    expect(fake.close).not.toHaveBeenCalled();
+  });
+
+  it("never opts the default session into ignoring TLS certificate failures", async () => {
+    const before = wireCalls.length;
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(wireCalls.slice(before)).toEqual([{ method: "session.new", params: {
+        capabilities: { alwaysMatch: { acceptInsecureCerts: false, unhandledPromptBehavior: { default: "dismiss" } } },
+      } }]);
+    } finally { conn.close(); }
+  });
+
+  it.each(["session.new", "browsingContext.getTree"])("retains the real protocol error code and top-level message from %s", async (method) => {
+    wireOverrides.set(method, (ws, id) => ws.send(JSON.stringify({
+      type: "error", id, error: "session not created", message: "A BiDi session is already active", stacktrace: "synthetic-stack",
+    })));
+    if (method === "session.new") {
+      await expect(connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 })).rejects.toThrow(/session not created.*A BiDi session is already active/);
+    } else {
+      const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+      try { await expect(bidiGetTopContext(conn, 5000)).rejects.toThrow(/session not created.*A BiDi session is already active/); }
+      finally { conn.close(); }
+    }
+  });
+
+  it.each(["session.new", "browsingContext.getTree"])("retains WebSocket close code/reason during %s", async (method) => {
+    wireOverrides.set(method, (ws) => ws.close(1008, "synthetic session policy rejection"));
+    const expected = /closed.*code=1008.*reason=synthetic session policy rejection/;
+    if (method === "session.new") {
+      await expect(connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 })).rejects.toThrow(expected);
+    } else {
+      const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+      try {
+        await expect(bidiGetTopContext(conn, 5000)).rejects.toThrow(expected);
+        expect(conn.closed).toBe(true);
+      } finally { conn.close(); }
+    }
+  });
+
+  it("offers removable event observation without auto-subscribing, reopening, or disturbing responses", async () => {
+    const event = { type: "event", method: "network.responseCompleted", params: { request: { request: "req-1" }, response: { status: 200 } } };
+    wireOverrides.set("browsingContext.getTree", (ws, id) => {
+      ws.send(JSON.stringify(event));
+      ws.send(JSON.stringify({ id, result: { contexts: [{ context: "ctx-1" }] } }));
+    });
+    const before = wireCalls.length;
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(typeof conn.onEvent).toBe("function");
+      const listener = vi.fn();
+      const unsubscribe = conn.onEvent!(listener);
+      expect(await bidiGetTopContext(conn, 5000)).toBe("ctx-1");
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({ method: event.method, params: event.params });
+      unsubscribe();
+      unsubscribe();
+      expect(await bidiGetTopContext(conn, 5000)).toBe("ctx-1");
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(wireCalls.slice(before).map((call) => call.method)).toEqual(["session.new", "browsingContext.getTree", "browsingContext.getTree"]);
+    } finally { conn.close(); }
+  });
+
+  it("isolates both sync and async listener errors from other observers and command correlation", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    wireOverrides.set("browsingContext.getTree", (ws, id) => {
+      ws.send(JSON.stringify({ type: "event", method: "network.beforeRequestSent", params: { request: { request: "req-2" } } }));
+      ws.send(JSON.stringify({ id, result: { contexts: [{ context: "ctx-1" }] } }));
+    });
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(typeof conn.onEvent).toBe("function");
+      conn.onEvent!(() => { throw new Error("synthetic synchronous observer failure"); });
+      conn.onEvent!(async () => { throw new Error("synthetic asynchronous observer failure"); });
+      const listener = vi.fn();
+      conn.onEvent!(listener);
+      expect(await bidiGetTopContext(conn, 5000)).toBe("ctx-1");
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledTimes(2);
+      expect(conn.closed).toBe(false);
+    } finally { conn.close(); }
+  });
+
+  it("does not deliver queued events or register new observers after local close", async () => {
+    let peer: WebSocket | undefined;
+    wireOverrides.set("browsingContext.getTree", (ws, id) => {
+      peer = ws;
+      ws.send(JSON.stringify({ id, result: { contexts: [{ context: "ctx-1" }] } }));
+    });
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(typeof conn.onEvent).toBe("function");
+      const listener = vi.fn();
+      conn.onEvent!(listener);
+      await bidiGetTopContext(conn, 5000);
+      const peerClosed = new Promise((resolve) => peer!.once("close", resolve));
+      peer!.send(JSON.stringify({ type: "event", method: "network.responseCompleted", params: {} }));
+      conn.close();
+      const lateListener = vi.fn();
+      const off = conn.onEvent!(lateListener);
+      await peerClosed;
+      expect(listener).not.toHaveBeenCalled();
+      expect(lateListener).not.toHaveBeenCalled();
+      expect(() => off()).not.toThrow();
+    } finally { conn.close(); }
+  });
 
   it("registers a preload script and returns its id", async () => {
     const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
@@ -152,7 +293,7 @@ describe("bidi-client wire protocol", () => {
     expect(info.sameSite).toBe(1); // lax
     expect(info.expires).toBe(1799999999);
 
-    expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1 }), 5000)).toBe(true);
+    expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1, expires: null }), 5000)).toBe(true);
     expect(await bidiDeleteCookies(conn, { name: "k" }, 5000)).toBe(1);
     conn.close();
   }, 15000);
@@ -277,7 +418,7 @@ describe("page-eval engine routing", () => {
 
 describe("cookie mapping (CookieInfo ↔ BiDi)", () => {
   it("maps strict/none and session cookies", () => {
-    const strict = cookieInfoToBidiCookie({ domain: ".example.com", name: "a", value: "b", path: "/", secure: true, httpOnly: true, sameSite: 2 });
+    const strict = cookieInfoToBidiCookie({ domain: ".example.com", name: "a", value: "b", path: "/", secure: true, httpOnly: true, sameSite: 2, expires: null });
     expect(strict.sameSite).toBe("strict");
     expect(strict.domain).toBe("example.com"); // leading dot stripped
     expect(strict.value).toEqual({ type: "string", value: "b" });

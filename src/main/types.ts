@@ -1,5 +1,8 @@
 // ── Shared types for Agent Browser Studio ──
 
+import type { NetworkObservationSummary, ObservedNetworkHop, NetworkHttpStatusEvidence } from "./services/network-diagnostics-contract.js";
+export type { NetworkCounts, NetworkCoverage, NetworkObservationSummary, NetworkObservationPayload, ObservedNetworkHop, NetworkHttpStatusEvidence } from "./services/network-diagnostics-contract.js";
+
 export interface ProxyConfig {
   type: "http" | "socks5" | "socks5h";
   host: string;
@@ -13,8 +16,17 @@ export interface ProxyConfig {
   updatedAt?: number;
 }
 
+export interface ProxyObservationMetadata {
+  observedAt: number | null;
+  source: "network" | "cache" | "unknown";
+  observationId: string | null;
+}
+
 export interface ProxyDetectionCacheEntry {
-  detectedAt: number;
+  detectedAt: number | null;
+  /** Absent on legacy records; normalizers project these explicitly as unknown. */
+  source?: ProxyObservationMetadata["source"];
+  observationId?: string | null;
   success: boolean;
   exitIp: string | null;
   country: string | null;
@@ -30,7 +42,9 @@ export interface ProxyDetectionCacheEntry {
 }
 
 export interface ProxyHealthHistoryPoint {
-  at: number;
+  at: number | null;
+  source?: ProxyObservationMetadata["source"];
+  observationId?: string | null;
   success: boolean;
   exitIp: string | null;
   countryCode: string | null;
@@ -49,8 +63,8 @@ export type ProxyRiskLevel = "good" | "watch" | "poor";
 
 export interface ProxyHealthEntry {
   proxyName: string;
-  firstSeenAt: number;
-  lastCheckedAt: number;
+  firstSeenAt: number | null;
+  lastCheckedAt: number | null;
   lastSuccessAt: number | null;
   checks: number;
   successes: number;
@@ -61,6 +75,9 @@ export interface ProxyHealthEntry {
   avgLatencyMs: number | null;
   score: number;
   risk: ProxyRiskLevel;
+  /** Derived on detached current reads; never a new measurement. */
+  freshness?: "fresh" | "stale" | "unknown";
+  observationAgeMs?: number | null;
   history: ProxyHealthHistoryPoint[];
   bindings: string[];
   cooldownUntil: number | null;
@@ -72,8 +89,51 @@ export interface ProxyHealthEntry {
 
 export type ProxyMode = "none" | "default" | "named";
 
+export type ProfileHealthKind = "env" | "webrtc" | "drift" | "consistency" | "network";
+export type ProfileHealthOutcome = "pass" | "warn" | "risk" | "error" | "unavailable" | "inconclusive" | "cancelled" | "baseline-established";
+export interface ProfileHealthEntry {
+  kind: ProfileHealthKind;
+  at: number;
+  outcome: ProfileHealthOutcome;
+  summary: string;
+  requestId?: string;
+  source: "runtime" | "host" | "baseline" | "cached" | "legacy";
+  /** Local-only v1 count/coverage facts. No origins or per-request detail. */
+  networkSummary?: NetworkObservationSummary;
+}
+
+export interface ProfileNetworkPage {
+  handle: string;
+  origin: string;
+  ordinal: number;
+}
+export interface ProfileNetworkPagesResult {
+  ok: boolean;
+  pages: ProfileNetworkPage[];
+  code?: string;
+  outcome?: ProfileHealthOutcome;
+}
+export interface ProfileNetworkArmedEvent {
+  dirId: string;
+  requestId: string;
+  armedAt: number;
+  observeForMs: 10000;
+}
+export interface ProfileNetworkObservationResult {
+  ok: boolean;
+  outcome: ProfileHealthOutcome;
+  requestId: string;
+  observation: NetworkObservationSummary;
+  hops: ObservedNetworkHop[];
+  httpStatusEvidence: NetworkHttpStatusEvidence[];
+  code?: string;
+}
+
 /** One persisted host-environment risk snapshot for a profile (R9 P1-4). */
 export interface EnvRiskDiagnosticsEntry {
+  outcome?: ProfileHealthOutcome;
+  requestId?: string;
+  source?: ProfileHealthEntry["source"];
   at: number;
   ok: boolean;
   high: number;
@@ -88,6 +148,9 @@ export interface EnvRiskDiagnosticsEntry {
 /** One persisted in-browser WebRTC diagnostics run for a profile. */
 export interface WebRtcDiagnosticsEntry {
   at: number;
+  outcome?: ProfileHealthOutcome;
+  requestId?: string;
+  gatheringState?: string;
   success: boolean;
   rtcAvailable: boolean;
   candidates: string[];
@@ -156,6 +219,7 @@ export interface BrowserFingerprintMeta {
   deviceMemory?: number | null;
   screenWidth?: number | null;
   screenHeight?: number | null;
+  /** Reported quota override in MiB; does not increase writable LocalStorage capacity. */
   storageQuota?: number | null;
   taskbarHeight?: number | null;
   fontsDir?: string | null;
@@ -174,6 +238,77 @@ export interface ProfileLock {
   at: number;
 }
 
+export type ProfilePreferencesSnapshot =
+  | { state: "present"; sha256: string; bytes: number }
+  | { state: "absent" };
+
+/** A completed remote snapshot of portable metadata plus Preferences only. */
+export interface ProfileSyncBaseline {
+  version: 1;
+  targetId: string;
+  snapshotId: string;
+  contentHash: string;
+  preferences: ProfilePreferencesSnapshot;
+  timestamp: number;
+}
+
+export interface HistorySchema {
+  version: 1;
+  sha256: string;
+  userVersion: string;
+  applicationId: string;
+  metaVersion: string | null;
+  compatibleVersion: string | null;
+}
+export interface HistoryArtifact {
+  version: 1;
+  snapshotId: string;
+  dirId: string;
+  engine: BrowserEngine;
+  path: "Default/History" | "places.sqlite";
+  capturedAt: number;
+  schema: HistorySchema;
+  semanticHash: string;
+  counts: { urls: string; visits: string; bookmarks: string };
+  members: Array<{ path: string; bytes: number; sha256: string }>;
+  object: { key: string; bytes: number; sha256: string };
+}
+export interface HistoryCoverage {
+  version: 1;
+  snapshotId: string;
+  dirId: string;
+  engine: BrowserEngine;
+  state: "complete" | "empty" | "absent" | "unselected" | "failed" | "preserved";
+  freshness: "captured" | "preserved" | "not-covered";
+  capturedAt?: number;
+  artifact?: HistoryArtifact;
+  code?: string;
+}
+/** Independent semantic proof; never inferred from config/Preferences sync. */
+export interface ProfileHistoryBaseline {
+  version: 1;
+  targetId: string;
+  snapshotId: string;
+  engine: BrowserEngine;
+  state: "present" | "absent";
+  semanticHash: string | null;
+  schemaHash: string | null;
+  timestamp: number;
+}
+export interface ProfileHistorySyncState {
+  scope: "history-and-firefox-bookmarks";
+  status: "synced" | "dirty" | "unknown" | "unselected";
+  coverage: "legacy" | HistoryCoverage["state"];
+  freshness: HistoryCoverage["freshness"] | "not-rechecked";
+  reason: string;
+  capturedAt: number | null;
+}
+
+export type ProfileSyncStatus = "synced" | "dirty" | "never" | "unknown";
+export type ProfileSyncScope = "portable-profile+preferences";
+export type ProfileSyncReason = "baseline-match" | "content-changed" | "no-baseline" | "legacy-marker"
+  | "invalid-baseline" | "target-mismatch" | "target-unavailable" | "preferences-unavailable" | "content-unavailable";
+
 export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   name: string;
   windowTitlePrefix?: string | null;
@@ -187,6 +322,9 @@ export interface BrowserProfileMeta extends BrowserFingerprintMeta {
   drm?: boolean;
   syncedAt?: number;
   syncedHash?: string;
+  syncBaseline?: ProfileSyncBaseline;
+  historySyncBaseline?: ProfileHistoryBaseline;
+  historySyncCoverage?: HistoryCoverage;
   note?: string | null;
   tags?: string[];
   /** Business preset id used at creation (Slice 75). */
@@ -256,7 +394,9 @@ export interface ProfileInfo {
   proxyName: string | null;
   proxyMode: ProxyMode;
   syncedAt: number | null;
-  syncStatus: "synced" | "dirty" | "never";
+  syncStatus: ProfileSyncStatus;
+  syncScope: ProfileSyncScope;
+  syncReason: ProfileSyncReason;
   tags: string[];
   fingerprint: BrowserFingerprintMeta;
 }
@@ -286,6 +426,9 @@ export interface SyncConfig {
    * consented. push/pull refuse while unset (fail-closed).
    */
   custodyConsentAt?: number | null;
+  /** Separate opt-in: history may also disclose Firefox Places bookmarks. */
+  includeHistory?: boolean;
+  historyConsentAt?: number | null;
 }
 
 export type TeamRole = "owner" | "admin" | "member" | "viewer";
@@ -318,6 +461,21 @@ export interface LlmConfig {
   model?: string;
 }
 
+/** Transport-only, bound to one committed collection snapshot, not a durable ID. */
+export interface AccountReference {
+  index: number;
+  revision: string;
+}
+export interface ReferencedPlatformAccount extends PlatformAccount {
+  ref: AccountReference;
+}
+export interface RedactedPlatformAccount extends Omit<PlatformAccount, "platformPassword"> {
+  /** Never present at runtime; permits legacy redaction destructuring during integration. */
+  platformPassword?: never;
+  hasPassword: boolean;
+  ref: AccountReference;
+}
+
 export interface PlatformAccount {
   platformUrl: string;
   platformUserName: string;
@@ -343,6 +501,8 @@ export interface MgmtConfig {
   webrtcDiagnostics?: Record<string, WebRtcDiagnosticsEntry[]>;
   /** Persisted host-environment risk snapshots per profile (R9 P1-4, mirrors webrtcDiagnostics). */
   envRiskDiagnostics?: Record<string, EnvRiskDiagnosticsEntry[]>;
+  /** Local diagnostic facts only; not part of portable profile or sync content. */
+  profileHealthHistory?: Record<string, ProfileHealthEntry[]>;
   sync: SyncConfig;
   browserProfiles: Record<string, BrowserProfileMeta>;
   extensionRepository?: Record<string, ExtensionRepositoryEntry>;
@@ -635,14 +795,64 @@ export interface StatusResult {
   running: boolean;
   pid: number | null;
   cdpPort: number | null;
+  /** Discovery failed; running:false is not confirmed exit in this case. */
+  unknown?: boolean;
 }
 
+export interface SyncComparisonToken {
+  targetId: string;
+  localHash: string;
+  remoteHash: string;
+}
+
+export type SyncOutcome = "complete" | "partial" | "failed" | "cancelled" | "recovery-required";
+export type SyncCommitState = "none" | "committed" | "partial" | "unknown";
+/** Per-profile restore effects, never a live fingerprint or browser-health pass. */
+export interface SyncProfileRuntimeEffect {
+  state: "stopped" | "running-or-unconfirmed";
+  action: "skipped-stop-required" | "restored-stopped" | "running-partial";
+  stopRequired: boolean;
+  restartRequired: boolean;
+  queuedCookies: number;
+  liveCookiesApplied: number;
+  liveCookiesUnconfirmed?: boolean;
+}
+export interface SyncItemResult {
+  side?: "local" | "remote";
+  scope: "config" | "profiles" | "cookies" | "localStorage" | "preferences" | "extensions" | "history" | "sidecar" | "baseline";
+  id?: string;
+  state: "applied" | "uploaded" | "queued" | "preserved" | "skipped" | "failed" | "unknown";
+  code?: string;
+  message?: string;
+  count?: number;
+  bytes?: number;
+  /** A policy-selected omission is distinct from an incomplete requested item. */
+  required?: boolean;
+  history?: HistoryCoverage;
+  identity?: import("./services/profile-identity.js").ProfileIdentityComparison;
+  runtimeEffect?: SyncProfileRuntimeEffect;
+}
+export interface SyncRecoveryInfo {
+  resource: "localStorage" | "extensions" | "profiles" | "history";
+  id: string;
+  receiptPath?: string;
+  paths: string[];
+}
 export interface SyncResult {
   success: boolean;
   message: string;
   transferredBytes?: number;
   /** Machine-readable failure (sale-93: CUSTODY_CONSENT_REQUIRED). */
   code?: string;
+  operationId?: string;
+  outcome?: SyncOutcome;
+  localCommit?: SyncCommitState;
+  remoteCommit?: SyncCommitState;
+  items?: SyncItemResult[];
+  warnings?: string[];
+  recovery?: SyncRecoveryInfo[];
+  /** Configuration publication is not a complete fresh browser-data backup. */
+  browserBackupIncomplete?: boolean;
 }
 
 // ── Updates (version-aware release store with pin + rollback) ──

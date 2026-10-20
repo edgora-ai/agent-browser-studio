@@ -7,10 +7,19 @@
   var profileRefreshTimer = null;
   var profileRuntimeSeq = 0;
 
-  function getSyncStatus(syncedAt, lastModified) {
-    if (!syncedAt) return "never";
-    if (lastModified && lastModified > syncedAt) return "dirty";
-    return "synced";
+  function getSyncStatus(profileOrSyncedAt) {
+    // Only the main-process content comparison can establish a match/change.
+    // Directory mtimes and legacy timestamps (including zero) are not proof.
+    if (profileOrSyncedAt && typeof profileOrSyncedAt === "object") {
+      var p = profileOrSyncedAt;
+      if (p.syncStatus === "unknown") return "unknown";
+      if (p.syncScope === "portable-profile+preferences" &&
+          (p.syncStatus === "synced" || p.syncStatus === "dirty" || p.syncStatus === "never")) return p.syncStatus;
+      if (p.syncStatus && p.syncStatus !== "never") return "unknown";
+      if (p.syncedAt != null || p.syncedHash || p.syncBaseline) return "unknown";
+      return "never";
+    }
+    return profileOrSyncedAt == null ? "never" : "unknown";
   }
 
   function markProfileRuntime(dirId, running, pid) {
@@ -430,7 +439,7 @@
     stack.appendChild(t);
     enforceToastLimit(stack);
 
-    var ttl = typeof opts.ttlMs === "number" ? opts.ttlMs : (TOAST_TTL_MS[level] || 3000);
+    var ttl = typeof opts.ttlMs === "number" ? opts.ttlMs : (TOAST_TTL_MS[level] === undefined ? 3000 : TOAST_TTL_MS[level]);
     if (ttl > 0) {
       setTimeout(function () {
         if (t.parentNode) t.parentNode.removeChild(t);
@@ -499,9 +508,9 @@
   }
 
   function skillSourceLabel(skill) {
-    if (skill.source === 'built-in') return 'Built-in';
-    if (skill.source === 'shared-catalog') return 'Shared catalog';
-    return 'Local';
+    if (skill.source === 'built-in') return pi18n("agent.skills.card.source.builtin", "Built-in");
+    if (skill.source === 'shared-catalog') return pi18n("agent.skills.card.source.catalog", "Shared catalog");
+    return pi18n("agent.skills.card.source.local", "Local");
   }
 
   function renderSkillTags(tags) {
@@ -519,14 +528,14 @@
     var actions = '';
     if (marketplace) {
       actions += enabled
-        ? '<button class="btn btn-secondary btn-sm" data-action="skill-disable">' + icon("check", 12) + ' Enabled</button> '
-        : '<button class="btn btn-primary btn-sm" data-action="skill-install">Install / Enable</button> ';
+        ? '<button class="btn btn-secondary btn-sm" data-action="skill-disable">' + icon("check", 12) + ' ' + esc(pi18n("agent.skills.card.enabled", "Enabled")) + '</button> '
+        : '<button class="btn btn-primary btn-sm" data-action="skill-install">' + esc(pi18n("agent.skills.card.install-enable", "Install / Enable")) + '</button> ';
     } else {
-      actions += '<button class="btn btn-secondary btn-sm" data-action="skill-toggle">' + (enabled ? 'Disable' : 'Enable') + '</button> ';
+      actions += '<button class="btn btn-secondary btn-sm" data-action="skill-toggle">' + esc(enabled ? pi18n("agent.skills.card.disable", "Disable") : pi18n("agent.skills.card.enable", "Enable")) + '</button> ';
     }
-    if (skill.source !== 'built-in') actions += '<button class="btn btn-secondary btn-sm" data-action="skill-edit">Edit</button> ';
-    actions += '<button class="btn btn-secondary btn-sm" data-action="skill-share">' + (shared ? 'Unshare' : 'Share') + '</button> ';
-    actions += '<button class="btn btn-danger btn-sm" data-action="skill-remove">' + (skill.source === 'built-in' ? 'Disable' : 'Remove') + '</button>';
+    if (skill.source !== 'built-in') actions += '<button class="btn btn-secondary btn-sm" data-action="skill-edit">' + esc(pi18n("agent.skills.card.edit", "Edit")) + '</button> ';
+    actions += '<button class="btn btn-secondary btn-sm" data-action="skill-share">' + esc(shared ? pi18n("agent.skills.card.unshare", "Unshare") : pi18n("agent.skills.card.share", "Share")) + '</button> ';
+    actions += '<button class="btn btn-danger btn-sm" data-action="skill-remove">' + esc(skill.source === 'built-in' ? pi18n("agent.skills.card.disable", "Disable") : pi18n("agent.skills.card.remove", "Remove")) + '</button>';
     /* R75: skill card inline styles (5 sites) converge to classes. */
     return '<div class="skill-card" data-skill-id="' + escAttr(skill.id) + '">' +
       '<div class="skill-layout">' +
@@ -534,10 +543,10 @@
           '<h4>' + esc(skill.title || skill.name || skill.id) + '</h4>' +
           '<p class="skill-desc">' + esc(skill.description || '') + '</p>' +
           '<div class="skill-meta">' +
-            '<span>Source: ' + esc(source) + '</span>' +
-            '<span>Status: ' + (enabled ? 'Enabled' : 'Disabled') + '</span>' +
-            '<span>Share: ' + (shared ? 'Yes' : 'No') + '</span>' +
-            '<span title="' + escAttr(tools) + '">Tools: ' + esc(tools ? tools.slice(0, 120) : 'none') + '</span>' +
+            '<span>' + esc(pi18n("agent.skills.card.source", "Source")) + ': ' + esc(source) + '</span>' +
+            '<span>' + esc(pi18n("common.status", "Status")) + ': ' + esc(enabled ? pi18n("agent.skills.card.enabled", "Enabled") : pi18n("agent.skills.card.disabled", "Disabled")) + '</span>' +
+            '<span>' + esc(pi18n("agent.skills.card.share", "Share")) + ': ' + esc(shared ? pi18n("agent.skills.card.yes", "Yes") : pi18n("agent.skills.card.no", "No")) + '</span>' +
+            '<span title="' + escAttr(tools) + '">' + esc(pi18n("agent.skills.card.tools", "Tools")) + ': ' + esc(tools ? tools.slice(0, 120) : pi18n("common.none", "none")) + '</span>' +
           '</div>' +
           (tags ? '<div class="skill-tags">' + tags + '</div>' : '') +
         '</div>' +
@@ -716,9 +725,13 @@
     if (i >= units.length) i = units.length - 1;
     return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
   }
+  var browserStatusSeq = 0;
   function updateBrowserStatus() {
+    var seq = ++browserStatusSeq;
     api.browser.binary().then(function (info) {
+      if (seq !== browserStatusSeq) return;
       var el = document.getElementById("sidebar-chrome-status");
+      if (!el) return;
       /* R125: preserve the sidebar-version class — className assignment
          wiped the truncate rules, causing mid-string wraps in narrow windows.
          R142: the glyph is a direct child of the flex host and the version text
@@ -729,12 +742,14 @@
         el.innerHTML = icon("check", 11) + '<span class="icon-text-label">Chromium ' + esc(info.version || "?") + '</span>';
         el.className = 'sidebar-version chrome-status-ok';
       } else {
-        el.innerHTML = icon("alert", 11) + '<span class="icon-text-label">No managed Chromium</span>';
+        el.innerHTML = icon("alert", 11) + '<span class="icon-text-label">' + esc(pi18n("browser.status.missing-sidebar", "No managed Chromium")) + '</span>';
         el.className = 'sidebar-version chrome-status-err';
       }
     }).catch(function () {
+      if (seq !== browserStatusSeq) return;
       var el = document.getElementById("sidebar-chrome-status");
-      el.innerHTML = icon("info", 11) + '<span class="icon-text-label">Chromium unknown</span>';
+      if (!el) return;
+      el.innerHTML = icon("info", 11) + '<span class="icon-text-label">' + esc(pi18n("browser.status.unknown-sidebar", "Chromium unknown")) + '</span>';
       el.className = 'sidebar-version chrome-status-unknown';
     });
   }

@@ -69,6 +69,10 @@
     loadTab("profiles");
     loadSyncConfig();
     updateBrowserStatus();
+    api.app.version().then(function (version) {
+      var el = document.getElementById('sidebar-app-version');
+      if (el && typeof version === 'string' && version.trim()) el.textContent = 'v' + version.trim();
+    }).catch(function (e) { console.error('[app] version unavailable:', e); });
 
     // First-run wizard — delay slightly so profiles list loads first
     setTimeout(function () { maybeShowWizard(); }, 500);

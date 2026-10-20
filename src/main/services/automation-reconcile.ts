@@ -1,17 +1,10 @@
 // Automation state reconciliation (M3).
 //
-// Runs at startup and again on sleep/resume and system-time change. It makes
-// the durable job log agree with reality after an interruption the process did
-// not observe — a crash, a quit mid-run, a suspend that outlived a retry timer.
-//
-// THE RULE: converge, never re-run. Every action here can only rewrite a row's
-// terminal state or drop a mark; none of them starts an execution, re-arms a
-// timer, or clears a user's cooldown. Re-running a side-effecting action
-// (launch, agent-task, sync) unprompted is exactly what this codebase refuses
-// to do, and a resume handler is the worst possible place to start.
-//
-// One implementation, two callers (startup + handleSystemResume), so the
-// sleep/resume path is exercisable without a real suspend.
+// Startup recovery and live timer refresh have different ownership rules.
+// Only startup can declare unfinished jobs orphaned: while this process is
+// alive, its running action, queued slot and retry timer still own those rows.
+// Neither path replays a side-effecting execution. Live refresh only recomputes
+// future clock/timezone deadlines without invalidating that active work.
 import {
   recoverInterruptedJobs,
   recoverOrphanedQueuedJobs,
@@ -44,8 +37,9 @@ export interface ReconcileReport {
 }
 
 /**
- * Converge the job log. Idempotent: running it twice changes nothing the
- * second time, because every step matches only the state it produces.
+ * Startup-only recovery, before IPC handlers and the scheduler start.
+ * Idempotent: a second pass changes nothing because each step matches only
+ * the state it produces. Never call this while the scheduler owns live jobs.
  */
 export function reconcileAutomationState(): ReconcileReport {
   const report: ReconcileReport = {
@@ -86,14 +80,14 @@ export function reconcileAutomationState(): ReconcileReport {
   return report;
 }
 
-/**
- * What a resume/time-change did. `rearmed` is always false and is reported so
- * the "resume never starts work" property is visible to a caller (and to the
- * E2E that asserts no job was created) rather than only stated in a comment.
- */
+/** Live refresh report: startup recovery counters stay zero for owned jobs. */
 export interface SystemResumeReport extends ReconcileReport {
   reason: string;
-  rearmed: false;
+  /** True only when at least one future cron/once TIMER was armed. */
+  rearmed: boolean;
+  timersRefreshed: number;
+  /** A live refresh does not replay or create an execution. */
+  workStarted: false;
   /** Whether the host's UTC offset differs from the one observed last time. */
   offsetChanged: boolean;
 }
@@ -118,30 +112,27 @@ function currentOffsetMinutes(): number | null {
  * that changes the offset — a move between two zones sharing an offset is
  * undetectable, which is recorded as a known limit).
  *
- * Re-reading the schedule is what makes the displayed next-run time correct
- * after a jump: every cron is recomputed from the new "now".
+ * Refreshing armed timers makes the displayed next-run time correct after a
+ * jump: future crons are recomputed from the new "now", without catch-up.
+ * Recovery of unfinished jobs is strictly startup-only.
  */
 export function handleSystemResume(reason: string): SystemResumeReport {
   const offset = currentOffsetMinutes();
   const offsetChanged = offset !== null && lastOffsetMinutes !== null && offset !== lastOffsetMinutes;
+  const timersRefreshed = refreshScheduleTimersFn?.() ?? 0;
   if (offset !== null) lastOffsetMinutes = offset;
-
-  const report = reconcileAutomationState();
-  try {
-    reloadScheduleFn?.();
-  } catch { /* ignore */ }
-
-  return { ...report, reason, rearmed: false, offsetChanged };
+  return {
+    reason, offsetChanged, rearmed: timersRefreshed > 0, timersRefreshed,
+    workStarted: false, interruptedJobs: 0, orphanedQueued: 0,
+    orphanedRetryWaiting: 0, jobsReplayedFromRun: 0, pruned: 0,
+    notificationsReplayed: 0,
+  };
 }
 
-/**
- * Injected by index.ts. A direct import would create a cycle (automation.ts
- * imports this module's job-store helpers, and the reconcile report is part of
- * the scheduler's public surface), so the one function needed is passed in.
- */
-let reloadScheduleFn: (() => void) | null = null;
-export function setReloadSchedule(fn: (() => void) | null): void {
-  reloadScheduleFn = fn;
+/** Injected by index.ts to avoid coupling startup recovery to live scheduling. */
+let refreshScheduleTimersFn: (() => number) | null = null;
+export function setRefreshScheduleTimers(fn: (() => number) | null): void {
+  refreshScheduleTimersFn = fn;
 }
 
 /** Tests: reset the remembered offset between cases. */

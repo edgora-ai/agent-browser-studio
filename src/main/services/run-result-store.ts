@@ -4,7 +4,7 @@
 //
 // Write protocol (per payload file):
 //   serialize in memory → open tmp (O_EXCL, 0600) → write → fsync → rename
-//   → fsync the directory → re-open and verify (lstat rejects symlinks,
+//   → fsync the directory where supported → re-open and verify (lstat rejects symlinks,
 //   size + SHA-256 must match, dataset payloads are re-parsed and checked
 //   against the claimed runId/columns/rows).
 // manifest.json is written LAST with the same protocol and is the only
@@ -69,8 +69,27 @@ export interface CommitArgs {
 }
 
 export type CommitResult =
-  | { ok: true; artifacts: AgentRunArtifactRef[]; reused: boolean }
+  | { ok: true; artifacts: AgentRunArtifactRef[]; reused: boolean; verification: AgentRunVerification }
   | { ok: false; reasonCode: "artifact_limit" | "integrity_conflict" | "artifact_invalid" | "write_failed"; detail: string };
+
+/**
+ * R0925-03: the verdict persisted in the manifest is decided HERE, where the
+ * actual truncation outcome is known — never upstream from pre-commit hopes.
+ * A truncated snapshot is partial evidence, so any automated verdict is
+ * honestly downgraded to manual_review before it touches disk.
+ */
+function effectiveVerification(v: AgentRunVerification, truncated: boolean, now: number): AgentRunVerification {
+  if (!truncated || v.status === "manual_review") return v;
+  return {
+    status: "manual_review",
+    checkedAt: now,
+    reasonCode: "artifact_limit",
+    ...(v.status !== "unverified"
+      ? { verifierId: v.verifierId, verifierVersion: v.verifierVersion }
+      : {}),
+    issues: [{ code: "artifact_limit", detail: "snapshot truncated to fit the result budget" }],
+  };
+}
 
 export interface DatasetEnvelope {
   schemaVersion: 1;
@@ -132,7 +151,7 @@ export class RunResultStore {
   // ── Low-level atomic write + verify ──
 
   /** Atomic write: unique O_EXCL tmp in the SAME directory, 0600, fsync,
-   *  rename, directory fsync. Tmp is always cleaned up. */
+   *  rename, directory fsync where supported. Tmp is always cleaned up. */
   private atomicWrite(targetPath: string, data: Buffer): void {
     const dir = path.dirname(targetPath);
     const tmp = path.join(dir, `${TMP_PREFIX}${process.pid}-${randomUUID()}`);
@@ -148,6 +167,11 @@ export class RunResultStore {
       try {
         dfd = fs.openSync(dir, fs.constants.O_RDONLY);
         fs.fsyncSync(dfd);
+      } catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        // Windows reports EPERM for directory fsync. This is not a directory
+        // durability guarantee: the file fsync and atomic rename remain required.
+        if (dfd === null || process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
       } finally {
         if (dfd !== null) try { fs.closeSync(dfd); } catch { /* best effort */ }
       }
@@ -304,7 +328,7 @@ export class RunResultStore {
     if (!RUN_ID_RE.test(args.runId)) return { ok: false, reasonCode: "artifact_invalid", detail: "invalid run id" };
     if (!args.dataset) {
       // Nothing to materialize (e.g. manual_review without a snapshot).
-      return { ok: true, artifacts: [], reused: false };
+      return { ok: true, artifacts: [], reused: false, verification: args.verification };
     }
 
     const runDir = this.runDir(args.runId);
@@ -327,7 +351,7 @@ export class RunResultStore {
           return { ok: false, reasonCode: "integrity_conflict", detail: "existing manifest payload hash differs; refusing to overwrite" };
         }
       }
-      return { ok: true, artifacts: m.artifacts, reused: true };
+      return { ok: true, artifacts: m.artifacts, reused: true, verification: m.verification };
     }
     if (existing.reasonCode !== "not_found") {
       // A corrupt/unverifiable manifest is an integrity conflict — never
@@ -387,6 +411,7 @@ export class RunResultStore {
     }
 
     const createdAt = this.now();
+    const verification = effectiveVerification(args.verification, dataset.truncated, createdAt);
     const artifact: AgentRunArtifactRef = {
       id: "dataset",
       kind: "dataset",
@@ -411,7 +436,7 @@ export class RunResultStore {
       runStartedAt: args.runStartedAt,
       templateId: args.templateId,
       templateVersion: args.templateVersion,
-      verification: args.verification,
+      verification,
       terminal: args.terminal,
       artifacts: [artifact],
       createdAt,
@@ -435,7 +460,7 @@ export class RunResultStore {
     } catch (e: any) {
       return { ok: false, reasonCode: e?.code === "ENOSPC" ? "artifact_limit" : "write_failed", detail: String(e?.message || e).slice(0, 300) };
     }
-    return { ok: true, artifacts: [artifact], reused: false };
+    return { ok: true, artifacts: [artifact], reused: false, verification };
   }
 
   // ── Read path ──

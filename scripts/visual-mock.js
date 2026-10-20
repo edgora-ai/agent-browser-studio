@@ -284,6 +284,16 @@
     { platformUserName: "ops@northwind.example", platformUrl: "https://sellercentral.amazon.com", hasPassword: false, tags: ["ops"], profileIds: ["prof_amazon", "prof_long"] },
     { platformUserName: "短账号名测试中文溢出情况", platformUrl: "https://example.cn/login", hasPassword: true, tags: [], profileIds: [] },
   ];
+  // The readonly dialog sweep needs the same detached list/get snapshot ref
+  // as the real transport; a bare mutable index cannot open account binding.
+  var accountRevision = "visual-accounts-snapshot-1";
+  function accountView(index) {
+    var account = accountList[index];
+    if (!account) return null;
+    var view = clone(account);
+    view.ref = { index: index, revision: accountRevision };
+    return view;
+  }
 
   var proxyHealth = {
     entries: [
@@ -321,6 +331,11 @@
     "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
   var eventListeners = {};
   var approvalPending = [];
+  // R0925-07: agent.activeRun used to fall through to the miss proxy, so the
+  // chat tab rendered with the empty-array fallback and the audit still
+  // passed. Model the real contract (ChatRunSnapshot | null) — default null
+  // (no live run); a harness can opt into a running snapshot.
+  var activeRunFixture = null;
   mock.on = function (channel, cb) {
     if (typeof cb !== "function") return;
     if (EVENT_CHANNELS.indexOf(channel) === -1) return;
@@ -337,7 +352,16 @@
     });
   };
   mock.listenerCount = function (channel) { return (eventListeners[channel] || []).length; };
+  // null = idle (default). Pass a ChatRunSnapshot-shaped object to render the
+  // running state, e.g. { conversationId, streamId, runId, state: "running",
+  // startedAt, reply: "", toolCalls: [], steps: [], currentTool: null }.
+  mock.setActiveRun = function (snapshot) { activeRunFixture = snapshot || null; };
   def("agent", {
+      activeRun: function () {
+        // Shape mirrors desktopChatRuns.snapshot (chat-runs.ts): null when no
+        // live run owns this conversation.
+        return Promise.resolve(activeRunFixture ? clone(activeRunFixture) : null);
+      },
       conversations: ns({
         list: function () {
           // Field parity with ipc/agent.ts conversations:list — the renderer's
@@ -367,7 +391,13 @@
       // bind → the account (hasPassword) or null; delete → boolean; bulk → a
       // {added, created?, skipped} counts object.
       accounts: ns({
-        list: function () { return Promise.resolve(clone(accountList)); },
+        list: function () { return Promise.resolve(accountList.map(function (_, index) { return accountView(index); })); },
+        get: function (index, ref) {
+          if (!Number.isSafeInteger(index) || index < 0 || !ref || ref.index !== index || ref.revision !== accountRevision) {
+            return Promise.reject(Object.assign(new Error("ACCOUNT_REFERENCE_CONFLICT"), { code: "ACCOUNT_REFERENCE_CONFLICT" }));
+          }
+          return Promise.resolve(accountView(index));
+        },
         add: function (account) {
           var rec = Object.assign({}, account, { hasPassword: Boolean(account && account.platformPassword) });
           accountList.push({ platformUserName: rec.platformUserName, platformUrl: rec.platformUrl, hasPassword: rec.hasPassword, tags: rec.tags || [], profileIds: [] });

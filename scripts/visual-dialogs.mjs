@@ -25,6 +25,8 @@ import os from "os";
 import path from "path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
+// Exact preload app.version() -> app:get-version -> app.getVersion(): Promise<string>.
+const MOCK_APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8")).version;
 const arg = (n, d) => {
   const i = process.argv.indexOf(`--${n}`);
   return i === -1 ? d : process.argv[i + 1];
@@ -68,7 +70,7 @@ function findChromium() {
 // falsifiable rather than mysterious.
 const DIALOGS = [
   { id: "dlg-account", cmd: "agentAddAccount" },
-  { id: "dlg-account-bind", cmd: "agentBindAccounts", arg: 0 },
+  { id: "dlg-account-bind", cmd: "agentBindAccounts", accountRefIndex: 0 },
   { id: "dlg-account-import", cmd: "agentImportAccounts" },
   { id: "dlg-agent-run", cmd: "runsOpen", arg: "run_9f0b" },
   { id: "dlg-agent-browser-seed", cmd: "editProfile", arg: "prof_amazon" },
@@ -139,7 +141,9 @@ async function boot(browser, lang, theme) {
     // fills/borders, so dark mode is a separate untested surface.
     localStorage.setItem("agent-browser-studio-theme", arg.theme);
   }, { lang, theme });
-  await page.addInitScript(mock);
+  await page.addInitScript(`${mock}
+    window.agentBrowserAPI.app.version = async () => ${JSON.stringify(MOCK_APP_VERSION)};
+  `);
   await page.goto("file://" + path.join(ROOT, "src/renderer/index.html"));
   await page.waitForTimeout(1200);
   await page.evaluate(() => {
@@ -155,19 +159,24 @@ async function boot(browser, lang, theme) {
 
 // Open one dialog and return what the user would see.
 async function inspect(page, d) {
-  return page.evaluate(async ({ id, cmd, arg, arg2, emit, emitArg }) => {
+  return page.evaluate(async ({ id, cmd, arg, arg2, accountRefIndex, emit, emitArg }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
     if (emit) {
       // Fire the same IPC channel the main process broadcasts on.
-      if (typeof window.agentBrowserAPI.emit !== "function") return { skipped: "mock has no emit" };
-      if (window.agentBrowserAPI.listenerCount(emit) === 0) return { skipped: `no listener for ${emit}` };
+      if (typeof window.agentBrowserAPI.emit !== "function") return { unavailable: "mock has no emit" };
+      if (window.agentBrowserAPI.listenerCount(emit) === 0) return { unavailable: `no listener for ${emit}` };
       window.agentBrowserAPI.emit(emit, emitArg);
     } else {
       // cmd may be dotted (e.g. "batch.showResult") — resolve through the path
       // so nested exports are reachable, not just top-level ones.
       const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
-      if (typeof fn !== "function") return { skipped: `no command ${cmd}` };
+      if (typeof fn !== "function") return { unavailable: `no command ${cmd}` };
       try {
+        if (accountRefIndex !== undefined) {
+          const accounts = await window.agentBrowser.R.agent.accounts.list();
+          arg = accounts[accountRefIndex] && accounts[accountRefIndex].ref;
+          if (!arg) return { unavailable: "account fixture has no displayed snapshot reference" };
+        }
         if (arg2 !== undefined) await fn(arg, arg2);
         else if (arg !== undefined) await fn(arg);
         else await fn();
@@ -177,8 +186,14 @@ async function inspect(page, d) {
     }
     await new Promise((r) => setTimeout(r, 450));
     const dlg = document.getElementById(id);
-    if (!dlg) return { skipped: "not in DOM" };
+    if (!dlg) return { unavailable: "not in DOM" };
     if (!dlg.open) return { didNotOpen: true };
+    if (accountRefIndex !== undefined) {
+      const save = dlg.querySelector('[data-cmd="agentSaveAccountBind"]');
+      if (!dlg.querySelector(".acct-bind-cb") || !save || save.disabled) {
+        return { unavailable: "account-bind fixture did not complete its referenced account/profile reads" };
+      }
+    }
     const text = dlg.innerText.replace(/\r/g, "").trim();
     // title = the h3 that labels the dialog
     const h3 = dlg.querySelector("h3");
@@ -220,7 +235,7 @@ async function run(lang, theme) {
     out[d.id] = await inspect(page, d);
     if (WANT_SHOTS && out[d.id].open) {
       fs.mkdirSync(OUT, { recursive: true });
-      await page.screenshot({ path: path.join(OUT, `${d.id}.${lang}.png`) });
+      await page.screenshot({ path: path.join(OUT, `${d.id}.${lang}.${theme}.png`) });
     }
   }
   // R183: opening a dialog exercises API paths the tab census never touches —
@@ -236,77 +251,88 @@ async function run(lang, theme) {
 }
 
 const THEMES = (arg("theme", "light,dark")).split(",").map((x) => x.trim()).filter(Boolean);
-const zh = await run("zh-CN", THEMES[0]);
-const en = await run("en-US", THEMES[0]);
 
+// R0925-07: every configured theme is swept, not just the first — a dark-only
+// defect (unthemed color, unreadable contrast pair) used to pass silently.
 const findings = [];
-// A mock method the renderer called but the fixture never modelled. The miss
-// proxy answers [], which passes a null check and then reads as undefined —
-// see R182 (edit-proxy). Prefer a loud report over a dialog that looks
-// populated but is not.
-for (const [lang, res] of [["zh", zh], ["en", en]]) {
-  for (const m of res.__mockMisses || []) {
-    findings.push({ id: "—", kind: "unstubbed-in-dialog", detail: `[${lang}] ${m} — the fixture has no such method, so the dialog rendered the empty-array fallback` });
-  }
-}
-
 let opened = 0, skipped = 0;
-for (const d of DIALOGS) {
-  const z = zh[d.id] || {};
-  const e = en[d.id] || {};
-  if (z.skipped || e.skipped) { skipped++; continue; }
-  if (z.threw) findings.push({ id: d.id, kind: "opener-threw", detail: `zh: ${z.threw}` });
-  if (e.threw) findings.push({ id: d.id, kind: "opener-threw", detail: `en: ${e.threw}` });
-  if (z.didNotOpen) findings.push({ id: d.id, kind: "did-not-open", detail: `command ${d.cmd} ran but the dialog stayed closed` });
-  if (!z.open) continue;
-  opened++;
+let summaryZh = null;
 
-  const gz = GARBAGE.exec(z.text), ge = GARBAGE.exec(e.text);
-  if (gz) findings.push({ id: d.id, kind: "garbage-text", detail: JSON.stringify(gz[0]) });
-  if (ge) findings.push({ id: d.id, kind: "garbage-text", detail: JSON.stringify(ge[0]) });
+for (const theme of THEMES) {
+  const zh = await run("zh-CN", theme);
+  const en = await run("en-US", theme);
+  if (!summaryZh) summaryZh = zh;
+  const tag = THEMES.length > 1 ? `[${theme}] ` : "";
 
-  // A visible raw i18n key is always a defect.
-  for (const [lang, r] of [["zh", z], ["en", e]]) {
-    const m = r.text.split("\n").map((l) => l.trim()).filter((l) => RAW_KEY.test(l) && !/https?:|\.(com|cn|org|io|example)\b/.test(l));
-    if (m.length) findings.push({ id: d.id, kind: "raw-key-leak", detail: `[${lang}] ${m[0].slice(0, 60)}` });
+  // A mock method the renderer called but the fixture never modelled. The miss
+  // proxy answers [], which passes a null check and then reads as undefined —
+  // see R182 (edit-proxy). Prefer a loud report over a dialog that looks
+  // populated but is not.
+  for (const [lang, res] of [["zh", zh], ["en", en]]) {
+    for (const m of res.__mockMisses || []) {
+      findings.push({ id: "—", kind: "unstubbed-in-dialog", detail: `${tag}[${lang}] ${m} — the fixture has no such method, so the dialog rendered the empty-array fallback` });
+    }
   }
 
-  if (z.overflow > 0) findings.push({ id: d.id, kind: "cell-overflow", detail: `${z.overflow} element(s) spill their box` });
+  for (const d of DIALOGS) {
+    const z = zh[d.id] || {};
+    const e = en[d.id] || {};
+    if (z.skipped || e.skipped) { if (theme === THEMES[0]) skipped++; continue; }
+    if (z.threw) findings.push({ id: d.id, kind: "opener-threw", detail: `${tag}zh: ${z.threw}` });
+    if (e.threw) findings.push({ id: d.id, kind: "opener-threw", detail: `${tag}en: ${e.threw}` });
+    for (const [lang, result] of [["zh", z], ["en", e]]) {
+      if (result.unavailable) findings.push({ id: d.id, kind: "unavailable-surface", detail: `${tag}${lang}: ${result.unavailable}` });
+      if (result.didNotOpen) findings.push({ id: d.id, kind: "did-not-open", detail: `${tag}${lang}: command ${d.cmd || d.emit} ran but the dialog stayed closed` });
+    }
+    if (!z.open && !e.open) continue;
+    if (theme === THEMES[0]) opened++;
 
-  // Copy that is byte-identical across locales is either untranslated or a
-  // proper noun; report the ones that look like sentences.
-  const sameBody = z.text === e.text && z.text.length > 40;
-  if (sameBody && /[a-zA-Z]{3}/.test(z.text)) {
-    findings.push({ id: d.id, kind: "untranslated", detail: z.text.slice(0, 70).replace(/\n/g, " | ") });
+    // An unavailable locale is a finding, not a body to inspect. Keep auditing
+    // the other locale and all later dialogs rather than throwing on its text.
+    for (const [lang, r] of [["zh", z], ["en", e]]) {
+      if (!r.open) continue;
+      const garbage = GARBAGE.exec(r.text);
+      if (garbage) findings.push({ id: d.id, kind: "garbage-text", detail: `${tag}[${lang}] ${JSON.stringify(garbage[0])}` });
+      const m = r.text.split("\n").map((l) => l.trim()).filter((l) => RAW_KEY.test(l) && !/https?:|\.(com|cn|org|io|example)\b/.test(l));
+      if (m.length) findings.push({ id: d.id, kind: "raw-key-leak", detail: `${tag}[${lang}] ${m[0].slice(0, 60)}` });
+      if (r.overflow > 0) findings.push({ id: d.id, kind: "cell-overflow", detail: `${tag}[${lang}] ${r.overflow} element(s) spill their box` });
+    }
+
+    // Copy that is byte-identical across locales is either untranslated or a
+    // proper noun; report the ones that look like sentences.
+    const sameBody = z.open && e.open && z.text === e.text && z.text.length > 40;
+    if (sameBody && /[a-zA-Z]{3}/.test(z.text)) {
+      findings.push({ id: d.id, kind: "untranslated", detail: `${tag}${z.text.slice(0, 70).replace(/\n/g, " | ")}` });
+    }
+  }
+
+  // Two dialogs showing the same title means they share a key — and since a key
+  // holds exactly one string, at most one of them can be labelled correctly.
+  // This is the R166 defect (dlg-extensions and dlg-extension-repo both drew
+  // "ext.dlg.title", so the add dialog was titled "扩展"). A per-dialog check
+  // cannot see it, because each dialog renders *something*; only comparing them
+  // exposes the collision.
+  const byTitle = new Map();
+  for (const d of DIALOGS) {
+    const r = zh[d.id] || {};
+    if (!r.open || !r.title) continue;
+    if (!byTitle.has(r.title)) byTitle.set(r.title, []);
+    byTitle.get(r.title).push(d.id);
+  }
+  for (const [title, ids] of byTitle) {
+    if (ids.length > 1) {
+      findings.push({
+        id: ids.join(" + "),
+        kind: "shared-title",
+        detail: `${tag}${ids.length} dialogs all render the title ${JSON.stringify(title)} — they share an i18n key, so only one can be labelled correctly`,
+      });
+    }
   }
 }
 
-// Two dialogs showing the same title means they share a key — and since a key
-// holds exactly one string, at most one of them can be labelled correctly.
-// This is the R166 defect (dlg-extensions and dlg-extension-repo both drew
-// "ext.dlg.title", so the add dialog was titled "扩展"). A per-dialog check
-// cannot see it, because each dialog renders *something*; only comparing them
-// exposes the collision.
-const byTitle = new Map();
+console.log(`\n=== dialog sweep: ${opened} opened, ${skipped} skipped (no programmatic opener), themes: ${THEMES.join("/")} ===\n`);
 for (const d of DIALOGS) {
-  const r = zh[d.id] || {};
-  if (!r.open || !r.title) continue;
-  if (!byTitle.has(r.title)) byTitle.set(r.title, []);
-  byTitle.get(r.title).push(d.id);
-}
-for (const [title, ids] of byTitle) {
-  if (ids.length > 1) {
-    findings.push({
-      id: ids.join(" + "),
-      kind: "shared-title",
-      detail: `${ids.length} dialogs all render the title ${JSON.stringify(title)} — they share an i18n key, so only one can be labelled correctly`,
-    });
-  }
-}
-
-console.log(`\n=== dialog sweep: ${opened} opened, ${skipped} skipped (no programmatic opener) ===\n`);
-for (const d of DIALOGS) {
-  const r = zh[d.id] || {};
+  const r = summaryZh[d.id] || {};
   const tag = r.skipped ? "skip " : r.open ? "open " : r.didNotOpen ? "SHUT " : r.threw ? "THREW" : "?    ";
   console.log(`  ${tag} ${d.id.padEnd(24)} ${r.title ? r.title.slice(0, 46) : (r.skipped || "")}`);
 }

@@ -13,6 +13,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import type { AutomationRule } from "../../src/main/types.js";
 
 // pid-suffixed: concurrent vitest processes must not share one config store.
 const TEST_USER_DATA = path.join(os.tmpdir(), `agent-browser-m3-plan-identity-test-${process.pid}`);
@@ -32,7 +33,7 @@ import {
   planChanged,
 } from "../../src/main/services/automation-rules.js";
 
-function onceTrigger(at = Date.now() + 60_000): any {
+function onceTrigger(at = Date.now() + 60_000): AutomationRule["trigger"] {
   return { type: "once", at };
 }
 
@@ -126,7 +127,7 @@ describe("planChanged", () => {
   });
 
   it("ignores name, enabled and retry knobs", () => {
-    const base = { trigger: onceTrigger(5_000), action: { type: "sync-push" } };
+    const base = { trigger: onceTrigger(5_000), action: { type: "sync-push" } } satisfies Partial<AutomationRule>;
     expect(planChanged(base, { ...base, name: "renamed" })).toBe(false);
     expect(planChanged(base, { ...base, enabled: false })).toBe(false);
     expect(planChanged(base, { ...base, runTimeoutMs: 1000, maxRetries: 3 })).toBe(false);

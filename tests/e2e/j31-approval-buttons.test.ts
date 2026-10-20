@@ -44,7 +44,11 @@ describe("J31 — approval via real dialog buttons", () => {
   async function waitForDialog(timeout = 15000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
-      const open = await h.page.evaluate(() => document.getElementById("dlg-approval").open);
+      const open = await h.page.evaluate(() => {
+        const dialog = document.getElementById("dlg-approval");
+        if (!(dialog instanceof HTMLDialogElement)) throw new Error("Expected #dlg-approval to be a dialog");
+        return dialog.open;
+      });
       if (open) return true;
       await h.page.waitForTimeout(150);
     }
@@ -87,7 +91,11 @@ describe("J31 — approval via real dialog buttons", () => {
     await h.page.locator('#dlg-approval [data-cmd="approvalAllow"][data-cmd-arg="always"]').click({ timeout: 5000 });
     // The second DROP should NOT re-open the dialog.
     await h.page.waitForTimeout(3000);
-    const reopened = await h.page.evaluate(() => document.getElementById("dlg-approval").open);
+    const reopened = await h.page.evaluate(() => {
+      const dialog = document.getElementById("dlg-approval");
+      if (!(dialog instanceof HTMLDialogElement)) throw new Error("Expected #dlg-approval to be a dialog");
+      return dialog.open;
+    });
     expect(reopened, "second identical DROP must not re-prompt").toBe(false);
     // Table is gone after both DROPs.
     const exists = await h.page.evaluate(async () =>

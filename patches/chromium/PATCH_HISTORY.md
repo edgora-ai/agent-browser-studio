@@ -360,3 +360,141 @@ b4bf6e9f21638c71848e72aed5deb6289f953a7a cleanup: remove scroll reconciliation d
   patch replays cleanly and the tree stays byte-identical to the annotated
   source commit. Runtime wiring and the OS-level title check are covered by
   the matching OSS slice and e2e journey.
+
+### `0051` — 2026-10-16 — restricted local-DNS policy, source-only
+
+- Patch: `0051-agent-browser-local-dns-policy.patch`.
+- Patch SHA-256:
+  `2ee8b807e9135a763b08f8de07b4145cb3fd84faef39e88b3e8304b6ec405535`.
+- Derived from read-only Chromium `152.0.7977.72` sources after the existing
+  `0002`–`0050` chain. All 95 pre-existing final-source hashes matched before
+  generation. No external Chromium file, applied-patch marker, source commit,
+  tag, binary, signature, installation or release was created/modified.
+- Scope: advertise `agent-browser-local-dns-policy-v1`; accept only the browser
+  policy token `proxy-local-dns-deny` and an optional validated single proxy
+  bootstrap host; generate native `MAP * ^NOTFOUND` with only exact loopback
+  and bootstrap exceptions. The actual 152 `MappedHostResolver` recognizes
+  `^NOTFOUND` rather than `~NOTFOUND` for its immediate failure result.
+  Common system/profile/OTR defaults carry typed policy to both the ordinary
+  `URLRequestContextBuilder` resolver and the standalone DNS-override resolver.
+  Native/off mode needs no fingerprint payload. Explicit existing managed
+  strict DoH stays isolated; malformed inputs fail explicitly before that
+  isolation, and the network service revalidates the typed policy.
+- Preservation: every released patch and immutable source payload, including
+  `0044` and `0050`, retains its prior bytes and digest. Only the rolling
+  `PATCHED_SOURCE.sha256` digest is refreshed, and the new `0051` patch digest
+  is appended to `PATCHSET.sha256`. The final-source manifest now covers 105
+  files. No bad-flag infobar suppression, keychain/TLS/page-JS changes or
+  prediction-policy changes are included.
+- Validation: read-only `git apply --check` against the real post-`0050` tree;
+  actual apply plus reverse-check in a disposable bounded scratch fixture
+  (10 original files, 1,039,277 bytes; three new source files); full-file Mojo
+  syntax parse with bytecode/table writes disabled; manifest read-back and
+  checksum verification; independent offline Vitest source-policy guard.
+- Not acceptance: native C++/browser tests are present but were not built or
+  run, by instruction. Neither the real banner nor external-site/DNS-wire
+  behavior has been verified by this source-only task. `apply.sh`/`check.sh`
+  final-state verification on the external source tree is intentionally left
+  to the authorized follow-up; see the `0051` README section for prerequisite
+  order and native test filters. The next native patch is `0052`; do not amend
+  or rewrite released earlier patches.
+
+### `0052` — 2026-10-16 — managed proxy DNS-only hints, source-only
+
+- Patch: `0052-agent-browser-managed-proxy-dns-prefetch.patch`.
+- Patch SHA-256:
+  `7f242fd728140aefdd14f0af5ea99764069a7633346c8385d301ac50e1566a73`.
+- Adds a default-deny embedder permission for proxy DNS-only hints. Chrome
+  allows it only for enabled managed strict DoH with nonempty validated
+  providers; the existing resolver still owns secure-only/proxy routing.
+- Keeps default proxy behavior, socket preconnects, preloading gates and
+  cancellation/disconnect paths. Multicast `.local` and `.local.` names remain
+  skipped because ANY-source secure resolution can still route them to SYSTEM.
+- Preserves every prior patch and immutable payload. Five additional source
+  targets bring the rolling final-source manifest to 110 files. No GPU,
+  keychain, TLS, page evidence or warning-suppression changes are included.
+- Validation so far: applicability check against the existing source; six
+  native regression cases and an offline patch-contract guard are supplied.
+  Native C++ compilation/execution, real DNS-wire and real-page acceptance
+  remain unverified; this entry is not a released or accepted native build.
+
+### `0053` — 2026-10-16 — real-compile DNS hint API correction
+
+- Patch: `0053-fix-managed-dns-prefetch-gurl-api.patch`.
+- Patch SHA-256:
+  `9cf1352f5efe64aee573385dee00360acf91576f265ff027e09df0a6358e23ca`.
+- A real Clang invocation of `preconnect_manager_impl.cc` rejected `0052`'s
+  `GURL::host_piece()` call: this pinned API exposes `host()` returning
+  `std::string_view`. Use that accessor without changing the multicast checks.
+- Move the default-deny delegate method out of its inline virtual body to the
+  existing implementation file and export the delegate for component builds.
+  The decision remains false; no opt-in, proxy, preloading or DNS policy changes.
+- Every earlier patch retains its bytes and digest. Only the two already
+  recorded final-source identities and rolling manifest digest change; the
+  final-source manifest still covers 110 files.
+- The pre-correction helper translation unit compiled successfully, but the
+  preconnect unit had a genuine compile error and the other units remained
+  generated-input/time blocked. Corrected translation-unit compilation is a
+  separate required check; this entry claims no full dependency build, link,
+  native test, kernel, banner, external-page acceptance or package.
+
+### `0054` — 2026-10-16 — cross-volume macOS bundle-copy correction
+
+- Patch: `0054-fix-cross-volume-macos-bundle-copy.patch`.
+- Patch SHA-256:
+  `d6dc741c9200876839a87ac0ec9321731355969ff0aabbbc8f4231acd5b7a0b2`.
+- Source provenance remains pinned Chromium `152.0.7977.72`, target
+  `026bb13a93d60e7adfefa2bbf58d6f57c2d335cc`, with the verified archive base
+  `fc4d67f1788019a27e32511137ceccbd2fafdaaa`. No baseline or sidecar was changed.
+- The real complete-target attempt reached 54,154/54,745, then failed copying
+  a helper `app.icns` across the actual source/output volumes: forced macOS
+  clonefile (`/bin/cp -Rc`) returned EXDEV. The failed build, generated Ninja
+  log and completed objects are retained, not relabeled as successful.
+- An actual 85,977-byte icon copy control reproduced `-Rc` exit 1 and verified
+  ordinary `-R` exit 0, exact bytes/SHA-256, unchanged source and independent
+  output identity. The patch changes only the macOS `copy_bundle_data` command;
+  the Linux command and every compiler/runtime/codec/warning policy stay intact.
+- Normal apply/check and 111 final-source hashes passed. The new build-file
+  identity is `a93cd30b3e5092aea3f926bbe0c6b37990be0b72bbbb0b6352221d8a3211da61`;
+  the rolling manifest SHA-256 is
+  `df73d9ad6be9521b6471a2fe14df2a64fbc3d1d050ef95cbf931d66c1c59eca4`.
+  Every earlier patch/payload hash and all previous 110 final-source hashes are
+  unchanged. GN regeneration preserved the release `args.gn` identity and the
+  real incremental dry-run lists 643 remaining actions in the same output.
+- This is a build-portability correction, not a full link, new-kernel runtime,
+  native test, banner, external-page or package acceptance result.
+
+### `0055` — 2026-10-16 — native macOS CPU metadata, source-only
+
+- Patch: `0055-native-macos-cpu-metadata.patch`.
+- Patch SHA-256:
+  `1843601b7848bbce5f8eb3b98336669026ba1174428e92ef718aa99f70b1349b`.
+- The same ARM64 Chromium 152 build reported managed UA-CH architecture `x86`
+  while its independently bound native/off control reported `arm`. The previous
+  persona/coherence gate allowed this difference and did not establish physical
+  CPU truth. Neither that gate nor the off control's site failure waives any
+  managed real-site finding or proves the cause of Ping0's GPU finding.
+- Correct only the shared managed `MacIntel` metadata producer on macOS. Use
+  Chromium's real `base::mac::GetCPUType()` enum: Intel maps to `x86`, ARM and
+  translated Intel (Rosetta) both map to `arm`. Guard the include and call with
+  `BUILDFLAG(IS_MAC)`, not a build-architecture, UA-token or config-based CPU
+  guess. The API is `BASE_EXPORT`; Blink public/common headers already have
+  `//base` in `public_deps`. No new GN or embedder dependency is introduced.
+- Other OS personas, bitness `64`, low-entropy/off behavior, platform/UA strings
+  and every GPU field/path are unchanged. The patch changes just this header;
+  initial payloads and all 53 earlier patch digests remain immutable.
+- Normal provenance/apply/check exited 0. All 111 final-source hashes were read
+  back; only the header identity changed to
+  `42274e00369814a09b7309ef32708e5eb8b714e36aeb1f48f9822ccb0d6b405b`.
+  The source-manifest SHA-256 is
+  `e83ed04672ca2d9ca98939fbf00406dede5fdca27c21dc66587dcc4c975e8a1a`;
+  the patchset has 58 inputs. Native HEAD, pinned baseline and archive provenance
+  sidecars are unchanged. Old preparation/source commitments must not authorize
+  a run of a future rebuilt kernel.
+- The targeted source constraints first ran with 5 failed/0 skipped tests, then
+  passed 5/5 after the forward patch. They reconstruct the immutable header
+  chain and verify the guarded enum mapping, unchanged non-CPU bytes and exact
+  manifests. This is source/provenance evidence, not native compilation/gtest,
+  Intel/Rosetta runtime, complete kernel/link, browser/fixture, banner, Ping0,
+  installation or package acceptance. Rebuild and real-site acceptance remain
+  separate required work; no browser or network was started for this patch.

@@ -2,6 +2,21 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const listenerMap = new WeakMap();
 
+// Electron transports thrown Error messages, not custom Error properties.
+// Preserve rejection (including for legacy truthy-success checks) and restore
+// the explicit account precondition code from its stable message prefix.
+async function invokeAccount(channel, ...args) {
+  try {
+    return await ipcRenderer.invoke(channel, ...args);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    const match = message.match(/\b(ACCOUNT_REFERENCE_REQUIRED|ACCOUNT_REFERENCE_INVALID|ACCOUNT_REFERENCE_CONFLICT|ACCOUNT_NOT_FOUND|ACCOUNT_VALIDATION_FAILED):/);
+    const rejected = new Error(message);
+    if (match) rejected.code = match[1];
+    throw rejected;
+  }
+}
+
 const api = {
   profile: {
     list: () => ipcRenderer.invoke("profile:list"),
@@ -14,9 +29,9 @@ const api = {
     trashList: () => ipcRenderer.invoke("profile:trash-list"),
     trashPurge: (dirId) => ipcRenderer.invoke("profile:trash-purge", dirId),
     rename: (dirId, name) => ipcRenderer.invoke("profile:rename", { dirId, name }),
-    exportArchive: (dirId, destPath) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath }),
+    exportArchive: (dirId, destPath, options) => ipcRenderer.invoke("profile:export-archive", { dirId, destPath, ...(options && options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) }),
     importArchive: (zipPath) => ipcRenderer.invoke("profile:import-archive", { zipPath }),
-    exportArchives: (dirIds, destDir) => ipcRenderer.invoke("profile:export-archives", { dirIds, destDir }),
+    exportArchives: (dirIds, destDir, options) => ipcRenderer.invoke("profile:export-archives", { dirIds, destDir, ...(options && options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) }),
     importArchives: (zipPaths) => ipcRenderer.invoke("profile:import-archives", { zipPaths }),
     // Cookie management
     cookies: (dirId, filter) => ipcRenderer.invoke("profile:cookies", { dirId, filter }),
@@ -75,6 +90,7 @@ const api = {
     push: (opts) => ipcRenderer.invoke("sync:push", opts),
     pull: (opts) => ipcRenderer.invoke("sync:pull", opts),
     status: () => ipcRenderer.invoke("sync:status"),
+    historyState: (dirId) => ipcRenderer.invoke("sync:history-state", dirId),
     preview: () => ipcRenderer.invoke("sync:preview"),
     previewDiff: () => ipcRenderer.invoke("sync:preview-diff"),
     configure: (config) => ipcRenderer.invoke("sync:configure", config),
@@ -89,6 +105,7 @@ const api = {
     setEnabled: (enabled) => ipcRenderer.invoke("team:set-enabled", { enabled }),
   },
   app: {
+    quit: () => ipcRenderer.invoke("app:quit"),
     paths: () => ipcRenderer.invoke("app:paths"),
     reloadConfig: () => ipcRenderer.invoke("app:reload-config"),
     openDir: (dirPath) => ipcRenderer.invoke("app:open-dir", dirPath),
@@ -152,9 +169,27 @@ const api = {
     status: (dirId) => ipcRenderer.invoke("browser:status", dirId),
     consistencyCheck: (dirId) => ipcRenderer.invoke("browser:consistency-check", dirId),
     consistencyPreview: (params) => ipcRenderer.invoke("browser:consistency-preview", params || {}),
-    captureBaseline: (dirId) => ipcRenderer.invoke("browser:capture-baseline", dirId),
+    captureBaseline: (dirId, options) => ipcRenderer.invoke("browser:capture-baseline", options ? { ...options, dirId } : dirId),
+    resetBaseline: (dirId, options) => ipcRenderer.invoke("browser:reset-baseline", options ? { ...options, dirId } : dirId),
     checkDrift: (dirId) => ipcRenderer.invoke("browser:check-drift", dirId),
-    envRisk: (dirId) => ipcRenderer.invoke("browser:env-risk", dirId),
+    driftReport: (dirId) => ipcRenderer.invoke("browser:drift-report", dirId),
+    envRisk: (dirId, options) => ipcRenderer.invoke("browser:env-risk", options ? { ...options, dirId } : dirId),
+    healthHistory: (dirId) => ipcRenderer.invoke("browser:health-history", dirId),
+    healthCancel: (dirId, options) => ipcRenderer.invoke("browser:health-cancel", dirId, options),
+    healthClear: (dirId, kind) => ipcRenderer.invoke("browser:health-clear", dirId, kind),
+    networkPages: (dirId) => ipcRenderer.invoke("browser:network-pages", dirId),
+    networkObserve: (dirId, options) => ipcRenderer.invoke("browser:network-observe", dirId, options),
+    onNetworkArmed: (callback) => {
+      if (typeof callback !== "function") throw new TypeError("Network armed callback must be a function");
+      const wrapped = (_event, payload) => callback(payload);
+      ipcRenderer.on("browser:network-armed", wrapped);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        ipcRenderer.removeListener("browser:network-armed", wrapped);
+      };
+    },
     envRiskHistory: (dirId) => ipcRenderer.invoke("browser:env-risk-history", dirId),
     envRiskClear: (dirId) => ipcRenderer.invoke("browser:env-risk-clear", dirId),
     // PL-07: pick a local Chromium build when no managed engine is installed.
@@ -227,16 +262,17 @@ const api = {
     },
     // Accounts
     accounts: {
-      list: () => ipcRenderer.invoke("agent:accounts:list"),
-      add: (account) => ipcRenderer.invoke("agent:accounts:add", account),
-      update: (index, account) => ipcRenderer.invoke("agent:accounts:update", { index, account }),
-      delete: (index) => ipcRenderer.invoke("agent:accounts:delete", index),
-      forProfile: (dirId) => ipcRenderer.invoke("agent:accounts:profile", dirId),
-      copyUsername: (index) => ipcRenderer.invoke("agent:accounts:copy-username", index),
-      copyPassword: (index) => ipcRenderer.invoke("agent:accounts:copy-password", index),
-      bind: (index, profileIds) => ipcRenderer.invoke("agent:accounts:bind", { index, profileIds }),
-      bulkAdd: (text) => ipcRenderer.invoke("agent:accounts:bulk-add", text),
-      bulkCreate: (text, options) => ipcRenderer.invoke("agent:accounts:bulk-create", { text, options }),
+      list: () => invokeAccount("agent:accounts:list"),
+      get: (index, ref) => invokeAccount("agent:accounts:get", index, ref),
+      add: (account) => invokeAccount("agent:accounts:add", account),
+      update: (index, account, ref) => invokeAccount("agent:accounts:update", { index, account, ref }),
+      delete: (index, ref) => invokeAccount("agent:accounts:delete", index, ref),
+      forProfile: (dirId) => invokeAccount("agent:accounts:profile", dirId),
+      copyUsername: (index, ref) => invokeAccount("agent:accounts:copy-username", index, ref),
+      copyPassword: (index, ref) => invokeAccount("agent:accounts:copy-password", index, ref),
+      bind: (index, profileIds, ref) => invokeAccount("agent:accounts:bind", { index, profileIds, ref }),
+      bulkAdd: (text) => invokeAccount("agent:accounts:bulk-add", text),
+      bulkCreate: (text, options) => invokeAccount("agent:accounts:bulk-create", { text, options }),
     },
   },
   automation: {
@@ -311,17 +347,26 @@ const api = {
     // M3 adds the three below — automation:run-finished (terminal alert),
     // automation:open-run (system-notification click) and
     // automation:schedule-changed (state refresh).
-    const validChannels = ["browser:exited", "profile:updated", "config:changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
-    if (validChannels.includes(channel)) {
+    const validChannels = ["browser:exited", "profile:updated", "config:changed", "sync:state-changed", "agent:tool-call", "agent:stream-start", "agent:stream-chunk", "agent:stream-tool-call", "agent:stream-done", "agent:stream-error", "agent:run-start", "agent:run-step", "agent:run-finish", "agent:approval-request", "batch:progress", "automation:run-finished", "automation:open-run", "automation:schedule-changed"];
+    if (validChannels.includes(channel) && typeof callback === "function") {
+      let channels = listenerMap.get(callback);
+      if (!channels) {
+        channels = new Map();
+        listenerMap.set(callback, channels);
+      }
+      if (channels.has(channel)) return;
       const wrapped = (_event, ...args) => callback(...args);
-      listenerMap.set(callback, wrapped);
       ipcRenderer.on(channel, wrapped);
+      channels.set(channel, wrapped);
     }
   },
   removeListener: (channel, callback) => {
-    const wrapped = listenerMap.get(callback);
-    ipcRenderer.removeListener(channel, wrapped || callback);
-    listenerMap.delete(callback);
+    const channels = listenerMap.get(callback);
+    const wrapped = channels && channels.get(channel);
+    if (!wrapped) return;
+    ipcRenderer.removeListener(channel, wrapped);
+    channels.delete(channel);
+    if (channels.size === 0) listenerMap.delete(callback);
   },
 };
 

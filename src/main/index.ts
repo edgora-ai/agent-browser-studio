@@ -1,42 +1,11 @@
 import { app, BrowserWindow, dialog, powerMonitor, session, shell } from "electron";
 import * as os from "node:os";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { registerProfileHandlers } from "./ipc/profile.js";
-import { registerProxyHandlers } from "./ipc/proxy.js";
-import { registerDrmHandlers } from "./ipc/drm.js";
-import { registerStorageHandlers } from "./ipc/storage.js";
-import { registerSyncHandlers } from "./ipc/sync.js";
-import { registerAppHandlers } from "./ipc/app.js";
-import { registerDetectHandlers } from "./ipc/detect.js";
-import { registerSettingsHandlers } from "./ipc/settings.js";
-import { registerAgentHandlers } from "./ipc/agent.js";
-import { desktopChatRuns } from "./services/agent/chat-runs.js";
-import { registerMcpHandlers } from "./ipc/mcp.js";
-import { registerApiHandlers } from "./ipc/api.js";
-import { registerBrowserHandlers } from "./ipc/browser.js";
-import { registerWebRtcHandlers } from "./ipc/webrtc.js";
-import { registerTeamHandlers } from "./ipc/team.js";
-import { registerAutomationHandlers } from "./ipc/automation.js";
-import { registerAuditHandlers } from "./ipc/audit.js";
-import { registerDataHandlers } from "./ipc/data.js";
-import { registerUpdateHandlers } from "./ipc/updates.js";
-import { registerObservabilityHandlers } from "./ipc/observability.js";
-import { registerLicenseHandlers } from "./ipc/license.js";
-import { configureObservability, logInfo, logWarn, logError } from "./services/observability.js";
-import { startScheduler, reloadSchedule } from "./services/automation.js";
-import { reconcileAutomationState, handleSystemResume, setReloadSchedule } from "./services/automation-reconcile.js";
-import { configureNotifier } from "./services/automation-notify.js";
-import { getConfig } from "./services/config-manager.js";
-import { reconcileRunResults } from "./services/agent-run-trace.js";
-import { isHeadlessMode } from "./services/server-mode.js";
-import { startMcpServer, stopMcpServer } from "./services/mcp-server.js";
-import { startRestApiServer, stopRestApiServer } from "./services/rest-api-server.js";
-import { shutdownAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } from "./services/browser-manager.js";
-import { migrateSecrets, getAppDataDir } from "./services/config-manager.js";
-import { noteAppStarted, markAppHealthy, noteAppCrashed } from "./services/update-manager.js";
-import { createTray, destroyTray, refreshTrayMenu } from "./services/tray-manager.js";
-import { UI_STORAGE_PARTITION, migrateLegacyRendererStorage } from "./services/renderer-storage.js";
+
+
+
 import {
   APP_DATA_DIR_NAME,
   CHROMIUM_CACHE_DIR_NAME,
@@ -45,15 +14,8 @@ import {
   PRODUCT_NAME,
   configureProductIdentity,
 } from "./branding.js";
-import {
-  migrateLegacyChromiumCache,
-  migrateLegacyUserData,
-} from "./services/legacy-data-migration.js";
-import {
-  initializeSecretStorage,
-  planSecretStorage,
-  type SecretStoragePlan,
-} from "./services/secrets.js";
+
+import type { SecretStoragePlan } from "./services/secrets.js";
 
 // ── ESM dirname equivalent ──
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +24,74 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Explicit --user-data-dir runs (tests and diagnostics) stay isolated and do
 // not import real user data.
 const productIdentity = configureProductIdentity(app);
+// Admission must precede imports too: REST/MCP token initialization and other
+// service entry points may write on evaluation. Canonicalize existing aliases
+// before Electron derives its per-userData single-instance lock identity.
+try {
+  fs.mkdirSync(productIdentity.userDataDir, { recursive: true, mode: 0o700 });
+  productIdentity.userDataDir = fs.realpathSync(productIdentity.userDataDir);
+  const configPath = path.join(productIdentity.userDataDir, "config.json");
+  try {
+    const stat = fs.lstatSync(configPath);
+    // Shared config file aliases across distinct userData roots cannot be
+    // protected by Electron's directory lock. Refuse rather than pretend CAS.
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+      throw new Error("Shared or non-regular config identity is not writable");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  app.setPath("userData", productIdentity.userDataDir);
+} catch (error) {
+  console.error("[startup] writer admission failed:", error);
+  app.exit(1);
+  throw error;
+}
+
+if (!app.requestSingleInstanceLock()) {
+  // app.quit() is asynchronous and can be prevented. Do not continue imports
+  // or bootstrap even if a controlled host's exit method returns.
+  app.exit(0);
+  throw new Error("WRITER_ADMISSION_REJECTED: another main owns this userData");
+}
+
+const { registerProfileHandlers } = await import("./ipc/profile.js");
+const { registerProxyHandlers } = await import("./ipc/proxy.js");
+const { registerDrmHandlers } = await import("./ipc/drm.js");
+const { registerStorageHandlers } = await import("./ipc/storage.js");
+const { registerSyncHandlers } = await import("./ipc/sync.js");
+const { registerAppHandlers } = await import("./ipc/app.js");
+const { registerDetectHandlers } = await import("./ipc/detect.js");
+const { registerSettingsHandlers } = await import("./ipc/settings.js");
+const { registerAgentHandlers } = await import("./ipc/agent.js");
+const { desktopChatRuns } = await import("./services/agent/chat-runs.js");
+const { registerMcpHandlers } = await import("./ipc/mcp.js");
+const { registerApiHandlers } = await import("./ipc/api.js");
+const { registerBrowserHandlers } = await import("./ipc/browser.js");
+const { registerWebRtcHandlers } = await import("./ipc/webrtc.js");
+const { registerTeamHandlers } = await import("./ipc/team.js");
+const { registerAutomationHandlers } = await import("./ipc/automation.js");
+const { registerAuditHandlers } = await import("./ipc/audit.js");
+const { registerDataHandlers } = await import("./ipc/data.js");
+const { registerUpdateHandlers } = await import("./ipc/updates.js");
+const { registerObservabilityHandlers } = await import("./ipc/observability.js");
+const { registerLicenseHandlers } = await import("./ipc/license.js");
+const { configureObservability, logInfo, logWarn, logError } = await import("./services/observability.js");
+const { startScheduler, reloadSchedule, refreshScheduleTimers } = await import("./services/automation.js");
+const { reconcileAutomationState, handleSystemResume, setRefreshScheduleTimers } = await import("./services/automation-reconcile.js");
+const { configureNotifier } = await import("./services/automation-notify.js");
+const { getConfig } = await import("./services/config-manager.js");
+const { reconcileRunResults } = await import("./services/agent-run-trace.js");
+const { isHeadlessMode } = await import("./services/server-mode.js");
+const { startMcpServer, stopMcpServer } = await import("./services/mcp-server.js");
+const { startRestApiServer, stopRestApiServer } = await import("./services/rest-api-server.js");
+const { shutdownAllBrowserProfiles, setIdlePolicyTimeoutMs, sweepIdleProfiles, getIdlePolicyTimeoutMs, purgeExpiredTrash } = await import("./services/browser-manager.js");
+const { migrateSecrets, getAppDataDir } = await import("./services/config-manager.js");
+const { noteAppStarted, markAppHealthy, noteAppCrashed } = await import("./services/update-manager.js");
+const { createTray, destroyTray, refreshTrayMenu } = await import("./services/tray-manager.js");
+const { UI_STORAGE_PARTITION, migrateLegacyRendererStorage } = await import("./services/renderer-storage.js");
+const { migrateLegacyChromiumCache, migrateLegacyUserData } = await import("./services/legacy-data-migration.js");
+const { initializeSecretStorage, planSecretStorage } = await import("./services/secrets.js");
 let legacyMigrationError: Error | null = null;
 let secretStoragePlan: SecretStoragePlan | null = null;
 let secretStoragePlanError: Error | null = null;
@@ -272,7 +302,9 @@ app.whenReady().then(async () => {
   try {
     const startupPurged = purgeExpiredTrash();
     if (startupPurged.length) console.log("[trash] startup sweep purged " + startupPurged.length + " expired profile(s)");
-  } catch { /* best effort */ }
+  } catch (error) {
+    console.error("[trash] startup sweep failed:", error);
+  }
   setInterval(() => {
     try {
       const purged = purgeExpiredTrash();
@@ -376,15 +408,17 @@ app.whenReady().then(async () => {
   }
   startScheduler();
 
-  // M3: react to the two ways the world changes underneath a scheduler without
-  // the process noticing — a suspend/resume, and a clock/timezone change.
-  // Both handlers are pure observers: they reconcile and re-read the schedule.
-  // Neither starts a job and neither re-arms anything, because a resume is the
-  // worst possible moment to begin side-effecting work unprompted.
-  setReloadSchedule(() => reloadSchedule());
+  // Running/queued/retry jobs still belong to this process on resume; only
+  // startup performs orphan recovery. Refresh future timer deadlines without
+  // invalidating jobs or replaying a missed execution.
+  setRefreshScheduleTimers(refreshScheduleTimers);
   try {
-    powerMonitor.on("resume", () => handleSystemResume("resume"));
-    powerMonitor.on("unlock-screen", () => handleSystemResume("unlock"));
+    powerMonitor.on("resume", () => {
+      try { handleSystemResume("resume"); } catch (error) { console.error("[automation] resume refresh failed:", error); }
+    });
+    powerMonitor.on("unlock-screen", () => {
+      try { handleSystemResume("unlock"); } catch (error) { console.error("[automation] unlock refresh failed:", error); }
+    });
   } catch (error) {
     console.error("[automation] powerMonitor wiring failed:", error);
   }

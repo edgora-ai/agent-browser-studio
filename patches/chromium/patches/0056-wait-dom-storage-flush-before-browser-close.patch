@@ -1,0 +1,606 @@
+diff --git a/components/services/storage/public/mojom/local_storage_control.mojom b/components/services/storage/public/mojom/local_storage_control.mojom
+--- a/components/services/storage/public/mojom/local_storage_control.mojom
++++ b/components/services/storage/public/mojom/local_storage_control.mojom
+@@ -34,6 +34,14 @@
+   // Tells the service to immediately commit any pending operations to disk.
+   Flush();
+ 
++  // Commits any pending operations and replies only after every storage area
++  // has either confirmed its database write or failed to. `confirmed` is true
++  // only when no area reported a failed or unstarted commit and no area was
++  // torn down first; it means "commit confirmed", never "data lost" when
++  // false. Callers that are about to terminate the process use this to avoid
++  // silently dropping acknowledged writes.
++  FlushForShutdown() => (bool confirmed);
++
+   // Purges any in-memory caches to free up as much memory as possible. The
+   // next access to the StorageArea will reload data from the backing database.
+   PurgeMemory();
+diff --git a/components/services/storage/dom_storage/storage_area_impl.h b/components/services/storage/dom_storage/storage_area_impl.h
+--- a/components/services/storage/dom_storage/storage_area_impl.h
++++ b/components/services/storage/dom_storage/storage_area_impl.h
+@@ -156,6 +156,16 @@
+   // waiting on the result of initializing our map the commit won't happen
+   // until the load has finished.
+   void ScheduleImmediateCommit();
++
++  // Like `ScheduleImmediateCommit()`, but `callback` runs only after the
++  // resulting database write has finished. If there is nothing left to write
++  // and no write is in flight, the callback runs asynchronously.
++  // `callback` receives true only when every batch this call waits for has
++  // completed with an OK status. It receives false when the database is
++  // absent, when a commit could not be started, or when this area is destroyed
++  // first. A false result means "commit not confirmed", never "data lost".
++  void ScheduleImmediateCommitWithCallback(
++      base::OnceCallback<void(bool)> callback);
+ 
+   // Clears the in-memory cache if currently no changes are pending. If there
+   // are uncommitted changes this method does nothing.
+@@ -362,6 +372,16 @@
+   bool has_committed_data_ = false;
+   std::unique_ptr<CommitBatch> commit_batch_;
+ 
++  // Invoked after the in-flight commit settles. Used by
++  // `ScheduleImmediateCommitWithCallback()`.
++  void RunCommitWaiters(bool committed_ok);
++
++  std::vector<base::OnceCallback<void(bool)>> commit_waiters_;
++  // Sticky: any failed batch between a waiter's registration and its
++  // completion keeps that waiter from reporting success, even if a later
++  // batch succeeds.
++  bool commit_waiters_saw_failure_ = false;
++
+   base::WeakPtrFactory<StorageAreaImpl> weak_ptr_factory_{this};
+ 
+   static bool s_aggressive_flushing_enabled_;
+diff --git a/components/services/storage/dom_storage/storage_area_impl.cc b/components/services/storage/dom_storage/storage_area_impl.cc
+--- a/components/services/storage/dom_storage/storage_area_impl.cc
++++ b/components/services/storage/dom_storage/storage_area_impl.cc
+@@ -7,6 +7,7 @@
+ #include <memory>
+ 
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -102,6 +103,11 @@
+   if (database_) {
+     database_->RemoveCommitter(this);
+   }
++
++  // A commit initiated above cannot answer waiters once this object is gone.
++  // Answer them as "not confirmed" so no shutdown caller waits forever and
++  // never mistakes teardown for a successful commit.
++  RunCommitWaiters(false);
+ }
+ 
+ void StorageAreaImpl::InitializeAsEmpty() {
+@@ -180,6 +186,56 @@
+     return;
+   }
+   CommitChanges();
++}
++
++void StorageAreaImpl::ScheduleImmediateCommitWithCallback(
++    base::OnceCallback<void(bool)> callback) {
++  // A waiter registered before a map load completes is still answered by the
++  // commit path, because the recursive call below commits immediately after
++  // the load.
++  commit_waiters_.push_back(std::move(callback));
++
++  if (has_pending_load_read_write_tasks()) {
++    LoadMap(OnLoadCompleteTask(
++        base::BindOnce(&StorageAreaImpl::ScheduleImmediateCommitWithCallback,
++                       weak_ptr_factory_.GetWeakPtr(),
++                       base::BindOnce([](bool) {})),
++        AccessMode::ReadWrite));
++    return;
++  }
++
++  if (!database_) {
++    // There is no backing database, so nothing can be persisted. Answer the
++    // caller with an explicit "not confirmed" rather than dropping it or
++    // implying success.
++    RunCommitWaiters(false);
++    return;
++  }
++
++  if (!commit_batch_ && !commit_batches_in_flight_) {
++    // Nothing of this area is outstanding: there is no commit to wait for, so
++    // there is no unconfirmed write either.
++    RunCommitWaiters(!commit_waiters_saw_failure_);
++    return;
++  }
++
++  if (commit_batch_) {
++    CommitChanges();
++  }
++  if (!commit_batches_in_flight_) {
++    // The commit could not start (for example the database was detached), so
++    // do not leave the caller waiting or imply that the write happened.
++    RunCommitWaiters(false);
++  }
++}
++
++void StorageAreaImpl::RunCommitWaiters(bool committed_ok) {
++  std::vector<base::OnceCallback<void(bool)>> waiters = std::move(commit_waiters_);
++  commit_waiters_.clear();
++  commit_waiters_saw_failure_ = false;
++  for (auto& waiter : waiters) {
++    std::move(waiter).Run(committed_ok);
++  }
+ }
+ 
+ void StorageAreaImpl::OnMemoryDump(const std::string& name,
+@@ -692,6 +748,12 @@
+   if (commit_batches_in_flight_)
+     return;
+ 
++  // A shutdown waiter explicitly requested an immediate commit, so the
++  // delayed commit task is redundant and must not race the waiter's own
++  // completion callback.
++  if (!commit_waiters_.empty())
++    return;
++
+   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+       FROM_HERE,
+       base::BindOnce(&StorageAreaImpl::CommitChanges,
+@@ -793,6 +855,18 @@
+   // Call before |DidCommit| as delegate can destroy this object.
+   UnloadMapIfPossible();
+ 
++  // Waiters asked for a confirmed commit, so answer them only once no
++  // database write is still in flight; an older batch completing first must
++  // not run a waiter whose newer batch has not been persisted yet. A failed
++  // batch in between stays sticky, so a later success cannot turn an earlier
++  // failure green. Run before `DidCommit()`, which can destroy this object.
++  if (!status.ok()) {
++    commit_waiters_saw_failure_ = true;
++  }
++  if (commit_batches_in_flight_ == 0) {
++    RunCommitWaiters(!commit_waiters_saw_failure_);
++  }
++
+   delegate_->DidCommit(status);
+ }
+ 
+diff --git a/components/services/storage/dom_storage/storage_area_impl_unittest.cc b/components/services/storage/dom_storage/storage_area_impl_unittest.cc
+--- a/components/services/storage/dom_storage/storage_area_impl_unittest.cc
++++ b/components/services/storage/dom_storage/storage_area_impl_unittest.cc
+@@ -520,7 +520,46 @@
+       }
+       return description;
+     });
++
++TEST_P(StorageAreaImplTest, ImmediateCommitWithCallbackRunsAfterDatabaseWrite) {
++  const std::string key = "flush_callback_key";
++  const std::string value = "flush_callback_value";
+ 
++  base::RunLoop put_loop;
++  storage_area()->Put(
++      ToBytes(key), ToBytes(value), std::nullopt,
++      test::MakeStorageAreaSource(),
++      base::BindLambdaForTesting([&](bool success) {
++        EXPECT_TRUE(success);
++        put_loop.Quit();
++      }));
++  put_loop.Run();
++
++  // The mojo Put reply only means the value reached the in-memory map. The
++  // new callback must be deferred until the database write finished.
++  EXPECT_FALSE(HasDatabaseEntry(*test_map_locator_, key));
++
++  bool callback_ran = false;
++  bool durable_when_callback_ran = false;
++  base::RunLoop flush_loop;
++  bool reported_confirmed = false;
++  storage_area_impl()->ScheduleImmediateCommitWithCallback(
++      base::BindLambdaForTesting([&](bool confirmed) {
++        callback_ran = true;
++        reported_confirmed = confirmed;
++        durable_when_callback_ran =
++            HasDatabaseEntry(*test_map_locator_, key) &&
++            GetDatabaseEntry(*test_map_locator_, key) == value;
++        flush_loop.Quit();
++      }));
++  EXPECT_FALSE(callback_ran);
++  flush_loop.Run();
++
++  EXPECT_TRUE(callback_ran);
++  EXPECT_TRUE(reported_confirmed);
++  EXPECT_TRUE(durable_when_callback_ran);
++}
++
+ TEST_P(StorageAreaImplTest, GetLoadedFromMap) {
+   storage_area_impl()->SetCacheModeForTesting(CacheMode::KEYS_AND_VALUES);
+   std::optional<std::vector<uint8_t>> result = GetSync(test_key2_bytes_);
+diff --git a/components/services/storage/dom_storage/local_storage_impl.h b/components/services/storage/dom_storage/local_storage_impl.h
+--- a/components/services/storage/dom_storage/local_storage_impl.h
++++ b/components/services/storage/dom_storage/local_storage_impl.h
+@@ -79,6 +79,7 @@
+                      DeleteStorageCallback callback) override;
+   void CleanUpStorage(CleanUpStorageCallback callback) override;
+   void Flush() override;
++  void FlushForShutdown(FlushForShutdownCallback callback) override;
+   void PurgeMemory() override;
+   void ApplyPolicyUpdates(
+       std::vector<mojom::StoragePolicyUpdatePtr> policy_updates) override;
+@@ -116,6 +117,8 @@
+   // Initiates connecting to the database if no connection is in progress yet.
+   void RunWhenConnected(base::OnceClosure callback);
+ 
++  void FlushForShutdownWhenConnected(FlushForShutdownCallback callback);
++
+   // Part of asynchronous database opening called from `RunWhenConnected()`. If
+   // opening the database on disk fails twice, falls back to in memory. If
+   // opening the database in memory fails, runs without a database.
+diff --git a/components/services/storage/dom_storage/local_storage_impl.cc b/components/services/storage/dom_storage/local_storage_impl.cc
+--- a/components/services/storage/dom_storage/local_storage_impl.cc
++++ b/components/services/storage/dom_storage/local_storage_impl.cc
+@@ -7,6 +7,7 @@
+ #include <inttypes.h>
+ 
+ #include <algorithm>
++#include <memory>
+ #include <optional>
+ #include <set>
+ #include <string>
+@@ -280,8 +281,74 @@
+ 
+   for (const auto& it : areas_)
+     it.second->storage_area()->ScheduleImmediateCommit();
++}
++
++void LocalStorageImpl::FlushForShutdown(FlushForShutdownCallback callback) {
++  if (connection_state_ != CONNECTION_FINISHED) {
++    RunWhenConnected(base::BindOnce(
++        &LocalStorageImpl::FlushForShutdownWhenConnected,
++        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
++    return;
++  }
++
++  FlushForShutdownWhenConnected(std::move(callback));
+ }
+ 
++void LocalStorageImpl::FlushForShutdownWhenConnected(
++    FlushForShutdownCallback callback) {
++  // An in-memory database can acknowledge SQL commits but cannot satisfy
++  // restart persistence, so it must never be reported as a confirmed
++  // persistent commit. Answer immediately: waiting would only delay the
++  // caller without changing the outcome.
++  if (in_memory_) {
++    std::move(callback).Run(/*confirmed=*/false);
++    return;
++  }
++
++  // Every storage area must confirm its database write before the caller is
++  // told the flush succeeded.
++  if (areas_.empty()) {
++    // Nothing was pending and nothing failed, so there is no unconfirmed
++    // write.
++    std::move(callback).Run(/*confirmed=*/true);
++    return;
++  }
++
++  // Shared completion state: each area gets its own closure that records its
++  // own result and decrements the counter. A single failure stays sticky, so
++  // one successful area cannot mask another area's failed commit.
++  struct Outcome {
++    size_t pending = 0;
++    bool any_failure = false;
++    bool finalized = false;
++    FlushForShutdownCallback callback;
++  };
++  auto outcome = std::make_shared<Outcome>();
++  outcome->pending = areas_.size();
++  outcome->callback = std::move(callback);
++  for (const auto& it : areas_) {
++    it.second->storage_area()->ScheduleImmediateCommitWithCallback(
++        base::BindOnce(
++            [](std::shared_ptr<Outcome> outcome, bool confirmed) {
++              if (outcome->finalized) {
++                return;
++              }
++              if (!confirmed) {
++                outcome->any_failure = true;
++              }
++              if (--outcome->pending != 0) {
++                return;
++              }
++              outcome->finalized = true;
++              FlushForShutdownCallback done = std::move(outcome->callback);
++              if (done) {
++                std::move(done).Run(!outcome->any_failure);
++              }
++            },
++            outcome));
++  }
++}
++
+ StorageAreaImpl* LocalStorageImpl::GetStorageAreaForTesting(
+     const blink::StorageKey& storage_key) {
+   if (connection_state_ != CONNECTION_FINISHED) {
+diff --git a/content/public/browser/dom_storage_context.h b/content/public/browser/dom_storage_context.h
+--- a/content/public/browser/dom_storage_context.h
++++ b/content/public/browser/dom_storage_context.h
+@@ -53,6 +53,14 @@
+   // been created after a session restore, or a session restore won't happen.
+   virtual void StartScavengingUnusedSessionStorage() = 0;
+ 
++  // Commits pending Local Storage writes and runs `callback` only after every
++  // storage area confirmed its database write or failed to. `confirmed` is
++  // true only when no area reported a failed/unstarted commit and no area was
++  // torn down first; false means "commit not confirmed", not "data lost".
++  // Called before a process exit that must not silently drop accepted writes.
++  virtual void FlushLocalStorageForShutdown(
++      base::OnceCallback<void(bool confirmed)> callback) = 0;
++
+  protected:
+   virtual ~DOMStorageContext() {}
+ };
+diff --git a/content/browser/dom_storage/dom_storage_context_wrapper.h b/content/browser/dom_storage/dom_storage_context_wrapper.h
+--- a/content/browser/dom_storage/dom_storage_context_wrapper.h
++++ b/content/browser/dom_storage/dom_storage_context_wrapper.h
+@@ -92,6 +92,8 @@
+   scoped_refptr<SessionStorageNamespace> RecreateSessionStorage(
+       const std::string& namespace_id) override;
+   void StartScavengingUnusedSessionStorage() override;
++  void FlushLocalStorageForShutdown(
++      base::OnceCallback<void(bool confirmed)> callback) override;
+   bool scavenging_started_for_testing() const {
+     return scavenging_started_for_testing_;
+   }
+diff --git a/content/browser/dom_storage/dom_storage_context_wrapper.cc b/content/browser/dom_storage/dom_storage_context_wrapper.cc
+--- a/content/browser/dom_storage/dom_storage_context_wrapper.cc
++++ b/content/browser/dom_storage/dom_storage_context_wrapper.cc
+@@ -243,6 +243,20 @@
+     session_storage_control_->Flush();
+   if (local_storage_control_)
+     local_storage_control_->Flush();
++}
++
++void DOMStorageContextWrapper::FlushLocalStorageForShutdown(
++    base::OnceCallback<void(bool confirmed)> callback) {
++  DCHECK(callback);
++  if (!local_storage_control_) {
++    // Shutdown() has been called. No pending write can still reach disk
++    // through this context, and we did not observe one, so report it as
++    // unconfirmed instead of implying a successful commit.
++    std::move(callback).Run(/*confirmed=*/false);
++    return;
++  }
++
++  local_storage_control_->FlushForShutdown(std::move(callback));
+ }
+ 
+ void DOMStorageContextWrapper::OpenLocalStorage(
+diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ 
+ #include <memory>
++#include <set>
+ #include <utility>
+ 
+ #include "base/command_line.h"
+@@ -14,6 +15,10 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/devtools/chrome_devtools_session.h"
+ #include "chrome/browser/devtools/device/android_device_manager.h"
+ #include "chrome/browser/devtools/device/tcp_device_provider.h"
+@@ -52,8 +57,11 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+ #include "content/public/browser/devtools_agent_host_client_channel.h"
++#include "content/public/browser/dom_storage_context.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
++#include "content/public/browser/storage_partition.h"
++#include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_switches.h"
+ #include "extensions/browser/extension_host.h"
+@@ -173,7 +181,169 @@
+ }
+ 
+ ChromeDevToolsManagerDelegate* g_instance;
++
++// Bounded wait for Local Storage to reach disk before a CDP-requested exit.
++// A controlled browser can be asked to close immediately after a page write
++// that was already acknowledged to the page. Chromium batches Local Storage
++// writes with a delay and teardown drops a pending batch, so the exit path
++// waits for the storage service instead. `kFlushBudget` keeps an unresponsive
++// service from making the browser unkillable.
++class DomStorageShutdownFlush {
++ public:
++  DomStorageShutdownFlush()
++      : remaining_(std::make_unique<int>(0)), state_(std::make_unique<State>()) {}
++
++  DomStorageShutdownFlush(const DomStorageShutdownFlush&) = delete;
++  DomStorageShutdownFlush& operator=(const DomStorageShutdownFlush&) = delete;
++
++  // Collects the default partitions of every loaded profile and every open
++  // browser window and asks each for a confirmed Local Storage commit. Exits
++  // once the last one reports back, or when the budget expires. The exit is
++  // unconditional: a storage failure must never trap the user in a browser
++  // that refuses to close. The result is only *reported*, never assumed.
++  void Start() {
++    // A second close request while the first flush is still running must not
++    // restart the counter or exit twice.
++    if (started_) {
++      return;
++    }
++    started_ = true;
++
++    // Snapshot every already-loaded partition before dispatching any flush:
++    // callbacks can complete synchronously, so the pending count must be
++    // final first. `ForEachLoadedStoragePartition` visits default and
++    // non-default partitions without creating or loading missing ones, and it
++    // never calls GetDefaultStoragePartition(), which would create an unused
++    // partition. A partition that was never loaded has no in-process pending
++    // writes, so skipping it loses nothing.
++    std::set<Profile*> profiles;
++    if (auto* profile_manager =
++            g_browser_process ? g_browser_process->profile_manager()
++                              : nullptr) {
++      for (Profile* profile : profile_manager->GetLoadedProfiles()) {
++        if (profile) {
++          profiles.insert(profile);
++        }
++      }
++    }
++    // Windows can belong to profiles that `GetLoadedProfiles()` does not
++    // report, so also cover every browser window currently owned.
++    if (auto* browsers = GlobalBrowserCollection::GetInstance()) {
++      static_cast<BrowserCollection*>(browsers)->ForEach(
++          [&profiles](BrowserWindowInterface* browser) {
++            if (browser && browser->GetProfile()) {
++              profiles.insert(browser->GetProfile());
++            }
++            return true;
++          });
++    }
++
++    std::set<content::StoragePartition*> partitions;
++    for (Profile* profile : profiles) {
++      profile->ForEachLoadedStoragePartition(
++          [&partitions](content::StoragePartition* partition) {
++            // An intentionally non-persistent partition (incognito, guest)
++            // has nothing to persist; it must not make persistent writes look
++            // unconfirmed. A disk-configured partition that fell back to an
++            // in-memory database still reports failure from the storage layer.
++            if (partition && !partition->GetConfig().in_memory()) {
++              partitions.insert(partition);
++            }
++          });
++    }
++
++    *remaining_ = static_cast<int>(partitions.size());
++    if (partitions.empty()) {
++      ExitOnce();
++      return;
++    }
++
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++        FROM_HERE,
++        base::BindOnce(&DomStorageShutdownFlush::OnBudgetExpired,
++                       weak_factory_.GetWeakPtr()),
++        kFlushBudget);
++
++    for (content::StoragePartition* partition : partitions) {
++      auto* context =
++          partition ? partition->GetDOMStorageContext() : nullptr;
++      if (!context) {
++        OnOneDone(/*confirmed=*/false);
++        continue;
++      }
++      context->FlushLocalStorageForShutdown(
++          base::BindOnce(&DomStorageShutdownFlush::OnOneDone,
++                         weak_factory_.GetWeakPtr()));
++    }
++  }
+ 
++ private:
++  struct State {
++    bool exited = false;
++    bool unconfirmed = false;
++  };
++
++  static constexpr base::TimeDelta kFlushBudget = base::Seconds(5);
++
++  void OnOneDone(bool confirmed) {
++    if (state_->exited) {
++      return;
++    }
++    if (!confirmed) {
++      state_->unconfirmed = true;
++    }
++    if (--*remaining_ > 0) {
++      return;
++    }
++    LogOutcome(/*timed_out=*/false);
++    ExitOnce();
++  }
++
++  // The budget is a hard stop. It means only "completion was not observed
++  // before the deadline" and claims nothing about the data.
++  void OnBudgetExpired() {
++    if (state_->exited) {
++      return;
++    }
++    LogOutcome(/*timed_out=*/true);
++    ExitOnce();
++  }
++
++  void LogOutcome(bool timed_out) {
++    // A non-durable outcome is not fatal, but it must be observable instead of
++    // looking like a clean flush to whoever reads the logs.
++    if (timed_out) {
++      LOG(WARNING) << "[chrome-devtools] Local Storage flush did not complete "
++                      "before the shutdown deadline; commit unconfirmed.";
++    } else if (state_->unconfirmed) {
++      LOG(WARNING) << "[chrome-devtools] Local Storage commit was not confirmed "
++                      "by every storage partition; data may not be durable.";
++    }
++  }
++
++  void ExitOnce() {
++    if (state_->exited) {
++      return;
++    }
++    state_->exited = true;
++    // Never exit from inside a Mojo reply: hop to a fresh task so the reply
++    // dispatch and its pipe are fully unwound before teardown starts.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce([]() {
++          // Release the keep-alive only now that all profile and
++          // storage-partition access is finished, then start the normal
++          // silent exit.
++          ChromeDevToolsManagerDelegate::AllowBrowserToClose();
++          chrome::ExitIgnoreUnloadHandlers();
++        }));
++  }
++
++  bool started_ = false;
++  std::unique_ptr<int> remaining_;
++  std::unique_ptr<State> state_;
++  base::WeakPtrFactory<DomStorageShutdownFlush> weak_factory_{this};
++};
++
+ }  // namespace
+ 
+ // static
+@@ -573,10 +743,20 @@
+ void ChromeDevToolsManagerDelegate::CloseBrowserSoon() {
+   content::GetUIThreadTaskRunner({})->PostTask(
+       FROM_HERE, base::BindOnce([]() {
+-        // Do not keep the application running anymore, we got an explicit
+-        // request to close.
+-        AllowBrowserToClose();
+-        chrome::ExitIgnoreUnloadHandlers();
++        // Hold the browser open until the flush below finishes. Releasing the
++        // keep-alive first would let teardown run concurrently with profile
++        // and storage-partition access, which is a use-after-free. The helper
++        // releases it exactly once, immediately before exiting.
++        //
++        // This MUST be a function-local `static`: `base::NoDestructor` stores
++        // its value inline and must never be used for locals or fields. As a
++        // local it dies with this lambda while the flush reply and the
++        // deadline task still hold weak pointers into it, which reads freed
++        // stack memory (SIGSEGV). As a static it lives for the process, so the
++        // asynchronous completions stay valid. `Start()` is idempotent, so a
++        // repeated close request neither restarts the counter nor exits twice.
++        static base::NoDestructor<DomStorageShutdownFlush> shutdown_flush;
++        shutdown_flush->Start();
+       }));
+ }
+ 

@@ -25,6 +25,7 @@ export interface WebGlCorpus {
     webgl1: WebGlContextCorpus | null;
     webgl2: WebGlContextCorpus | null;
   };
+  windowOffscreen: WebGlCorpus["window"];
   worker: {
     webgl1: WebGlContextCorpus | null;
     webgl2: WebGlContextCorpus | null;
@@ -207,6 +208,15 @@ export async function captureWebGlCorpusInPage(): Promise<WebGlCorpus> {
     webgl1: captureContext(document.createElement("canvas").getContext("webgl"), 1),
     webgl2: captureContext(document.createElement("canvas").getContext("webgl2"), 2),
   };
+  // Window OffscreenCanvas is a separate surface, not evidence inferred from
+  // either DOM canvases or a Worker's OffscreenCanvas. Retain unavailable arms
+  // as null so acceptance cannot silently pass with missing coverage.
+  const windowOffscreenCorpus = {
+    webgl1: typeof OffscreenCanvas === "function"
+      ? captureContext(new OffscreenCanvas(16, 16).getContext("webgl"), 1) : null,
+    webgl2: typeof OffscreenCanvas === "function"
+      ? captureContext(new OffscreenCanvas(16, 16).getContext("webgl2"), 2) : null,
+  };
 
   const workerSource = [
     `const captureContext=${captureContext.toString()};`,
@@ -236,7 +246,7 @@ export async function captureWebGlCorpusInPage(): Promise<WebGlCorpus> {
       };
       worker.postMessage(1);
     });
-    return { window: windowCorpus, worker: workerCorpus };
+    return { window: windowCorpus, windowOffscreen: windowOffscreenCorpus, worker: workerCorpus };
   } finally {
     URL.revokeObjectURL(workerUrl);
   }

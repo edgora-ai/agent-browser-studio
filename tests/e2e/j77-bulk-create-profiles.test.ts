@@ -49,7 +49,11 @@ describe("J77 — bulk import → bulk create profiles", () => {
     expect(cbVisible).toBe(true);
     // Toggling the checkbox reveals the platform options.
     await h.page.locator("#acct-import-create-profiles").check({ timeout: 5000 });
-    const optsVisible = await h.page.evaluate(() => document.getElementById("acct-import-create-options").style.display !== "none");
+    const optsVisible = await h.page.evaluate(() => {
+      const options = document.getElementById("acct-import-create-options");
+      if (!options) throw new Error("Expected #acct-import-create-options to exist");
+      return options.style.display !== "none";
+    });
     expect(optsVisible).toBe(true);
     await h.page.evaluate(() => (window as any).agentBrowser.api.agent.accounts.bulkCreate(
       "https://shop.com, carol, pass1",

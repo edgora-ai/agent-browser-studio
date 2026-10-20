@@ -21,6 +21,11 @@
   var t = function (k, fb) { return window.i18n ? window.i18n.t(k, fb) : fb; };
 
   var lastStatus = null;
+  var statusRequest = 0;
+  var dialogRequest = 0;
+  var activationPending = false;
+  var dialogStatusError = false;
+  var bannerRequest = 0;
 
   function supported() {
     return !!(api && api.license && typeof api.license.status === "function");
@@ -28,11 +33,21 @@
 
   function refresh() {
     if (!supported()) return Promise.resolve(null);
-    return api.license.status().then(function (st) {
+    var request = ++statusRequest;
+    return Promise.resolve().then(function () { return api.license.status(); }).then(function (st) {
+      if (request !== statusRequest) return lastStatus;
       lastStatus = st || null;
-      renderLicenseBanner(st);
-      return st;
-    }).catch(function () { return lastStatus; });
+      renderLicenseBanner(lastStatus);
+      renderActivationStatus(lastStatus);
+      return lastStatus;
+    }).catch(function () {
+      if (request === statusRequest) {
+        lastStatus = null;
+        renderLicenseBanner(null);
+        renderActivationStatus(null);
+      }
+      return lastStatus;
+    });
   }
 
   function planLabel(st) {
@@ -45,6 +60,7 @@
   }
 
   function renderLicenseBanner(st) {
+    var request = ++bannerRequest;
     var el = document.getElementById("license-banner");
     if (!el) return;
     if (!st) { el.style.display = "none"; return; }
@@ -69,6 +85,7 @@
     // Try to fill in real profile usage without blocking the banner.
     try {
       api.browser.list().then(function (profiles) {
+        if (request !== bannerRequest) return;
         var used = Array.isArray(profiles) ? profiles.length : 0;
         var body = el.querySelector("span");
         if (body && !st.expired && days !== null) {
@@ -82,27 +99,68 @@
   function openActivateDialog() {
     var dlg = document.getElementById("dlg-license");
     if (!dlg) return;
-    refresh().then(function (st) {
-      var devEl = document.getElementById("license-device-id");
-      if (devEl) devEl.textContent = (st && st.deviceId) || (lastStatus && lastStatus.deviceId) || "—";
-      var planEl = document.getElementById("license-current-plan");
-      if (planEl) planEl.textContent = st ? planLabel(st) : (lastStatus ? planLabel(lastStatus) : "—");
-      var input = document.getElementById("license-code-input");
-      if (input) input.value = "";
-      var refundBox = document.getElementById("license-refund-ack");
-      if (refundBox) refundBox.checked = false;
-      var err = document.getElementById("license-error");
-      if (err) { err.textContent = ""; err.style.display = "none"; }
-      if (!dlg.open) {
-        dlg.showModal();
-        if (typeof agentBrowser.focusDialogPrimary === "function") agentBrowser.focusDialogPrimary(dlg);
-      }
-    });
+    ++dialogRequest;
+    var input = document.getElementById("license-code-input");
+    if (input) input.value = "";
+    var refundBox = document.getElementById("license-refund-ack");
+    if (refundBox) refundBox.checked = false;
+    var err = document.getElementById("license-error");
+    lastStatus = null;
+    dialogStatusError = true;
+    setActivationControls(null);
+    if (err) { err.textContent = t("common.loading", "Loading…"); err.style.display = ""; }
+    if (!dlg.open) {
+      dlg.showModal();
+      if (typeof agentBrowser.focusDialogPrimary === "function") agentBrowser.focusDialogPrimary(dlg);
+    }
+    // The winning shared refresh owns both the banner and the live dialog;
+    // a superseded open-dialog request must not strand or overwrite controls.
+    refresh();
+  }
+
+  function renderActivationStatus(st) {
+    var dlg = document.getElementById("dlg-license");
+    if (!dlg || !dlg.open) return;
+    var devEl = document.getElementById("license-device-id");
+    if (devEl) devEl.textContent = (st && st.deviceId) || "—";
+    var planEl = document.getElementById("license-current-plan");
+    if (planEl) planEl.textContent = st ? planLabel(st) : "—";
+    setActivationControls(st);
+    var message = activationReadinessError(st);
+    var err = document.getElementById("license-error");
+    if (err && (message || dialogStatusError)) {
+      err.textContent = message;
+      err.style.display = message ? "" : "none";
+    }
+    dialogStatusError = !!message;
+  }
+
+  function activationReadinessError(st) {
+    if (st && st.canActivate === true) return "";
+    if (st && st.canActivate === false) return t("license.no-pubkey", "This build cannot verify licenses (trial only).");
+    return t("license.activate-failed", "Activation failed") + " · " + t("common.retry", "Retry");
+  }
+
+  function setActivationControls(st) {
+    var disabled = activationPending || !st || st.canActivate !== true;
+    var button = document.getElementById("license-activate-btn");
+    var input = document.getElementById("license-code-input");
+    if (button) button.disabled = disabled;
+    if (input) input.disabled = disabled;
   }
 
   function submitActivation() {
     var input = document.getElementById("license-code-input");
     var err = document.getElementById("license-error");
+    if (activationPending) return;
+    var readinessError = activationReadinessError(lastStatus);
+    if (readinessError) {
+      setActivationControls(lastStatus);
+      if (err) { err.textContent = readinessError; err.style.display = ""; }
+      else toast(readinessError, "error");
+      return;
+    }
+    dialogStatusError = false;
     // Sale-93: one-shot refund-policy acknowledgement — required per
     // activation, never persisted (each code purchase re-confirms).
     var refundBox = document.getElementById("license-refund-ack");
@@ -127,8 +185,13 @@
     }
     // Never echo the code: clear the field before the IPC round trip.
     if (input) input.value = "";
-    api.license.activate(code).then(function (r) {
+    activationPending = true;
+    var request = dialogRequest;
+    setActivationControls(lastStatus);
+    Promise.resolve().then(function () { return api.license.activate(code); }).then(function (r) {
       code = "";
+      var currentDialog = document.getElementById("dlg-license");
+      if (request !== dialogRequest || !currentDialog || !currentDialog.open) { refresh(); return; }
       if (r && r.ok) {
         toast(t("license.activated", "License activated"), "success");
         var dlg = document.getElementById("dlg-license");
@@ -136,6 +199,7 @@
         refresh();
         return;
       }
+      dialogStatusError = false;
       var msg = (r && r.error) || t("license.activate-failed", "Activation failed");
       if (r && r.code === "DEVICE_MISMATCH") {
         msg = t("license.device-mismatch",
@@ -149,9 +213,16 @@
       else toast(msg, "error");
     }).catch(function (e) {
       code = "";
+      var dlg = document.getElementById("dlg-license");
+      if (request !== dialogRequest || !dlg || !dlg.open) return;
+      dialogStatusError = false;
       var msg = (e && e.message) || t("license.activate-failed", "Activation failed");
       if (err) { err.textContent = msg; err.style.display = ""; }
       else toast(msg, "error");
+    }).finally(function () {
+      activationPending = false;
+      var dlg = document.getElementById("dlg-license");
+      if (dlg && dlg.open) setActivationControls(lastStatus);
     });
   }
 

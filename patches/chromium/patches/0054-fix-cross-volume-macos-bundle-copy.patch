@@ -1,0 +1,19 @@
+diff --git a/build/toolchain/apple/toolchain.gni b/build/toolchain/apple/toolchain.gni
+--- a/build/toolchain/apple/toolchain.gni
++++ b/build/toolchain/apple/toolchain.gni
+@@ -735,11 +735,11 @@
+       # copy some files into the application bundle which fails if source
+       # and destination are hardlinked together.
+       #
+-      # Instead use clonefile to copy the files which is as efficient as
+-      # hardlink but ensure the file have distinct metadata (thus avoid the
+-      # error with ditto, see https://crbug.com/1042182).
++      # Bundle files need distinct metadata (see https://crbug.com/1042182).
++      # Do not require clonefile: source and build output may be on
++      # different volumes, where cp -c fails with EXDEV.
+       if (host_os == "mac") {
+-        command = "rm -rf {{output}} && /bin/cp -Rc {{source}} {{output}}"
++        command = "rm -rf {{output}} && /bin/cp -R {{source}} {{output}}"
+       } else {
+         command = "rm -rf {{output}} && /bin/cp -Rld {{source}} {{output}}"
+       }

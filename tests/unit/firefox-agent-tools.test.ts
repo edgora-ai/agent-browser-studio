@@ -16,7 +16,13 @@ import { WebSocketServer } from "ws";
 
 vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
-  app: { getPath: () => "/tmp/j99-agent-tools-userdata" },
+  app: { getPath: () => path.join(os.tmpdir(), "j99-agent-tools-userdata") },
+}));
+vi.mock("node:dns/promises", () => ({
+  lookup: async (host: string) => {
+    if (host !== "example.com") throw new Error(`Unexpected Firefox navigation fixture DNS: ${host}`);
+    return [{ address: "198.51.100.79", family: 4 }];
+  },
 }));
 
 import { connectBidi, type BidiConnection } from "../../src/main/services/bidi-client.js";
@@ -41,6 +47,7 @@ import {
   firefoxUploadFile,
 } from "../../src/main/services/firefox-agent-tools.js";
 import { executeToolCall } from "../../src/main/services/local-agent.js";
+import { runWithProtocolDispatchGuard } from "../../src/main/services/agent/dispatch-guard.js";
 
 let server: http.Server | null = null;
 let wss: WebSocketServer | null = null;
@@ -200,7 +207,65 @@ describe("firefox-agent-tools over the BiDi wire protocol", () => {
   });
 });
 
+describe("Firefox load wait has one total deadline and captured caller authority", () => {
+  function waitingConnection(delayContext: number, delayEvaluation: number) {
+    const sent: Array<{ method: string; timeoutMs?: number }> = [];
+    const close = vi.fn();
+    const connection: BidiConnection = {
+      wsUrl: "ws://127.0.0.1:42079/session", closed: false, close,
+      async send(method, _params, timeoutMs) {
+        sent.push({ method, timeoutMs });
+        const delay = method === "browsingContext.getTree" ? delayContext : delayEvaluation;
+        if (delay) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+        if (method === "browsingContext.getTree") return { contexts: [{ context: "budget-context" }] };
+        if (method === "script.evaluate") return { result: { type: "string", value: "complete" } };
+        throw new Error(`Unexpected budget fixture method: ${method}`);
+      },
+    };
+    return { connection, sent, close };
+  }
+
+  it("starts the load budget before context lookup and rejects late complete", async () => {
+    const fixture = waitingConnection(45, 0);
+    await expect(firefoxWaitForLoad(fixture.connection, 20)).rejects.toMatchObject({ name: "BrowserLoadTimeoutError", code: "BROWSER_LOAD_TIMEOUT" });
+    expect(fixture.sent.filter((call) => call.method === "script.evaluate")).toEqual([]);
+    expect(fixture.close).not.toHaveBeenCalled();
+  });
+
+  it("passes only remaining time to evaluation and rejects complete arriving after the deadline", async () => {
+    const fixture = waitingConnection(10, 45);
+    await expect(firefoxWaitForLoad(fixture.connection, 35)).rejects.toMatchObject({ name: "BrowserLoadTimeoutError", code: "BROWSER_LOAD_TIMEOUT" });
+    expect(fixture.sent[0].timeoutMs).toBeLessThanOrEqual(35);
+    expect(fixture.sent[1].timeoutMs).toBeLessThan(35);
+    expect(fixture.close).not.toHaveBeenCalled();
+  });
+
+  it("rechecks captured cancellation after evaluation before accepting complete and keeps the shared session usable", async () => {
+    const fixture = waitingConnection(0, 35);
+    let allowed = true;
+    const waiting = runWithProtocolDispatchGuard(() => { if (!allowed) throw new Error("Firefox wait caller cancelled"); }, () => firefoxWaitForLoad(fixture.connection, 300));
+    const rejected = expect(waiting).rejects.toThrow("Firefox wait caller cancelled");
+    allowed = false;
+    await rejected;
+    expect(fixture.close).not.toHaveBeenCalled();
+    await expect(firefoxWaitForLoad(fixture.connection, 300)).resolves.toEqual({ loaded: true });
+  });
+});
+
 describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)", () => {
+  let uploadDir: string | undefined;
+
+  beforeAll(() => {
+    uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), "j99-firefox-upload-"));
+  });
+
+  afterAll(() => {
+    if (!uploadDir) return;
+    const entry = fs.lstatSync(uploadDir);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("Refusing to clean a replaced Firefox upload fixture directory");
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+  });
+
   it("routes browser_navigate / evaluate / screenshot / get_cookies to BiDi for a firefox port", async () => {
     const ctx = {
       engineResolver: () => "firefox" as const,
@@ -218,7 +283,7 @@ describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)",
 
   it("routes interactions: click / type / press_key / select / scroll / upload", async () => {
     const ctx = { engineResolver: () => "firefox" as const, sessionResolver: () => conn };
-    const uploadPath = path.join(os.tmpdir(), `j99-firefox-upload-${process.pid}.txt`);
+    const uploadPath = path.join(uploadDir!, "upload.txt");
     fs.writeFileSync(uploadPath, "agent upload fixture");
     const click = await executeToolCall("browser_click", { port, selector: "#submit" }, undefined, ctx);
     expect(click.success).toBe(true);
@@ -228,7 +293,6 @@ describe("executeToolCall engine dispatch (firefox → BiDi, chromium → CDP)",
     await executeToolCall("browser_scroll", { port, direction: "down" }, undefined, ctx);
     await executeToolCall("browser_hover", { port, selector: "#a" }, undefined, ctx);
     await executeToolCall("browser_upload_file", { port, selector: "input[type=file]", filePath: uploadPath }, undefined, ctx);
-    fs.unlinkSync(uploadPath);
     expect(lastCall("input.performActions")).not.toBeNull();
   });
 

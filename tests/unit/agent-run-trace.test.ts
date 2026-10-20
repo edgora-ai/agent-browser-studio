@@ -3,8 +3,9 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { DatabaseSync } from "node:sqlite";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-recorder-test");
+const TEST_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-recorder-test-"));
 
 const h = vi.hoisted(() => ({
   /** Fake windows that emit() broadcasts to; empty by default. */
@@ -38,16 +39,20 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import { agentRunRecorder } from "../../src/main/services/agent-run-trace.js";
-import { getConfig, getConfigPath, reloadConfig } from "../../src/main/services/config-manager.js";
+import { getConfig, getConfigPath, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
+import { agentDbExecScript, closeAgentDb, ensureNewsRunResultSchema } from "../../src/main/services/agent-db.js";
 import { transact } from "../../src/main/services/config/store.js";
 import { CONFIG_MAX_BYTES, ConfigTooLargeError } from "../../src/main/services/config/limits.js";
+import { runResultStore } from "../../src/main/services/run-result-store.js";
 
 describe("RunRecorder", () => {
   beforeEach(() => {
+    closeAgentDb();
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
   });
   afterEach(() => {
+    closeAgentDb();
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
   });
@@ -152,7 +157,9 @@ describe("RunRecorder", () => {
 
   it("deleteRun + clearRuns mutate config", () => {
     const a = agentRunRecorder.startRun({ source: { type: "chat" }, name: "a" });
-    agentRunRecorder.startRun({ source: { type: "chat" }, name: "b" });
+    const b = agentRunRecorder.startRun({ source: { type: "chat" }, name: "b" });
+    agentRunRecorder.finishRun(a.id, "done");
+    agentRunRecorder.finishRun(b.id, "done");
     expect(agentRunRecorder.deleteRun(a.id)).toBe(true);
     expect(agentRunRecorder.listRuns().length).toBe(1);
     const n = agentRunRecorder.clearRuns();
@@ -160,13 +167,173 @@ describe("RunRecorder", () => {
     expect(agentRunRecorder.listRuns().length).toBe(0);
   });
 
-  // 210 synchronous config writes through the save path; under full-suite load
-  // this crosses the 5s default timeout on slower runners.
-  it("caps runs to 200", { timeout: 20000 }, () => {
-    for (let i = 0; i < 210; i++) {
-      agentRunRecorder.startRun({ source: { type: "chat" }, name: "r" + i });
+  it("retains the oldest active run ahead of 200 newer terminal runs, including on load", { timeout: 60000 }, () => {
+    const active = agentRunRecorder.startRun({ source: { type: "chat" }, name: "protected" });
+    const oldTerminal = agentRunRecorder.startRun({ source: { type: "chat" }, name: "old-terminal" });
+    agentRunRecorder.finishRun(oldTerminal.id, "done");
+    for (let i = 0; i < 200; i++) {
+      const filler = agentRunRecorder.startRun({ source: { type: "chat" }, name: `terminal-${i}` });
+      agentRunRecorder.finishRun(filler.id, "done");
     }
-    expect(getConfig().agentRuns!.length).toBe(200);
+    const disk = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(disk.agentRuns).toHaveLength(200);
+    expect(disk.agentRuns.some((r: any) => r.id === active.id)).toBe(true);
+    expect(disk.agentRuns.some((r: any) => r.id === oldTerminal.id)).toBe(false);
+    // Emulate a new process without process-local bindings; select raw running
+    // rows before load-time crash recovery marks them interrupted.
+    agentRunRecorder.releaseRun(active.id);
+    reloadConfig();
+    expect(agentRunRecorder.getRun(active.id)).toMatchObject({ status: "error", endReason: "interrupted" });
+    expect(agentRunRecorder.listRuns()).toHaveLength(200);
+  });
+
+  it("allows more than 200 active runs until completion, preserving a finishing run's result", { timeout: 60000 }, () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 202; i++) {
+      ids.push(agentRunRecorder.startRun({ source: { type: "chat" }, name: `active-${i}` }).id);
+    }
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).agentRuns).toHaveLength(202);
+    expect(ids.every((id) => agentRunRecorder.isActive(id))).toBe(true);
+    expect(agentRunRecorder.finishRun(ids[0], "done")?.id).toBe(ids[0]);
+    expect(agentRunRecorder.getRun(ids[0])).not.toBeNull();
+    expect(agentRunRecorder.recordStep(ids[1], { tool: "after-overflow", args: {}, ok: true, durationMs: 1 })).not.toBeNull();
+    expect(agentRunRecorder.finishRun(ids[1], "done")?.id).toBe(ids[1]);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).agentRuns.some((r: any) => r.id === ids[1])).toBe(true);
+    for (const id of ids.slice(2)) agentRunRecorder.releaseRun(id);
+  });
+
+  it("does not delete or clear live or persisted-running runs, but clears terminal siblings", () => {
+    const active = agentRunRecorder.startRun({ source: { type: "chat" }, name: "active" });
+    const terminal = agentRunRecorder.startRun({ source: { type: "chat" }, name: "terminal" });
+    agentRunRecorder.finishRun(terminal.id, "done");
+    const diskBefore = fs.readFileSync(getConfigPath());
+    expect(agentRunRecorder.deleteRun(active.id)).toBe(false);
+    expect(fs.readFileSync(getConfigPath())).toEqual(diskBefore);
+    expect(agentRunRecorder.clearRuns()).toBe(1);
+    expect(agentRunRecorder.getRun(terminal.id)).toBeNull();
+    expect(agentRunRecorder.getRun(active.id)?.status).toBe("running");
+    expect(agentRunRecorder.isActive(active.id)).toBe(true);
+    expect(agentRunRecorder.recordStep(active.id, { tool: "still-writing", args: {}, ok: true, durationMs: 1 })).not.toBeNull();
+    expect(agentRunRecorder.finishRun(active.id, "done")?.status).toBe("done");
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).agentRuns.find((r: any) => r.id === active.id).steps).toHaveLength(1);
+    expect(agentRunRecorder.clearRuns()).toBe(1);
+    expect(agentRunRecorder.getRun(active.id)).toBeNull();
+    const persisted = agentRunRecorder.startRun({ source: { type: "chat" }, name: "no-binding" });
+    agentRunRecorder.releaseRun(persisted.id);
+    expect(agentRunRecorder.deleteRun(persisted.id)).toBe(false);
+    expect(agentRunRecorder.clearRuns()).toBe(0);
+    expect(agentRunRecorder.getRun(persisted.id)?.status).toBe("running");
+  });
+
+  it("reload during a process-owned run keeps its running state and hides terminal actions", () => {
+    const active = agentRunRecorder.startRun({ source: { type: "chat" }, name: "reload while owned" });
+    reloadConfig();
+    expect(agentRunRecorder.isActive(active.id)).toBe(true);
+    expect(agentRunRecorder.getRun(active.id)).toMatchObject({ status: "running" });
+    expect(agentRunRecorder.getRun(active.id)?.endReason).toBeUndefined();
+    expect(agentRunRecorder.listRuns()[0].status).toBe("running");
+    expect(agentRunRecorder.deleteRunDetailed(active.id)).toBe("active");
+    expect(agentRunRecorder.clearRunsDetailed()).toEqual({ deleted: 0, skipped: 1 });
+    expect(agentRunRecorder.recordStep(active.id, { tool: "after-reload", args: {}, ok: true, durationMs: 1 })).not.toBeNull();
+    expect(agentRunRecorder.finishRun(active.id, "done")?.steps).toHaveLength(1);
+    expect(agentRunRecorder.deleteRun(active.id)).toBe(true);
+  });
+
+  it("protects raw running rows during normalization before crash recovery", () => {
+    const raw = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    const run = (i: number, status: string) => ({
+      id: `run_raw_fixture_${i}`, name: `raw ${i}`, status, source: { type: "chat" },
+      startedAt: i, steps: [], variables: {}, verification: { status: "unverified" },
+    });
+    raw.agentRuns = [run(0, "running"), ...Array.from({ length: 201 }, (_, i) => run(i + 1, "done"))];
+    fs.writeFileSync(getConfigPath(), JSON.stringify(raw, null, 2));
+    reloadConfig();
+    expect(agentRunRecorder.listRuns()).toHaveLength(200);
+    expect(agentRunRecorder.getRun("run_raw_fixture_0")).toMatchObject({ status: "error", endReason: "interrupted" });
+    expect(agentRunRecorder.getRun("run_raw_fixture_1")).toBeNull();
+    expect(agentRunRecorder.getRun("run_raw_fixture_2")).toBeNull();
+    transact((draft) => { draft.agentRuns[0].name = "persisted recovered run"; });
+    const disk = JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+    expect(disk.agentRuns).toHaveLength(200);
+    expect(disk.agentRuns[0]).toMatchObject({ id: "run_raw_fixture_0", name: "persisted recovered run" });
+  });
+
+  it("denied deletion preserves result files and accepts later steps and finish", () => {
+    const run = agentRunRecorder.startRun({ source: { type: "chat" }, name: "retained artifact" });
+    const terminal = agentRunRecorder.startRun({ source: { type: "chat" }, name: "clearable" });
+    agentRunRecorder.finishRun(terminal.id, "done");
+    expect(agentRunRecorder.deleteRun(run.id)).toBe(false);
+    expect(agentRunRecorder.clearRunsDetailed()).toEqual({ deleted: 1, skipped: 1 });
+    const before = agentRunRecorder.recordStep(run.id, { tool: "before-artifact", args: {}, ok: true, durationMs: 1 });
+    expect(before).not.toBeNull();
+    const result = runResultStore.commitRunResult({
+      runId: run.id, runStartedAt: run.startedAt, templateId: "synthetic-f05", templateVersion: 1,
+      verification: { status: "unverified" },
+      terminal: { status: "done", endReason: "completed", finishedAt: Date.now() },
+      dataset: { columns: ["item"], rows: [{ item: "kept" }], sourceRowCount: 1, rejectedRowCount: 0, truncated: false },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const manifest = path.join(TEST_USER_DATA, "agent-results", run.id, "manifest.json");
+    const dataset = path.join(TEST_USER_DATA, "agent-results", run.id, "artifacts", "dataset.json");
+    expect(JSON.parse(fs.readFileSync(manifest, "utf8")).runId).toBe(run.id);
+    expect(JSON.parse(fs.readFileSync(dataset, "utf8")).rows).toEqual([["kept"]]);
+    expect(agentRunRecorder.deleteRunDetailed(run.id)).toBe("active");
+    expect(agentRunRecorder.clearRunsDetailed()).toEqual({ deleted: 0, skipped: 1 });
+    const after = agentRunRecorder.recordStep(run.id, { tool: "after-artifact", args: {}, ok: true, durationMs: 1 });
+    const finished = agentRunRecorder.finishRun(run.id, "done", undefined, { artifacts: result.artifacts });
+    expect(finished?.steps.map((step) => step.id)).toEqual([before?.id, after?.id]);
+    expect(fs.existsSync(manifest)).toBe(true);
+    expect(fs.existsSync(dataset)).toBe(true);
+    expect(runResultStore.readDatasetPreview(run.id, "dataset", 0, 10)).toMatchObject({ ok: true, value: { rows: [["kept"]] } });
+    reloadConfig();
+    expect(agentRunRecorder.getRun(run.id)?.artifacts).toHaveLength(1);
+    expect(agentRunRecorder.getRun(run.id)?.steps).toHaveLength(2);
+    expect(agentRunRecorder.deleteRunDetailed(run.id)).toBe("deleted");
+    expect(fs.existsSync(manifest)).toBe(false);
+    expect(agentRunRecorder.getRun(run.id)).toBeNull();
+  });
+
+  it("cleans terminal result files and SQLite only after an unrelated config save evicts them", { timeout: 120000 }, () => {
+    const ids = Array.from({ length: 202 }, (_, i) =>
+      agentRunRecorder.startRun({ source: { type: "chat" }, name: `owned-${i}` }).id);
+    const evicted = ids[0];
+    const initial = agentRunRecorder.getRun(evicted)!;
+    expect(ensureNewsRunResultSchema().ok).toBe(true);
+    expect(agentDbExecScript(`INSERT INTO news_run_results_v1 (run_id, title, url, source, published_at) VALUES ('${evicted}', 'synthetic', 'https://fixture.invalid/item', 'fixture.invalid', '2026-09-30T00:00:00Z')`).ok).toBe(true);
+    const committed = runResultStore.commitRunResult({
+      runId: evicted, runStartedAt: initial.startedAt, templateId: "synthetic-f05", templateVersion: 1,
+      verification: { status: "unverified" },
+      terminal: { status: "done", endReason: "completed", finishedAt: Date.now() },
+      dataset: { columns: ["item"], rows: [{ item: "synthetic" }], sourceRowCount: 1, rejectedRowCount: 0, truncated: false },
+    });
+    expect(committed.ok).toBe(true);
+    expect(agentRunRecorder.finishRun(evicted, "done")?.id).toBe(evicted);
+    const manifest = path.join(TEST_USER_DATA, "agent-results", evicted, "manifest.json");
+    const diskBefore = fs.readFileSync(getConfigPath());
+    const query = () => {
+      const db = new DatabaseSync(path.join(TEST_USER_DATA, "agent-store.sqlite"), { readOnly: true });
+      try { return db.prepare('SELECT run_id FROM "news_run_results_v1" WHERE run_id = ?').all(evicted); }
+      finally { db.close(); }
+    };
+    expect(fs.existsSync(manifest)).toBe(true);
+    expect(query()).toHaveLength(1);
+    const changed = structuredClone(getConfig());
+    changed.deviceName = "non-recorder settings save";
+    h.renameFault = { code: "EIO" };
+    expect(() => saveConfig(changed)).toThrow(/EIO/);
+    h.renameFault = null;
+    expect(fs.readFileSync(getConfigPath())).toEqual(diskBefore);
+    expect(fs.existsSync(manifest)).toBe(true);
+    expect(query()).toHaveLength(1);
+    saveConfig(changed);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).agentRuns.some((r: any) => r.id === evicted)).toBe(false);
+    expect(agentRunRecorder.getRun(evicted)).toBeNull();
+    expect(agentRunRecorder.listRuns().map((r) => r.id)).not.toContain(evicted);
+    expect(fs.existsSync(manifest)).toBe(false);
+    expect(runResultStore.readDatasetPreview(evicted, "dataset", 0, 10).ok).toBe(false);
+    expect(query()).toHaveLength(0);
+    for (const id of ids.slice(1)) agentRunRecorder.releaseRun(id);
   });
 
   it("startRun records dirId and listRuns filters by profile", () => {
@@ -198,6 +365,7 @@ describe("RunRecorder write atomicity", () => {
   beforeEach(() => {
     h.renameFault = null;
     h.windows = [];
+    closeAgentDb(); // Both handles belong to this mocked TEST_USER_DATA fixture.
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
     // Settle device identity before any fault is armed: getConfig() assigns a
@@ -208,6 +376,7 @@ describe("RunRecorder write atomicity", () => {
   afterEach(() => {
     h.renameFault = null;
     h.windows = [];
+    closeAgentDb(); // Release the owned reader/writer before Windows cleanup.
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
     reloadConfig();
   });
@@ -341,26 +510,26 @@ describe("RunRecorder write atomicity", () => {
     expect(sent).toEqual([]);
   });
 
-  it("a failed deleteRun / clearRuns keeps history and the webContents mapping", () => {
+  it("a failed terminal deleteRun / clearRuns leaves history and disk unchanged", () => {
     const { wc } = fakeWindow(4);
     const a = agentRunRecorder.startRun({ source: { type: "chat" }, name: "d1", webContents: wc });
+    agentRunRecorder.finishRun(a.id, "done");
+    const diskBefore = fs.readFileSync(getConfigPath());
 
     h.renameFault = { code: "EIO" };
     expect(() => agentRunRecorder.deleteRun(a.id)).toThrow(/EIO/);
     h.renameFault = null;
-    expect(agentRunRecorder.getRun(a.id)).not.toBeNull();
-    expect((agentRunRecorder as any).runWebContents.get(a.id)).toBe(wc);
+    expect(fs.readFileSync(getConfigPath())).toEqual(diskBefore);
+    expect(agentRunRecorder.getRun(a.id)?.status).toBe("done");
 
     h.renameFault = { code: "EIO" };
     expect(() => agentRunRecorder.clearRuns()).toThrow(/EIO/);
     h.renameFault = null;
-    expect(agentRunRecorder.listRuns().length).toBe(1);
-    expect((agentRunRecorder as any).runWebContents.get(a.id)).toBe(wc);
+    expect(fs.readFileSync(getConfigPath())).toEqual(diskBefore);
+    expect(agentRunRecorder.listRuns()).toHaveLength(1);
 
-    // A later legal clear still works and releases the mapping.
     expect(agentRunRecorder.clearRuns()).toBe(1);
-    expect(agentRunRecorder.listRuns().length).toBe(0);
-    expect((agentRunRecorder as any).runWebContents.has(a.id)).toBe(false);
+    expect(agentRunRecorder.listRuns()).toHaveLength(0);
   });
 
   it("rejects a trace over the real byte budget without changing disk, maps or events", { timeout: 20_000 }, () => {

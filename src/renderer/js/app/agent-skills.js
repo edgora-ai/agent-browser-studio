@@ -155,6 +155,7 @@
   };
 
   // ══════ Skill Marketplace ══════
+  var skillMarketSeq = 0;
   agentBrowser.skillMarket = function() {
     document.getElementById('skill-market-list').innerHTML = '<div class="loading">Loading marketplace...</div>';
     var search = document.getElementById('skill-market-search');
@@ -167,8 +168,10 @@
     var list = document.getElementById('skill-market-list');
     var search = document.getElementById('skill-market-search');
     var filter = search ? search.value.trim() : '';
+    var seq = ++skillMarketSeq;
     list.innerHTML = '<div class="loading">Loading marketplace...</div>';
     R.agent.skills.marketplace(filter).then(function(skills) {
+      if (seq !== skillMarketSeq) return;
       if (!skills || skills.length === 0) {
         list.innerHTML = '<div class="empty-state">No matching skills. Add a local skill or import a shared catalog.</div>';
         return;
@@ -176,6 +179,7 @@
       list.innerHTML = skills.map(function(s) { return renderSkillCard(s, true); }).join('');
       bindSkillCardActions(list, skills, true);
     }).catch(function(e) {
+      if (seq !== skillMarketSeq) return;
       list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message || String(e)) + '</div>';
     });
   };

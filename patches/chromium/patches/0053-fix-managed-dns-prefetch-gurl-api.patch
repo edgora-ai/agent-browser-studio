@@ -1,0 +1,44 @@
+diff --git a/content/browser/preloading/preconnect/preconnect_manager_impl.cc b/content/browser/preloading/preconnect/preconnect_manager_impl.cc
+--- a/content/browser/preloading/preconnect/preconnect_manager_impl.cc
++++ b/content/browser/preloading/preconnect/preconnect_manager_impl.cc
+@@ -28,6 +28,10 @@
+ namespace content {
+ 
+ const bool kAllowCredentialsOnPreconnectByDefault = true;
++
++bool PreconnectManager::Delegate::ShouldPreresolveThroughProxy() {
++  return false;
++}
+ 
+ std::unique_ptr<PreconnectManager> PreconnectManager::Create(
+     base::WeakPtr<PreconnectManager::Delegate> delegate,
+@@ -400,7 +404,7 @@
+ 
+   // HostResolver's ANY source sends .local address queries to the system
+   // resolver even in secure mode. Preserve the proxy skip for those names.
+-  const auto host = job->url.host_piece();
++  const auto host = job->url.host();
+   const bool multicast_name =
+       host.ends_with(".local") || host.ends_with(".local.");
+   const bool allow_proxy_dns =
+diff --git a/content/public/browser/preconnect_manager.h b/content/public/browser/preconnect_manager.h
+--- a/content/public/browser/preconnect_manager.h
++++ b/content/public/browser/preconnect_manager.h
+@@ -62,7 +62,7 @@
+ //  - All methods of the class must be called on the UI thread.
+ class CONTENT_EXPORT PreconnectManager {
+  public:
+-  class Delegate {
++  class CONTENT_EXPORT Delegate {
+    public:
+     virtual ~Delegate() = default;
+ 
+@@ -83,7 +83,7 @@
+ 
+     // Opt-in for DNS-only hints when the embedder has a strict, proxied DNS
+     // route. Ordinary proxy preconnects must continue to skip local DNS.
+-    virtual bool ShouldPreresolveThroughProxy() { return false; }
++    virtual bool ShouldPreresolveThroughProxy();
+   };
+ 
+   // An observer for testing.

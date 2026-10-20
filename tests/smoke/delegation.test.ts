@@ -9,7 +9,7 @@ import * as path from "node:path";
 const ROOT = path.resolve(__dirname, "../..");
 
 // Minimal DOM mock with the structure delegation.js queries
-function makeMockElement(tag, attrs = {}, parent = null) {
+function makeMockElement(tag: string, attrs: Record<string, string> = {}, parent = null) {
   const el: any = {
     tagName: tag.toUpperCase(),
     _attrs: { ...attrs },

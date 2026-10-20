@@ -14,9 +14,23 @@ import {
   judgeInjectionProbe,
   shouldBlockInjectionProbe,
 } from "../../src/main/services/firefox-fingerprint.js";
-import { buildBrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
+import { buildBrowserFingerprintConfig, type BrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
 import { FIREFOX_NATIVE_CONFIG_PREF } from "../../src/main/services/firefox-native-capabilities.js";
-import type { BrowserFingerprintMeta, BrowserFingerprintConfig } from "../../src/main/types.js";
+import type { BrowserFingerprintMeta } from "../../src/main/types.js";
+
+type InjectedCollection<T> = T[] & {
+  item(index: number): T | null;
+  namedItem(name: string): T | null;
+};
+type InjectedMime = BrowserFingerprintConfig["pluginProfile"]["mimeTypes"][number];
+type InjectedPlugin = Omit<BrowserFingerprintConfig["pluginProfile"]["plugins"][number], "mimeTypes"> & {
+  mimeTypes: InjectedCollection<InjectedMime>;
+};
+
+function requireInjectedItem<T>(item: T | null): T {
+  if (item === null) throw new Error("Expected injected plugin/mime item is missing");
+  return item;
+}
 
 function meta(overrides: Partial<BrowserFingerprintMeta> = {}): BrowserFingerprintMeta {
   return {
@@ -156,8 +170,8 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain("latitude: cfg.geolocation.latitude");
   });
 
-  it("patches media devices, speech voices, storage quota and audio noise", () => {
-    expect(script).toContain('"enumerateDevices"');
+  it("keeps media enumeration native while patching speech voices, storage quota and audio noise", () => {
+    expect(script).not.toContain('Object.defineProperty(devicesProto, "enumerateDevices"');
     expect(script).toContain('speechSynthesis.getVoices');
     expect(script).toContain("cfg.storageQuotaBytes");
     expect(script).toContain("copyToChannel");
@@ -169,20 +183,13 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain("getByteTimeDomainData");
   });
 
-  it("reaches OffscreenCanvas 2d + WebGL and WebGPU adapter identity (Slice 79.1)", () => {
-    // OffscreenCanvas 2D noise — same deterministic seed family as the page.
+  it("retains OffscreenCanvas 2d noise without page-only WebGL or WebGPU identity patches", () => {
     expect(script).toContain("OffscreenCanvasRenderingContext2D.prototype");
     expect(script).toContain('patchProto(typeof OffscreenCanvasRenderingContext2D !== "undefined" ? OffscreenCanvasRenderingContext2D.prototype : null)');
-    // Shared WebGL patch helper used by BOTH the page canvas and offscreen.
-    expect(script).toContain("function patchWebglContext(ctx)");
-    expect(script).toContain('typeof OffscreenCanvas !== "undefined" ? OffscreenCanvas.prototype : null');
-    // Firefox 154 exposes GPUAdapter.info as a SameObject attribute. Patch the
-    // shared native info prototype so adapter and device identity agree while
-    // subgroup sizes/features/limits remain native.
-    expect(script).toContain('typeof GPUAdapterInfo === "function"');
-    expect(script).toContain('var fields = ["vendor", "architecture", "device", "description"]');
-    expect(script).toContain('Object.defineProperty(Ctor.prototype, field');
-    expect(script).toContain("GPUDevice.adapterInfo");
+    // Engine preferences, not fabricated JS extensions, supply WebGL identity.
+    expect(script).not.toContain("function patchWebglContext(ctx)");
+    expect(script).not.toContain("UNMASKED_VENDOR =");
+    expect(script).not.toContain('Object.defineProperty(Ctor.prototype, field');
     expect(script).not.toContain('typeof adapter.info === "function"');
     expect(script).not.toContain("out.subgroupMinSize");
   });
@@ -247,10 +254,12 @@ describe("buildFirefoxManagedIdentity", () => {
     expect(bundle.config.appVersion).toBe("5.0 (Windows)");
     expect(bundle.prefs["general.useragent.override"]).toBe(bundle.userAgent);
     expect(bundle.prefs["dom.maxHardwareConcurrency"]).toBe(bundle.config.hardwareConcurrency);
-    expect(bundle.nativePrefs).toEqual(buildFirefoxNativeFingerprintPrefs(bundle.config, "138.0"));
+    expect(bundle.nativePrefs).toEqual(buildFirefoxNativeFingerprintPrefs(bundle.nativeConfig, "138.0"));
+    expect(bundle.config.webgpu.mode).toBe("native");
+    expect(bundle.nativeConfig.webgpu.mode).toBe("webgl");
     const encoded = bundle.nativePrefs[FIREFOX_NATIVE_CONFIG_PREF];
     expect(typeof encoded).toBe("string");
-    expect(JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"))).toEqual(bundle.config);
+    expect(JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"))).toEqual(bundle.nativeConfig);
     expect(bundle.prefs[FIREFOX_NATIVE_CONFIG_PREF]).toBeUndefined();
     expect(bundle.preloadScript).toContain(bundle.config.seed.toString());
     expect(bundle.preloadScript).toContain("cfg.screen.width");
@@ -258,7 +267,7 @@ describe("buildFirefoxManagedIdentity", () => {
 });
 
 describe("injection self-check probe (Slice 79.2)", () => {
-  const exp = buildInjectionProbeExpectation(buildBrowserFingerprintConfig(meta({})));
+  const exp = buildInjectionProbeExpectation(buildBrowserFingerprintConfig(meta({}), null));
 
   it("expression carries a marker, reads webdriver and double-draws a canvas", () => {
     const expression = buildInjectionProbeExpression();
@@ -360,9 +369,16 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
       open() {}
       send() {}
     }
-    class NavigatorStub {}
+    class NavigatorStub {
+      // The preload installs prototype getters; declarations emit no shadowing fields.
+      declare readonly platform: string;
+      declare readonly plugins: InjectedCollection<InjectedPlugin>;
+      declare readonly mimeTypes: InjectedCollection<InjectedMime>;
+      declare readonly pdfViewerEnabled: boolean;
+    }
     class WindowStub {}
     class ScreenStub {
+      declare readonly width: number;
       orientation: any;
       constructor(orientation: any) { this.orientation = orientation; }
     }
@@ -412,7 +428,13 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
     // Real navigators expose these on the PROTOTYPE (accessors), not as own
     // instance fields — class fields here would shadow the shim's prototype
     // writes and the persona re-application assertions would never hold.
-    class WorkerNavigator {}
+    class WorkerNavigator {
+      declare readonly platform: string;
+      declare readonly oscpu: string;
+      declare readonly webdriver: boolean;
+      declare readonly maxTouchPoints: number;
+      declare readonly languages: string[];
+    }
     const navigatorProto = WorkerNavigator.prototype as any;
     const hostFields: Record<string, unknown> = {
       platform: hostPlatform,
@@ -459,9 +481,9 @@ describe("preload executes in a stubbed Firefox realm (G2/G3/G4 runtime smoke)",
       expect(world.navigator.plugins[0].name).toBe("Internal PDF Plugin");
       expect(world.navigator.plugins[0].filename).toBe("pdfium.dll");
       expect(world.navigator.plugins.namedItem("Widevine Content Decryption Module")).not.toBeNull();
-      expect(world.navigator.plugins.item(1).mimeTypes.length).toBe(0);
+      expect(requireInjectedItem(world.navigator.plugins.item(1)).mimeTypes.length).toBe(0);
       expect(world.navigator.mimeTypes.length).toBe(1);
-      expect(world.navigator.mimeTypes.namedItem("application/pdf").suffixes).toBe("pdf");
+      expect(requireInjectedItem(world.navigator.mimeTypes.namedItem("application/pdf")).suffixes).toBe("pdf");
       expect(world.navigator.pdfViewerEnabled).toBe(true);
       expect(world.screen.width).toBe(config.screen.width);
 

@@ -1,28 +1,140 @@
 // Update manager unit tests — version-aware release store, staged install,
 // pin + rollback and crash-loop auto-rollback.
-import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import * as crypto from "node:crypto";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), "agent-browser-update-manager-test");
+// Both providers use this actual hoisted binding, not separately reconstructed
+// names. Keep the root inode alive until afterAll; per-case cleanup removes only
+// verified physical descendants created during this fixture lifetime.
+const fixture = await vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const os = await import("node:os");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-update-manager-test-")));
+  const identity = fs.lstatSync(root);
+  const marker = path.join(root, ".fixture-owner");
+  const owner = JSON.stringify({ role: "update-manager", root, dev: identity.dev, ino: identity.ino });
+  fs.writeFileSync(marker, owner, { flag: "wx", mode: 0o600 });
+  const markerIdentity = fs.lstatSync(marker);
+  const reserved = new Map<string, { dev: number; ino: number }>();
+  const allocatedArchives = new Set<string>();
+  // Allocate absent archive names inside exclusively owned directories. If a
+  // writer uses streams, observe their real close before claiming/cleaning the
+  // published inode; do not pre-create a file that defeats ZIP no-clobber.
+  const archiveStreams = new Map<import("node:fs").WriteStream, {
+    path: string; closed: Promise<void>; error?: Error;
+  }>();
+  function observeWriteStream(stream: import("node:fs").WriteStream, destination: import("node:fs").PathLike): void {
+    if (typeof destination !== "string" || !allocatedArchives.has(destination) ||
+        !destination.startsWith(root + path.sep) || !destination.endsWith(".zip")) return;
+    const record: { path: string; closed: Promise<void>; error?: Error } = {
+      path: destination,
+      closed: new Promise<void>((resolve) => stream.once("close", resolve)),
+    };
+    stream.once("error", (error) => { record.error = error; });
+    archiveStreams.set(stream, record);
+  }
+  async function awaitArchiveClose(p: string): Promise<void> {
+    for (const [stream, record] of archiveStreams) {
+      if (record.path !== p && !record.path.startsWith(p + path.sep)) continue;
+      await record.closed;
+      if (!stream.closed) throw new Error("Archive stream emitted close without closing: " + record.path);
+      archiveStreams.delete(stream);
+      if (record.error) throw record.error;
+    }
+  }
+  function assertTree(p: string): void {
+    const st = fs.lstatSync(p);
+    const acquired = reserved.get(p);
+    if (st.isSymbolicLink() || (!st.isDirectory() && (!st.isFile() || st.nlink !== 1)) ||
+        (acquired && (st.dev !== acquired.dev || st.ino !== acquired.ino))) {
+      throw new Error("Refusing non-physical or replaced fixture cleanup: " + p);
+    }
+    if (st.isDirectory()) for (const name of fs.readdirSync(p)) assertTree(path.join(p, name));
+  }
+  function children(): string[] {
+    const st = fs.lstatSync(root);
+    const mark = fs.lstatSync(marker);
+    if (!st.isDirectory() || st.isSymbolicLink() || st.dev !== identity.dev || st.ino !== identity.ino ||
+        fs.realpathSync(root) !== root || !mark.isFile() || mark.isSymbolicLink() || mark.nlink !== 1 ||
+        mark.dev !== markerIdentity.dev || mark.ino !== markerIdentity.ino || fs.readFileSync(marker, "utf8") !== owner) {
+      throw new Error("Refusing unowned fixture cleanup: " + root);
+    }
+    const names = fs.readdirSync(root).filter((name) => name !== ".fixture-owner");
+    for (const name of names) {
+      const p = path.join(root, name);
+      if (name !== "updates" && name !== "audit.log.jsonl" && !reserved.has(p)) {
+        throw new Error("Unexpected fixture role: " + name);
+      }
+      assertTree(p);
+    }
+    return names;
+  }
+  function makeDirectory(prefix: string): string {
+    children();
+    if (!/^ab-upd-(manifest-[a-z0-9-]+|payload|archive)-$/.test(prefix)) throw new Error("Invalid fixture role");
+    const dir = fs.mkdtempSync(path.join(root, prefix));
+    reserved.set(dir, fs.lstatSync(dir));
+    return dir;
+  }
+  function archivePath(name: string): string {
+    if (!/^[a-z0-9-]+$/.test(name)) throw new Error("Invalid archive fixture name");
+    const p = path.join(makeDirectory("ab-upd-archive-"), name + ".zip");
+    allocatedArchives.add(p);
+    return p;
+  }
+  async function acquireArchive(p: string): Promise<void> {
+    await awaitArchiveClose(p);
+    children();
+    if (!allocatedArchives.has(p) || !reserved.has(path.dirname(p))) throw new Error("Refusing unallocated archive acquisition");
+    const st = fs.lstatSync(p);
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) throw new Error("Archive publication is not an owned regular file");
+    reserved.set(p, { dev: st.dev, ino: st.ino });
+  }
+  async function remove(p: string): Promise<void> {
+    children();
+    await awaitArchiveClose(root);
+    children();
+    if (!reserved.has(p) || !p.startsWith(root + path.sep)) throw new Error("Refusing unowned fixture removal");
+    assertTree(p);
+    fs.rmSync(p, { recursive: true });
+    reserved.delete(p);
+    allocatedArchives.delete(p);
+  }
+  async function clear(): Promise<void> {
+    children();
+    await awaitArchiveClose(root);
+    for (const name of children()) fs.rmSync(path.join(root, name), { recursive: true });
+    reserved.clear();
+    allocatedArchives.clear();
+  }
+  return { root, makeDirectory, archivePath, acquireArchive, observeWriteStream, remove, clear,
+    dispose: async () => { await clear(); fs.unlinkSync(marker); fs.rmdirSync(root); } };
+});
+const TEST_USER_DATA = fixture.root;
 
-vi.mock("electron", () => {
-  const path = require("node:path");
-  const os = require("node:os");
-  const TEST_DATA = path.join(os.tmpdir(), "agent-browser-update-manager-test");
+afterAll(() => fixture.dispose());
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
   return {
-    app: {
-      getPath: (name: string) => {
-        if (name === "userData") return TEST_DATA;
-        if (name === "home") return TEST_DATA;
-        return "/tmp";
-      },
-      getAppPath: () => path.resolve(process.cwd()),
+    ...actual,
+    createWriteStream: (...args: Parameters<typeof actual.createWriteStream>) => {
+      const stream = actual.createWriteStream(...args);
+      fixture.observeWriteStream(stream, args[0]);
+      return stream;
     },
   };
 });
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: (_name: string) => fixture.root,
+    getAppPath: () => require("node:path").resolve(process.cwd()),
+  },
+}));
 
 import {
   compareVersions,
@@ -37,7 +149,7 @@ import {
   getUpdateState,
   getCurrentVersion,
 } from "../../src/main/services/update-manager.js";
-import { writeZipArchive } from "../../src/main/services/zip-writer.js";
+import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
 import { resetSecretStorageForTests } from "../../src/main/services/secrets.js";
 import { listAudit } from "../../src/main/services/audit-log.js";
 
@@ -45,13 +157,13 @@ const MANIFESTS: string[] = [];
 const PAYLOAD_DIRS: string[] = [];
 
 function makeManifestDir(name: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ab-upd-manifest-" + name + "-"));
+  const dir = fixture.makeDirectory("ab-upd-manifest-" + name + "-");
   MANIFESTS.push(dir);
   return dir;
 }
 
 function makePayloadDir(version: string, marker: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ab-upd-payload-"));
+  const dir = fixture.makeDirectory("ab-upd-payload-");
   fs.mkdirSync(path.join(dir, "payload"), { recursive: true });
   fs.writeFileSync(path.join(dir, "payload", "version.txt"), version);
   fs.writeFileSync(path.join(dir, "payload", "marker.json"), JSON.stringify({ marker, version }));
@@ -69,17 +181,28 @@ function sha256File(p: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 }
 
-beforeEach(() => {
-  fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+function assertArchiveVersion(zipPath: string, version: string): void {
+  const bytes = fs.readFileSync(zipPath);
+  const entries = readZipEntries(bytes);
+  expect(entries).toHaveLength(1);
+  expect(entries[0].name).toBe("version.txt");
+  // Extraction verifies the actual ZIP payload's size and CRC, not just its
+  // creation receipt or a metadata-only hash expectation.
+  expect(extractZipEntry(bytes, entries[0]).toString("utf8")).toBe(version);
+}
+
+beforeEach(async () => {
+  await fixture.clear();
   fs.mkdirSync(TEST_USER_DATA, { recursive: true });
   delete process.env.AGENT_BROWSER_UPDATE_MANIFEST;
 });
 
-afterEach(() => {
-  for (const d of MANIFESTS.splice(0)) fs.rmSync(d, { recursive: true, force: true });
-  for (const d of PAYLOAD_DIRS.splice(0)) fs.rmSync(d, { recursive: true, force: true });
-  fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
+afterEach(async () => {
   resetSecretStorageForTests();
+  for (const d of MANIFESTS.splice(0)) await fixture.remove(d);
+  for (const d of PAYLOAD_DIRS.splice(0)) await fixture.remove(d);
+  // Includes both exclusively reserved ZIPs, including the hash-less archive.
+  await fixture.clear();
 });
 
 describe("version comparison", () => {
@@ -195,39 +318,67 @@ describe("install / activate / rollback", () => {
   });
 
   it("refuses a hash-less archive payload (spoofable update)", async () => {
-    const zipPath = path.join(os.tmpdir(), "ab-upd-nohash-" + Date.now() + ".zip");
-    await writeZipArchive(zipPath, [
+    const zipPath = fixture.archivePath("nohash");
+    expect(fs.existsSync(zipPath), "exclusive input must remain absent until ZIP publication").toBe(false);
+    const written = await writeZipArchive(zipPath, [
       { name: "version.txt", data: Buffer.from("3.0.0") },
     ]);
+    await fixture.acquireArchive(zipPath);
+    expect(fs.statSync(zipPath).size).toBe(written.bytes);
+    assertArchiveVersion(zipPath, "3.0.0");
+    const inputHash = sha256File(zipPath);
+    const before = getUpdateState();
     const dir = makeManifestDir("nohash");
     const manifestPath = writeManifest(dir, "update.json", {
       product: "agent-browser-studio",
       releases: [{ version: "3.0.0", url: zipPath }],
     });
     await expect(installRelease("3.0.0", manifestPath)).rejects.toThrow(/no sha256|hash-less/i);
+    expect(fs.existsSync(path.join(TEST_USER_DATA, "updates", "releases", "3.0.0", "payload"))).toBe(false);
+    expect(fs.existsSync(path.join(TEST_USER_DATA, "updates", "state.json"))).toBe(false);
+    expect(getUpdateState()).toEqual(before);
+    expect(sha256File(zipPath)).toBe(inputHash);
+    assertArchiveVersion(zipPath, "3.0.0");
   });
 
   it("verifies sha256 for archive payloads and rejects mismatches", async () => {
-    const zipPath = path.join(os.tmpdir(), "ab-upd-payload-" + Date.now() + ".zip");
-    await writeZipArchive(zipPath, [
+    const zipPath = fixture.archivePath("sha256-payload");
+    expect(fs.existsSync(zipPath), "exclusive input must remain absent until ZIP publication").toBe(false);
+    const written = await writeZipArchive(zipPath, [
       { name: "version.txt", data: Buffer.from("2.0.0") },
     ]);
+    await fixture.acquireArchive(zipPath);
+    expect(fs.statSync(zipPath).size).toBe(written.bytes);
+    assertArchiveVersion(zipPath, "2.0.0");
     const goodSha = sha256File(zipPath);
     const dir = makeManifestDir("zip");
     const goodManifest = writeManifest(dir, "good.json", {
       product: "agent-browser-studio",
       releases: [{ version: "2.0.0", url: zipPath, sha256: goodSha }],
     });
-    let state = await installRelease("2.0.0", goodManifest);
+    const state = await installRelease("2.0.0", goodManifest);
     expect(state.installed.some((i) => i.version === "2.0.0")).toBe(true);
-    expect(fs.readFileSync(path.join(TEST_USER_DATA, "updates", "releases", "2.0.0", "payload", "version.txt"), "utf8")).toBe("2.0.0");
+    const releaseDir = path.join(TEST_USER_DATA, "updates", "releases", "2.0.0");
+    expect(fs.readFileSync(path.join(releaseDir, "payload", "version.txt"), "utf8")).toBe("2.0.0");
+    expect(JSON.parse(fs.readFileSync(path.join(releaseDir, "meta.json"), "utf8"))).toMatchObject({ version: "2.0.0", sha256: goodSha, url: zipPath });
+    const statePath = path.join(TEST_USER_DATA, "updates", "state.json");
+    const storedState = fs.readFileSync(statePath);
+    const stored = JSON.parse(storedState.toString("utf8"));
+    expect(stored.installed.find((item: any) => item.version === "2.0.0")).toMatchObject({ status: "staged", sha256: goodSha, url: zipPath });
+    expect(getUpdateState().installed.find((item) => item.version === "2.0.0")).toMatchObject({ status: "staged", sha256: goodSha });
+    expect(listAudit(100, { category: "updates" }).some((entry) => entry.action === "install" && entry.target === "2.0.0")).toBe(true);
 
     const badManifest = writeManifest(dir, "bad.json", {
       product: "agent-browser-studio",
       releases: [{ version: "2.0.1", url: zipPath, sha256: "f".repeat(64) }],
     });
     await expect(installRelease("2.0.1", badManifest)).rejects.toThrow(/sha256 mismatch/i);
-    fs.rmSync(zipPath, { force: true });
+    expect(fs.existsSync(path.join(TEST_USER_DATA, "updates", "releases", "2.0.1", "payload"))).toBe(false);
+    expect(fs.readFileSync(statePath)).toEqual(storedState);
+    expect(getUpdateState().installed.find((item) => item.version === "2.0.1")).toBeUndefined();
+    expect(sha256File(zipPath)).toBe(goodSha);
+    assertArchiveVersion(zipPath, "2.0.0");
+    await fixture.remove(zipPath);
   });
 
   it("rolls back to the previous known-good release", async () => {

@@ -1,0 +1,720 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index eced4913ed..be171b50d8 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -378,11 +378,12 @@
+ // one of these switches and should exit now.
+ bool HandleVersionSwitches(const base::CommandLine& command_line) {
+   if (command_line.HasSwitch(roxy::kAgentBrowserCapabilitiesSwitch)) {
+-    UNSAFE_TODO(printf("%s\n%s\n%s\n%s\n",
++    UNSAFE_TODO(printf("%s\n%s\n%s\n%s\n%s\n",
+                        roxy::kAgentBrowserProxyAuthCapability,
+                        roxy::kAgentBrowserQuicProxyCapability,
+                        roxy::kAgentBrowserFingerprintConfigCapability,
+-                       roxy::kAgentBrowserGoogleApiKeyInfoBarCapability));
++                       roxy::kAgentBrowserGoogleApiKeyInfoBarCapability,
++                       roxy::kAgentBrowserLocalDnsPolicyCapability));
+     return true;
+   }
+   if (command_line.HasSwitch(roxy::kCapabilitiesSwitch)) {
+diff --git a/chrome/browser/net/roxy_proxy_auth.h b/chrome/browser/net/roxy_proxy_auth.h
+index e1f0ad097c..ed01b62418 100644
+--- a/chrome/browser/net/roxy_proxy_auth.h
++++ b/chrome/browser/net/roxy_proxy_auth.h
+@@ -35,6 +35,8 @@
+     "agent-browser-fingerprint-config-v1";
+ inline constexpr char kAgentBrowserGoogleApiKeyInfoBarCapability[] =
+     "agent-browser-google-api-key-infobar-v1";
++inline constexpr char kAgentBrowserLocalDnsPolicyCapability[] =
++    "agent-browser-local-dns-policy-v1";
+ 
+ // Loads and deletes the one-shot credential file before child processes are
+ // started. Calling this more than once has no effect.
+diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/net/stub_resolver_config_reader.cc
+index e2ae118677..121584f9a7 100644
+--- a/chrome/browser/net/stub_resolver_config_reader.cc
++++ b/chrome/browser/net/stub_resolver_config_reader.cc
+@@ -327,6 +327,13 @@
+     UpdateNetworkService(false /* record_metrics */);
+ }
+ 
++// static
++bool StubResolverConfigReader::IsManagedSecureDnsEnabled() {
++  const auto& config = blink::RoxyFingerprintConfig::Get();
++  return config.enabled() && config.secure_dns_enabled() &&
++         !config.secure_dns_templates().empty();
++}
++
+ bool StubResolverConfigReader::GetInsecureStubResolverEnabled() {
+   return local_state_->GetBoolean(prefs::kBuiltInDnsClientEnabled);
+ }
+@@ -357,9 +364,7 @@
+   // (no fingerprint config) keep stock Chromium behavior.
+   const blink::RoxyFingerprintConfig& roxy_config =
+       blink::RoxyFingerprintConfig::Get();
+-  const bool managed_secure_dns =
+-      roxy_config.enabled() && roxy_config.secure_dns_enabled() &&
+-      !roxy_config.secure_dns_templates().empty();
++  const bool managed_secure_dns = IsManagedSecureDnsEnabled();
+   if (managed_secure_dns) {
+     secure_dns_mode = net::SecureDnsMode::kSecure;
+     is_managed = true;
+diff --git a/chrome/browser/net/stub_resolver_config_reader.h b/chrome/browser/net/stub_resolver_config_reader.h
+index 0cc9e5ac54..0fe21b5d62 100644
+--- a/chrome/browser/net/stub_resolver_config_reader.h
++++ b/chrome/browser/net/stub_resolver_config_reader.h
+@@ -99,6 +99,11 @@
+   SecureDnsConfig GetSecureDnsConfiguration(
+       bool force_check_parental_controls_for_automatic_mode);
+ 
++  // The same browser-owned managed strict DoH opt-in used to configure the
++  // stub resolver. Keeps default NetworkContextParams' local-DNS deny policy
++  // separate from this path without forwarding fingerprint data.
++  static bool IsManagedSecureDnsEnabled();
++
+   bool GetInsecureStubResolverEnabled();
+ 
+   // Updates the network service with the current configuration.
+diff --git a/chrome/browser/net/system_network_context_manager.cc b/chrome/browser/net/system_network_context_manager.cc
+index e1baad6622..81ffddac9b 100644
+--- a/chrome/browser/net/system_network_context_manager.cc
++++ b/chrome/browser/net/system_network_context_manager.cc
+@@ -80,6 +80,7 @@
+ #include "sandbox/policy/sandbox_type.h"
+ #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
+ #include "services/network/network_service.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
+ #include "services/network/public/cpp/features.h"
+ #include "services/network/public/cpp/network_switches.h"
+@@ -969,6 +970,14 @@
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+ 
++  // ProfileNetworkContextService also uses this common defaults entry point,
++  // including off-the-record/storage-partition contexts and service restarts.
++  // The opt-in works without a fingerprint config (native/off mode). Explicit
++  // managed strict DoH keeps the existing secure-only, proxy-routed resolver.
++  network_context_params->agent_browser_local_dns_policy =
++      network::ParseAgentBrowserLocalDnsPolicy(
++          command_line, StubResolverConfigReader::IsManagedSecureDnsEnabled());
++
+   // TODO(eroman): Figure out why this doesn't work in single-process mode,
+   // or if it does work, now.
+   // Should be possible now that a private isolate is used.
+diff --git a/chrome/browser/net/system_network_context_manager_browsertest.cc b/chrome/browser/net/system_network_context_manager_browsertest.cc
+index df86c47237..976418fab2 100644
+--- a/chrome/browser/net/system_network_context_manager_browsertest.cc
++++ b/chrome/browser/net/system_network_context_manager_browsertest.cc
+@@ -15,6 +15,7 @@
+ #include "base/strings/strcat.h"
+ #include "base/test/bind.h"
+ #include "base/test/run_until.h"
++#include "base/test/scoped_command_line.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/test_future.h"
+ #include "base/test/values_test_util.h"
+@@ -57,6 +58,7 @@
+ #include "net/dns/mock_host_resolver.h"
+ #include "net/net_buildflags.h"
+ #include "sandbox/policy/features.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/cpp/features.h"
+ #include "services/network/public/cpp/network_service_buildflags.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+@@ -966,6 +968,34 @@
+   base::test::ScopedFeatureList scoped_feature_list_;
+ };
+ 
++IN_PROC_BROWSER_TEST_F(SystemNetworkContextManagerBrowsertest,
++                       AgentBrowserLocalDnsPolicyDefaultsWithoutFingerprint) {
++  auto* manager = g_browser_process->system_network_context_manager();
++  EXPECT_FALSE(manager->CreateDefaultNetworkContextParams()
++                   ->agent_browser_local_dns_policy);
++  base::test::ScopedCommandLine scoped_command_line;
++  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
++      network::kAgentBrowserLocalDnsPolicySwitch,
++      network::kAgentBrowserProxyLocalDnsDeny);
++  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
++      network::kAgentBrowserProxyBootstrapHostSwitch, "proxy.example");
++  auto system_params = manager->CreateDefaultNetworkContextParams();
++  // Profiles (including OTR/storage partitions) use ConfigureDefault directly,
++  // not CreateDefault. Check that common path and typed cloning too.
++  auto profile_params = network::mojom::NetworkContextParams::New();
++  manager->ConfigureDefaultNetworkContextParams(profile_params.get());
++  ASSERT_TRUE(system_params->agent_browser_local_dns_policy);
++  ASSERT_TRUE(profile_params->agent_browser_local_dns_policy);
++  EXPECT_EQ(network::BuildAgentBrowserHostMappingRules(
++                system_params->agent_browser_local_dns_policy.get()),
++            network::BuildAgentBrowserHostMappingRules(
++                profile_params->agent_browser_local_dns_policy.get()));
++  auto cloned = profile_params->agent_browser_local_dns_policy.Clone();
++  EXPECT_EQ(network::BuildAgentBrowserHostMappingRules(cloned.get()),
++            "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1, "
++            "EXCLUDE proxy.example");
++}
++
+ class SystemNetworkContextManagerWPADQuickCheckBrowsertest
+     : public SystemNetworkContextManagerBrowsertest,
+       public testing::WithParamInterface<bool> {
+diff --git a/services/network/network_context.cc b/services/network/network_context.cc
+index 789de76a8d..bf964e9621 100644
+--- a/services/network/network_context.cc
++++ b/services/network/network_context.cc
+@@ -141,6 +141,7 @@
+ #include "services/network/proxy_config_service_mojo.h"
+ #include "services/network/proxy_lookup_request.h"
+ #include "services/network/proxy_resolving_socket_factory_mojo.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/cpp/cert_verifier/mojo_cert_verifier.h"
+ #include "services/network/public/cpp/constants.h"
+ #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
+@@ -2252,8 +2253,9 @@
+     private_internal_resolver =
+         network_service_->host_resolver_factory()->CreateStandaloneResolver(
+             url_request_context_->net_log(), std::move(options),
+-            /* host_mapping_rules */ "", /* enable_caching */ false,
+-            /* enable_stale */ false);
++            BuildAgentBrowserHostMappingRules(
++                params_->agent_browser_local_dns_policy.get()),
++            /* enable_caching */ false, /* enable_stale */ false);
+     private_internal_resolver->SetRequestContext(url_request_context_);
+     internal_resolver = private_internal_resolver.get();
+   }
+@@ -3229,7 +3231,13 @@
+             std::move(network_layer));
+       }));
+ 
+-  if (command_line->HasSwitch(switches::kHostResolverRules)) {
++  if (params_->agent_browser_local_dns_policy) {
++    // Install at the resolver, not only at speculative/proxy lookup call sites:
++    // proxy selection errors must not fall through to local DNS. The restricted
++    // policy takes precedence over generic mapping switches when opted in.
++    builder.set_host_mapping_rules(BuildAgentBrowserHostMappingRules(
++        params_->agent_browser_local_dns_policy.get()));
++  } else if (command_line->HasSwitch(switches::kHostResolverRules)) {
+     builder.set_host_mapping_rules(
+         command_line->GetSwitchValueASCII(switches::kHostResolverRules));
+   } else if (command_line->HasSwitch(switches::kHostRules)) {
+diff --git a/services/network/network_context_unittest.cc b/services/network/network_context_unittest.cc
+index b533388fcc..73fc0ee526 100644
+--- a/services/network/network_context_unittest.cc
++++ b/services/network/network_context_unittest.cc
+@@ -46,6 +46,7 @@
+ #include "base/test/metrics/histogram_tester.h"
+ #include "base/test/mock_entropy_provider.h"
+ #include "base/test/run_until.h"
++#include "base/test/scoped_command_line.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/simple_test_clock.h"
+ #include "base/test/task_environment.h"
+@@ -106,6 +107,7 @@
+ #include "net/cookies/site_for_cookies.h"
+ #include "net/reporting/reporting_policy.h"
+ #include "services/network/devtools_durable_msg_collector.h"
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
+ #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
+ #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
+ 
+@@ -6213,6 +6215,89 @@
+   std::vector<raw_ptr<net::ContextHostResolver, VectorExperimental>> resolvers_;
+ };
+ 
++// Captures the two production factory entry points without replacing the real
++// HostResolver/MappedHostResolver implementation.
++class AgentBrowserPolicyResolverFactory : public net::HostResolver::Factory {
++ public:
++  std::unique_ptr<net::HostResolver> CreateResolver(
++      net::HostResolverManager* manager,
++      std::string_view rules,
++      bool enable_caching,
++      bool enable_stale) override {
++    mappings.emplace_back(rules);
++    return net::HostResolver::Factory::CreateResolver(
++        manager, rules, enable_caching, enable_stale);
++  }
++  std::unique_ptr<net::HostResolver> CreateStandaloneResolver(
++      net::NetLog* net_log,
++      const net::HostResolver::ManagerOptions& options,
++      std::string_view rules,
++      bool enable_caching,
++      bool enable_stale) override {
++    mappings.emplace_back(rules);
++    return net::HostResolver::Factory::CreateStandaloneResolver(
++        net_log, options, rules, enable_caching, enable_stale);
++  }
++  std::vector<std::string> mappings;
++};
++
++TEST_F(NetworkContextTest, AgentBrowserLocalDnsPolicyReachesContextResolver) {
++  base::test::ScopedCommandLine command_line;
++  // A generic mapping must not override the restricted opt-in.
++  command_line.GetProcessCommandLine()->AppendSwitchASCII(
++      switches::kHostResolverRules, "MAP * 127.0.0.1");
++  auto factory = std::make_unique<AgentBrowserPolicyResolverFactory>();
++  auto* factory_ptr = factory.get();
++  network_service_->set_host_resolver_factory_for_testing(std::move(factory));
++  auto params = CreateNetworkContextParamsForTesting();
++  params->agent_browser_local_dns_policy =
++      mojom::AgentBrowserLocalDnsPolicy::New();
++  params->agent_browser_local_dns_policy->proxy_bootstrap_host = "proxy.example";
++  const auto rules = BuildAgentBrowserHostMappingRules(
++      params->agent_browser_local_dns_policy.get());
++  auto context = CreateContextWithParams(std::move(params));
++  EXPECT_THAT(factory_ptr->mappings, ElementsAre(rules));
++  net::HostResolver::ResolveHostParameters parameters;
++  // Hermetic even if a regression removes the mapping: no external DNS I/O.
++  parameters.source = net::HostResolverSource::LOCAL_ONLY;
++  auto request = context->url_request_context()->host_resolver()->CreateRequest(
++      net::HostPortPair("target.example", 443), net::NetworkAnonymizationKey(),
++      net::handles::kInvalidNetworkHandle, net::NetLogWithSource(), parameters);
++  net::TestCompletionCallback callback;
++  EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, request->Start(callback.callback()));
++}
++
++#if !BUILDFLAG(IS_IOS)
++TEST_F(NetworkContextTest, AgentBrowserLocalDnsPolicySurvivesConfigOverrides) {
++  auto factory = std::make_unique<AgentBrowserPolicyResolverFactory>();
++  auto* factory_ptr = factory.get();
++  network_service_->set_host_resolver_factory_for_testing(std::move(factory));
++  auto params = CreateNetworkContextParamsForTesting();
++  params->agent_browser_local_dns_policy =
++      mojom::AgentBrowserLocalDnsPolicy::New();
++  const auto rules = BuildAgentBrowserHostMappingRules(
++      params->agent_browser_local_dns_policy.get());
++  auto context = CreateContextWithParams(std::move(params));
++  net::DnsConfigOverrides overrides;
++  overrides.secure_dns_mode = net::SecureDnsMode::kOff;
++  mojo::Remote<mojom::HostResolver> resolver;
++  context->CreateHostResolver(overrides,
++                              resolver.BindNewPipeAndPassReceiver());
++  EXPECT_THAT(factory_ptr->mappings, ElementsAre(rules, rules));
++  base::RunLoop run_loop;
++  auto parameters = mojom::ResolveHostParameters::New();
++  parameters->source = net::HostResolverSource::LOCAL_ONLY;
++  mojo::PendingRemote<mojom::ResolveHostClient> response;
++  TestResolveHostClient client(&response, &run_loop);
++  resolver->ResolveHost(mojom::HostResolverHost::NewHostPortPair(
++                            net::HostPortPair("target.example", 443)),
++                        net::NetworkAnonymizationKey(), std::move(parameters),
++                        std::move(response));
++  run_loop.Run();
++  EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, client.result_error());
++}
++#endif  // !BUILDFLAG(IS_IOS)
++
+ using NetworkContextCreateHostResolverTest = NetworkContextTest;
+ 
+ TEST_F(NetworkContextCreateHostResolverTest, Basic) {
+diff --git a/services/network/public/cpp/BUILD.gn b/services/network/public/cpp/BUILD.gn
+index 29a9819b61..15ff7d462e 100644
+--- a/services/network/public/cpp/BUILD.gn
++++ b/services/network/public/cpp/BUILD.gn
+@@ -57,6 +57,8 @@
+   output_name = "network_cpp"
+ 
+   sources = [
++    "agent_browser_local_dns_policy.cc",
++    "agent_browser_local_dns_policy.h",
+     "avail_language_header_parser.cc",
+     "avail_language_header_parser.h",
+     "browsing_topics_parser.cc",
+@@ -800,6 +802,7 @@
+   testonly = true
+ 
+   sources = [
++    "agent_browser_local_dns_policy_unittest.cc",
+     "avail_language_header_parser_unittest.cc",
+     "browsing_topics_parser_unittest.cc",
+     "client_hints_unittest.cc",
+diff --git a/services/network/public/cpp/agent_browser_local_dns_policy.cc b/services/network/public/cpp/agent_browser_local_dns_policy.cc
+new file mode 100644
+--- /dev/null
++++ b/services/network/public/cpp/agent_browser_local_dns_policy.cc
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
++
++#include <optional>
++#include <string_view>
++
++#include "base/check.h"
++#include "base/command_line.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "net/base/ip_address.h"
++#include "net/base/url_util.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "url/url_canon.h"
++
++namespace network {
++namespace {
++
++std::optional<std::string> CanonicalBootstrapHost(std::string_view host) {
++  if (host.empty() || host.size() > 253 || !base::IsStringASCII(host)) {
++    return std::nullopt;
++  }
++  std::string_view ip_literal = host;
++  if (ip_literal.front() == '[' && ip_literal.back() == ']') {
++    ip_literal = ip_literal.substr(1, ip_literal.size() - 2);
++  }
++  net::IPAddress address;
++  if (address.AssignFromIPLiteral(ip_literal)) {
++    // Reject shorthand/octal IPv4 and brackets around IPv4. Only IPv6 accepts
++    // alternate equivalent spellings; normalize it to HostPortPair's bare host.
++    const std::string canonical = address.ToString();
++    if (address.IsIPv4() && host != canonical) {
++      return std::nullopt;
++    }
++    return canonical;
++  }
++
++  std::string_view dns_name = host;
++  if (dns_name.back() == '.') {
++    dns_name.remove_suffix(1);
++  }
++  if (dns_name.empty()) {
++    return std::nullopt;
++  }
++  for (std::string_view label : base::SplitStringPiece(
++           dns_name, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL)) {
++    if (label.empty() || label.size() > 63 ||
++        !base::IsAsciiAlphaNumeric(label.front()) ||
++        !base::IsAsciiAlphaNumeric(label.back())) {
++      return std::nullopt;
++    }
++    for (char c : label) {
++      if (!base::IsAsciiAlphaNumeric(c) && c != '-') {
++        return std::nullopt;
++      }
++    }
++  }
++  // Reject noncanonical numeric addresses as DNS names, as the proxy parser
++  // would otherwise canonicalize them to a different host (e.g. 127.1).
++  url::CanonHostInfo host_info;
++  std::string canonical = net::CanonicalizeHost(host, &host_info);
++  if (host_info.family != url::CanonHostInfo::NEUTRAL ||
++      canonical != base::ToLowerASCII(host)) {
++    return std::nullopt;
++  }
++  return canonical;
++}
++
++}  // namespace
++
++mojom::AgentBrowserLocalDnsPolicyPtr ParseAgentBrowserLocalDnsPolicy(
++    const base::CommandLine& command_line,
++    bool managed_secure_dns) {
++  if (!command_line.HasSwitch(kAgentBrowserLocalDnsPolicySwitch)) {
++    CHECK(!command_line.HasSwitch(kAgentBrowserProxyBootstrapHostSwitch))
++        << "Proxy bootstrap host requires the local DNS deny policy";
++    return nullptr;
++  }
++  CHECK(command_line.GetSwitchValueASCII(kAgentBrowserLocalDnsPolicySwitch) ==
++        kAgentBrowserProxyLocalDnsDeny)
++      << "Invalid Agent Browser local DNS policy";
++  auto policy = mojom::AgentBrowserLocalDnsPolicy::New();
++  policy->mode = mojom::AgentBrowserLocalDnsMode::kProxyLocalDnsDeny;
++  if (command_line.HasSwitch(kAgentBrowserProxyBootstrapHostSwitch)) {
++    const std::string host =
++        command_line.GetSwitchValueASCII(kAgentBrowserProxyBootstrapHostSwitch);
++    policy->proxy_bootstrap_host = CanonicalBootstrapHost(host);
++    CHECK(policy->proxy_bootstrap_host.has_value())
++        << "Invalid Agent Browser proxy bootstrap host";
++  }
++  // Validate first: a malformed opt-in must never silently become stock.
++  if (managed_secure_dns) {
++    return nullptr;
++  }
++  return policy;
++}
++
++std::string BuildAgentBrowserHostMappingRules(
++    const mojom::AgentBrowserLocalDnsPolicy* policy) {
++  if (!policy) {
++    return {};
++  }
++  CHECK(policy->mode == mojom::AgentBrowserLocalDnsMode::kProxyLocalDnsDeny)
++      << "Invalid Agent Browser local DNS policy mode";
++  // Chromium 152's MappedHostResolver recognizes ^NOTFOUND, not ~NOTFOUND.
++  // This fails before cache, hosts, system, DNS or secure-DNS resolution.
++  std::string rules = "MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1";
++  if (policy->proxy_bootstrap_host) {
++    auto host = CanonicalBootstrapHost(*policy->proxy_bootstrap_host);
++    CHECK(host.has_value()) << "Invalid Agent Browser proxy bootstrap host";
++    rules.append(", EXCLUDE ").append(*host);
++  }
++  return rules;
++}
++
++}  // namespace network
+diff --git a/services/network/public/cpp/agent_browser_local_dns_policy.h b/services/network/public/cpp/agent_browser_local_dns_policy.h
+new file mode 100644
+--- /dev/null
++++ b/services/network/public/cpp/agent_browser_local_dns_policy.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef SERVICES_NETWORK_PUBLIC_CPP_AGENT_BROWSER_LOCAL_DNS_POLICY_H_
++#define SERVICES_NETWORK_PUBLIC_CPP_AGENT_BROWSER_LOCAL_DNS_POLICY_H_
++
++#include <string>
++
++#include "base/component_export.h"
++#include "services/network/public/mojom/network_context.mojom-forward.h"
++
++namespace base {
++class CommandLine;
++}
++
++namespace network {
++
++inline constexpr char kAgentBrowserLocalDnsPolicySwitch[] =
++    "agent-browser-local-dns-policy";
++inline constexpr char kAgentBrowserProxyBootstrapHostSwitch[] =
++    "agent-browser-proxy-bootstrap-host";
++inline constexpr char kAgentBrowserProxyLocalDnsDeny[] = "proxy-local-dns-deny";
++
++// Browser-only opt-in, independent of fingerprint configuration. Invalid or
++// incomplete input CHECK-fails, including when managed strict DoH is enabled.
++// Valid managed strict DoH launches return null and retain their existing path.
++COMPONENT_EXPORT(NETWORK_CPP)
++mojom::AgentBrowserLocalDnsPolicyPtr ParseAgentBrowserLocalDnsPolicy(
++    const base::CommandLine& command_line,
++    bool managed_secure_dns);
++
++// Network-service consumer. Null leaves stock behavior unchanged. Revalidates
++// the typed policy before producing a fixed deny rule and exact exclusions;
++// never accepts caller-supplied mapping rules or replacement addresses.
++COMPONENT_EXPORT(NETWORK_CPP)
++std::string BuildAgentBrowserHostMappingRules(
++    const mojom::AgentBrowserLocalDnsPolicy* policy);
++
++}  // namespace network
++
++#endif  // SERVICES_NETWORK_PUBLIC_CPP_AGENT_BROWSER_LOCAL_DNS_POLICY_H_
+diff --git a/services/network/public/cpp/agent_browser_local_dns_policy_unittest.cc b/services/network/public/cpp/agent_browser_local_dns_policy_unittest.cc
+new file mode 100644
+--- /dev/null
++++ b/services/network/public/cpp/agent_browser_local_dns_policy_unittest.cc
+@@ -0,0 +1,179 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/network/public/cpp/agent_browser_local_dns_policy.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <utility>
++
++#include "base/command_line.h"
++#include "base/test/gtest_util.h"
++#include "base/test/task_environment.h"
++#include "net/base/host_port_pair.h"
++#include "net/base/net_errors.h"
++#include "net/base/network_anonymization_key.h"
++#include "net/base/test_completion_callback.h"
++#include "net/dns/mapped_host_resolver.h"
++#include "net/dns/mock_host_resolver.h"
++#include "net/dns/public/host_resolver_source.h"
++#include "net/dns/public/secure_dns_policy.h"
++#include "net/log/net_log_with_source.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++#include "url/scheme_host_port.h"
++
++namespace network {
++namespace {
++
++TEST(AgentBrowserLocalDnsPolicyTest, StockOffModeAndStrictDohAreSeparate) {
++  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++  EXPECT_FALSE(ParseAgentBrowserLocalDnsPolicy(command_line, false));
++  EXPECT_FALSE(ParseAgentBrowserLocalDnsPolicy(command_line, true));
++  EXPECT_TRUE(BuildAgentBrowserHostMappingRules(nullptr).empty());
++  // No fingerprint switch/payload is needed, including in native/off mode.
++  command_line.AppendSwitchASCII(kAgentBrowserLocalDnsPolicySwitch,
++                                 kAgentBrowserProxyLocalDnsDeny);
++  auto policy = ParseAgentBrowserLocalDnsPolicy(command_line, false);
++  ASSERT_TRUE(policy);
++  EXPECT_EQ("MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
++            BuildAgentBrowserHostMappingRules(policy.get()));
++  EXPECT_FALSE(ParseAgentBrowserLocalDnsPolicy(command_line, true));
++}
++
++TEST(AgentBrowserLocalDnsPolicyTest, CanonicalBootstrapHostOnly) {
++  const std::pair<const char*, const char*> hosts[] = {
++      {"Proxy.Example", "proxy.example"},
++      {"proxy.example.", "proxy.example."},
++      {"192.0.2.8", "192.0.2.8"},
++      {"[2001:DB8::1]", "2001:db8::1"},
++      {"2001:db8::1", "2001:db8::1"},
++      {"[::1]", "::1"},
++  };
++  for (const auto& [input, expected] : hosts) {
++    SCOPED_TRACE(input);
++    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++    command_line.AppendSwitchASCII(kAgentBrowserLocalDnsPolicySwitch,
++                                   kAgentBrowserProxyLocalDnsDeny);
++    command_line.AppendSwitchASCII(kAgentBrowserProxyBootstrapHostSwitch,
++                                   input);
++    auto policy = ParseAgentBrowserLocalDnsPolicy(command_line, false);
++    ASSERT_TRUE(policy);
++    ASSERT_TRUE(policy->proxy_bootstrap_host);
++    EXPECT_EQ(expected, *policy->proxy_bootstrap_host);
++    EXPECT_EQ(std::string("MAP * ^NOTFOUND, EXCLUDE localhost, EXCLUDE ") +
++                  "127.0.0.1, EXCLUDE " + expected,
++              BuildAgentBrowserHostMappingRules(policy.get()));
++  }
++}
++
++TEST(AgentBrowserLocalDnsPolicyTest,
++     MalformedCommandLineDiesEvenWithStrictDoh) {
++  for (bool managed_secure_dns : {false, true}) {
++    for (const char* value : {"", "stock", "off", "PROXY-LOCAL-DNS-DENY",
++                              "MAP * 192.0.2.1"}) {
++      base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++      command_line.AppendSwitchASCII(kAgentBrowserLocalDnsPolicySwitch, value);
++      EXPECT_CHECK_DEATH(
++          ParseAgentBrowserLocalDnsPolicy(command_line, managed_secure_dns));
++    }
++    const std::string invalid_hosts[] = {
++        "", "*.example", "proxy?.example", "proxy.example, EXCLUDE *",
++        "proxy.example:80", "http://proxy.example", "user@proxy.example",
++        "proxy example", "proxy\texample", "proxy/example", "proxy\\example",
++        "a..example", "_proxy.example", "-proxy.example", ".", "127.1",
++        "[::1]:80", "[not-ip]", "pr\xc3\xb6xy.example",
++        std::string(64, 'a') + ".example", std::string(254, 'a'),
++    };
++    for (const std::string& host : invalid_hosts) {
++      SCOPED_TRACE(host);
++      base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
++      command_line.AppendSwitchASCII(kAgentBrowserLocalDnsPolicySwitch,
++                                     kAgentBrowserProxyLocalDnsDeny);
++      command_line.AppendSwitchUTF8(kAgentBrowserProxyBootstrapHostSwitch,
++                                    host);
++      EXPECT_CHECK_DEATH(
++          ParseAgentBrowserLocalDnsPolicy(command_line, managed_secure_dns));
++    }
++    base::CommandLine incomplete(base::CommandLine::NO_PROGRAM);
++    incomplete.AppendSwitchASCII(kAgentBrowserProxyBootstrapHostSwitch,
++                                 "proxy.example");
++    EXPECT_CHECK_DEATH(
++        ParseAgentBrowserLocalDnsPolicy(incomplete, managed_secure_dns));
++  }
++}
++
++TEST(AgentBrowserLocalDnsPolicyTest, MalformedTypedPolicyDies) {
++  auto policy = mojom::AgentBrowserLocalDnsPolicy::New();
++  policy->mode = static_cast<mojom::AgentBrowserLocalDnsMode>(123);
++  EXPECT_CHECK_DEATH(BuildAgentBrowserHostMappingRules(policy.get()));
++  policy->mode = mojom::AgentBrowserLocalDnsMode::kProxyLocalDnsDeny;
++  policy->proxy_bootstrap_host = "proxy.example, EXCLUDE *";
++  EXPECT_CHECK_DEATH(BuildAgentBrowserHostMappingRules(policy.get()));
++  policy->proxy_bootstrap_host = "";
++  EXPECT_CHECK_DEATH(BuildAgentBrowserHostMappingRules(policy.get()));
++}
++
++TEST(AgentBrowserLocalDnsPolicyTest,
++     ResolverDeniesBeforeFallbackWithExactExceptions) {
++  base::test::TaskEnvironment task_environment;
++  auto inner = std::make_unique<net::MockHostResolver>();
++  auto state = inner->state();
++  inner->set_synchronous_mode(true);
++  inner->rules()->AddRule("*", "192.0.2.42");
++  net::MappedHostResolver resolver(std::move(inner));
++  auto policy = mojom::AgentBrowserLocalDnsPolicy::New();
++  policy->proxy_bootstrap_host = "proxy.example";
++  resolver.SetRulesFromString(BuildAgentBrowserHostMappingRules(policy.get()));
++
++  // Includes SYSTEM / disabled secure DNS: deny precedes the resolver backend,
++  // so neither cache nor a failed proxy selection can open local DNS.
++  for (const char* host :
++       {"target.example", "sub.proxy.example", "proxy.example.evil",
++        "sub.localhost", "localhost.evil", "127.0.0.2", "::1"}) {
++    SCOPED_TRACE(host);
++    net::HostResolver::ResolveHostParameters parameters;
++    parameters.source = net::HostResolverSource::SYSTEM;
++    parameters.secure_dns_policy = net::SecureDnsPolicy::kDisable;
++    auto request = resolver.CreateRequest(
++        net::HostPortPair(host, 443), net::NetworkAnonymizationKey(),
++        net::handles::kInvalidNetworkHandle, net::NetLogWithSource(),
++        parameters);
++    net::TestCompletionCallback callback;
++    EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, request->Start(callback.callback()));
++  }
++  auto scheme_request = resolver.CreateRequest(
++      url::SchemeHostPort(GURL("https://target.example/")),
++      net::NetworkAnonymizationKey(), net::handles::kInvalidNetworkHandle,
++      net::NetLogWithSource(), std::nullopt);
++  net::TestCompletionCallback callback;
++  EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED,
++            scheme_request->Start(callback.callback()));
++  auto endpoint_request = resolver.CreateServiceEndpointRequest(
++      net::HostResolver::Host(
++          url::SchemeHostPort(GURL("https://target.example/"))),
++      net::NetworkAnonymizationKey(), net::handles::kInvalidNetworkHandle,
++      net::NetLogWithSource(), net::HostResolver::ResolveHostParameters());
++  EXPECT_EQ(net::ERR_NAME_NOT_RESOLVED, endpoint_request->Start(nullptr));
++  EXPECT_EQ(0u, state->num_resolve());
++  for (const char* host : {"localhost", "127.0.0.1", "proxy.example"}) {
++    auto request = resolver.CreateRequest(
++        net::HostPortPair(host, 443), net::NetworkAnonymizationKey(),
++        net::handles::kInvalidNetworkHandle, net::NetLogWithSource(),
++        std::nullopt);
++    net::TestCompletionCallback result;
++    EXPECT_EQ(net::OK, request->Start(result.callback()));
++    if (std::string_view(host) == "proxy.example") {
++      ASSERT_FALSE(request->GetAddressResults().empty());
++      EXPECT_EQ("192.0.2.42:443",
++                request->GetAddressResults().front().ToString());
++    }
++  }
++}
++
++}  // namespace
++}  // namespace network
+diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
+index abddef1d20..9d36f788e4 100644
+--- a/services/network/public/mojom/network_context.mojom
++++ b/services/network/public/mojom/network_context.mojom
+@@ -347,6 +347,19 @@
+   pending_remote<SocketBroker> server;
+ };
+ 
++// Restricted Agent Browser resolver policy. There is deliberately no arbitrary
++// mapping string, redirect address, or permissive mode in this contract.
++enum AgentBrowserLocalDnsMode {
++  kProxyLocalDnsDeny,
++};
++
++struct AgentBrowserLocalDnsPolicy {
++  AgentBrowserLocalDnsMode mode = kProxyLocalDnsDeny;
++  // One exact proxy bootstrap hostname or IP literal, not a URL/port/pattern.
++  // Null permits only the built-in exact localhost and 127.0.0.1 exceptions.
++  string? proxy_bootstrap_host;
++};
++
+ // Parameters for constructing a network context.
+ struct NetworkContextParams {
+   // The user agent string.
+@@ -666,6 +679,11 @@
+   // do not have an associated `URLLoaderFactory`.
+   pending_remote<URLLoaderNetworkServiceObserver>?
+       device_bound_sessions_network_observer;
++
++  // Browser-owned policy shared by system, profile and off-the-record contexts.
++  // Null preserves stock / managed strict DoH behavior; no fingerprint payload
++  // is sent to the network service. Invalid policy input fails closed.
++  AgentBrowserLocalDnsPolicy? agent_browser_local_dns_policy;
+ };
+ 
+ struct NetworkConditions {

@@ -1,26 +1,29 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { createHmac, createHash } from "node:crypto";
 
-vi.mock("electron", () => {
-  return {
-    app: {
-      getPath: (name: string) => {
-        if (name === "home") return path.join(os.tmpdir(), "agent-browser-sync-test-home");
-        return os.tmpdir();
-      },
-    },
-  };
+const fixture = vi.hoisted(() => ({ root: "" }));
+vi.mock("electron", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  fixture.root = mkdtempSync(join(tmpdir(), "studio-sync-unit-"));
+  return { app: { getPath: (name: string) => name === "home" ? join(fixture.root, "home") : fixture.root } };
 });
 
 import { __syncTestHooks, signV2, signS3Request } from "../../src/main/services/sync-service.js";
 import { getProfilesDir, getConfig } from "../../src/main/services/config-manager.js";
 import { setMainLanguage } from "../../src/main/services/main-i18n.js";
 
-const TEST_HOME = path.join(os.tmpdir(), "agent-browser-sync-test-home");
+const TEST_HOME = path.join(fixture.root, "home");
+afterAll(() => {
+  expect(path.dirname(fixture.root)).toBe(os.tmpdir());
+  expect(path.basename(fixture.root)).toMatch(/^studio-sync-unit-/);
+  fs.rmSync(fixture.root, { recursive: true, force: true });
+});
 
 function tarHeader(name: string, typeFlag: string, size: number): Buffer {
   const header = Buffer.alloc(512);
@@ -349,11 +352,11 @@ describe("Sync service hardening", () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-ls-test-"));
     try {
       const archive = tgz([
-        tarEntry("CURRENT", "MANIFEST-000001"),
+        tarEntry("CURRENT", "MANIFEST-000001\n"),
         tarEntry("000003.log", "log"),
         tarEntry("MANIFEST-000001", "manifest"),
       ]);
-      expect(__syncTestHooks.extractSafeLocalStorageArchive(archive, outDir)).toEqual({ files: 3, bytesWritten: 26 });
+      expect(__syncTestHooks.extractSafeLocalStorageArchive(archive, outDir)).toEqual({ files: 3, bytesWritten: 27 });
       expect(fs.existsSync(path.join(outDir, "CURRENT"))).toBe(true);
       expect(fs.existsSync(path.join(outDir, "000003.log"))).toBe(true);
       expect(fs.existsSync(path.join(outDir, "MANIFEST-000001"))).toBe(true);
@@ -729,6 +732,48 @@ describe("Sync merge strategy (mergeSectionById / mergeAccountSection / countAdo
     const merged = __syncTestHooks.mergeAccountSection(remoteAccs as any, localAccs as any, "remote", resolutionFor);
     expect(merged).toHaveLength(1);
     expect(merged[0].tags).toEqual(["l"]);
+  });
+
+  it("keeps only local proxy credentials for a remote metadata winner at the same endpoint", () => {
+    const local = { p: { type: "http", host: "same.test", port: 80, username: "local", password: "v2:local", fallbacks: ["old"], updatedAt: 100 } };
+    const remote = { p: { type: "http", host: "same.test", port: 80, bypassList: ["new.test"], updatedAt: 200 } };
+    const chosen = __syncTestHooks.mergeProxySection(local as any, remote as any, "newest").p;
+    expect(chosen).toEqual({ ...remote.p, username: "local", password: "v2:local" });
+    expect(__syncTestHooks.countAdoptedFromRemote(local, { p: chosen }, "newest")).toBe(1);
+    // Credentials missing from a snapshot are not a metadata conflict.
+    const unchanged = __syncTestHooks.mergeProxySection({ p: { ...remote.p, username: "local", password: "v2:local" } } as any, remote as any, "remote");
+    expect(unchanged.p).toEqual({ ...remote.p, username: "local", password: "v2:local" });
+    expect(__syncTestHooks.mergeProxySection({ p: { ...remote.p, username: "local", password: "" } } as any,
+      { p: { ...remote.p, bypassList: ["different.test"] } } as any, "remote").p.password).toBe("");
+  });
+
+  it("drops proxy authentication for every changed target dimension, without moving other local metadata", () => {
+    const old = { type: "http", host: "same.test", port: 80, username: "local", password: "v2:local", fallbacks: ["old"] };
+    for (const changed of [{ type: "socks5" }, { host: "new.test" }, { port: 81 }]) {
+      const remote = { ...old, ...changed, username: undefined, password: undefined, fallbacks: undefined };
+      const result = __syncTestHooks.mergeProxySection({ p: old } as any, { p: remote } as any, "remote").p;
+      expect(result.username).toBeUndefined();
+      expect(result.password).toBeUndefined();
+      expect(result.fallbacks).toBeUndefined();
+    }
+    expect(__syncTestHooks.mergeProxySection({}, { new: { type: "http", host: "new.test", port: 82 } } as any, "local").new.username).toBeUndefined();
+  });
+
+  it("carries an account password only across the exact username+URL key", () => {
+    const local = [{ platformUserName: "alice", platformUrl: "https://a.test", platformPassword: "v2:local", tags: ["local"], createdAt: 1, updatedAt: 100 }];
+    const remote = [
+      { platformUserName: "alice", platformUrl: "https://a.test", tags: ["remote"], updatedAt: 200 },
+      { platformUserName: "alice", platformUrl: "https://b.test", tags: ["other"] },
+      { platformUserName: "bob", platformUrl: "https://a.test", tags: ["other"] },
+    ];
+    const result = __syncTestHooks.mergeAccountSection(remote as any, local as any, "newest");
+    expect(result.find((a: any) => a.platformUserName === "alice" && a.platformUrl === "https://a.test"))
+      .toEqual({ ...remote[0], platformPassword: "v2:local" });
+    expect(result.filter((a: any) => a.platformUrl === "https://b.test" || a.platformUserName === "bob"))
+      .toEqual([remote[1], remote[2]]);
+    const sameMetadata = __syncTestHooks.mergeAccountSection([remote[0]] as any,
+      [{ ...remote[0], platformPassword: "v2:local" }] as any, "remote");
+    expect(sameMetadata[0].platformPassword).toBe("v2:local");
   });
 });
 

@@ -55,6 +55,10 @@
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
 
   agentBrowser.switchTab = function (tab) {
+    // Direct navigation must dismiss top-layer menus before hiding their page.
+    if (typeof agentBrowser.closeCardMenus === "function") {
+      agentBrowser.closeCardMenus(document, false);
+    }
     state.currentTab = tab;
     document.querySelectorAll('.nav-item').forEach(function (n) {
       var isActive = n.dataset.tab === tab;
@@ -133,9 +137,9 @@
     }
   };
 
-  agentBrowser.clearCache = function (dirId) { api.storage.clearCache(dirId).then(function (r) { toast(r.message || "Cache cleared", "success"); agentBrowser.loadStorage(); }); };
+  agentBrowser.clearCache = function (dirId) { return api.storage.clearCache(dirId).then(function (r) { toast(r.message || t("storage.cache-cleared", "Cache cleared"), "success"); agentBrowser.loadStorage(); }).catch(function (e) { toast(t("toast.browser.action-failed", "Failed: ") + (e.message || String(e)), "error"); }); };
 
-  agentBrowser.clearAllCaches = function () { api.storage.clearCache().then(function (r) { toast(r.message || "Caches cleared", "success"); agentBrowser.loadStorage(); }); };
+  agentBrowser.clearAllCaches = function () { return api.storage.clearCache().then(function (r) { toast(r.message || t("storage.caches-cleared", "Caches cleared"), "success"); agentBrowser.loadStorage(); }).catch(function (e) { toast(t("toast.browser.action-failed", "Failed: ") + (e.message || String(e)), "error"); }); };
 
   agentBrowser.loadStorage = function () {
     var list = document.getElementById("storage-profile-list");

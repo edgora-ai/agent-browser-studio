@@ -95,6 +95,41 @@ const ONLY = flag("only", "");
 // A renderer call that is NOT in here is a dead call site: it silently does
 // nothing at runtime and no test notices, because the mock's Proxy answers it
 // with an empty array.
+
+// A computed selector prefix is not a literal ID. Keep static lookups intact:
+// '#wizard-step' + step is dynamic, but '#wizard-steps' is a real container.
+function literalSelectorSource(source) {
+  const ts = require("typescript");
+  const file = ts.createSourceFile("visual-selector-source.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const spans = [];
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.arguments.length) {
+      const expr = node.expression;
+      const name = ts.isPropertyAccessExpression(expr) ? expr.name.text : ts.isIdentifier(expr) ? expr.text : "";
+      const arg = node.arguments[0];
+      if (["getElementById", "querySelector", "querySelectorAll", "$"].includes(name) &&
+          !ts.isStringLiteral(arg) && !ts.isNoSubstitutionTemplateLiteral(arg)) {
+        // Only literal fragments of computed arguments confuse the regex probe.
+        // Preserve newlines so its reported source locations remain accurate.
+        function mask(part) {
+          if (ts.isStringLiteral(part) || ts.isNoSubstitutionTemplateLiteral(part) || part.kind === ts.SyntaxKind.TemplateHead) {
+            spans.push([part.getStart(file), part.end]);
+          } else ts.forEachChild(part, mask);
+        }
+        mask(arg);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  let result = source;
+  for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) {
+    const blank = result.slice(start, end).replace(/[^\r\n]/g, " ");
+    result = result.slice(0, start) + '""' + blank.slice(2) + result.slice(end);
+  }
+  return result;
+}
+
 function realApiSurface() {
   const src = readFileSync(path.join(ROOT, "src", "main", "preload.cjs"), "utf-8");
   const paths = new Set();
@@ -120,11 +155,13 @@ function realApiSurface() {
 const REAL_API = realApiSurface();
 
 // ── Locate Playwright's bundled Chromium ────────────────────────────────────
-// The package cache lives in different places per platform and the revision
-// number changes on every install, so match any chromium-<rev> directory.
+// Prefer the installed Playwright revision and its platform-specific layout;
+// retain cache scanning for older installs and explicit binary overrides.
 function resolveChromium() {
   const explicit = process.env.PLAYWRIGHT_CHROMIUM_PATH || process.env.CHROME_PATH;
   if (explicit && existsSync(explicit)) return explicit;
+  const installed = chromium.executablePath();
+  if (installed && existsSync(installed)) return installed;
   const roots = [
     path.join(os.homedir(), "Library", "Caches", "ms-playwright"),
     path.join(os.homedir(), ".cache", "ms-playwright"),
@@ -136,7 +173,7 @@ function resolveChromium() {
     ? ["chrome-mac-arm64", "chrome-mac-x64"].map((v) => [v, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"])
     : process.platform === "win32"
       ? [["chrome-win", "chrome.exe"]]
-      : [["chrome-linux", "chrome"]];
+      : [["chrome-linux64", "chrome"], ["chrome-linux", "chrome"]];
   const hits = [];
   for (const root of roots) {
     if (!existsSync(root)) continue;
@@ -153,6 +190,8 @@ function resolveChromium() {
 }
 
 const MOCK = readFileSync(path.join(ROOT, "scripts", "visual-mock.js"), "utf-8");
+// preload app.version() invokes app:get-version, whose result is app.getVersion().
+const MOCK_APP_VERSION = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf-8")).version;
 const PAGE_URL = "file://" + path.join(ROOT, "src", "renderer", "index.html");
 
 // ── Page bootstrap ──────────────────────────────────────────────────────────
@@ -165,6 +204,7 @@ async function openPage(browser, theme, width = WIDTH, height = HEIGHT, teamEmpt
   const page = await ctx.newPage();
   await page.addInitScript(`
     ${MOCK}
+    window.agentBrowserAPI.app.version = async () => ${JSON.stringify(MOCK_APP_VERSION)};
     try {
       if (${JSON.stringify(teamEmpty)}) window.__visualHarness.teamMode = 'empty';
       localStorage.setItem('agent-browser-studio-theme', ${JSON.stringify(theme)});
@@ -1134,7 +1174,7 @@ function auditSelectors() {
     path.join(ROOT, "src/renderer/index.html"),
     ...(existsSync(appDir) ? readdirSync(appDir).filter((f) => f.endsWith(".js")).map((f) => path.join(appDir, f)) : []),
   ].filter((f) => existsSync(f));
-  const sources = files.map((f) => ({ f, src: readFileSync(f, "utf-8") }));
+  const sources = files.map((f) => ({ f, src: literalSelectorSource(readFileSync(f, "utf-8")) }));
 
   // Producers. A class attribute is usually split across a concatenation
   // (`class="profile-card' + (x ? ' running' : '')`), so take the first token
@@ -1243,9 +1283,11 @@ try {
     printEnglishLeak(english);
     // Dead call sites, leaked `undefined`, and untranslated copy are real
     // defects; thin tabs and unstubbed paths are harness debt that silently
-    // undermines the rest.
+    // undermines the rest. R0925-07: an unstubbed REAL API call means a tab
+    // rendered on the empty-array fallback while the audit said PASS — count
+    // it as a failure so the fixture has to catch up with the renderer.
     const enFails = LANG === "en-US" ? 0 : english.length;
-    const failures = overflow.length + cellOverflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails;
+    const failures = overflow.length + cellOverflow.length + contrast.length + errors.length + dead.length + garbage.length + icons.length + selectors.length + headerOrder.length + enFails + unstubbed.length;
     console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${errors.length} exceptions, ${overflow.length} overflow, ${cellOverflow.length} cell overflow, ${contrast.length} contrast, ${icons.length} icon misalignments, ${headerOrder.length} header order, ${selectors.length} dead selectors, ${dead.length} dead call sites, ${garbage.length} garbage text, ${enFails} untranslated, ${unstubbed.length} unstubbed, ${thin.length} thin`);
     // Non-zero exit so --audit works as a gate in CI or an automation, not just
     // as something a human reads.
