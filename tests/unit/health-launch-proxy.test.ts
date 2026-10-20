@@ -49,9 +49,24 @@ vi.mock("../../src/main/services/config/store.js", () => ({ transact: () => f.fo
 vi.mock("../../src/main/services/event-bus.js", () => ({ emitEvent: () => undefined }));
 vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({ cdpCookieService: { applyQueuedImports: async () => 0 }, readQueuedCookieImports: () => [] }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: { applyQueuedImports: async () => 0 } }));
-vi.mock("../../src/main/services/fingerprint-baseline.js", () => ({
+vi.mock("../../src/main/services/fingerprint-baseline.js", async (original) => ({
+  ...await original<typeof import("../../src/main/services/fingerprint-baseline.js")>(),
   captureFingerprint: f.capture, diffFingerprints: () => [], hasRiskyDrift: () => false,
   summarizeDrift: () => "", checkPersonaConsistency: () => ({ ok: true, mismatches: [] }), mismatchesAsDrift: () => [],
+}));
+// This dispatch/proxy receipt fixture explicitly fences diagnostic persistence;
+// real report/revision publication and consent have independent filesystem/IPC tests.
+vi.mock("../../src/main/services/fingerprint-drift-reports.js", () => ({
+  beginFingerprintObservation: () => Object.freeze({}),
+  saveFingerprintComparison: (_handle: unknown, input: any) => ({
+    schemaVersion: 1, policyVersion: 2, id: "22222222-2222-4222-8222-222222222222", dirId: input.dirId,
+    observedAt: input.observedAt, source: input.source, hasBaseline: Boolean(input.meta.fingerprintBaseline),
+    engine: input.engine || (input.meta.engine === "firefox" ? "firefox" : "chromium"), engineVersion: input.engineVersion || null,
+    fields: input.analysis.fields, baselineFields: input.analysis.baselineFields, availableFields: input.analysis.availableFields,
+    comparedFields: input.analysis.comparedFields, changes: input.analysis.changes, counts: input.analysis.counts,
+    risky: input.analysis.risky, partial: input.analysis.partial, saved: false, baselineCandidate: false,
+    warning: "SYNTHETIC_STORAGE_BOUNDARY",
+  }),
 }));
 vi.mock("../../src/main/services/environment-risk.js", () => ({ checkEnvironmentRisk: () => ({ ok: true, findings: [] }), checkEnvironmentRiskRuntime: () => f.forbidden("environment wire"), shouldBlockEnvironmentRisk: () => false, summarizeEnvFindings: () => "" }));
 vi.mock("../../src/main/services/authenticated-socks-bridge.js", () => ({ startAuthenticatedSocksBridge: () => f.forbidden("SOCKS bridge") }));
@@ -151,7 +166,10 @@ describe("read-only drift capture dispatch (not a fingerprint correctness oracle
     f.status.mockReturnValue({ running: true, pid: 4901, cdpPort: 49049 });
     f.capture.mockResolvedValue({ userAgent: "synthetic runtime boundary" });
     const before = structuredClone(f.cfg);
-    expect((await checkFingerprintDrift(ID)).checked).toBe(true);
+    const result = await checkFingerprintDrift(ID);
+    expect(result.checked).toBe(true);
+    expect(result.currentConfigMatches).toBe(false);
+    expect(result.report?.engine).toBe(engine ?? "chromium");
     expect(f.capture).toHaveBeenCalledWith(49049, engine ?? "chromium");
     expect(f.cfg).toEqual(before);
   });

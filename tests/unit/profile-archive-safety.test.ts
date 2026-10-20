@@ -14,13 +14,13 @@ const io = vi.hoisted(() => ({
   appData: "", paths: new Map<number, string>(), events: [] as IoEvent[],
   hook: null as null | ((event: IoEvent) => void | { value: any }),
   streams: [] as Fs.WriteStream[],
-  running: false, inspectStatus: null as null | ((id: string) => void),
+  running: false, statusExtra: {} as Record<string, unknown>, inspectStatus: null as null | ((id: string) => void),
 }));
 vi.mock("electron", () => ({
   app: { getPath: () => io.appData }, BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock("../../src/main/services/browser-manager.js", () => ({
-  statusBrowser: (id: string) => { io.inspectStatus?.(id); return { running: io.running }; },
+  statusBrowser: (id: string) => { io.inspectStatus?.(id); return { running: io.running, pid: null, ...io.statusExtra }; },
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -98,6 +98,7 @@ import { getConfig, getConfigPath, getProfileMeta, getProfilesDir, reloadConfig 
 import { transact } from "../../src/main/services/config/store.js";
 import { acquireRestoreLock, isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
 import { PROFILE_ID_PREFIX } from "../../src/main/branding.js";
+import { getProfileDataRevision } from "../../src/main/services/profile-data-revision.js";
 
 function failure(code: string, syscall: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: injected ${syscall} failure`), { code, syscall });
@@ -114,7 +115,7 @@ async function settleStreams(): Promise<void> {
   }
 }
 beforeEach(() => {
-  io.hook = null; io.events = []; io.running = false; io.inspectStatus = null;
+  io.hook = null; io.events = []; io.running = false; io.statusExtra = {}; io.inspectStatus = null;
   disk.rmSync(WORK, { recursive: true, force: true });
   disk.rmSync(io.appData, { recursive: true, force: true });
   disk.mkdirSync(WORK, { recursive: true, mode: 0o700 });
@@ -497,6 +498,73 @@ describe("profile archive ownership, restore lock and live config commit", () =>
     io.running = true;
     await expect(exportProfile(id, dest)).rejects.toThrow(/stop/i);
     expect(isRestoreLocked(id)).toBe(false); expect(disk.existsSync(dest)).toBe(false);
+  });
+
+  it.each([{ pid: 1234 }, { stopping: true }, { state: "unknown" }])("refuses export while exit is unconfirmed: %j", async (extra) => {
+    const id = makeProfile(), dest = path.join(WORK, "unconfirmed.zip");
+    const before = getProfileDataRevision(id);
+    io.statusExtra = extra;
+    await expect(exportProfile(id, dest)).rejects.toMatchObject({ code: "PROFILE_STOP_REQUIRED" });
+    expect(disk.existsSync(dest)).toBe(false); expect(isRestoreLocked(id)).toBe(false);
+    expect(getProfileDataRevision(id)).toBe(before);
+  });
+
+  it.each(["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock", ".parentlock", "lock"])("refuses dangling browser ownership marker %s without removing it", async (name) => {
+    const id = makeProfile(), dest = path.join(WORK, "marker.zip");
+    const marker = path.join(getProfilesDir(), id, name);
+    disk.symlinkSync(path.join(ROOT, "owned-missing-lock-target"), marker);
+    await expect(exportProfile(id, dest)).rejects.toMatchObject({ code: "PROFILE_STOP_REQUIRED" });
+    expect(disk.lstatSync(marker).isSymbolicLink()).toBe(true);
+    expect(disk.existsSync(dest)).toBe(false); expect(isRestoreLocked(id)).toBe(false);
+  });
+
+  it.each([".parentlock", "parent.lock"])("exports configured stopped Firefox with inert %s, retaining the source file but not archiving OS sentinels", async (name) => {
+    const id = makeProfile(), dest = path.join(WORK, "inert-firefox.zip");
+    transact((draft) => { draft.browserProfiles[id].engine = "firefox"; });
+    const marker = path.join(getProfilesDir(), id, name); disk.writeFileSync(marker, "", { mode: 0o600 });
+    const before = disk.lstatSync(marker), revision = getProfileDataRevision(id);
+    const nested = path.join(getProfilesDir(), id, "Default", "nested", name); disk.mkdirSync(path.dirname(nested), { recursive: true }); disk.writeFileSync(nested, "owned nested payload, not an OS sentinel");
+    await exportProfile(id, dest);
+    expect(disk.readFileSync(marker)).toEqual(Buffer.alloc(0)); expect(disk.lstatSync(marker).ino).toBe(before.ino);
+    const archive = disk.readFileSync(dest), entries = readZipEntries(archive);
+    expect(entries.some((entry) => entry.name === name)).toBe(false);
+    expect(extractZipEntry(archive, entries.find((entry) => entry.name === "Default/nested/" + name)!)).toEqual(disk.readFileSync(nested));
+    expect(getProfileDataRevision(id)).toBe(revision); expect(isRestoreLocked(id)).toBe(false);
+  });
+
+  it("publishes a new local revision before the first imported profile file is adopted", async () => {
+    const zip = await importFixture();
+    let observed = false;
+    io.hook = (event) => {
+      if (event.op !== "rename" || !event.path.includes("profile-import-") || !event.to?.startsWith(getProfilesDir() + path.sep)) return;
+      const id = path.relative(getProfilesDir(), event.to).split(path.sep)[0];
+      observed = true;
+      expect(isRestoreLocked(id)).toBe(true);
+      expect(getProfileDataRevision(id)).not.toBe("initial");
+      const value = JSON.parse(disk.readFileSync(path.join(io.appData, "profile-data-revisions", id + ".json"), "utf8"));
+      expect(value.revision).toBe(getProfileDataRevision(id));
+    };
+    const imported = importProfileArchive(zip);
+    expect(observed).toBe(true); expect(isRestoreLocked(imported.dirId)).toBe(false);
+    expect(getProfileDataRevision(imported.dirId)).not.toBe("initial");
+  });
+
+  it("does not adopt files or metadata when revision durability fails", async () => {
+    const existing = makeProfile("ab_revision_untouched", "Existing");
+    const zip = await importFixture(), before = disk.readFileSync(getConfigPath());
+    let failed = false;
+    io.hook = (event) => {
+      if (event.op === "fsync" && event.path.includes("profile-data-revisions") && !event.directory) {
+        failed = true; throw failure("EIO", "revision fsync");
+      }
+    };
+    expect(() => importProfileArchive(zip)).toThrow(/revision unavailable/i);
+    io.hook = null;
+    expect(failed).toBe(true);
+    expect(disk.readFileSync(getConfigPath())).toEqual(before);
+    expect(disk.readdirSync(getProfilesDir())).toEqual([existing]);
+    reloadConfig(); expect(Object.keys(getConfig().browserProfiles)).toEqual([existing]);
+    expect(getProfileDataRevision(existing)).toBe("initial");
   });
 
   it("stages imports under the profiles volume rather than the system temporary volume", async () => {

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
   const identity = actual.lstatSync(root);
   const forbidden = vi.fn((capability: unknown) => { throw new Error(`Undeclared network-unit capability: ${String(capability)}`); });
   const fds = new Set<number>();
+  const importRealpaths: { input: string; resolved: string; stack: string }[] = [];
   const assertPath = (input: unknown) => {
     if (typeof input === "number") {
       if (!fds.has(input)) forbidden("unowned file descriptor");
@@ -55,7 +56,20 @@ const h = vi.hoisted(() => {
   for (const [name, value] of Object.entries(actual)) {
     if (name === "promises") { guarded[name] = { readFile: forbidden, writeFile: forbidden, mkdir: forbidden, readdir: forbidden, stat: forbidden, lstat: forbidden, open: forbidden, rename: forbidden, rm: forbidden }; continue; }
     if (typeof value !== "function") { guarded[name] = value; continue; }
-    if (name === "openSync") guarded[name] = (...args: any[]) => { assertPath(args[0]); const fd = (value as Function)(...args); fds.add(fd); return fd; };
+    // profile-data-revision imports zip-writer, whose TEMP_ROOTS initializer
+    // resolves os.tmpdir() once. That mock is this exact owned root: no other
+    // realpath input, options, repeat call or generic path capability is allowed.
+    if (name === "realpathSync") guarded[name] = (...args: unknown[]) => {
+      if (args.length !== 1 || args[0] !== root || importRealpaths.length !== 0) return forbidden("fs.realpathSync outside one owned temporary-root import");
+      assertPath(root);
+      const stack = new Error("owned temporary-root realpath import").stack || "";
+      const resolved = actual.realpathSync(root);
+      if (resolved !== root) return forbidden("fs.realpathSync resolved outside the exact owned root");
+      assertPath(resolved);
+      importRealpaths.push({ input: root, resolved, stack });
+      return resolved;
+    };
+    else if (name === "openSync") guarded[name] = (...args: any[]) => { assertPath(args[0]); const fd = (value as Function)(...args); fds.add(fd); return fd; };
     else if (name === "closeSync") guarded[name] = (fd: number) => { assertPath(fd); const result = actual.closeSync(fd); fds.delete(fd); return result; };
     else if (name === "renameSync") guarded[name] = (from: fs.PathLike, to: fs.PathLike) => {
       assertPath(from); assertPath(to);
@@ -68,7 +82,7 @@ const h = vi.hoisted(() => {
   }
   const state = { failRename: false };
   return {
-    root, identity, fds, forbidden, state, fs: { ...guarded, default: guarded },
+    root, identity, fds, importRealpaths, forbidden, state, fs: { ...guarded, default: guarded },
     list: vi.fn(), create: vi.fn(), status: vi.fn(),
     declaredPids: new Set<number>(), deadPids: new Set<number>(),
     safeStorage: { isEncryptionAvailable: () => true, encryptString: (text: string) => Buffer.from(`synthetic:${text}`), decryptString: (bytes: Buffer) => {
@@ -286,6 +300,14 @@ afterAll(() => {
 });
 
 describe("owned-runtime-only page selection, without discovery or observation", () => {
+  it("the real revision dependency resolves only the owned temporary root once at zip-writer import", () => {
+    expect(h.importRealpaths).toHaveLength(1);
+    expect(h.importRealpaths[0]).toMatchObject({ input: h.root, resolved: h.root });
+    const caller = h.importRealpaths[0].stack.split("\n").find(line => line.includes("/src/main/services/zip-writer.ts:"));
+    expect(caller).toEqual(expect.any(String));
+    console.info("[network-unit owned import] " + caller!.trim());
+  });
+
   it("lists opaque one-use UUIDs and safe origins, never target/debugger data, and does not write or observe", async () => {
     const before = fs.readFileSync(getConfigPath());
     const reply = await listProfileNetworkPages(ID, { owner: OWNER });

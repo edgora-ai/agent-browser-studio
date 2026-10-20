@@ -1021,15 +1021,33 @@ describe("Integration — Sync restore hardening", () => {
   it("guards running profile restore and validates artifacts", () => {
     const sync = fs.readFileSync(path.join(ROOT, "src/main/services/sync-service.ts"), "utf-8");
     expect(sync).toContain("isProfileRunningForRestore(dirId)");
-    expect(sync).toContain("statusBrowser(dirId).running");
     const tree = syntax(sync);
+    const stoppedGuards = calls(tree, "assertProfileTransferStopped");
+    expect(stoppedGuards.some(call => call.arguments[0]?.getText(tree) === "dirId" &&
+      calls(call, "statusBrowser").some(status => status.arguments[0]?.getText(tree) === "dirId")),
+    "the shared stopped proof must use actual runtime discovery, not only a running boolean").toBe(true);
     const pulls = nodes(tree, ts.isMethodDeclaration).filter(node =>
       (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) && node.name.text === "pull");
     expect(pulls, "inspect the real Pull method, not Push or diagnostic text").toHaveLength(1);
     const pull = pulls[0];
     const runningChecks = nodes(pull, ts.isVariableDeclaration).filter(node => ts.isIdentifier(node.name) && node.name.text === "running" &&
       node.initializer && ts.isCallExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "isProfileRunningForRestore");
-    expect(runningChecks).toHaveLength(1);
+    expect(runningChecks.length, "runtime must be rechecked before profile application and after awaited preparation").toBeGreaterThanOrEqual(1);
+    const wholeProfileGates = nodes(pull, ts.isIfStatement).filter(node => ts.isBinaryExpression(node.expression) &&
+      node.expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+      ts.isIdentifier(node.expression.left) && node.expression.left.text === "running" &&
+      ts.isPrefixUnaryExpression(node.expression.right) && node.expression.right.operator === ts.SyntaxKind.ExclamationToken &&
+      ts.isIdentifier(node.expression.right.operand) && node.expression.right.operand.text === "allowRunningPartial");
+    expect(wholeProfileGates, "default pull must skip the whole unconfirmed profile unless partial merge was explicitly enabled").toHaveLength(1);
+    const wholeProfileGate = wholeProfileGates[0];
+    expect(calls(wholeProfileGate.thenStatement, "skipForStop")).toHaveLength(1);
+    expect(nodes(wholeProfileGate.thenStatement, ts.isContinueStatement)).toHaveLength(1);
+    for (const mutation of ["markProfileDataChanging", "importLocalStorage", "importSqliteLocalStorage", "writeFileAtomic"]) {
+      expect(calls(wholeProfileGate.thenStatement, mutation), "skip must not perform " + mutation).toHaveLength(0);
+    }
+    const revisions = calls(pull, "markProfileDataChanging");
+    expect(revisions.length, "a real restore must invalidate old fingerprint evidence before publication").toBeGreaterThan(0);
+    expect(wholeProfileGate.getStart(tree)).toBeLessThan(Math.min(...revisions.map(call => call.getStart(tree))));
     const branches = nodes(pull, ts.isIfStatement).filter(node => ts.isIdentifier(node.expression) && node.expression.text === "running");
     const skipBranches = ["localStorage", "preferences"].map(scope => {
       const matched = branches.filter(branch => nodes(branch.thenStatement, ts.isCallExpression).some(call =>

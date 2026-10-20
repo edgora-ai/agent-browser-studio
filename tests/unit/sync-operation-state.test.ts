@@ -10,7 +10,7 @@ vi.mock("electron", async () => {
   h.root = fs.mkdtempSync(path.join(os.tmpdir(), "studio-sync-lifecycle-"));
   return { app: { getPath: (name: string) => name === "home" ? path.join(h.root, "home") : h.root } };
 });
-vi.mock("../../src/main/services/browser-manager.js", () => ({ statusBrowser: () => ({ running: false }) }));
+vi.mock("../../src/main/services/browser-manager.js", () => ({ statusBrowser: () => ({ running: h.running, pid: h.running ? 49001 : null, cdpPort: h.running ? 49002 : null }) }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ runtimeCookieOps: {
   hasRunningBrowser: () => h.running, exportCookiesSnapshot: h.snapshot, importCookies: h.importCookies,
 } }));
@@ -78,7 +78,7 @@ describe("shared synchronization operation ownership", () => {
     h.running = true;
     h.importCookies.mockImplementation(async () => { started.resolve(); await release.promise; return 1; });
     const controller = new AbortController();
-    const pending = syncService.pull(controller.signal, { strategy: "remote" }).catch((error) => (error as any).syncResult);
+    const pending = syncService.pull(controller.signal, { strategy: "remote", allowRunningPartial: true }).catch((error) => (error as any).syncResult);
     await started.promise; controller.abort(); await new Promise((done) => setImmediate(done));
     try {
       expect((syncService.getStatus() as any).operation.active?.kind).toBe("pull");

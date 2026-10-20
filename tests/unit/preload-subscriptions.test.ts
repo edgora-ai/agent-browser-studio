@@ -85,6 +85,16 @@ describe("production preload subscriptions", () => {
     expect(invoke).toHaveBeenLastCalledWith("browser:health-cancel", "profile", { kind: "env", requestId: "env-request" });
     await api.browser.captureBaseline("profile", { confirmationToken: "reviewed" });
     expect(invoke).toHaveBeenLastCalledWith("browser:capture-baseline", { dirId: "profile", confirmationToken: "reviewed" });
+    await api.browser.driftReport("profile");
+    expect(invoke).toHaveBeenLastCalledWith("browser:drift-report", "profile");
+    await api.browser.captureBaseline("profile", { reportId: "comparison-report" });
+    expect(invoke).toHaveBeenLastCalledWith("browser:capture-baseline", { dirId: "profile", reportId: "comparison-report" });
+    await api.browser.captureBaseline("profile", { reportId: "comparison-report", confirmationToken: "report-reviewed" });
+    expect(invoke).toHaveBeenLastCalledWith("browser:capture-baseline", { dirId: "profile", reportId: "comparison-report", confirmationToken: "report-reviewed" });
+    await api.browser.resetBaseline("profile");
+    expect(invoke).toHaveBeenLastCalledWith("browser:reset-baseline", "profile");
+    await api.browser.resetBaseline("profile", { confirmationToken: "reset-reviewed" });
+    expect(invoke).toHaveBeenLastCalledWith("browser:reset-baseline", { dirId: "profile", confirmationToken: "reset-reviewed" });
     await api.webrtc.diag("profile", { allowLaunch: true, requestId: "rtc-request" });
     expect(invoke).toHaveBeenLastCalledWith("webrtc:diag", { dirId: "profile", allowLaunch: true, requestId: "rtc-request" });
   });

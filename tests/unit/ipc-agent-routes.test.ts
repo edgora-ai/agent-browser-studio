@@ -18,6 +18,9 @@ vi.mock("electron", () => ({
 vi.mock("node:child_process", async (original) => ({ ...await original<typeof import("node:child_process")>(),
   exec: h.forbidden, execFile: h.forbidden, execSync: h.forbidden, execFileSync: h.forbidden, spawn: h.forbidden, spawnSync: h.forbidden,
 }));
+// LLM auto-discovery uses os.homedir(), not Electron's mocked home path. Keep
+// the real discovery flow, but never let this store fixture read host settings.
+vi.mock("node:os", async (original) => ({ ...await original<typeof import("node:os")>(), homedir: () => h.root }));
 
 import { registerAgentHandlers } from "../../src/main/ipc/agent.js";
 import { getConfig, getConfigPath, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
@@ -35,12 +38,13 @@ function role(value: "owner" | "viewer") {
     members: [{ deviceId: cfg.deviceId!, name: "IPC device", role: value, addedAt: 1 }] }; saveConfig(cfg);
 }
 beforeEach(() => {
+  vi.stubEnv("OPENAI_API_KEY", ""); vi.stubEnv("ANTHROPIC_API_KEY", "");
   closeAgentDb(); resetSecretStorageForTests(); clearApprovalMemory(); fs.rmSync(h.root, { recursive: true, force: true }); fs.mkdirSync(h.root); reloadConfig(); getConfig();
   initializeSecretStorage({ backend: "file", userDataDir: h.root, keyPath: path.join(h.root, ".secret-vault-key"), reason: "isolated IPC fixture" });
   h.trusted = true; h.forbidden.mockClear(); h.clipboard.mockReset(); h.saveDialog.mockReset(); sender.send.mockClear();
   vi.stubGlobal("fetch", h.forbidden);
 });
-afterEach(() => { closeAgentDb(); resetSecretStorageForTests(); clearApprovalMemory(); vi.unstubAllGlobals(); });
+afterEach(() => { closeAgentDb(); resetSecretStorageForTests(); clearApprovalMemory(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(() => fs.rmSync(h.root, { recursive: true, force: true }));
 
 describe("actual agent IPC routes with real isolated stores", () => {
@@ -54,6 +58,20 @@ describe("actual agent IPC routes with real isolated stores", () => {
       const config = await invoke(channel); expect(config).toMatchObject({ provider: "openai", hasApiKey: true, model: "offline-fixture" }); expect(config).not.toHaveProperty("apiKey");
     }
     expect(await invoke("agent:chat-simple", { messages: null })).toHaveProperty("error");
+    expect(h.forbidden).not.toHaveBeenCalled();
+  });
+
+  it("auto-discovery reads only the isolated home settings and redacts its synthetic credential", async () => {
+    const file = path.join(h.root, ".claude", "settings.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ env: {
+      ANTHROPIC_BASE_URL: "https://llm.fixture.test", ANTHROPIC_AUTH_TOKEN: "fixture-discovery-secret", ANTHROPIC_MODEL: "offline-fixture",
+    } }));
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).env.ANTHROPIC_MODEL).toBe("offline-fixture");
+    const detected = await invoke("agent:detect-llm-config");
+    expect(detected).toMatchObject({ provider: "claude", model: "offline-fixture", hasApiKey: true });
+    expect(detected).not.toHaveProperty("apiKey");
+    expect(JSON.stringify(detected)).not.toContain("fixture-discovery-secret");
     expect(h.forbidden).not.toHaveBeenCalled();
   });
 

@@ -7,6 +7,7 @@
   var state = agentBrowser.state;
   var profileFilter = { status: "all", tags: [] };
   var profileSelection = {};
+  function isStoppedRuntime(profile) { return !!profile && !profile.running && profile.unknown !== true && profile.stopping !== true; }
   // R9 P1-2: in-flight launch/stop per card. Kept outside the DOM so a list
   // re-render (keyed diff rebuilds card nodes) cannot drop the busy state.
   var busyCards = Object.create(null);
@@ -254,9 +255,16 @@
     );
   }
   /** Engine-aware pre-launch gate. cb receives nothing; call launch IPC inside. */
-  function withEngineGate(dirId, cb) {
+  function withEngineGate(dirId, cb, viewOptions) {
     api.browser.list().then(function (profiles) {
       var meta = (profiles || []).filter(function (p) { return p.dirId === dirId; })[0] || {};
+      if (meta.unknown === true || meta.stopping === true) {
+        var runtimeMessage = t(meta.stopping ? "profile.runtime.stopping-help" : "profile.runtime.unconfirmed-help");
+        toast(runtimeMessage, "warning");
+        scheduleProfilesRefresh();
+        if (viewOptions && viewOptions.fingerprintViewEpoch !== undefined && typeof agentBrowser.finishFingerprintLaunchView === "function") agentBrowser.finishFingerprintLaunchView(dirId, { error: runtimeMessage }, viewOptions.fingerprintViewEpoch);
+        return;
+      }
       var engine = meta.engine || "chromium";
       // Unknown/invalidated or available metadata must reach authoritative main
       // discovery; a cached banner is not permission to refuse a current launch.
@@ -276,6 +284,8 @@
         var force = !!(opts && opts.forceDeadProxy);
         agentBrowser.ipc.call("browser.launch:" + dirId, function () { return api.browser.launch(dirId, force ? { forceDeadProxy: true } : undefined); }, { kind: "launch", dedupe: !force })
           .then(function (r) {
+            var fingerprintEpoch = opts && opts.fingerprintViewEpoch;
+            if (fingerprintEpoch !== undefined && typeof agentBrowser.finishFingerprintLaunchView === "function") agentBrowser.finishFingerprintLaunchView(dirId, r, fingerprintEpoch);
             // Sale-90/92: license gate first — an expired trial opens the
             // paywall dialog instead of a dead-end toast (or worse, a proxy
             // retry that can never succeed).
@@ -289,7 +299,7 @@
               setCardBusy(dirId, false);
               agentBrowser.confirm(
                 t("launch.force-proxy.msg", "The proxy is unreachable, so this profile may not load pages. Launch anyway? Without a working proxy the browser may fall back to a direct connection and expose your real IP."),
-                function () { launchInner(dirId, { forceDeadProxy: true }); },
+                function () { launchInner(dirId, { forceDeadProxy: true, fingerprintViewEpoch: fingerprintEpoch }); },
                 { title: t("launch.force-proxy.title", "Launch without a working proxy?") },
               );
               return;
@@ -297,12 +307,17 @@
             if (r.success) {
               // UI R3: success toast carries the next step (health check) as
               // an action instead of a bare port number.
-              var cookieWarning = !!(r.cookieCheck && r.cookieCheck.checked && r.cookieCheck.error);
-              toast(t("toast.profile.started", "Managed Chromium started") + " (CDP port " + r.cdpPort + ")", cookieWarning ? "warning" : "success", {
-                detail: cookieWarning
-                  ? t("toast.profile.cookies-pending", "Browser started, but queued cookies were not confirmed applied. Review the import result before using this session.")
-                  : t("toast.profile.started-next", "Next: run a health check from the card's health menu"),
-                action: { label: t("toast.profile.check-now", "Check now"), onClick: (function (id) { return function () { agentBrowser.openEnvRisk(id); }; })(dirId) },
+              var launchWarnings = [];
+              if (r.cookieCheck && r.cookieCheck.checked && r.cookieCheck.error) {
+                launchWarnings.push(t("toast.profile.cookies-pending", "Browser started, but queued cookies were not confirmed applied. Review the import result before using this session."));
+              }
+              var driftNotice = typeof agentBrowser.fingerprintLaunchNotice === "function" ? agentBrowser.fingerprintLaunchNotice(r.driftCheck) : { warning: false, hasDetails: false, detail: "" };
+              if (driftNotice.warning) launchWarnings.push(driftNotice.detail);
+              toast(t("toast.profile.started", "Managed Chromium started") + " (CDP port " + r.cdpPort + ")", launchWarnings.length ? "warning" : "success", {
+                detail: launchWarnings.length ? launchWarnings.join(" ") : driftNotice.detail || t("toast.profile.started-next", "Next: run a health check from the card's health menu"),
+                action: driftNotice.hasDetails
+                  ? { label: t("launch.drift-review", "Review launch snapshot"), onClick: function () { showLaunchDriftReview(dirId, r.driftCheck, false); } }
+                  : { label: t("toast.profile.check-now", "Check now"), onClick: (function (id) { return function () { agentBrowser.openEnvRisk(id); }; })(dirId) },
               });
               if (r.envCheck && r.envCheck.high) {
                 var envCodes = (r.envCheck.findings || []).filter(function(f){ return f.severity === "high"; }).map(function(f){ return f.code; }).join(", ");
@@ -312,6 +327,11 @@
               setTimeout(function () { clearProfileRuntime(dirId, seq); scheduleProfilesRefresh(); }, 5000);
               scheduleProfilesRefresh();
             } else {
+              if (r.code === "fingerprint-drift") {
+                if (fingerprintEpoch === undefined) showLaunchDriftReview(dirId, r.driftCheck, true);
+                scheduleProfilesRefresh(); // A stop was requested, not a successful running launch.
+                return;
+              }
               // Stable main-process codes carry localized recovery guidance;
               // saving metadata or restarting Studio never applies identity live.
               var launchError = profileErrorMessage(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"));
@@ -319,17 +339,28 @@
                 launchError = t("launch.host-platform-mismatch", "This managed profile uses a different OS from this computer. Edit the profile OS to match the host, save, then stop the browser if it is running and start it again. Restarting Studio is not enough.");
               } else if (r.code === "restart-required") {
                 launchError = t("launch.restart-required", "Saved identity changes are not active in this running browser. Explicitly stop the browser, then start it again. Saving or restarting Studio does not apply them live.");
+              } else if (r.code === "fingerprint-check-unavailable") {
+                launchError = t("err.drift.unavailable", "Launch refused: the stored fingerprint reference could not be checked. This is not evidence of drift. Review the details, then retry normal launch for fresh evidence.");
+                if (fingerprintEpoch === undefined) showLaunchDriftReview(dirId, r.driftCheck || { checked: false }, false);
+                scheduleProfilesRefresh();
               }
-              toast(launchError, "error");
+              if (r.code === "fingerprint-check-unavailable" && r.driftCheck && r.driftCheck.error) {
+                toast(launchError, "error", { detail: r.driftCheck.error });
+              } else {
+                toast(launchError, "error");
+              }
             }
           })
-          .catch(function (e) { toast(profileErrorMessage(e), "error"); })
+          .catch(function (e) {
+            if (opts && opts.fingerprintViewEpoch !== undefined && typeof agentBrowser.finishFingerprintLaunchView === "function") agentBrowser.finishFingerprintLaunchView(dirId, { error: profileErrorMessage(e) }, opts.fingerprintViewEpoch);
+            toast(profileErrorMessage(e), "error");
+          })
           .then(function () { setCardBusy(dirId, false); });
   }
 
   Object.assign(agentBrowser, {
-  launch: function (dirId) {
-        withEngineGate(dirId, function () { launchInner(dirId); });
+  launch: function (dirId, viewOptions) {
+        withEngineGate(dirId, function () { launchInner(dirId, viewOptions && { fingerprintViewEpoch: viewOptions.fingerprintViewEpoch }); }, viewOptions);
       },
 
   stop: function (dirId) {
@@ -903,7 +934,10 @@
     return archiveCall("profile.exportArchive:" + dirId, function () { return api.profile.exportArchive(dirId); }, function(r) {
       if (archiveWasCancelled(r)) return r;
       if (!r || !r.success) {
-        toast(t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown"), "error");
+        var failure = r && r.code === "PROFILE_STOP_REQUIRED"
+          ? t("archive.stop-required", "Stop {n} profile(s) and wait for confirmed exit, then retry export.").replace("{n}", 1)
+          : t("toast.profile.export-failed", "Export failed: ") + ((r && r.error) || "unknown");
+        toast(failure, "error");
         return r;
       }
       var warnings = Array.isArray(r.warnings) ? r.warnings : [];
@@ -912,8 +946,12 @@
       toast(msg, warnings.length ? "warning" : "success");
       return r;
     }, function(e) {
-      toast(t("toast.profile.export-failed", "Export failed: ") + (e.message || String(e)), "error");
-      return { success: false, error: e.message || String(e), code: e.code };
+      var raw = (e && e.message) || String(e);
+      var failure = e && e.code === "PROFILE_STOP_REQUIRED"
+        ? t("archive.stop-required", "Stop {n} profile(s) and wait for confirmed exit, then retry export.").replace("{n}", 1)
+        : t("toast.profile.export-failed", "Export failed: ") + raw;
+      toast(failure, "error");
+      return { success: false, error: raw, code: e && e.code };
     });
   };
 
@@ -955,8 +993,12 @@
 
   agentBrowser.bulkStart = function() {
     api.browser.list().then(function(profiles) {
-      var stopped = (profiles || []).filter(function(p) { return !p.running; });
-      if (stopped.length === 0) { toast(t("toast.bulk.all-running", "All profiles are already running"), "success"); return; }
+      var stopped = (profiles || []).filter(isStoppedRuntime);
+      if (stopped.length === 0) {
+        var unconfirmed = (profiles || []).some(function(p) { return p.unknown === true || p.stopping === true; });
+        toast(unconfirmed ? t("profile.runtime.launch-unavailable") : t("toast.bulk.all-running", "All profiles are already running"), unconfirmed ? "warning" : "success");
+        return;
+      }
       // R10 P1-3: engine-aware preflight — only refuse the subset whose
       // engine is actually missing. The old gate blocked Firefox batches
       // when Chromium was missing (and vice versa).
@@ -1371,10 +1413,12 @@
       var rep = r.report;
       var exported = (rep.exported || []).length;
       var skipped = (rep.skipped || []).length;
+      var stopRequired = (rep.skipped || []).filter(function(item) { return item && (item.reason === "running" || item.reason === "running-or-unconfirmed" || item.code === "PROFILE_STOP_REQUIRED"); }).length;
       var failed = (rep.failed || []).length;
       var warnings = (rep.exported || []).reduce(function(n, item) { return n + ((item.warnings || []).length); }, 0);
       var msg = t("toast.profile.exported-batch", "Exported {n} profiles").replace("{n}", exported);
-      if (skipped) msg += t("toast.batch.export-skipped", ", skipped {n} (running)").replace("{n}", skipped);
+      if (skipped) msg += t("toast.batch.export-skipped", ", skipped {n}").replace("{n}", skipped);
+      if (stopRequired) msg += " " + t("archive.stop-required", "Explicitly stop {n} running or unconfirmed profile(s) and wait for browser exit before exporting again. No automatic stop was requested.").replace("{n}", stopRequired);
       if (failed) msg += t("toast.batch.export-failed", ", {n} failed").replace("{n}", failed);
       if (warnings) msg += t("archive.batch.warning-count", ", {n} warnings").replace("{n}", warnings);
       toast(msg, exported === 0 && failed > 0 ? "error" : (skipped || failed || warnings || exported === 0 ? "warning" : "success"));
@@ -1658,6 +1702,7 @@
   }
   function healthRequestCurrent(request) {
     if (!request || request.discarded || request.epoch !== (healthEpoch[healthEpochKey(request.dirId, request.kind)] || 0)) return false;
+    if (request.fingerprintViewEpoch !== undefined && !agentBrowser.isFingerprintViewCurrent(request.fingerprintViewEpoch, request.dirId)) return false;
     if (!request.view) return true;
     var view = healthDialogs[request.kind];
     var dlg = document.getElementById(request.kind === "network" ? "dlg-network-observation" : request.kind === "env" ? "dlg-env-risk" : "dlg-webrtc-diag");
@@ -2006,6 +2051,7 @@
 
   agentBrowser.invalidateProfilesForSync = function() {
     retireNetworkView(false, "network.unavailable");
+    if (typeof agentBrowser.invalidateFingerprintComparison === "function") agentBrowser.invalidateFingerprintComparison();
     ++profilesLoadSeq;
     ++profileEditSeq;
     ++newProfileProxySeq;
@@ -2121,6 +2167,8 @@
           sizeBytes: 0,
           lastModified: cp.lastModified || 0,
           running: cp.running,
+          unknown: cp.unknown,
+          stopping: cp.stopping,
           pid: cp.pid,
           proxy: resolvedProxy,
           proxyMode: proxyMode,
@@ -2157,7 +2205,7 @@
       profiles.forEach(function (p) {
         var override = window._profileRuntimeOverrides && window._profileRuntimeOverrides[p.dirId];
         if (!override) return;
-        if (override.expiresAt && Date.now() > override.expiresAt) {
+        if (p.unknown === true || p.stopping === true || override.expiresAt && Date.now() > override.expiresAt) {
           delete window._profileRuntimeOverrides[p.dirId];
           return;
         }
@@ -2168,8 +2216,8 @@
         if (override.pending) { p.running = override.running; p.pid = override.pid; }
       });
       // Apply status + tag filters (batch operations console).
-      if (profileFilter.status === "running") profiles = profiles.filter(function (p) { return p.running; });
-      else if (profileFilter.status === "stopped") profiles = profiles.filter(function (p) { return !p.running; });
+      if (profileFilter.status === "running") profiles = profiles.filter(function (p) { return p.running && p.unknown !== true; });
+      else if (profileFilter.status === "stopped") profiles = profiles.filter(isStoppedRuntime);
       if (profileFilter.tags && profileFilter.tags.length) {
         profiles = profiles.filter(function (p) {
           var tags = (p.tags || []).map(function (t) { return String(t).toLowerCase(); });
@@ -2215,7 +2263,9 @@
       }).join("");
 
       var cardHtmlFn = function (p) {
-        var isRunning = p.running;
+        var isUnknown = p.unknown === true, isStopping = p.stopping === true;
+        var isRunning = p.running && !isUnknown;
+        var runtimeHelp = isStopping ? t("profile.runtime.stopping-help") : isUnknown ? t("profile.runtime.unconfirmed-help") : "";
         // R9 P1-2: render the in-flight busy state so a list re-render cannot
         // re-enable a card mid-launch (setCardBusy also patches live nodes).
         var isBusy = !!busyCards[p.dirId];
@@ -2270,14 +2320,16 @@
         var healthSelect = '<select class="health-select" data-action="health" aria-label="' +
           escAttr(t('profile.health.aria', 'Run a health check')) + '">' +
           '<option value="">' + esc(t('profile.health.placeholder', 'Health…')) + '</option>' +
-          '<option value="drift">' + esc(t('profile.health.drift', 'Fingerprint drift')) + '</option>' +
-          '<option value="lock">' + esc(t('profile.health.lock', 'Lock fingerprint baseline')) + '</option>' +
+          '<option value="drift">' + esc(t('profile.health.drift', 'Run fingerprint comparison')) + '</option>' +
+          '<option value="drift-details">' + esc(t('profile.health.drift-details', 'View last fingerprint comparison')) + '</option>' +
+          '<option value="lock">' + esc(t('profile.health.lock', 'Capture/update live reference…')) + '</option>' +
           '<option value="consistency">' + esc(t('profile.health.consistency', '4-field alignment')) + '</option>' +
           '<option value="env">' + esc(t('profile.health.env', 'Host environment')) + '</option>' +
           '<option value="webrtc">' + esc(t('profile.health.webrtc', 'WebRTC leak')) + '</option>' +
           '<option value="network">' + esc(t('profile.health.network', 'Observe this page’s network for 10 seconds')) + '</option>' +
           '<option value="risk">' + esc(t('profile.health.external', 'External site (ping0.cc)')) + '</option>' +
           '<option value="history">' + esc(t('profile.health.history', 'History')) + '</option>' +
+          '<option value="reset">' + esc(t('profile.health.reset', 'Advanced: reset fingerprint baseline…')) + '</option>' +
           '</select>';
         var isLocked = !!(p.lock && p.lock.owner);
         var lockBadge = isLocked ? '<span class="status-badge badge-governance" style="background:var(--warning-bg);color: var(--warning-text);" title="' + escAttr(t('profile.badge.locked', 'Locked (governance): owned by {owner}').replace('{owner}', p.lock.ownerName || p.lock.owner)) + '">' + icon("lock", 11) + ' ' + esc(p.lock.ownerName || 'device') + '</span>' : '';
@@ -2314,7 +2366,7 @@
             // card by ~129px). Row 2 is theirs alone, so they wrap among
             // themselves and the card never grows past its column.
             '<span class="card-status">' +
-              '<span class="status-badge badge-lifecycle ' + (isRunning ? 'status-running' : 'status-stopped') + '">' + (isRunning ? t('profile.status.running', 'Running') : t('profile.status.stopped', 'Stopped')) + '</span>' +
+              '<span class="status-badge badge-lifecycle ' + (isUnknown || isStopping ? 'status-warn' : isRunning ? 'status-running' : 'status-stopped') + '" title="' + escAttr(runtimeHelp) + '">' + esc(isUnknown ? t('profile.status.unconfirmed', 'Runtime unconfirmed') : isStopping ? t('profile.status.stopping', 'Waiting for browser exit') : isRunning ? t('profile.status.running', 'Running') : t('profile.status.stopped', 'Stopped')) + '</span>' +
               lockBadge +
               syncBadge +
               engineBadge +
@@ -2348,9 +2400,11 @@
             // reachable as a tooltip so merging the old "Proxy" row into this
             // control loses no information.
             '<select class="proxy-select" data-action="proxy" title="' + escAttr(proxyStr) + '" aria-label="' + escAttr(t('profile.row.proxy', 'Proxy')) + '">' + proxyOptsHtml + '</select>' +
-            (isRunning
-              ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>' + icon('stop', 14) + ' ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
-              : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>' + icon('play', 14) + ' ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
+            (isUnknown || isStopping
+              ? '<button class="btn btn-secondary btn-sm" data-action="refresh-runtime" title="' + escAttr(runtimeHelp) + '" aria-label="' + escAttr(t('profile.action.retry-status', 'Retry status')) + '"' + disAttr + '>' + icon('refresh', 14) + ' ' + esc(t('profile.action.retry-status', 'Retry status')) + '</button> '
+              : isRunning
+                ? '<button class="btn btn-secondary btn-sm" data-action="stop" aria-label="' + escAttr(t('profile.action.stop', 'Stop this profile')) + '"' + disAttr + '>' + icon('stop', 14) + ' ' + esc(t('profile.action.stop-label', 'Stop')) + '</button> '
+                : '<button class="btn btn-primary btn-sm" data-action="launch" aria-label="' + escAttr(t('profile.action.launch', 'Launch this profile')) + '"' + disAttr + '>' + icon('play', 14) + ' ' + esc(t('profile.action.launch-label', 'Launch')) + '</button> ') +
             '<button class="btn btn-secondary btn-sm btn-icon" data-action="edit" title="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '" aria-label="' + escAttr(t('profile.action.edit', 'Edit this profile')) + '"' + disAttr + '>' + icon('edit', 14) + '</button> ' +
             (p.appUrl ? '<button class="btn btn-secondary btn-sm btn-icon" data-action="open-app" title="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '" aria-label="' + escAttr(t('profile.action.open-app', 'Open as Web App')) + '">' + icon('monitor', 14) + '</button> ' : '') +
             // ── UE-08: every control has an accessible name ──
@@ -2608,6 +2662,7 @@
       else if (action === "note") agentBrowser.addNote(dirId);
       else if (action === "stop") agentBrowser.stop(dirId);
       else if (action === "launch") agentBrowser.launch(dirId);
+      else if (action === "refresh-runtime") loadProfiles(true);
       else if (action === "edit") agentBrowser.editProfile(dirId);
       else if (action === "cookies") agentBrowser.showCookies(dirId);
       else if (action === "extensions") agentBrowser.showExtensions(dirId);
@@ -2651,7 +2706,9 @@
         if (!kind || !hcard || !hcard.dataset.dirId) return;
         var id = hcard.dataset.dirId;
         if (kind === "drift") agentBrowser.checkDrift(id);
+        else if (kind === "drift-details") agentBrowser.openFingerprintDetails(id);
         else if (kind === "lock") agentBrowser.lockBaseline(id);
+        else if (kind === "reset") agentBrowser.resetBaseline(id);
         else if (kind === "consistency") agentBrowser.runConsistencyCheck(id);
         else if (kind === "env") agentBrowser.openEnvRisk(id);
         else if (kind === "webrtc") agentBrowser.openWebRtcDiag(id);
@@ -2665,14 +2722,107 @@
   // sale-96: one-click fingerprint lock — capture the live baseline now so
   // later drift blocks the launch. Requires a running profile (CDP read).
   var baselineConfirmations = Object.create(null);
-  function baselineReviewValue(value) {
+  var baselineResetConfirmations = Object.create(null);
+  function baselineReviewValue(value, full) {
     var text = typeof value === "string" ? value : JSON.stringify(value);
     if (text === undefined) return t("common.unknown", "Unknown");
-    return text.length > 240 ? text.slice(0, 240) + "…" : text;
+    return !full && text.length > 240 ? text.slice(0, 240) + "…" : text;
   }
-  function captureHealthBaseline(dirId, confirmationToken) {
+  function showLaunchDriftReview(dirId, check, blocked) {
+    agentBrowser.showFingerprintComparison(dirId, check || { checked: false }, { source: "launch", historical: true, blocked: blocked });
+  }
+  function resetHealthBaseline(dirId, confirmationToken) {
     var request = beginHealthRequest(dirId, "drift");
     if (!request) return;
+    delete baselineResetConfirmations[dirId];
+    healthCall("browser.resetBaseline", function () {
+      return api.browser.resetBaseline(dirId, confirmationToken ? { confirmationToken: confirmationToken } : undefined);
+    }, request).then(function (r) {
+      finishHealthRequest(request);
+      if (!healthResponseCurrent(request, r)) return;
+      if (r && (r.code === "PROFILE_RUNNING" || r.code === "PROFILE_STOP_REQUIRED")) {
+        toast(t("health.baseline.reset-running", "Stop this profile first, then choose Health > Reset fingerprint baseline… again. No stop was requested."), "warning");
+        return;
+      }
+      if (r && r.code === "BASELINE_CONFIRMATION_STALE") {
+        toast(t("health.baseline.reset-stale", "The reset review expired or the profile changed. Nothing was reset. Choose Health > Reset fingerprint baseline… and review again."), "warning");
+        return;
+      }
+      if (r && r.code === "BASELINE_NOT_SET") {
+        toast(t("health.baseline.reset-not-set", "No fingerprint baseline is set; nothing was reset."), "info");
+        return;
+      }
+      if (r && r.code === "BASELINE_RESET_CONFIRMATION_REQUIRED") {
+        if (typeof r.confirmationToken !== "string" || !r.confirmationToken) {
+          toast(r.error || t("health.baseline.reset-failed", "Fingerprint baseline could not be reset."), "error");
+          return;
+        }
+        baselineResetConfirmations[dirId] = r.confirmationToken;
+        agentBrowser.confirm(t("health.baseline.reset-confirm", "Remove this profile's stored fingerprint baseline?"), function () {
+          if (!healthRequestCurrent(request) || baselineResetConfirmations[dirId] !== r.confirmationToken) {
+            toast(t("health.baseline.reset-stale", "The reset review expired or the profile changed. Nothing was reset. Choose Health > Reset fingerprint baseline… and review again."), "warning");
+            return;
+          }
+          var token = baselineResetConfirmations[dirId];
+          delete baselineResetConfirmations[dirId];
+          resetHealthBaseline(dirId, token);
+        }, {
+          title: t("health.baseline.reset-title", "Reset fingerprint baseline?"),
+          ackLabel: t("health.baseline.reset-ack", "I understand that this removes the comparison baseline, not the detected risk, and does not prove the profile is safe."),
+          detailHtml: '<div style="font-size:12px;line-height:1.6;">' + esc(t("health.baseline.reset-scope", "Only the fingerprint baseline is removed. The seed, identity settings, operation history, Cookies and LocalStorage stay unchanged.")) + '</div>' +
+            '<div style="margin-top:8px;">' + esc(t("health.baseline.reset-unverified", "Fingerprint comparison will be unavailable until you launch the profile and choose Health > Lock fingerprint baseline. Resetting is not a safety pass and does not launch the browser.")) + '</div>' +
+            (r.warning ? '<div style="margin-top:8px;color:var(--warning-text);">' + esc(r.warning) + '</div>' : ''),
+        });
+        return;
+      }
+      if (r && r.ok && r.baselineReset === true) {
+        var detail = t("health.baseline.reset-done", "Fingerprint baseline removed. Comparison is not verified until a new launch and Lock fingerprint baseline; this is not a safety pass.");
+        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: detail }, request.requestId);
+        toast(detail + (r.warning ? " " + r.warning : ""), r.warning ? "warning" : "info");
+        scheduleProfilesRefresh();
+      } else {
+        toast(r && r.error || t("health.baseline.reset-failed", "Fingerprint baseline could not be reset."), "error");
+      }
+    }).catch(function (e) {
+      finishHealthRequest(request);
+      if (healthRequestCurrent(request)) toast(e.message || String(e), "error");
+    });
+  }
+  agentBrowser.resetBaseline = function(dirId) { resetHealthBaseline(dirId); };
+
+  // Narrow mutation bridge for the viewer. Main binds the candidate and token;
+  // the existing health lease also invalidates confirmations on a newer check.
+  var snapshotBaselineConfirmations = Object.create(null);
+  agentBrowser.captureReviewedFingerprintBaseline = function(dirId, reportId, token, viewEpoch) {
+    var reviewed = snapshotBaselineConfirmations[dirId];
+    if (!agentBrowser.isFingerprintViewCurrent(viewEpoch, dirId) || token && (!reviewed || reviewed.reportId !== reportId || reviewed.token !== token || !healthRequestCurrent(reviewed.request))) {
+      return Promise.resolve({ ok: false, code: "BASELINE_CONFIRMATION_STALE" });
+    }
+    delete snapshotBaselineConfirmations[dirId];
+    var request = beginHealthRequest(dirId, "drift");
+    if (!request) return Promise.resolve({ ok: false, code: "HEALTH_BUSY" });
+    request.fingerprintViewEpoch = viewEpoch;
+    var options = { reportId: reportId };
+    if (token) options.confirmationToken = token;
+    return healthCall("browser.captureBaseline", function () { return api.browser.captureBaseline(dirId, options); }, request).then(function (result) {
+      finishHealthRequest(request);
+      if (!healthResponseCurrent(request, result)) return null;
+      if (result && result.code === "BASELINE_CONFIRMATION_REQUIRED" && typeof result.confirmationToken === "string") snapshotBaselineConfirmations[dirId] = { reportId: reportId, token: result.confirmationToken, request: request };
+      if (result && result.ok && result.baselineCommitted === true) {
+        recordHealthResult(dirId, "drift", { outcome: result.outcome === "risk" || result.risky ? "risk" : "baseline-established", detail: t("fingerprint.saved") }, request.requestId);
+        scheduleProfilesRefresh();
+      }
+      return result;
+    }).catch(function (error) { finishHealthRequest(request); if (healthRequestCurrent(request)) throw error; return null; });
+  };
+
+  function captureHealthBaseline(dirId, confirmationToken, fingerprintEpoch) {
+    var request = beginHealthRequest(dirId, "drift");
+    if (!request) {
+      if (fingerprintEpoch !== undefined) agentBrowser.showFingerprintBaselineOutcome(dirId, { ok: false, code: "HEALTH_BUSY" }, { epoch: fingerprintEpoch, live: true });
+      return;
+    }
+    request.fingerprintViewEpoch = fingerprintEpoch;
     delete baselineConfirmations[dirId];
     healthCall("browser.captureBaseline", function () {
       return api.browser.status(dirId).then(function (s) {
@@ -2682,50 +2832,58 @@
     }, request).then(function (r) {
       finishHealthRequest(request);
       if (!healthResponseCurrent(request, r)) return;
+      if (fingerprintEpoch !== undefined) agentBrowser.showFingerprintBaselineOutcome(dirId, r, { epoch: fingerprintEpoch, live: true });
       if (r && r.code === "PROFILE_NOT_RUNNING") {
         toast(t("toast.fp.lock-need-running", "Start the profile first, then lock — the baseline is read from the live browser"), "info");
         return;
       }
       if (r && r.code === "BASELINE_CONFIRMATION_REQUIRED") {
-        recordHealthResult(dirId, "drift", { outcome: "risk", detail: t("health.baseline.not-replaced", "Risk found. The previous baseline has not been replaced.") }, request.requestId);
+        var reviewOutcome = r.risky || r.outcome === "risk" || r.report && r.report.risky ? "risk" : "warn";
+        recordHealthResult(dirId, "drift", { outcome: reviewOutcome, detail: t("health.baseline.not-replaced", "Changes need review. The previous baseline has not been replaced.") }, request.requestId);
         if (!r.confirmationToken) { toast(t("toast.fp.lock-failed", "Failed to lock baseline"), "error"); return; }
         baselineConfirmations[dirId] = r.confirmationToken;
-        var fields = (r.drift || []).map(function (d) {
+        var fields = (r.report && r.report.changes || r.drift || []).map(function (d) {
           return '<div style="margin-top:6px;"><b>' + esc(d.field || d.code || "") + '</b>' +
             '<div>' + esc(t("health.baseline.previous", "Previous / expected")) + ': ' + esc(baselineReviewValue(d.baseline)) + '</div>' +
             '<div>' + esc(t("health.baseline.current", "Current snapshot")) + ': ' + esc(baselineReviewValue(d.current)) + '</div></div>';
         }).join("");
-        agentBrowser.confirm(t("health.baseline.confirm", "Replace the baseline with this risky snapshot?"), function () {
+        agentBrowser.confirm(t("health.baseline.confirm", "Replace the baseline with the reviewed snapshot?"), function () {
           if (baselineConfirmations[dirId] !== r.confirmationToken || !healthRequestCurrent(request)) return;
           var token = baselineConfirmations[dirId];
           delete baselineConfirmations[dirId]; // A confirmation is single-use; never retry a stale token.
-          captureHealthBaseline(dirId, token);
-        }, { title: t("health.baseline.risk-title", "Confirm risky baseline replacement"),
-          detailHtml: '<div style="color:var(--danger-text);">' + esc(t("health.baseline.not-replaced", "Risk found. The previous baseline has not been replaced.")) + '</div>' +
+          captureHealthBaseline(dirId, token, fingerprintEpoch);
+        }, { title: t("health.baseline.risk-title", "Confirm reference replacement"),
+          ackLabel: t("fingerprint.update.ack"),
+          detailHtml: '<div>' + esc(t("health.baseline.not-replaced", "Changes need review. The previous baseline has not been replaced.")) + '</div>' +
             '<div style="margin-top:8px;word-break:break-word;">' + fields + '</div>' +
-            '<div style="margin-top:8px;">' + esc(t("health.baseline.bound-confirmation", "This confirmation is bound to the reviewed baseline, configuration and live snapshot. If any changes, review and confirm again. Saving a risky baseline does not mean the profile passed a health check.")) + '</div>',
+            '<div style="margin-top:8px;">' + esc(t("health.baseline.bound-confirmation", "This confirmation is bound to the reviewed baseline, configuration and live snapshot. If any changes, review and confirm again. Saving a new reference does not mean the profile passed a health check.")) + '</div>',
         });
         return;
       }
       if (r && r.code === "BASELINE_CONFIRMATION_STALE") {
-        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Lock baseline again and review the new risks.") }, request.requestId);
-        toast(t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Lock baseline again and review the new risks."), "warning");
+        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Capture/update live reference again and review the new snapshot.") }, request.requestId);
+        toast(t("health.baseline.stale", "The baseline or live snapshot changed. Nothing was replaced. Run Capture/update live reference again and review the new snapshot."), "warning");
         return;
       }
       if (r && r.ok) {
         var outcome = r.risky || r.outcome === "risk" ? "risk" : r.outcome === "warn" ? "warn" : "baseline-established";
-        var detail = outcome === "baseline-established" ? t("health.baseline.established", "Baseline recorded; this is not a fingerprint stability pass.") : t("health.baseline.risk-saved", "Baseline replaced after explicit risk confirmation. The observed risk remains.");
+        var detail = outcome === "baseline-established" ? t("health.baseline.established", "Baseline recorded; this is not a fingerprint stability pass.") : t("health.baseline.risk-saved", "Baseline replaced after explicit confirmation. This is not a fingerprint stability or safety pass.");
         recordHealthResult(dirId, "drift", { outcome: outcome, detail: detail }, r.requestId || request.requestId);
         toast(detail + (r.warning ? " " + r.warning : ""), outcome === "baseline-established" && !r.warning ? "info" : "warning");
         scheduleProfilesRefresh();
       } else {
         var error = r && r.error || t("toast.fp.lock-failed", "Failed to lock baseline");
-        recordHealthResult(dirId, "drift", { outcome: r && r.outcome === "cancelled" ? "cancelled" : "error", detail: error }, request.requestId);
+        recordHealthResult(dirId, "drift", { outcome: r && (r.outcome === "cancelled" || r.outcome === "unavailable") ? r.outcome : r && r.code === "BASELINE_CAPTURE_UNAVAILABLE" ? "unavailable" : "error", detail: error }, request.requestId);
         toast(error, "error");
       }
-    }).catch(function (e) { finishHealthRequest(request); toast(e.message || String(e), "error"); });
+    }).catch(function (e) {
+      finishHealthRequest(request);
+      if (!healthRequestCurrent(request)) return;
+      if (fingerprintEpoch !== undefined) agentBrowser.showFingerprintBaselineOutcome(dirId, { ok: false }, { epoch: fingerprintEpoch, live: true });
+      toast(e.message || String(e), "error");
+    });
   }
-  agentBrowser.lockBaseline = function(dirId) { captureHealthBaseline(dirId); };
+  agentBrowser.lockBaseline = function(dirId, fingerprintEpoch) { captureHealthBaseline(dirId, undefined, fingerprintEpoch); };
 
   // B3 (#107): browser:consistency-check existed in main + preload with
   // zero renderer callers — the 4-field alignment check (IP/timezone/locale/
@@ -2772,39 +2930,22 @@
   agentBrowser.checkDrift = function(dirId) {
     var request = beginHealthRequest(dirId, "drift");
     if (!request) return;
-    healthCall("browser.checkDrift", function () {
+    request.fingerprintViewEpoch = agentBrowser.beginFingerprintComparison(dirId, { source: "manual" });
+    return healthCall("browser.checkDrift", function () {
       return api.browser.checkDrift(dirId);
     }, request).then(function(r) {
       finishHealthRequest(request);
       if (!healthResponseCurrent(request, r)) return;
-      if (!r || !r.ok) {
-        var error = r && r.error || t("toast.fp.drift-failed", "Fingerprint check failed");
-        recordHealthResult(dirId, "drift", { outcome: r && (r.outcome === "cancelled" || r.outcome === "unavailable") ? r.outcome : "error", detail: error }, request.requestId);
-        toast(error, "error"); return;
-      }
-      if (!r.hasBaseline) {
-        recordHealthResult(dirId, "drift", { outcome: "inconclusive", detail: t("toast.fp.no-baseline", "No fingerprint baseline yet — launch the profile and capture a baseline first") }, request.requestId);
-        toast(t("toast.fp.no-baseline", "No fingerprint baseline yet — launch the profile and capture a baseline first"), "info");
-        return;
-      }
-      var driftFields = (r.drift || []).map(function(d) { return d.field; });
-      // PL-05: keep the verdict so the card can show it later.
-      var outcome = r.risky ? "risk" : driftFields.length ? "warn" : knownHealthOutcome(r.outcome) ? r.outcome : "inconclusive";
-      recordHealthResult(dirId, "drift", {
-        outcome: outcome,
-        detail: driftFields.slice(0, 6).join(", "),
-      }, r.requestId || request.requestId);
-      if (outcome === "pass" || outcome === "warn") {
-        toast(t("toast.fp.stable", "Fingerprint stable ({n} benign change(s))").replace("{n}", driftFields.length), outcome === "warn" ? "warning" : "success");
-      } else if (outcome === "risk") {
-        toast(t("toast.fp.drift", "Risky fingerprint drift") + ": " + driftFields.slice(0, 6).join(", ") + (driftFields.length > 6 ? " (+" + (driftFields.length - 6) + ")" : ""), "error");
-      } else {
-        toast(healthVerdict({ outcome: outcome }).label, "info");
-      }
+      agentBrowser.showFingerprintComparison(dirId, r, { epoch: request.fingerprintViewEpoch, source: "manual", historical: !!(r && r.code === "PROFILE_NOT_RUNNING") });
+      // A stopped response replays original evidence. It must not mint a new
+      // check, cache timestamp, history query, baseline or launch.
+      if (r && r.code === "PROFILE_NOT_RUNNING") return;
+      recordHealthResult(dirId, "drift", agentBrowser.fingerprintComparisonSummary(r), r && r.requestId || request.requestId);
       scheduleProfilesRefresh();
     }).catch(function(e) {
       finishHealthRequest(request);
-      if (healthRequestCurrent(request)) toast(e.message || String(e), "error");
+      if (!healthRequestCurrent(request)) return;
+      agentBrowser.showFingerprintComparison(dirId, { ok: false, outcome: "error", error: e.message || String(e) }, { epoch: request.fingerprintViewEpoch, source: "manual" });
     });
   };
 

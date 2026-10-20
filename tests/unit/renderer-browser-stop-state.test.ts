@@ -11,7 +11,7 @@ import * as vm from "node:vm";
 const ROOT = path.resolve(__dirname, "../..");
 const HTML = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
 const I18N = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8");
-const MODULES = ["icons", "core", "ipc", "tabs", "profiles", "batch-ui"] as const;
+const MODULES = ["icons", "core", "ipc", "fingerprint-drift", "tabs", "profiles", "batch-ui"] as const;
 const SOURCES = Object.fromEntries(MODULES.map((name) => [name,
   fs.readFileSync(path.join(ROOT, `src/renderer/js/app/${name}.js`), "utf8"),
 ]));
@@ -65,6 +65,8 @@ class Element {
   set value(value: string | number) { this.input = String(value); }
   get open() { return this.attributes.open !== undefined; }
   set open(value: boolean) { if (value) this.attributes.open = ""; else delete this.attributes.open; }
+  get hidden() { return this.attributes.hidden !== undefined; }
+  set hidden(value: boolean) { if (value) this.attributes.hidden = ""; else delete this.attributes.hidden; }
   get textContent(): string { return this.text + this.children.map((c) => c.textContent).join(""); }
   set textContent(value: string) { this.text = String(value); for (const child of this.children) child.parentNode = null; this.children = []; }
   get innerHTML(): string { return escape(this.text) + this.children.map((c) => c.tagName === "#TEXT" ? escape(c.textContent)
@@ -190,6 +192,8 @@ function harness(language: "en-US" | "zh-CN" = "en-US") {
       binary: vi.fn(async () => ({ installed: true, version: "synthetic-engine", installedVersions: [] })),
       engineStatus: vi.fn(async () => ({ firefox: { installed: true } })),
       healthHistory: null, // No health evidence is requested or manufactured by this suite.
+      status: vi.fn(async (id: string): Promise<any> => ({ running: profiles.find(p => p.dirId === id)?.running === true })),
+      driftReport: vi.fn(async (_id: string): Promise<any> => ({ ok: true, report: null, currentConfigMatches: false, canUpdateBaseline: false })),
       batchMaxConcurrency: vi.fn(async () => ({ max: 4 })),
       batchStop: vi.fn(async (_ids: string[], _concurrency: number, _jobId: string) => batchReceipt()),
     }, "browser"),
@@ -204,10 +208,11 @@ function harness(language: "en-US" | "zh-CN" = "en-US") {
     Option: function(text: string, value: string) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; },
   });
   vm.runInContext(I18N, context, { filename: "src/renderer/js/i18n.js" });
+  window.i18n.apply(); // The real DOMContentLoaded performs this static translation step.
   for (const name of ["icons", "core", "ipc"] as const) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
   const app: any = window.agentBrowser;
   app.helpers.toast = vi.fn(); // Observe rendered copy without native live-region timers.
-  for (const name of ["tabs", "profiles", "batch-ui"] as const) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
+  for (const name of ["fingerprint-drift", "tabs", "profiles", "batch-ui"] as const) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
   const el = (id: string): Element => { const found = document.getElementById(id); if (!found) throw new Error("Missing production HTML element " + id); return found; };
   const card = (id = ID): Element => { const found = el("profile-list").querySelector(`.profile-card[data-dir-id="${id}"]`); if (!found) throw new Error("Production card missing: " + el("profile-list").textContent); return found; };
   const render = async () => { app.loadProfiles(true); await flush(); card(); };
@@ -317,6 +322,33 @@ for (const language of ["en-US", "zh-CN"] as const) {
       expect(h.window._profileRuntimeOverrides?.[ID]).toBeUndefined();
     });
 
+    it("keeps unconfirmed/stopping runtimes out of Stopped and replaces Launch with read-only status retry", async () => {
+      const h = harness(language);
+      let runtime: any = { running: false, pid: null, unknown: true };
+      h.api.browser.list.mockImplementation(async () => [{ ...structuredClone(PROFILE), ...runtime }, { ...structuredClone(PROFILE), dirId: OTHER, name: "Confirmed stopped control", running: false, pid: null }]);
+      h.app.helpers.markProfileRuntime(ID, true, PID); await h.render();
+      expect(h.card().querySelector(".badge-lifecycle")?.textContent).toBe(h.window.i18n.t("profile.status.unconfirmed"));
+      expect(h.card().querySelector('[data-action="launch"]')).toBeNull(); expect(h.card().querySelector('[data-action="stop"]')).toBeNull();
+      expect(h.window._profileRuntimeOverrides?.[ID]).toBeUndefined();
+      const retry = h.card().querySelector('[data-action="refresh-runtime"]')!;
+      expect(retry.textContent).toContain(h.window.i18n.t("profile.action.retry-status"));
+      expect(retry.getAttribute("title")).toBe(h.window.i18n.t("profile.runtime.unconfirmed-help"));
+      const reads = h.api.browser.list.mock.calls.length;
+      (h.el("profile-list") as any).onclick({ target: retry }); await flush(); expect(h.api.browser.list.mock.calls.length).toBeGreaterThan(reads);
+      h.app.launch(ID); await flush(); expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+      h.el("profile-status-filter").value = "stopped"; h.app.onProfileFilterChange(); await flush();
+      expect(h.el("profile-list").querySelector(`[data-dir-id="${ID}"]`)).toBeNull(); expect(h.card(OTHER)).toBeTruthy();
+      runtime = { running: true, pid: PID, stopping: true }; h.app.clearProfileFilters(); await flush();
+      expect(h.card().querySelector(".badge-lifecycle")?.textContent).toBe(h.window.i18n.t("profile.status.stopping"));
+      expect(h.card().classList.contains("running")).toBe(true); // A stop in progress is not an observed exit.
+      expect(h.card().querySelector('[data-action="launch"]')).toBeNull(); expect(h.card().querySelector('[data-action="refresh-runtime"]')).not.toBeNull();
+      h.app.launch(ID); await flush(); expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+      runtime = { running: false, pid: null }; h.app.loadProfiles(true); await flush();
+      expect(h.card().querySelector(".badge-lifecycle")?.textContent).toBe(h.window.i18n.t("profile.status.stopped"));
+      expect(h.card().querySelector('[data-action="launch"]')).not.toBeNull();
+      expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+    });
+
     it("keeps selection, search and unsaved profile fields during stop-acceptance list refresh", async () => {
       const h = harness(language); await h.render();
       const checkbox = h.card().querySelector(".profile-select-checkbox")!;
@@ -354,6 +386,115 @@ it("production clearProfileRuntime without seq clears the current overlay, while
   h.app.helpers.clearProfileRuntime(ID);
   expect(h.window._profileRuntimeOverrides[ID]).toBeUndefined();
 });
+
+function comparisonReport(changes: any[], patch: any = {}) {
+  return { schemaVersion: 1, policyVersion: 2, id: "synthetic-launch-report", dirId: ID, observedAt: 1700000000000, source: "launch", hasBaseline: true,
+    fields: 7, availableFields: 7, baselineFields: 7, comparedFields: 12,
+    counts: { risk: changes.filter(row => row.severity === "risk").length, review: changes.filter(row => row.severity === "review").length,
+      info: changes.filter(row => row.severity === "info").length, unavailable: changes.filter(row => row.severity === "unavailable").length },
+    changes, risky: changes.some(row => row.severity === "risk"), partial: changes.some(row => row.severity === "unavailable"), ...patch };
+}
+
+for (const language of ["en-US", "zh-CN"] as const) {
+  describe(`fingerprint launch receipts (${language}, original card Launch onclick)`, () => {
+    it("shows actual blocked launch values and original observation time without a running overlay", async () => {
+      const h = harness(language), at = Date.parse("2024-04-05T06:07:08Z");
+      const before = "synthetic-before-" + "A".repeat(280), current = '<img src=x onerror="synthetic">';
+      h.exitedList(); await h.render();
+      h.api.browser.launch.mockResolvedValue({ success: false, code: "fingerprint-drift", error: "Fingerprint drift blocked (userAgent).",
+        driftCheck: { checked: true, risky: true, observedAt: at, drift: [
+          { field: "userAgent", baseline: before, current },
+          { field: "uaHighEntropy", baseline: { architecture: "arm" }, current: { architecture: "x86" } },
+        ] } });
+      h.clickLaunch(); await flush();
+      expect(h.api.browser.launch).toHaveBeenCalledExactlyOnceWith(ID, undefined);
+      expect(h.el("dlg-fingerprint-drift").open).toBe(true);
+      expect(h.el("dlg-confirm").open).toBe(false);
+      const detail = h.el("fingerprint-drift-body"), text = detail.textContent;
+      expect(text).toContain(new Date(at).toLocaleString()); expect(text).toContain("userAgent");
+      expect(text).toContain(before); expect(text).toContain(current);
+      expect(text).toContain("uaHighEntropy.architecture");
+      expect(text).toContain("arm"); expect(text).toContain("x86");
+      expect(text).toContain(h.window.i18n.t("fingerprint.field.architecture"));
+      expect(text).not.toContain('{"architecture":'); // Nested values are readable leaves, not opaque JSON blobs.
+      expect(detail.querySelector("[data-fingerprint-expand]")).not.toBeNull();
+      expect(detail.querySelector("img")).toBeNull(); expect(detail.querySelector("[onerror]")).toBeNull();
+      expect(text).toContain(h.window.i18n.t("health.drift.block-boundary"));
+      expect(h.el("fingerprint-drift-scope").textContent).toContain(h.window.i18n.t("fingerprint.scope").split(".")[0]);
+      expect(h.el("fingerprint-drift-advanced").textContent).toContain(h.window.i18n.t("profile.health.reset"));
+      expect(h.el("fingerprint-drift-recheck").hidden).toBe(true);
+      expect(h.el("fingerprint-drift-update").hidden).toBe(true);
+      expect(h.el("fingerprint-drift-launch").hidden).toBe(false);
+      expect(text).toContain(h.window.i18n.t("fingerprint.next.fresh-launch"));
+      expect(h.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+      expect(h.window._profileRuntimeOverrides?.[ID]).toBeUndefined();
+      expect(h.card().getAttribute("aria-busy")).toBe("false");
+      expect(h.card().classList.contains("running")).toBe(false);
+      h.el("dlg-fingerprint-drift").close(); await flush(); // Reading/closing does not start or stop anything.
+      expect(h.api.browser.launch).toHaveBeenCalledTimes(1); expect(h.api.browser.stop).not.toHaveBeenCalled();
+      await h.tick(); expect(h.window._profileRuntimeOverrides?.[ID]).toBeUndefined();
+      expect(h.card().classList.contains("running")).toBe(false);
+      expect(h.card().getAttribute("aria-busy")).toBe("false");
+    });
+
+    it("reports failed fingerprint capture as unavailable, never a launch success or proven drift", async () => {
+      const h = harness(language); h.exitedList(); await h.render();
+      h.api.browser.launch.mockResolvedValue({ success: false, code: "fingerprint-check-unavailable", error: "Fingerprint check unavailable: synthetic capture refusal.",
+        driftCheck: { checked: false, error: "synthetic capture failure" } });
+      h.clickLaunch(); await flush(); await h.tick();
+      expect(h.toast).toHaveBeenCalledWith(h.window.i18n.t("err.drift.unavailable"), "error", { detail: "synthetic capture failure" });
+      expect(h.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+      expect(h.messages()).not.toContain(h.window.i18n.t("err.drift.blocked"));
+      expect(h.el("dlg-confirm").open).toBe(false);
+      expect(h.window._profileRuntimeOverrides?.[ID]).toBeUndefined();
+      expect(h.card().classList.contains("running")).toBe(false);
+      expect(h.card().getAttribute("aria-busy")).toBe("false");
+      expect(h.api.browser.stop).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "unavailable capture with the gate off", key: "launch.drift-unavailable-warning", warning: true, driftCheck: { checked: false, error: "synthetic capture failure" } },
+      { label: "legacy risky drift with the gate off", key: "launch.drift-risk-warning", warning: true, driftCheck: { checked: true, risky: true, observedAt: 1700000000000,
+        drift: [{ field: "platform", baseline: "MacIntel", current: "Win32" }] } },
+      { label: "unclassified legacy viewport difference", key: "launch.drift-legacy-warning", warning: true, driftCheck: { checked: true, risky: false, observedAt: 1700000000000,
+        drift: [{ field: "innerWidth", baseline: 1000, current: 1200 }] } },
+      { label: "normal resize/sidebar/theme INFO only", key: "launch.drift-info", warning: false, driftCheck: { checked: true, report: comparisonReport([
+        { field: "innerWidth", baseline: 1000, current: 1200, severity: "info", category: "window", reason: "window-geometry" },
+        { field: "screen.availWidth", baseline: 1440, current: 1360, severity: "info", category: "environment", reason: "display-environment" },
+        { field: "colorScheme", baseline: "light", current: "dark", severity: "info", category: "environment", reason: "runtime-environment" },
+      ]) } },
+      { label: "intentional verified engine update", key: "launch.drift-review-warning", warning: true, driftCheck: { checked: true, report: comparisonReport([
+        { field: "uaHighEntropy.uaFullVersion", baseline: "150.0", current: "151.0", severity: "review", category: "identity", reason: "browser-version" },
+      ]) } },
+      { label: "optional probe unavailable", key: "launch.drift-partial-warning", warning: true, driftCheck: { checked: true, report: comparisonReport([
+        { field: "voices", baseline: ["synthetic"], current: null, severity: "unavailable", category: "availability", reason: "probe-unavailable" },
+      ]) } },
+    ])("reports $label independently of process-start success", async ({ key, warning, driftCheck }) => {
+      const h = harness(language); h.exitedList(); await h.render();
+      h.api.browser.launch.mockImplementation(async () => {
+        h.runningList(); return { success: true, pid: PID, cdpPort: 41_701, driftCheck };
+      });
+      h.clickLaunch(); await flush(); await h.tick(); expectRunning(h);
+      const startup = h.toast.mock.calls.find((call: any[]) => String(call[0]).startsWith(h.window.i18n.t("toast.profile.started")));
+      expect(startup?.[1]).toBe(warning ? "warning" : "success");
+      expect(startup?.[2]?.detail).toContain(h.window.i18n.t(key));
+      if (!warning) expect(h.toast.mock.calls.some((call: any[]) => call[1] === "warning")).toBe(false);
+      else expect(h.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+      if ("error" in driftCheck) expect(startup?.[2]?.detail).toContain(driftCheck.error);
+      expect(startup?.[2]?.action.label).toBe(h.window.i18n.t("launch.drift-review"));
+      startup?.[2]?.action.onClick(); await flush();
+      const body = h.el("fingerprint-drift-body");
+      expect(h.el("dlg-fingerprint-drift").open).toBe(true); expect(h.el("dlg-confirm").open).toBe(false);
+      const field = "report" in driftCheck ? driftCheck.report.changes[0].field : "drift" in driftCheck ? driftCheck.drift[0].field : "";
+      if (field) expect(body.textContent).toContain(field);
+      expect(body.textContent).toContain(h.window.i18n.t("fingerprint.historical"));
+      expect(body.textContent).not.toContain(h.window.i18n.t("health.drift.block-boundary"));
+      expect(h.el("fingerprint-drift-recheck").hidden).toBe(false);
+      expect(h.card().getAttribute("aria-busy")).toBe("false");
+      expect(h.api.browser.launch).toHaveBeenCalledTimes(1); expect(h.api.browser.stop).not.toHaveBeenCalled();
+    });
+  });
+}
 
 // Cookie persistence/application is NOT simulated here. These explicit preload
 // receipts exercise only how the unchanged renderer reports a started browser

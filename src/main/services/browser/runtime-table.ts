@@ -25,6 +25,8 @@ export interface RunningEntry {
   port: number;
   lastActivityAt: number;
   engine?: "chromium" | "firefox";
+  /** Version read from the selected binary on this owned fresh launch only. */
+  browserVersion?: string | null;
   /** Opaque startup-input hashes only; never credentials or GPU attestation. */
   launchProvenance?: ChromiumLaunchProvenance;
   /** Absent for legacy/adopted processes; never backfilled from current settings. */
@@ -46,6 +48,14 @@ export function getEntry(dirId: string): RunningEntry | undefined {
 export function getLaunchProxySnapshot(dirId: string): LaunchProxySnapshot | null {
   const snapshot = runningProcesses.get(dirId)?.launchProxy;
   return snapshot ? { mode: snapshot.mode, ...(snapshot.type !== undefined ? { type: snapshot.type } : {}), source: snapshot.source } : null;
+}
+
+/** Saved intent, discovery and a page's UA are never selected-binary evidence. */
+export function getOwnedBrowserVersion(dirId: string): string | null {
+  const entry = runningProcesses.get(dirId), child = entry?.process;
+  return entry && !entry.stopping && child && child.pid === entry.pid && child.exitCode === null &&
+    child.signalCode === null && child.killed !== true && typeof entry.browserVersion === "string" &&
+    /^\d+(?:\.\d+){1,3}$/.test(entry.browserVersion) ? entry.browserVersion : null;
 }
 
 export function setEntry(dirId: string, entry: RunningEntry): void {

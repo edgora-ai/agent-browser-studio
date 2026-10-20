@@ -9,6 +9,10 @@ import { captureWebGlCorpusInPage } from "../../tools/webgl-corpus.js";
 import { captureWebGpuCorpusInPage } from "../../tools/webgpu-corpus.js";
 import { captureFontCorpusInPage } from "../../tools/font-corpus.js";
 import type { BrowserEngine } from "./browser-engine.js";
+import { classifyFingerprintDrift, diffFingerprintSnapshots } from "./fingerprint-drift-policy.js";
+import type { FingerprintDrift } from "./fingerprint-drift-policy.js";
+export type { FingerprintDrift, FingerprintChange, FingerprintDriftAnalysis } from "./fingerprint-drift-policy.js";
+export { analyzeFingerprintDrift, classifyFingerprintDrift, diffFingerprintSnapshots, isFingerprintSnapshotEquivalent } from "./fingerprint-drift-policy.js";
 
 const WEBGL_CORPUS_CAPTURE_SOURCE = captureWebGlCorpusInPage.toString();
 const WEBGPU_CORPUS_CAPTURE_SOURCE = captureWebGpuCorpusInPage.toString();
@@ -246,57 +250,14 @@ export async function captureFingerprint(cdpPort: number, engine: BrowserEngine 
   return typeof value === "string" ? JSON.parse(value) : (value || {});
 }
 
-export interface FingerprintDrift {
-  field: string;
-  baseline: unknown;
-  current: unknown;
-}
-
-/**
- * Window-frame fields measured from the OS window server. On macOS the
- * compositor rounds the window top / content height by 1 px between captures
- * (menu-bar/decoration rounding, the same stock-matched variance recorded in
- * ALIGNMENT_MATRIX). A ±1 change here is placement noise, not identity: the
- * declared screen.* surfaces, DPR and every seeded field still match exactly.
- */
-const FRAME_NOISE_FIELDS = new Set(["screenX", "screenY", "innerWidth", "innerHeight"]);
-
-/** Compare two fingerprints; return the changed fields (drift). */
+/** Compatibility entry point; policy and semantic comparison live in one pure module. */
 export function diffFingerprints(baseline: Fingerprint | null | undefined, current: Fingerprint): FingerprintDrift[] {
-  if (!baseline) return [];
-  const drift: FingerprintDrift[] = [];
-  const keys = new Set([...Object.keys(baseline), ...Object.keys(current)]);
-  for (const k of keys) {
-    const b = (baseline as any)[k];
-    const c = (current as any)[k];
-    if (b === undefined && c === undefined) continue;
-    if (String(b ?? "") !== String(c ?? "")) {
-      const bn = Number(b);
-      const cn = Number(c);
-      if (FRAME_NOISE_FIELDS.has(k) && Number.isFinite(bn) && Number.isFinite(cn) && Math.abs(bn - cn) <= 1) {
-        continue;
-      }
-      drift.push({ field: k, baseline: b ?? null, current: c ?? null });
-    }
-  }
-  return drift;
+  return diffFingerprintSnapshots(baseline, current);
 }
 
-/** True if the drift contains a high-risk signal field. */
+/** Availability is incomplete evidence, never an observed high-risk identity change. */
 export function hasRiskyDrift(drift: FingerprintDrift[]): boolean {
-  const risky = new Set([
-    "userAgent", "platform", "uaPlatform", "uaHighEntropy", "tz", "tzOffset",
-    "glVendor", "glUnmaskedVendor", "glRenderer", "webglCapabilityHash", "webgpuVendor", "webgpuArchitecture",
-    "webgpuDevice", "webgpuDescription", "webgpuCapabilityHash", "webgpuSubgroupMinSize", "webgpuSubgroupMaxSize",
-    "webgpuIsFallbackAdapter", "hardwareConcurrency", "deviceMemory",
-    "maxTouchPoints", "screenW", "screenH", "availLeft", "availTop",
-    "screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight",
-    "devicePixelRatio", "canvasHash",
-    "clientRect", "workerIdentity", "plugins", "mimeTypes", "speechVoices",
-    "fontAvailability", "fontCapabilityHash", "audioHash",
-    "mediaDevices", "storageQuota", "doNotTrack", "systemColors", "preferredColorScheme",
-  ]);
-  return drift.some((d) => risky.has(d.field));
+  return drift.some((row) => classifyFingerprintDrift(row).severity === "risk");
 }
 
 /** Human-readable summary of drifted fields (capped for UI/audit). */
@@ -343,8 +304,8 @@ export function checkPersonaConsistency(
     out.push({ field: "persona.platform", expected: expectedPlat, actual: plat });
   }
   const isMobile = persona.platform === "android";
-  const pluginsStr = String(current.plugins ?? "");
-  if (isMobile && pluginsStr !== "") {
+  const pluginsStr = typeof current.plugins === "string" ? current.plugins : undefined;
+  if (isMobile && pluginsStr !== undefined && pluginsStr !== "") {
     out.push({ field: "persona.plugins", expected: "empty (mobile)", actual: pluginsStr.slice(0, 80) });
   }
   if (!isMobile && pluginsStr === "") {

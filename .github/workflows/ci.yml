@@ -28,6 +28,15 @@ jobs:
         with:
           go-version: "1.25"
       - run: npm ci
+      - name: Prepare owned fixture temporary directory
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const root = fs.realpathSync(fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, "abs-ci-")));
+          fs.chmodSync(root, 0o700);
+          fs.appendFileSync(process.env.GITHUB_ENV, `TMPDIR=${root}\n`);
+          NODE
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build
@@ -83,6 +92,15 @@ jobs:
         with:
           go-version: "1.25"
       - run: npm ci
+      - name: Prepare owned fixture temporary directory
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const root = fs.realpathSync(fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, "abs-ci-")));
+          fs.chmodSync(root, 0o700);
+          fs.appendFileSync(process.env.GITHUB_ENV, `TMPDIR=${root}\n`);
+          NODE
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build (bash on Windows)

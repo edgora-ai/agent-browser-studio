@@ -10,14 +10,15 @@ import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
 import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
-import { acquireRestoreLock, isRestoreLocked } from "./profile-restore-lock.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped } from "./profile-restore-lock.js";
+import { markProfileDataChanging } from "./profile-data-revision.js";
 import { decryptSecretOr } from "./secrets.js";
 import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush, requireSettingsMutation } from "./team.js";
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
 import { listExtensionRepository, getExtensionRepoEntryDir, prepareSyncedExtensionPackage, restoreSyncedExtensionPackage } from "./extension-repository.js";
 import { tMain } from "./main-i18n.js";
-import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken } from "../types.js";
+import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken, SyncProfileRuntimeEffect } from "../types.js";
 import { SyncOperationResult } from "./sync/operation-result.js";
 import { beginSyncOperation, getSyncOperationState } from "./sync/operation-state.js";
 import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot, profileHistoryCoverage, readProfileHistorySyncState } from "./sync/profile-state.js";
@@ -77,13 +78,13 @@ export const syncService = {
     const profileIds = Object.keys(cfg.browserProfiles || {});
     const runningProfiles: string[] = [];
     for (const dirId of profileIds) {
-      try { if (statusBrowser(dirId).running) runningProfiles.push(dirId); } catch { /* ignore */ }
+      if (isProfileRunningForRestore(dirId)) runningProfiles.push(dirId);
     }
     let extensions = 0;
     try { extensions = listExtensionRepository().length; } catch { /* ignore */ }
     const configured = Boolean(sync.enabled && sync.endpoint && sync.bucket);
     const skipNote = runningProfiles.length
-      ? `（${runningProfiles.length} 个运行中,pull 时跳过 localStorage/preferences）`
+      ? `（${runningProfiles.length} 个运行中或退出未确认，pull 时整项跳过；需先停止并确认浏览器退出）`
       : "";
     return {
       configured,
@@ -180,6 +181,14 @@ export const syncService = {
     if ("busy" in lease) return lease.busy;
     const operation = lease.operation;
     const historyRollbacks: Array<() => void> = [];
+    const profileLocks = new Map<string, () => void>();
+    const profileReceipts = new Map<string, SyncItemResult>();
+    const allowRunningPartial = Boolean(opts && Object.hasOwn(opts, "allowRunningPartial") && opts.allowRunningPartial === true);
+    const skipForStop = (dirId: string): void => {
+      operation.add({ scope: "profiles", id: dirId, state: "skipped", required: true, code: "PROFILE_STOP_REQUIRED",
+        message: "No profile data or metadata was applied. Stop the profile, wait for browser exit, then pull again; other sync sections may still apply.",
+        runtimeEffect: { state: "running-or-unconfirmed", action: "skipped-stop-required", stopRequired: true, restartRequired: false, queuedCookies: 0, liveCookiesApplied: 0 } });
+    };
     let historyConfigCommitted = false;
     try {
       const selectedHistory = historySelected(sync, opts);
@@ -220,6 +229,14 @@ export const syncService = {
       const profileResolve = (id: string): MergeStrategy | null => resolutionFor(resolutions, "profiles", id);
       const remoteProfiles = remoteConfig.browserProfiles || {};
       const selectedRemoteProfiles = selectRemoteEntries(profileDecisionMap(profileSnapshot), profileDecisionMap(remoteProfiles), mergeStrategy, profileResolve);
+      if (!allowRunningPartial) {
+        for (const dirId of selectedRemoteProfiles) {
+          if (isProfileRunningForRestore(dirId)) {
+            skipForStop(dirId);
+            selectedRemoteProfiles.delete(dirId);
+          }
+        }
+      }
       const selectedRemoteEntries = Object.fromEntries(
         [...selectedRemoteProfiles].map((id) => [id, remoteProfiles[id]]),
       );
@@ -299,10 +316,32 @@ export const syncService = {
         assertSyncRole("pull");
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         const release = acquireRestoreLock(dirId);
+        let keepLock = false;
         let pendingRuntimeImport: Promise<number> | undefined;
         try {
           assertSyncNotAborted(signal);
+          const running = isProfileRunningForRestore(dirId);
+          if (running && !allowRunningPartial) {
+            skipForStop(dirId);
+            selectedRemoteProfiles.delete(dirId);
+            delete selectedRemoteEntries[dirId];
+            continue;
+          }
           assertLocalStorageRestorable(dirId);
+          const runtimeEffect: SyncProfileRuntimeEffect = {
+            state: running ? "running-or-unconfirmed" : "stopped", action: running ? "running-partial" : "restored-stopped",
+            stopRequired: running, restartRequired: running, queuedCookies: 0, liveCookiesApplied: 0,
+          };
+          const receipt: SyncItemResult = { scope: "profiles", id: dirId, state: "preserved", required: false,
+            code: "PROFILE_RESTORE_PENDING", message: "Profile configuration has not yet been adopted.", runtimeEffect };
+          profileReceipts.set(dirId, receipt);
+          operation.add(receipt);
+          // Keep admitted launches excluded through metadata adoption, not just
+          // through each artifact write. Reads/preparation/skips never mark data.
+          profileLocks.set(dirId, release);
+          keepLock = true;
+          markProfileDataChanging(dirId);
+          if (!allowRunningPartial) assertHistoryStopped(dirId);
           if (!fs.existsSync(resolveProfileDir(dirId))) {
             fs.mkdirSync(resolveProfileDir(dirId), { mode: 0o700 });
             createdProfileIds.add(dirId);
@@ -327,11 +366,7 @@ export const syncService = {
               if (artifacts.history) {
                 if (existing && stableStringify(existing.summary.schema) !== stableStringify(artifacts.history.summary.schema)) throw new Error("Incompatible target history schema/version; original group retained");
                 const restored = importSqliteLocalStorage(dirId, artifacts.history, operation.operationId, signal, { engine: coverage.engine, guard });
-                if (restored.rollback) historyRollbacks.push(() => {
-                  const release = acquireRestoreLock(dirId);
-                  try { restored.rollback!(); }
-                  finally { release(); }
-                });
+                if (restored.rollback) historyRollbacks.push(() => restored.rollback!());
                 operation.add({ scope: "history", id: dirId, state: "applied", bytes: restored.bytesWritten, history: coverage });
                 appliedHistory.set(dirId, coverage);
                 if (restored.backupDir) operation.warnings.push(`Previous History/Places group retained for runtime validation: ${restored.backupDir}`);
@@ -348,8 +383,10 @@ export const syncService = {
             if (!list.length) {
               operation.add({ scope: "cookies", id: dirId, state: "preserved", count: 0, code: "EMPTY_COOKIE_SNAPSHOT", message: "Empty snapshot; merge import does not delete existing cookies" });
             } else if (runtimeCookieOps.hasRunningBrowser(dirId)) {
+              if (!allowRunningPartial) assertProfileTransferStopped(dirId, () => statusBrowser(dirId), () => runtimeCookieOps.hasRunningBrowser(dirId), { engine: getConfig().browserProfiles?.[dirId]?.engine });
               const previousCommit = operation.localCommit;
               operation.localCommit = "unknown";
+              runtimeEffect.liveCookiesUnconfirmed = true;
               pendingRuntimeImport = runtimeCookieOps.importCookies(dirId, list, combineAbortSignals(signal, 30000));
               const n = await withTimeout(pendingRuntimeImport, 30000, signal);
               if (n === null || !Number.isInteger(n) || n < 0 || n > list.length) {
@@ -357,7 +394,9 @@ export const syncService = {
                 throw Object.assign(new Error("Runtime Cookie import result is unknown; do not retry automatically"), { code: "COOKIE_IMPORT_UNCONFIRMED" });
               }
               operation.localCommit = previousCommit;
+              runtimeEffect.liveCookiesUnconfirmed = false;
               operation.add({ scope: "cookies", id: dirId, state: "applied", count: n });
+              runtimeEffect.liveCookiesApplied += n;
               importedCookies += n;
               if (n !== list.length) {
                 operation.add({ scope: "cookies", id: dirId, state: "failed", code: "COOKIE_IMPORT_INCOMPLETE" });
@@ -366,10 +405,12 @@ export const syncService = {
               assertSyncNotAborted(signal);
             } else {
               try {
+                if (!allowRunningPartial) assertHistoryStopped(dirId);
                 writeQueuedCookieImports(dirId, list);
                 if (operation.localCommit === "none") operation.localCommit = "partial";
                 if (JSON.stringify(readQueuedCookieImports(dirId)) !== JSON.stringify(list)) throw new Error("Cookie queue readback mismatch after publication");
                 operation.add({ scope: "cookies", id: dirId, state: "queued", count: list.length });
+                runtimeEffect.queuedCookies += list.length;
                 queuedCookies += list.length;
               } catch (error) {
                 operation.add({ scope: "cookies", id: dirId, state: "failed", message: (error as Error).message });
@@ -422,7 +463,7 @@ export const syncService = {
             const [settled] = await Promise.allSettled([pendingRuntimeImport]);
             if (settled.status === "rejected") operation.warnings.push(`Runtime Cookie request for ${dirId} ended with an error; consult the per-item result before retrying.`);
           }
-          release();
+          if (!keepLock) release();
         }
       }
 
@@ -442,6 +483,7 @@ export const syncService = {
         const localProfiles = draft.browserProfiles || {};
         for (const dirId of selectedRemoteProfiles) {
           assertSelectedProfileUnchanged(profileSnapshot, localProfiles, dirId);
+          if (!allowRunningPartial) assertHistoryStopped(dirId);
         }
         const mergedProfiles = mergeSectionById(localProfiles, selectedRemoteEntries, "remote", undefined, {
           ignoredFields: new Set([...SYNC_BOOKKEEPING_FIELDS, "fontsDir"]),
@@ -484,7 +526,12 @@ export const syncService = {
       operation.add({ scope: "config", state: "applied" });
       for (const dirId of selectedRemoteProfiles) {
         const identity = compareProfileIdentity(rawRemoteProfiles[dirId], getConfig().browserProfiles[dirId]);
-        operation.add({ scope: "profiles", id: dirId, state: "applied", identity, message: "Configuration identity comparison only; runtime fingerprint not re-verified." });
+        const receipt = profileReceipts.get(dirId)!;
+        receipt.state = "applied";
+        receipt.required = true;
+        receipt.code = undefined;
+        receipt.identity = identity;
+        receipt.message = "Configuration identity comparison only; runtime fingerprint not re-verified. Start a fresh browser after any required stop and verify restored data.";
         if (identity.configuration.state === "missing-seed") operation.warnings.push(`Profile ${dirId} came from a legacy snapshot without a seed; configuration identity cannot be proven retained. Runtime fingerprint remains unverified.`);
       }
       let importedExts = 0;
@@ -517,6 +564,22 @@ export const syncService = {
       finalResult = operation.complete(`Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}`);
       return finalResult;
     } catch (e: any) {
+      if (e?.code === "PROFILE_STOP_REQUIRED") {
+        const affected = profileReceipts.get(e.dirId);
+        if (affected?.runtimeEffect) {
+          affected.runtimeEffect.state = "running-or-unconfirmed";
+          affected.runtimeEffect.stopRequired = true;
+          affected.runtimeEffect.restartRequired = true;
+          affected.code = "PROFILE_STOP_REQUIRED";
+          affected.message = "Runtime became active or unconfirmed during restore. Metadata was not adopted; inspect per-item effects, stop the profile and wait for exit before retrying.";
+        }
+      }
+      for (const receipt of profileReceipts.values()) {
+        if (receipt.code === "PROFILE_RESTORE_PENDING") {
+          receipt.code = "PROFILE_RESTORE_INCOMPLETE";
+          receipt.message = "Profile configuration was not adopted; some data writes may already have occurred. Review per-item results before retrying.";
+        }
+      }
       if (!historyConfigCommitted && historyRollbacks.length) {
         let recoveryError: unknown;
         for (const rollback of historyRollbacks.reverse()) {
@@ -548,6 +611,7 @@ export const syncService = {
         try { fs.rmSync(stageRoot, { recursive: true, force: true }); }
         catch (error) { operation.warnings.push(`Could not clean owned sync staging directory: ${(error as Error).message}`); }
       }
+      for (const release of [...profileLocks.values()].reverse()) release();
       if (finalResult) finalResult.warnings = [...operation.warnings];
       lease.finish(finalResult ?? operation.failure(new Error("Sync pull ended without a confirmed result")));
     }
@@ -637,13 +701,7 @@ function assertActiveHistoryScope(sync: SyncConfig, selected: boolean): void {
 }
 function assertHistoryStopped(dirId: string): void {
   assertProfilePathsSafe(dirId);
-  if (runtimeCookieOps.hasRunningBrowser(dirId)) throw Object.assign(new Error("History source/target profile is running"), { code: "PROFILE_RUNNING" });
-  const status = statusBrowser(dirId);
-  if (status.running !== false || status.pid !== null && status.pid !== undefined) throw Object.assign(new Error("History profile runtime ownership is not confirmed stopped"), { code: "PROFILE_RUNNING" });
-  for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock", ".parentlock", "lock"]) {
-    // lstat detects dangling lock symlinks; existsSync would silently miss them.
-    if (fs.lstatSync(resolveProfileFile(dirId, name), { throwIfNoEntry: false })) throw Object.assign(new Error("History profile lock is present; stopped ownership unconfirmed"), { code: "PROFILE_RUNNING" });
-  }
+  assertProfileTransferStopped(dirId, () => statusBrowser(dirId), () => runtimeCookieOps.hasRunningBrowser(dirId), { engine: getConfig().browserProfiles?.[dirId]?.engine });
 }
 function historyEngine(profile: any): BrowserEngine {
   if (profile?.engine !== undefined && profile.engine !== "chromium" && profile.engine !== "firefox") throw new Error("Unsupported profile history engine");
@@ -656,6 +714,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
   const operation = lease.operation;
   let stageRoot: string | undefined;
   let result: SyncResult | undefined;
+  let browserBackupIncomplete = false;
   try {
     const timestamp = Date.now();
     const initial = cloneConfig(getConfig());
@@ -680,6 +739,11 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const selectedHistory = historySelected(sync, opts);
     let historyBytes = 0;
     const artifactSources: Record<string, Record<string, string>> = { cookies: {}, localStorage: {}, preferences: {}, history: {} };
+    const artifactCapturedAt: Record<string, Record<string, number | null>> = { cookies: {}, localStorage: {}, preferences: {} };
+    const retainedCaptureTime = (scope: string, id: string): number | null => {
+      const value = previous.artifactCapturedAt?.[scope]?.[id];
+      return Number.isSafeInteger(value) && value > 0 && value <= timestamp ? value : null;
+    };
     const extensionInventories: Record<string, ReturnType<typeof listExtensionsForSync>> = {};
     let cookieCount = 0;
     let preferenceBytes = 0;
@@ -688,8 +752,10 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
       assertSyncNotAborted(signal);
       const release = acquireRestoreLock(id);
       try {
+        if (isProfileRunningForRestore(id)) browserBackupIncomplete = true;
         const raw = capturePreferences(id);
         preferenceSnapshots[id] = profilePreferencesSnapshot(raw);
+        artifactCapturedAt.preferences[id] = raw === null ? null : Date.now();
         artifactSources.preferences[id] = raw === null ? "absent" : "captured";
         if (raw !== null) {
           preferenceBytes += raw.length;
@@ -711,12 +777,15 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
           if (compressed.length > MAX_COOKIES_GZIP_BYTES) throw new Error("Cookies compressed snapshot is too large");
           cookies[id] = compressed.toString("base64");
           artifactSources.cookies[id] = "captured";
+          artifactCapturedAt.cookies[id] = Date.now();
         } else {
+          browserBackupIncomplete = true;
           if (Object.hasOwn(previous.cookies || {}, id)) {
             parseCookieBlob(previous.cookies[id]);
             cookies[id] = previous.cookies[id];
           }
           artifactSources.cookies[id] = cookies[id] ? "preserved" : "unavailable";
+          artifactCapturedAt.cookies[id] = cookies[id] ? retainedCaptureTime("cookies", id) : null;
           operation.add({ side: "remote", scope: "cookies", id, state: cookies[id] ? "preserved" : "skipped", required: false, code: "COOKIE_SOURCE_UNAVAILABLE" });
           operation.warnings.push(`Cookies for ${id} were not freshly verified (${cookieSnapshot.reason}); ${cookies[id] ? "previous remote data retained" : "no previous snapshot available"}.`);
         }
@@ -725,6 +794,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
           if (cookieCount > MAX_PULL_COOKIES) throw new Error("Too many cookies in sync snapshot");
         }
         if (isProfileRunningForRestore(id)) {
+          browserBackupIncomplete = true;
           if (Object.hasOwn(previous.localStorage || {}, id)) {
             const old = decodeBase64Field(previous.localStorage[id], MAX_LOCAL_STORAGE_TGZ_BYTES, "previous localStorage");
             const checked = fs.mkdtempSync(path.join(stageRoot, "ls-previous-"));
@@ -733,6 +803,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
             localStorage[id] = previous.localStorage[id];
           }
           artifactSources.localStorage[id] = localStorage[id] ? "preserved" : "unavailable";
+          artifactCapturedAt.localStorage[id] = localStorage[id] ? retainedCaptureTime("localStorage", id) : null;
           operation.add({ side: "remote", scope: "localStorage", id, state: localStorage[id] ? "preserved" : "skipped", required: false, code: "PROFILE_RUNNING" });
           operation.warnings.push(`LocalStorage for running profile ${id} was not captured; ${localStorage[id] ? "previous remote copy retained" : "no database snapshot available"}.`);
         } else if (localStorageFormat(id) !== "absent") {
@@ -743,7 +814,11 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
           fs.rmSync(checked, { recursive: true });
           localStorage[id] = archive.toString("base64");
           artifactSources.localStorage[id] = "captured";
-        } else artifactSources.localStorage[id] = "absent";
+          artifactCapturedAt.localStorage[id] = Date.now();
+        } else {
+          artifactSources.localStorage[id] = "absent";
+          artifactCapturedAt.localStorage[id] = null;
+        }
         const engine = historyEngine(initial.browserProfiles[id]);
         const base = { version: 1 as const, snapshotId: operation.operationId, dirId: id, engine };
         let captureError: unknown;
@@ -788,6 +863,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
         }
         const coverage = history[id]; artifactSources.history[id] = coverage.state;
         const incomplete = selectedHistory && (coverage.state === "failed" || coverage.state === "preserved");
+        if (incomplete) browserBackupIncomplete = true;
         if (incomplete || coverage.state === "unselected" || coverage.state === "preserved") operation.add({ side: "remote", scope: "history", id,
           state: incomplete ? coverage.state === "preserved" ? "preserved" : "failed" : "skipped", required: selectedHistory, code: coverage.code, history: coverage });
         if (captureError) operation.warnings.push(`History for ${id} was not freshly captured: ${(captureError as Error).message}; ${coverage.state === "preserved" ? "previous verified object preserved" : "no verified history snapshot available"}.`);
@@ -812,7 +888,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const configGzip = zlib.gzipSync(configData);
     if (configData.length > MAX_CONFIG_JSON_BYTES || configGzip.length > MAX_CONFIG_GZIP_BYTES) throw new Error("Sync configuration snapshot is too large");
     const document = { version: snapshot.version, artifactVersion: 3, snapshotId: operation.operationId, timestamp,
-      data: configGzip.toString("base64"), cookies, localStorage, preferences, history, artifactSources };
+      data: configGzip.toString("base64"), cookies, localStorage, preferences, history, artifactSources, artifactCapturedAt };
     const body = Buffer.from(JSON.stringify(document));
     if (body.length > MAX_REMOTE_PAYLOAD_JSON_BYTES) throw new Error("Sync payload is too large");
     assertSyncRole("push", force);
@@ -901,7 +977,9 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const sidecars: Array<{ key: string; body: Buffer }> = [];
     for (const [id, encoded] of Object.entries(cookies)) {
       const list = parseCookieBlob(encoded);
-      sidecars.push({ key: `cookies-${id}.json`, body: Buffer.from(JSON.stringify({ dirId: id, profileName: getSyncProfileName(snapshot, id), timestamp, count: list.length, cookies: list })) });
+      sidecars.push({ key: `cookies-${id}.json`, body: Buffer.from(JSON.stringify({ dirId: id, profileName: getSyncProfileName(snapshot, id),
+        timestamp: artifactCapturedAt.cookies[id], capturedAt: artifactCapturedAt.cookies[id], publishedAt: timestamp,
+        source: artifactSources.cookies[id], count: list.length, cookies: list })) });
     }
     for (const [id, encoded] of Object.entries(localStorage)) sidecars.push({ key: `localstorage-${id}.tgz`, body: Buffer.from(encoded, "base64") });
     for (const [id, encoded] of Object.entries(preferences)) sidecars.push({ key: `preferences-${id}.json`, body: Buffer.from(encoded, "base64") });
@@ -917,10 +995,16 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
       if (!verified) operation.warnings.push(`Authoritative snapshot is published; compatibility sidecar ${sidecar.key} was not confirmed by byte readback.`);
       assertSyncNotAborted(signal);
     }
-    result = operation.complete(`Pushed ${ids.length} profile configuration(s), ${extensions.length} extension package(s); Cookie/LocalStorage coverage is recorded separately.`, body.length + packageBytes);
+    result = operation.complete(`Configuration published: ${ids.length} profile configuration(s), ${extensions.length} extension package(s). ${browserBackupIncomplete ? "Browser backup incomplete; running, preserved or unavailable data was not freshly backed up." : "Cookie/LocalStorage coverage is recorded separately; this is not runtime fingerprint proof."}`, body.length + packageBytes);
+    if (browserBackupIncomplete) {
+      result.browserBackupIncomplete = true;
+      result.success = false;
+      result.outcome = "partial";
+    }
     return result;
   } catch (error: any) {
     result = operation.failure(error, signal?.aborted);
+    if (browserBackupIncomplete) result.browserBackupIncomplete = true;
     if (signal?.aborted) { error.syncResult = result; throw error; }
     return result;
   } finally {
@@ -1630,30 +1714,13 @@ function writeFileAtomic(filePath: string, data: Buffer): void {
 
 function isProfileRunningForRestore(dirId: string): boolean {
   validateDirId(dirId);
-  if (runtimeCookieOps.hasRunningBrowser(dirId)) return true;
   try {
-    if (statusBrowser(dirId).running) return true;
-  } catch (e) {
-    console.error(`[sync] failed to check browser status for ${dirId}:`, e);
+    assertProfileTransferStopped(dirId, () => statusBrowser(dirId), () => runtimeCookieOps.hasRunningBrowser(dirId), { engine: getConfig().browserProfiles?.[dirId]?.engine });
+    return false;
+  } catch (error) {
+    if ((error as { code?: string })?.code !== "PROFILE_STOP_REQUIRED") throw error;
     return true;
   }
-  const profileDir = resolveProfileDir(dirId);
-  for (const rel of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
-    try {
-      const lockPath = resolveProfileFile(dirId, ...rel.split(path.sep));
-      if (fs.existsSync(lockPath)) return true;
-    } catch (e) {
-      console.error(`[sync] failed to check profile lock ${rel} for ${dirId}:`, e);
-      return true;
-    }
-  }
-  try {
-    if (fs.existsSync(profileDir) && fs.lstatSync(profileDir).isSymbolicLink()) return true;
-  } catch (e) {
-    console.error(`[sync] failed to inspect profile dir for ${dirId}:`, e);
-    return true;
-  }
-  return false;
 }
 
 function decodeBase64Field(value: unknown, maxBytes: number, label: string): Buffer {
@@ -2404,6 +2471,8 @@ function normalizeMergeStrategy(value: unknown): MergeStrategy {
 }
 
 export interface SyncPullOptions extends SyncHistoryOptions {
+  /** Explicit legacy partial-live merge. Default skips the entire active/unconfirmed profile. */
+  allowRunningPartial?: boolean;
   strategy?: MergeStrategy;
   comparisonToken?: SyncComparisonToken;
   /** Per-entry overrides keyed as "<section>:<id>", e.g. "profiles:ab_xyz" or "accounts:user @ https://a.com". */

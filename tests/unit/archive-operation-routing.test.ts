@@ -26,6 +26,7 @@ const proof = {
   ipcBridgeInvokes: 0, ipc: {} as Record<string, number>, rest: {} as Record<string, number>,
   nativeSave: 0, nativeOpen: 0, nativeConfirm: 0, serviceExports: 0, serviceExportBatches: 0, serviceImportBatches: 0,
   realPostPublishWarnings: 0, rendererRealIpcLoads: 0, lateCommittedReadbacks: 0,
+  syntheticDiscoveryScans: 0, confirmedStoppedStatuses: 0, transferRefusals: 0, revisionReadbacks: 0,
 };
 const active: Array<() => Promise<void>> = [];
 const hash = (file: string) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -75,6 +76,8 @@ async function fixture() {
   fs.mkdirSync(out);
   fs.mkdirSync(path.join(dir, "home"));
   const running = new Set<string>();
+  const runtime = { overrides: new Map<string, Record<string, unknown>>(), discoveryAvailable: true };
+  const syntheticOwnerPid = 41_001;
   const clock = new Clock();
   const modules = new Map<string, { exports: any }>();
   const handlers = new Map<string, (...args: any[]) => any>();
@@ -84,6 +87,8 @@ async function fixture() {
     services: [] as Array<{ name: string; args: any[]; result?: any; error?: string }>,
     native: [] as Array<{ kind: string; options: any }>,
     rendererKeys: [] as string[],
+    discovery: [] as Array<{ profileDir: string; available: boolean; candidates: number }>,
+    statuses: [] as Array<{ dirId: string; value: Record<string, unknown> }>,
   };
   const faults = { warnAfterPublication: false, published: false };
   const native = {
@@ -136,10 +141,45 @@ async function fixture() {
       return vm.runInContext("JSON.parse", context)(JSON.stringify({ ...raw, updatedAt: Date.now() }));
     },
   } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque("config-manager")[key] });
+  const inspectSyntheticLaunches = (profileDir: string) => {
+    if (!owned(profileDir)) deny("discovery profile escape")();
+    const id = path.basename(profileDir);
+    const candidates = runtime.discoveryAvailable && running.has(id) ? [{
+      pid: id === A ? 47_001 : 47_002, executablePath: path.join(dir, "synthetic-browser"), engine: "chromium",
+      args: [`--user-data-dir=${profileDir}`], profileDirs: [profileDir], cdpPorts: [], malformed: false,
+    }] : [];
+    proof.syntheticDiscoveryScans++;
+    trace.discovery.push({ profileDir, available: runtime.discoveryAvailable, candidates: candidates.length });
+    return { available: runtime.discoveryAvailable, candidates, tracked: null };
+  };
+  const discovery = new Proxy({
+    inspectBrowserLaunchesSync: inspectSyntheticLaunches,
+    findBrowserByProfileSync: (_id: string, profileDir: string) => {
+      const scan = inspectSyntheticLaunches(profileDir);
+      if (!scan.available) throw new Error("Synthetic process discovery unavailable");
+      return scan.candidates.length ? { pid: scan.candidates[0].pid, cdpPort: 0 } : null;
+    },
+    getRunningProcessesAsync: async () => {
+      if (!runtime.discoveryAvailable) throw new Error("Synthetic process discovery unavailable");
+      return [...running].map((id) => ({ pid: id === A ? 47_001 : 47_002, args: `synthetic-browser --user-data-dir=${path.join(profilesDir, id)}` }));
+    },
+  } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque("process-discovery")[key] });
+  const syntheticStatus = (id: string) => {
+    const scan = inspectSyntheticLaunches(path.join(profilesDir, id));
+    const present = scan.candidates[0];
+    const value = {
+      running: Boolean(present), pid: present?.pid ?? null, cdpPort: null, stopping: false,
+      unknown: !scan.available, state: !scan.available ? "unknown" : present ? "running" : "stopped",
+      ...runtime.overrides.get(id),
+    };
+    if (value.running === false && value.pid === null && value.stopping === false && value.unknown === false && value.state === "stopped") proof.confirmedStoppedStatuses++;
+    trace.statuses.push({ dirId: id, value: structuredClone(value) });
+    return value;
+  };
   const browser = new Proxy({
-    statusBrowser: (id: string) => ({ running: running.has(id), pid: null, cdpPort: null }),
+    statusBrowser: syntheticStatus,
     touchProfileActivity: (_id: string) => undefined,
-    listBrowserProfiles: () => Object.entries(config.getConfig().browserProfiles).map(([dirId, value]: any) => ({ ...value, dirId, running: running.has(dirId) })),
+    listBrowserProfiles: () => Object.entries(config.getConfig().browserProfiles).map(([dirId, value]: any) => ({ ...value, dirId, ...syntheticStatus(dirId) })),
   } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque("browser-manager")[key] });
   const electron = {
     app: { getPath: (name: string) => name === "home" ? path.join(dir, "home") : dir },
@@ -167,6 +207,7 @@ async function fixture() {
     "ipc/profile.ts", "services/profile-archive.ts", "services/zip-writer.ts", "services/archive-path-guard.ts",
     "services/profile-portability.ts", "services/profile-identity.ts", "services/config/store.ts", "services/config/limits.ts",
     "services/rest-api-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/main-i18n.ts", "branding.ts",
+    "services/profile-restore-lock.ts", "services/profile-data-revision.ts",
   ]);
   function boundary(relative: string, original: any): any {
     if (relative !== "services/profile-archive.ts") return original;
@@ -190,7 +231,11 @@ async function fixture() {
   const context = vm.createContext({
     Buffer, URL, TextDecoder: util.TextDecoder, structuredClone,
     console: { log() {}, warn() {}, error() {} },
-    process: { platform: process.platform, argv: ["node", "synthetic-archive-fixture"], uptime: () => 1, env: {
+    process: { platform: process.platform, pid: syntheticOwnerPid, getuid: process.getuid?.bind(process),
+      kill: (pid: number, signal: number) => {
+        if (pid !== syntheticOwnerPid || signal !== 0) return deny("unexpected process signal")();
+        return true; // Only the synthetic restore-lease owner is known alive.
+      }, argv: ["node", "synthetic-archive-fixture"], uptime: () => 1, env: {
       HOME: path.join(dir, "home"), NODE_ENV: "test", AGENT_BROWSER_API_TOKEN: TOKEN, AGENT_BROWSER_API_PORT: "0",
     } },
     setImmediate, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
@@ -221,7 +266,7 @@ async function fixture() {
       if (logical === "services/config-manager.ts") return config;
       if (logical === "services/config/paths.ts") return { getConfigPath: () => configPath };
       if (logical === "services/browser-manager.ts") return browser;
-      if (logical === "services/profile-restore-lock.ts") return { acquireRestoreLock: (_id: string) => () => undefined };
+      if (logical === "services/process-discovery.ts") return discovery;
       if (logical === "services/team.ts") return { requireProfileMutation: () => ({ ok: true }) };
       if (logical === "services/license.ts") return { checkCreateAllowed: () => ({ allowed: true }) };
       if (logical === "services/utils.ts") return { validateDirId: (id: string) => { if (typeof id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid fixture dirId"); } };
@@ -325,7 +370,7 @@ async function fixture() {
     if (!entry) throw new Error(`Missing verified archive entry ${name}`);
     return zip.extractZipEntry(bytes, entry);
   }
-  return { dir, out, configPath, profilesDir, running, clock, trace, faults, native, api, invoke, request, agent: window.agentBrowser, toasts, settle, existing, readEntry, archives, zip, mainI18n: load("services/main-i18n.ts") };
+  return { dir, out, configPath, profilesDir, running, runtime, clock, trace, faults, native, api, invoke, request, agent: window.agentBrowser, toasts, settle, existing, readEntry, archives, zip, dataRevisions: load("services/profile-data-revision.ts"), mainI18n: load("services/main-i18n.ts") };
 }
 
 afterEach(async () => {
@@ -344,6 +389,8 @@ describe("archive operation routing controls", () => {
     const fresh = path.join(f.out, "fresh.zip");
     const result = await f.api.profile.exportArchive(A, fresh);
     expect(result.success).toBe(true);
+    expect(f.trace.statuses.find((item) => item.dirId === A)?.value).toMatchObject({ running: false, pid: null, stopping: false, unknown: false, state: "stopped" });
+    expect(f.trace.discovery).toContainEqual({ profileDir: path.join(f.profilesDir, A), available: true, candidates: 0 });
     expect(f.trace.invokes.at(-1)?.channel).toBe("profile:export-archive");
     expect(f.trace.services.at(-1)?.name).toBe("exportProfileArchive");
     expect(f.readEntry(fresh, "sentinel.txt").toString()).toBe(`archive routing sentinel ${A}\n`);
@@ -367,6 +414,43 @@ describe("archive operation routing controls", () => {
     expect(response.body.success).toBe(true);
     expect(f.trace.services.at(-1)?.name).toBe("exportProfileArchive");
     expect(f.readEntry(file, "sentinel.txt").toString()).toBe(`archive routing sentinel ${A}\n`);
+  });
+});
+
+describe("archive confirmed-stop refusal controls", () => {
+  const unsafe: Array<{ label: string; status?: Record<string, unknown>; running?: boolean; unavailable?: boolean }> = [
+    { label: "running", running: true },
+    { label: "stopping after PID clear", status: { stopping: true, state: "stopping" } },
+    { label: "unknown", status: { unknown: true, state: "unknown" } },
+    { label: "missing PID evidence", status: { pid: undefined } },
+    { label: "uncleared positive PID", status: { pid: 47_001 } },
+    { label: "failed process discovery", unavailable: true },
+  ];
+  it.each(unsafe.flatMap((scenario) => ["ipc", "rest"].map((transport) => ({ ...scenario, transport }))))("refuses $label through $transport without replacing even an explicitly approved ZIP", async ({ status, running, unavailable, transport }) => {
+    const f = await fixture();
+    const old = await f.existing();
+    const beforeConfig = fs.readFileSync(f.configPath);
+    const beforeProfile = fs.readFileSync(path.join(f.profilesDir, A, "sentinel.txt"));
+    if (running) f.running.add(A);
+    if (status) f.runtime.overrides.set(A, status);
+    if (unavailable) f.runtime.discoveryAvailable = false;
+    const response = transport === "ipc"
+      ? { body: await f.api.profile.exportArchive(A, old.file, { overwrite: true }), status: undefined }
+      : await f.request("POST", `/api/profiles/${A}/export`, { destPath: old.file, overwrite: true });
+    expect(response.body).toMatchObject({ success: false, outcome: "failed", code: "PROFILE_STOP_REQUIRED" });
+    if (transport === "rest") expect(response.status).toBe(400);
+    expect(f.trace.services).toHaveLength(1);
+    expect(f.trace.services[0].name).toBe("exportProfileArchive");
+    expect(f.trace.services[0].error).toBeTypeOf("string");
+    expect(f.trace.statuses.at(-1)?.dirId).toBe(A);
+    if (unavailable) expect(f.trace.discovery.at(-1)).toMatchObject({ available: false });
+    expect(hash(old.file)).toBe(old.hash);
+    expect(fs.readFileSync(f.configPath)).toEqual(beforeConfig);
+    expect(fs.readFileSync(path.join(f.profilesDir, A, "sentinel.txt"))).toEqual(beforeProfile);
+    expect(fs.readdirSync(f.out)).toEqual(["existing.zip"]);
+    expect(fs.readdirSync(path.join(f.dir, "locks"))).toEqual([]);
+    expect(fs.existsSync(path.join(f.dir, "profile-data-revisions"))).toBe(false);
+    proof.transferRefusals++;
   });
 });
 
@@ -442,7 +526,7 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
     const f = await fixture(); f.running.add(A); f.running.add(B);
     const result = transport === "ipc" ? await f.api.profile.exportArchives([A, B], f.out)
       : (await f.request("POST", "/api/profiles/export", { dirIds: [A, B], destDir: f.out })).body;
-    expect(result.report).toMatchObject({ exported: [], skipped: [{ dirId: A, reason: "running" }, { dirId: B, reason: "running" }], failed: [] });
+    expect(result.report).toMatchObject({ exported: [], skipped: [{ dirId: A, reason: "running-or-unconfirmed", code: "PROFILE_STOP_REQUIRED" }, { dirId: B, reason: "running-or-unconfirmed", code: "PROFILE_STOP_REQUIRED" }], failed: [] });
     expect(f.trace.services.at(-1)?.name).toBe("exportProfileArchives");
     expect(fs.readdirSync(f.out)).toEqual([]);
     expect(result.success, "real report exported 0, skipped 2, failed 0").toBe(false);
@@ -453,7 +537,7 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
     const result = transport === "ipc" ? await f.api.profile.exportArchives([A, B], f.out)
       : (await f.request("POST", "/api/profiles/export", { dirIds: [A, B], destDir: f.out })).body;
     expect(result.report.exported).toHaveLength(1);
-    expect(result.report.skipped).toEqual([{ dirId: B, reason: "running" }]);
+    expect(result.report.skipped).toEqual([{ dirId: B, reason: "running-or-unconfirmed", code: "PROFILE_STOP_REQUIRED" }]);
     expect(result.report.failed).toEqual([]);
     expect(f.readEntry(result.report.exported[0].filePath, "sentinel.txt").toString()).toContain(A);
     expect(result.success, "real report exported 1, skipped 1, failed 0").toBe(false);
@@ -480,6 +564,10 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
     expect(result.report.imported[0].identity.configuration.beforeHash).toMatch(/^[a-f0-9]{64}$/);
     expect(result.report.imported[0].identity.configuration.afterHash).toBe(result.report.imported[0].identity.configuration.beforeHash);
     expect(fs.readFileSync(path.join(f.profilesDir, imported, "sentinel.txt"), "utf8")).toContain(A);
+    const revision = JSON.parse(fs.readFileSync(path.join(f.dir, "profile-data-revisions", imported + ".json"), "utf8"));
+    expect(revision).toEqual({ version: 1, dirId: imported, revision: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
+    expect(f.dataRevisions.getProfileDataRevision(imported)).toBe(revision.revision);
+    proof.revisionReadbacks++;
     expect(result.success, "real report imported 1 and rejected 1 corrupt ZIP").toBe(false);
   });
 

@@ -1,9 +1,11 @@
 import {
-  diffFingerprints, hasRiskyDrift, summarizeDrift,
+  diffFingerprints, summarizeDrift,
   checkPersonaConsistency, mismatchesAsDrift,
 } from "../fingerprint-baseline.js";
 import { checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "../environment-risk.js";
-import type { FingerprintDrift } from "../fingerprint-baseline.js";
+import type { Fingerprint, FingerprintDrift } from "../fingerprint-baseline.js";
+import { analyzeFingerprintDrift, type FingerprintDriftAnalysis } from "../fingerprint-drift-policy.js";
+import type { FingerprintComparisonReport } from "../fingerprint-drift-reports.js";
 import { getHostBrowserPlatform } from "../browser-platform-policy.js";
 import type { BrowserProfileMeta } from "../../types.js";
 
@@ -11,15 +13,22 @@ export interface LaunchDriftCheck {
   checked: boolean;
   risky?: boolean;
   drift?: FingerprintDrift[];
+  observedAt?: number;
+  partial?: boolean;
+  review?: boolean;
+  blockingUnavailable?: boolean;
+  report?: FingerprintComparisonReport;
   error?: string;
 }
 
 export class LaunchBlockedError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly driftBlocked: boolean;
+  constructor(code: string, message: string, readonly driftCheck?: LaunchDriftCheck) {
     super(message);
     this.name = "LaunchBlockedError";
     this.code = code;
+    this.driftBlocked = code === "fingerprint-drift" || code === "fingerprint-check-unavailable";
   }
 }
 
@@ -46,16 +55,20 @@ export interface DriftGuardDeps {
   audit: (detail: string) => void;
   auditBlock: (detail: string) => void;
   auditError?: (detail: string) => void;
+  assertCurrent?: () => void;
+  recordComparison?: (current: Fingerprint, analysis: FingerprintDriftAnalysis, observedAt: number) => FingerprintComparisonReport;
 }
 
 export async function runFingerprintDriftGuard(
   deps: DriftGuardDeps,
-  opts: { cdpPort: number; meta: any; cfg: any; passThrough: boolean },
+  opts: { cdpPort: number; meta: any; cfg: any; passThrough: boolean; expectedBrowserVersion?: string | null },
 ): Promise<LaunchDriftCheck> {
   let driftCheck: LaunchDriftCheck = { checked: false };
   if (opts.passThrough || !opts.meta.fingerprintBaseline) return driftCheck;
   try {
+    deps.assertCurrent?.();
     const current = await deps.captureFingerprint(opts.cdpPort);
+    deps.assertCurrent?.();
     const drift = diffFingerprints(opts.meta.fingerprintBaseline, current);
     const personaCheck = checkPersonaConsistency(
       { platform: opts.meta.platform || "windows", timezone: opts.meta.timezone },
@@ -63,23 +76,43 @@ export async function runFingerprintDriftGuard(
     );
     const personaDrift = mismatchesAsDrift(personaCheck);
     const combinedDrift = [...drift, ...personaDrift];
-    const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-    driftCheck = { checked: true, risky, drift: combinedDrift };
-    if (drift.length || personaDrift.length) {
-      deps.audit(combinedDrift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift));
+    const observedAt = Date.now();
+    const analysis = analyzeFingerprintDrift(opts.meta.fingerprintBaseline, current, combinedDrift, {
+      expectedBrowserVersion: opts.expectedBrowserVersion, observedAt,
+    });
+    const { risky } = analysis;
+    driftCheck = { checked: !analysis.blockingUnavailable, risky, drift: combinedDrift, observedAt,
+      partial: analysis.partial, review: analysis.counts.review > 0, blockingUnavailable: analysis.blockingUnavailable,
+      ...(analysis.blockingUnavailable ? { error: "Required fingerprint evidence is unavailable" } : {}) };
+    if (deps.recordComparison) {
+      try { driftCheck.report = deps.recordComparison(current, analysis, observedAt); }
+      catch (error) { console.warn("[launch-guards] could not retain fingerprint comparison:", error); }
+    }
+    if (combinedDrift.length) {
+      deps.audit(combinedDrift.length + " field(s) compared" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift));
     }
     if (risky && opts.cfg.blockOnFingerprintDrift !== false) {
-      const reason = "Fingerprint drift blocked (" + summarizeDrift(combinedDrift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+      const riskFields = analysis.changes.filter(change => change.severity === "risk");
+      const reason = "Fingerprint drift blocked (" + summarizeDrift(riskFields) + "). The baseline is unchanged. Open fingerprint details to review exact values. If an identity change was intended, explicitly accept the reviewed snapshot while stopped, then start and verify again; conflicts with profile settings must be fixed instead.";
       deps.auditBlock(reason);
-      throw new LaunchBlockedError("fingerprint-drift", reason);
+      throw new LaunchBlockedError("fingerprint-drift", reason, driftCheck);
+    }
+    if (analysis.blockingUnavailable && opts.cfg.blockOnFingerprintDrift !== false) {
+      throw new LaunchBlockedError("fingerprint-check-unavailable",
+        "Fingerprint check unavailable: required probes could not verify the locked baseline. Review unavailable fields and retry; missing evidence is not observed identity drift.", driftCheck);
     }
   } catch (e: any) {
     if (e instanceof LaunchBlockedError) throw e;
     const msg = (e && e.message) || String(e);
-    try { deps.auditError?.("fingerprint drift capture failed: " + msg); } catch {}
+    try { deps.auditError?.("fingerprint drift capture failed: " + msg); }
+    catch (error) { console.warn("[launch-guards] failed to record fingerprint capture error:", error); }
     // eslint-disable-next-line no-console
     console.warn("[launch-guards] fingerprint drift check failed:", msg);
     driftCheck = { checked: false, error: msg };
+    if (opts.cfg.blockOnFingerprintDrift !== false) {
+      throw new LaunchBlockedError("fingerprint-check-unavailable",
+        "Fingerprint check unavailable: the locked baseline could not be verified, so launch was refused. Retry the capture; this is not evidence of fingerprint drift.", driftCheck);
+    }
   }
   return driftCheck;
 }

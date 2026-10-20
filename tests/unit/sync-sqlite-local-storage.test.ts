@@ -254,7 +254,8 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     seedProfile(); installSqlite(); const first = await syncService.push(undefined, true); expect(first.success, first.message).toBe(true);
     const encoded = payload().localStorage[ID]; h.running.add(ID); h.reads = [];
     h.fault = (op, file) => { if (op === "open" && [dbPath(), dbPath() + "-wal"].includes(file)) throw new Error("live SQLite source was read"); };
-    const result = await syncService.push(undefined, true); expect(result.success, result.message).toBe(true);
+    const result = await syncService.push(undefined, true);
+    expect(result).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
     expect(payload().localStorage[ID]).toBe(encoded); expect(payload().artifactSources.localStorage[ID]).toBe("preserved");
     expect(result.items?.filter((item) => item.scope === "localStorage" && item.state === "preserved")).toHaveLength(1);
     expect(h.reads.filter((file) => [dbPath(), dbPath() + "-wal"].includes(file))).toEqual([]);
@@ -277,11 +278,16 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     assertBusiness(dbPath()); assertBackupBusiness(backupRoots()[0], "old with empty journal");
   });
 
-  it("validates but skips SQLite restore when the target is running", async () => {
+  it("skips the entire running target profile instead of partially adopting metadata around its SQLite data", async () => {
     seedProfile(); installSqlite(sqliteBytes("running-original")); const before = liveSnapshot();
+    const local = structuredClone(getConfig().browserProfiles[ID]);
     remoteArchive(sqliteArchive()); h.running.add(ID);
     const result = await syncService.pull(undefined, { strategy: "remote" });
-    expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "localStorage", id: ID, state: "skipped", code: "PROFILE_RUNNING" })]));
+    expect(result).toMatchObject({ success: false, outcome: "partial" });
+    expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "profiles", id: ID, state: "skipped", code: "PROFILE_STOP_REQUIRED",
+      runtimeEffect: expect.objectContaining({ action: "skipped-stop-required", stopRequired: true, queuedCookies: 0, liveCookiesApplied: 0 }) })]));
+    expect(getConfig().browserProfiles[ID]).toEqual(local);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[ID]).toEqual(local);
     for (const [file, hash] of Object.entries(before)) if (file !== getConfigPath()) {
       if (hash === null) expect(fs.existsSync(file)).toBe(false); else expect(sha(fs.readFileSync(file))).toBe(hash);
     }

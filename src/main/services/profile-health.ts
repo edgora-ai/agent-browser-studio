@@ -7,6 +7,9 @@ import {
 import { statusBrowser } from "./browser-manager.js";
 import { getEntry, getLaunchProxySnapshot } from "./browser/runtime-table.js";
 import { sanitizeBrowserEngine } from "./browser-engine.js";
+import { clearFingerprintComparison } from "./fingerprint-drift-reports.js";
+import { getProfileDataRevision } from "./profile-data-revision.js";
+import { isRestoreLocked } from "./profile-restore-lock.js";
 import { checkEnvironmentRisk, checkEnvironmentRiskRuntime, summarizeEnvFindings } from "./environment-risk.js";
 import type { EnvironmentRiskResult } from "./environment-risk.js";
 import { tMain } from "./main-i18n.js";
@@ -80,13 +83,16 @@ function targetIdentity(dirId: string, kind: ProfileHealthKind): string {
     });
     return createHash("sha256").update(bytes).digest("hex");
   }
+  if (kind === "drift" && isRestoreLocked(dirId)) throw new ProfileHealthError("PROFILE_RESTORE_IN_PROGRESS", "Wait for profile data transfer to finish before comparing fingerprints", "unavailable");
   const status = statusBrowser(dirId);
   const bytes = JSON.stringify({
+    ...(kind === "drift" ? { dataRevision: getProfileDataRevision(dirId) } : {}),
     configPath: getConfigPath(), deviceId: cfg.deviceId,
     profile: portableProfileContent(cfg.browserProfiles[dirId]),
     proxy: resolveProfileProxy(dirId), launchProxy: getLaunchProxySnapshot(dirId),
     engine: getEntry(dirId)?.engine ?? null,
     running: status.running, pid: status.pid || null, port: status.cdpPort || null,
+    unknown: status.unknown === true, stopping: getEntry(dirId)?.stopping === true,
   });
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -170,6 +176,7 @@ export function cancelProfileHealthRun(dirId: string, options: { kind: ProfileHe
 export function clearProfileHealthHistory(dirId: string, kind?: ProfileHealthKind): void {
   validateDirId(dirId);
   if (kind !== undefined && !kinds.has(kind)) throw new ProfileHealthError("HEALTH_INVALID_REQUEST", "Invalid diagnostic kind");
+  if (kind === undefined || kind === "drift") clearFingerprintComparison(dirId);
   clearProfileHealthRecords(dirId, kind);
 }
 export function recordProfileHealthResult(dirId: string, entry: ProfileHealthEntry): void {

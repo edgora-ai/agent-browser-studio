@@ -64,6 +64,21 @@ vi.mock("../../src/main/services/browser/idle-tracker.js", () => ({
 }));
 vi.mock("../../src/main/services/browser/launch-pipeline.js", () => ({ launchBrowserPipeline: vi.fn(() => { throw new Error("Test the exported launcher, not a wrapper"); }) }));
 vi.mock("../../src/main/services/profile-restore-lock.js", () => ({ acquireRestoreLock: f.lock }));
+// This suite owns process/launch ordering, not filesystem report publication.
+// Keep the production guard and classifier; the IPC/report suites exercise the
+// real diagnostic store with direct disk readback and session-bound authority.
+vi.mock("../../src/main/services/fingerprint-drift-reports.js", () => ({
+  beginFingerprintObservation: vi.fn(() => Object.freeze({})),
+  saveFingerprintComparison: vi.fn((_handle, input) => ({
+    schemaVersion: 1, policyVersion: 2, id: "11111111-1111-4111-8111-111111111111", dirId: input.dirId,
+    observedAt: input.observedAt, source: input.source, hasBaseline: Boolean(input.meta.fingerprintBaseline),
+    engine: input.meta.engine === "firefox" ? "firefox" : "chromium", engineVersion: input.engineVersion || null,
+    fields: input.analysis.fields, baselineFields: input.analysis.baselineFields, availableFields: input.analysis.availableFields,
+    comparedFields: input.analysis.comparedFields, changes: input.analysis.changes, counts: input.analysis.counts,
+    risky: input.analysis.risky, partial: input.analysis.partial, saved: false, baselineCandidate: false,
+    warning: "SYNTHETIC_REPORT_TRANSPORT",
+  })),
+}));
 vi.mock("../../src/main/services/secrets.js", () => ({ decryptSecretOr: f.secrets }));
 vi.mock("../../src/main/services/audit-log.js", () => ({ recordAudit: f.audit }));
 vi.mock("../../src/main/services/consistency-check.js", () => ({ checkProfileConsistency: f.consistency }));
@@ -526,6 +541,63 @@ describe("actual exported launch ordering", () => {
 });
 
 describe("late Chromium startup failures preserve a replacement owner", () => {
+  it.each(["fingerprint-drift", "fingerprint-check-unavailable"] as const)(
+    "preserves %s and its evidence after terminating the owned child", async (code) => {
+      const actual = await vi.importActual<typeof import("../../src/main/services/fingerprint-baseline.js")>("../../src/main/services/fingerprint-baseline.js");
+      f.fingerprintDiff.mockImplementation(actual.diffFingerprints);
+      f.riskyDrift.mockImplementation(actual.hasRiskyDrift);
+      currentMeta().fingerprintBaseline = { tz: "UTC" };
+      const before = structuredClone(currentMeta());
+      f.cfg.blockOnFingerprintDrift = true;
+      if (code === "fingerprint-drift") f.captureFingerprint.mockResolvedValue({ tz: "Asia/Tokyo" });
+      else f.captureFingerprint.mockRejectedValue(new Error("No debuggable page found"));
+      f.kill.mockImplementation((target, signal) => {
+        if (signal === "SIGTERM") { f.deadPids.add(target); return true; }
+        if (f.deadPids.has(target)) throw Object.assign(new Error("fixture: exited"), { code: "ESRCH" });
+        return true;
+      });
+      const error = await launchBrowser(dirId).then(() => null, (caught) => caught);
+      expect(error).toBeInstanceOf(LaunchBlockedError);
+      expect(error).toMatchObject({ code, driftBlocked: true, driftCheck: code === "fingerprint-drift"
+        ? { checked: true, risky: true, drift: [{ field: "tz", baseline: "UTC", current: "Asia/Tokyo" }] }
+        : { checked: false, error: "No debuggable page found" } });
+      expect(f.spawn).toHaveBeenCalledOnce();
+      expect(f.kill).toHaveBeenCalledWith(pid, "SIGTERM");
+      expect(f.deadPids.has(pid)).toBe(true);
+      expect(runningProcesses.has(dirId)).toBe(false);
+      expect(vi.mocked(emitEvent).mock.calls.some(([event]) => event === "profile:launched")).toBe(false);
+      expect(currentMeta()).toEqual(before);
+      expect(f.saveConfig).not.toHaveBeenCalled();
+      expect(f.release).toHaveBeenCalled();
+    },
+  );
+
+  it.each(["fingerprint-drift", "fingerprint-check-unavailable"] as const)(
+    "uses the same %s gate and evidence when cleaning a Firefox launch", async (code) => {
+      const actual = await vi.importActual<typeof import("../../src/main/services/fingerprint-baseline.js")>("../../src/main/services/fingerprint-baseline.js");
+      f.fingerprintDiff.mockImplementation(actual.diffFingerprints);
+      f.riskyDrift.mockImplementation(actual.hasRiskyDrift);
+      currentMeta().engine = "firefox";
+      currentMeta().fingerprintBaseline = { tz: "UTC" };
+      f.cfg.blockOnFingerprintDrift = true;
+      f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+      if (code === "fingerprint-drift") f.captureFingerprint.mockResolvedValue({ tz: "Asia/Tokyo" });
+      else f.captureFingerprint.mockRejectedValue(new Error("BiDi capture unavailable"));
+      const error = await launchBrowser(dirId).then(() => null, (caught) => caught);
+      expect(error).toBeInstanceOf(LaunchBlockedError);
+      expect(error).toMatchObject({ code, driftBlocked: true, driftCheck: code === "fingerprint-drift"
+        ? { checked: true, risky: true, drift: [{ field: "tz", baseline: "UTC", current: "Asia/Tokyo" }] }
+        : { checked: false, error: "BiDi capture unavailable" } });
+      expect(f.captureFingerprint).toHaveBeenCalledWith(port, "firefox");
+      expect(f.firefoxSpawn).toHaveBeenCalledOnce();
+      expect(f.deadPids.has(5101)).toBe(true);
+      expect(f.bidiSessions.has(port)).toBe(false);
+      expect(runningProcesses.has(dirId)).toBe(false);
+      expect(currentMeta().fingerprintBaseline).toEqual({ tz: "UTC" });
+      expect(f.saveConfig).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["readiness-rejection", "fingerprint-drift-block"] as const)(
     "does not clean replacement B when stopped launch A resumes at %s", async (boundary) => {
       if (boundary === "fingerprint-drift-block") {
@@ -614,7 +686,10 @@ describe("late Chromium startup failures preserve a replacement owner", () => {
         if (boundary === "readiness-rejection") expect.soft(outcome.error?.message).toContain("CDP did not become ready");
         else {
           expect.soft(outcome.error?.message).toMatch(/^Fingerprint drift blocked \(/);
-          expect.soft(outcome.error).toMatchObject({ driftBlocked: true });
+          expect.soft(outcome.error).toBeInstanceOf(LaunchBlockedError);
+          expect.soft(outcome.error).toMatchObject({ code: "fingerprint-drift", driftBlocked: true,
+            driftCheck: { checked: true, risky: true, observedAt: expect.any(Number),
+              drift: [{ field: "tz", baseline: "UTC", current: "Asia/Tokyo" }] } });
         }
 
         // A's failure may retire A's own resources, never B's ownership lease.

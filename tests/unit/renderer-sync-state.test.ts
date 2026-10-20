@@ -329,6 +329,48 @@ describe("draft preservation and exact viewed comparison token", () => {
 });
 
 describe("typed result facts and long operation ownership", () => {
+  it("labels published configuration with incomplete browser data instead of a completed backup", async () => {
+    const h = harness();
+    h.api.sync.push.mockResolvedValueOnce(result({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true }));
+    await h.ab.syncPush(); await flush();
+    expect(h.renderedResult()).toContain("Configuration published; browser backup incomplete");
+    expect(h.renderedResult()).not.toContain("Complete in reported scope");
+  });
+
+  it("explains whole-profile stop-required skips and never silently opts into live partial merge", async () => {
+    const h = harness();
+    h.setPreview({ configured: true, profiles: 1, runningProfiles: ["profile-a"] });
+    await h.ab.loadSyncDiff();
+    h.api.sync.pull.mockResolvedValueOnce(result({ success: false, outcome: "partial", items: [{ scope: "profiles", id: "profile-a", state: "skipped", code: "PROFILE_STOP_REQUIRED",
+      runtimeEffect: { state: "running-or-unconfirmed", action: "skipped-stop-required", stopRequired: true, restartRequired: false, queuedCookies: 0, liveCookiesApplied: 0 } }] }));
+    await h.ab.syncPull(); await flush();
+    expect(h.ab.confirmAsync.mock.calls.some((call: any[]) => /skip their entire profile data and settings/.test(String(call[0])))).toBe(true);
+    expect(h.api.sync.pull.mock.calls[0][0]).not.toHaveProperty("allowRunningPartial");
+    expect(h.renderedResult()).toMatch(/wait for browser exit.*pull again/);
+    expect(h.renderedResult()).toContain("No profile data or settings were applied");
+  });
+
+  it("shows stopped restore next steps and queued Cookies without claiming they were applied", async () => {
+    const h = harness(); await h.ab.loadSyncDiff();
+    h.api.sync.pull.mockResolvedValueOnce(result({ items: [{ scope: "profiles", id: "profile-a", state: "applied",
+      runtimeEffect: { state: "stopped", action: "restored-stopped", stopRequired: false, restartRequired: false, queuedCookies: 2, liveCookiesApplied: 0 } }] }));
+    await h.ab.syncPull(); await flush();
+    expect(h.renderedResult()).toContain("Start the profile and verify restored data");
+    expect(h.renderedResult()).toContain("2 Cookie(s) queued, not yet applied");
+    expect(h.renderedResult()).toContain("not a runtime fingerprint pass");
+  });
+
+  it("retains explicit live-partial, restart and unknown Cookie-write facts on failure", async () => {
+    const h = harness(); await h.ab.loadSyncDiff();
+    h.api.sync.pull.mockResolvedValueOnce(result({ success: false, outcome: "partial", localCommit: "unknown", items: [{ scope: "profiles", id: "profile-a", state: "preserved",
+      runtimeEffect: { state: "running-or-unconfirmed", action: "running-partial", stopRequired: true, restartRequired: true, queuedCookies: 0, liveCookiesApplied: 0, liveCookiesUnconfirmed: true } }] }));
+    await h.ab.syncPull(); await flush();
+    expect(h.renderedResult()).toContain("partial live merge was explicitly requested");
+    expect(h.renderedResult()).toContain("start a fresh browser");
+    expect(h.renderedResult()).toContain("Live Cookie changes are unconfirmed; do not retry automatically");
+    expect(h.api.sync.pull).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["partial", "recovery-required", "cancelled"])("renders %s and committed/queued/skipped/unknown facts even when success is false", async (outcome) => {
     const h = harness(); await h.ab.loadSyncDiff();
     const actual = result({ success: false, outcome, localCommit: "partial", remoteCommit: "committed", message: "owned partial fixture",

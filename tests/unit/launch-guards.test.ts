@@ -36,24 +36,81 @@ describe("native-GPU host launch guard", () => {
 });
 
 describe("launch-guards", () => {
-  it("drift: blocks on risky drift", async () => {
-    const captureFingerprint = async () => ({ gpu: "different" });
-    // Mock diff to report drift; use real hasRisky path via stubbed capture mismatch
-    // We inject a capture that will cause diff; use real diff logic by providing baseline vs current mismatch
-    // Simpler: mock the underlying module via a wrapper capture that returns a known current
-    // For this isolated test, verify guard blocks when hasRiskyDrift would be true
-    // Use a known risky field: gpuVendor
-    const audit = vi.fn();
+  it("drift: keeps the actual CPU drift evidence after refusing a launch", async () => {
+    const baseline = { platform: "MacIntel", plugins: "PDF", uaHighEntropy: '{"architecture":"arm"}' };
+    const current = { ...baseline, uaHighEntropy: '{"architecture":"x86"}' };
+    const meta = { fingerprintBaseline: baseline, platform: "macos" };
+    const before = structuredClone(meta);
     const auditBlock = vi.fn();
-    // Baseline with gpuVendor, current with different gpuVendor
-    const meta = { fingerprintBaseline: { gpuVendor: "Intel" }, platform: "windows", timezone: "UTC" };
-    // Provide a capture that returns a different gpuVendor than baseline
-    // The real diffFingerprints will see the delta
     await expect(runFingerprintDriftGuard(
-      { captureFingerprint: async () => ({ gpuVendor: "NVIDIA", gpuRenderer: "ANGLE", platform: "windows", timezone: "UTC" } as any), audit, auditBlock },
-      { cdpPort: 1, meta, cfg: { blockOnFingerprintDrift: true }, passThrough: false },
-    )).rejects.toBeInstanceOf(LaunchBlockedError);
-    expect(auditBlock).toHaveBeenCalled();
+      { captureFingerprint: async () => current, audit: vi.fn(), auditBlock },
+      { cdpPort: 1, meta, cfg: {}, passThrough: false },
+    )).rejects.toMatchObject({
+      code: "fingerprint-drift",
+      driftCheck: { checked: true, risky: true, observedAt: expect.any(Number),
+        drift: [{ field: "uaHighEntropy.architecture", baseline: "arm", current: "x86" }] },
+    });
+    expect(auditBlock).toHaveBeenCalledWith(expect.stringContaining("uaHighEntropy"));
+    expect(meta).toEqual(before);
+  });
+
+  it("drift: reports a content viewport change without treating browser chrome as a new identity", async () => {
+    const baseline = { platform: "MacIntel", plugins: "PDF", innerHeight: 713, outerHeight: 800 };
+    await expect(runFingerprintDriftGuard(
+      { captureFingerprint: async () => ({ ...baseline, innerHeight: 600 }), audit: vi.fn(), auditBlock: vi.fn() },
+      { cdpPort: 1, meta: { fingerprintBaseline: baseline, platform: "macos" }, cfg: {}, passThrough: false },
+    )).resolves.toMatchObject({ checked: true, risky: false, drift: [{ field: "innerHeight", baseline: 713, current: 600 }] });
+  });
+
+  it("drift: separates missing required evidence from observed identity risk", async () => {
+    const baseline = { platform: "MacIntel", plugins: "PDF", screenW: 1280 };
+    const auditBlock = vi.fn();
+    await expect(runFingerprintDriftGuard(
+      { captureFingerprint: async () => ({ platform: "MacIntel", plugins: "PDF" }), audit: vi.fn(), auditBlock },
+      { cdpPort: 1, meta: { platform: "macos", fingerprintBaseline: baseline }, cfg: {}, passThrough: false },
+    )).rejects.toMatchObject({ code: "fingerprint-check-unavailable", driftCheck: { checked: false, risky: false, partial: true,
+      blockingUnavailable: true, drift: [{ field: "screenW", required: true, availability: "probe-unavailable" }] } });
+    expect(auditBlock).not.toHaveBeenCalled();
+  });
+
+  it("drift: an optional timed-out worker remains partial without inventing an identity change", async () => {
+    const baseline = { platform: "MacIntel", plugins: "PDF", workerIdentity: '{"platform":"MacIntel"}' };
+    await expect(runFingerprintDriftGuard(
+      { captureFingerprint: async () => ({ ...baseline, workerIdentity: '{"timeout":true}' }), audit: vi.fn(), auditBlock: vi.fn() },
+      { cdpPort: 1, meta: { platform: "macos", fingerprintBaseline: baseline }, cfg: {}, passThrough: false },
+    )).resolves.toMatchObject({ checked: true, risky: false, partial: true, blockingUnavailable: false });
+  });
+
+  it("drift: only owned matching binary evidence makes a coherent version update review-only", async () => {
+    const snapshot = (version: string) => ({ platform: "MacIntel", plugins: "PDF",
+      userAgent: "Mozilla/5.0 (Macintosh) Chrome/" + version.split(".")[0] + ".0.0.0 Safari/537.36",
+      uaHighEntropy: JSON.stringify({ architecture: "arm", fullVersionList: [{ brand: "Chromium", version }] }) });
+    const baseline = snapshot("152.0.7977.72"), current = snapshot("153.0.8000.10");
+    const meta = { platform: "macos", fingerprintBaseline: baseline };
+    const deps = { captureFingerprint: async () => current, audit: vi.fn(), auditBlock: vi.fn() };
+    await expect(runFingerprintDriftGuard(deps, { cdpPort: 1, meta, cfg: {}, passThrough: false,
+      expectedBrowserVersion: "153.0.8000.10" })).resolves.toMatchObject({ checked: true, risky: false, review: true, partial: false });
+    await expect(runFingerprintDriftGuard(deps, { cdpPort: 1, meta, cfg: {}, passThrough: false }))
+      .rejects.toMatchObject({ code: "fingerprint-drift", driftCheck: { risky: true } });
+    expect(meta.fingerprintBaseline).toEqual(baseline);
+  });
+
+  it("drift: a locked profile cannot randomly pass when its live capture fails", async () => {
+    const auditError = vi.fn();
+    const auditBlock = vi.fn();
+    await expect(runFingerprintDriftGuard(
+      { captureFingerprint: async () => { throw new Error("No debuggable page found"); }, audit: vi.fn(), auditBlock, auditError },
+      { cdpPort: 1, meta: { fingerprintBaseline: { platform: "MacIntel" } }, cfg: {}, passThrough: false },
+    )).rejects.toMatchObject({ code: "fingerprint-check-unavailable", driftCheck: { checked: false, error: "No debuggable page found" } });
+    expect(auditError).toHaveBeenCalled();
+    expect(auditBlock).not.toHaveBeenCalled(); // Unknown is not observed identity drift.
+  });
+
+  it("drift: explicitly disabled gate still returns an unverified capture failure", async () => {
+    await expect(runFingerprintDriftGuard(
+      { captureFingerprint: async () => { throw new Error("capture unavailable"); }, audit: vi.fn(), auditBlock: vi.fn() },
+      { cdpPort: 1, meta: { fingerprintBaseline: { platform: "MacIntel" } }, cfg: { blockOnFingerprintDrift: false }, passThrough: false },
+    )).resolves.toMatchObject({ checked: false, error: "capture unavailable" });
   });
 
   it("drift: passThrough skips", async () => {

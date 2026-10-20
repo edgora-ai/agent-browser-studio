@@ -11,7 +11,7 @@ import ts from "typescript";
 
 const ROOT = path.resolve(__dirname, "../..");
 const HTML = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
-const SOURCES = Object.fromEntries(["icons", "core", "ipc", "profiles", "proxies"].map(name => [name,
+const SOURCES = Object.fromEntries(["icons", "core", "ipc", "fingerprint-drift", "profiles", "proxies"].map(name => [name,
   fs.readFileSync(path.join(ROOT, `src/renderer/js/app/${name}.js`), "utf8"),
 ]));
 const I18N = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8");
@@ -191,7 +191,11 @@ function harness(language = "en-US") {
       healthHistory: vi.fn(async (_id: string): Promise<any> => ({ entries: [] })),
       healthCancel: vi.fn(async (_id: string, _opts?: any): Promise<any> => ({ success: true, cancelled: true })),
       checkDrift: vi.fn(async (_id: string, _opts?: any): Promise<any> => ({ ok: true, hasBaseline: true, risky: false, drift: [], outcome: "pass" })),
+      driftReport: vi.fn(async (_id: string): Promise<any> => ({ ok: true, report: null, currentConfigMatches: false, canUpdateBaseline: false })),
       captureBaseline: vi.fn(async (_id: string, _opts?: any): Promise<any> => ({ ok: true, risky: false, fields: 9, outcome: "baseline-established" })),
+      resetBaseline: vi.fn(async (_id: string, _opts?: any): Promise<any> => { throw new Error("Synthetic reset receipt must be explicitly declared by the test"); }),
+      launch: vi.fn(async (_id: string, _opts?: any): Promise<any> => { throw new Error("Health reset must not launch a browser"); }),
+      stop: vi.fn(async (_id: string): Promise<any> => { throw new Error("Health reset must not stop a browser"); }),
       consistencyCheck: vi.fn(async (_id: string, _opts?: any): Promise<any> => ({ ok: true, warnings: [], blockers: [], outcome: "inconclusive" })),
       openRiskCheck: vi.fn(async (_id: string, _opts?: any): Promise<any> => ({ success: true })),
     }, "browser"),
@@ -217,12 +221,14 @@ function harness(language = "en-US") {
     Option: function(text: string, value: string) { const option = document.createElement("option"); option.textContent = text; option.value = value; return option; },
   });
   vm.runInContext(I18N, context, { filename: "src/renderer/js/i18n.js" });
+  window.i18n.apply(); // Model only the static translation step, not native hydration.
   for (const name of ["icons", "core", "ipc"]) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
   const app: any = window.agentBrowser;
   app.helpers.toast = vi.fn(); app.state.currentTab = "profiles";
+  const productionConfirm = app.confirm;
   app.confirm = vi.fn(); app.confirmHtml = vi.fn(); app.refresh = vi.fn();
   app.renderViewState = vi.fn((el: Element, options: any) => { el.textContent = options.error || options.empty || options.loading || ""; });
-  for (const name of ["profiles", "proxies"]) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
+  for (const name of ["fingerprint-drift", "profiles", "proxies"]) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
   const el = (id: string): Element => { const found = document.getElementById(id); if (!found) throw new Error("Missing production HTML element " + id); return found; };
   const card = (id = PROFILE.dirId) => el("profile-list").querySelector(`[data-dir-id="${id}"]`)!;
   const badge = (id = PROFILE.dirId) => card(id)?.querySelector(".health-verdict")!;
@@ -237,7 +243,7 @@ function harness(language = "en-US") {
     api.browser.healthHistory.mockImplementation(async (id: string) => ({ entries: id === dirId
       ? [{ kind, outcome, summary, at: Date.now(), source: kind === "env" ? "host" : "runtime" }] : [] }));
   };
-  return { app, api, window, document, context, memory, downloadIntents, el, card, badge, history, confirm, menu, render, tick, authority, toast: app.helpers.toast };
+  return { app, api, window, document, context, memory, downloadIntents, el, card, badge, history, confirm, productionConfirm, menu, render, tick, authority, toast: app.helpers.toast };
 }
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -300,6 +306,122 @@ describe("health renderer business conclusions (whole production modules)", () =
   });
 });
 
+describe("stopped fingerprint evidence and explicit baseline reset", () => {
+  it.each(["en-US", "zh-CN"])("reviews historical block at its original time without writing a new check in %s", async language => {
+    vi.setSystemTime(new Date("2031-03-02T04:05:06Z"));
+    const h = harness(language), at = Date.parse("2024-01-02T03:04:05Z");
+    const original = JSON.stringify({ [PROFILE.dirId]: [{ kind: "drift", at, outcome: "risk", detail: "retained original summary" }] });
+    h.memory.set(HEALTH_KEY, original); await h.render();
+    h.api.browser.checkDrift.mockResolvedValue({ ok: false, outcome: "unavailable", code: "PROFILE_NOT_RUNNING",
+      error: "synthetic old/current values must not leak", lastBlocked: { at, fields: ["uaHighEntropy", "platform", "<img src=x>", "platform=secret"] } });
+    const historyReads = h.api.browser.healthHistory.mock.calls.length;
+    h.api.browser.status.mockResolvedValue({ running: false });
+    h.menu("drift"); await flush();
+    const detail = h.el("fingerprint-drift-body"), text = detail.textContent;
+    expect(h.el("dlg-fingerprint-drift").open).toBe(true);
+    expect(h.app.confirm).not.toHaveBeenCalled();
+    expect(text).toContain(h.window.i18n.t("health.drift.stopped"));
+    expect(text).toContain(new Date(at).toLocaleString());
+    expect(text).not.toContain(new Date(Date.now()).toLocaleString());
+    expect(text).toContain(h.window.i18n.t("fingerprint.historical"));
+    expect(h.el("fingerprint-drift-advanced").textContent).toContain(h.window.i18n.t("profile.health.reset"));
+    expect(text).toContain("uaHighEntropy"); expect(text).toContain("platform");
+    expect(text).toContain(h.window.i18n.t("fingerprint.value.missing"));
+    expect(detail.querySelector("img")).toBeNull();
+    expect(text).not.toMatch(/platform=secret|synthetic old\/current/);
+    expect(h.memory.get(HEALTH_KEY)).toBe(original);
+    expect(h.api.browser.healthHistory).toHaveBeenCalledTimes(historyReads);
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "success")).toBe(false);
+    h.el("fingerprint-drift-close").click(); await flush(); // Reading/closing is not a mutation.
+    expect(h.memory.get(HEALTH_KEY)).toBe(original);
+    expect(h.api.browser.resetBaseline).not.toHaveBeenCalled();
+    expect(h.api.browser.captureBaseline).not.toHaveBeenCalled();
+    expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+  });
+
+  it.each(["en-US", "zh-CN"])("requires a server token, human confirm and checked acknowledgement for reset in %s", async language => {
+    const h = harness(language); h.app.confirm.mockImplementation(h.productionConfirm); await h.render();
+    const old = { kind: "env", at: 1000, outcome: "warn", summary: "preserve unrelated historical evidence", source: "host" };
+    h.api.browser.resetBaseline.mockResolvedValueOnce({ ok: false, outcome: "inconclusive", code: "BASELINE_RESET_CONFIRMATION_REQUIRED", confirmationToken: "server-reset-review-token" })
+      .mockImplementationOnce(async () => {
+        h.api.browser.healthHistory.mockResolvedValue({ entries: [old, { kind: "drift", at: Date.now(), outcome: "inconclusive", source: "baseline", summary: "reset is not a safety pass" }] });
+        return { ok: true, outcome: "inconclusive", baselineReset: true };
+      });
+    h.memory.set(HEALTH_KEY, JSON.stringify({ [PROFILE.dirId]: [old] }));
+    h.menu("reset"); await flush();
+    expect(h.api.browser.resetBaseline.mock.calls).toEqual([[PROFILE.dirId, undefined]]);
+    expect(h.el("dlg-confirm").open).toBe(true);
+    expect(h.el("dlg-confirm-ack-wrap").style.display).toBe("flex");
+    expect(h.el("dlg-confirm-ack").checked).toBe(false);
+    expect(h.el("dlg-confirm-ack-label").textContent).toBe(h.window.i18n.t("health.baseline.reset-ack"));
+    const detail = h.el("dlg-confirm-detail").textContent;
+    expect(detail).toContain(h.window.i18n.t("health.baseline.reset-scope"));
+    expect(detail).toContain(h.window.i18n.t("health.baseline.reset-unverified"));
+    expect(detail).toMatch(/Cookies.*LocalStorage/); expect(detail).not.toContain("server-reset-review-token");
+    const accept = h.app.confirm.mock.calls.at(-1)[1];
+    h.app.doConfirm(); await flush(); // Production acknowledgement gate refuses an unchecked box.
+    expect(h.api.browser.resetBaseline).toHaveBeenCalledTimes(1); expect(h.el("dlg-confirm").open).toBe(true);
+    h.el("dlg-confirm-ack").checked = true; h.app.doConfirm(); await flush();
+    expect(h.api.browser.resetBaseline.mock.calls[1]).toEqual([PROFILE.dirId, { confirmationToken: "server-reset-review-token" }]);
+    expect(h.history().find((entry: any) => entry.kind === "drift").outcome).toBe("inconclusive");
+    expect(h.history().some((entry: any) => entry.summary === old.summary)).toBe(true);
+    expect(h.memory.get(HEALTH_KEY)).not.toContain("server-reset-review-token");
+    expect(h.badge().getAttribute("data-health-outcome")).toBe("inconclusive");
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "info" && c[0] === h.window.i18n.t("health.baseline.reset-done"))).toBe(true);
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "success")).toBe(false);
+    expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+    expect(h.api.browser.captureBaseline).not.toHaveBeenCalled();
+    accept(); await flush(); expect(h.api.browser.resetBaseline).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards a reset confirmation after a newer drift request epoch", async () => {
+    const h = harness(); await h.render();
+    h.api.browser.resetBaseline.mockResolvedValue({ ok: false, code: "BASELINE_RESET_CONFIRMATION_REQUIRED", confirmationToken: "superseded-reset-token" });
+    h.menu("reset"); await flush(); const accept = h.app.confirm.mock.calls.at(-1)[1];
+    h.menu("drift"); await flush(); const cache = h.memory.get(HEALTH_KEY);
+    accept(); await flush();
+    expect(h.api.browser.resetBaseline).toHaveBeenCalledTimes(1); expect(h.memory.get(HEALTH_KEY)).toBe(cache);
+    expect(h.toast.mock.calls.some((c: any[]) => c[0] === h.window.i18n.t("health.baseline.reset-stale"))).toBe(true);
+  });
+
+  it("never retries a server-stale reset confirmation or reports a committed reset", async () => {
+    const h = harness(); await h.render();
+    h.api.browser.resetBaseline.mockResolvedValueOnce({ ok: false, code: "BASELINE_RESET_CONFIRMATION_REQUIRED", confirmationToken: "stale-server-token" })
+      .mockResolvedValueOnce({ ok: false, outcome: "inconclusive", code: "BASELINE_CONFIRMATION_STALE" });
+    h.menu("reset"); await flush(); h.confirm(); await flush();
+    expect(h.api.browser.resetBaseline.mock.calls).toEqual([[PROFILE.dirId, undefined], [PROFILE.dirId, { confirmationToken: "stale-server-token" }]]);
+    expect(h.history()).toEqual([]);
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "warning" && c[0] === h.window.i18n.t("health.baseline.reset-stale"))).toBe(true);
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "success")).toBe(false);
+  });
+
+  it.each([
+    { result: { ok: false, code: "PROFILE_RUNNING" }, key: "health.baseline.reset-running", tone: "warning" },
+    { result: { ok: false, code: "BASELINE_NOT_SET" }, key: "health.baseline.reset-not-set", tone: "info" },
+    { result: { ok: false, code: "BASELINE_RESET_CONFIRMATION_REQUIRED" }, key: "health.baseline.reset-failed", tone: "error" },
+    { result: { ok: true, baselineReset: false }, key: "health.baseline.reset-failed", tone: "error" },
+  ])("shows $result.code without inventing a token, stopping or launching", async ({ result, key, tone }) => {
+    const h = harness(); await h.render(); h.api.browser.resetBaseline.mockResolvedValue(result);
+    h.menu("reset"); await flush();
+    expect(h.api.browser.resetBaseline).toHaveBeenCalledTimes(1); expect(h.app.confirm).not.toHaveBeenCalled();
+    expect(h.toast).toHaveBeenCalledWith(h.window.i18n.t(key), tone); expect(h.history()).toEqual([]);
+    expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a reset error and a committed-reset history warning without claiming rollback or PASS", async () => {
+    const h = harness(); await h.render();
+    h.api.browser.resetBaseline.mockResolvedValueOnce({ ok: false, error: "synthetic baseline reset refusal" });
+    h.menu("reset"); await flush(); expect(h.toast).toHaveBeenCalledWith("synthetic baseline reset refusal", "error");
+    h.api.browser.resetBaseline.mockResolvedValueOnce({ ok: false, code: "BASELINE_RESET_CONFIRMATION_REQUIRED", confirmationToken: "warn-reset-token" })
+      .mockResolvedValueOnce({ ok: true, baselineReset: true, warning: "synthetic separate history write failed" });
+    h.menu("reset"); await flush(); h.confirm(); await flush();
+    expect(h.history()[0].outcome).toBe("inconclusive");
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "warning" && /synthetic separate history write failed/.test(c[0]))).toBe(true);
+    expect(h.toast.mock.calls.some((c: any[]) => c[1] === "success")).toBe(false);
+    expect(h.api.browser.launch).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+  });
+});
+
 describe("health renderer request ownership and truthful clears", () => {
   it("closing the dialog isolates a late response and does not claim cancellation", async () => {
     const h = harness(), pending = deferred(); h.api.browser.envRisk.mockReturnValue(pending.promise);
@@ -349,7 +471,12 @@ describe("health authoritative history, cancellation and baseline review contrac
   it("retains the legacy health entries and routes beside the explicit network action", async () => {
     const h = harness(); await h.render();
     const options = h.card().querySelector('[data-action="health"]')!.querySelectorAll("option").map(o => o.value);
-    expect(options).toEqual(["", "drift", "lock", "consistency", "env", "webrtc", "network", "risk", "history"]);
+    expect(options).toEqual(["", "drift", "drift-details", "lock", "consistency", "env", "webrtc", "network", "risk", "history", "reset"]);
+    h.menu("drift-details"); await flush();
+    expect(h.api.browser.driftReport).toHaveBeenCalledExactlyOnceWith(PROFILE.dirId);
+    expect(h.api.browser.checkDrift).not.toHaveBeenCalled();
+    expect(h.api.browser.captureBaseline).not.toHaveBeenCalled();
+    h.el("fingerprint-drift-close").click();
     h.authority("drift", "pass"); h.menu("drift"); await flush(); expect(h.api.browser.checkDrift).toHaveBeenCalledWith(PROFILE.dirId);
     h.menu("lock"); await flush(); expect(h.api.browser.captureBaseline).toHaveBeenCalledTimes(1);
     h.menu("consistency"); await flush(); expect(h.api.browser.consistencyCheck).toHaveBeenCalledWith(PROFILE.dirId);

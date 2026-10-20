@@ -2,7 +2,7 @@
 // original feature RED before the explicit renderer production handoff. Further
 // execution requires the coordinator's serialized source-stable test window.
 //
-// Unit boundary: whole production icons/core/ipc/profiles/i18n modules as-is in an
+// Unit boundary: whole production icons/core/ipc/fingerprint-drift/profiles/i18n modules as-is in an
 // owned in-memory DOM/VM. API replies and armed notifications are explicit mocks.
 // No Electron, browser, sockets, fetch, user-data, persistent writes or new deps.
 // Like renderer-health-flows.test.ts, this fixture models DOM state, not layout,
@@ -19,7 +19,7 @@ import ts from "typescript";
 const ROOT = path.resolve(__dirname, "../..");
 const HTML = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
 const I18N = fs.readFileSync(path.join(ROOT, "src/renderer/js/i18n.js"), "utf8");
-const SOURCES = Object.fromEntries(["icons", "core", "ipc", "profiles"].map(name => [name,
+const SOURCES = Object.fromEntries(["icons", "core", "ipc", "fingerprint-drift", "profiles"].map(name => [name,
   fs.readFileSync(path.join(ROOT, `src/renderer/js/app/${name}.js`), "utf8"),
 ]));
 const HEALTH_KEY = "agent-browser-health-history-v1";
@@ -313,6 +313,7 @@ function harness(language = "en-US") {
       envRiskHistory: vi.fn(async (_dirId: string): Promise<any> => ({ ok: true, entries: [] })),
       envRiskClear: vi.fn(async (_dirId: string): Promise<any> => ({ ok: true })),
       checkDrift: vi.fn(async (_dirId: string, _opts?: any): Promise<any> => ({ ok: true, hasBaseline: true, risky: false, drift: [], outcome: "pass" })),
+      driftReport: vi.fn(async (_dirId: string): Promise<any> => ({ ok: true, report: null, currentConfigMatches: false, canUpdateBaseline: false })),
       captureBaseline: vi.fn(async (_dirId: string, _opts?: any): Promise<any> => ({ ok: true, risky: false, fields: 9, outcome: "baseline-established" })),
       consistencyCheck: vi.fn(async (_dirId: string, _opts?: any): Promise<any> => ({ ok: true, warnings: [], blockers: [], outcome: "inconclusive" })),
       launch: forbidden, stop: forbidden, navigate: forbidden, openRiskCheck: forbidden, openApp: forbidden,
@@ -341,7 +342,7 @@ function harness(language = "en-US") {
   app.helpers.toast = vi.fn(); app.state.currentTab = "profiles";
   app.confirm = vi.fn(); app.confirmHtml = vi.fn(); app.refresh = vi.fn();
   app.renderViewState = vi.fn((el: FixtureElement, options: any) => { el.textContent = options.error || options.empty || options.loading || ""; });
-  vm.runInContext(SOURCES.profiles, context, { filename: "src/renderer/js/app/profiles.js" });
+  for (const name of ["fingerprint-drift", "profiles"]) vm.runInContext(SOURCES[name], context, { filename: `src/renderer/js/app/${name}.js` });
   const el = (id: string): FixtureElement => { const found = document.getElementById(id); if (!found) throw new Error("Missing feature-contract production HTML element " + id); return found; };
   const call = (name: string, ...args: any[]) => { expect(typeof app[name], "Production renderer global " + name).toBe("function"); return app[name](...args); };
   const command = (id: string) => { const control = el(id); expect(control.disabled, id + " must be enabled for this action").toBe(false); expect(control.dataset.role).toBe("cmd"); return call(control.dataset.cmd); };
@@ -434,7 +435,7 @@ describe("selected-page network UI feature contract (whole production modules)",
     const control = h.card().querySelector('[data-action="health"]')!;
     const values = control.querySelectorAll("option").map(option => option.value);
     expect(values.filter(value => value === "network")).toHaveLength(1);
-    expect(values.filter(value => value !== "network")).toEqual(["", "drift", "lock", "consistency", "env", "webrtc", "risk", "history"]);
+    expect(values.filter(value => value !== "network")).toEqual(["", "drift", "drift-details", "lock", "consistency", "env", "webrtc", "risk", "history", "reset"]);
     expect(control.getAttribute("aria-label")).toBeTruthy();
     h.menu("network"); await flush();
     expect(h.dialog().open).toBe(true); expect(control.value).toBe("");

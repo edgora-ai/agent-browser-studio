@@ -18,12 +18,17 @@ import { checkProfileConsistency } from "./consistency-check.js";
 import { drmLaunchArgs } from "./drm.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import {
-  captureFingerprint, diffFingerprints, hasRiskyDrift, summarizeDrift,
+  captureFingerprint, diffFingerprints, sanitizePortableFingerprintBaseline,
   checkPersonaConsistency, mismatchesAsDrift,
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
 import { checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
-import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible } from "./browser/launch-guards.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible, type LaunchDriftCheck } from "./browser/launch-guards.js";
+export type { LaunchDriftCheck } from "./browser/launch-guards.js";
+import { analyzeFingerprintDrift, type FingerprintDriftAnalysis } from "./fingerprint-drift-policy.js";
+import {
+  beginFingerprintObservation, saveFingerprintComparison, type FingerprintComparisonReport, type FingerprintObservation,
+} from "./fingerprint-drift-reports.js";
 import { getHostBrowserPlatform } from "./browser-platform-policy.js";
 import {
   assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence,
@@ -104,7 +109,7 @@ import { firefoxCookieService } from "./bidi-cookie-service.js";
 import { runBrowserCommand } from "./browser-command.js";
 import { bundledBrowsersRoot } from "./bundled-native-browsers.js";
 import { getManagedFirefoxRoot } from "./native-firefox-manager.js";
-import { captureLaunchProxySnapshot, runningProcesses, type RunningEntry } from "./browser/runtime-table.js";
+import { captureLaunchProxySnapshot, runningProcesses, getOwnedBrowserVersion, type RunningEntry } from "./browser/runtime-table.js";
 import { firefoxEffectiveLaunchHash, firefoxLaunchDigest, firefoxLaunchRequestHash } from "./browser/firefox-launch-provenance.js";
 
 interface OwnedFirefoxLaunch {
@@ -166,6 +171,8 @@ export interface BrowserProfile {
   lastModified: number;
   lock: ProfileLock | null;
   running: boolean;
+  unknown?: boolean;
+  stopping?: boolean;
   pid: number | null;
   cdpPort: number | null;
 }
@@ -1010,6 +1017,8 @@ export function listBrowserProfiles(runtime: ProfileRuntimeSnapshot = getProfile
       lastModified,
       lock: m.lock || null,
       running: st.running,
+      ...(st.unknown ? { unknown: true } : {}),
+      ...(runningProcesses.get(dirId)?.stopping ? { stopping: true } : {}),
       pid: st.pid,
       cdpPort: st.cdpPort,
     });
@@ -1162,11 +1171,12 @@ export async function assertProxyLaunchable(
   }
 }
 
-export interface LaunchDriftCheck {
-  checked: boolean;
-  risky?: boolean;
-  drift?: FingerprintDrift[];
-  error?: string;
+function fingerprintComparisonRecorder(dirId: string, meta: BrowserProfileMeta, engineVersion: string | null, isCurrent: () => boolean, restoreLockHeld = false, config = getConfig()) {
+  let observation: FingerprintObservation | undefined;
+  try { observation = beginFingerprintObservation(dirId, meta, { restoreLockHeld, config }); }
+  catch (error) { console.warn("[agent-browser] fingerprint details could not establish a current observation:", error); }
+  return (current: Record<string, unknown>, analysis: FingerprintDriftAnalysis, observedAt: number) =>
+    saveFingerprintComparison(observation, { dirId, meta, current, analysis, observedAt, source: "launch", engineVersion, isCurrent, restoreLockHeld });
 }
 
 export interface LaunchEnvCheck {
@@ -1287,7 +1297,7 @@ export async function launchBrowser(
     assertFirefoxRequest();
     if (existing?.stopping) throw restartRequired("the Firefox profile is still stopping");
     if (existing?.engine === "chromium" || existing?.launchProvenance) throw restartRequired("profile engine changed from Chromium to Firefox");
-    const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid);
+    const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid, { strict: true });
     if (!observed.available) throw restartRequired("Firefox process discovery is unavailable");
     if (observed.candidates.length > 1) throw restartRequired("multiple processes claim this Firefox profile");
     if (observed.tracked?.engine === "chromium" || observed.candidates.some((entry) => entry.engine === "chromium")) {
@@ -1365,7 +1375,7 @@ export async function launchBrowser(
 
   if (existing?.stopping) throw restartRequired("the profile browser is still stopping");
   if (existing?.engine === "firefox") throw restartRequired("profile engine changed from Firefox to Chromium");
-  const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid);
+  const observed = inspectBrowserLaunchesSync(profileDir, existing?.pid, { strict: true });
   if (!observed.available) throw restartRequired("browser process discovery is unavailable");
   if (observed.candidates.length > 1) throw restartRequired("multiple processes claim this profile directory");
   let candidate = observed.candidates[0];
@@ -1779,6 +1789,7 @@ export async function launchBrowser(
     port: cdpPort,
     lastActivityAt: Date.now(),
     engine: "chromium",
+    browserVersion: nativeChromiumVersion,
     launchProvenance,
     launchProxy: captureLaunchProxySnapshot(resolvedProxy),
     ...(pendingProxyBridge ? { proxyBridge: pendingProxyBridge } : {}),
@@ -1848,8 +1859,12 @@ export async function launchBrowser(
         audit: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto", detail }),
         auditBlock: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail }),
         auditError: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-error", target: dirId, actor: "auto", detail }),
+        recordComparison: fingerprintComparisonRecorder(dirId, meta, nativeChromiumVersion, () => {
+          const entry = runningProcesses.get(dirId);
+          return entry?.process === child && entry.pid === pid && entry.port === cdpPort && !entry.stopping;
+        }, false, cfg),
       },
-      { cdpPort, meta, cfg, passThrough },
+      { cdpPort, meta: { ...meta, timezone: effectiveTimezone }, cfg, passThrough, expectedBrowserVersion: nativeChromiumVersion },
     );
   } catch (e: any) {
     if (e instanceof LaunchBlockedError) {
@@ -1858,9 +1873,10 @@ export async function launchBrowser(
       try { process.kill(pid, "SIGTERM"); } catch (killError) { console.error("[agent-browser] failed to terminate drifted process " + pid + ":", killError); }
       try { fs.closeSync(logFd); } catch (closeError) { console.error("[agent-browser] failed to close launch log:", closeError); }
       await waitForProcessExit(pid);
-      const blockError: any = new Error(e.message);
-      blockError.driftBlocked = true;
-      throw blockError;
+      // Preserve the code and the pre-stop measurement for offline review.
+      // Replacing this with Error(message) leaves the UI with a dead browser
+      // and no way to inspect the drift that caused its termination.
+      throw e;
     }
     throw e;
   }
@@ -1972,39 +1988,53 @@ async function waitForProcessExit(pid: number, timeoutMs = 4000): Promise<void> 
 
 export interface FingerprintDriftCheckResult {
   ok: boolean;
+  code?: string;
   error?: string;
   checked?: boolean;
   hasBaseline?: boolean;
   risky?: boolean;
+  partial?: boolean;
+  review?: boolean;
+  blockingUnavailable?: boolean;
+  observedAt?: number;
+  currentConfigMatches?: boolean;
+  report?: FingerprintComparisonReport;
   drift?: FingerprintDrift[];
   fields?: number;
 }
 
-/** Read-only live fingerprint check against the stored baseline (no state change). */
-export async function checkFingerprintDrift(dirId: string): Promise<FingerprintDriftCheckResult> {
+/** Does not alter the reference or session data; retains bounded local comparison details. */
+export async function checkFingerprintDrift(dirId: string, options: { assertCurrent?: () => void } = {}): Promise<FingerprintDriftCheckResult> {
   validateDirId(dirId);
-  const cfg = getConfig() as any;
-  const meta = cfg.browserProfiles?.[dirId];
+  const meta = structuredClone(getConfig().browserProfiles?.[dirId]);
   if (!meta) return { ok: false, error: "Profile not found" };
-  const engine = getProfileEngineByDirId(dirId);
-  if (!meta.fingerprintBaseline) {
-    return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
-  }
+  if (!meta.fingerprintBaseline) return { ok: true, checked: false, hasBaseline: false, risky: false, drift: [] };
   const st = statusBrowser(dirId);
-  if (!st.running || !st.cdpPort) return { ok: false, error: "profile not running" };
+  if (!st.running || !st.cdpPort) return { ok: false, code: "PROFILE_NOT_RUNNING", checked: false, hasBaseline: true, error: "profile not running" };
+  const runtime = runningProcesses.get(dirId);
   try {
+    const observation = beginFingerprintObservation(dirId, meta);
+    const version = getOwnedBrowserVersion(dirId);
+    const engine = getProfileEngineByDirId(dirId);
     const current = await captureFingerprint(st.cdpPort, engine);
-    const drift = diffFingerprints(meta.fingerprintBaseline, current);
-    const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
-      { platform: meta.platform || "windows", timezone: meta.timezone },
-      current,
-    ));
-    const combined = [...drift, ...personaDrift];
-    const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-    return { ok: true, checked: true, hasBaseline: true, risky, drift: combined, fields: Object.keys(current).length };
-  } catch (e: any) {
-    return { ok: false, error: e.message || String(e) };
-  }
+    options.assertCurrent?.();
+    const stillCurrent = () => {
+      const entry = runningProcesses.get(dirId);
+      return entry === runtime && (!entry || entry.pid === st.pid && entry.port === st.cdpPort && !entry.stopping);
+    };
+    if (!stillCurrent()) return { ok: false, checked: false, hasBaseline: true, code: "HEALTH_PROFILE_CHANGED", error: "Browser session changed during the fingerprint comparison" };
+    const prior = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
+    const drift = diffFingerprints(prior, current);
+    const personaDrift = mismatchesAsDrift(checkPersonaConsistency({ platform: meta.platform || "windows", timezone: meta.timezone }, current));
+    const observedAt = Date.now();
+    const analysis = analyzeFingerprintDrift(meta.fingerprintBaseline, current, [...drift, ...personaDrift], { expectedBrowserVersion: version, observedAt });
+    const report = saveFingerprintComparison(observation, { dirId, meta, current, analysis, observedAt, source: "manual", engine, engineVersion: version, isCurrent: stillCurrent });
+    return { ok: !analysis.blockingUnavailable, checked: !analysis.blockingUnavailable, hasBaseline: true, risky: analysis.risky,
+      currentConfigMatches: engine === sanitizeBrowserEngine(meta.engine),
+      partial: analysis.partial, review: analysis.counts.review > 0, blockingUnavailable: analysis.blockingUnavailable,
+      drift: analysis.drift, fields: analysis.fields, observedAt, report,
+      ...(analysis.blockingUnavailable ? { code: "FINGERPRINT_CHECK_UNAVAILABLE", error: "Required fingerprint probes are unavailable" } : {}) };
+  } catch (e: any) { return { ok: false, checked: false, hasBaseline: true, error: e.message || String(e), ...(typeof e.code === "string" ? { code: e.code } : {}) }; }
 }
 
 function resolveFirefoxProxy(dirId: string, meta: BrowserProfileMeta, cfg: any): ResolvedProfileProxy {
@@ -2255,7 +2285,7 @@ async function launchFirefoxProfile(
   // profile's debug port; agent CDP tooling remains Chromium-only for now
   // (documented follow-up), while the product's own tools went BiDi (Slice 79).
   const actualPort = info.actualPort ?? info.marionettePort ?? remotePort;
-  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox",
+  runningProcesses.set(dirId, { pid, process: child, port: actualPort, lastActivityAt: Date.now(), engine: "firefox", browserVersion: firefoxVersion,
     launchProxy: captureLaunchProxySnapshot(resolvedProxy) });
   child.on("exit", () => {
     const entry = runningProcesses.get(dirId);
@@ -2323,38 +2353,19 @@ async function launchFirefoxProfile(
     // Post-launch fingerprint drift check — same gate as managed Chromium:
     // a stored baseline that no longer matches the live fingerprint on
     // high-risk fields blocks the launch (blockOnFingerprintDrift).
-    if (managedIdentity && meta.fingerprintBaseline) {
-      try {
-        const current = await captureFingerprint(actualPort, "firefox");
-        const drift = diffFingerprints(meta.fingerprintBaseline, current);
-        // R12 P2-2: same persona cross-check as the read-only drift check —
-        // platform/timezone vs live fingerprint mismatches are risky too.
-        const personaDrift = mismatchesAsDrift(checkPersonaConsistency(
-          { platform: meta.platform || "windows", timezone: effectiveMeta.timezone },
-          current,
-        ));
-        const combined = [...drift, ...personaDrift];
-        const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-        driftCheck = { checked: true, risky, drift: combined };
-        if (combined.length) {
-          recordAudit({
-            category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto",
-            detail: combined.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combined),
-          });
-        }
-        if (risky && cfg.blockOnFingerprintDrift !== false) {
-          const reason = "Fingerprint drift blocked (" + summarizeDrift(combined) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
-          recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail: reason });
-          const blockError: any = new Error(reason);
-          blockError.driftBlocked = true;
-          throw blockError;
-        }
-      } catch (e: any) {
-        if (e && e.driftBlocked) throw e;
-        console.warn("[agent-browser] fingerprint drift check failed for " + dirId.slice(0, 8) + ":", e?.message || e);
-        driftCheck = { checked: false, error: (e && e.message) || String(e) };
-      }
-    }
+    driftCheck = await runFingerprintDriftGuard(
+      {
+        captureFingerprint: (port: number) => captureFingerprint(port, "firefox"),
+        audit: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId, actor: "auto", detail }),
+        auditBlock: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-block", target: dirId, actor: "auto", detail }),
+        auditError: (detail: string) => recordAudit({ category: "profile", action: "fingerprint-drift-error", target: dirId, actor: "auto", detail }),
+        recordComparison: fingerprintComparisonRecorder(dirId, meta, firefoxVersion, () => {
+          const entry = runningProcesses.get(dirId);
+          return entry?.process === child && entry.pid === pid && entry.port === actualPort && !entry.stopping;
+        }, releaseLaunchLock !== null, cfg),
+      },
+      { cdpPort: actualPort, meta: { ...meta, timezone: effectiveMeta.timezone }, cfg, passThrough: !managedIdentity, expectedBrowserVersion: firefoxVersion },
+    );
 
     // Managed-injection self-check — the drift gate cannot tell whether the
     // preload took effect (baseline and live both read the "true" world when

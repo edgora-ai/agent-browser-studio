@@ -13,7 +13,13 @@ import * as fs from "node:fs";
 import { listAudit } from "../services/audit-log.js";
 import { getConfig, saveConfig, setProfileMeta, assertProfileWritable, resolveProfileProxy, getProxyDetection, getEnvRiskDiagnostics } from "../services/config-manager.js";
 import { checkProfileConsistency, type ConsistencyResult } from "../services/consistency-check.js";
-import { captureFingerprint, diffFingerprints, hasRiskyDrift, checkPersonaConsistency, mismatchesAsDrift, sanitizePortableFingerprintBaseline } from "../services/fingerprint-baseline.js";
+import { captureFingerprint, diffFingerprints, checkPersonaConsistency, mismatchesAsDrift, sanitizePortableFingerprintBaseline } from "../services/fingerprint-baseline.js";
+import { analyzeFingerprintDrift, isFingerprintSnapshotEquivalent } from "../services/fingerprint-drift-policy.js";
+import {
+  beginFingerprintObservation, saveFingerprintComparison, readFingerprintComparison,
+  getFingerprintBaselineCandidate, markFingerprintReferenceAccepted, fingerprintConfirmationWitness, FingerprintReportError,
+} from "../services/fingerprint-drift-reports.js";
+import { getProfileDataRevision } from "../services/profile-data-revision.js";
 import {
   beginProfileHealthRun, cancelProfileHealthRun, clearProfileHealthHistory, listProfileHealthHistory,
   profileHealthFailure, recordProfileHealthResult, runProfileEnvironmentRisk,
@@ -28,7 +34,9 @@ import { validateDirId } from "../services/utils.js";
 import { sanitizeBrowserEngine } from "../services/browser-engine.js";
 import { getProfileEngineByDirId, navigateInPage } from "../services/page-eval.js";
 import { assertSafeNavigationUrl } from "../services/local-agent.js";
-import { getEntry } from "../services/browser/runtime-table.js";
+import { getEntry, getOwnedBrowserVersion } from "../services/browser/runtime-table.js";
+import { LaunchBlockedError } from "../services/browser/launch-guards.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped } from "../services/profile-restore-lock.js";
 import { assertChatBrowserScopePort, captureChatBrowserScope } from "../services/agent/run-scope.js";
 import {
   runBatch,
@@ -280,7 +288,8 @@ export function registerBrowserHandlers(): void {
     } catch (e: any) {
       // R12 P1-1: surface the machine code so the UI can offer the force-launch escape hatch.
       // Sale-90/92: the paywall code rides the same field (UI opens the dialog).
-      return { success: false, error: e.message, code: (e as any)?.code || undefined };
+      return { success: false, error: e.message, code: (e as any)?.code || undefined,
+        ...(e instanceof LaunchBlockedError && e.driftCheck ? { driftCheck: e.driftCheck } : {}) };
     }
   });
 
@@ -392,19 +401,66 @@ export function registerBrowserHandlers(): void {
     } catch { return { ok: false, code: clearing ? "HEALTH_HISTORY_WRITE_FAILED" : "HEALTH_INVALID_REQUEST" }; }
   });
 
+  // Reopening details is a pure local read: no capture, process adoption, launch
+  // or new canonical history timestamp, including while the browser is stopped.
+  handleBrowser("drift-report", async (event, dirId: string) => {
+    try {
+      ipcHealthOwner(event); validateDirId(dirId);
+      const meta = getConfig().browserProfiles?.[dirId];
+      if (!meta) return { ok: false, code: "PROFILE_NOT_FOUND", report: null, currentConfigMatches: false, canUpdateBaseline: false };
+      return { ok: true, ...readFingerprintComparison(dirId, meta) };
+    } catch (error) {
+      console.warn("[browser] fingerprint details could not be read:", error);
+      return { ok: false, code: "FINGERPRINT_REPORT_READ_FAILED", report: null, currentConfigMatches: false, canUpdateBaseline: false,
+        error: "The saved fingerprint details could not be read; no new check was run." };
+    }
+  });
+
   // A missing baseline is unavailable, not a passed live drift comparison.
   handleBrowser("check-drift", async (event, dirId: string) => {
     let run: ProfileHealthRun | undefined;
     try {
       return await withIpcHealthOwner(event, async (options) => {
         run = beginProfileHealthRun(dirId, "drift", options);
-        const result = await checkFingerprintDrift(dirId);
+        const result = await checkFingerprintDrift(dirId, { assertCurrent: () => run!.assertCurrent() });
         run.assertCurrent();
-        const outcome: ProfileHealthOutcome = result.hasBaseline === false || result.error === "profile not running" ? "unavailable" : !result.ok ? "error"
-          : result.checked !== true ? "inconclusive" : result.risky ? "risk" : result.drift?.length ? "warn" : "pass";
-        recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), outcome, requestId: run.requestId,
-          source: result.checked ? "runtime" : "baseline", summary: result.error || (outcome === "unavailable" ? "No fingerprint baseline" : `Fingerprint drift: ${outcome}`) });
-        return { ...result, outcome, requestId: run.requestId };
+        const stopped = result.code === "PROFILE_NOT_RUNNING" || result.error === "profile not running";
+        if (stopped) {
+          const meta = getConfig().browserProfiles?.[dirId];
+          if (meta) {
+            try {
+              const details = readFingerprintComparison(dirId, meta);
+              if (details.report) return { ...result, ...details, checked: false, outcome: "unavailable", requestId: run.requestId };
+            } catch (error) { console.warn("[browser] could not reopen stopped fingerprint details:", error); }
+          }
+          const blocked = listAudit(2000, { category: "profile", target: dirId }).find((entry) =>
+            entry.action === "fingerprint-drift-block" && Number.isFinite(entry.at) && entry.at > 0);
+          if (blocked) {
+            // Replay only typed field names and the original time, not arbitrary
+            // audit text or a new live verdict. The old log may predate this
+            // configuration; reading it must not mint another health sample.
+            const fields = (blocked.detail?.match(/^Fingerprint drift blocked \(([^)]*)\)/)?.[1] || "")
+              .split(",").map((field) => field.trim().replace(/\s+\(\+\d+ more.*$/, ""))
+              .filter((field) => /^[A-Za-z]\w*(?:\.[A-Za-z]\w*)?$/.test(field)).slice(0, 8);
+            return { ...result, checked: false, code: "PROFILE_NOT_RUNNING", outcome: "unavailable" as const,
+              lastBlocked: { at: blocked.at, fields }, requestId: run.requestId };
+          }
+        }
+        if (stopped) return { ...result, checked: false, outcome: "unavailable", requestId: run.requestId };
+        const outcome: ProfileHealthOutcome = result.hasBaseline === false ? "unavailable" : result.risky ? "risk"
+          : result.blockingUnavailable ? "unavailable" : !result.ok ? "error" : result.checked !== true || result.currentConfigMatches === false ? "inconclusive"
+          : result.review || result.report?.counts.review ? "warn" : result.partial || result.report?.counts.info || !result.report && result.drift?.length ? "inconclusive" : "pass";
+        try {
+          recordProfileHealthResult(dirId, { kind: "drift", at: result.observedAt || Date.now(), outcome, requestId: run.requestId,
+            source: result.checked ? "runtime" : "baseline", summary: result.error || (outcome === "unavailable" ? "No fingerprint baseline" : `Fingerprint comparison: ${outcome}; limited to sampled fields, not website acceptance`) });
+        } catch (error) {
+          // A separate summary write must not erase a comparison already
+          // observed/saved. Preserve risk/details, but never turn this into PASS.
+          return { ...result, ok: false, code: "HEALTH_HISTORY_WRITE_FAILED", outcome: result.risky ? "risk" : "inconclusive", requestId: run.requestId,
+            currentConfigMatches: result.currentConfigMatches !== false, canUpdateBaseline: false, historySaved: false,
+            warning: "Comparison captured, but health history could not be saved.", error: error instanceof Error ? error.message : String(error) };
+        }
+        return { ...result, outcome, requestId: run.requestId, currentConfigMatches: result.currentConfigMatches !== false, canUpdateBaseline: result.report?.baselineCandidate === true };
       });
     } catch (error) { return profileHealthFailure(error, run?.requestId); }
     finally { run?.finish(); }
@@ -585,8 +641,10 @@ export function registerBrowserHandlers(): void {
   // Bind it to the reviewed old/new identities and the invoking window. Ignore
   // presentation-only edits so a concurrent note is preserved by setProfileMeta.
   type BaselineConfirmation = {
+    kind: "capture" | "reset" | "report";
     dirId: string; sender: Electron.WebContents; before: unknown; current: unknown;
-    identity: unknown; pid: number | null; port: number; expiresAt: number; destroyed: () => void; timer?: ReturnType<typeof setTimeout>;
+    identity: unknown; dataRevision: string; reportId?: string;
+    pid: number | null; port: number; expiresAt: number; destroyed: () => void; timer?: ReturnType<typeof setTimeout>;
   };
   const baselineConfirmations = new Map<string, BaselineConfirmation>();
   function releaseBaselineConfirmation(token: string): void {
@@ -598,12 +656,32 @@ export function registerBrowserHandlers(): void {
   }
   function baselineIdentity(meta: BrowserProfileMeta): Record<string, unknown> {
     const { name, note, tags, updatedAt, syncedAt, syncedHash, syncBaseline, lock, fingerprintBaseline, ...identity } = meta;
-    return identity;
+    return { ...identity, routeWitness: fingerprintConfirmationWitness(meta) };
   }
   const staleBaseline = () => ({ ok: false, code: "BASELINE_CONFIRMATION_STALE", outcome: "inconclusive", error: "The reviewed fingerprint or profile changed. Capture and review it again." });
 
-  handleBrowser("capture-baseline", async (event, params: string | { dirId: string; confirmationToken?: string }) => {
+  function issueBaselineConfirmation(input: Omit<BaselineConfirmation, "expiresAt" | "destroyed" | "timer">): string {
+    for (const [token, pending] of baselineConfirmations) {
+      if (pending.expiresAt <= Date.now() || pending.sender === input.sender && pending.dirId === input.dirId) releaseBaselineConfirmation(token);
+    }
+    while (baselineConfirmations.size >= 32) releaseBaselineConfirmation(baselineConfirmations.keys().next().value!);
+    const token = randomUUID();
+    const pending: BaselineConfirmation = { ...input, expiresAt: Date.now() + 5 * 60 * 1000, destroyed: () => releaseBaselineConfirmation(token) };
+    baselineConfirmations.set(token, pending);
+    pending.sender.once("destroyed", pending.destroyed);
+    pending.timer = setTimeout(pending.destroyed, 5 * 60 * 1000); pending.timer.unref?.();
+    return token;
+  }
+  function baselineCommitHistory(dirId: string, risky: boolean, requestId?: string): string | undefined {
+    try {
+      recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), outcome: risky ? "risk" : "baseline-established", requestId, source: "baseline",
+        summary: "Fingerprint reference explicitly updated; start and verify again; not a health pass" });
+    } catch (error: any) { return `Baseline saved, but health history could not be saved: ${error?.message || String(error)}`; }
+  }
+
+  handleBrowser("capture-baseline", async (event, params: string | { dirId: string; confirmationToken?: string; reportId?: string }) => {
     let run: ProfileHealthRun | undefined;
+    let release: (() => void) | undefined;
     try {
       return await withIpcHealthOwner(event, async (options) => {
         const dirId = typeof params === "string" ? params : params?.dirId;
@@ -613,82 +691,166 @@ export function registerBrowserHandlers(): void {
         assertProfileWritable(dirId);
         const meta = structuredClone(getConfig().browserProfiles?.[dirId]);
         if (!meta) return { ok: false, outcome: "unavailable", error: "Profile not found" };
-        const st = statusBrowser(dirId);
-        if (!st.running || !st.cdpPort) return { ok: false, outcome: "unavailable", error: "profile not running" };
         const sender = event.sender;
-        if (!sender || sender.isDestroyed()) return { ok: false, outcome: "cancelled", error: "Capture owner is unavailable" };
-        for (const [token, pending] of baselineConfirmations) {
-          if (pending.expiresAt <= Date.now()) releaseBaselineConfirmation(token);
-        }
         const token = typeof params === "string" ? undefined : params.confirmationToken;
+        const reportId = typeof params === "string" ? undefined : params.reportId;
+        const dataRevision = getProfileDataRevision(dirId);
+        const identity = baselineIdentity(meta);
         let confirmation: BaselineConfirmation | undefined;
         if (token !== undefined) {
           confirmation = typeof token === "string" ? baselineConfirmations.get(token) : undefined;
-          if (!confirmation || confirmation.dirId !== dirId || confirmation.sender !== sender) return staleBaseline();
+          if (!confirmation || confirmation.kind !== (reportId === undefined ? "capture" : "report") ||
+              confirmation.dirId !== dirId || confirmation.sender !== sender || confirmation.reportId !== reportId) return staleBaseline();
           releaseBaselineConfirmation(token!);
           if (confirmation.expiresAt <= Date.now() || !isDeepStrictEqual(confirmation.before, meta.fingerprintBaseline) ||
-              !isDeepStrictEqual(confirmation.identity, baselineIdentity(meta)) || confirmation.pid !== st.pid || confirmation.port !== st.cdpPort) return staleBaseline();
+              !isDeepStrictEqual(confirmation.identity, identity) || confirmation.dataRevision !== dataRevision) return staleBaseline();
         }
-        const identity = baselineIdentity(meta);
-        run = beginProfileHealthRun(dirId, "drift", options);
-        const captured = await captureFingerprint(st.cdpPort, getProfileEngineByDirId(dirId));
-        const current = sanitizePortableFingerprintBaseline(captured);
-        // Async CDP must not grant permission to overwrite a lock or a baseline
-        // that arrived while it was running. Re-read immediately before commit.
-        assertProfileWritable(dirId);
-        run.assertCurrent();
-        if (!current) return { ok: false, outcome: "inconclusive", code: "BASELINE_EMPTY_SNAPSHOT", error: "The probe returned no fingerprint fields; the old baseline was preserved." };
-        const latest = getConfig().browserProfiles?.[dirId];
-        const live = statusBrowser(dirId);
-        if (sender.isDestroyed() || !latest || !live.running || live.pid !== st.pid || live.cdpPort !== st.cdpPort ||
-            !isDeepStrictEqual(meta.fingerprintBaseline, latest.fingerprintBaseline) ||
-            !isDeepStrictEqual(identity, baselineIdentity(latest))) return staleBaseline();
-        if (confirmation && (confirmation.expiresAt <= Date.now() || !isDeepStrictEqual(confirmation.current, current))) return staleBaseline();
-        const prior = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
-        const drift = diffFingerprints(prior, current);
-        const personaDrift = mismatchesAsDrift(checkPersonaConsistency({ platform: meta.platform || "windows", timezone: meta.timezone }, current));
-        const combined = [...drift, ...personaDrift];
-        const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-        if (risky && !confirmation) {
-          // One pending review per window/profile; global bound prevents renderer
-          // spam from retaining unbounded full snapshots or destroyed listeners.
-          for (const [pendingToken, pending] of baselineConfirmations) {
-            if (pending.sender === sender && pending.dirId === dirId) releaseBaselineConfirmation(pendingToken);
+        if (reportId !== undefined) {
+          if (typeof reportId !== "string" || !/^[0-9a-f-]{36}$/.test(reportId)) return staleBaseline();
+          release = acquireRestoreLock(dirId);
+          assertProfileTransferStopped(dirId, () => statusBrowser(dirId), undefined, { engine: sanitizeBrowserEngine(meta.engine) });
+          const candidate = getFingerprintBaselineCandidate(dirId, reportId, meta, { restoreLockHeld: true });
+          if (confirmation && !isDeepStrictEqual(confirmation.current, candidate.snapshot)) return staleBaseline();
+          if (!confirmation) {
+            const confirmationToken = issueBaselineConfirmation({ kind: "report", dirId, sender, before: meta.fingerprintBaseline, current: candidate.snapshot,
+              identity, dataRevision, reportId, pid: null, port: 0 });
+            return { ok: false, code: "BASELINE_CONFIRMATION_REQUIRED", outcome: candidate.report.risky ? "risk" : "inconclusive", confirmationToken,
+              report: candidate.report, fields: candidate.report.fields, risky: candidate.report.risky, drift: candidate.report.changes,
+              currentConfigMatches: true, canUpdateBaseline: true };
           }
-          while (baselineConfirmations.size >= 32) releaseBaselineConfirmation(baselineConfirmations.keys().next().value!);
-          const confirmationToken = randomUUID();
-          const pending: BaselineConfirmation = { dirId, sender, before: meta.fingerprintBaseline, current, identity,
-            pid: st.pid, port: st.cdpPort, expiresAt: Date.now() + 5 * 60 * 1000,
-            destroyed: () => releaseBaselineConfirmation(confirmationToken) };
-          baselineConfirmations.set(confirmationToken, pending);
-          sender.once("destroyed", pending.destroyed);
-          pending.timer = setTimeout(pending.destroyed, 5 * 60 * 1000);
-          pending.timer.unref?.();
-          return { ok: false, code: "BASELINE_CONFIRMATION_REQUIRED", outcome: "risk", confirmationToken, fields: Object.keys(current).length, drift: combined, risky, baseline: current };
+          // The trusted candidate is main-process memory, not a portable baseline
+          // or a report loaded from disk. The lock spans validation and commit.
+          assertProfileWritable(dirId);
+          setProfileMeta(dirId, { fingerprintBaseline: candidate.snapshot });
+          let warning = baselineCommitHistory(dirId, candidate.report.risky);
+          try { const detailsWarning = markFingerprintReferenceAccepted(dirId, reportId); warning ||= detailsWarning; }
+          catch (error) { console.warn("[browser] baseline committed but details acknowledgement failed:", error); warning ||= "FINGERPRINT_REPORT_ACKNOWLEDGEMENT_FAILED"; }
+          recordAudit({ category: "profile", action: "fingerprint-baseline", target: dirId, actor: "user",
+            detail: "Reviewed current-session snapshot explicitly accepted while stopped; start and verify again; not a health pass" });
+          return { ok: true, baselineCommitted: true, outcome: candidate.report.risky ? "risk" : "baseline-established",
+            fields: candidate.report.fields, risky: candidate.report.risky, drift: candidate.report.changes,
+            report: { ...candidate.report, acceptedAt: Date.now(), baselineCandidate: false }, currentConfigMatches: false, canUpdateBaseline: false,
+            ...(warning ? { warning } : {}) };
+        }
+        if (isRestoreLocked(dirId)) throw new FingerprintReportError("PROFILE_RESTORE_IN_PROGRESS", "Wait for the profile data transfer to finish before capturing a reference.");
+        const st = statusBrowser(dirId);
+        if (!st.running || !st.cdpPort) return { ok: false, code: "PROFILE_NOT_RUNNING", outcome: "unavailable", error: "profile not running" };
+        const engine = getProfileEngineByDirId(dirId);
+        if (engine !== sanitizeBrowserEngine(meta.engine)) return { ok: false, code: "BASELINE_IDENTITY_CONFLICT", outcome: "unavailable",
+          error: "Saved browser engine differs from this running session. Stop normally and restart before capturing a reference; the old baseline is unchanged." };
+        if (confirmation && (confirmation.pid !== st.pid || confirmation.port !== st.cdpPort)) return staleBaseline();
+        run = beginProfileHealthRun(dirId, "drift", options);
+        const observation = beginFingerprintObservation(dirId, meta);
+        const version = getOwnedBrowserVersion(dirId);
+        const captured = await captureFingerprint(st.cdpPort, engine);
+        const current = sanitizePortableFingerprintBaseline(captured);
+        assertProfileWritable(dirId); run.assertCurrent();
+        if (!current) return { ok: false, outcome: "inconclusive", code: "BASELINE_EMPTY_SNAPSHOT", error: "The probe returned no fingerprint fields; the old baseline was preserved." };
+        const stillCurrent = () => {
+          const latest = getConfig().browserProfiles?.[dirId], live = statusBrowser(dirId);
+          return !sender.isDestroyed() && Boolean(latest) && live.running && live.pid === st.pid && live.cdpPort === st.cdpPort &&
+            isDeepStrictEqual(meta.fingerprintBaseline, latest.fingerprintBaseline) && isDeepStrictEqual(identity, baselineIdentity(latest)) &&
+            dataRevision === getProfileDataRevision(dirId);
+        };
+        if (!stillCurrent() || confirmation && (confirmation.expiresAt <= Date.now() || !isFingerprintSnapshotEquivalent(confirmation.current as Record<string, unknown>, current))) return staleBaseline();
+        const prior = sanitizePortableFingerprintBaseline(meta.fingerprintBaseline);
+        const personaDrift = mismatchesAsDrift(checkPersonaConsistency({ platform: meta.platform || "windows", timezone: meta.timezone }, current));
+        const observedAt = Date.now();
+        const analysis = analyzeFingerprintDrift(prior, current, [...diffFingerprints(prior, current), ...personaDrift], { expectedBrowserVersion: version, observedAt });
+        const report = saveFingerprintComparison(observation, { dirId, meta, current, analysis, observedAt, source: "baseline", engine, engineVersion: version, isCurrent: stillCurrent });
+        if (personaDrift.length) return { ok: false, code: "BASELINE_IDENTITY_CONFLICT", outcome: "risk", report, drift: analysis.drift, risky: true,
+          error: "The snapshot contradicts profile settings. Fix those settings or the runtime; accepting the leak as a reference cannot fix it." };
+        if (analysis.blockingUnavailable) return { ok: false, code: "BASELINE_CAPTURE_UNAVAILABLE", outcome: "unavailable", report, drift: analysis.drift,
+          error: "Required fingerprint probes are unavailable; the old reference was preserved." };
+        if ((analysis.risky || prior && analysis.counts.review > 0) && !confirmation) {
+          const confirmationToken = issueBaselineConfirmation({ kind: "capture", dirId, sender, before: meta.fingerprintBaseline, current, identity, dataRevision, pid: st.pid, port: st.cdpPort });
+          return { ok: false, code: "BASELINE_CONFIRMATION_REQUIRED", outcome: analysis.risky ? "risk" : "inconclusive", confirmationToken,
+            fields: analysis.fields, drift: analysis.drift, risky: analysis.risky, partial: analysis.partial, review: analysis.counts.review > 0, baseline: current, report };
         }
         run.assertCurrent();
+        release = acquireRestoreLock(dirId);
+        assertProfileWritable(dirId);
+        if (!stillCurrent()) return staleBaseline();
         setProfileMeta(dirId, { fingerprintBaseline: current });
-        const outcome = risky ? "risk" as const : "baseline-established" as const;
-        let historyWarning: string | undefined;
-        try {
-          recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), outcome, requestId: run.requestId, source: "baseline",
-            summary: risky ? "Risky fingerprint baseline explicitly accepted" : "Fingerprint baseline established; not a health pass" });
-        } catch (error: any) {
-          // The baseline transaction already committed. Do not report a rollback
-          // merely because the separate historical summary could not be saved.
-          historyWarning = `Baseline saved, but health history could not be saved: ${error?.message || String(error)}`;
-        }
-        if (combined.length) {
-          recordAudit({ category: "profile", action: "fingerprint-drift", target: dirId,
-            detail: `${combined.length} field(s) changed${risky ? " (risky, explicitly accepted)" : ""}: ${combined.map((d) => d.field).slice(0, 8).join(", ")}` });
-        } else {
-          recordAudit({ category: "profile", action: "fingerprint-baseline", target: dirId, detail: "baseline established; not a health pass" });
-        }
-        return { ok: true, outcome, baselineCommitted: true, requestId: run.requestId, fields: Object.keys(current).length, drift: combined, risky, baseline: current,
-          ...(historyWarning ? { code: "HEALTH_HISTORY_WRITE_FAILED", warning: historyWarning } : {}) };
+        let warning = baselineCommitHistory(dirId, analysis.risky, run.requestId);
+        try { const detailsWarning = markFingerprintReferenceAccepted(dirId, report.id); warning ||= detailsWarning; }
+        catch (error) { console.warn("[browser] baseline committed but details acknowledgement failed:", error); warning ||= "FINGERPRINT_REPORT_ACKNOWLEDGEMENT_FAILED"; }
+        recordAudit({ category: "profile", action: analysis.drift.length ? "fingerprint-drift" : "fingerprint-baseline", target: dirId,
+          detail: "Fingerprint reference explicitly saved after review; not a health pass" });
+        return { ok: true, baselineCommitted: true, outcome: analysis.risky ? "risk" : "baseline-established", requestId: run.requestId,
+          fields: analysis.fields, drift: analysis.drift, risky: analysis.risky, partial: analysis.partial, baseline: current,
+          report: { ...report, acceptedAt: Date.now(), baselineCandidate: false }, currentConfigMatches: false, canUpdateBaseline: false,
+          ...(warning ? { code: "HEALTH_HISTORY_WRITE_FAILED", warning } : {}) };
       });
-    } catch (error) { return profileHealthFailure(error, run?.requestId); }
-    finally { run?.finish(); }
+    } catch (error: any) {
+      if (error instanceof FingerprintReportError || ["PROFILE_STOP_REQUIRED", "PROFILE_DATA_REVISION_UNAVAILABLE"].includes(error?.code)) {
+        return { ok: false, code: error.code, outcome: "unavailable", error: error.message };
+      }
+      return profileHealthFailure(error, run?.requestId);
+    } finally { release?.(); run?.finish(); }
+  });
+
+  // A blocked browser cannot supply a replacement live baseline. Reset only
+  // the comparison checkpoint, while stopped, after a window-bound review.
+  handleBrowser("reset-baseline", async (event, params: string | { dirId: string; confirmationToken?: string }) => {
+    let release: (() => void) | undefined;
+    try {
+      const dirId = typeof params === "string" ? params : params?.dirId;
+      validateDirId(dirId);
+      ipcHealthOwner(event);
+      const role = requireProfileMutation();
+      if (!role.ok) return { ok: false, code: "TEAM_ROLE_DENIED", outcome: "error", error: role.error };
+      assertProfileWritable(dirId);
+      release = acquireRestoreLock(dirId);
+      const meta = structuredClone(getConfig().browserProfiles?.[dirId]);
+      if (!meta) return { ok: false, code: "PROFILE_NOT_FOUND", outcome: "unavailable", error: "Profile not found" };
+      if (statusBrowser(dirId).running) return { ok: false, code: "PROFILE_RUNNING", outcome: "unavailable", error: "Stop the profile before resetting its fingerprint baseline." };
+      assertProfileTransferStopped(dirId, () => statusBrowser(dirId), undefined, { engine: sanitizeBrowserEngine(meta.engine) });
+      const sender = event.sender;
+      for (const [token, pending] of baselineConfirmations) {
+        if (pending.expiresAt <= Date.now()) releaseBaselineConfirmation(token);
+      }
+      const token = typeof params === "string" ? undefined : params.confirmationToken;
+      if (token !== undefined) {
+        const pending = typeof token === "string" ? baselineConfirmations.get(token) : undefined;
+        if (!pending || pending.kind !== "reset" || pending.dirId !== dirId || pending.sender !== sender) return staleBaseline();
+        releaseBaselineConfirmation(token!);
+        if (pending.expiresAt <= Date.now() || !isDeepStrictEqual(pending.before, meta.fingerprintBaseline) ||
+            !isDeepStrictEqual(pending.identity, baselineIdentity(meta)) || pending.dataRevision !== getProfileDataRevision(dirId)) return staleBaseline();
+      } else {
+        if (!meta.fingerprintBaseline) return { ok: false, code: "BASELINE_NOT_SET", outcome: "unavailable", error: "No fingerprint baseline is set; nothing was reset." };
+        for (const [oldToken, pending] of baselineConfirmations) {
+          if (pending.sender === sender && pending.dirId === dirId) releaseBaselineConfirmation(oldToken);
+        }
+        while (baselineConfirmations.size >= 32) releaseBaselineConfirmation(baselineConfirmations.keys().next().value!);
+        const confirmationToken = randomUUID();
+        const pending: BaselineConfirmation = { kind: "reset", dirId, sender, before: meta.fingerprintBaseline, current: undefined,
+          identity: baselineIdentity(meta), dataRevision: getProfileDataRevision(dirId), pid: null, port: 0, expiresAt: Date.now() + 5 * 60 * 1000,
+          destroyed: () => releaseBaselineConfirmation(confirmationToken) };
+        baselineConfirmations.set(confirmationToken, pending);
+        sender.once("destroyed", pending.destroyed);
+        pending.timer = setTimeout(pending.destroyed, 5 * 60 * 1000);
+        pending.timer.unref?.();
+        return { ok: false, code: "BASELINE_RESET_CONFIRMATION_REQUIRED", outcome: "inconclusive", confirmationToken };
+      }
+      // An empty captured-field object normalizes to an absent baseline. No
+      // fingerprint seed, session files or browser safety-gate setting changes.
+      setProfileMeta(dirId, { fingerprintBaseline: {} });
+      recordAudit({ category: "profile", action: "fingerprint-baseline-reset", target: dirId, actor: "user",
+        detail: "Fingerprint comparison baseline removed after explicit confirmation; identity and browser data unchanged; not a health pass" });
+      let warning: string | undefined;
+      try {
+        recordProfileHealthResult(dirId, { kind: "drift", at: Date.now(), source: "baseline", outcome: "inconclusive",
+          summary: "Fingerprint baseline reset; launch and lock a new baseline before comparing again; not a health pass" });
+      } catch (error: any) {
+        warning = `Baseline reset, but health history could not be saved: ${error?.message || String(error)}`;
+      }
+      return { ok: true, baselineReset: true, outcome: "inconclusive", ...(warning ? { code: "HEALTH_HISTORY_WRITE_FAILED", warning } : {}) };
+    } catch (error) {
+      if ((error as { code?: string })?.code === "PROFILE_STOP_REQUIRED") return { ok: false, code: "PROFILE_STOP_REQUIRED", outcome: "unavailable",
+        error: error instanceof Error ? error.message : String(error) };
+      return profileHealthFailure(error);
+    } finally { release?.(); }
   });
 
   // Set fingerprint seed for a profile

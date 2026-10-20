@@ -27,6 +27,7 @@ import { createBrowserProfile, deleteBrowserProfile } from "../../src/main/servi
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../../src/main/services/profile-archive.js";
 import { getProfilesDir, getProfileMeta, getConfig, getConfigPath, reloadConfig, saveConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
 import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
+import { getProfileDataRevision } from "../../src/main/services/profile-data-revision.js";
 
 const ARCHIVES = path.join(TEST_ROOT, "exports");
 afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
@@ -70,15 +71,19 @@ describe("profile archive export/import", () => {
     fs.mkdirSync(path.join(dir, "Default"), { recursive: true });
     fs.writeFileSync(path.join(dir, "Default", "Preferences"), JSON.stringify({ profile: { name: "x" } }));
     fs.writeFileSync(path.join(dir, "bookmarks"), "bookmarks-data");
-    // Cache + lock files must be excluded.
+    // Cache and inert database LOCK files are excluded. Browser ownership
+    // markers instead require a confirmed stop; they are not silently ignored.
     fs.mkdirSync(path.join(dir, "Cache"), { recursive: true });
     fs.writeFileSync(path.join(dir, "Cache", "f"), "cache");
-    fs.writeFileSync(path.join(dir, "SingletonLock"), "lock");
+    fs.writeFileSync(path.join(dir, "Default", "LOCK"), "database lock placeholder");
+    const sourceRevision = getProfileDataRevision(created.dirId);
 
     const zipPath = path.join(ARCHIVES, "export.zip");
     const exported = await exportProfileArchive(created.dirId, zipPath);
     expect(exported.dirId).toBe(created.dirId);
     expect(fs.existsSync(zipPath)).toBe(true);
+    expect(getProfileDataRevision(created.dirId)).toBe(sourceRevision);
+    expect(readZipEntries(fs.readFileSync(zipPath)).some((entry) => entry.name.includes("profile-data-revisions"))).toBe(false);
     // Remove the source so the import lands with its original name.
     expect(deleteBrowserProfile(created.dirId)).toBe(true);
 
@@ -98,7 +103,12 @@ describe("profile archive export/import", () => {
     expect(JSON.parse(fs.readFileSync(path.join(idir, "Default", "Preferences"), "utf8")).profile.name).toBe("x");
     expect(fs.readFileSync(path.join(idir, "bookmarks"), "utf8")).toBe("bookmarks-data");
     expect(fs.existsSync(path.join(idir, "Cache"))).toBe(false);
-    expect(fs.existsSync(path.join(idir, "SingletonLock"))).toBe(false);
+    expect(fs.existsSync(path.join(idir, "Default", "LOCK"))).toBe(false);
+    const importedRevision = getProfileDataRevision(imported.dirId);
+    expect(importedRevision).not.toBe("initial");
+    expect(importedRevision).not.toBe(sourceRevision);
+    expect(JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, "profile-data-revisions", imported.dirId + ".json"), "utf8")).revision).toBe(importedRevision);
+    reloadConfig(); expect(getProfileDataRevision(imported.dirId)).toBe(importedRevision);
 
     // Source profile was removed; the imported one fully replaces it.
     expect(getProfileMeta(created.dirId)).toBeNull();
@@ -226,7 +236,7 @@ describe("profile archive export/import", () => {
         expect(getProfileMeta(created.dirId)?.note).toBe(note);
         expect(Object.keys(getConfig().browserProfiles)).toEqual([created.dirId]);
       }
-      expect(stoppedFixture.discover).toHaveBeenCalledWith(created.dirId, path.resolve(getProfilesDir(), created.dirId));
+      expect(stoppedFixture.discover).toHaveBeenCalledWith(created.dirId, path.resolve(getProfilesDir(), created.dirId), { strict: true });
     },
   );
 

@@ -227,25 +227,31 @@ export function inspectBrowserLaunchLines(
   };
 }
 
-export function inspectBrowserLaunchesSync(expectedProfileDir: string, trackedPid?: number): BrowserLaunchSnapshot {
-  return inspectBrowserLaunchLines(collectLinesSync(true), expectedProfileDir, trackedPid);
+export function inspectBrowserLaunchesSync(expectedProfileDir: string, trackedPid?: number, options?: { strict?: boolean }): BrowserLaunchSnapshot {
+  return inspectBrowserLaunchLines(collectLinesSync(true, options?.strict === true), expectedProfileDir, trackedPid);
 }
 
-function psLinesSync(): string[] {
-  // Prefer `ps -eo pid,args`; fallback to pid,command.
+function discoveryUnavailable(cause: unknown): Error {
+  return Object.assign(new Error("Browser process discovery unavailable", { cause }), { code: "PROCESS_DISCOVERY_UNAVAILABLE" });
+}
+
+function psLinesSync(strict = false): string[] {
+  // Prefer `ps -eo pid,args`; preserve the existing pid,command fallback.
+  let primaryError: unknown;
   try {
     const out = execFileSyncImpl("ps", ["-eo", "pid,args"], { encoding: "utf-8", timeout: 2000 }) as unknown as string;
     return out.split("\n");
-  } catch {}
+  } catch (error) { primaryError = error; }
   try {
     const out = execFileSyncImpl("ps", ["-eo", "pid,command"], { encoding: "utf-8", timeout: 2000 }) as unknown as string;
     return out.split("\n");
-  } catch {
+  } catch (error) {
+    if (strict) throw discoveryUnavailable(new AggregateError([primaryError, error], "Both process listing commands failed"));
     return [];
   }
 }
 
-function wmicLinesSync(): string[] {
+function wmicLinesSync(strict = false): string[] {
   // WMIC is deprecated on newer Windows but still present on many hosts.
   // Use CSV form so commas inside command lines remain quoted.
   try {
@@ -275,7 +281,8 @@ function wmicLinesSync(): string[] {
       lines.push(`${pid} ${cmd}`);
     }
     return lines;
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }
@@ -309,7 +316,7 @@ function tasklistLinesSync(): string[] {
   }
 }
 
-function powershellLinesSync(): string[] {
+function powershellLinesSync(strict = false): string[] {
   try {
     // JSON avoids Format-List wrapping/truncating long native payloads. This is
     // the existing one-shot process-table fallback, not a persistent observer.
@@ -320,13 +327,23 @@ function powershellLinesSync(): string[] {
     return (Array.isArray(parsed) ? parsed : [parsed])
       .filter((entry) => Number.isInteger(entry?.ProcessId) && entry.ProcessId > 0 && typeof entry.CommandLine === "string" && entry.CommandLine.trim())
       .map((entry) => `${entry.ProcessId} ${entry.CommandLine}`);
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return [];
   }
 }
 
-function collectLinesSync(requireCommandLine = false): string[] {
+function collectLinesSync(requireCommandLine = false, strict = false): string[] {
   if (process.platform === "win32") {
+    if (strict) {
+      // Authoritative absence needs real command lines, never tasklist window
+      // titles. Ordinary callers retain all their existing fallback commands.
+      try { return wmicLinesSync(true); }
+      catch (primaryError) {
+        try { return powershellLinesSync(true); }
+        catch (error) { throw discoveryUnavailable(new AggregateError([primaryError, error], "Both command-line process providers failed")); }
+      }
+    }
     const wmic = wmicLinesSync();
     if (wmic.length) return wmic;
     // Ordinary listing retains tasklist's lossy fallback. Launch validation
@@ -337,12 +354,22 @@ function collectLinesSync(requireCommandLine = false): string[] {
     }
     return powershellLinesSync();
   }
-  return psLinesSync();
+  return psLinesSync(strict);
 }
 
-export function findBrowserByProfileSync(dirId: string, expectedProfileDir: string): { pid: number; cdpPort: number } | null {
+export function findBrowserByProfileSync(dirId: string, expectedProfileDir: string, options?: { strict?: boolean }): { pid: number; cdpPort: number; unknown?: boolean } | null {
   void dirId;
-  const lines = collectLinesSync();
+  const lines = collectLinesSync(false, options?.strict === true);
+  if (options?.strict === true) {
+    // Runtime ownership is independent of a usable automation endpoint. A live
+    // browser with port 0/no debug flag must never become a stopped-data target.
+    const candidates = inspectBrowserLaunchLines(lines, expectedProfileDir).candidates;
+    if (!candidates.length) return null;
+    const first = candidates[0];
+    const usablePort = first.cdpPorts.length === 1 && Number.isInteger(first.cdpPorts[0]) && first.cdpPorts[0] > 0 && first.cdpPorts[0] <= 65535;
+    const unknown = candidates.length !== 1 || first.malformed || first.engine === null || !usablePort;
+    return { pid: first.pid, cdpPort: usablePort ? first.cdpPorts[0] : 0, ...(unknown ? { unknown: true } : {}) };
+  }
   for (const line of lines) {
     const info = parseBrowserProcessLine(line, expectedProfileDir);
     if (info) return info;

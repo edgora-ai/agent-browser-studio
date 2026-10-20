@@ -462,11 +462,15 @@ describe("independent history semantic state", () => {
 });
 
 describe("history pull prepares all bytes and compensates complete groups", () => {
-  it("validates but skips a running receiver without reading/writing its live history", async () => {
+  it("skips a running receiver's entire profile without metadata adoption or live History reads/writes", async () => {
     await publish(); resetDevice("running-receiver"); seedProfile("chromium"); install("chromium"); const before = liveSnapshot("chromium"); h.running.add(ID);
+    const local = structuredClone(getConfig().browserProfiles[ID]);
     h.fault = (op, file) => { if (op === "open" && [livePath("chromium"), livePath("chromium") + "-wal"].includes(file)) throw new Error("Running target history was read"); };
     const result = await syncService.pull(undefined, { strategy: "remote", history: true }); h.fault = null;
-    expect(result).toMatchObject({ success: false, outcome: "partial" }); expect(result.items).toContainEqual(expect.objectContaining({ scope: "history", state: "skipped", code: "PROFILE_RUNNING_OR_UNCONFIRMED" }));
+    expect(result).toMatchObject({ success: false, outcome: "partial" }); expect(result.items).toContainEqual(expect.objectContaining({ scope: "profiles", state: "skipped", code: "PROFILE_STOP_REQUIRED",
+      runtimeEffect: expect.objectContaining({ stopRequired: true, action: "skipped-stop-required" }) }));
+    expect(getConfig().browserProfiles[ID]).toEqual(local);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[ID]).toEqual(local);
     for (const [file, hash] of Object.entries(before)) if (file !== getConfigPath()) expect(fs.existsSync(file) ? sha(fs.readFileSync(file)) : null).toBe(hash);
   });
   it("refuses a different existing target schema/version without migrating or touching it", async () => {

@@ -70,7 +70,7 @@ vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) =
 
 import { getConfig, getConfigPath, getProfileMeta, reloadConfig } from "../../src/main/services/config-manager.js";
 import { transact } from "../../src/main/services/config/store.js";
-import { acquireRestoreLock, isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped } from "../../src/main/services/profile-restore-lock.js";
 import {
   deleteBrowserProfile, trashBrowserProfile, restoreTrashedProfile, purgeTrashedProfile, purgeExpiredTrash,
 } from "../../src/main/services/browser-manager.js";
@@ -192,6 +192,176 @@ afterEach(() => {
 afterAll(() => {
   if (path.dirname(ROOT) !== os.tmpdir() || !path.basename(ROOT).startsWith("profile-mutation-lock-f09-")) throw new Error("Unsafe fixture cleanup root");
   fs.rmSync(ROOT, { recursive: true, force: true });
+});
+
+describe("confirmed-stopped transfer gates and active restore-lock owners", () => {
+  it.each([
+    { running: true, pid: null }, { running: false, pid: 1234 }, { running: false },
+    { running: false, pid: null, stopping: true }, { running: false, pid: null, state: "unknown" },
+    { running: false, pid: null, unknown: true },
+  ])("does not certify stopped from $running / $pid / $state", (status) => {
+    expect(() => assertProfileTransferStopped(ID, () => status)).toThrow(/wait for browser exit/);
+  });
+  it("accepts only a confirmed stopped status and treats discovery failures as stop-required", () => {
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }))).not.toThrow();
+    expect(() => assertProfileTransferStopped(ID, () => { throw new Error("synthetic discovery failure"); })).toThrow(/discovery or lock inspection failed/);
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }), () => { throw new Error("synthetic runtime discovery failure"); })).toThrow(/discovery or lock inspection failed/);
+  });
+  it.each(["SingletonLock", "SingletonCookie", "SingletonSocket", "parent.lock", ".parentlock", "lock"])("detects dangling %s without following or deleting it", (name) => {
+    fs.mkdirSync(LIVE, { recursive: true });
+    const marker = path.join(LIVE, name);
+    fs.symlinkSync(path.join(ROOT, "owned-missing-target"), marker);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }))).toThrow(/lock marker present/);
+    expect(fs.lstatSync(marker).isSymbolicLink()).toBe(true);
+  });
+  it.each([".parentlock", "parent.lock"])("keeps configured Firefox's unchanged empty regular %s after two stopped checks, without calling crash data clean", (name) => {
+    seedLive(); transact((draft) => { draft.browserProfiles[ID].engine = "firefox"; });
+    const marker = path.join(LIVE, name); fs.writeFileSync(marker, Buffer.alloc(0), { mode: 0o600 });
+    const before = fs.lstatSync(marker), bytes = fs.readFileSync(marker);
+    const status = vi.fn(() => ({ running: false, pid: null }));
+    const release = acquireRestoreLock(ID);
+    try { expect(() => assertProfileTransferStopped(ID, status, undefined, { engine: getProfileMeta(ID)?.engine })).not.toThrow(); }
+    finally { release(); }
+    expect(status).toHaveBeenCalledTimes(2);
+    const after = fs.lstatSync(marker);
+    expect(fs.readFileSync(marker)).toEqual(bytes);
+    expect([after.dev, after.ino, after.mode, after.nlink, after.size, after.mtimeMs, after.ctimeMs]).toEqual([before.dev, before.ino, before.mode, before.nlink, before.size, before.mtimeMs, before.ctimeMs]);
+  });
+  it.each([undefined, "chromium", "unknown"])("does not permit an empty Firefox-named sentinel for engine %s", (engine) => {
+    seedLive(); const marker = path.join(LIVE, ".parentlock"); fs.writeFileSync(marker, "");
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }), undefined, { engine } as any)).toThrow(/lock marker present/);
+    expect(fs.readFileSync(marker)).toEqual(Buffer.alloc(0));
+  });
+  it.each(["SingletonLock", "SingletonCookie", "SingletonSocket", "lock"])("keeps %s strict even for configured Firefox", (name) => {
+    seedLive(); const marker = path.join(LIVE, name); fs.writeFileSync(marker, "");
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }), undefined, { engine: "firefox" })).toThrow(/lock marker present/);
+    expect(fs.existsSync(marker)).toBe(true);
+  });
+  it.each(["nonempty", "directory", "hardlink", "symlink", "dangling-symlink"])("refuses Firefox sentinel boundary %s without deleting or following it", (kind) => {
+    seedLive(); const marker = path.join(LIVE, ".parentlock"), target = path.join(ROOT, "owned-sentinel-target");
+    if (kind === "directory") fs.mkdirSync(marker);
+    else if (kind === "symlink" || kind === "dangling-symlink") {
+      if (kind === "symlink") fs.writeFileSync(target, "untouched-owned-target");
+      fs.symlinkSync(target, marker);
+    } else {
+      fs.writeFileSync(marker, kind === "nonempty" ? "busy" : "");
+      if (kind === "hardlink") fs.linkSync(marker, target);
+    }
+    expect(() => assertProfileTransferStopped(ID, () => ({ running: false, pid: null }), undefined, { engine: "firefox" })).toThrow(/lock marker present/);
+    expect(fs.lstatSync(marker)).toBeDefined();
+    if (kind === "symlink") expect(fs.readFileSync(target, "utf8")).toBe("untouched-owned-target");
+  });
+  it.each(["content", "inode", "link-count", "timestamp", "disappeared", "symlink", "profile-directory"])("refuses a Firefox sentinel changed between stopped checks: %s", (kind) => {
+    seedLive(); const marker = path.join(LIVE, ".parentlock"); fs.writeFileSync(marker, "");
+    const before = fs.lstatSync(marker); let checks = 0;
+    const status = () => {
+      if (++checks === 2) {
+        if (kind === "content") fs.writeFileSync(marker, "changed");
+        if (kind === "inode") { fs.renameSync(marker, marker + ".old"); fs.writeFileSync(marker, ""); }
+        if (kind === "link-count") fs.linkSync(marker, path.join(ROOT, "owned-new-link"));
+        if (kind === "timestamp") fs.utimesSync(marker, new Date(before.mtimeMs + 1000), new Date(before.mtimeMs + 1000));
+        if (kind === "disappeared") fs.renameSync(marker, marker + ".moved");
+        if (kind === "symlink") { fs.renameSync(marker, marker + ".old"); fs.symlinkSync(path.join(ROOT, "owned-missing-target"), marker); }
+        if (kind === "profile-directory") {
+          fs.renameSync(LIVE, LIVE + ".old"); fs.mkdirSync(LIVE); fs.renameSync(path.join(LIVE + ".old", ".parentlock"), marker);
+        }
+      }
+      return { running: false, pid: null };
+    };
+    expect(() => assertProfileTransferStopped(ID, status, undefined, { engine: "firefox" })).toThrow(/changed/);
+    expect(checks).toBe(2);
+  });
+  it.each(["unknown", "live", "discovery-error"])("does not accept inert Firefox sentinels when second stopped proof is %s", (kind) => {
+    seedLive(); const marker = path.join(LIVE, "parent.lock"); fs.writeFileSync(marker, "");
+    let checks = 0;
+    const status = () => {
+      if (++checks === 2) {
+        if (kind === "discovery-error") throw new Error("Synthetic strict discovery unavailable");
+        return kind === "unknown" ? { running: false, pid: null, unknown: true } : { running: true, pid: 1234 };
+      }
+      return { running: false, pid: null };
+    };
+    expect(() => assertProfileTransferStopped(ID, status, undefined, { engine: "firefox" })).toThrow(/confirmed stopped|discovery/);
+    expect(fs.readFileSync(marker)).toEqual(Buffer.alloc(0));
+  });
+
+  it("never expires a live restore-lock owner solely by age", () => {
+    const release = holdSourceLock("external-restore");
+    const bytes = fs.readFileSync(LOCK);
+    const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    fs.utimesSync(LOCK, old, old);
+    expect(isRestoreLocked(ID)).toBe(true);
+    expect(() => acquireRestoreLock(ID)).toThrow(/Restore already in progress/);
+    expect(fs.readFileSync(LOCK)).toEqual(bytes);
+    release();
+  });
+  it.each(["EPERM", "EIO"])("does not reclaim an owner when liveness discovery returns %s", (code) => {
+    const release = holdSourceLock("external-restore");
+    const bytes = fs.readFileSync(LOCK);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("synthetic liveness failure"), { code }); });
+    try {
+      expect(isRestoreLocked(ID)).toBe(true);
+      expect(() => acquireRestoreLock(ID)).toThrow(/Restore already in progress/);
+      expect(fs.readFileSync(LOCK)).toEqual(bytes);
+    } finally { kill.mockRestore(); release(); }
+  });
+  it("an old release is idempotent and cannot close or delete a newer acquisition", () => {
+    const oldRelease = acquireRestoreLock(ID);
+    const oldToken = JSON.parse(fs.readFileSync(LOCK, "utf8")).token;
+    oldRelease();
+    const newRelease = acquireRestoreLock(ID);
+    try {
+      const bytes = fs.readFileSync(LOCK);
+      expect(JSON.parse(bytes.toString()).token).not.toBe(oldToken);
+      oldRelease(); oldRelease();
+      expect(isRestoreLocked(ID)).toBe(true);
+      expect(fs.readFileSync(LOCK)).toEqual(bytes);
+      expect(() => acquireRestoreLock(ID)).toThrow(/Restore already in progress/);
+      expect(fs.readFileSync(LOCK)).toEqual(bytes);
+    } finally { newRelease(); }
+    expect(isRestoreLocked(ID)).toBe(false); expect(fs.existsSync(LOCK)).toBe(false);
+  });
+  it("read-only inspection reports a dead owner without reclaiming its file", () => {
+    fs.mkdirSync(path.dirname(LOCK), { recursive: true });
+    const bytes = JSON.stringify({ pid: 123456, token: "dead-read-only-owned-fixture" });
+    fs.writeFileSync(LOCK, bytes, { mode: 0o600 });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("synthetic dead owner"), { code: "ESRCH" }); });
+    try {
+      expect(isRestoreLocked(ID, { reclaimStale: false })).toBe(false);
+      expect(fs.readFileSync(LOCK, "utf8")).toBe(bytes);
+      expect(isRestoreLocked(ID, { reclaimStale: false })).toBe(false);
+      expect(fs.readFileSync(LOCK, "utf8")).toBe(bytes);
+      expect(isRestoreLocked(ID)).toBe(false);
+      expect(fs.existsSync(LOCK)).toBe(false);
+    } finally { kill.mockRestore(); }
+  });
+  it("reclaims only an ESRCH-proven dead owner", () => {
+    fs.mkdirSync(path.dirname(LOCK), { recursive: true });
+    fs.writeFileSync(LOCK, JSON.stringify({ pid: 123456, token: "dead-owned-fixture" }), { mode: 0o600 });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("synthetic dead owner"), { code: "ESRCH" }); });
+    try { expect(isRestoreLocked(ID)).toBe(false); expect(fs.existsSync(LOCK)).toBe(false); }
+    finally { kill.mockRestore(); }
+    const release = acquireRestoreLock(ID);
+    expect(isRestoreLocked(ID)).toBe(true);
+    release();
+    expect(fs.existsSync(LOCK)).toBe(false);
+  });
+  it("does not delete malformed or symlinked unknown ownership", () => {
+    fs.mkdirSync(path.dirname(LOCK), { recursive: true });
+    fs.writeFileSync(LOCK, "{malformed", { mode: 0o600 });
+    expect(isRestoreLocked(ID)).toBe(true);
+    expect(() => acquireRestoreLock(ID)).toThrow(/Restore already in progress/);
+    expect(fs.readFileSync(LOCK, "utf8")).toBe("{malformed");
+    fs.unlinkSync(LOCK);
+    const target = path.join(ROOT, "owned-lock-target.json");
+    fs.writeFileSync(target, "sentinel");
+    fs.symlinkSync(target, LOCK);
+    expect(isRestoreLocked(ID)).toBe(true);
+    expect(() => acquireRestoreLock(ID)).toThrow(/Restore already in progress/);
+    expect(fs.lstatSync(LOCK).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toBe("sentinel");
+  });
 });
 
 describe.each(["export", "external-restore"] as const)("profile mutations while %s holds the restore lock", (kind) => {

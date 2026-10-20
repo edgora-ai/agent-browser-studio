@@ -21,7 +21,8 @@ import {
   writeZipArchive, extractZipArchive, ensureArchiveDirectory, syncArchiveDirectory, isPathInside,
   MAX_ZIP_ENTRIES, MAX_ZIP_TOTAL_BYTES, type ZipFileEntry, type ZipDirEntry, type WriteZipOptions,
 } from "./zip-writer.js";
-import { acquireRestoreLock } from "./profile-restore-lock.js";
+import { acquireRestoreLock, assertProfileTransferStopped } from "./profile-restore-lock.js";
+import { markProfileDataChanging } from "./profile-data-revision.js";
 import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArchiveImportPath } from "./archive-path-guard.js";
 import { hasSqliteLocalStorage, SQLITE_LOCAL_STORAGE_SIDECARS } from "./sync/sqlite-local-storage.js";
 import { historyBasename, historySidecars } from "./sync/sqlite-history.js";
@@ -69,7 +70,7 @@ export interface BatchExportItem {
 
 export interface BatchExportReport {
   exported: BatchExportItem[];
-  skipped: Array<{ dirId: string; reason: string }>;
+  skipped: Array<{ dirId: string; reason: string; code?: string }>;
   failed: Array<{ dirId: string; error: string; code?: string }>;
 }
 
@@ -331,7 +332,7 @@ function collectProfileEntries(profileDir: string, recovery: ArchiveRecovery): A
         if (entries.length >= MAX_ZIP_ENTRIES) throw new Error("ZIP entry count too large (including meta.json)");
         walk(rel);
       } else if (stat.isFile()) {
-        if (!rescue && SKIP_FILE_NAMES.has(dirent.name)) continue;
+        if (!rescue && (SKIP_FILE_NAMES.has(dirent.name) || !baseRel && (dirent.name === ".parentlock" || dirent.name === "parent.lock"))) continue;
         entries.push({ name: rel, filePath: absPath });
         if (entries.length >= MAX_ZIP_ENTRIES) throw new Error("ZIP entry count too large (including meta.json)");
       }
@@ -387,7 +388,7 @@ export async function exportProfileArchive(
     // pre-lock running check alone cannot protect an awaited file snapshot.
     const meta = getProfileMeta(dirId);
     if (!meta) throw new Error("Profile not found");
-    if (statusBrowser(dirId).running) throw new Error("Stop the profile before exporting (browser data may be mid-write)");
+    assertProfileTransferStopped(dirId, () => statusBrowser(dirId), undefined, { engine: meta.engine });
     const profileDir = path.join(getProfilesDir(), dirId);
     if (!fs.existsSync(profileDir)) throw new Error("Profile data directory missing");
     ensureArchiveDirectory(profileDir);
@@ -465,6 +466,8 @@ export function importProfileArchive(zipPath: string): ImportProfileResult {
     if (Object.hasOwn(getConfig().browserProfiles || {}, dirId)) throw new Error("Imported profile ID already exists (config collision)");
     profileDir = path.join(profilesDir, dirId);
     release = acquireRestoreLock(dirId);
+    // Fresh local generation: an imported baseline/report is not runtime proof.
+    markProfileDataChanging(dirId);
     // Never use recursive mkdir here: EEXIST is not proof of ownership.
     fs.mkdirSync(profileDir, { mode: 0o700 });
     profileOwner = fs.lstatSync(profileDir);
@@ -529,7 +532,9 @@ export function getProfileArchiveExportConflicts(dirIds: string[], destDir: stri
   for (const dirId of dirIds) {
     validateDirId(dirId);
     const meta = getProfileMeta(dirId);
-    if (!meta || statusBrowser(dirId).running) continue;
+    if (!meta) continue;
+    try { assertProfileTransferStopped(dirId, () => statusBrowser(dirId), undefined, { engine: meta.engine }); }
+    catch (error) { if ((error as { code?: string })?.code === "PROFILE_STOP_REQUIRED") continue; throw error; }
     const filePath = assertSafeArchiveExportPath(batchArchivePath(destDir, dirId, meta.name));
     if (fs.lstatSync(filePath, { throwIfNoEntry: false })) conflicts.push(filePath);
   }
@@ -555,8 +560,10 @@ export async function exportProfileArchives(dirIds: string[], destDir: string, o
         report.failed.push({ dirId, error: "Profile not found" });
         continue;
       }
-      if (statusBrowser(dirId).running) {
-        report.skipped.push({ dirId, reason: "running" });
+      try { assertProfileTransferStopped(dirId, () => statusBrowser(dirId), undefined, { engine: meta.engine }); }
+      catch (error) {
+        if ((error as { code?: string })?.code !== "PROFILE_STOP_REQUIRED") throw error;
+        report.skipped.push({ dirId, reason: "running-or-unconfirmed", code: "PROFILE_STOP_REQUIRED" });
         continue;
       }
       const filePath = batchArchivePath(destDir, dirId, meta.name);

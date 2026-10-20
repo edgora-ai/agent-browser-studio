@@ -6,7 +6,7 @@ import * as zlib from "node:zlib";
 import { createHash } from "node:crypto";
 
 const h = vi.hoisted(() => ({
-  root: "", failConfigCommit: false, unreadableRemote: false,
+  root: "", failConfigCommit: false, unreadableRemote: false, running: false,
   objects: new Map<string, Buffer>(), requests: [] as Array<{ method: string; url: string }>,
   onPut: null as null | ((url: string, body: Buffer) => Promise<"reject" | "lost" | void>),
   snapshot: vi.fn(), legacyExport: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) =
   findBrowserByProfileSync: vi.fn(() => null),
 }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({
-  runtimeCookieOps: { hasRunningBrowser: vi.fn(() => false), exportCookies: h.legacyExport, exportCookiesSnapshot: h.snapshot, importCookies: vi.fn(async () => 0) },
+  runtimeCookieOps: { hasRunningBrowser: vi.fn(() => h.running), exportCookies: h.legacyExport, exportCookiesSnapshot: h.snapshot, importCookies: vi.fn(async () => 0) },
   firefoxCookieService: { applyQueuedImports: vi.fn(async () => 0) },
 }));
 
@@ -40,6 +40,7 @@ import { listBrowserProfiles } from "../../src/main/services/browser-manager.js"
 import { getProfileInfo } from "../../src/main/services/profile-manager.js";
 import { installLocalExtension } from "../../src/main/services/extension-repository.js";
 import { writeZipArchive } from "../../src/main/services/zip-writer.js";
+import { getProfileDataRevision } from "../../src/main/services/profile-data-revision.js";
 
 const ID = "ab_snapshot_a";
 const NEW_ID = "ab_snapshot_new";
@@ -84,6 +85,7 @@ function cleanup(): void {
 beforeEach(() => {
   h.failConfigCommit = false;
   h.unreadableRemote = false;
+  h.running = false;
   h.onPut = null;
   h.objects.clear();
   h.requests = [];
@@ -235,6 +237,54 @@ describe("sync publishes a frozen snapshot, not the latest local draft", () => {
     expect(payload().cookies[ID]).toBe(JSON.parse(old.toString()).cookies[ID]);
     expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "cookies", id: ID, state: "preserved", code: "COOKIE_SOURCE_UNAVAILABLE" })]));
     expect(result.warnings?.length).toBeGreaterThan(0);
+    expect(result).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    const sidecar = JSON.parse(h.objects.get(`${ENDPOINT}/synthetic/cookies-${ID}.json`)!.toString("utf8"));
+    expect(sidecar).toMatchObject({ timestamp: null, capturedAt: null, source: "preserved" });
+    expect(sidecar.publishedAt).toBeGreaterThan(99);
+    expect(getProfileDataRevision(ID)).toBe("initial");
+  });
+
+  it("keeps a retained Cookie capture's original time instead of stamping it as newly captured", async () => {
+    const old = JSON.parse(previousCloud([{ domain: "example.test", name: "old", value: "retained", path: "/", expires: null, secure: false, httpOnly: true, sameSite: 0 }]).toString());
+    old.artifactCapturedAt = { cookies: { [ID]: 42 } };
+    h.objects.set(MAIN, Buffer.from(JSON.stringify(old)));
+    h.snapshot.mockResolvedValue({ state: "unavailable", reason: "not-running" });
+    const result = await syncService.push();
+    expect(result).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    expect(payload().artifactCapturedAt.cookies[ID]).toBe(42);
+    const sidecar = JSON.parse(h.objects.get(`${ENDPOINT}/synthetic/cookies-${ID}.json`)!.toString("utf8"));
+    expect(sidecar).toMatchObject({ timestamp: 42, capturedAt: 42, source: "preserved" });
+    expect(sidecar.publishedAt).toBeGreaterThan(42);
+    expect(getProfileDataRevision(ID)).toBe("initial");
+  });
+
+  it("reports running-profile publication as configuration-only, not a complete browser backup", async () => {
+    h.running = true;
+    const before = getProfileDataRevision(ID);
+    const result = await syncService.push();
+    expect(result).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    expect(result.message).toMatch(/Configuration published.*Browser backup incomplete/);
+    expect(result.items).toContainEqual(expect.objectContaining({ scope: "localStorage", id: ID, state: "skipped", code: "PROFILE_RUNNING" }));
+    expect(payload().artifactSources.localStorage[ID]).toBe("unavailable");
+    expect(getProfileDataRevision(ID)).toBe(before);
+    expect(fs.existsSync(path.join(h.root, "profile-data-revisions"))).toBe(false);
+  });
+
+  it("preserves a running profile's previous LocalStorage bytes and capture time without invalidating local evidence", async () => {
+    const directory = path.join(getProfilesDir(), ID, "Default", "Local Storage", "leveldb");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "CURRENT"), "MANIFEST-000001\n");
+    fs.writeFileSync(path.join(directory, "MANIFEST-000001"), "synthetic-manifest");
+    const first = await syncService.push(); expect(first.success, first.message).toBe(true);
+    const old = payload(), before = getProfileDataRevision(ID);
+    h.running = true;
+    const second = await syncService.push();
+    expect(second).toMatchObject({ success: false, outcome: "partial", browserBackupIncomplete: true, remoteCommit: "committed" });
+    expect(payload().localStorage[ID]).toBe(old.localStorage[ID]);
+    expect(payload().artifactCapturedAt.localStorage[ID]).toBe(old.artifactCapturedAt.localStorage[ID]);
+    expect(second.items).toContainEqual(expect.objectContaining({ scope: "localStorage", id: ID, state: "preserved" }));
+    expect(getProfileDataRevision(ID)).toBe(before);
+    expect(fs.readFileSync(path.join(directory, "CURRENT"), "utf8")).toBe("MANIFEST-000001\n");
   });
 
   it.each([false, true])("does not overwrite an unreadable existing manifest (force=%s)", async (force) => {

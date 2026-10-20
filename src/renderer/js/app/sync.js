@@ -180,10 +180,26 @@
     var labels = { retained: 'Configuration identity retained', changed: 'Configuration identity changed', 'not-verifiable': 'Configuration identity not verifiable', 'missing-seed': 'Legacy configuration has no identity seed' };
     return t('identity.config.' + state, labels[state] || labels['not-verifiable']) + ' · ' + t('identity.runtime.not-verified', 'Runtime fingerprint not re-verified');
   }
+  function runtimeEffectHtml(item) {
+    var effect = item && item.runtimeEffect;
+    if (!effect || typeof effect !== 'object') return '';
+    var note = effect.action === 'skipped-stop-required' && item.state === 'skipped'
+      ? t('sync.result.runtime.stop-required', 'Stop this profile and wait for browser exit, then pull again. No profile data or settings were applied.')
+      : effect.action === 'running-partial'
+        ? t('sync.result.runtime.running-partial', 'A partial live merge was explicitly requested. Inspect per-item effects, stop this profile, wait for browser exit, then start a fresh browser and verify restored data.')
+        : item.state === 'applied' && effect.state === 'stopped'
+          ? t('sync.result.runtime.stopped', 'Changes were applied while the browser was confirmed stopped. Start the profile and verify restored data; this is not a runtime fingerprint pass.')
+          : t('sync.result.runtime.incomplete', 'Profile restore did not finish. Review per-item effects before retrying; restored data still requires a fresh launch and verification.');
+    var html = '<div class="status-note">' + esc(note) + '</div>';
+    if (Number.isInteger(effect.queuedCookies) && effect.queuedCookies > 0) html += '<div class="status-note">' + esc(t('sync.result.runtime.queued', '{n} Cookie(s) queued, not yet applied; they will be attempted on the next launch.').replace('{n}', String(effect.queuedCookies))) + '</div>';
+    if (Number.isInteger(effect.liveCookiesApplied) && effect.liveCookiesApplied > 0) html += '<div class="status-note">' + esc(t('sync.result.runtime.live-cookies', '{n} Cookie(s) applied to the live browser.').replace('{n}', String(effect.liveCookiesApplied))) + '</div>';
+    if (effect.liveCookiesUnconfirmed === true) html += '<div class="health-text-watch">' + esc(t('sync.result.runtime.live-unconfirmed', 'Live Cookie changes are unconfirmed; do not retry automatically.')) + '</div>';
+    return html;
+  }
   function resultLabel(prefix, labels, value) { return t(prefix + value, labels[value] || labels.unknown || value); }
   function resultOutcome(r) { return OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
   function limitedResult(r) {
-    return resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
+    return r.browserBackupIncomplete === true || resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
       r.localCommit === 'partial' || r.remoteCommit === 'partial' || !COMMIT[r.localCommit] || !COMMIT[r.remoteCommit] ||
       r.localCommit === 'unknown' || r.remoteCommit === 'unknown' || (r.recovery || []).length ||
       (r.items || []).some(function(item) { return ['queued', 'skipped', 'unknown', 'failed', 'preserved'].indexOf(item.state) >= 0; });
@@ -202,6 +218,9 @@
     var tone = limited ? 'health-text-watch' : 'health-text-good';
     if (outcome === 'failed' || outcome === 'recovery-required') tone = 'health-text-poor';
     var heading = outcome === 'complete' && limited ? t('sync.result.limited', 'Completed with limitations') : resultLabel('sync.result.outcome.', OUTCOME, outcome);
+    if (r.browserBackupIncomplete === true) heading = r.remoteCommit === 'committed'
+      ? t('sync.result.backup-incomplete', 'Configuration published; browser backup incomplete')
+      : t('sync.result.backup-not-published', 'Browser backup incomplete');
     var local = COMMIT[r.localCommit] ? r.localCommit : 'unknown';
     var remote = COMMIT[r.remoteCommit] ? r.remoteCommit : 'unknown';
     var html = '<div class="' + tone + '"><strong>' + esc(t('sync.result.title', 'Last synchronization result')) + ' · ' + esc(heading) + '</strong></div>' +
@@ -213,6 +232,7 @@
         (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (item.message ? ' · ' + esc(item.message) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
       if (item.scope === 'history') html += '<div class="status-note">' + esc(historyLabel(item.history)) + '</div>';
       if (item.identity) html += '<div class="status-note">' + esc(identityLabel(item.identity)) + '</div>';
+      html += runtimeEffectHtml(item);
     });
     if ((r.warnings || []).length) html += '<div class="health-text-watch"><strong>' + esc(t('sync.result.warnings', 'Warnings')) + '</strong>' + (r.warnings || []).map(function(warning) { return '<div>' + esc(warning) + '</div>'; }).join('') + '</div>';
     if ((r.recovery || []).length || outcome === 'recovery-required') {
@@ -312,12 +332,12 @@
     // R127: the message color carries configured/not — no glyph prefix needed.
     messageEl.innerHTML = '<span class="' + (preview.configured ? 'health-text-good' : 'health-text-watch') + '">' + esc(message || t('sync.preview.unavailable', 'Preview unavailable')) + '</span>';
     listEl.innerHTML = [
-      previewCountCard(t('sync.preview.title.profiles','Profiles'), preview.profiles || 0, running.length ? t('sync.preview.profiles.running', '{n} running — Pull skips localStorage/preferences').replace('{n}', String(running.length)) : t('sync.preview.profiles.no-skip', 'Pull has no running-profile skips')),
+      previewCountCard(t('sync.preview.title.profiles','Profiles'), preview.profiles || 0, running.length ? t('sync.preview.profiles.running', '{n} running or unconfirmed — Pull skips each whole profile until stopped').replace('{n}', String(running.length)) : t('sync.preview.profiles.no-skip', 'No active profile detected; stopped state is rechecked before restoring')),
       previewCountCard(t('sync.preview.title.proxies','Proxies'), preview.proxies || 0, t('sync.preview.proxies', 'Synced with the config snapshot (secrets redacted)')),
       previewCountCard(t('sync.preview.title.accounts','Accounts'), preview.accounts || 0, t('sync.preview.accounts', 'Platform account metadata; passwords not shown')),
       previewCountCard(t('sync.preview.title.extensions','Extensions'), preview.extensions || 0, t('sync.preview.extensions', 'Private extension repository entries')),
     ].join('') + (running.length ? '<div class="profile-card" style="border-color: var(--warning-text);">' +
-      '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.preview.running-title','Running Profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Pull skip')) + '</span></div>' +
+      '<div class="card-header card-head-inline"><span class="name">' + esc(t('sync.preview.running-title','Running or unconfirmed profiles')) + '</span><span class="status-badge status-running">' + esc(t('sync.preview.skip-badge','Stop required')) + '</span></div>' +
       '<div style="font-family:var(--mono);font-size:11px;color:var(--text-muted);word-break:break-all;">' + running.map(esc).join('<br>') + '</div>' +
     '</div>' : '');
   }
@@ -565,7 +585,7 @@
       if (!ownsOperation(operation) || !preview) return null;
       var running = preview.runningProfiles || [];
       if (!running.length) return pull();
-      var runMsg = t('sync.confirm.pull-running','Detected {n} running profile(s). Pull will skip localStorage/preferences for them. Continue?').replace('{n}', String(running.length));
+      var runMsg = t('sync.confirm.pull-running','Detected {n} running or unconfirmed profile(s). Pull will skip their entire profile data and settings. Stop them and wait for browser exit before pulling those profiles. Continue with other selected data?').replace('{n}', String(running.length));
       return agentBrowser.confirmAsync(runMsg).then(function(ok) { return ok ? pull() : null; });
     }).then(function(r) {
       reportOperationResult(operation, r, t('sync.toast.pull-failed', 'Pull failed'));

@@ -182,8 +182,9 @@ function isLivePid(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error: any) {
-    // EPERM means the process exists but this user cannot signal it.
-    return error?.code === "EPERM";
+    // Only ESRCH proves exit. EPERM/EIO/unknown errors must not release owned
+    // runtime state, close its bridge, or certify that restored data is idle.
+    return error?.code !== "ESRCH";
   }
 }
 
@@ -266,7 +267,7 @@ export async function shutdownAllBrowserProfiles(
   };
 }
 
-export function statusBrowser(dirId: string): { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } {
+export function statusBrowser(dirId: string): { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck; unknown?: boolean } {
   validateDirId(dirId);
   const entry = runningProcesses.get(dirId);
   if (entry) {
@@ -275,13 +276,25 @@ export function statusBrowser(dirId: string): { running: boolean; pid: number | 
       const status: { running: boolean; pid: number | null; cdpPort: number | null; injectionProbe?: InjectionProbeCheck } = { running: true, pid: entry.pid, cdpPort: entry.port };
       if (entry.injectionProbe) status.injectionProbe = entry.injectionProbe;
       return status;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ESRCH") {
+        // EPERM and discovery failures do not prove exit or authorize dropping
+        // runtime ownership/its bridge. Healthy status keeps its existing shape.
+        return { running: true, pid: entry.pid, cdpPort: entry.port, unknown: true };
+      }
       void entry.proxyBridge?.close().catch(() => undefined);
       runningProcesses.delete(dirId);
     }
   }
-  const psFound = findBrowserByProfile(dirId);
+  let psFound: { pid: number; cdpPort: number; unknown?: boolean } | null;
+  try { psFound = findBrowserByProfileSync(dirId, path.resolve(getProfilesDir(), dirId), { strict: true }); }
+  catch { return { running: false, pid: null, cdpPort: null, unknown: true }; }
   if (psFound) {
+    if (psFound.unknown) {
+      // Report the matching owner without adopting it or connecting to an
+      // unverified endpoint merely to prove that the profile is not stopped.
+      return { running: true, pid: psFound.pid, cdpPort: psFound.cdpPort || null, unknown: true };
+    }
     runningProcesses.set(dirId, { pid: psFound.pid, process: null, port: psFound.cdpPort, lastActivityAt: Date.now() });
     return { running: true, pid: psFound.pid, cdpPort: psFound.cdpPort };
   }

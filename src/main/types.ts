@@ -795,6 +795,8 @@ export interface StatusResult {
   running: boolean;
   pid: number | null;
   cdpPort: number | null;
+  /** Discovery failed; running:false is not confirmed exit in this case. */
+  unknown?: boolean;
 }
 
 export interface SyncComparisonToken {
@@ -805,6 +807,16 @@ export interface SyncComparisonToken {
 
 export type SyncOutcome = "complete" | "partial" | "failed" | "cancelled" | "recovery-required";
 export type SyncCommitState = "none" | "committed" | "partial" | "unknown";
+/** Per-profile restore effects, never a live fingerprint or browser-health pass. */
+export interface SyncProfileRuntimeEffect {
+  state: "stopped" | "running-or-unconfirmed";
+  action: "skipped-stop-required" | "restored-stopped" | "running-partial";
+  stopRequired: boolean;
+  restartRequired: boolean;
+  queuedCookies: number;
+  liveCookiesApplied: number;
+  liveCookiesUnconfirmed?: boolean;
+}
 export interface SyncItemResult {
   side?: "local" | "remote";
   scope: "config" | "profiles" | "cookies" | "localStorage" | "preferences" | "extensions" | "history" | "sidecar" | "baseline";
@@ -818,6 +830,7 @@ export interface SyncItemResult {
   required?: boolean;
   history?: HistoryCoverage;
   identity?: import("./services/profile-identity.js").ProfileIdentityComparison;
+  runtimeEffect?: SyncProfileRuntimeEffect;
 }
 export interface SyncRecoveryInfo {
   resource: "localStorage" | "extensions" | "profiles" | "history";
@@ -838,6 +851,8 @@ export interface SyncResult {
   items?: SyncItemResult[];
   warnings?: string[];
   recovery?: SyncRecoveryInfo[];
+  /** Configuration publication is not a complete fresh browser-data backup. */
+  browserBackupIncomplete?: boolean;
 }
 
 // ── Updates (version-aware release store with pin + rollback) ──

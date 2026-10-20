@@ -654,7 +654,29 @@
 
 <!-- ── New Profile Dialog ── -->
 
-<!-- ── Bulk Import Dialog ── -->
+<!-- ── Read-only fingerprint comparison; mutations require separate consent ── -->
+<dialog id="dlg-fingerprint-drift" class="fingerprint-drift-dialog" aria-labelledby="dlg-fingerprint-drift-title" aria-describedby="fingerprint-drift-scope">
+ <h3 id="dlg-fingerprint-drift-title" data-icon="chip"><span data-i18n="fingerprint.title">Fingerprint comparison</span></h3>
+ <p id="fingerprint-drift-profile" class="fingerprint-drift-profile"></p>
+ <p id="fingerprint-drift-scope" class="fingerprint-drift-scope" data-i18n="fingerprint.scope">Captured fields only, not proof that a site or account is safe. Reading this view does not change the reference or start a browser. Matching saved settings is not proof of the current runtime.</p>
+ <div id="fingerprint-drift-body" class="fingerprint-drift-body" aria-busy="true"><p data-i18n="common.loading">Loading...</p></div>
+ <p id="fingerprint-drift-status" class="fingerprint-drift-status" role="status" aria-live="polite" aria-atomic="true"></p>
+ <p class="fingerprint-drift-close-boundary" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</p>
+ <details id="fingerprint-drift-advanced" class="fingerprint-drift-advanced" hidden>
+  <summary data-i18n="fingerprint.advanced">Advanced reference actions</summary>
+  <p data-i18n="fingerprint.reset-boundary">Reset only removes the stored comparison reference. It does not fix a changed identity, restore a session, or verify safety.</p>
+  <button id="fingerprint-drift-reset" type="button" class="btn btn-secondary" disabled data-i18n="profile.health.reset">Advanced: reset fingerprint baseline…</button>
+ </details>
+ <div class="fingerprint-drift-actions">
+  <button id="fingerprint-drift-recheck" type="button" class="btn btn-secondary" data-icon="refresh" hidden disabled><span data-i18n="fingerprint.recheck">Check running browser again</span></button>
+  <button id="fingerprint-drift-capture" type="button" class="btn btn-secondary" data-icon="chip" hidden disabled><span data-i18n="fingerprint.capture">Capture/update live reference…</span></button>
+  <button id="fingerprint-drift-update" type="button" class="btn btn-secondary" hidden disabled data-i18n="fingerprint.update">Use reviewed launch snapshot as reference…</button>
+  <button id="fingerprint-drift-launch" type="button" class="btn btn-secondary" hidden disabled><span id="fingerprint-drift-launch-label" data-i18n="fingerprint.retry-launch">Retry normal launch for fresh evidence</span></button>
+  <button id="fingerprint-drift-close" type="button" class="btn btn-primary" data-i18n="common.close" autofocus>Close</button>
+ </div>
+</dialog>
+
+<!-- ── Host Environment Dialog ── -->
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
   <h3 id="dlg-env-risk-title" data-icon="monitor"><span data-i18n="env.risk.title">Host environment risk check</span></h3>
@@ -1629,6 +1651,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <script src="js/app/errors.js"></script>
  <script src="js/app/ipc.js"></script>
 <script src="js/app/tabs.js"></script>
+<script src="js/app/fingerprint-drift.js"></script>
 <script src="js/app/profiles.js"></script>
 <script src="js/app/batch-ui.js"></script>
 <script src="js/app/proxies.js"></script>
