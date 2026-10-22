@@ -4,9 +4,10 @@
 import type { Browser } from 'playwright-core';
 import type { AgentRun, LlmConfig, SyncResult, SyncConfig, SyncComparisonToken, ProfileHistorySyncState } from '../../src/main/types.js';
 export type SyncHistoryOptions = { history?: boolean; comparisonToken?: SyncComparisonToken };
-export type SyncSettings = Pick<Partial<SyncConfig>, 'enabled' | 'endpoint' | 'bucket' | 'accessKey' | 'secretKey' | 'includeHistory'> & { custodyConsent?: boolean; historyConsent?: boolean };
+export type SyncSettings = Pick<Partial<SyncConfig>, 'enabled' | 'endpoint' | 'bucket' | 'accessKey' | 'secretKey' | 'includeHistory' | 'includeFullProfile' | 'fullProfilePassphrase'> & { custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean };
 export type SyncStatus = { enabled: boolean; configured: boolean; endpoint: string; bucket: string; accessKeyMasked: string;
-  includeHistory: boolean; custodyConsentAt: number | null; historyConsentAt: number | null; history: Record<string, ProfileHistorySyncState>; operation: unknown };
+  includeHistory: boolean; custodyConsentAt: number | null; historyConsentAt: number | null; history: Record<string, ProfileHistorySyncState>;
+  includeFullProfile: boolean; fullProfileConsentAt: number | null; fullProfilePassphraseSet: boolean; operation: unknown };
 import type { Conversation } from '../../src/main/services/agent/conversation-store.js';
 import type { QueryResult, TableInfo } from '../../src/main/services/agent-db.js';
 import type { ApprovalRequest, ApprovalDecision } from '../../src/main/services/approval-gate.js';

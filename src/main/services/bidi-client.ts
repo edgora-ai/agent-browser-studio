@@ -246,12 +246,15 @@ export async function connectBidi(wsUrl: string, opts: BidiConnectOpts = {}): Pr
       const waiter = pending.get(msg.id);
       if (!waiter) return;
       pending.delete(msg.id);
-      if (msg.error) {
-        const details = [typeof msg.error === "string" ? msg.error : msg.error.error, msg.message, msg.error.message]
+      if (Object.hasOwn(msg, "error") || msg.type === "error") {
+        const details = [typeof msg.error === "string" ? msg.error : msg.error?.error, msg.message, msg.error?.message]
           .filter((value): value is string => typeof value === "string" && value.length > 0);
         waiter.reject(new Error("BiDi request failed" + (details.length ? ": " + [...new Set(details)].join(": ") : "")));
+      } else if ((msg.type !== undefined && msg.type !== "success") || !Object.hasOwn(msg, "result") ||
+                 !msg.result || typeof msg.result !== "object" || Array.isArray(msg.result)) {
+        waiter.reject(new Error("Invalid BiDi response envelope"));
       } else {
-        waiter.resolve(msg.result ?? {});
+        waiter.resolve(msg.result);
       }
     });
 
@@ -484,10 +487,15 @@ export async function bidiGetCookies(conn: BidiConnection, timeoutMs = 10000): P
   return cookies;
 }
 
-/** Write one cookie via `storage.setCookie`; returns true when stored. */
-export async function bidiSetCookie(conn: BidiConnection, cookie: BidiCookie, timeoutMs = 10000): Promise<boolean> {
-  const result = await conn.send("storage.setCookie", { cookie }, timeoutMs);
-  return result?.success === true;
+/** BiDi confirms a stored cookie with a partition key, not CDP's success flag. */
+export async function bidiSetCookie(conn: BidiConnection, cookie: BidiCookie, timeoutMs = 10000, signal?: AbortSignal): Promise<boolean> {
+  const result = await conn.send("storage.setCookie", { cookie }, timeoutMs, signal);
+  const key = result?.partitionKey;
+  return !!result && typeof result === "object" && !Array.isArray(result) &&
+    Object.hasOwn(result, "partitionKey") && !Object.hasOwn(result, "error") && result.success !== false &&
+    !!key && typeof key === "object" && !Array.isArray(key) &&
+    (key.userContext === undefined || typeof key.userContext === "string") &&
+    (key.sourceOrigin === undefined || typeof key.sourceOrigin === "string");
 }
 
 /**

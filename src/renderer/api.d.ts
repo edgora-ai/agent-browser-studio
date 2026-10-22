@@ -1,4 +1,4 @@
-import type { SyncResult, SyncComparisonToken, ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry, ProxyDetectionCacheEntry, ProxyObservationMetadata } from "../main/types.js";
+import type { SyncConfig, SyncResult, SyncComparisonToken, ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry, ProxyDetectionCacheEntry, ProxyObservationMetadata } from "../main/types.js";
 import type { FingerprintComparisonReport } from "../main/services/fingerprint-drift-reports.js";
 export type { FingerprintComparisonReport } from "../main/services/fingerprint-drift-reports.js";
 import type { ProxyDetectionResult } from "../main/services/proxy-detector.js";
@@ -615,10 +615,14 @@ export interface AgentBrowserAPI {
     push: (opts?: { force?: boolean; comparisonToken?: SyncComparisonToken; history?: boolean }) => Promise<SyncResult>;
     pull: (opts?: { strategy?: "local" | "remote" | "newest"; resolutions?: Record<string, "local" | "remote" | "newest">; comparisonToken?: SyncComparisonToken; history?: boolean; allowRunningPartial?: boolean }) => Promise<SyncResult>;
     status: () => Promise<{ enabled: boolean; configured: boolean; endpoint: string; bucket: string; accessKeyMasked: string; custodyConsentAt: number | null;
+      includeHistory?: boolean; historyConsentAt?: number | null;
+      includeFullProfile: boolean; fullProfileConsentAt: number | null; fullProfilePassphraseSet: boolean;
       operation: { generation: number; active: ActiveSyncOperation | null; last: SyncResult | null } }>;
     preview: () => Promise<{ configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string }>;
     previewDiff: () => Promise<SyncDiffResult>;
-    configure: (config: any) => Promise<{ success: boolean; error?: string; code?: string }>;
+    configure: (config: Partial<Pick<SyncConfig, "enabled" | "endpoint" | "bucket" | "accessKey" | "secretKey" | "includeHistory" | "includeFullProfile" | "fullProfilePassphrase">> & {
+      custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean;
+    }) => Promise<{ success: boolean; error?: string; code?: string }>;
   };
   app: {
     /** Acknowledges an exit request; actual termination must be observed separately. */

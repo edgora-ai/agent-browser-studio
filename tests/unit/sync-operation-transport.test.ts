@@ -15,7 +15,7 @@ import type { SyncComparisonToken, SyncResult } from "../../src/main/types.js";
 const MAIN = path.resolve(__dirname, "../../src/main");
 const PRELOAD = fs.readFileSync(path.join(MAIN, "preload.cjs"), "utf8");
 const MODULES = [
-  "ipc/sync.ts", "services/rest-api-server.ts", "services/event-bus.ts", "services/team.ts",
+  "ipc/sync.ts", "services/rest-api-server.ts", "services/event-bus.ts", "services/team.ts", "services/server-mode.ts", "branding.ts",
   "services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/http/auth.ts", "services/http/body.ts", "services/utils.ts",
 ];
 const compileCounts = new Map<string, number>();
@@ -86,7 +86,7 @@ function fixture() {
     }),
   };
   const context = vm.createContext({ Buffer, URL, structuredClone, console: log,
-    process: { platform: "darwin", argv: ["synthetic-node", "synthetic-entry"], env: { AGENT_BROWSER_API_TOKEN: AUTH, AGENT_BROWSER_API_PORT: "0" } },
+    process: { platform: "darwin", argv: ["synthetic-node", "synthetic-entry"], uptime: () => 1, env: { AGENT_BROWSER_API_TOKEN: AUTH, AGENT_BROWSER_API_PORT: "0" } },
     setTimeout: fail("timer"), clearTimeout: fail("timer"), fetch: fail("network"),
   });
   function load(name: string): any {
@@ -159,14 +159,14 @@ function fixture() {
   const rest = load("services/rest-api-server.ts");
   const startup = rest.startRestApiServer();
   expect(callback).toBeTypeOf("function");
-  async function request(method: string, route: string, body?: any) {
+  async function request(method: string, route: string, body?: any, authorized = true) {
     await startup.ready;
     const req: any = new EventEmitter();
     const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     // One authorized callback path only. Real socket/auth matrices belong to
     // the separate Electron E2E task, not this transport fixture.
     req.method = method; req.url = route;
-    req.headers = { host: "127.0.0.1", authorization: "Bearer " + AUTH, ...(encoded ? { "content-length": String(encoded.length) } : {}) };
+    req.headers = { host: "127.0.0.1", ...(authorized ? { authorization: "Bearer " + AUTH } : {}), ...(encoded ? { "content-length": String(encoded.length) } : {}) };
     req.socket = { remoteAddress: "127.0.0.1" }; req.destroy = fail("request destroy");
     const response = { status: 0, headers: {} as Record<string, unknown>, body: undefined as any };
     const res = {
@@ -383,7 +383,8 @@ describe("REST profile detail shared projection (controlled helper boundary, not
 });
 
 describe("configure permission and result translation via original preload/registered IPC", () => {
-  const settings = { enabled: true, endpoint: "https://configured.synthetic.invalid", bucket: "synthetic-bucket", accessKey: "synthetic-access-only", secretKey: "synthetic-secret-only", custodyConsent: true };
+  const settings = { enabled: true, endpoint: "https://configured.synthetic.invalid", bucket: "synthetic-bucket", accessKey: "synthetic-access-only", secretKey: "synthetic-secret-only", custodyConsent: true,
+    includeFullProfile: true, fullProfileConsent: true, fullProfilePassphrase: "synthetic migration phrase" };
   it("a real synthetic viewer role is refused before calling the config setter", async () => {
     const f = fixture(); f.role("viewer");
     const result = await f.api.sync.configure(settings);
@@ -395,6 +396,19 @@ describe("configure permission and result translation via original preload/regis
     expect(await f.api.sync.configure(settings)).toEqual({ success: true });
     expect(f.setter).toHaveBeenCalledExactlyOnceWith(settings); expect(f.setter.mock.calls[0][0]).not.toBe(settings);
     expect(f.invocations.at(-1)).toEqual({ channel: "sync:configure", args: [settings] });
+  });
+  it("preserves full-migration failure codes through original IPC instead of relying on invoke exceptions", async () => {
+    const f = fixture(); f.setter.mockImplementationOnce(() => { throw Object.assign(new Error("Synthetic full-scope consent refusal"), { code: "FULL_PROFILE_CONSENT_REQUIRED" }); });
+    expect(await f.api.sync.configure(settings)).toEqual({ success: false, code: "FULL_PROFILE_CONSENT_REQUIRED", error: "Synthetic full-scope consent refusal" });
+  });
+  it("keeps public health, REST auth and viewer settings gates ahead of full-migration configure", async () => {
+    const f = fixture();
+    expect((await f.request("GET", "/health", undefined, false)).status).toBe(200);
+    expect((await f.request("POST", "/api/sync/config", settings, false)).status).toBe(401); expect(f.setter).not.toHaveBeenCalled();
+    f.role("viewer"); expect((await f.request("POST", "/api/sync/config", settings)).status).toBe(403); expect(f.setter).not.toHaveBeenCalled();
+    f.role("member"); const saved = await f.request("POST", "/api/sync/config", settings);
+    expect(saved.status).toBe(200); expect(f.setter).toHaveBeenCalledExactlyOnceWith(settings);
+    expect(saved.body).not.toHaveProperty("fullProfilePassphrase");
   });
   it("setter failure returns a structured failure instead of a false success or rejected invoke", async () => {
     const f = fixture(); f.setter.mockImplementationOnce(() => { throw new Error("Synthetic configuration validation failure"); });

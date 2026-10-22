@@ -43,7 +43,7 @@ const behaviors: Record<string, (params: any) => any> = {
   "storage.getCookies": () => ({ cookies: [
     { name: "sid", value: { type: "string", value: "abc" }, domain: "example.com", path: "/", size: 7, httpOnly: true, secure: true, sameSite: "lax", expiry: 1799999999 },
   ] }),
-  "storage.setCookie": () => ({ success: true }),
+  "storage.setCookie": () => ({ partitionKey: { userContext: "default" } }),
   "storage.deleteCookies": () => ({ partitionKey: ["fake-key"] }),
 };
 
@@ -283,20 +283,61 @@ describe("bidi-client wire protocol", () => {
 
   it("storage cookie operations map through the protocol", async () => {
     const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
-    const cookies = await bidiGetCookies(conn, 5000);
-    expect(cookies).toHaveLength(1);
-    expect(cookies[0].name).toBe("sid");
-    const info = bidiCookieToCookieInfo(cookies[0]);
-    expect(info.domain).toBe("example.com");
-    expect(info.value).toBe("abc");
-    expect(info.httpOnly).toBe(true);
-    expect(info.sameSite).toBe(1); // lax
-    expect(info.expires).toBe(1799999999);
+    try {
+      const cookies = await bidiGetCookies(conn, 5000);
+      expect(cookies).toHaveLength(1);
+      expect(cookies[0].name).toBe("sid");
+      const info = bidiCookieToCookieInfo(cookies[0]);
+      expect(info.domain).toBe("example.com");
+      expect(info.value).toBe("abc");
+      expect(info.httpOnly).toBe(true);
+      expect(info.sameSite).toBe(1); // lax
+      expect(info.expires).toBe(1799999999);
 
-    expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1, expires: null }), 5000)).toBe(true);
-    expect(await bidiDeleteCookies(conn, { name: "k" }, 5000)).toBe(1);
-    conn.close();
+      expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.com", name: "k", value: "v", path: "/", secure: false, httpOnly: false, sameSite: 1, expires: null }), 5000)).toBe(true);
+      expect(await bidiDeleteCookies(conn, { name: "k" }, 5000)).toBe(1);
+    } finally { conn.close(); }
   }, 15000);
+
+  it.each([{}, { userContext: "default" }, { userContext: "default", sourceOrigin: "https://example.test" }])("recognizes a normal storage.setCookie partitionKey response %j", async (partitionKey) => {
+    wireOverrides.set("storage.setCookie", (ws, id) => ws.send(JSON.stringify({ type: "success", id, result: { partitionKey } })));
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.test", name: "key", value: "synthetic", path: "/", secure: true, httpOnly: true, sameSite: 1, expires: null }), 500)).toBe(true);
+    } finally { conn.close(); }
+  });
+
+  it.each([
+    {}, { success: true }, { partitionKey: null }, { partitionKey: [] }, { partitionKey: "not-a-key" },
+    { partitionKey: { userContext: 12 } }, { partitionKey: { sourceOrigin: false } },
+  ])("does not turn a malformed storage.setCookie result %j into a confirmed write", async (result) => {
+    wireOverrides.set("storage.setCookie", (ws, id) => ws.send(JSON.stringify({ type: "success", id, result })));
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try {
+      expect(await bidiSetCookie(conn, cookieInfoToBidiCookie({ domain: "example.test", name: "key", value: "synthetic", path: "/", secure: true, httpOnly: true, sameSite: 1, expires: null }), 500)).toBe(false);
+    } finally { conn.close(); }
+  });
+
+  it.each([
+    { type: "error", error: "invalid argument", message: "synthetic storage failure" },
+    { type: "error" }, { error: null }, { error: false },
+    { type: "event" }, { type: "unknown" },
+  ])("rejects an error or contradictory response envelope even if it carries a success-shaped result: %j", async (envelope) => {
+    wireOverrides.set("storage.setCookie", (ws, id) => ws.send(JSON.stringify({ ...envelope, id, result: { partitionKey: { userContext: "default" } } })));
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try { await expect(conn.send("storage.setCookie", {}, 500)).rejects.toThrow(); }
+    finally { conn.close(); }
+  });
+
+  it.each([
+    { type: "success" }, { type: "success", result: null },
+    { type: "success", result: [] }, { type: "success", result: "not-a-result" },
+  ])("rejects a malformed success envelope rather than manufacturing an empty result: %j", async (envelope) => {
+    wireOverrides.set("storage.setCookie", (ws, id) => ws.send(JSON.stringify({ ...envelope, id })));
+    const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });
+    try { await expect(conn.send("storage.setCookie", {}, 500)).rejects.toThrow(/response/i); }
+    finally { conn.close(); }
+  });
 
   it("rejects with a clear protocol error for unknown commands", async () => {
     const conn = await connectBidi(`ws://127.0.0.1:${port}/session`, { timeoutMs: 5000 });

@@ -162,8 +162,23 @@ Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服�
 2. **起飞前预览**显示 push/pull 会动到什么；**Team Diff** 对比本地与远端，push 会**移除远端数据**前会先警告。
 3. **团队工作区（RBAC）**：owner / admin / member / viewer 角色随同步传播。viewer 不能推送、下载或修改同步设置；强制推送需要 admin 或 owner。
 4. **签出锁**（见「配置」）阻止遵守协议的客户端覆盖其他设备的签出，不代表跨设备原子事务或 CAS 保证。
+5. **完整环境迁移需独立授权**，不会扩大已有同步同意。勾选**完整环境迁移（包含浏览器密码、历史和站点数据）**，填写**迁移口令**并保存，即明确授权将历史／书签、站点登录会话、浏览器保存密码及所需代理凭据放入加密迁移工件；普通同步仍为有限范围。请先停止配置并检查逐项结果，不保证免登录，也不能迁移硬件绑定的 Passkey。
+6. **新机器必须输入同一迁移口令。** 长度为 12–1024 个 UTF-8 字节，保留空格；忘记后不可恢复，不能用 S3 Secret Key 代替。口令仅在本机加密保存，无可用加密后端时拒绝保存／启用，不静默保存明文。留空保留旧口令；提交后清空输入，状态接口不返回口令或本地 vault 密文。本机自动操作可使用已加密保存的口令。撤销完整迁移或历史同意都会关闭完整迁移，但不会删除已有远端对象。
+
+**完整迁移简短流程——源机 → 接收机：**
+1. 两机配置同一 endpoint／bucket，分别明确同意数据代管及**完整环境迁移**，输入**同一迁移口令**并保存。
+2. 两机相关配置均先正常停止并等待确认浏览器退出。源机以完整模式**推送**，核对完整环境／保存密码的逐项结果；部分或失败采集不是完整迁移备份。
+3. 接收机先与远端比较，使用完整模式默认的**远端优先**，再**拉取**所选环境。用户明确的本地／逐项选择仍会保留；原有配置目录保留为备份。随后正常启动、按需解锁，并验证恢复的数据。
+
+- **旧 v3 不是完整迁移备份。** 必须回到原机，以完整模式重新推送生成 v4；旧有限快照无法还原从未上传的文件／密码。有限模式推送若会覆盖 v4 完整快照，将被拒绝。
+- **凭据支持有明确边界。** 当前托管 Chromium 支持 macOS／Linux 基本凭据后端的重新加密；Windows DPAPI／App-Bound 加密尚不支持，会拒绝而非假报密码恢复成功。Firefox 恢复配对凭据文件后，已设置的 **Primary Password** 仍须正常解锁。站点可能要求重新认证，不保证免登录；硬件绑定的 Passkey 不可迁移。
+
+- **先处理既有 Cookie 导入队列。** `FULL_PROFILE_COOKIE_QUEUE_PENDING` 要求正常启动配置并确认既有 Cookie 已导入，再正常停止并确认浏览器退出后，重试完整推送／拉取。`FULL_PROFILE_COOKIE_QUEUE_UNAVAILABLE` 表示须检查并修复既有队列，不能当作空队列或迁移成功。原数据和队列保留，不会通过清队列绕过门禁。
+- **持久恢复门禁：** 未决 `FULL_PROFILE_RECOVERY_REQUIRED` 即使重启 Studio 仍阻止配置启动；须检查保留副本及外置恢复 receipt，只有配置提交或确认完整回滚后才清除，不得删除 receipt 冒充已恢复。
 
 **看清结果，再决定是否重试：**
+下方 Cookie／LocalStorage／v3 运输细节针对**有限同步**；完整迁移使用上方 v4 流程。提交、恢复处理及运行态复验的共通告警仍适用。
+
 - profile 的**已同步**仅证明可迁移配置与 `Preferences` 符合当前 endpoint/bucket 的已发布基线，不证明 Cookie、SQLite/WAL、LevelDB 或整个目录没有变化。**本地有改动**表示已保存到本地但不在该同步基线中；**未知**包括旧基线无法验证、同步目标改变等情况。读取列表不会自动升级旧标记。
 - Compare 比较配置及有证据覆盖的 Preferences，并列出未验证、未比较的数据。比较后任一端内容变化，需要重新比较再应用旧决策。同一应用进程一次只执行一个推送/下载；“忙碌”不表示请求已排队。
 - Cookie 导出区分“确实为空”和“来源不可用”；不可用时可以保留旧云端副本及其原始采集时间，发布时间不能冒充新采集。**运行中推送**可以发布配置，但浏览器备份可能不完整：不会新采集 LocalStorage 和所选历史，Cookie 也可能保留旧副本／不可用。回执明确写**配置已发布／浏览器备份不完整**，不能当作完整备份成功。
@@ -176,10 +191,10 @@ Windows / Linux 代码路径已存在但尚未端到端验证；提供无头服�
 - 历史校验仅打开含 WAL 的拥有副本，检查结构完整性、普通表 schema、精确类型值与关键关联；不 checkpoint／修复源库，也不用 `immutable` 忽略 WAL。不支持的 CHECK、生成列、表达式索引及虚拟表会被拒绝，而非执行其 SQL。源码已知的版本准入为 Chromium History 15–70（compatible version 至多 16）及 Firefox Places 52–86；这不证明每种指定／已装内核都能使用该库。已有接收端 schema 必须匹配，不会悄悄进行跨引擎或 schema 迁移。
 - 拉取会先验证所选历史对象，再在**同一 `dirId`** 下恢复，不走 ZIP 导入的新 ID 路径。旧 DB／WAL／SHM／空 journal 完整组保留在 `.history-backup-*`，live 组不会留下旧 sidecar；应用前重新核对配置和运行归属。多文件发布**并非原子事务**：配置提交前的失败／取消，在归属允许时执行补偿。`HISTORY_RECOVERY_REQUIRED` 表示补偿未确认，重试前应检查保留的旧／新组和回执，不要删除唯一的恢复副本。
 - **旧协议未覆盖**、**未选择**、**已确认源不存在**、**完整空快照**、**保留旧快照**与**失败**分别报告。旧备份／仅配置导入无法恢复从未上传的访问记录；源不存在不会清空接收端历史，明确选择的完整空数据库则会替换旧组。历史使用独立语义基线，对比带类型的行与关联，而非物理 main／WAL 哈希；checkpoint、SQLite 统计及已知维护元数据不会导致刚推送就变脏。请使用**复查已停止配置的历史状态**或 history-state API；状态区记录的覆盖不是新的本地读取，也不是浏览器历史界面的真实验收。
-- 新快照先发布内容寻址扩展／历史对象，再发布主清单。新版可读取旧 envelope；旧客户端不保证理解 v3、历史 artifact v1、版本 2 的扩展包寻址或 SQLite LocalStorage 附件。共享新格式快照前，应一起升级团队客户端。
+- 新快照先发布内容寻址扩展／历史对象，再发布主清单。新版可读取旧 envelope；旧客户端不保证理解 v4 完整迁移、v3、历史 artifact v1、版本 2 的扩展包寻址或 SQLite LocalStorage 附件。共享新格式快照前，应一起升级团队客户端。
 - 同步／导入回执分别报告**配置身份保持／改变／不可验证／旧配置缺 seed**及**运行指纹尚未复验**。已有 seed 会保留，不因拉取／导入重新随机。随包保留的 `fingerprintBaseline` 只是参考数据，不是实时对比证明。本机字体、缺失扩展包、实际内核／版本、操作系统及原生 GPU／引擎策略仍可能改变运行结果，需另行在同宿主／内核下实测对比。
 
-S3 bucket 属敏感存储：同步会省略基础设施和账号凭据字段，但导出的 Cookie 与 profile 状态仍是真实账号数据，并非匿名化或端到端加密备份。
+S3 bucket 属敏感存储。**有限同步**省略基础设施和账号凭据字段，但其中导出的 Cookie 与 profile 状态仍是真实账号数据，并非匿名化或额外端到端加密备份。另行授权的**完整环境迁移**使用独立迁移口令，对浏览器数据及所选保存密码／代理凭据进行 AES 加密。配置元数据与扩展包仍分项运输并分别报告结果，不能据此声称这些项目或旧有限模式也全部端到端加密。迁移口令、本地 vault 密文及 S3／API 密钥不可上传，也不可由普通导出、日志、账号或状态响应暴露。
 
 ## 11. 数据与备份——请读一次
 
@@ -198,6 +213,7 @@ S3 bucket 属敏感存储：同步会省略基础设施和账号凭据字段，�
 - **REST API** `127.0.0.1:26582`——`/openapi.json` 提供 OpenAPI 3.0，Bearer 鉴权（`AGENT_BROWSER_API_TOKEN`）。覆盖 profiles、proxies、accounts、automation、jobs、agent、DRM、team、updates。
 - **MCP 服务器** `127.0.0.1:26581`，供 Claude Code / Cursor 等 MCP 客户端连接。同步工具为 `agent_browser_sync_status`、`agent_browser_sync_configure`、`agent_browser_sync_push`、`agent_browser_sync_pull` 和 `agent_browser_sync_history_state`；明确同意应来自用户意图，智能体不能从普通的启用同步擅自推断同意。
 - **历史范围 API**：经鉴权的 `POST /api/sync/config` 接收 `{ "historyConsent": true, "includeHistory": true }`，分别记录同意并选择未来自动同步范围（member+）。推送／拉取接受可选 `history: true/false`；省略时继承已保存选择，不会给旧配置悄悄开启历史。`GET /api/sync/history/{dirId}` 返回独立语义状态、覆盖和新鲜度，不是完整恢复或实时身份凭证。JS SDK 方法为 `configureSync`、`syncPush`、`syncPull`、`syncHistoryState`；Python 对应 `configure_sync`、`sync_push`、`sync_pull`、`sync_history_state`。应先读取 HTTP 错误中的不完整／恢复回执，再决定是否重试。
+- **完整迁移配置 API**：同一经鉴权且 member+ 的 `POST /api/sync/config`／MCP `agent_browser_sync_configure` 新增 `includeFullProfile?: boolean`、`fullProfileConsent?: boolean` 和仅写入的 `fullProfilePassphrase?: string`。启用须有数据代管同意、用户明确的完整范围授权和有效的本地加密口令。只有 main 记录 `fullProfileConsentAt` 及关联历史同意，不接受调用方时间戳；旧配置缺少 `includeFullProfile` 不会自动升级授权。`fullProfileConsent: false` 或 `historyConsent: false` 均关闭完整迁移。状态仅暴露 `includeFullProfile`、`fullProfileConsentAt`、`fullProfilePassphraseSet`，不回显秘密。模型不能从普通同意推断密码迁移授权，也不能替用户自动批准。
 - **Python 与 JS SDK**（`sdk/python`、`sdk/js`）——其中 `connectPlaywright` / `connectPuppeteer` 一行代码拿到绑定受管 profile 的真实 Playwright/Puppeteer 浏览器。profile 响应保留同步状态、范围和原因；HTTP 错误保留 `.status` 与有界 `.body`，应读取提交、结果与恢复字段，不要解析 message 猜测状态。错误正文超过 2 MiB 时，JS 的 `bodyTruncated` / Python 的 `body_truncated` 会明确标记，且不返回完整正文。正文缺失、被截断或运输超时都不能证明没有写入，不应盲目重试。
 
 ## 13. 推荐操作清单

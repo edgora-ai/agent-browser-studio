@@ -26,8 +26,11 @@
   var lastResult = null;
   var formBaseline = {};
   var formTouched = {};
-  var formFields = ['sync-enabled', 'sync-endpoint-input', 'sync-bucket-input', 'sync-custody-consent', 'sync-history-consent', 'sync-include-history', 'sync-ak-input', 'sync-sk-input'];
-  var checkboxFields = { 'sync-enabled': true, 'sync-custody-consent': true, 'sync-history-consent': true, 'sync-include-history': true };
+  var formFields = ['sync-enabled', 'sync-endpoint-input', 'sync-bucket-input', 'sync-custody-consent', 'sync-history-consent', 'sync-include-history', 'sync-full-profile-consent', 'sync-ak-input', 'sync-sk-input'];
+  var checkboxFields = { 'sync-enabled': true, 'sync-custody-consent': true, 'sync-history-consent': true, 'sync-include-history': true, 'sync-full-profile-consent': true };
+  var fullProfilePassphraseSet = false;
+  var savedFullProfileScope = false;
+  var pullStrategyExplicit = false;
   var savedHistoryScope;
   var lastHistoryStatus = null;
   var historyObservations = {};
@@ -146,6 +149,44 @@
     }
   });
 
+  var fullProfileBox = document.getElementById('sync-full-profile-consent');
+  var pullStrategySelect = document.getElementById('sync-merge-strategy');
+  if (pullStrategySelect && typeof pullStrategySelect.addEventListener === 'function') {
+    pullStrategySelect.addEventListener('change', function() { pullStrategyExplicit = true; });
+  }
+  function defaultPullStrategy() {
+    return savedFullProfileScope || fullProfileBox && fullProfileBox.checked ? 'remote' : 'local';
+  }
+  function applyPullStrategyDefault() {
+    if (pullStrategySelect && !pullStrategyExplicit) pullStrategySelect.value = defaultPullStrategy();
+    var note = document.getElementById('sync-full-profile-pull-note');
+    if (note) {
+      note.style.display = defaultPullStrategy() === 'remote' ? '' : 'none';
+      note.textContent = t('sync.full-profile.pull-strategy', 'Full migration defaults to a complete remote restore; the original directory is kept as a backup. You can explicitly change the strategy.');
+    }
+  }
+  if (fullProfileBox && typeof fullProfileBox.addEventListener === 'function') {
+    fullProfileBox.addEventListener('change', function() {
+      if (fullProfileBox.checked) ['sync-history-consent', 'sync-include-history'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) { el.checked = true; formTouched[id] = true; }
+      });
+      applyPullStrategyDefault();
+    });
+  }
+  ['sync-history-consent', 'sync-include-history'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && typeof el.addEventListener === 'function') el.addEventListener('change', function() {
+      if (el.checked) return;
+      if (fullProfileBox) { fullProfileBox.checked = false; formTouched['sync-full-profile-consent'] = true; }
+      if (id === 'sync-history-consent') {
+        var includeHistory = document.getElementById('sync-include-history');
+        if (includeHistory) { includeHistory.checked = false; formTouched['sync-include-history'] = true; }
+      }
+      applyPullStrategyDefault();
+    });
+  });
+
   function hydrateField(id, value, requestedDraft, savedDraft) {
     var el = document.getElementById(id);
     if (!el) return;
@@ -166,7 +207,7 @@
   var OUTCOME = { complete: 'Complete in reported scope', partial: 'Partial completion', failed: 'Failed', cancelled: 'Cancelled', 'recovery-required': 'Recovery required' };
   var COMMIT = { none: 'No commit reported', committed: 'Committed', partial: 'Partially committed', unknown: 'Unknown' };
   var ITEM = { applied: 'Applied', uploaded: 'Uploaded', queued: 'Queued', preserved: 'Preserved', skipped: 'Skipped', failed: 'Failed', unknown: 'Unknown' };
-  var SCOPE = { config: 'Configuration', profiles: 'Profiles', cookies: 'Cookies', localStorage: 'LocalStorage', preferences: 'Preferences', extensions: 'Extensions', history: 'History / Firefox bookmarks', sidecar: 'Compatibility sidecars', baseline: 'Sync baseline' };
+  var SCOPE = { config: 'Configuration', profiles: 'Profiles', cookies: 'Cookies', localStorage: 'LocalStorage', preferences: 'Preferences', extensions: 'Extensions', history: 'History / Firefox bookmarks', fullProfile: 'Full environment artifact', credentials: 'Saved browser passwords', sidecar: 'Compatibility sidecars', baseline: 'Sync baseline' };
   var HISTORY_COVERAGE = { legacy: 'Legacy backup: history not covered', unselected: 'History not selected', absent: 'Source confirmed absent (not an empty database)', empty: 'Complete empty database snapshot', complete: 'Complete database snapshot', preserved: 'Previous snapshot preserved', failed: 'History capture failed' };
   var HISTORY_FRESHNESS = { captured: 'Captured at the recorded time', preserved: 'Not freshly captured', 'not-covered': 'Not covered', 'not-rechecked': 'Local content not rechecked' };
   var HISTORY_COMPARE = { synced: 'Semantic baseline matches', dirty: 'History has local changes', unknown: 'Local content not rechecked or unavailable', unselected: 'History not selected' };
@@ -197,7 +238,18 @@
     return html;
   }
   function resultLabel(prefix, labels, value) { return t(prefix + value, labels[value] || labels.unknown || value); }
-  function resultOutcome(r) { return OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
+  function fullProfileFailureMessage(code) {
+    switch (code) {
+      case 'FULL_PROFILE_SELECTION_REQUIRED':
+        return t('sync.full-profile.selection-required', 'No remote profiles selected. Compare again, then choose Remote wins or select remote entries before pulling.');
+      case 'FULL_PROFILE_COOKIE_QUEUE_PENDING':
+        return t('sync.full-profile.cookie-queue-pending', 'An existing Cookie import queue is pending. Start the profile normally and confirm the existing Cookie import, then stop it and wait for confirmed browser exit before retrying full push/pull. Existing data and queue are retained.');
+      case 'FULL_PROFILE_COOKIE_QUEUE_UNAVAILABLE':
+        return t('sync.full-profile.cookie-queue-unavailable', 'The Cookie import queue is unreadable or invalid. Check and repair the existing queue before retrying full push/pull. Existing data and queue are retained; this is not an empty queue or a successful migration.');
+      default: return '';
+    }
+  }
+  function resultOutcome(r) { return fullProfileFailureMessage(r.code) ? 'failed' : OUTCOME[r.outcome] ? r.outcome : r.success ? 'complete' : 'failed'; }
   function limitedResult(r) {
     return r.browserBackupIncomplete === true || resultOutcome(r) !== 'complete' || !r.success || (r.warnings || []).length ||
       r.localCommit === 'partial' || r.remoteCommit === 'partial' || !COMMIT[r.localCommit] || !COMMIT[r.remoteCommit] ||
@@ -225,16 +277,21 @@
     var remote = COMMIT[r.remoteCommit] ? r.remoteCommit : 'unknown';
     var html = '<div class="' + tone + '"><strong>' + esc(t('sync.result.title', 'Last synchronization result')) + ' · ' + esc(heading) + '</strong></div>' +
       '<div>' + esc(t('sync.result.local-commit', 'Local changes')) + ': ' + esc(resultLabel('sync.result.commit.', COMMIT, local)) + ' · ' + esc(t('sync.result.remote-commit', 'Remote publication')) + ': ' + esc(resultLabel('sync.result.commit.', COMMIT, remote)) + '</div>';
-    if (r.message) html += '<div>' + esc(r.message) + '</div>';
+    var staticFailure = fullProfileFailureMessage(r.code);
+    var message = staticFailure || r.message;
+    if (message) html += '<div>' + esc(message) + '</div>';
     if (r.code) html += '<div><code>' + esc(r.code) + '</code></div>';
     (r.items || []).forEach(function(item) {
+      // Queue parser diagnostics may contain Cookie values. Known full-mode
+      // failures use static instructions, never free-text error payloads.
+      var itemMessage = fullProfileFailureMessage(item.code) || (staticFailure ? '' : item.message);
       html += '<div>' + esc(resultLabel('sync.result.scope.', SCOPE, item.scope)) + (item.id ? ' · ' + esc(item.id) : '') + ': <strong>' + esc(resultLabel('sync.result.item.', ITEM, item.state)) + '</strong>' +
-        (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (item.message ? ' · ' + esc(item.message) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
+        (typeof item.count === 'number' ? ' (' + esc(String(item.count)) + ')' : '') + (itemMessage ? ' · ' + esc(itemMessage) : '') + (item.code ? ' · ' + esc(item.code) : '') + '</div>';
       if (item.scope === 'history') html += '<div class="status-note">' + esc(historyLabel(item.history)) + '</div>';
       if (item.identity) html += '<div class="status-note">' + esc(identityLabel(item.identity)) + '</div>';
       html += runtimeEffectHtml(item);
     });
-    if ((r.warnings || []).length) html += '<div class="health-text-watch"><strong>' + esc(t('sync.result.warnings', 'Warnings')) + '</strong>' + (r.warnings || []).map(function(warning) { return '<div>' + esc(warning) + '</div>'; }).join('') + '</div>';
+    if (!staticFailure && (r.warnings || []).length) html += '<div class="health-text-watch"><strong>' + esc(t('sync.result.warnings', 'Warnings')) + '</strong>' + (r.warnings || []).map(function(warning) { return '<div>' + esc(warning) + '</div>'; }).join('') + '</div>';
     if ((r.recovery || []).length || outcome === 'recovery-required') {
       html += '<div class="health-text-poor">' + esc(t('sync.result.recovery', 'Manual recovery is required. Inspect the retained paths before retrying.')) + '</div>';
       (r.recovery || []).forEach(function(recovery) { html += '<div><code>' + esc(recovery.resource + ' · ' + recovery.id) + '</code>' + (recovery.paths || []).map(function(file) { return '<div><code>' + esc(file) + '</code></div>'; }).join('') + (recovery.receiptPath ? '<div><code>' + esc(recovery.receiptPath) + '</code></div>' : '') + '</div>'; });
@@ -567,8 +624,8 @@
     }
     var token = viewedComparison.token;
     var strategySel = document.getElementById('sync-merge-strategy');
-    var strategy = strategySel ? strategySel.value : 'local';
-    if (['local', 'remote', 'newest'].indexOf(strategy) < 0) strategy = 'local';
+    var strategy = strategySel ? strategySel.value : defaultPullStrategy();
+    if (['local', 'remote', 'newest'].indexOf(strategy) < 0) strategy = defaultPullStrategy();
     var resolutions = {};
     Array.prototype.forEach.call(document.querySelectorAll('#sync-diff .sync-entry-strategy'), function(sel) {
       var section = sel.getAttribute('data-section'), id = sel.getAttribute('data-id'), value = sel.value;
@@ -642,6 +699,8 @@
     return !!(r && (r.code === 'CUSTODY_CONSENT_REQUIRED' || /custody consent/i.test(r.message || '')));
   }
   function toastSyncResult(r, fallback) {
+    var staticFailure = r && fullProfileFailureMessage(r.code);
+    if (staticFailure) { toast(staticFailure, 'error'); return; }
     if (consentError(r)) { toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error'); return; }
     if (!r) { toast(fallback, 'error'); return; }
     if (!r.outcome && !r.items && !r.warnings) { toast(r.message || fallback, r.success ? 'success' : 'error'); return; }
@@ -669,8 +728,25 @@
     if (document.getElementById('sync-include-history')) {
       config.includeHistory = !!submitted['sync-include-history'];
       config.historyConsent = !!submitted['sync-history-consent'];
-      if (config.includeHistory && !config.historyConsent) { toast(t('sync.history.consent-required', 'History scope includes Firefox bookmarks. Give separate consent and save before selecting it.'), 'error'); return Promise.resolve(null); }
     }
+    // The passphrase never enters the ordinary form draft/baseline, and status
+    // never hydrates it. Only an explicit Save reads this password input.
+    var passphraseInput = document.getElementById('sync-full-profile-passphrase');
+    var passphrase = passphraseInput ? passphraseInput.value : '';
+    if (passphrase) config.fullProfilePassphrase = passphrase;
+    if (document.getElementById('sync-full-profile-consent')) {
+      config.includeFullProfile = !!submitted['sync-full-profile-consent'];
+      config.fullProfileConsent = config.includeFullProfile;
+      if (config.includeFullProfile) {
+        if (!custodyConsented()) { toast(t('sync.custody.required', 'Tick the data-custody consent box and save before pushing/pulling.'), 'error'); return Promise.resolve(null); }
+        if (!passphrase && !fullProfilePassphraseSet) { toast(t('sync.full-profile.required', 'Full environment migration needs a migration passphrase. Enter it and save first.'), 'error'); if (passphraseInput) passphraseInput.focus(); return Promise.resolve(null); }
+        config.includeHistory = true;
+        // The full checkbox explicitly includes History; ordinary custody or
+        // History consent alone must never select password migration.
+        config.historyConsent = true;
+      }
+    }
+    if (config.includeHistory && !config.historyConsent) { toast(t('sync.history.consent-required', 'History scope includes Firefox bookmarks. Give separate consent and save before selecting it.'), 'error'); return Promise.resolve(null); }
     var operation = beginOperation('configure'), saved = null;
     return dispatchOperation(operation, function() { return api.sync.configure(config); }).then(function(r) {
       if (!r) return null;
@@ -687,7 +763,12 @@
     }).catch(function(e) {
       reportOperationError(operation, e, t('sync.toast.save-failed-default', 'Save failed'));
       return null;
-    }).finally(function() { return finishOperation(operation, saved); });
+    }).finally(function() {
+      if (passphraseInput && passphraseInput.value === passphrase) passphraseInput.value = '';
+      passphrase = '';
+      delete config.fullProfilePassphrase;
+      return finishOperation(operation, saved);
+    });
   };
 
   function hydrateOperation(operation) {
@@ -729,6 +810,16 @@
       hydrateField('sync-custody-consent', !!status.custodyConsentAt, requestedDraft, savedDraft);
       hydrateField('sync-history-consent', !!status.historyConsentAt, requestedDraft, savedDraft);
       hydrateField('sync-include-history', status.includeHistory === true, requestedDraft, savedDraft);
+      hydrateField('sync-full-profile-consent', status.includeFullProfile === true && !!status.fullProfileConsentAt, requestedDraft, savedDraft);
+      savedFullProfileScope = status.includeFullProfile === true;
+      applyPullStrategyDefault();
+      fullProfilePassphraseSet = status.fullProfilePassphraseSet === true;
+      var passphraseInput = document.getElementById('sync-full-profile-passphrase');
+      if (passphraseInput) passphraseInput.placeholder = fullProfilePassphraseSet ? t('sync.credentials.saved', 'Saved; leave blank to keep') : '';
+      var fullProfileState = document.getElementById('sync-full-profile-state');
+      if (fullProfileState) fullProfileState.textContent = status.includeFullProfile === true
+        ? t('sync.full-profile.selected', 'Saved scope: passphrase-encrypted full environment migration. Check per-item results for completeness.')
+        : t('sync.full-profile.limited', 'Saved scope: limited sync only; saved browser passwords and full profile files are not included.');
       savedHistoryScope = typeof status.includeHistory === 'boolean' ? status.includeHistory : undefined;
       var ak = document.getElementById('sync-ak-input'), sk = document.getElementById('sync-sk-input');
       if (ak && !ak.value) ak.placeholder = status.accessKeyMasked || '';

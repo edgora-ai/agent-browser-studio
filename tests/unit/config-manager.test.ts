@@ -53,6 +53,9 @@ import {
   setWebRtcDiagnostics,
   clearWebRtcDiagnostics,
   sanitizeAppUrl,
+  getSyncConfig,
+  setSyncConfig,
+  sanitizeTracePayload,
 } from "../../src/main/services/config-manager.js";
 import type { BrowserProfileMeta, MgmtConfig } from "../../src/main/types.js";
 import {
@@ -136,6 +139,87 @@ describe("Config Manager (real functions)", () => {
     expect(stored.sync.secretKey).toMatch(/^v2:/);
     expect(decryptSecret(stored.llm.apiKey)).toBe("llm-secret");
     expect(decryptSecret(stored.sync.secretKey)).toBe("sync-secret");
+  });
+
+  describe("explicit full environment migration settings", () => {
+    const phrase = "  synthetic migration phrase  ";
+    const diskSync = () => JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).sync;
+    function rejectedWithoutCommit(input: Parameters<typeof setSyncConfig>[0], code: string) {
+      const before = structuredClone(getSyncConfig()), bytes = fs.readFileSync(getConfigPath());
+      let caught: unknown;
+      try { setSyncConfig(input); } catch (error) { caught = error; }
+      expect(caught).toMatchObject({ code });
+      expect(fs.readFileSync(getConfigPath())).toEqual(bytes);
+      expect(getSyncConfig()).toEqual(before);
+    }
+    function enable(passphrase = phrase) {
+      setSyncConfig({ custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: passphrase });
+    }
+
+    it("keeps legacy custody/history consent limited and ignores forged full-consent timestamps", () => {
+      setSyncConfig({ custodyConsent: true, historyConsent: true, includeHistory: true, fullProfileConsentAt: 1 });
+      expect(diskSync().includeFullProfile).toBeUndefined(); expect(diskSync().fullProfileConsentAt).toBeUndefined();
+      rejectedWithoutCommit({ includeFullProfile: true, fullProfileConsentAt: Date.now(), fullProfilePassphrase: phrase }, "FULL_PROFILE_CONSENT_REQUIRED");
+    });
+
+    it("requires custody, explicit full consent and a separate passphrase without committing failed requests", () => {
+      rejectedWithoutCommit({ fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: phrase }, "CUSTODY_CONSENT_REQUIRED");
+      rejectedWithoutCommit({ custodyConsent: true, includeFullProfile: true, fullProfilePassphrase: phrase }, "FULL_PROFILE_CONSENT_REQUIRED");
+      rejectedWithoutCommit({ custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, secretKey: "synthetic S3 secret is not a migration passphrase" }, "FULL_PROFILE_PASSPHRASE_REQUIRED");
+    });
+
+    it("stamps full and History consent in main and stores only a locally encrypted, retrievable passphrase", () => {
+      const start = Date.now();
+      setSyncConfig({ custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: phrase, fullProfileConsentAt: 1, historyConsentAt: 1 });
+      const saved = diskSync();
+      expect(saved.includeFullProfile).toBe(true); expect(saved.includeHistory).toBe(true);
+      expect(saved.fullProfileConsentAt).toBeGreaterThanOrEqual(start); expect(saved.historyConsentAt).toBe(saved.fullProfileConsentAt);
+      expect(saved.fullProfilePassphrase).toMatch(/^v2:/); expect(decryptSecret(saved.fullProfilePassphrase)).toBe(phrase);
+      expect(fs.readFileSync(getConfigPath(), "utf8").includes(phrase)).toBe(false);
+      reloadConfig(); expect(getSyncConfig()).toEqual(saved); expect(decryptSecret(getSyncConfig().fullProfilePassphrase!)).toBe(phrase);
+      expect(Object.keys(diskSync()).filter(key => /passphrase/i.test(key))).toEqual(["fullProfilePassphrase"]);
+    });
+
+    it.each(["x".repeat(12), " ".repeat(12), "测".repeat(4), "x".repeat(1024), "😀".repeat(256)])("accepts the UTF-8 byte boundaries without trimming (case %#)", value => {
+      enable(value); expect(decryptSecret(diskSync().fullProfilePassphrase)).toBe(value);
+    });
+
+    it.each(["x".repeat(11), "测".repeat(3), "x".repeat(1025), "😀".repeat(257), "v2:synthetic-ciphertext-not-a-plain-passphrase"])("rejects invalid byte lengths and supplied vault ciphertext without a commit (case %#)", value => {
+      rejectedWithoutCommit({ custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: value }, "FULL_PROFILE_PASSPHRASE_INVALID");
+    });
+
+    it("preserves the encrypted passphrase on empty/omitted input for subsequent local automatic use", () => {
+      enable(); const encrypted = diskSync().fullProfilePassphrase;
+      setSyncConfig({ fullProfilePassphrase: "", bucket: "synthetic-bucket" });
+      expect(diskSync().fullProfilePassphrase).toBe(encrypted);
+      setSyncConfig({ endpoint: "https://migration.synthetic.invalid" }); reloadConfig();
+      expect(getSyncConfig().includeFullProfile).toBe(true); expect(decryptSecret(getSyncConfig().fullProfilePassphrase!)).toBe(phrase);
+    });
+
+    it("refuses plaintext fallback when encrypted local secret storage is unavailable", () => {
+      getSyncConfig(); resetSecretStorageForTests();
+      rejectedWithoutCommit({ fullProfilePassphrase: phrase }, "FULL_PROFILE_ENCRYPTION_REQUIRED");
+    });
+
+    it("refuses enabling a saved but unreadable local ciphertext without committing new consent", () => {
+      enable(); const cfg = structuredClone(getConfig()); cfg.sync.includeFullProfile = false; cfg.sync.fullProfilePassphrase = "v2:broken-synthetic-value"; saveConfig(cfg);
+      rejectedWithoutCommit({ fullProfileConsent: true, includeFullProfile: true }, "FULL_PROFILE_PASSPHRASE_REQUIRED");
+    });
+
+    it.each(["fullProfileConsent", "historyConsent", "custodyConsent"] as const)("revoking %s disables full migration even with a stale true selection", consent => {
+      enable(); const encrypted = diskSync().fullProfilePassphrase;
+      setSyncConfig({ [consent]: false, includeFullProfile: true });
+      expect(diskSync().includeFullProfile).toBe(false); expect(diskSync().fullProfilePassphrase).toBe(encrypted);
+      if (consent === "fullProfileConsent") expect(diskSync().fullProfileConsentAt).toBeNull();
+      if (consent === "historyConsent") { expect(diskSync().includeHistory).toBe(false); expect(diskSync().historyConsentAt).toBeNull(); }
+      reloadConfig(); expect(getSyncConfig().includeFullProfile).toBe(false);
+    });
+
+    it("redacts passphrases, local vault fields and serialized ciphertext from generic traces", () => {
+      const value = sanitizeTracePayload({ fullProfilePassphrase: phrase, nested: { vault: "v2:c3ludGhldGlj", detail: 'fullProfilePassphrase="synthetic phrase with spaces"', note: "os1:c3ludGhldGlj" }, enabled: true }, 8192) as any;
+      expect(value.fullProfilePassphrase).toBe("[REDACTED]"); expect(value.nested.vault).toBe("[REDACTED]");
+      expect(value.nested.detail).toBe("[redacted]"); expect(value.nested.note).toBe("[redacted]"); expect(value.enabled).toBe(true);
+    });
   });
 
   it("allows repository local extension ids in profile extension maps", () => {

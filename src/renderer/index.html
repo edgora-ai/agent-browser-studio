@@ -185,6 +185,7 @@
    <option value="newest" data-i18n="sync.strategy.newest">Newest wins</option>
  </select>
  </div>
+ <p id="sync-full-profile-pull-note" class="status-note" style="display:none;" data-i18n="sync.full-profile.pull-strategy">Full migration defaults to a complete remote restore; the original directory is kept as a backup. You can explicitly change the strategy.</p>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
@@ -225,10 +226,18 @@
  <div id="sync-custody-state" class="status-note"></div>
  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
   <input type="checkbox" id="sync-history-consent" style="margin-top:2px;">
-  <span data-i18n="sync.history.consent">I separately consent to syncing browsing History and Firefox Places, which may include bookmarks, URLs and titles, to my bucket. Disabling this scope does not delete existing remote objects. This is custodial bucket storage, not an additionally end-to-end-encrypted backup.</span>
+  <span data-i18n="sync.history.consent">I separately consent to syncing browsing History and Firefox Places, which may include bookmarks, URLs and titles, to my bucket. Disabling this scope does not delete existing remote objects. Limited-mode History uses custodial bucket storage, not an additionally end-to-end-encrypted backup.</span>
  </label>
  <label><input type="checkbox" id="sync-include-history"><span data-i18n="sync.history.include">Include consented history/bookmarks in future push/pull and automatic sync (save first)</span></label>
  <p class="status-note" data-i18n="sync.history.restore-note">Only stopped, stable SQLite groups are captured/restored. Legacy backups cannot recover history they never uploaded; absent, empty, preserved and failed snapshots are distinct. A restored file group is not browser-UI or live identity verification.</p>
+ <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
+  <input type="checkbox" id="sync-full-profile-consent" aria-describedby="sync-full-profile-notice" style="margin-top:2px;">
+  <span data-i18n="sync.full-profile.consent">Full environment migration (includes saved browser passwords, history and site data)</span>
+ </label>
+ <p id="sync-full-profile-notice" class="status-note" data-i18n="sync.full-profile.notice">I separately authorize migrating history/bookmarks, site login/session data, saved browser passwords and required proxy credentials in a passphrase-encrypted artifact. Staying signed in is not guaranteed; hardware-bound passkeys cannot be migrated. Disabling this scope does not delete existing remote objects.</p>
+ <div class="form-row"><label for="sync-full-profile-passphrase" data-i18n="sync.full-profile.passphrase">Migration passphrase</label><input id="sync-full-profile-passphrase" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="sync-full-profile-passphrase-help"></div>
+ <p id="sync-full-profile-passphrase-help" class="status-note" data-i18n="sync.full-profile.passphrase-help">12–1024 UTF-8 bytes; spaces are preserved. Enter the same passphrase on the new machine. A forgotten passphrase cannot be recovered. This is not your S3 Secret Key. Saved encrypted on this machine only; leave blank to keep it.</p>
+ <div id="sync-full-profile-state" class="status-note" role="status" aria-live="polite"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
  </div>
  </div>

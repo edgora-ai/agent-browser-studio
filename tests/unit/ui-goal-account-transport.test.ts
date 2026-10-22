@@ -78,6 +78,8 @@ function fixture(transport: "rest" | "mcp" = "rest") {
   });
   const allow = new Set([
     "services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts",
+    "services/observability.ts", "services/data-export.ts", "services/event-bus.ts",
+    "services/sync/operation-state.ts", "services/sync/operation-result.ts",
     "services/secrets.ts", "services/local-agent.ts", "services/team.ts", "services/browser-engine.ts",
     // Receipt classification is part of the real MCP dispatch, not an optional
     // capability. Compile the production classifier in this realm as well.
@@ -195,7 +197,9 @@ function fixture(transport: "rest" | "mcp" = "rest") {
       enabled, members: [{ deviceId: draft.deviceId, name: "synthetic", role: value, addedAt: 1 }],
     }; });
   }
-  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls, createdProfileOpts, browserLaunch };
+  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls, createdProfileOpts, browserLaunch,
+    exportData: (scope: string) => load("services/data-export.ts").exportData(scope),
+    syncState: () => load("services/sync/operation-state.ts").getSyncOperationState(), handlers };
 }
 async function rejection(pending: Promise<any>, code: string) {
   let error: any;
@@ -219,6 +223,31 @@ afterAll(() => {
   fs.writeFileSync(path.join(ROOT, "proof-storage-manifest.json"), JSON.stringify({ root: ROOT, prohibitedCalls: prohibited, stored }, null, 2));
   expect(prohibited).toEqual([]);
   if (!process.env.ACCOUNT_TRANSPORT_RETAIN) fs.rmSync(ROOT, { recursive: true, force: true });
+});
+
+describe("migration passphrase stays outside generic account/export surfaces", () => {
+  it.each(["rest", "mcp"] as const)("isolates local sync ciphertext from %s account replies and structured exports", async transport => {
+    const f = fixture(transport), phrase = "synthetic migration isolation phrase";
+    const generation = f.syncState().generation;
+    f.config.setSyncConfig({ fullProfilePassphrase: phrase });
+    expect(f.syncState().generation).toBeGreaterThan(generation); expect(f.syncState().active).toBeNull();
+    const cipher = JSON.parse(f.bytes().toString("utf8")).sync.fullProfilePassphrase;
+    expect(cipher).toMatch(/^v2:/); expect(f.vault.decryptSecret(cipher) === phrase).toBe(true);
+    // A foreign account row must not smuggle configuration secrets through a
+    // metadata response; the real config normalizer drops non-account fields.
+    f.store.transact((draft: any) => { draft.accounts[0].fullProfilePassphrase = phrase; draft.accounts[0].localVault = cipher; });
+    expect(f.rows()[0]).not.toHaveProperty("fullProfilePassphrase"); expect(f.rows()[0]).not.toHaveProperty("localVault");
+    const ipc = await f.api.list(), exported = f.exportData("accounts");
+    const response = transport === "rest"
+      ? await f.request("GET", "/api/accounts").pending
+      : await f.request("POST", "/mcp", { jsonrpc: "2.0", id: "migration-isolation", method: "tools/call", params: { name: "agent_browser_list_accounts", arguments: {} } }).pending;
+    expect(response.status).toBe(200);
+    const publicData = JSON.stringify({ ipc, exported, reply: response.body });
+    expect(publicData.includes(phrase)).toBe(false); expect(publicData.includes(cipher)).toBe(false);
+    expect(publicData).not.toContain("fullProfilePassphrase"); expect(publicData).not.toContain("localVault");
+    expect(f.handlers.has("config:get")).toBe(false); expect(f.handlers.has("config:export")).toBe(false);
+    f.config.reloadConfig(); expect(f.vault.decryptSecret(f.config.getSyncConfig().fullProfilePassphrase) === phrase).toBe(true);
+  });
 });
 
 describe("whole preload/IPC account targeting", () => {

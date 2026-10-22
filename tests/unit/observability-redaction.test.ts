@@ -50,6 +50,20 @@ describe("observability redaction (R8 P0-1)", () => {
     expect(out.username).toBe("u");
   });
 
+  it("never persists migration passphrases or local vault ciphertext in structured/serialized logs or diagnostic bundles", () => {
+    const phrase = "synthetic phrase with spaces", cipher = "v2:c3ludGhldGlj";
+    log("info", "sync.synthetic", { fullProfilePassphrase: phrase, vault: cipher, nested: { message: JSON.stringify({ fullProfilePassphrase: phrase }), detail: `migration failed with ${cipher}` }, ok: "visible" });
+    const memory = getRecentEvents(10);
+    const bundle = exportDiagnosticBundle({ fullProfilePassphrase: phrase, localVault: cipher });
+    expect(bundle.success).toBe(true);
+    const stored = fs.readdirSync(dir).filter(name => name.endsWith(".log")).map(name => fs.readFileSync(path.join(dir, name), "utf8")).join("\n");
+    const evidence = JSON.stringify(memory) + stored + fs.readFileSync(bundle.filePath!, "utf8");
+    expect(evidence.includes(phrase)).toBe(false); expect(evidence.includes(cipher)).toBe(false); expect(evidence).toContain("visible");
+    expect(redactSensitive('fullProfilePassphrase="synthetic phrase with spaces"')).toBe("[redacted]");
+    expect(redactSensitive("passphrase=synthetic phrase with spaces")).toBe("[redacted]");
+    expect(redactSensitive("os1:c3ludGhldGlj")).toBe("[redacted]");
+  });
+
   it("writes log files owner-only (0600)", () => {
     log("info", "test.perm", { x: 1 });
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".log"));

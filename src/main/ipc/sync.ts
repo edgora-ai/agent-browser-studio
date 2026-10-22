@@ -40,14 +40,14 @@ export function registerSyncHandlers(): void {
   ipcMain.handle("sync:preview", async () => syncService.preview());
   ipcMain.handle("sync:preview-diff", async () => syncService.previewDiff());
 
-  ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean }): Promise<{ success: boolean; error?: string; code?: string }> => {
+  ipcMain.handle("sync:configure", async (_event, config: Partial<SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean }): Promise<{ success: boolean; error?: string; code?: string }> => {
     const gate = requireSettingsMutation();
     if (!gate.ok) return { success: false, code: "TEAM_ROLE_DENIED", error: gate.error };
     try {
       setSyncConfig(config);
       return { success: true };
     } catch (e: any) {
-      return { success: false, error: e.message };
+      return { success: false, error: e.message, ...(typeof e.code === "string" ? { code: e.code } : {}) };
     }
   });
 }

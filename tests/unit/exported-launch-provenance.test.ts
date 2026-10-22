@@ -21,7 +21,7 @@ const f = vi.hoisted(() => ({
   nativeRequested: false, firefoxCapabilities: vi.fn(), consistency: vi.fn(), persona: vi.fn(), captureFingerprint: vi.fn(), cachedDetection: vi.fn(),
   fingerprintDiff: vi.fn(), riskyDrift: vi.fn(),
   deadPids: new Set<number>(), envRisk: vi.fn(), windows: [] as any[],
-  queuedCookies: [] as any[], cookieApply: vi.fn(),
+  queuedCookies: [] as any[], cookieApply: vi.fn(), firefoxCookieApply: vi.fn(), cookieReadError: false,
 }));
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -89,9 +89,12 @@ vi.mock("../../src/main/services/config/store.js", () => ({ transact: f.transact
 vi.mock("../../src/main/services/event-bus.js", () => ({ emitEvent: vi.fn() }));
 vi.mock("../../src/main/services/cdp-cookie-service.js", () => ({
   cdpCookieService: { applyQueuedImports: f.cookieApply },
-  readQueuedCookieImports: () => f.queuedCookies.map((cookie) => ({ ...cookie })),
+  readQueuedCookieImports: () => {
+    if (f.cookieReadError) throw new Error("synthetic-cookie-read-canary");
+    return f.queuedCookies.map((cookie) => ({ ...cookie }));
+  },
 }));
-vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: { applyQueuedImports: vi.fn(async () => 0) } }));
+vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ firefoxCookieService: { applyQueuedImports: f.firefoxCookieApply } }));
 vi.mock("../../src/main/services/fingerprint-baseline.js", () => ({
   captureFingerprint: f.captureFingerprint, diffFingerprints: f.fingerprintDiff, hasRiskyDrift: f.riskyDrift,
   summarizeDrift: () => "", checkPersonaConsistency: f.persona, mismatchesAsDrift: () => [],
@@ -236,7 +239,8 @@ beforeEach(() => {
   f.inspect.mockImplementation((_dir, trackedPid) => inspectBrowserLaunchLines(["9 /virtual/unrelated-process", ...f.lines], profileDir, trackedPid));
   f.legacy.mockReturnValue(null);
   f.deadPids.clear(); f.bidiSessions.clear(); f.windows = [];
-  f.queuedCookies = []; f.cookieApply.mockReset().mockResolvedValue(0);
+  f.queuedCookies = []; f.cookieReadError = false;
+  f.cookieApply.mockReset().mockResolvedValue(0); f.firefoxCookieApply.mockReset().mockResolvedValue(0);
   f.kill.mockImplementation((target) => {
     if (f.deadPids.has(target)) throw Object.assign(new Error("fixture: exited"), { code: "ESRCH" });
     return true;
@@ -1690,6 +1694,59 @@ describe("Firefox effective Auto launch identity", () => {
     });
     await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
     owned.unchanged();
+  });
+});
+
+describe("actual Firefox queued-Cookie launch evidence", () => {
+  function setupQueue() {
+    currentMeta().engine = "firefox"; currentMeta().fingerprintMode = "off";
+    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.queuedCookies = ["first", "second"].map((name) => ({ domain: "example.test", name, value: "synthetic-unit-cookie", path: "/", secure: false, httpOnly: false, expires: null, sameSite: 1 }));
+  }
+
+  it.each([0, 1])("reports %i/2 and the retained queue as incomplete, not successful identity restoration", async (applied) => {
+    setupQueue(); f.firefoxCookieApply.mockResolvedValue(applied);
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ pid: 5101, cdpPort: port, cookieCheck: { checked: true, applied, pending: 2, error: "COOKIE_IMPORT_INCOMPLETE" } });
+    expect(f.firefoxCookieApply).toHaveBeenCalledExactlyOnceWith(dirId, expect.objectContaining({ port, isCurrent: expect.any(Function) }));
+    const target = f.firefoxCookieApply.mock.calls[0][1];
+    expect(target.isCurrent()).toBe(true);
+    const entry = runningProcesses.get(dirId)!;
+    runningProcesses.set(dirId, { ...entry, process: {} }); expect(target.isCurrent()).toBe(false);
+    runningProcesses.set(dirId, { ...entry, bidiConn: { ...entry.bidiConn! } }); expect(target.isCurrent()).toBe(false);
+    runningProcesses.set(dirId, entry);
+    expect(f.bidiConnect).toHaveBeenCalledOnce(); expect(entry.bidiConn!.closed).toBe(false);
+  });
+
+  it("reports complete application only after rereading a consumed queue", async () => {
+    setupQueue(); f.firefoxCookieApply.mockImplementation(async () => { f.queuedCookies = []; return 2; });
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ cookieCheck: { checked: true, applied: 2, pending: 0 } });
+    expect(result.cookieCheck?.error).toBeUndefined();
+  });
+
+  it.each(["connection", "queue"] as const)("surfaces a redacted %s error while leaving the launched session open", async (failure) => {
+    setupQueue();
+    if (failure === "connection") f.firefoxCookieApply.mockRejectedValue(new Error("synthetic-cookie-error-canary"));
+    else f.cookieReadError = true;
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const result = await launchBrowser(dirId);
+    expect(result).toMatchObject({ cookieCheck: { checked: true, applied: 0, error: "COOKIE_IMPORT_UNAVAILABLE" } });
+    if (failure === "connection") expect(result.cookieCheck?.pending).toBe(2);
+    else expect(f.firefoxCookieApply).not.toHaveBeenCalled();
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("canary");
+    expect(runningProcesses.get(dirId)?.bidiConn?.closed).toBe(false);
+  });
+
+  it.each(["exitCode", "signalCode", "killed", "pid"] as const)("pins queue application to a live child and notices changed %s", async (field) => {
+    setupQueue(); const observed: boolean[] = [];
+    f.firefoxCookieApply.mockImplementation(async (_id, target) => {
+      const child = runningProcesses.get(dirId)!.process, original = child[field];
+      observed.push(target.isCurrent());
+      child[field] = field === "exitCode" ? 0 : field === "signalCode" ? "SIGTERM" : field === "killed" ? true : 5102;
+      observed.push(target.isCurrent()); child[field] = original; return 0;
+    });
+    await launchBrowser(dirId); expect(observed).toEqual([true, false]);
   });
 });
 

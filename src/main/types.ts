@@ -429,6 +429,12 @@ export interface SyncConfig {
   /** Separate opt-in: history may also disclose Firefox Places bookmarks. */
   includeHistory?: boolean;
   historyConsentAt?: number | null;
+  /** Absent/false preserves the limited legacy sync scope; never auto-enabled. */
+  includeFullProfile?: boolean;
+  /** Main-stamped explicit consent for history, site data, saved browser passwords and required proxy credentials. */
+  fullProfileConsentAt?: number | null;
+  /** Local encrypted secret only. Never publish this value or its vault ciphertext. */
+  fullProfilePassphrase?: string;
 }
 
 export type TeamRole = "owner" | "admin" | "member" | "viewer";
@@ -819,7 +825,7 @@ export interface SyncProfileRuntimeEffect {
 }
 export interface SyncItemResult {
   side?: "local" | "remote";
-  scope: "config" | "profiles" | "cookies" | "localStorage" | "preferences" | "extensions" | "history" | "sidecar" | "baseline";
+  scope: "config" | "profiles" | "cookies" | "localStorage" | "preferences" | "extensions" | "history" | "fullProfile" | "credentials" | "sidecar" | "baseline";
   id?: string;
   state: "applied" | "uploaded" | "queued" | "preserved" | "skipped" | "failed" | "unknown";
   code?: string;

@@ -68,7 +68,8 @@ vi.mock("ws", async () => {
       else if (override) response = { id: request.id, result: override.result };
       else if (request.method === "Network.getAllCookies") response = { id: request.id, result: fixture.cdpResult };
       else if (request.method === "storage.getCookies") response = { id: request.id, result: fixture.bidiResult };
-      else if (["Network.setCookie", "storage.setCookie"].includes(request.method)) response = { id: request.id, result: { success: fixture.setResults.shift() ?? true } };
+      else if (request.method === "Network.setCookie") response = { id: request.id, result: { success: fixture.setResults.shift() ?? true } };
+      else if (request.method === "storage.setCookie") response = { id: request.id, result: (fixture.setResults.shift() ?? true) ? { partitionKey: { userContext: "default" } } : {} };
       else response = { id: request.id, result: {} };
       queueMicrotask(() => { if (!this.closed) this.emit("message", Buffer.from(override?.raw ?? JSON.stringify(response))); });
     }
@@ -584,12 +585,25 @@ describe("snapshot addition leaves coordinator cookie queue semantics intact", (
     cdp.writeQueuedCookieImports(id, pending);
     const file = path.join(fixture.appData, "pending-cookie-imports", `${id}.json`), before = fs.readFileSync(file);
     const service = engine === "firefox" ? bidi.firefoxCookieService : cdp.cdpCookieService;
-    fixture.setResults = [true, false];
-    expect(await service.applyQueuedImports(id)).toBe(1);
-    expect(fs.readFileSync(file)).toEqual(before); expect(cdp.readQueuedCookieImports(id)).toEqual(pending);
-    fixture.setResults = [true, true];
-    expect(await service.applyQueuedImports(id)).toBe(2);
-    expect(fs.existsSync(file)).toBe(false); expect(cdp.readQueuedCookieImports(id)).toEqual([]);
+    const { runningProcesses } = await import("../../src/main/services/browser/runtime-table.js");
+    const conn = engine === "firefox" ? await nativeBidi.connectBidi(`ws://127.0.0.1:${fixture.port}/session`) : null;
+    if (conn) {
+      nativeBidi.registerFirefoxSession(fixture.port, conn);
+      runningProcesses.set(id, { pid: 720001, process: { pid: 720001, exitCode: null, signalCode: null, killed: false },
+        port: fixture.port, lastActivityAt: 0, engine: "firefox", bidiConn: conn });
+    }
+    try {
+      fixture.setResults = [true, false];
+      if (engine === "firefox") await expect(service.applyQueuedImports(id)).rejects.toThrow(/1\/2/);
+      else expect(await service.applyQueuedImports(id)).toBe(1);
+      expect(fs.readFileSync(file)).toEqual(before); expect(cdp.readQueuedCookieImports(id)).toEqual(pending);
+      fixture.setResults = [true, true];
+      expect(await service.applyQueuedImports(id)).toBe(2);
+      expect(fs.existsSync(file)).toBe(false); expect(cdp.readQueuedCookieImports(id)).toEqual([]);
+      if (conn) expect(conn.closed).toBe(false);
+    } finally {
+      if (conn) { nativeBidi.dropFirefoxSession(fixture.port); conn.close(); runningProcesses.delete(id); }
+    }
   });
 
   it("retains exported normalizeCookieForQueue and does not relax its validation", () => {

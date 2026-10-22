@@ -13,6 +13,7 @@ import { transact as storeTransact, readSnapshot, setAfterTransactHook, getCommi
 import { createProxyWitness, proxyObservationTime } from "./proxy-observation.js";
 import { assertConfigSize } from "./config/limits.js";
 import { invalidateSyncSettings } from "./sync/operation-state.js";
+import { redactLocalSecretText } from "./observability.js";
 import {
   clearLegacySecretMigrationCache,
   decryptSecretOr,
@@ -395,6 +396,7 @@ export function migrateSecrets(): number {
   try {
     if (cfg.llm?.apiKey) cfg.llm.apiKey = migrateValue(cfg.llm.apiKey);
     if (cfg.sync?.secretKey) cfg.sync.secretKey = migrateValue(cfg.sync.secretKey);
+    if (cfg.sync?.fullProfilePassphrase) cfg.sync.fullProfilePassphrase = migrateValue(cfg.sync.fullProfilePassphrase);
     for (const proxy of Object.values(cfg.proxies || {})) {
       if (proxy.username && proxy.password) {
         proxy.password = migrateValue(proxy.password);
@@ -1452,29 +1454,30 @@ export function removeProfileMeta(dirId: string): void {
 
 // ── Sync ──
 
+/** Main-only snapshot, including encrypted local secrets. Public callers use the
+ * field-projected sync status; never return this object over IPC/REST/MCP. */
 export function getSyncConfig() {
   return { ...getConfig().sync };
 }
 
-export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean }): void {
+export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & { custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean }): void {
   if (!sync || typeof sync !== "object" || Array.isArray(sync)) throw new Error("Sync settings must be an object");
-  for (const key of ["enabled", "custodyConsent", "includeHistory", "historyConsent"] as const) {
+  for (const key of ["enabled", "custodyConsent", "includeHistory", "historyConsent", "includeFullProfile", "fullProfileConsent"] as const) {
     if (sync[key] !== undefined && typeof sync[key] !== "boolean") throw new Error(`Sync ${key} must be a boolean`);
   }
-  for (const key of ["endpoint", "bucket", "accessKey", "secretKey"] as const) {
+  for (const key of ["endpoint", "bucket", "accessKey", "secretKey", "fullProfilePassphrase"] as const) {
     if (sync[key] !== undefined && typeof sync[key] !== "string") throw new Error(`Sync ${key} must be a string`);
   }
-  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey", "includeHistory"];
+  const passphrase = sync.fullProfilePassphrase;
+  if (passphrase) {
+    validateFullProfilePassphrase(passphrase);
+    // encryptSecret intentionally accepts stored ciphertext for legacy callers.
+    // This boundary accepts plaintext only, never renderer-supplied vault values.
+    if (isEncrypted(passphrase)) throw syncConfigError("FULL_PROFILE_PASSPHRASE_INVALID", "Enter a plaintext migration passphrase, not a stored credential");
+  }
+  const allowed: Array<keyof import("../types.js").SyncConfig> = ["enabled", "endpoint", "bucket", "accessKey", "secretKey", "includeHistory", "includeFullProfile"];
   storeTransact((cfg) => {
     const next = { ...cfg.sync };
-    // Custody consent is stamped by main, but published only if validation and
-    // the configuration rename commit both succeed. Never mutate live state.
-    if (sync?.custodyConsent === true) next.custodyConsentAt = Date.now();
-    if (sync.historyConsent === true) next.historyConsentAt = Date.now();
-    else if (sync.historyConsent === false) { next.historyConsentAt = null; next.includeHistory = false; }
-    if (sync.includeHistory === true && !(Number.isSafeInteger(next.historyConsentAt) && next.historyConsentAt! > 0)) {
-      throw Object.assign(new Error("History scope consent required (includes Firefox Places bookmarks)"), { code: "HISTORY_CONSENT_REQUIRED" });
-    }
     for (const key of allowed) {
       const value = sync[key];
       if (value === undefined) continue;
@@ -1485,11 +1488,64 @@ export function setSyncConfig(sync: Partial<import("../types.js").SyncConfig> & 
         (next as any)[key] = value;
       }
     }
+    // Main stamps consent only inside the transaction. Caller timestamps are
+    // never copied; a validation/rename failure changes neither disk nor state.
+    const now = Date.now();
+    if (sync.custodyConsent === true) next.custodyConsentAt = now;
+    if (sync.historyConsent === true) next.historyConsentAt = now;
+    if (sync.fullProfileConsent === true) {
+      next.fullProfileConsentAt = now;
+      next.historyConsentAt = now;
+    }
+    // Revocation wins over stale checkbox selections in the same request.
+    if (sync.fullProfileConsent === false) { next.fullProfileConsentAt = null; next.includeFullProfile = false; }
+    if (sync.historyConsent === false) { next.historyConsentAt = null; next.includeHistory = false; next.includeFullProfile = false; }
+    if (sync.custodyConsent === false) { next.custodyConsentAt = null; next.includeFullProfile = false; }
+    // Refuse an unauthorized scope before touching the migration secret codec.
+    if (next.includeFullProfile === true) {
+      if (!hasSyncConsent(next.custodyConsentAt)) throw syncConfigError("CUSTODY_CONSENT_REQUIRED", "Data-custody consent required for full environment migration");
+      if (!hasSyncConsent(next.fullProfileConsentAt) || !hasSyncConsent(next.historyConsentAt)) {
+        throw syncConfigError("FULL_PROFILE_CONSENT_REQUIRED", "Separate full environment consent required (history, site data, saved browser passwords and required proxy credentials)");
+      }
+    }
+    if (passphrase) {
+      if (!usingEncryption()) throw syncConfigError("FULL_PROFILE_ENCRYPTION_REQUIRED", "Encrypted local secret storage is required to save a migration passphrase");
+      try {
+        const encrypted = encryptSecret(passphrase);
+        if (!isEncrypted(encrypted) || encrypted === passphrase || decryptSecretOr(encrypted) !== passphrase) throw new Error("Secret storage verification failed");
+        next.fullProfilePassphrase = encrypted;
+      } catch {
+        throw syncConfigError("FULL_PROFILE_ENCRYPTION_REQUIRED", "Could not securely save the migration passphrase; check local secret storage");
+      }
+    }
+    if (next.includeFullProfile === true) {
+      if (!usingEncryption()) throw syncConfigError("FULL_PROFILE_ENCRYPTION_REQUIRED", "Encrypted local secret storage is required for full environment migration");
+      if (!next.fullProfilePassphrase || !isEncrypted(next.fullProfilePassphrase)) throw syncConfigError("FULL_PROFILE_PASSPHRASE_REQUIRED", "Save a migration passphrase before enabling full environment migration");
+      try { validateFullProfilePassphrase(decryptSecretOr(next.fullProfilePassphrase)); }
+      catch { throw syncConfigError("FULL_PROFILE_PASSPHRASE_REQUIRED", "The saved migration passphrase is unavailable or invalid; enter it again"); }
+      next.includeHistory = true;
+    }
+    if (next.includeHistory === true && !hasSyncConsent(next.historyConsentAt)) {
+      throw syncConfigError("HISTORY_CONSENT_REQUIRED", "History scope consent required (includes Firefox Places bookmarks)");
+    }
     next.endpoint = normalizeSyncEndpoint(next.endpoint || "");
     next.bucket = normalizeSyncBucket(next.bucket || "");
     cfg.sync = next;
   });
   invalidateSyncSettings();
+}
+
+function syncConfigError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+function hasSyncConsent(value: number | null | undefined): boolean {
+  return Number.isSafeInteger(value) && value! > 0;
+}
+
+function validateFullProfilePassphrase(value: string): void {
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes < 12 || bytes > 1024) throw syncConfigError("FULL_PROFILE_PASSPHRASE_INVALID", "Migration passphrase must be 12–1024 UTF-8 bytes (spaces are preserved)");
 }
 
 function normalizeSyncEndpoint(value: string): string {
@@ -1940,12 +1996,15 @@ const AGENT_RUN_END_REASONS = new Set<AgentRunEndReason>([
 ]);
 const RUN_ID_RE = /^run_[a-zA-Z0-9_-]{1,80}$/;
 const STEP_ID_RE = /^step_[a-zA-Z0-9_-]{1,80}$/;
-const SECRET_KEY_RE = /authorization|cookie|password|secret|token|api[-_]?key|credentials?/i;
+const SECRET_KEY_RE = /authorization|cookie|password|passphrase|secret|vault|token|api[-_]?key|credentials?/i;
 
 /** Recursively sanitize a trace payload: slice strings, cap arrays/keys, redact secret keys. */
 export function sanitizeTracePayload(value: unknown, maxStringLength: number): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return value.length > maxStringLength ? value.slice(0, maxStringLength) : value;
+  if (typeof value === "string") {
+    const safe = redactLocalSecretText(value);
+    return safe.length > maxStringLength ? safe.slice(0, maxStringLength) : safe;
+  }
   if (typeof value !== "object") return value;
   if (Array.isArray(value)) {
     return value.slice(0, 100).map((v) => sanitizeTracePayload(v, maxStringLength));

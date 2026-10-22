@@ -16,6 +16,50 @@ beforeEach(() => {
 });
 
 const post = (route: string, body: unknown) => f.api(route, { method: "POST", body });
+describe("full environment configure keeps explicit human scope, auth/RBAC and secret boundaries", () => {
+  const phrase = "  synthetic migration phrase  ";
+  const settings = { custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: phrase };
+  it("preserves public health 200, protected no-auth 401 and authenticated storage/readback without echoing input secrets", async () => {
+    const before = f.bytes();
+    expect((await f.api("/health", { token: null })).status).toBe(200);
+    expect((await f.api("/api/sync/config", { method: "POST", token: null, body: settings })).status).toBe(401); expect(f.bytes()).toEqual(before);
+    expect((await request(f.mcpPort, "/mcp", { body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "agent_browser_sync_configure", arguments: settings } } })).status).toBe(401); expect(f.bytes()).toEqual(before);
+    const saved = await post("/api/sync/config", { ...settings, fullProfileConsentAt: 1, historyConsentAt: 1 }); expect(saved.status).toBe(200);
+    const disk = f.disk().sync; expect(disk.includeFullProfile).toBe(true); expect(disk.includeHistory).toBe(true); expect(disk.fullProfileConsentAt).toBeGreaterThan(1); expect(disk.historyConsentAt).toBe(disk.fullProfileConsentAt);
+    expect(disk.fullProfilePassphrase).toMatch(/^v2:/); expect(f.bytes().toString("utf8").includes(phrase)).toBe(false);
+    const secrets = await import("../../src/main/services/secrets.js"); expect(secrets.decryptSecret(disk.fullProfilePassphrase) === phrase).toBe(true);
+    f.config.reloadConfig(); expect(f.config.getSyncConfig()).toEqual(disk);
+    expect(saved.text.includes(phrase)).toBe(false); expect(saved.text.includes(disk.fullProfilePassphrase)).toBe(false); expect(saved.body).not.toHaveProperty("fullProfilePassphrase");
+  });
+  it("rejects ordinary-consent upgrades and viewer attempts without any disk mutation", async () => {
+    let before = f.bytes();
+    for (const body of [{ custodyConsent: true, includeFullProfile: true, fullProfilePassphrase: phrase }, { ...settings, fullProfilePassphrase: "" }, { ...settings, fullProfileConsent: "true" }]) {
+      expect((await post("/api/sync/config", body)).status).toBe(400); expect(f.bytes()).toEqual(before);
+    }
+    f.role("viewer"); before = f.bytes();
+    expect((await post("/api/sync/config", settings)).status).toBe(403); expect(f.bytes()).toEqual(before);
+    expect((await f.call("agent_browser_sync_configure", settings)).payload).toMatchObject({ success: false, code: "TEAM_ROLE_DENIED" }); expect(f.bytes()).toEqual(before);
+  });
+  it("MCP accepts only explicit full consent, retains the local passphrase on blank input and applies History revocation", async () => {
+    const saved = await f.call("agent_browser_sync_configure", settings); expect(saved.payload.success).toBe(true);
+    const encrypted = f.disk().sync.fullProfilePassphrase; expect(saved.text.includes(phrase)).toBe(false); expect(saved.text.includes(encrypted)).toBe(false);
+    expect((await f.call("agent_browser_sync_configure", { fullProfilePassphrase: "", bucket: "synthetic-bucket" })).payload.success).toBe(true); expect(f.disk().sync.fullProfilePassphrase).toBe(encrypted);
+    expect((await f.call("agent_browser_sync_configure", { historyConsent: false, includeFullProfile: true })).payload.success).toBe(true);
+    expect(f.disk().sync.includeFullProfile).toBe(false); expect(f.disk().sync.includeHistory).toBe(false); expect(f.disk().sync.historyConsentAt).toBeNull();
+  });
+  it("advertises write-only full migration settings with explicit human intent and no caller consent timestamp", async () => {
+    const tools = (await f.rpc("tools/list")).body.result.tools;
+    const tool = tools.find((item: any) => item.name === "agent_browser_sync_configure");
+    expect(tool.description).toMatch(/human.*explicit/); expect(tool.description).toMatch(/autonomously.*AI/);
+    const properties = tool.inputSchema.properties;
+    expect(properties.includeFullProfile.type).toBe("boolean"); expect(properties.fullProfileConsent.type).toBe("boolean");
+    expect(properties.fullProfilePassphrase).toMatchObject({ type: "string", maxLength: 1024, writeOnly: true }); expect(properties.fullProfileConsentAt).toBeUndefined();
+    const route = (await f.api("/openapi.json", { token: null })).body.paths["/api/sync/config"].post;
+    expect(route.requestBody.content["application/json"].schema.properties.fullProfilePassphrase.writeOnly).toBe(true);
+    expect(route.responses["401"]).toBeDefined(); expect(route.responses["403"]).toBeDefined(); expect(route.description).toMatch(/human.*explicit/);
+  });
+});
+
 describe("history settings preserve public health and protected auth/RBAC boundaries", () => {
   it("keeps public health 200 and protected scope endpoints 401 without synthetic auth / 200 with auth", async () => {
     expect((await f.api("/health", { token: null })).status).toBe(200);

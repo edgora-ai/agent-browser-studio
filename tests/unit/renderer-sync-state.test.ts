@@ -171,6 +171,136 @@ describe("separate history scope and truthful bilingual coverage", () => {
   });
 });
 
+describe("separate full environment migration consent and write-only passphrase", () => {
+  it("keeps legacy status limited, never infers full consent from ordinary/history consent, and never fills secrets from status", async () => {
+    const h = harness(); Object.assign(h.status(), { historyConsentAt: 1, includeHistory: true, fullProfilePassphrase: "v2:c3ludGhldGlj", fullProfilePassphraseSet: true });
+    await h.ab.loadSyncConfig();
+    expect(h.elements["sync-full-profile-consent"].checked).toBe(false); expect(h.elements["sync-full-profile-state"].textContent).toMatch(/limited sync/);
+    expect(h.elements["sync-full-profile-passphrase"].value).toBe(""); expect(h.elements["sync-full-profile-passphrase"].placeholder).toMatch(/Saved/);
+    await h.ab.syncSave(); expect(h.api.sync.configure).toHaveBeenCalledWith(expect.objectContaining({ includeFullProfile: false, fullProfileConsent: false }));
+    expect(h.api.sync.configure.mock.calls[0][0]).not.toHaveProperty("fullProfilePassphrase");
+  });
+
+  it("requires a new passphrase and explicit custody, preserves whitespace, and erases the submitted secret after save", async () => {
+    const h = harness(); await h.ab.loadSyncConfig();
+    const full = h.elements["sync-full-profile-consent"], input = h.elements["sync-full-profile-passphrase"];
+    full.checked = true; full.emit("change");
+    expect(h.elements["sync-history-consent"].checked).toBe(true); expect(h.elements["sync-include-history"].checked).toBe(true);
+    await h.ab.syncSave(); expect(h.api.sync.configure).not.toHaveBeenCalled();
+    input.value = "  synthetic migration phrase  "; h.elements["sync-custody-consent"].checked = false;
+    await h.ab.syncSave(); expect(h.api.sync.configure).not.toHaveBeenCalled();
+    h.elements["sync-custody-consent"].checked = true;
+    let sent: any;
+    h.api.sync.configure.mockImplementation(async config => {
+      sent = structuredClone(config);
+      Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 2, fullProfilePassphraseSet: true, includeHistory: true, historyConsentAt: 2 });
+      return result({ operationId: "manual-configure" });
+    });
+    await h.ab.syncSave();
+    expect(sent).toMatchObject({ includeFullProfile: true, fullProfileConsent: true, historyConsent: true, includeHistory: true });
+    expect(sent.fullProfilePassphrase === "  synthetic migration phrase  ").toBe(true);
+    expect(input.value).toBe(""); expect(h.api.sync.configure.mock.calls[0][0]).not.toHaveProperty("fullProfilePassphrase");
+    await h.ab.loadSyncConfig(); expect(input.value).toBe("");
+    await h.ab.syncPush(); expect(h.api.sync.push).toHaveBeenCalledWith(expect.objectContaining({ history: true }));
+    expect(JSON.stringify(h.api.sync.push.mock.calls)).not.toContain("fullProfilePassphrase");
+    await h.ab.syncSave(); expect(sent).not.toHaveProperty("fullProfilePassphrase");
+  });
+
+  it("retains a newer typed input across a pending save/status refresh but never resurrects the submitted value", async () => {
+    const h = harness(); Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true, includeHistory: true, historyConsentAt: 1 });
+    await h.ab.loadSyncConfig(); const reply = deferred<any>(); h.api.sync.configure.mockReturnValueOnce(reply.promise);
+    const input = h.elements["sync-full-profile-passphrase"]; input.value = "synthetic submitted phrase";
+    const pending = h.ab.syncSave(); await flush(); input.value = "synthetic newer phrase";
+    await h.ab.loadSyncConfig(); expect(input.value).toBe("synthetic newer phrase");
+    reply.resolve(result()); await pending; expect(input.value).toBe("synthetic newer phrase");
+    input.value = ""; await h.ab.loadSyncConfig(); expect(input.value).toBe("");
+  });
+
+  it("clears the submitted passphrase after an unsuccessful configure and disables full selection on History revocation", async () => {
+    const h = harness(); await h.ab.loadSyncConfig();
+    h.elements["sync-full-profile-consent"].checked = true; h.elements["sync-full-profile-consent"].emit("change");
+    h.elements["sync-full-profile-passphrase"].value = "synthetic migration phrase";
+    h.api.sync.configure.mockResolvedValueOnce({ success: false, code: "FULL_PROFILE_ENCRYPTION_REQUIRED", error: "Synthetic encrypted storage refusal" });
+    await h.ab.syncSave(); expect(h.elements["sync-full-profile-passphrase"].value).toBe("");
+    expect(h.api.sync.configure.mock.calls[0][0]).not.toHaveProperty("fullProfilePassphrase");
+    h.elements["sync-history-consent"].checked = false; h.elements["sync-history-consent"].emit("change");
+    expect(h.elements["sync-full-profile-consent"].checked).toBe(false); expect(h.elements["sync-include-history"].checked).toBe(false);
+    await h.ab.syncSave(); expect(h.api.sync.configure).toHaveBeenLastCalledWith(expect.objectContaining({ historyConsent: false, includeHistory: false, fullProfileConsent: false, includeFullProfile: false }));
+  });
+
+  it.each(["en-US", "zh-CN"] as const)("states full scope, passphrase recovery limits and no hardware-passkey portability in %s", locale => {
+    const h = harness(locale), tr = (key: string) => h.window.i18n.t(key);
+    expect(tr("sync.full-profile.notice")).toMatch(locale === "zh-CN" ? /保存密码.*代理凭据/ : /saved browser passwords.*proxy credentials/);
+    expect(tr("sync.full-profile.notice")).toMatch(locale === "zh-CN" ? /不保证免登录.*Passkey 不可迁移/ : /not guaranteed.*passkeys cannot be migrated/);
+    expect(tr("sync.full-profile.passphrase-help")).toMatch(locale === "zh-CN" ? /同一口令.*不可恢复.*S3 Secret Key/ : /same passphrase.*cannot be recovered.*S3 Secret Key/);
+    expect(HTML).toMatch(/id="sync-full-profile-passphrase" type="password" autocomplete="new-password"/);
+  });
+});
+
+describe("full migration download defaults and zero-selection receipts", () => {
+  it("keeps limited legacy Pull local but defaults configured full migration to remote with inherited per-item choices", async () => {
+    const limited = harness(); await limited.ab.loadSyncConfig(); expect(limited.elements["sync-merge-strategy"].value).toBe("local");
+    const h = harness(); Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true, includeHistory: true, historyConsentAt: 1 });
+    await h.ab.loadSyncConfig(); expect(h.elements["sync-merge-strategy"].value).toBe("remote");
+    expect(h.elements["sync-full-profile-pull-note"].style.display).toBe(""); expect(h.elements["sync-full-profile-pull-note"].textContent).toMatch(/remote restore.*backup/);
+    await h.ab.loadSyncDiff(); expect(h.entries().every(entry => entry.value === "")).toBe(true);
+    await h.ab.syncPull(); expect(h.api.sync.pull).toHaveBeenCalledWith(expect.objectContaining({ strategy: "remote", resolutions: {} }));
+  });
+  it("defaults a newly selected full scope to remote while retaining an explicit local global and explicit remote per-item choice", async () => {
+    const h = harness(); await h.ab.loadSyncConfig(); const strategy = h.elements["sync-merge-strategy"], full = h.elements["sync-full-profile-consent"];
+    full.checked = true; full.emit("change"); expect(strategy.value).toBe("remote"); expect(h.api.sync.configure).not.toHaveBeenCalled();
+    strategy.value = "local"; strategy.emit("change");
+    Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true });
+    await h.ab.loadSyncConfig(); expect(strategy.value).toBe("local");
+    full.checked = false; full.emit("change"); full.checked = true; full.emit("change"); expect(strategy.value).toBe("local");
+    await h.ab.loadSyncDiff(); const profile = h.entries().find(entry => entry.getAttribute("data-section") === "profiles")!; profile.value = "remote"; profile.emit("change");
+    await h.ab.syncPull(); expect(h.api.sync.pull).toHaveBeenCalledWith(expect.objectContaining({ strategy: "local", resolutions: { "profiles:profile-a": "remote" } }));
+  });
+  it("does not overwrite an explicit local decision made before the first full status response", async () => {
+    const h = harness(), reply = deferred<any>(); h.api.sync.status.mockReturnValueOnce(reply.promise);
+    const pending = h.ab.loadSyncConfig(); h.elements["sync-merge-strategy"].value = "local"; h.elements["sync-merge-strategy"].emit("change");
+    reply.resolve({ ...h.status(), includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true }); await pending;
+    expect(h.elements["sync-merge-strategy"].value).toBe("local");
+  });
+  it.each(["en-US", "zh-CN"] as const)("never labels FULL_PROFILE_SELECTION_REQUIRED as complete or success in %s, even with contradictory legacy success flags", async locale => {
+    const h = harness(locale); Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true });
+    await h.ab.loadSyncConfig(); await h.ab.loadSyncDiff();
+    h.api.sync.pull.mockResolvedValueOnce(result({ code: "FULL_PROFILE_SELECTION_REQUIRED", success: true, outcome: "complete", localCommit: "none", remoteCommit: "none", items: [] }));
+    await h.ab.syncPull(); const html = h.renderedResult();
+    expect(html).toContain("health-text-poor"); expect(html).not.toContain("health-text-good");
+    expect(html).toContain(h.window.i18n.t("sync.result.outcome.failed")); expect(html).not.toContain(h.window.i18n.t("sync.result.outcome.complete"));
+    expect(html).toContain(h.window.i18n.t("sync.full-profile.selection-required"));
+    expect(h.ab.helpers.toast.mock.calls.some((call: any[]) => call[1] === "success")).toBe(false);
+    expect(h.ab.helpers.toast).toHaveBeenLastCalledWith(h.window.i18n.t("sync.full-profile.selection-required"), "error");
+  });
+});
+
+describe("Cookie queue guard static bilingual UI receipts", () => {
+  const guards = [
+    { code: "FULL_PROFILE_COOKIE_QUEUE_PENDING", key: "cookie-queue-pending", en: "Start the profile normally and confirm", zh: "正常启动配置并确认既有 Cookie 已导入" },
+    { code: "FULL_PROFILE_COOKIE_QUEUE_UNAVAILABLE", key: "cookie-queue-unavailable", en: "Check and repair the existing queue", zh: "检查并修复既有队列" },
+  ];
+  for (const locale of ["en-US", "zh-CN"] as const) for (const kind of ["push", "pull"] as const) for (const guard of guards) {
+    it(`${locale} ${kind} ${guard.code} renders static instructions in the result DOM and error toast without Cookie values`, async () => {
+      const h = harness(locale); Object.assign(h.status(), { includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true, includeHistory: true, historyConsentAt: 1 });
+      await h.ab.loadSyncConfig();
+      const rawCookie = "synthetic-cookie-value-not-for-renderer";
+      h.api.sync[kind].mockResolvedValueOnce(result({ success: false, outcome: "failed", code: guard.code, localCommit: "none", remoteCommit: "none", message: rawCookie,
+        items: [{ scope: "fullProfile", id: "profile-a", state: "failed", code: guard.code, message: rawCookie }], warnings: [rawCookie] }));
+      if (kind === "pull") await h.ab.loadSyncDiff();
+      await h.ab[kind === "push" ? "syncPush" : "syncPull"]();
+      const panel = h.elements["sync-operation-result"], expected = h.window.i18n.t("sync.full-profile." + guard.key);
+      expect(panel.innerHTML.includes(rawCookie)).toBe(false); expect(JSON.stringify(h.ab.helpers.toast.mock.calls).includes(rawCookie)).toBe(false);
+      expect(panel.textContent.includes(locale === "zh-CN" ? guard.zh : guard.en)).toBe(true); expect(panel.textContent.includes(expected)).toBe(true);
+      expect(panel.innerHTML).toContain("health-text-poor"); expect(panel.innerHTML).not.toContain("health-text-good");
+      expect(panel.textContent).toContain(guard.code); expect(h.ab.helpers.toast).toHaveBeenLastCalledWith(expected, "error");
+      expect(h.api.sync[kind]).toHaveBeenCalledTimes(1); expect(h.api.sync.configure).not.toHaveBeenCalled();
+      if (guard.code === "FULL_PROFILE_COOKIE_QUEUE_PENDING") expect(panel.textContent).toMatch(locale === "zh-CN" ? /再正常停止.*确认浏览器退出.*完整推送／拉取/ : /then stop.*confirmed browser exit.*full push\/pull/);
+      else expect(panel.textContent).toMatch(locale === "zh-CN" ? /原数据和队列均保留.*不是空队列.*成功/ : /data and queue are retained.*not an empty queue.*successful/);
+    });
+  }
+});
+
 describe("sync mutation events, cache invalidation and request epochs", () => {
   it.each(["push", "pull", "configure"])("refreshes %s completed outside the renderer without reloadConfig or another write", async (kind) => {
     const h = harness();
@@ -559,7 +689,8 @@ describe("truthful Compare scope and effective mirrored translations", () => {
     ...["complete", "partial", "failed", "cancelled", "recovery-required"].map((suffix) => `sync.result.outcome.${suffix}`),
     ...["none", "committed", "partial", "unknown"].map((suffix) => `sync.result.commit.${suffix}`),
     ...["applied", "uploaded", "queued", "preserved", "skipped", "failed", "unknown"].map((suffix) => `sync.result.item.${suffix}`),
-    ...["config", "profiles", "cookies", "localStorage", "preferences", "extensions", "sidecar", "baseline"].map((suffix) => `sync.result.scope.${suffix}`),
+    ...["config", "profiles", "cookies", "localStorage", "preferences", "extensions", "history", "fullProfile", "credentials", "sidecar", "baseline"].map((suffix) => `sync.result.scope.${suffix}`),
+    ...["consent", "notice", "passphrase", "passphrase-help", "required", "selected", "limited", "pull-strategy", "selection-required", "cookie-queue-pending", "cookie-queue-unavailable"].map((suffix) => `sync.full-profile.${suffix}`),
     "profile.sync.local-changes", "profile.sync.unknown", "profile.sync.baseline-at", "profile.sync.proof-scope", "profile.edit.baseline-changed",
     ...["match", "changed", "none", "legacy", "invalid", "target-changed", "target-unavailable", "preferences-unavailable", "content-unavailable", "unknown"].map((suffix) => `profile.sync.reason.${suffix}`),
     ...["export.title", "export.batch-title", "import.title", "import.batch-title", "filter.backup", "replace.title", "replace.message", "replace.detail", "replace.confirm", "cancel", "pending", "export.warning-count", "batch.warning-count"].map((suffix) => `archive.${suffix}`),

@@ -88,6 +88,13 @@ describe("JavaScript SDK full bounded error receipts", () => {
     expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({ history: false, strategy: "remote" });
     expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({}); expect(fetch).toHaveBeenCalledTimes(5);
   });
+  it("forwards explicit full migration consent and a write-only passphrase without inventing defaults", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ success: true, includeFullProfile: true, fullProfileConsentAt: 1, fullProfilePassphraseSet: true }))), f = sdk(fetch);
+    const settings = { custodyConsent: true, fullProfileConsent: true, includeFullProfile: true, fullProfilePassphrase: "  synthetic migration phrase  " };
+    const saved = await f.client.configureSync(settings);
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual(settings); expect(saved).not.toHaveProperty("fullProfilePassphrase");
+    await f.client.configureSync({ historyConsent: true }); expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ historyConsent: true }); expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it("keeps the old standalone Error constructor compatible", () => {
     const f = sdk(async () => { throw new Error("unplanned fetch"); });
     const error = new f.ErrorClass("old caller message");
@@ -96,6 +103,15 @@ describe("JavaScript SDK full bounded error receipts", () => {
 });
 
 describe("SDK public profile/error declarations", () => {
+  it("declares full migration inputs but only a passphrase presence flag in status", () => {
+    const ast = ts.createSourceFile(DECL_FILE, fs.readFileSync(DECL_FILE, "utf8"), ts.ScriptTarget.Latest, true);
+    const settings = ast.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === "SyncSettings") as ts.TypeAliasDeclaration;
+    expect(settings.type.getText(ast)).toContain("'includeFullProfile'"); expect(settings.type.getText(ast)).toContain("'fullProfilePassphrase'"); expect(settings.type.getText(ast)).toContain("fullProfileConsent?: boolean");
+    const status = ast.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === "SyncStatus") as ts.TypeAliasDeclaration;
+    const fields = new Map((status.type as ts.TypeLiteralNode).members.map(member => [member.name!.getText(ast), (member as ts.PropertySignature).type?.getText(ast)]));
+    expect(fields.get("fullProfilePassphraseSet")).toBe("boolean"); expect(fields.get("includeFullProfile")).toBe("boolean");
+    expect(fields.has("fullProfilePassphrase")).toBe(false); expect(fields.has("vault")).toBe(false);
+  });
   it("declares sync fields on ProfileSummary with self-contained literal contracts", () => {
     const ast = ts.createSourceFile(DECL_FILE, fs.readFileSync(DECL_FILE, "utf8"), ts.ScriptTarget.Latest, true);
     const profile = ast.statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === "ProfileSummary") as ts.InterfaceDeclaration;
@@ -158,6 +174,9 @@ mode.update(body={'operation':{'generation':1,'active':None,'last':result}}); as
 mode.update(status=200,body=result)
 assert c.configure_sync({'historyConsent':True,'includeHistory':True})==result
 assert json.loads(requests[-1].data)=={'historyConsent':True,'includeHistory':True}
+full={'custodyConsent':True,'fullProfileConsent':True,'includeFullProfile':True,'fullProfilePassphrase':'  synthetic migration phrase  '}
+assert c.configure_sync(full)==result
+assert json.loads(requests[-1].data)==full
 assert c.sync_push({'history':True,'comparisonToken':token})==result
 assert json.loads(requests[-1].data)=={'history':True,'comparisonToken':token}
 assert c.sync_pull({'history':False,'strategy':'remote'})==result

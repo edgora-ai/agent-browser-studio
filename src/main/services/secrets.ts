@@ -155,6 +155,16 @@ export function encryptSecret(plain: string): string {
   return state.backend === "file" ? encryptFileSecret(plain) : encryptOsSecret(plain);
 }
 
+/** Import already-authorized plaintext under THIS machine's vault. Unlike the
+ * legacy idempotent setter, a literal value starting with v1:/v2:/os1: is data,
+ * never trusted as a ciphertext produced by this machine. */
+export function encryptLiteralSecret(plain: string): string {
+  if (typeof plain !== "string" || !usingEncryption()) {
+    throw new Error("Encrypted local storage is required to import secret values");
+  }
+  return state.backend === "file" ? encryptFileSecret(plain) : encryptOsSecret(plain);
+}
+
 /** Decrypt a stored secret for use. Plaintext values pass through. */
 export function decryptSecret(stored: string): string {
   if (stored == null) return stored;

@@ -4,13 +4,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as zlib from "node:zlib";
 import { spawn } from "node:child_process";
-import { getSyncConfig, getConfig, saveConfig, getProfilesDir, getAppDataDir, portableProfileContent } from "./config-manager.js";
+import { getSyncConfig, getConfig, getConfigPath, saveConfig, getProfilesDir, getAppDataDir, portableProfileContent } from "./config-manager.js";
 import { transact } from "./config/store.js";
 import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
 import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
-import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped } from "./profile-restore-lock.js";
+import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
 import { markProfileDataChanging } from "./profile-data-revision.js";
 import { decryptSecretOr } from "./secrets.js";
 import { sanitizeTeam, mergeTeam, requireSyncPush, requireForcePush, requireSettingsMutation } from "./team.js";
@@ -34,7 +34,7 @@ import { compareProfileIdentity } from "./profile-identity.js";
 export type { SyncResult } from "../types.js";
 
 type SyncSafeConfig = Omit<MgmtConfig, "sync" | "proxies"> & {
-  sync: Omit<SyncConfig, "accessKey" | "secretKey">;
+  sync: Omit<SyncConfig, "accessKey" | "secretKey" | "fullProfilePassphrase">;
   proxies: Record<string, Omit<ProxyConfig, "username" | "password">>;
 };
 
@@ -156,7 +156,9 @@ export const syncService = {
 
     try { historySelected(sync, opts); }
     catch (error) { return { success: false, message: (error as Error).message, code: (error as any).code || "INVALID_HISTORY_SCOPE" }; }
-    return pushFrozenSnapshot(structuredClone(sync), force, signal, comparisonToken, opts);
+    return sync.includeFullProfile
+      ? pushFullProfileSnapshot(structuredClone(sync), force, signal, comparisonToken, opts)
+      : pushFrozenSnapshot(structuredClone(sync), force, signal, comparisonToken, opts);
   },
 
   // ── Pull ──
@@ -177,6 +179,7 @@ export const syncService = {
 
     const pullGate = requireSettingsMutation();
     if (!pullGate.ok) return { success: false, code: "TEAM_ROLE_DENIED", message: "Pull blocked by team policy: " + pullGate.error };
+    if (sync.includeFullProfile) return pullFullProfileSnapshot(sync, signal, opts);
     const lease = beginSyncOperation("pull");
     if ("busy" in lease) return lease.busy;
     const operation = lease.operation;
@@ -201,6 +204,7 @@ export const syncService = {
       }
 
       const payload = fetched.payload;
+      if (payload.artifactVersion === 4) throw fullProfileError("FULL_PROFILE_CONSENT_REQUIRED", "This snapshot contains complete encrypted browser data; enable complete migration and enter its passphrase before restoring");
       assertComparisonUnchanged(opts?.comparisonToken, sync, payload);
       const raw = gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "sync config");
       // Preserve original presence/absence of identity seed before the portable
@@ -643,11 +647,383 @@ export const syncService = {
       // Sale-93: the UI shows whether custody consent was recorded (and when).
       custodyConsentAt: typeof (sync as any)?.custodyConsentAt === "number" ? (sync as any).custodyConsentAt : null,
       includeHistory: sync.includeHistory === true,
+      includeFullProfile: sync.includeFullProfile === true,
+      fullProfileConsentAt: Number.isSafeInteger(sync.fullProfileConsentAt) && sync.fullProfileConsentAt! > 0 ? sync.fullProfileConsentAt : null,
+      fullProfilePassphraseSet: Boolean(sync.fullProfilePassphrase),
       history: Object.fromEntries(Object.entries(getConfig().browserProfiles || {}).map(([id, profile]) => [id, profileHistoryCoverage(profile)])),
       historyConsentAt: Number.isSafeInteger(sync.historyConsentAt) && sync.historyConsentAt! > 0 ? sync.historyConsentAt : null,
     };
   },
 };
+
+function fullProfileError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+function fullProfileProxyName(meta: MgmtConfig["browserProfiles"][string], defaultProxy: string): string | undefined {
+  return meta.proxyMode === "none" ? undefined : meta.proxyMode === "named" ? meta.proxyName || undefined : defaultProxy || "default";
+}
+function assertFullProfileScope(sync: SyncConfig, history?: boolean, readPassphrase = false): string {
+  const current = getSyncConfig();
+  if (!sync.includeFullProfile || !Number.isSafeInteger(sync.fullProfileConsentAt) || sync.fullProfileConsentAt! <= 0 ||
+      !Number.isSafeInteger(sync.historyConsentAt) || sync.historyConsentAt! <= 0 || !sync.includeHistory || history === false) {
+    throw fullProfileError("FULL_PROFILE_CONSENT_REQUIRED", "Complete migration includes saved passwords, history and site storage; enable its separate scope and save first");
+  }
+  if (!current.enabled || !current.custodyConsentAt || current.custodyConsentAt !== sync.custodyConsentAt ||
+      getProfileSyncTarget(current) !== getProfileSyncTarget(sync) || !current.includeFullProfile ||
+      current.fullProfileConsentAt !== sync.fullProfileConsentAt || current.historyConsentAt !== sync.historyConsentAt ||
+      current.fullProfilePassphrase !== sync.fullProfilePassphrase || current.accessKey !== sync.accessKey || current.secretKey !== sync.secretKey) {
+    throw fullProfileError("FULL_PROFILE_SCOPE_CHANGED", "Complete migration settings changed during the operation");
+  }
+  if (!readPassphrase) return "";
+  const passphrase = decryptSecretOr(sync.fullProfilePassphrase || "", "");
+  if (typeof passphrase !== "string" || Buffer.byteLength(passphrase) < 12 || Buffer.byteLength(passphrase) > 1024) {
+    throw fullProfileError("FULL_PROFILE_PASSPHRASE_REQUIRED", "Set the same migration passphrase on both machines before complete push or pull");
+  }
+  return passphrase;
+}
+function assertFullProfileCookieQueueEmpty(dirId: string): void {
+  let pending: CookieInfo[];
+  try { pending = readQueuedCookieImports(dirId, { strict: true }); }
+  catch {
+    throw Object.assign(fullProfileError("FULL_PROFILE_COOKIE_QUEUE_UNAVAILABLE", "Cannot verify pending Cookie imports. Resolve the existing import queue before complete migration; it has not been cleared or replaced"), { dirId });
+  }
+  if (pending.length) {
+    throw Object.assign(fullProfileError("FULL_PROFILE_COOKIE_QUEUE_PENDING", "Complete migration requires pending Cookie imports to finish first. Start the profile normally, confirm the import, then stop it and wait for browser exit before retrying; the queue has been preserved"), { dirId });
+  }
+}
+function fullProfileRecoveryFailure(cause: unknown, ticket: FullProfileRecoveryTicket): Error {
+  const paths = (cause as { recoveryPaths?: unknown })?.recoveryPaths;
+  return Object.assign(fullProfileError("FULL_PROFILE_RECOVERY_REQUIRED", "Complete migration needs manual recovery. Browser launch remains blocked until the retained profile data and configuration have been reconciled"), {
+    cause, dirId: ticket.dirId, recoveryReceiptPath: ticket.receiptPath,
+    recoveryPaths: [...new Set([ticket.receiptPath, ticket.profileDir, ticket.backupDir, ticket.stagingDir,
+      ...(Array.isArray(paths) ? paths.filter((value): value is string => typeof value === "string") : [])])],
+  });
+}
+function confirmFullProfileConfigCommitted(): void {
+  // The shared store's optional fsync does not certify this two-resource commit.
+  // Verify and flush the actual config before removing a durable recovery gate.
+  const file = getConfigPath(), expected = Buffer.from(JSON.stringify(getConfig(), null, 2));
+  const before = fs.lstatSync(file);
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== expected.length) throw new Error("Complete migration config readback is unconfirmed");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const opened = fs.fstatSync(fd);
+    if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size || opened.nlink !== 1) throw new Error("Complete migration config identity changed");
+    const bytes = Buffer.alloc(expected.length + 1); let count = 0;
+    while (count < bytes.length) {
+      const read = fs.readSync(fd, bytes, count, bytes.length - count, count);
+      if (!Number.isInteger(read) || read < 0 || read > bytes.length - count) throw new Error("Complete migration config readback failed");
+      if (read === 0) break;
+      count += read;
+    }
+    if (count !== expected.length || !bytes.subarray(0, count).equals(expected)) throw new Error("Complete migration config readback mismatch");
+    fs.fsyncSync(fd);
+    const after = fs.lstatSync(file), flushed = fs.fstatSync(fd);
+    for (const current of [after, flushed]) {
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.dev !== before.dev || current.ino !== before.ino ||
+          current.size !== before.size || current.mtimeMs !== before.mtimeMs || current.ctimeMs !== before.ctimeMs) throw new Error("Complete migration config changed during verification");
+    }
+  } finally { fs.closeSync(fd); }
+  if (!syncArchiveDirectory(path.dirname(file))) throw new Error("Complete migration config directory durability is unconfirmed");
+}
+function cleanupFullProfileStage(root: string | undefined, owner: fs.Stats | undefined, operation: SyncOperationResult, retain: boolean): void {
+  if (!root || !owner) return;
+  if (retain) { operation.warnings.push(`Complete migration staging retained for recovery: ${root}`); return; }
+  try {
+    const current = fs.lstatSync(root);
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owner.dev || current.ino !== owner.ino) throw new Error("Staging ownership changed");
+    fs.rmSync(root, { recursive: true });
+  } catch { operation.warnings.push(`Complete migration staging cleanup was not confirmed: ${root}`); }
+}
+
+async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?: AbortSignal, comparisonToken?: SyncComparisonToken, opts?: SyncHistoryOptions): Promise<SyncResult> {
+  const lease = beginSyncOperation("push");
+  if ("busy" in lease) return lease.busy;
+  const operation = lease.operation, releases: Array<() => void> = [], sourceGuards: Array<() => void> = [];
+  let root: string | undefined, owner: fs.Stats | undefined, result: SyncResult | undefined, retain = false;
+  try {
+    const passphrase = assertFullProfileScope(sync, opts?.history, true);
+    const { captureFullProfileTransfer, fullProfileProxyHash } = await import("./sync/full-profile-transfer.js");
+    assertSyncRole("push", force); assertSyncNotAborted(signal);
+    const initial = cloneConfig(getConfig()), snapshot = sanitizeConfigForSync(initial), timestamp = Date.now();
+    const ids = Object.keys(snapshot.browserProfiles || {});
+    if (ids.length > MAX_SYNC_PROFILES) throw new Error("Too many profiles in complete snapshot");
+    const previous = await fetchSyncConfig(sync, signal);
+    if (!previous.ok && !previous.message.startsWith("HTTP 404")) throw new Error("Cannot verify the previous remote snapshot");
+    assertComparisonUnchanged(comparisonToken, sync, previous.ok ? previous.payload : null);
+    const locks = await collectRemoteLocksBlockingPush(sync, signal, previous);
+    if (!force && locks.length) throw fullProfileError("PROFILE_LOCKED", "A selected profile is checked out by another machine");
+    root = createPullStagingRoot(); owner = fs.lstatSync(root);
+    const preferences: Record<string, ProfilePreferencesSnapshot> = {};
+    const captured: Array<{ id: string; body: Buffer; descriptor: import("./sync/full-profile-artifact.js").FullProfileArtifact }> = [];
+    let total = 0;
+    for (const id of ids) {
+      releases.push(acquireRestoreLock(id));
+      const guard = () => {
+        assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+        assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id);
+        assertFullProfileCookieQueueEmpty(id);
+        if (initial.defaultProxy !== getConfig().defaultProxy) throw new Error("Default proxy changed during complete capture");
+        const name = fullProfileProxyName(initial.browserProfiles[id], initial.defaultProxy);
+        if (name && stableStringify(initial.proxies[name]) !== stableStringify(getConfig().proxies[name])) throw new Error("Linked proxy changed during complete capture");
+      };
+      guard(); sourceGuards.push(guard);
+      preferences[id] = profilePreferencesSnapshot(capturePreferences(id));
+      const meta = snapshot.browserProfiles[id], proxyName = fullProfileProxyName(meta, initial.defaultProxy);
+      const proxy = proxyName ? initial.proxies[proxyName] : undefined;
+      const item = await captureFullProfileTransfer({ profileDir: resolveProfileDir(id), stagingDir: root, dirId: id,
+        engine: historyEngine(meta), snapshotId: operation.operationId, sourcePlatform: process.platform,
+        browserVersion: typeof meta.browserVersion === "string" ? meta.browserVersion : undefined,
+        passphrase, guard, signal, environment: { profileHash: profileContentHash(meta, profilePreferencesSnapshot(null)),
+          ...(proxy && proxyName ? { proxy: { name: proxyName, publicHash: fullProfileProxyHash(proxy), username: decryptSecretOr(proxy.username || "", ""), password: decryptSecretOr(proxy.password || "", "") } } : {}) } });
+      guard(); total += item.body.length;
+      if (total > 1024 * 1024 * 1024) throw fullProfileError("FULL_PROFILE_SIZE_LIMIT", "Complete snapshot exceeds its aggregate byte limit; no partial browser snapshot was published");
+      captured.push({ id, body: item.body, descriptor: item.descriptor });
+      operation.add({ side: "remote", scope: "credentials", id, state: "preserved", required: false,
+        count: item.credentials.databases.reduce((sum, db) => sum + db.fields, 0), code: "SOURCE_CREDENTIALS_VERIFIED" });
+    }
+    const extensions: FrozenExtensionSnapshot[] = [];
+    for (const entry of Object.values(initial.extensionRepository || {})) {
+      assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+      if (extensions.length >= MAX_SYNC_EXTENSIONS) throw new Error("Too many extension packages");
+      const capture = (await import("./extension-repository.js")).captureRepositoryExtensionForSync;
+      const frozen = await capture(entry, path.join(root, `complete-extension-${randomUUID()}`), signal);
+      total += fs.statSync(frozen.packagePath).size;
+      if (total > 1024 * 1024 * 1024) throw new Error("Complete snapshot byte limit exceeded");
+      snapshot.extensionRepository![entry.id] = sanitizeExtensionRepoEntry(entry.id, frozen.entry); extensions.push(frozen);
+    }
+    markAllProfilesSynced(snapshot, timestamp, { profilePreferences: preferences, targetId: getProfileSyncTarget(sync), snapshotId: operation.operationId });
+    const configBytes = Buffer.from(JSON.stringify(snapshot)), compressed = zlib.gzipSync(configBytes);
+    if (configBytes.length > MAX_CONFIG_JSON_BYTES || compressed.length > MAX_CONFIG_GZIP_BYTES) throw new Error("Complete configuration exceeds its byte limit");
+    const document = { version: snapshot.version, artifactVersion: 4, snapshotId: operation.operationId, timestamp,
+      data: compressed.toString("base64"), fullProfiles: Object.fromEntries(captured.map(item => [item.id, item.descriptor])) };
+    const body = Buffer.from(JSON.stringify(document));
+    lease.stage("publishing");
+    const publishVerified = async (key: string, bytes: Buffer, scope: "fullProfile" | "extensions", id: string): Promise<void> => {
+      assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+      const publication = await publishS3Object(sync, key, bytes, signal);
+      operation.remoteCommit = publication.state === "accepted" ? "partial" : "unknown";
+      const readback = publication.state === "rejected" ? null : await s3Get(sync, key, signal, bytes.length);
+      assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+      if (!readback?.equals(bytes)) throw fullProfileError("FULL_PROFILE_UPLOAD_UNCONFIRMED", "Complete migration object upload/readback was not confirmed; previous snapshot retained");
+      for (const guard of sourceGuards) guard();
+      operation.add({ side: "remote", scope, id, state: "uploaded", bytes: bytes.length });
+    };
+    for (const item of captured) await publishVerified(item.descriptor.key, item.body, "fullProfile", item.id);
+    for (const extension of extensions) await publishVerified(extensionObjectKey(extension.entry), fs.readFileSync(extension.packagePath), "extensions", extension.entry.id);
+    assertComparisonUnchanged(comparisonToken, sync, previous.ok ? previous.payload : null);
+    for (const guard of sourceGuards) guard();
+    assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+    await publishS3Object(sync, SYNC_CONFIG_KEY, body, signal); operation.remoteCommit = "unknown";
+    const observed = await fetchSyncConfig(sync, signal);
+    if (!observed.ok || stableStringify(observed.payload) !== stableStringify(document)) throw fullProfileError("REMOTE_COMMIT_UNCONFIRMED", "Complete snapshot publication could not be verified");
+    operation.remoteCommit = "committed"; operation.add({ side: "remote", scope: "config", state: "uploaded", bytes: body.length });
+    transact((draft: MgmtConfig) => {
+      assertSyncRole("push", force); assertFullProfileScope(sync, opts?.history);
+      for (const guard of sourceGuards) guard();
+      for (const id of ids) {
+        assertSelectedProfileUnchanged(initial.browserProfiles, draft.browserProfiles || {}, id);
+        const current = draft.browserProfiles[id], published = snapshot.browserProfiles[id];
+        current.syncedAt = published.syncedAt; current.syncedHash = published.syncedHash; current.syncBaseline = published.syncBaseline;
+      }
+    });
+    operation.localCommit = "committed"; operation.add({ scope: "baseline", state: "applied" });
+    result = operation.complete(`Complete encrypted browser snapshot published for ${ids.length} profile(s). Includes saved-password databases, cookies, site storage and sessions; hardware-bound authenticators and website acceptance are not a migration guarantee.`, total + body.length);
+    return result;
+  } catch (error: any) {
+    retain = error?.code === "FULL_PROFILE_RECOVERY_REQUIRED";
+    result = operation.failure(error, signal?.aborted);
+    if (signal?.aborted) { error.syncResult = result; throw error; }
+    return result;
+  } finally {
+    cleanupFullProfileStage(root, owner, operation, retain);
+    for (const release of releases.reverse()) release();
+    if (result) result.warnings = [...operation.warnings];
+    lease.finish(result ?? operation.failure(new Error("Complete push did not confirm its result")));
+  }
+}
+
+async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, opts?: SyncPullOptions): Promise<SyncResult> {
+  const lease = beginSyncOperation("pull");
+  if ("busy" in lease) return lease.busy;
+  const operation = lease.operation, releases: Array<() => void> = [];
+  const restored: Array<{ value: import("./sync/full-profile-artifact.js").RestoredFullProfile; ticket: FullProfileRecoveryTicket }> = [];
+  const pendingRecovery = new Set<FullProfileRecoveryTicket>();
+  let root: string | undefined, owner: fs.Stats | undefined, result: SyncResult | undefined, committed = false, retain = false;
+  let configBeforeCommit: MgmtConfig | undefined;
+  try {
+    const passphrase = assertFullProfileScope(sync, opts?.history, true);
+    if (opts?.allowRunningPartial) throw fullProfileError("FULL_PROFILE_STOP_REQUIRED", "Complete migration cannot be partially applied to a running profile");
+    const { parseFullProfileArtifact, restorePreparedFullProfile } = await import("./sync/full-profile-artifact.js");
+    const { prepareFullProfileTransfer, fullProfileProxyHash } = await import("./sync/full-profile-transfer.js");
+    const fetched = await fetchSyncConfig(sync, signal);
+    if (!fetched.ok) throw new Error(fetched.message);
+    const payload = fetched.payload;
+    if (payload.artifactVersion !== 4) throw fullProfileError("FULL_PROFILE_SNAPSHOT_REQUIRED", "The remote snapshot has no complete browser backup. Push a complete snapshot from the original machine first; nothing was restored");
+    assertComparisonUnchanged(opts?.comparisonToken, sync, payload);
+    const rawRemote = JSON.parse(gunzipBase64Field(payload.data, MAX_CONFIG_GZIP_BYTES, MAX_CONFIG_JSON_BYTES, "complete sync config").toString());
+    const remote = sanitizeRemoteConfig(rawRemote as MgmtConfig), initial = cloneConfig(getConfig());
+    const ids = Object.keys(remote.browserProfiles || {});
+    validateArtifactProfileIds(payload, new Set(ids));
+    if (ids.length > MAX_SYNC_PROFILES || !payload.fullProfiles || Object.keys(payload.fullProfiles).length !== ids.length) throw new Error("Complete profile inventory does not match its configuration");
+    const descriptors = new Map<string, NonNullable<ReturnType<typeof parseFullProfileArtifact>>>();
+    for (const id of ids) {
+      const descriptor = parseFullProfileArtifact(payload.fullProfiles[id]);
+      if (!descriptor || descriptor.dirId !== id || descriptor.engine !== historyEngine(remote.browserProfiles[id]) || descriptor.snapshotId !== payload.snapshotId) throw new Error("Complete profile descriptor identity mismatch");
+      descriptors.set(id, descriptor);
+    }
+    const strategy = opts?.strategy === undefined ? "remote" : normalizeMergeStrategy(opts.strategy), resolve = (scope: string, id: string) => resolutionFor(opts?.resolutions, scope, id);
+    const selected = selectRemoteEntries(profileDecisionMap(initial.browserProfiles), profileDecisionMap(remote.browserProfiles), strategy, id => resolve("profiles", id));
+    if (ids.length && !selected.size) throw fullProfileError("FULL_PROFILE_SELECTION_REQUIRED", "No complete remote profile was selected. Choose remote restore; local-priority is not a completed migration");
+    for (const id of ids) if (!selected.has(id)) operation.add({ scope: "fullProfile", id, state: "skipped", code: "FULL_PROFILE_LOCAL_PRESERVED", message: "The local decision preserved this profile; it was not migrated" });
+    for (const id of selected) {
+      releases.push(acquireRestoreLock(id));
+      assertHistoryStopped(id); assertFullProfileCookieQueueEmpty(id);
+      if (initial.browserProfiles[id] && historyEngine(initial.browserProfiles[id]) !== historyEngine(remote.browserProfiles[id])) throw fullProfileError("FULL_PROFILE_ENGINE_MISMATCH", "Complete migration does not convert between browser engines");
+    }
+    root = createPullStagingRoot(); owner = fs.lstatSync(root);
+    const prepared: Array<{ id: string; value: Awaited<ReturnType<typeof prepareFullProfileTransfer>> }> = [];
+    const credentialProxyNames = new Set<string>();
+    let total = 0;
+    const guardFor = (id: string) => () => {
+      assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+      assertSelectedProfileUnchanged(initial.browserProfiles, getConfig().browserProfiles || {}, id); assertHistoryStopped(id);
+      assertFullProfileCookieQueueEmpty(id);
+    };
+    for (const id of selected) {
+      const descriptor = descriptors.get(id)!, guard = guardFor(id); guard();
+      total += descriptor.size;
+      if (total > 1024 * 1024 * 1024) throw new Error("Complete migration aggregate byte limit exceeded");
+      const body = await s3Get(sync, descriptor.key, signal, descriptor.size);
+      if (!body) throw fullProfileError("FULL_PROFILE_OBJECT_UNAVAILABLE", "Complete browser data object is unavailable; nothing was restored");
+      guard();
+      const value = await prepareFullProfileTransfer({ body, descriptor, stagingDir: root, passphrase,
+        dirId: id, engine: descriptor.engine, snapshotId: payload.snapshotId, receiverPlatform: process.platform,
+        profileHash: profileContentHash(remote.browserProfiles[id], profilePreferencesSnapshot(null)), guard, signal });
+      guard();
+      const proxy = value.environment.proxy;
+      if (proxy) {
+        const remoteProxy = remote.proxies[proxy.name];
+        if (fullProfileProxyName(remote.browserProfiles[id], remote.defaultProxy) !== proxy.name || !Object.hasOwn(remote.proxies, proxy.name) || !remoteProxy || fullProfileProxyHash(remoteProxy) !== proxy.publicHash) throw fullProfileError("FULL_PROFILE_PROXY_MISMATCH", "Linked proxy settings do not match their encrypted credentials");
+        const { encryptLiteralSecret } = await import("./secrets.js");
+        remote.proxies[proxy.name] = { ...remoteProxy, username: encryptLiteralSecret(proxy.username), password: encryptLiteralSecret(proxy.password) };
+        credentialProxyNames.add(proxy.name);
+      }
+      prepared.push({ id, value });
+    }
+    const extensions = await preparePullExtensions(sync, remote, root, signal, true);
+    assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history); assertSyncNotAborted(signal);
+    for (const extension of extensions) {
+      const applied = await restoreSyncedExtensionPackage(extension.id, extension.packagePath, extension.remoteEntry, signal);
+      operation.add({ scope: "extensions", id: extension.id, state: "applied" });
+      for (const warning of applied.repositoryCommit?.cleanupWarnings || []) operation.warnings.push(warning.message);
+    }
+    lease.stage("applying");
+    confirmFullProfileConfigCommitted();
+    const preferenceHashes: Record<string, string> = {}, preferenceIds = new Set<string>();
+    for (const item of prepared) {
+      const guard = guardFor(item.id); guard();
+      const ticket = beginFullProfileRecovery({ dirId: item.id, operationId: operation.operationId, stagingDir: root });
+      pendingRecovery.add(ticket);
+      markProfileDataChanging(item.id);
+      let applied: import("./sync/full-profile-artifact.js").RestoredFullProfile;
+      try { applied = restorePreparedFullProfile({ prepared: item.value.prepared, profileDir: resolveProfileDir(item.id), backupSuffix: ".full-profile-backup-" + operation.operationId, guard }); }
+      catch (error: any) { throw error?.code === "FULL_PROFILE_RECOVERY_REQUIRED" ? fullProfileRecoveryFailure(error, ticket) : error; }
+      restored.push({ value: applied, ticket });
+      operation.add({ scope: "fullProfile", id: item.id, state: "applied", bytes: applied.bytes,
+        runtimeEffect: { state: "stopped", action: "restored-stopped", stopRequired: false, restartRequired: true, queuedCookies: 0, liveCookiesApplied: 0 } });
+      operation.add({ scope: "credentials", id: item.id, state: "applied", count: item.value.credentials.databases.reduce((sum, db) => sum + db.fields, 0),
+        code: item.value.credentials.passwordUsability === "requires-firefox-nss-unlock" ? "FIREFOX_NSS_UNLOCK_REQUIRED" : "CREDENTIAL_DATABASES_VERIFIED" });
+      if (item.value.credentials.passwordUsability === "requires-firefox-nss-unlock") operation.warnings.push("Firefox login/key files are paired and restored; unlock the existing Primary Password normally. NSS runtime unlock has not been verified.");
+      for (const warning of applied.warnings || []) operation.warnings.push(warning);
+      if (applied.backupDir) operation.warnings.push(`Previous complete profile retained: ${applied.backupDir}`);
+      const raw = capturePreferences(item.id);
+      if (raw !== null) { preferenceIds.add(item.id); preferenceHashes[item.id] = raw.toString("base64"); }
+    }
+    configBeforeCommit = getConfig();
+    transact((draft: MgmtConfig) => {
+      assertSyncRole("pull"); assertFullProfileScope(sync, opts?.history);
+      for (const id of selected) {
+        assertSelectedProfileUnchanged(initial.browserProfiles, draft.browserProfiles || {}, id); assertHistoryStopped(id);
+        assertFullProfileCookieQueueEmpty(id);
+      }
+      const selectedEntries = Object.fromEntries([...selected].map(id => [id, remote.browserProfiles[id]]));
+      draft.browserProfiles = mergeSectionById(draft.browserProfiles || {}, selectedEntries, "remote", undefined,
+        { ignoredFields: new Set([...SYNC_BOOKKEEPING_FIELDS, "fontsDir"]), onRemoteWin: (local, incoming) => ({ ...local, ...incoming, fontsDir: local.fontsDir ?? null }) });
+      const previousProxies = draft.proxies || {};
+      draft.proxies = mergeProxySection(previousProxies, remote.proxies || {}, strategy, id => resolve("proxies", id));
+      for (const name of credentialProxyNames) {
+        const incoming = remote.proxies[name], previous = previousProxies[name];
+        if (!previous || remoteWins(previous, incoming, resolve("proxies", name) ?? strategy)) {
+          draft.proxies[name] = { ...draft.proxies[name], username: incoming.username, password: incoming.password };
+        }
+      }
+      draft.accounts = mergeAccountSection(remote.accounts || [], draft.accounts || [], strategy, id => resolve("accounts", id.split("\u0000").join(" @ ")));
+      draft.defaultProxy = remote.defaultProxy || draft.defaultProxy;
+      const team = mergeTeam(draft.team ?? null, remote.team ?? null);
+      if (team) draft.team = team; else delete draft.team;
+      markRemoteProfilesSynced(draft, remote, payload.timestamp, { selectedRemoteProfiles: selected, preferences: preferenceIds, preferenceHashes, targetId: getProfileSyncTarget(sync) });
+    }, undefined, { forceAccountRevision: true, requireAccountRetention: true });
+    committed = true; operation.localCommit = "committed"; operation.add({ scope: "config", state: "applied" });
+    confirmFullProfileConfigCommitted();
+    for (const id of selected) assertFullProfileCookieQueueEmpty(id);
+    for (const ticket of pendingRecovery) { finishFullProfileRecovery(ticket); pendingRecovery.delete(ticket); }
+    for (const id of selected) operation.add({ scope: "profiles", id, state: "applied", identity: compareProfileIdentity(rawRemote.browserProfiles[id], getConfig().browserProfiles[id]),
+      message: "Complete persistent data and credential databases restored; website acceptance, hardware authenticators and live fingerprint remain separate checks." });
+    result = operation.complete(`Restored ${selected.size} complete encrypted browser profile(s). Start the restored browser to verify site sessions; hardware-bound passkeys are not transferred.`, total);
+    return result;
+  } catch (error: any) {
+    const firstTicket = [...pendingRecovery][0];
+    if (!committed && configBeforeCommit && getConfig() !== configBeforeCommit && firstTicket) {
+      operation.localCommit = "unknown";
+      error = fullProfileRecoveryFailure(error, firstTicket);
+    }
+    if (!committed && error?.code !== "FULL_PROFILE_RECOVERY_REQUIRED") {
+      if (firstTicket) {
+        try { confirmFullProfileConfigCommitted(); }
+        catch (failure) { error = fullProfileRecoveryFailure(failure, firstTicket); }
+      }
+      if (error?.code !== "FULL_PROFILE_RECOVERY_REQUIRED") {
+        let rollbackFailure: unknown;
+        for (const item of restored.reverse()) {
+          try {
+            item.value.rollback();
+            finishFullProfileRecovery(item.ticket); pendingRecovery.delete(item.ticket);
+            const staleWarning = operation.warnings.indexOf(`Previous complete profile retained: ${item.value.backupDir}`);
+            if (staleWarning >= 0) operation.warnings.splice(staleWarning, 1);
+            if (item.value.rollbackDir) operation.warnings.push(`Incoming complete profile retained after verified rollback: ${item.value.rollbackDir}`);
+          } catch (failure) { rollbackFailure ??= fullProfileRecoveryFailure(failure, item.ticket); }
+        }
+        if (!rollbackFailure) {
+          try { for (const ticket of pendingRecovery) { finishFullProfileRecovery(ticket); pendingRecovery.delete(ticket); } }
+          catch (failure) { rollbackFailure = failure; }
+        }
+        if (rollbackFailure) { error = rollbackFailure; retain = true; }
+        else {
+          for (const item of operation.items) if (item.scope === "fullProfile" || item.scope === "credentials") { item.state = "preserved"; item.code = "FULL_PROFILE_ROLLED_BACK"; }
+          operation.localCommit = operation.items.some(item => item.scope === "extensions" && item.state === "applied") ? "partial" : "none";
+        }
+      }
+    }
+    const pending = [...pendingRecovery];
+    if (pending.length) {
+      retain = true;
+      const primary = pending.find(ticket => ticket.dirId === error?.dirId) ?? pending[0];
+      error = fullProfileRecoveryFailure(error, primary);
+      for (const ticket of pending) if (ticket !== primary) operation.recovery.push({ resource: "profiles", id: ticket.dirId,
+        receiptPath: ticket.receiptPath, paths: [ticket.profileDir, ticket.backupDir, ticket.stagingDir] });
+    }
+    retain ||= error?.code === "FULL_PROFILE_RECOVERY_REQUIRED";
+    result = operation.failure(error, signal?.aborted);
+    if (signal?.aborted) { error.syncResult = result; throw error; }
+    return result;
+  } finally {
+    cleanupFullProfileStage(root, owner, operation, retain);
+    for (const release of releases.reverse()) release();
+    if (result) result.warnings = [...operation.warnings];
+    lease.finish(result ?? operation.failure(new Error("Complete pull did not confirm its result")));
+  }
+}
 
 interface FrozenExtensionSnapshot {
   entry: ExtensionRepositoryEntry;
@@ -725,6 +1101,7 @@ async function pushFrozenSnapshot(sync: SyncConfig, force: boolean, signal?: Abo
     const fetched = await fetchSyncConfig(sync, signal);
     if (!fetched.ok && !fetched.message.startsWith("HTTP 404")) throw new Error(`Cannot verify the previous remote snapshot: ${fetched.message}`);
     const previous = fetched.ok ? fetched.payload : {};
+    if (previous.artifactVersion === 4) throw fullProfileError("FULL_PROFILE_DOWNGRADE_BLOCKED", "The remote contains a complete browser backup; limited synchronization must not replace it. Enable complete migration first");
     assertComparisonUnchanged(comparisonToken, sync, fetched.ok ? fetched.payload : null);
     const locks = await collectRemoteLocksBlockingPush(sync, signal, fetched);
     if (!force && locks.length) throw new Error(`Push blocked: ${locks.length} profile(s) locked by another device (${locks.map((lock) => lock.id).slice(0, 8).join(", ")}). Release their locks or force push.`);
@@ -1890,10 +2267,13 @@ async function readResponseTextLimited(resp: Response, maxBytes: number, signal?
 
 function validateSyncPayloadShape(payload: any, cookiesOnly = false): void {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Remote config payload must be an object");
-  if (payload.artifactVersion !== undefined && ![1, 2, 3].includes(payload.artifactVersion)) throw new Error("Unsupported remote artifact format");
-  if ([2, 3].includes(payload.artifactVersion) && (typeof payload.snapshotId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.snapshotId))) throw new Error("Remote snapshot identity is invalid");
+  if (payload.artifactVersion !== undefined && ![1, 2, 3, 4].includes(payload.artifactVersion)) throw new Error("Unsupported remote artifact format");
+  if ([2, 3, 4].includes(payload.artifactVersion) && (typeof payload.snapshotId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.snapshotId))) throw new Error("Remote snapshot identity is invalid");
   if (!cookiesOnly && typeof payload.data !== "string") throw new Error("Remote config payload is missing data");
-  for (const field of ["cookies", "localStorage", "preferences", "history"]) {
+  if (payload.artifactVersion === 4 && (!payload.fullProfiles || typeof payload.fullProfiles !== "object" || Array.isArray(payload.fullProfiles))) throw new Error("Complete profile inventory is required");
+  if (payload.artifactVersion === 4 && ["cookies", "localStorage", "preferences", "history"].some(field => payload[field] !== undefined)) throw new Error("Complete profile snapshots must not contain plaintext legacy browser artifacts");
+  if (payload.artifactVersion !== 4 && payload.fullProfiles !== undefined) throw new Error("Complete profiles require a v4 envelope");
+  for (const field of ["cookies", "localStorage", "preferences", "history", "fullProfiles"]) {
     if (payload[field] !== undefined && (!payload[field] || typeof payload[field] !== "object" || Array.isArray(payload[field]))) {
       throw new Error(`Remote config ${field} must be an object`);
     }
@@ -1901,6 +2281,7 @@ function validateSyncPayloadShape(payload: any, cookiesOnly = false): void {
 }
 
 function parseRemoteHistory(payload: any, profiles: Record<string, any>): Record<string, HistoryCoverage> {
+  if (payload.artifactVersion === 4) return {}; // History is inside the authenticated complete-profile object, not a v1 history artifact.
   if (payload.artifactVersion !== 3) {
     if (payload.history !== undefined) throw new Error("History coverage requires a v3 envelope");
     return {};
@@ -1916,7 +2297,7 @@ function parseRemoteHistory(payload: any, profiles: Record<string, any>): Record
 }
 
 function validateArtifactProfileIds(payload: any, allowedProfileIds: Set<string>): void {
-  for (const field of ["cookies", "localStorage", "preferences", "history"]) {
+  for (const field of ["cookies", "localStorage", "preferences", "history", "fullProfiles"]) {
     const artifactMap = payload[field];
     if (!artifactMap || typeof artifactMap !== "object") continue;
     const ids = Object.keys(artifactMap);

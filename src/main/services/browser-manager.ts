@@ -1206,7 +1206,8 @@ export async function launchBrowser(
   let pendingProxyBridge: { close: () => Promise<void> } | null = null;
   try {
     releaseLaunchLock = acquireRestoreLock(dirId);
-  } catch {
+  } catch (error) {
+    if ((error as { code?: string })?.code === "FULL_PROFILE_RECOVERY_REQUIRED") throw error;
     throw new Error(`Profile ${dirId.slice(0, 8)} is being restored; launch is temporarily blocked`);
   }
 
@@ -2337,18 +2338,37 @@ async function launchFirefoxProfile(
       );
     }
 
-    // Queued cookie imports (shared with the Chromium pipeline). A failure is
-    // surfaced on the launch result — never a silent warn — so callers can see
-    // the session launched without its queued identity.
+    // A live BiDi session is not proof of restored Cookie identity. Pin imports
+    // to this owned child/session, then strictly reread the queue even on failure.
+    let expectedCookies: number | undefined, pendingCookies: number | undefined;
+    let appliedCookies = 0, cookieError: string | undefined;
     try {
-      const queuedCookies = await firefoxCookieService.applyQueuedImports(dirId);
-      cookieCheck = { checked: true, applied: queuedCookies };
-      if (queuedCookies > 0) console.log(`[agent-browser] Applied ${queuedCookies} queued cookies for ${dirId.slice(0, 8)}`);
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      console.warn(`[agent-browser] Firefox queued-cookie apply failed for ${dirId.slice(0, 8)}:`, msg);
-      cookieCheck = { checked: true, applied: 0, error: msg };
-    }
+      expectedCookies = readQueuedCookieImports(dirId, { strict: true }).length;
+      if (expectedCookies > 0) {
+        const applied = await firefoxCookieService.applyQueuedImports(dirId, {
+          port: actualPort,
+          isCurrent: () => {
+            opts.assertCurrentRequest();
+            const entry = runningProcesses.get(dirId);
+            return entry?.process === child && entry.pid === pid && entry.port === actualPort && !entry.stopping &&
+              child.pid === pid && child.exitCode === null && child.signalCode === null && child.killed !== true &&
+              entry.bidiConn === liveBidi && !liveBidi.closed && getRegisteredFirefoxSession(actualPort) === liveBidi;
+          },
+        });
+        if (!Number.isSafeInteger(applied) || applied < 0 || applied > expectedCookies) throw new Error("Invalid Cookie import count");
+        appliedCookies = applied;
+      }
+    } catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+    try { pendingCookies = readQueuedCookieImports(dirId, { strict: true }).length; }
+    catch { cookieError = "COOKIE_IMPORT_UNAVAILABLE"; }
+    if (!cookieError && (expectedCookies !== appliedCookies || pendingCookies !== 0)) cookieError = "COOKIE_IMPORT_INCOMPLETE";
+    cookieCheck = {
+      checked: true, applied: appliedCookies,
+      ...(pendingCookies !== undefined ? { pending: pendingCookies } : {}),
+      ...(cookieError ? { error: cookieError } : {}),
+    };
+    if (cookieError) console.warn(`[agent-browser] Firefox queued Cookie import for ${dirId.slice(0, 8)}: ${cookieError}`);
+    else if (appliedCookies > 0) console.log(`[agent-browser] Applied ${appliedCookies} queued cookies for ${dirId.slice(0, 8)}`);
 
     // Post-launch fingerprint drift check — same gate as managed Chromium:
     // a stored baseline that no longer matches the live fingerprint on

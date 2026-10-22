@@ -34,11 +34,11 @@ export class SyncOperationResult {
   failure(error: unknown, cancelled = false): SyncResult {
     const e = error as any;
     const code = typeof e?.code === "string" ? e.code : cancelled ? "SYNC_CANCELLED" : "SYNC_FAILED";
-    if (code === "EXTENSION_REPOSITORY_RECOVERY_REQUIRED" || code === "LOCAL_STORAGE_RECOVERY_REQUIRED" || code === "HISTORY_RECOVERY_REQUIRED") {
+    if (code === "EXTENSION_REPOSITORY_RECOVERY_REQUIRED" || code === "LOCAL_STORAGE_RECOVERY_REQUIRED" || code === "HISTORY_RECOVERY_REQUIRED" || code === "FULL_PROFILE_RECOVERY_REQUIRED") {
       this.recovery.push({
-        resource: code === "HISTORY_RECOVERY_REQUIRED" ? "history" : code === "LOCAL_STORAGE_RECOVERY_REQUIRED" ? "localStorage" : "extensions",
+        resource: code === "FULL_PROFILE_RECOVERY_REQUIRED" ? "profiles" : code === "HISTORY_RECOVERY_REQUIRED" ? "history" : code === "LOCAL_STORAGE_RECOVERY_REQUIRED" ? "localStorage" : "extensions",
         id: e.dirId || e.extensionId || "",
-        receiptPath: e.recoveryReceiptPath,
+        receiptPath: e.recoveryReceiptPath ?? e.receiptPath,
         paths: Array.isArray(e.recoveryPaths) ? e.recoveryPaths : [],
       });
       if (e.localChanged !== false && this.localCommit === "none") this.localCommit = "partial";

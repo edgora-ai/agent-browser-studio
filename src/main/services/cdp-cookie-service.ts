@@ -4,7 +4,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getAppDataDir, getProfilesDir } from "./config-manager.js";
 import { findCdpPortSync } from "./process-discovery.js";
 import { validateDirId } from "./utils.js";
@@ -453,21 +453,99 @@ function assertQueuePathSafe(filePath: string): void {
   if (file && (!file.isFile() || file.isSymbolicLink())) throw new Error("Unsafe Cookie queue file");
 }
 
+function parseQueuedCookieImports(text: string, strict = false): CookieInfo[] {
+  const parsed: unknown = JSON.parse(text);
+  if (!Array.isArray(parsed)) throw new Error("Invalid Cookie import queue");
+  const normalized = parsed.map(normalizeCookieForQueue);
+  if (strict && normalized.some((cookie) => !cookie)) throw new Error("Invalid queued Cookie");
+  return normalized.filter(Boolean) as CookieInfo[];
+}
+
 /** Read the queued cookie imports for a profile. */
 export function readQueuedCookieImports(dirId: string, options?: { strict?: boolean }): CookieInfo[] {
   const filePath = pendingCookiePath(dirId);
   try {
     assertQueuePathSafe(filePath);
     if (!fs.existsSync(filePath)) return [];
-    const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    if (!Array.isArray(parsed)) throw new Error("Invalid Cookie import queue");
-    const normalized = parsed.map(normalizeCookieForQueue);
-    if (options?.strict && normalized.some((cookie) => !cookie)) throw new Error("Invalid queued Cookie");
-    return normalized.filter(Boolean) as CookieInfo[];
+    return parseQueuedCookieImports(fs.readFileSync(filePath, "utf-8"), options?.strict);
   } catch {
     console.error(`[cdp] failed to read queued cookies for ${dirId}: COOKIE_QUEUE_UNREADABLE`);
     if (options?.strict) throw new Error("COOKIE_QUEUE_UNREADABLE");
     return [];
+  }
+}
+
+interface CookieQueueWitness {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
+  readonly sha256: string;
+}
+
+/** A normalized queue bound to one exact on-disk generation, not just equal
+ * Cookie values. A same-byte atomic replacement is still a different queue. */
+export interface QueuedCookieImportSnapshot {
+  readonly dirId: string;
+  readonly cookies: readonly CookieInfo[];
+  readonly witness: Readonly<CookieQueueWitness> | null;
+}
+
+function sameQueueFile(a: Pick<fs.Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">, b: Pick<fs.Stats, "dev" | "ino" | "size" | "mtimeMs" | "ctimeMs">): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+/** Strict, no-follow read with an FD/path identity check around the actual bytes.
+ * Existing Chromium callers retain readQueuedCookieImports's legacy semantics. */
+export function readQueuedCookieImportSnapshot(dirId: string): QueuedCookieImportSnapshot {
+  const filePath = pendingCookiePath(dirId);
+  try {
+    assertQueuePathSafe(filePath);
+    const before = fs.lstatSync(filePath, { throwIfNoEntry: false });
+    if (!before) return Object.freeze({ dirId, cookies: Object.freeze([]), witness: null });
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() || !sameQueueFile(before, opened)) throw new Error("Cookie queue changed during open");
+      const bytes = fs.readFileSync(fd);
+      const after = fs.fstatSync(fd), current = fs.lstatSync(filePath, { throwIfNoEntry: false });
+      if (!current || !current.isFile() || current.isSymbolicLink() || bytes.length !== after.size ||
+          !sameQueueFile(opened, after) || !sameQueueFile(after, current)) throw new Error("Cookie queue changed during read");
+      assertQueuePathSafe(filePath);
+      const text = bytes.toString("utf8");
+      if (!Buffer.from(text, "utf8").equals(bytes)) throw new Error("Invalid Cookie queue encoding");
+      const cookies = Object.freeze(parseQueuedCookieImports(text, true).map((cookie) => Object.freeze(cookie)));
+      const witness = Object.freeze({ dev: after.dev, ino: after.ino, size: after.size, mtimeMs: after.mtimeMs,
+        ctimeMs: after.ctimeMs, sha256: createHash("sha256").update(bytes).digest("hex") });
+      return Object.freeze({ dirId, cookies, witness });
+    } finally { fs.closeSync(fd); }
+  } catch {
+    console.error(`[cdp] failed to read queued cookies for ${dirId}: COOKIE_QUEUE_UNREADABLE`);
+    throw new Error("COOKIE_QUEUE_UNREADABLE");
+  }
+}
+
+/** Synchronous compare-and-clear for queue writers in this main process. Verify
+ * file identity AND raw bytes, so a replaced or rewritten queue is never cleared
+ * merely because its normalized Cookie array equals the imported one. */
+export function clearQueuedCookieImportsIfUnchanged(dirId: string, snapshot: QueuedCookieImportSnapshot): boolean {
+  const filePath = pendingCookiePath(dirId);
+  try {
+    if (snapshot.dirId !== dirId) throw new Error("Cookie queue snapshot profile mismatch");
+    const current = readQueuedCookieImportSnapshot(dirId);
+    if (!snapshot.witness || !current.witness || !sameQueueFile(snapshot.witness, current.witness) ||
+        snapshot.witness.sha256 !== current.witness.sha256) return false;
+    assertQueuePathSafe(filePath);
+    const last = fs.lstatSync(filePath, { throwIfNoEntry: false });
+    if (!last) return false;
+    if (!last.isFile() || last.isSymbolicLink()) throw new Error("Unsafe Cookie queue file");
+    if (!sameQueueFile(last, current.witness)) return false;
+    fs.unlinkSync(filePath);
+    return fs.lstatSync(filePath, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    console.error(`[cdp] failed to clear queued cookies for ${dirId}: COOKIE_QUEUE_UNREADABLE`);
+    throw new Error("COOKIE_QUEUE_UNREADABLE");
   }
 }
 
