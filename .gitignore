@@ -62,3 +62,10 @@ coverage/
 # Local artwork, migration evidence, and external archive pointers.
 /output/
 /release-candidate-20261012-arm64-01
+
+# Local electron-builder outputs for About/proxy review rounds (never commit);
+# release assets live in GitHub Releases, not the repository.
+/release-about-*/
+/release-firefox-webrtc-*/
+.tmp-build/
+.tmp-sign/

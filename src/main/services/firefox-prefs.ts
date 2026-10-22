@@ -2,7 +2,7 @@
 // Gecko comments are accepted; no vm/eval/import of user.js or prefs.js.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TextDecoder } from "node:util";
 import type { FingerprintMode, ProxyConfig } from "../types.js";
 
@@ -11,6 +11,12 @@ export type FirefoxPrefValue = string | number | boolean;
  * originals may carry opaque bytes; caller-supplied managed values stay scalar. */
 export interface FirefoxPrefBytes { kind: "bytes"; hex: string }
 export type FirefoxStoredPrefValue = FirefoxPrefValue | FirefoxPrefBytes;
+/** Engine-level WebRTC routing, independent from identity prefs. */
+export interface FirefoxWebRtcPrefs {
+  forceProxy: boolean;
+  obfuscateHostAddresses: boolean;
+  disablePeerConnectionApi: boolean;
+}
 export interface FirefoxUserJsOpts {
   proxy?: ProxyConfig | null;
   dohUrl?: string | null;
@@ -18,6 +24,22 @@ export interface FirefoxUserJsOpts {
   allowThirdPartyCookies?: boolean;
   /** Only the exact fingerprint-pref family produced by firefox-fingerprint.ts. */
   extraPrefs?: Record<string, FirefoxPrefValue> | null;
+  /** Production launch always supplies the resolved policy; null keeps legacy defaults. */
+  webrtcRouting?: FirefoxWebRtcPrefs | null;
+  /** Whether a proxy route is configured; disambiguates "no proxy" from "real". */
+  proxyRouting?: boolean;
+  /** Explicit extra keys for isolated test/acceptance profiles. Not exposed by
+   * product callers; still restricted to the exact types in TYPES. */
+  testOnlyPrefs?: Record<string, FirefoxPrefValue> | null;
+  /**
+   * Policy lineage for the ICE prefs. A fresh request hash alone can disable
+   * reuse indefinitely when the previous preference value was the opposite
+   * routing boolean: after the launch, prefs.js holds exactly the new desired
+   * value and the original user value is gone. The writer therefore persists a
+   * hashed checkpoint of the keys it owns (see webrtcCheckpointHash) so a new
+   * requested policy can be compared with what was actually applied.
+   */
+  webrtcCheckpointHash?: string | null;
   fingerprintMode?: FingerprintMode;
   useGpu?: boolean;
   /** true/omitted leaves Gecko's sandbox default alone; false is unsupported. */
@@ -68,6 +90,10 @@ const TYPES: Record<string, "string" | "boolean" | "number"> = {
   "network.proxy.socks": "string", "network.proxy.socks_port": "number", "network.proxy.socks_version": "number",
   "network.proxy.socks_remote_dns": "boolean", "network.proxy.no_proxies_on": "string",
   "network.proxy.username": "string", "network.proxy.password": "string",
+  "media.peerconnection.enabled": "boolean",
+  "network.proxy.allow_hijacking_localhost": "boolean", "media.peerconnection.ice.loopback": "boolean",
+  "places.history.enabled": "boolean", "toolkit.telemetry.enabled": "boolean",
+  "datareporting.healthreport.uploadEnabled": "boolean", "browser.safebrowsing.enabled": "boolean",
   "network.trr.mode": "number", "network.trr.uri": "string", "intl.locale.requested": "string",
   "app.update.auto": "boolean", "browser.shell.checkDefaultBrowser": "boolean", "browser.startup.page": "number",
 };
@@ -155,6 +181,52 @@ function managedPrefs(opts: FirefoxUserJsOpts): Map<string, FirefoxPrefValue> {
       put(prefs, key, value);
     }
   }
+  // Routing is not identity. It applies in off mode too, and overrides the
+  // historical identity defaults (both true) when the user chose Real/Disabled.
+  // When routing removes a key that an earlier launch owned, prefs.js must be
+  // scrubbed explicitly; ownership of those legacy keys comes from prior state
+  // entries, so no permanent "delete marker" is written here.
+  if (opts.webrtcRouting != null) {
+    const routing = opts.webrtcRouting;
+    if (typeof routing !== "object" || Array.isArray(routing)
+        || typeof routing.forceProxy !== "boolean" || typeof routing.obfuscateHostAddresses !== "boolean"
+        || typeof routing.disablePeerConnectionApi !== "boolean") refuse("FIREFOX_PREFS_INVALID_INPUT", "Invalid Firefox WebRTC routing preferences.");
+    if (typeof opts.proxyRouting !== "boolean") refuse("FIREFOX_PREFS_INVALID_INPUT", "Firefox WebRTC routing requires an explicit proxy state.");
+    if (opts.webrtcCheckpointHash != null && !/^[a-f0-9]{64}$/.test(opts.webrtcCheckpointHash)) refuse("FIREFOX_PREFS_INVALID_INPUT", "Invalid Firefox WebRTC routing checkpoint.");
+    if (routing.disablePeerConnectionApi) {
+      prefs.delete("media.peerconnection.ice.obfuscate_host_addresses");
+      prefs.delete("media.peerconnection.ice.proxy_only");
+      put(prefs, "media.peerconnection.enabled", false);
+    } else if (routing.forceProxy) {
+      prefs.delete("media.peerconnection.enabled");
+      put(prefs, "media.peerconnection.ice.obfuscate_host_addresses", routing.obfuscateHostAddresses);
+      put(prefs, "media.peerconnection.ice.proxy_only", true);
+    } else {
+      // Explicit Real: native routing, so no managed ICE routing/obfuscation.
+      // Without a proxy, write the routing keys false instead of deleting, so
+      // a previous owned True can be retired from prefs.js on this write.
+      prefs.delete("media.peerconnection.enabled");
+      if (opts.proxyRouting) {
+        prefs.delete("media.peerconnection.ice.obfuscate_host_addresses");
+        prefs.delete("media.peerconnection.ice.proxy_only");
+      } else {
+        put(prefs, "media.peerconnection.ice.obfuscate_host_addresses", false);
+        put(prefs, "media.peerconnection.ice.proxy_only", false);
+      }
+    }
+    // Record what was actually applied, not just what was requested. Store a
+    // one-way digest so user/original preference values never leak from state.
+    if (opts.webrtcCheckpointHash) {
+      const applied = JSON.stringify({
+        v: 1, enabled: prefs.get("media.peerconnection.enabled") ?? null,
+        proxyOnly: prefs.get("media.peerconnection.ice.proxy_only") ?? null,
+        obfuscate: prefs.get("media.peerconnection.ice.obfuscate_host_addresses") ?? null,
+      });
+      if (createHash("sha256").update(applied).digest("hex") !== opts.webrtcCheckpointHash) {
+        refuse("FIREFOX_PREFS_INVALID_INPUT", "Firefox WebRTC routing checkpoint does not match the applied preferences.");
+      }
+    }
+  }
   const base = {
     "focusmanager.testmode": true, "layout.testing.top-level-always-active": true,
     "dom.min_background_timeout_value": 0, "dom.min_background_timeout_value_without_budget_throttling": 0,
@@ -216,6 +288,9 @@ function managedPrefs(opts: FirefoxUserJsOpts): Map<string, FirefoxPrefValue> {
     put(prefs, "network.trr.mode", 3); put(prefs, "network.trr.uri", opts.dohUrl);
   } else put(prefs, "network.trr.mode", 5);
   if (opts.locale != null && opts.locale !== "") put(prefs, "intl.locale.requested", opts.locale);
+  // Applied last: isolated test profiles may need to override a managed default
+  // such as the loopback proxy bypass. Product callers never pass this field.
+  for (const [key, value] of Object.entries(opts.testOnlyPrefs ?? {})) put(prefs, key, value);
   return prefs;
 }
 export function buildFirefoxUserJs(opts: FirefoxUserJsOpts): string { return HEADER + serialize(managedPrefs(opts)); }
@@ -333,11 +408,13 @@ function legacyEntries(text: string, rows: FirefoxPrefStatement[]): Owned[] {
   if (text !== utf8Bytes(LEGACY_HEADER + rows.map(row => `user_pref(${JSON.stringify(row.key)}, ${JSON.stringify(row.value)});\n`).join(""))) bad();
   if (![0, -1].includes(prefs.get(SANDBOX) as number)) bad();
   const extras = Object.fromEntries([...prefs].filter(([key]) => Object.hasOwn(FINGERPRINT_TYPES, key)));
-  if (Object.keys(extras).length && ["general.useragent.override", "general.useragent.site_specific_overrides", "dom.maxHardwareConcurrency", "intl.accept_languages", "webgl.disabled", "media.peerconnection.ice.obfuscate_host_addresses", "media.peerconnection.ice.proxy_only"].some(key => !Object.hasOwn(extras, key))) bad();
+  // Historical output always carried both ICE keys true; explicit Real may
+  // legitimately contain false, so require presence, not a fixed value.
+  const legacyIdentityKeys = ["general.useragent.override", "general.useragent.site_specific_overrides", "dom.maxHardwareConcurrency", "intl.accept_languages", "webgl.disabled", "media.peerconnection.ice.obfuscate_host_addresses", "media.peerconnection.ice.proxy_only"];
+  if (Object.keys(extras).length && legacyIdentityKeys.some(key => !Object.hasOwn(extras, key))) bad();
   if (Object.hasOwn(extras, "privacy.donottrackheader.enabled") !== Object.hasOwn(extras, "privacy.donottrackheader.value")) bad();
   const fixedFingerprintValues = {
     "general.useragent.site_specific_overrides": false, "webgl.disabled": false,
-    "media.peerconnection.ice.obfuscate_host_addresses": true, "media.peerconnection.ice.proxy_only": true,
     "privacy.donottrackheader.enabled": true, "privacy.donottrackheader.value": 1,
   };
   if (Object.entries(fixedFingerprintValues).some(([key, value]) => Object.hasOwn(extras, key) && extras[key] !== value)) bad();

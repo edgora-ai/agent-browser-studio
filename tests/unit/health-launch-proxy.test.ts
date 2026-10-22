@@ -9,6 +9,7 @@ const f = vi.hoisted(() => ({
   cfg: {} as any, lines: [] as string[], proxyResult: {} as ResolvedProfileProxy,
   proxy: vi.fn(), spawn: vi.fn(), firefoxSpawn: vi.fn(), firefoxPrefs: vi.fn(), inspect: vi.fn(), capture: vi.fn(), status: vi.fn(),
   kill: vi.fn(), netCreate: vi.fn(), fetch: vi.fn(), forbidden: vi.fn((name: string): never => { throw new Error(`Undeclared capability: ${name}`); }),
+  webRtcPreferencesValidate: vi.fn(), webRtcPreferencesApply: vi.fn(),
   sessions: new Map<number, any>(),
   fs: Object.fromEntries(["existsSync", "mkdirSync", "readFileSync", "writeFileSync", "openSync", "writeSync", "closeSync", "renameSync", "unlinkSync", "rmSync", "realpathSync", "lstatSync", "statSync"].map((name) => [name, vi.fn()])) as Record<string, ReturnType<typeof vi.fn>>,
 }));
@@ -92,6 +93,12 @@ vi.mock("../../src/main/services/native-proxy-auth.js", () => ({
 }));
 vi.mock("../../src/main/services/browser-command.js", () => ({ runBrowserCommand: async () => ({ stdout: "Chromium 150.0.7800.1", stderr: "" }) }));
 vi.mock("../../src/main/services/browser/launch-diagnostics.js", () => ({ prepareChromiumDiagnosticNetLogArgs: () => [] }));
+// This virtual-filesystem suite verifies launch receipts, not preference durability.
+// The actual writer has independent owned-filesystem and native-browser tests.
+vi.mock("../../src/main/services/browser/webrtc-preferences.js", () => ({
+  validateChromiumWebRtcPreferences: f.webRtcPreferencesValidate,
+  applyChromiumWebRtcPreferences: f.webRtcPreferencesApply,
+}));
 vi.mock("../../src/main/services/browser/chromium-gpu-context.js", () => ({ readChromiumGpuContext: () => f.forbidden("GPU file inspection") }));
 vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => "/virtual/bundled" }));
 vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => "/virtual/firefox" }));
@@ -156,6 +163,11 @@ beforeEach(() => {
   f.spawn.mockImplementation(child);
   f.firefoxSpawn.mockImplementation(async (file, args) => ({ child: child(file, args), info: { actualPort: 49049, bidiWebSocketUrl: "ws://127.0.0.1:49049/session" } }));
   f.firefoxPrefs.mockImplementation(() => undefined);
+  f.webRtcPreferencesValidate.mockImplementation(directory => { if (directory !== `/virtual/profiles/${ID}`) f.forbidden("unexpected WebRTC preferences directory"); });
+  f.webRtcPreferencesApply.mockImplementation((directory, policy) => {
+    if (directory !== `/virtual/profiles/${ID}`) f.forbidden("unexpected WebRTC preferences directory");
+    return { policy: policy.restrictNonProxiedUdp || policy.effectiveMode === "disable" ? "disable_non_proxied_udp" : "default", changed: true, readbackVerified: true, directorySynced: true };
+  });
 });
 afterEach(() => { runtime.runningProcesses.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); expect(f.forbidden).not.toHaveBeenCalled(); });
 
@@ -226,6 +238,10 @@ describe("actual fresh launch entry producers with declared synthetic effect bou
     const launched = await launchBrowser(ID);
     expect(launched).toMatchObject({ pid: 4901, cdpPort: 49049 });
     expect(engine === "chromium" ? f.spawn : f.firefoxSpawn).toHaveBeenCalledOnce();
+    if (engine === "chromium") {
+      expect(f.webRtcPreferencesValidate).toHaveBeenCalledExactlyOnceWith(`/virtual/profiles/${ID}`);
+      expect(f.webRtcPreferencesApply).toHaveBeenCalledWith(`/virtual/profiles/${ID}`, expect.objectContaining({ fingerprintMode: "off", effectiveMode: "proxy-only", restrictNonProxiedUdp: true }));
+    } else { expect(f.webRtcPreferencesValidate).not.toHaveBeenCalled(); expect(f.webRtcPreferencesApply).not.toHaveBeenCalled(); }
     const stored = runtime.getEntry(ID)!;
     expect(stored.launchProxy).toEqual({ mode: "named", type: "http", source: "fresh-launch" });
     expect(runtime.getLaunchProxySnapshot(ID)).toEqual(stored.launchProxy);
@@ -250,9 +266,10 @@ describe("actual fresh launch entry producers with declared synthetic effect bou
     expect(runtime.getLaunchProxySnapshot(ID)).toEqual({ mode: "none", source: "fresh-launch" });
     const child = f.spawn.mock.results[0].value;
     f.lines = [`4901 ${child.spawnargs.join(" ")}`];
-    runtime.clearEntry(ID); f.spawn.mockClear(); f.proxy.mockClear();
+    runtime.clearEntry(ID); f.spawn.mockClear(); f.proxy.mockClear(); f.webRtcPreferencesValidate.mockClear(); f.webRtcPreferencesApply.mockClear();
     await launchBrowser(ID);
     expect(f.spawn).not.toHaveBeenCalled(); expect(f.proxy).not.toHaveBeenCalled();
+    expect(f.webRtcPreferencesValidate).not.toHaveBeenCalled(); expect(f.webRtcPreferencesApply).not.toHaveBeenCalled();
     expect(runtime.getEntry(ID)).toMatchObject({ pid: 4901, process: null, engine: "chromium" });
     expect(runtime.getEntry(ID)).not.toHaveProperty("launchProxy");
     expect(runtime.getLaunchProxySnapshot(ID)).toBeNull();

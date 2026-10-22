@@ -145,6 +145,27 @@ export interface EnvRiskDiagnosticsEntry {
   cnFonts: string[];
 }
 
+export interface WebRtcSelectedPairEvidence {
+  protocol: "udp" | "tcp";
+  localType: "host" | "srflx" | "prflx" | "relay";
+  remoteType: "host" | "srflx" | "prflx" | "relay";
+  /** Transport to TURN, distinct from the candidate's peer-side protocol. */
+  relayProtocol: "udp" | "tcp" | "tls" | null;
+  bytesSent: number;
+  bytesReceived: number;
+}
+export interface WebRtcPeerConnectivityEvidence {
+  status: "not-tested" | "connected" | "failed" | "unavailable";
+  scope: "not-tested" | "two-peer-data-channel";
+  relayOnly: boolean;
+  sentBytes: number;
+  receivedBytes: number;
+  sentMessages: number;
+  receivedMessages: number;
+  selectedPairs: WebRtcSelectedPairEvidence[];
+  code: string | null;
+}
+
 /** One persisted in-browser WebRTC diagnostics run for a profile. */
 export interface WebRtcDiagnosticsEntry {
   at: number;
@@ -159,6 +180,8 @@ export interface WebRtcDiagnosticsEntry {
   srflxIps: string[];
   connectionState: string;
   rttMs: number | null;
+  /** ICE exposure and an actual peer connection are separate observations. */
+  peerConnectivity?: WebRtcPeerConnectivityEvidence;
   error: string | null;
   summary: string;
 }
@@ -176,7 +199,7 @@ export interface ResolvedProfileProxy {
  * persona (touch, phone screen geometry, mobile UA) for mobile simulation. */
 export type BrowserPlatform = "windows" | "macos" | "android";
 export type GeolocationMode = "real" | "disable" | "custom";
-export type WebRtcMode = "auto" | "real" | "altered" | "disable";
+export type WebRtcMode = "auto" | "proxy-only" | "real" | "altered" | "disable";
 export type FingerprintMode = "managed" | "off";
 /** Browser engine a profile launch uses. `chromium` is the managed Chromium build (default); `firefox` uses an installed Firefox (Slice 77). */
 export type BrowserEngine = "chromium" | "firefox";

@@ -12,6 +12,7 @@ import {
   chromiumLaunchRequestHash, chromiumLaunchStampArg, stampChromiumLaunch,
 } from "../../src/main/services/browser/launch-provenance.js";
 import { parseBrowserLaunchProcessLine } from "../../src/main/services/process-discovery.js";
+import { CHROMIUM_WEBRTC_PROFILE_ARG } from "../../src/main/services/browser/webrtc-policy.js";
 
 function fixture() {
   const meta = { name: "QA --lang=fr", platform: "macos" as const, fingerprintSeed: 12345, fingerprintMode: "managed" as const };
@@ -19,7 +20,7 @@ function fixture() {
   const profileDir = "/virtual/profiles/ab_review";
   const executablePath = "/virtual/Managed Chromium/Chromium";
   const args = [
-    `--user-data-dir=${profileDir}`, "--remote-debugging-port=9222", "--fingerprint=12345", "--fingerprint-platform=macos",
+    `--user-data-dir=${profileDir}`, CHROMIUM_WEBRTC_PROFILE_ARG, "--remote-debugging-port=9222", "--fingerprint=12345", "--fingerprint-platform=macos",
     buildBrowserFingerprintArg(meta, "152.0.7977.72"), `--user-agent=${config.userAgent}`, "--lang=en-US",
     "--proxy-server=http://127.0.0.1:18080", "--disable-quic",
     "--agent-browser-window-title-prefix=QA --lang=fr",

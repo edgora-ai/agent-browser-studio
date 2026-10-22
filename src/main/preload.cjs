@@ -110,6 +110,7 @@ const api = {
     reloadConfig: () => ipcRenderer.invoke("app:reload-config"),
     openDir: (dirPath) => ipcRenderer.invoke("app:open-dir", dirPath),
     version: () => ipcRenderer.invoke("app:get-version"),
+    buildInfo: () => ipcRenderer.invoke("app:get-build-info"),
     openUrl: (url) => ipcRenderer.invoke("app:open-url", url),
     setLanguage: (lang) => ipcRenderer.invoke("app:set-language", lang),
     getLanguage: () => ipcRenderer.invoke("app:get-language"),

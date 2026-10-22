@@ -17,6 +17,8 @@ import {
   stampChromiumLaunch,
 } from "../../src/main/services/browser/launch-provenance.js";
 
+import { CHROMIUM_WEBRTC_PROFILE_ARG } from "../../src/main/services/browser/webrtc-policy.js";
+
 const policy = "--agent-browser-local-dns-policy=proxy-local-dns-deny";
 const bootstrap = "--agent-browser-proxy-bootstrap-host=proxy.example.test";
 
@@ -34,7 +36,7 @@ function fixture(mode: Mode) {
   });
   const payload = { schemaVersion: 1, seed: 12345, platform: "MacIntel", userAgent: "Fixture UA" };
   const args = [
-    "--user-data-dir=/virtual/native-dns-profile", policy, bootstrap,
+    "--user-data-dir=/virtual/native-dns-profile", CHROMIUM_WEBRTC_PROFILE_ARG, policy, bootstrap,
     ...(mode === "managed" ? [
       `--agent-browser-fingerprint-config=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`,
       `--user-agent=${payload.userAgent}`,

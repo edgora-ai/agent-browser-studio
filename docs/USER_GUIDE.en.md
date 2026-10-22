@@ -21,6 +21,13 @@ Agent Browser Studio is a local desktop console for managing isolated browser pr
 | 📜 Activity | Audit timeline: who did what to which asset, and when |
 | 📊 Database | The agent's local SQLite database (read + guarded write) |
 
+**About** sits at the bottom of the sidebar. It is read-only and reports the build you are actually running: version, application ID, packaged vs. development mode, the write times of the app bundle / `app.asar` / compiled main entry, the bundled and installed versions of each browser engine (kept separate — a shipped engine and an installed one can differ), Electron/Chromium/Node/V8/ABI, and host platform/OS/locale. **Copy technical details** puts the same facts on the clipboard as plain text for a bug report.
+
+Two limits are deliberate and stated in the dialog:
+
+- File timestamps are when those files were written **on this machine**. Copying, unzipping or re-signing changes them, so they do not prove when a release was published.
+- A value the build cannot observe shows **unavailable** rather than being blank or filled with "now". A blank row would read as "nothing wrong".
+
 ## 1. Install and run
 
 Requirements today: **macOS on Apple Silicon**, Node.js 22.16+, and an independently built Chromium placed in the managed cache.
@@ -95,6 +102,22 @@ These are configuration and launch rules, not proof of Ping0 live-site or packag
 - DNS-only hints and real resource requests differ, as do the pre-resolution policies for default proxy-side DNS and explicit strict DoH. Denying local resolution does not imply that egress cannot resolve. Ping0 uses DNS-prefetch, CSS, Image and STUN probes; prefetch alone cannot explain the count.
 - A launch log saying **configured** is not proof of a completed DNS transaction. A third-party `resolver_count=0` alone proves neither fake-IP nor total DNS failure. Successful proxied navigation also does not validate a detector probe or strict DoH transaction; correlate actual resolver/route evidence. No fixed third-party score is guaranteed. See [Ping0 detection mechanism](PING0_DETECTION.md) for the algorithm, response fields and layered troubleshooting (Chinese).
 - Old GPU baselines can change after this repair. Review the actual drift; the application does not automatically delete baselines, reset licensing, or rewrite existing profiles.
+
+### Chromium WebRTC routing and actual transport capability
+
+- **Auto** uses **Proxy-only** when the resolved profile route has a proxy, even if exit-IP detection fails. Without a proxy, Auto uses the real network. **Proxy-only** explicitly requires a configured proxy and refuses launch rather than silently falling back to direct access.
+- **Proxy-only** blocks non-proxied WebRTC UDP while preserving actual ICE/relay addresses. It also applies when fingerprint identity is **off**. Full Chrome reads the profile's `webrtc.ip_handling_policy` privacy preference; a similarly named command-line flag alone is not enforcement evidence. Studio pins its managed Chrome profile to `Default`, then validates, saves and reads back these app-managed routing preferences before spawn; Local State's last-used profile cannot redirect that launch. Invalid/unwritable Preferences block launch without resetting site data.
+- **Real network** explicitly permits native routing and may bypass the proxy. **Legacy IP replacement** changes visible ICE/SDP addresses, not transport; it requires an IP and may break real calls. **Disabled** blocks ICE gathering through the managed native implementation; it does not promise to remove the WebRTC JavaScript API. Legacy replacement/Disabled require managed fingerprinting.
+- Stop and relaunch the profile explicitly after changing routing/mode. Existing browsers with missing, older or inconsistent launch evidence are not silently reused, killed or replaced.
+
+| Transport | What it means |
+| --- | --- |
+| HTTP proxy TCP | Ordinary HTTP forwarding / CONNECT. A successful CONNECT alone is not an application-payload test. |
+| HTTP proxy UDP | **Unsupported by ordinary HTTP/CONNECT.** Studio does not release direct UDP to make it appear supported. |
+| SOCKS5 UDP | Requires real UDP ASSOCIATE and relay datagram round trips. TCP success does not prove this capability. The authenticated SOCKS bridge's CONNECT path remains TCP-only. |
+| WebRTC via a proxy | Requires the site to provide a compatible TURN/TCP (or supported TURN/TLS) service and an allowing proxy. Studio does not provision a public TURN server. A relay's public IP need not equal the web proxy's exit IP. |
+
+The proxy card states protocol limits and unverified capabilities, not a fresh UDP/RTC certificate for your provider. The public **WebRTC diagnostic remains an ICE exposure check**; it explicitly says peer connectivity is not tested. Config-only HTTP IP lookups no longer claim a WebRTC/DNS leak pass. The controlled developer acceptance separately verifies real TCP payloads, SOCKS UDP and two-peer DataChannels over exact proxy-to-TURN/TCP routes. That acceptance is limited to the selected macOS ARM64 Chromium and owned IPv4 endpoints, not Firefox, TURN/TLS, browser SOCKS UDP/QUIC, audio/video or arbitrary external sites. See [verification scope](review/proxy-transport-webrtc-2026-10-22.md).
 
 ### Reported quota and site storage errors
 

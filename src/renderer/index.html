@@ -39,6 +39,7 @@
  </ul>
  <div class="sidebar-footer">
  <span id="sidebar-chrome-status" class="sidebar-version"></span>
+ <button id="sidebar-about" type="button" class="sidebar-about-link" data-role="cmd" data-cmd="showAbout" data-i18n="about.open">About</button>
  <div class="sidebar-controls" style="display:flex;gap:4px;margin-top:8px;align-items:center;">
  <!-- R181: was a bare <div> with a click handler — no tabindex, no role, so
       the theme switch was mouse-only and announced as plain text. role=switch
@@ -641,7 +642,7 @@
  </section>
 
 <!-- Approval dialog (risky-operation authorization) -->
-<dialog id="dlg-approval" data-no-close>
+<dialog id="dlg-approval" aria-labelledby="dlg-approval-title" data-no-close>
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
  <h3 id="dlg-approval-title" style="margin:0;" data-icon="alert"><span data-i18n="approval.dialog-title">Operation Authorization</span></h3>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="close" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
@@ -795,6 +796,17 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  <div id="new-profile-firefox-opts" class="field-note-tight" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></div>
+ <div id="new-profile-firefox-webrtc" class="firefox-webrtc-section" style="display:none;">
+ <div class="form-row"><label for="new-agent-browser-webrtc-mode-fx" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
+ <select id="new-agent-browser-webrtc-mode-fx">
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
+ </select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.firefox-routing-help">Firefox forces ICE through its configured proxy and hides host addresses; its WebRTC proxy path is TCP, not SOCKS UDP. Choose Real to use native routing, or Disabled to remove the WebRTC API. Address replacement is not available on this engine.</p>
+ </div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-platform" data-i18n="profile.new.field.platform">Platform</label>
@@ -889,13 +901,15 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-webrtc-mode" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
  <select id="new-agent-browser-webrtc-mode">
- <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
- <option value="real" data-i18n="profile.new.webrtc.real">Real network</option>
- <option value="altered" data-i18n="profile.new.webrtc.altered">Altered / custom exit IP</option>
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="altered" data-i18n="profile.new.webrtc.altered">Legacy address replacement (may break calls)</option>
  <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.routing-help">Proxy-only blocks non-proxied UDP and preserves relay candidates. Ordinary HTTP does not carry UDP; calls may require TURN/TCP or TURN/TLS. IP replacement is not forwarding. With fingerprinting off, use Auto, Proxy-only or explicit Real.</p>
  <div class="form-row"><label for="new-agent-browser-webrtc" data-i18n="profile.new.field.webrtc">WebRTC IP</label>
  <input id="new-agent-browser-webrtc" data-i18n-placeholder="profile.new.field.webrtc.placeholder" placeholder="Proxy exit IP or explicit override for altered mode">
  </div>
@@ -1070,7 +1084,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ── Extensions Dialog ── -->
-<dialog id="dlg-extensions" class="dialog-wide">
+<dialog id="dlg-extensions" class="dialog-wide" aria-labelledby="ext-dlg-title">
  <form method="dialog" style="display:flex;flex-direction:column;max-height:80vh;">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 data-icon="extensions"><span id="ext-dlg-title" data-i18n="ext.dlg.title">Extensions</span></h3>
@@ -1092,9 +1106,9 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ── Extension Repository Dialog ── -->
-<dialog id="dlg-extension-repo">
+<dialog id="dlg-extension-repo" aria-labelledby="dlg-extension-repo-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveRepositoryExtension">
- <h3 data-icon="extensions"><span data-i18n="ext.repo.dlg.title">Add Chrome Extension to Repository</span></h3>
+ <h3 data-icon="extensions"><span id="dlg-extension-repo-title" data-i18n="ext.repo.dlg.title">Add Chrome Extension to Repository</span></h3>
  <p class="dialog-note" data-i18n="ext.dlg.description">Paste a Chrome Web Store URL or a 32-character extension ID. The package is cached once in the private repository and profiles can enable it later.</p>
  <div class="form-row"><label data-i18n="ext.dlg.field.url" for="repo-ext-input">Chrome Extension URL / ID *</label><input id="repo-ext-input" placeholder="https://chromewebstore.google.com/detail/..." data-i18n-en-ok required></div>
  <div class="form-row"><label data-i18n="ext.dlg.field.tags" for="repo-ext-tags">Tags</label><input id="repo-ext-tags" placeholder="wallet, captcha, work" data-i18n-en-ok></div>
@@ -1141,8 +1155,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  </form>
 </dialog>
-<dialog id="dlg-account-bind">
- <h3 data-icon="link"><span data-i18n="acct.bind.title">Bind Account to Profiles</span></h3>
+<dialog id="dlg-account-bind" aria-labelledby="dlg-account-bind-title">
+ <h3 data-icon="link"><span id="dlg-account-bind-title" data-i18n="acct.bind.title">Bind Account to Profiles</span></h3>
  <input type="hidden" id="acct-bind-index" value="-1">
  <p class="section-desc" data-i18n="acct.bind.desc">Select the profiles that should auto-fill with this account.</p>
  <div id="acct-bind-list" style="max-height:280px;overflow-y:auto;margin-bottom:10px;">
@@ -1153,8 +1167,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
 </dialog>
-<dialog id="dlg-account-import" class="dialog-wide">
- <h3 data-icon="download"><span data-i18n="acct.import.title">Bulk Import Accounts</span></h3>
+<dialog id="dlg-account-import" class="dialog-wide" aria-labelledby="dlg-account-import-title">
+ <h3 data-icon="download"><span id="dlg-account-import-title" data-i18n="acct.import.title">Bulk Import Accounts</span></h3>
  <p class="section-desc" data-i18n="acct.import.desc">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
  <textarea id="acct-import-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;" placeholder="https://twitter.com, alice, s3cret, social" data-i18n-en-ok></textarea>
  <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0 4px;">
@@ -1361,10 +1375,21 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- Shared profile identity editor; engine-specific options stay scoped. -->
-<dialog id="dlg-agent-browser-seed">
+<dialog id="dlg-agent-browser-seed" aria-labelledby="dlg-agent-browser-seed-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveBrowserMeta">
- <h3 data-icon="browser"><span data-i18n="profile.meta.title">Browser Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <h3 data-icon="browser"><span id="dlg-agent-browser-seed-title" data-i18n="profile.meta.title">Browser Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
  <p id="agent-browser-meta-firefox-note" class="dialog-note" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></p>
+ <div id="agent-browser-meta-firefox-webrtc" class="firefox-webrtc-section" style="display:none;">
+ <div class="form-row"><label for="agent-browser-meta-webrtc-mode-fx" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
+ <select id="agent-browser-meta-webrtc-mode-fx">
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
+ </select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.firefox-routing-help">Firefox forces ICE through its configured proxy and hides host addresses; its WebRTC proxy path is TCP, not SOCKS UDP. Choose Real to use native routing, or Disabled to remove the WebRTC API. Address replacement is not available on this engine.</p>
+ </div>
  <!-- R146: --fingerprint=<seed> is a literal CLI flag, so it stays English; only
       the prose around it is translated. Split so the code span keeps its
       formatting instead of being folded into one data-i18n blob. -->
@@ -1469,12 +1494,14 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.webrtc-mode" for="agent-browser-meta-webrtc-mode">WebRTC Mode</label>
  <select id="agent-browser-meta-webrtc-mode">
- <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
- <option value="real" data-i18n="profile.new.webrtc.real">Real network</option>
- <option value="altered" data-i18n="profile.new.webrtc.altered">Altered / custom exit IP</option>
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="altered" data-i18n="profile.new.webrtc.altered">Legacy address replacement (may break calls)</option>
  <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
  </select>
  </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.routing-help">Proxy-only blocks non-proxied UDP and preserves relay candidates. Ordinary HTTP does not carry UDP; calls may require TURN/TCP or TURN/TLS. IP replacement is not forwarding. With fingerprinting off, use Auto, Proxy-only or explicit Real.</p>
  <div class="form-row"><label data-i18n="profile.new.field.webrtc" for="agent-browser-meta-webrtc">WebRTC IP</label>
  <input id="agent-browser-meta-webrtc" data-i18n-placeholder="profile.new.field.webrtc.placeholder" placeholder="Proxy exit IP or explicit override">
  </div>
@@ -1643,13 +1670,24 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ══════ Batch operation result (PL-01: honest success/failure tally) ══════ -->
-<dialog id="dlg-batch-result" style="min-width:420px;max-width:660px;">
+<dialog id="dlg-batch-result" aria-labelledby="batch-result-title" style="min-width:420px;max-width:660px;">
  <h3 id="batch-result-title" style="margin:0 0 10px;" data-i18n="batch.result">Batch result</h3>
  <div id="batch-result-summary"></div>
  <div id="batch-result-list"></div>
  <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
   <button class="btn btn-primary btn-sm" id="batch-result-retry" data-batch-cmd="retry" style="display:none;" data-i18n="batch.retry-failed">Retry failed</button>
   <button class="btn btn-secondary btn-sm" data-batch-cmd="close" data-i18n="common.close">Close</button>
+ </div>
+</dialog>
+
+<!-- ══════ About / build identity (read-only) ══════ -->
+<dialog id="dlg-about" class="dialog-wide" aria-labelledby="dlg-about-title">
+ <h3 id="dlg-about-title" data-icon="info"><span data-i18n="about.title">About Agent Browser Studio</span></h3>
+ <p class="dialog-note" data-i18n="about.scope">Read-only build facts for this copy of the app. Timestamps are file times, not a promise about when a release was published; “unavailable” means this build could not observe the value.</p>
+ <div id="about-body" class="about-grid" role="status" aria-live="polite"><div class="hint-line" data-i18n="common.loading">Loading...</div></div>
+ <div class="btn-row">
+  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="copyAboutBuildInfo" data-icon="copy"><span data-i18n="about.copy">Copy technical details</span></button>
+  <button type="button" class="btn btn-primary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close" autofocus>Close</button>
  </div>
 </dialog>
 
@@ -1682,6 +1720,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <script src="js/app/activity.js"></script>
 <script src="js/app/delegation.js"></script>
 <script src="js/app/license.js"></script>
+<script src="js/app/about.js"></script>
 <script src="js/app/init.js"></script>
 </body>
 </html>

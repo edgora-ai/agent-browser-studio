@@ -904,6 +904,10 @@ export function registerBrowserHandlers(): void {
     proxyName?: string | null;
     tags?: string[];
   }) => {
+    // Team RBAC: profile metadata carries the identity, proxy binding and
+    // launch inputs. A viewer must not rewrite them.
+    const mutationGate = requireProfileMutation();
+    if (!mutationGate.ok) return { success: false, error: mutationGate.error };
     validateDirId(params.dirId);
     const cfg = getConfig();
     if (!Object.hasOwn(cfg.browserProfiles || {}, params.dirId)) return { success: false };

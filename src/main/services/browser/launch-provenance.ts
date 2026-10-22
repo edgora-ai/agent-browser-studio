@@ -3,12 +3,13 @@ import type { BrowserProfileMeta, ProxyConfig } from "../../types.js";
 import { normalizeManagedSecureDnsUrl, resolveChromiumDnsPolicy } from "../browser-dns-policy.js";
 import { getChromiumManagedGpuIdentity, type ChromiumGpuContext } from "../browser-fingerprint-config.js";
 import { normalizeBrowserProcessPath, type BrowserLaunchProcess } from "../process-discovery.js";
-import { LaunchBlockedError } from "./launch-guards.js";
+import { LaunchBlockedError, assertChromiumWebRtcLaunchPolicy, readChromiumLaunchWebRtcPayload, resolveChromiumWebRtcLaunchPolicy } from "./launch-guards.js";
+import { CHROMIUM_WEBRTC_PROFILE_ARG, CHROMIUM_WEBRTC_IP_HANDLING_SWITCH, CHROMIUM_WEBRTC_PROXY_ONLY_ARG, CHROMIUM_WEBRTC_ROUTING_POLICY_VERSION, chromiumWebRtcSwitchName } from "./webrtc-policy.js";
 
 // Chromium ignores unrecognized switches. Firefox must never receive this flag.
 export const CHROMIUM_LAUNCH_STAMP_SWITCH = "--agent-browser-launch-stamp=";
 export interface ChromiumLaunchProvenance {
-  version: 1;
+  version: 2;
   requestHash: string;
   payloadHash: string;
 }
@@ -47,6 +48,23 @@ export function assertChromiumReuseDnsCompatible(meta: BrowserProfileMeta, cfg: 
   }
 }
 
+/** Reuse must retain the current routing policy, including fingerprint-off consent. */
+export function assertChromiumReuseWebRtcCompatible(args: readonly string[], meta: BrowserProfileMeta, cfg: LaunchRequestConfig): void {
+  const native = readChromiumLaunchWebRtcPayload(args);
+  const policy = resolveChromiumWebRtcLaunchPolicy({
+    requestedMode: meta.webrtcMode || (text(meta.webrtcIp) ? "altered" : "auto"),
+    fingerprintMode: meta.fingerprintMode === "off" ? "off" : "managed",
+    hasProxy: Boolean(cachedChromiumProxy(meta, cfg)),
+    // A detected altered IP is a stamped startup input, not a new Geo lookup.
+    webrtcIp: text(meta.webrtcIp) || native?.publicIp,
+  });
+  try { assertChromiumWebRtcLaunchPolicy(args, policy); }
+  catch (error) {
+    if (error instanceof LaunchBlockedError) throw restartRequired("startup WebRTC routing does not satisfy the current policy");
+    throw error;
+  }
+}
+
 function proxyRequest(proxy: ProxyConfig | null): unknown {
   if (!proxy) return null;
   return {
@@ -78,19 +96,25 @@ export function chromiumLaunchRequestHash(
   const gpuIdentity = mode === "managed" && meta.engine !== "firefox"
     ? getChromiumManagedGpuIdentity(meta, opts.gpuContext) : null;
   return hash({
-    version: 1,
+    version: 2,
     engine: meta.engine === "firefox" ? "firefox" : "chromium",
     mode,
     browserVersion: text(meta.browserVersion),
     binaryOverride: configuredBinary ? normalizeBrowserProcessPath(configuredBinary) : null,
     headless: opts.headless === true,
+    // Transport policy remains active when identity spoofing is off. In
+    // particular off is not consent to real WebRTC on a proxied profile.
+    webrtcRouting: {
+      policyVersion: CHROMIUM_WEBRTC_ROUTING_POLICY_VERSION,
+      proxyOnlyArg: CHROMIUM_WEBRTC_PROXY_ONLY_ARG,
+      requestedMode: webrtcMode,
+      webrtcIp: mode === "managed" && webrtcMode === "altered" ? text(meta.webrtcIp) : null,
+    },
     identity: mode === "off" ? null : {
       platform: meta.platform || "windows",
       seed: Number(meta.fingerprintSeed || 12345),
       timezone: timezone ? new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone : null,
       locale: locale ? Intl.getCanonicalLocales(locale)[0] : null,
-      webrtcMode,
-      webrtcIp: webrtcMode === "auto" || webrtcMode === "altered" ? text(meta.webrtcIp) : null,
       geolocation: geoMode === "custom"
         ? [geoMode, optionalNumber(meta.geolocationLatitude), optionalNumber(meta.geolocationLongitude), optionalNumber(meta.geolocationAccuracy) ?? 50]
         : [geoMode],
@@ -99,8 +123,7 @@ export function chromiumLaunchRequestHash(
       hardware: [meta.hardwareConcurrency, meta.deviceMemory, meta.screenWidth, meta.screenHeight, meta.storageQuota, meta.taskbarHeight].map(optionalNumber),
       fontsDir: text(meta.fontsDir) ? normalizeBrowserProcessPath(meta.fontsDir!.trim()) : null,
       renderScaleMode: meta.renderScaleMode || "native",
-      // Omit this extension for unchanged policies so off and native-only
-      // platforms retain their existing request hashes.
+      // Only eligible managed GPU contexts contribute a GPU-policy extension.
       ...(gpuIdentity ? { gpuIdentity } : {}),
     },
     dns: {
@@ -122,12 +145,14 @@ export function restartRequired(reason: string): LaunchBlockedError {
 }
 
 export function parseChromiumLaunchStamp(value: string): ChromiumLaunchProvenance | null {
-  const match = /^v1\.([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(value);
-  return match ? { version: 1, requestHash: match[1], payloadHash: match[2] } : null;
+  // v1 predates proxy-only routing (including off+proxy). Never adopt it,
+  // even if its old request/payload digests are otherwise self-consistent.
+  const match = /^v2\.([a-f0-9]{64})\.([a-f0-9]{64})$/.exec(value);
+  return match ? { version: 2, requestHash: match[1], payloadHash: match[2] } : null;
 }
 
 function relevantPayloadArgument(arg: string): boolean {
-  const key = arg.split("=", 1)[0];
+  const key = chromiumWebRtcSwitchName(arg);
   return key.startsWith("--fingerprint") || [
     "--agent-browser-fingerprint-config", "--roxy-fingerprint-config", "--user-agent", "--lang",
     "--window-size", "--window-position", "--force-device-scale-factor",
@@ -136,24 +161,32 @@ function relevantPayloadArgument(arg: string): boolean {
     "--proxy-server", "--proxy-bypass-list", "--no-proxy-server", "--proxy-auto-detect",
     "--proxy-pac-url", "--proxy-pac-mandatory", "--disable-quic", "--enable-quic",
     "--ignore-certificate-errors-spki-list", "--origin-to-force-quic-on",
-    "--user-data-dir", "--remote-debugging-port",
+    "--user-data-dir", "--profile-directory", "--remote-debugging-port", CHROMIUM_WEBRTC_IP_HANDLING_SWITCH,
   ].includes(key);
 }
 
 /** Bind the exact native config/UA and related identity/DNS switches, not a GPU claim. */
 export function chromiumLaunchPayloadHash(args: readonly string[], mode: "managed" | "off"): string {
+  if (args.includes("--")) throw restartRequired("command-line terminator would bypass startup policy switches");
   const relevant = args.filter(relevantPayloadArgument);
+  const profiles = relevant.filter(arg => chromiumWebRtcSwitchName(arg) === "--profile-directory");
+  if (profiles.length !== 1 || profiles[0] !== CHROMIUM_WEBRTC_PROFILE_ARG) {
+    throw restartRequired("Chrome profile selection is not bound to the verified Default routing preferences");
+  }
+  if (relevant.some(arg => chromiumWebRtcSwitchName(arg) === CHROMIUM_WEBRTC_IP_HANDLING_SWITCH && arg !== CHROMIUM_WEBRTC_PROXY_ONLY_ARG)) {
+    throw restartRequired("non-canonical or downgraded WebRTC routing switch");
+  }
   // Owned launches use a native auth file or bridge, never URL userinfo. Do
   // not hash inline credentials from an unknown/tampered command line.
-  if (relevant.some((arg) => /^(?:--proxy-server|--proxy-pac-url)=/.test(arg) && arg.includes("@"))) {
+  if (relevant.some((arg) => ["--proxy-server", "--proxy-pac-url"].includes(chromiumWebRtcSwitchName(arg)) && arg.includes("@"))) {
     throw restartRequired("proxy startup arguments contain unsupported inline credentials");
   }
-  const keys = relevant.map((arg) => arg.split("=", 1)[0]);
+  const keys = relevant.map(chromiumWebRtcSwitchName);
   if (new Set(keys).size !== keys.length) throw restartRequired("duplicate startup payload switches");
   const nativeArgs = relevant.filter((arg) => /^--(?:agent-browser|roxy)-fingerprint-config(?:=|$)/.test(arg));
   const userAgents = relevant.filter((arg) => arg.startsWith("--user-agent="));
   if (mode === "off") {
-    if (relevant.some((arg) => arg.startsWith("--fingerprint") || /^--(?:agent-browser|roxy)-fingerprint-config/.test(arg) || /^--(?:user-agent|lang|window-size|window-position|force-device-scale-factor)(?:=|$)/.test(arg))) {
+    if (keys.some((key) => key.startsWith("--fingerprint") || /^--(?:agent-browser|roxy)-fingerprint-config$/.test(key) || /^--(?:user-agent|lang|window-size|window-position|force-device-scale-factor)$/.test(key))) {
       throw restartRequired("fingerprint-off process still carries managed identity switches");
     }
   } else {
@@ -172,16 +205,16 @@ export function chromiumLaunchPayloadHash(args: readonly string[], mode: "manage
       throw restartRequired("malformed or unsupported native identity payload/UA");
     }
   }
-  return hash({ version: 1, mode, args: [...relevant].sort() });
+  return hash({ version: 2, webrtcRoutingPolicyVersion: CHROMIUM_WEBRTC_ROUTING_POLICY_VERSION, mode, args: [...relevant].sort() });
 }
 
 export function stampChromiumLaunch(args: readonly string[], requestHash: string, mode: "managed" | "off"): ChromiumLaunchProvenance {
-  if (args.some((arg) => arg.split("=", 1)[0] === CHROMIUM_LAUNCH_STAMP_SWITCH.slice(0, -1))) throw restartRequired("duplicate launch stamp");
-  return { version: 1, requestHash, payloadHash: chromiumLaunchPayloadHash(args, mode) };
+  if (args.some((arg) => chromiumWebRtcSwitchName(arg) === CHROMIUM_LAUNCH_STAMP_SWITCH.slice(0, -1))) throw restartRequired("duplicate launch stamp");
+  return { version: 2, requestHash, payloadHash: chromiumLaunchPayloadHash(args, mode) };
 }
 
 export function chromiumLaunchStampArg(stamp: ChromiumLaunchProvenance): string {
-  return `${CHROMIUM_LAUNCH_STAMP_SWITCH}v1.${stamp.requestHash}.${stamp.payloadHash}`;
+  return `${CHROMIUM_LAUNCH_STAMP_SWITCH}v${stamp.version}.${stamp.requestHash}.${stamp.payloadHash}`;
 }
 
 export function assertChromiumLaunchProvenance(
@@ -189,7 +222,7 @@ export function assertChromiumLaunchProvenance(
   requestHash: string,
   mode: "managed" | "off",
 ): ChromiumLaunchProvenance {
-  const stamps = args.filter((arg) => arg.split("=", 1)[0] === CHROMIUM_LAUNCH_STAMP_SWITCH.slice(0, -1));
+  const stamps = args.filter((arg) => chromiumWebRtcSwitchName(arg) === CHROMIUM_LAUNCH_STAMP_SWITCH.slice(0, -1));
   if (stamps.length !== 1 || !stamps[0].startsWith(CHROMIUM_LAUNCH_STAMP_SWITCH)) throw restartRequired("missing legacy or duplicate launch stamp");
   const stamp = parseChromiumLaunchStamp(stamps[0].slice(CHROMIUM_LAUNCH_STAMP_SWITCH.length));
   if (!stamp) throw restartRequired("malformed or unknown launch stamp version");

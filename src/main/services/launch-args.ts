@@ -285,6 +285,24 @@ export function readPreferences(dirId: string): any {
 }
 
 /**
+ * Read Preferences for a read-modify-write. Unlike readPreferences, this
+ * distinguishes "no file yet" (safe to create) from "exists but unreadable"
+ * (corrupt JSON, EACCES, EIO). Writing the second case would replace the whole
+ * preference file with our handful of managed keys and report success.
+ */
+export function readPreferencesForUpdate(dirId: string): { ok: true; prefs: any } | { ok: false; reason: string } {
+  const prefPath = resolveProfileFile(dirId, "Default", "Preferences");
+  let raw: string;
+  try { raw = fs.readFileSync(prefPath, "utf-8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { ok: true, prefs: {} };
+    return { ok: false, reason: `Preferences could not be read (${(error as NodeJS.ErrnoException)?.code || "error"}); refusing to overwrite` };
+  }
+  try { return { ok: true, prefs: JSON.parse(raw) }; }
+  catch { return { ok: false, reason: "Preferences is not valid JSON; refusing to overwrite" }; }
+}
+
+/**
  * Write Chrome Preferences for a profile.
  */
 export function writePreferences(dirId: string, prefs: any): boolean {
@@ -306,7 +324,9 @@ export function applyProfileSettings(dirId: string, settings: {
   downloadDir?: string;
   pdfDownload?: boolean;
 }): boolean {
-  const prefs = readPreferences(dirId) || {};
+  const loaded = readPreferencesForUpdate(dirId);
+  if (!loaded.ok) throw Object.assign(new Error(loaded.reason), { code: "PREFERENCES_UNREADABLE" });
+  const prefs = loaded.prefs || {};
 
   if (settings.homepage) {
     prefs.session = prefs.session || {};

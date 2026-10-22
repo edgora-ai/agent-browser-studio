@@ -249,6 +249,27 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("health renderer business conclusions (whole production modules)", () => {
+  it.each(["en-US", "zh-CN"])("offers Proxy-only with truthful routing help in both %s profile forms", language => {
+    const h = harness(language);
+    for (const id of ["new-agent-browser-webrtc-mode", "agent-browser-meta-webrtc-mode"]) {
+      expect(h.el(id).querySelector('[value="proxy-only"]')?.textContent).toBe(h.window.i18n.t("profile.new.webrtc.proxy-only"));
+      expect(h.el(id).querySelector('[value="real"]')?.textContent).toBe(h.window.i18n.t("profile.new.webrtc.real"));
+    }
+    expect(h.window.i18n.t("profile.new.webrtc.routing-help")).not.toBe("profile.new.webrtc.routing-help");
+  });
+
+  it.each(["en-US", "zh-CN"])("localizes strict WebRTC launch refusals without offering a direct retry in %s", async language => {
+    for (const [code, key] of [["webrtc-proxy-required", "proxy-required"], ["webrtc-managed-required", "managed-required"], ["webrtc-routing-policy", "policy-conflict"], ["webrtc-preferences-unavailable", "preferences-unavailable"]]) {
+      const h = harness(language); await h.render();
+      h.api.browser.launch.mockResolvedValue({ success: false, code, error: "Owned routing refusal" });
+      h.app.launch(PROFILE.dirId); await flush();
+      expect(h.api.browser.launch).toHaveBeenCalledOnce();
+      expect(h.toast).toHaveBeenCalledWith(h.window.i18n.t("launch.webrtc." + key), "error");
+      expect(h.app.confirm).not.toHaveBeenCalled(); expect(h.api.browser.stop).not.toHaveBeenCalled();
+      expect(h.history()).toEqual([]);
+    }
+  });
+
   it("never paints a probe error as PASS merely because hostIps is empty", async () => {
     const h = harness(); await h.render(); h.api.webrtc.diag.mockResolvedValue(rtc({ error: "synthetic probe failure" }, "error"));
     h.app.openWebRtcDiag(PROFILE.dirId); await flush();
@@ -641,6 +662,12 @@ describe("health authoritative history, cancellation and baseline review contrac
     const body = h.el("webrtc-diag-body").textContent;
     expect(body).toContain("ICE candidate exposure on the current page only"); expect(body).toContain("does not establish a remote peer connection");
     expect(body).toContain("RTT: Not measured (requires a connected peer)"); expect(body).not.toContain("RTT: 0ms");
+    expect(body).toContain("Peer connection: not tested");
+  });
+  it.each(["en-US", "zh-CN"])("keeps untested peer scope explicit in %s even when ICE exposure passes", async language => {
+    const h = harness(language); h.api.webrtc.diag.mockResolvedValue(rtc()); h.app.openWebRtcDiag(PROFILE.dirId); await flush();
+    expect(h.el("webrtc-diag-body").textContent).toContain(h.window.i18n.t("webrtc.peer.not-tested"));
+    expect(h.el("webrtc-diag-body").textContent).not.toContain("webrtc.peer.not-tested");
   });
   it("malformed positive canonical history cannot turn missing source evidence into Pass", async () => {
     const h = harness(); h.api.browser.healthHistory.mockResolvedValue({ entries: [{ kind: "env", at: Date.now(), outcome: "pass", summary: "no authority source" }] });
@@ -705,6 +732,17 @@ describe("health localization and mirror contract", () => {
 });
 
 describe("proxy health re-read boundary", () => {
+  it.each(["en-US", "zh-CN"])("does not promote HTTP or SOCKS UDP/RTC capabilities from a TCP-only detect in %s", async language => {
+    const h = harness(language);
+    h.api.proxy.list.mockResolvedValue(["http", "socks5"].map(type => ({ name: "synthetic-" + type, config: { type, host: "proxy.synthetic.invalid", port: 1080 } })));
+    await h.app.loadProxies(); await flush();
+    const cards = h.el("proxy-list").querySelectorAll(".profile-card");
+    expect(cards).toHaveLength(2);
+    h.app.detectProxyIntoCard("synthetic-http", cards[0]); await flush();
+    expect(cards[0].textContent).toContain(h.window.i18n.t("proxy.transport.http-scope"));
+    expect(cards[1].textContent).toContain(h.window.i18n.t("proxy.transport.socks-scope"));
+    expect(h.api.detect.proxyByName).toHaveBeenCalledOnce();
+  });
   it("failed re-read after detect is visible instead of an empty catch", async () => {
     const h = harness(); h.api.proxy.list.mockResolvedValue([{ name: "synthetic-proxy", config: { type: "http", host: "proxy.synthetic.invalid", port: 1080 }, isDefault: false }]);
     await h.app.loadProxies(); await flush();

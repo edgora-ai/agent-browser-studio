@@ -12,7 +12,7 @@ import { PORTABLE_PROFILE_FIELDS } from "./profile-portability.js";
 import { compareProfileIdentity, type ProfileIdentityComparison } from "./profile-identity.js";
 import type { BrowserEngine, BrowserProfileMeta } from "../types.js";
 import { transact } from "./config/store.js";
-import { requireProfileMutation } from "./team.js";
+import { requireProfileMutation, requireAccountSecret } from "./team.js";
 import { hasInstalledRepositoryExtension } from "./extension-repository.js";
 import { statusBrowser } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
@@ -380,6 +380,11 @@ function uniqueName(baseName: string, profiles: Record<string, BrowserProfileMet
 export async function exportProfileArchive(
   dirId: string, destPath: string, options: WriteZipOptions = {},
 ): Promise<ExportProfileResult> {
+  // The archive carries Cookies and Login Data, i.e. live session material.
+  // Import was gated but export was not, so a team viewer could walk away with
+  // every logged-in session. Same member+ rule as plaintext proxy export.
+  const secretGate = requireAccountSecret();
+  if (!secretGate.ok) throw new Error(secretGate.error);
   validateDirId(dirId);
   destPath = assertSafeArchiveExportPath(destPath);
   const release = acquireRestoreLock(dirId);
@@ -547,6 +552,10 @@ export function getProfileArchiveExportConflicts(dirIds: string[], destDir: stri
  * reported per item so a single bad profile never aborts the whole batch.
  */
 export async function exportProfileArchives(dirIds: string[], destDir: string, options: BatchArchiveExportOptions = {}): Promise<BatchExportReport> {
+  // Refuse up front rather than letting the per-item catch turn a viewer
+  // denial into a report full of "failed" entries.
+  const secretGate = requireAccountSecret();
+  if (!secretGate.ok) throw new Error(secretGate.error);
   assertArchiveBatchInput(dirIds, "dirIds");
   if (options.overwrite !== undefined && typeof options.overwrite !== "boolean") throw Object.assign(new Error("overwrite must be a boolean"), { code: "ARCHIVE_INVALID_INPUT" });
   destDir = assertSafeArchiveExportDir(destDir);

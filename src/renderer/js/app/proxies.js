@@ -560,6 +560,10 @@
              column, so the values started at x = 330 / 316 / 301 / 301. */
           '<div class="card-meta">' +
           '<div class="info-row"><span>' + esc(t('proxy.row.endpoint', 'Endpoint')) + '</span><span>' + esc(label) + '</span></div>' +
+          '<div class="info-row"><span>' + esc(t('proxy.row.transport', 'Transport scope')) + '</span><span class="proxy-transport-scope">' + esc(cfg.type === 'http'
+            ? t('proxy.transport.http-scope', 'TCP proxy; UDP unsupported; WebRTC relay not tested')
+            : cfg.type === 'socks5' || cfg.type === 'socks5h' ? t('proxy.transport.socks-scope', 'TCP proxy; SOCKS5 UDP and WebRTC not verified')
+            : t('proxy.transport.unknown-scope', 'Transport capabilities not verified')) + '</span></div>' +
           // `proxy.detect` is the same word the Detect button uses ("检测"),
           // so the row label and the control that fills it stay in sync.
           '<div class="info-row"><span>' + esc(t('proxy.detect', 'Detect')) + '</span><span class="proxy-detect-result">' + esc(p.detection ? detectionText(p.detection) : t('proxy.not-checked', 'Not checked')) + '</span></div>' +

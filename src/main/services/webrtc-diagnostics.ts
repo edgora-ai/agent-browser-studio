@@ -2,9 +2,9 @@
 // performance diagnostics" parity) ──
 // Runs a real RTCPeerConnection probe inside the profile's own managed
 // browser via CDP (Chromium) or WebDriver BiDi (Firefox), and reports what ICE
-// candidates expose (mDNS hostnames vs raw host IPs), connection state and
-// RTT. This verifies the engine's WebRTC hiding from the actual browser
-// surface, not from a curl proxy test.
+// candidates expose (mDNS hostnames vs raw host IPs). This is an ICE exposure
+// check, not proof of a peer connection, UDP forwarding, or proxy routing.
+// Real two-peer challenge/selected-pair verification lives in webrtc-peer-probe.
 
 import { isIP } from "node:net";
 import { statusBrowser } from "./browser-manager.js";
@@ -15,6 +15,7 @@ import { evaluateInPage, getProfileEngineByDirId } from "./page-eval.js";
 import { beginProfileHealthRun, clearProfileHealthHistory, ProfileHealthError, profileHealthFailure } from "./profile-health.js";
 import type { ProfileHealthOptions, ProfileHealthRun } from "./profile-health.js";
 import type { ProfileHealthOutcome, WebRtcDiagnosticsEntry } from "../types.js";
+import { unmeasuredWebRtcPeerConnectivity } from "./webrtc-peer-probe.js";
 
 /** Probe injected via CDP Runtime.evaluate (awaitPromise). Plain ES5-ish. */
 const PROBE_JS = `(async () => {
@@ -201,6 +202,7 @@ function webRtcEntry(raw: any, requestId: string): WebRtcDiagnosticsEntry {
     gatheringState: typeof raw?.gatheringState === "string" ? raw.gatheringState.slice(0, 40) : "unknown",
     connectionState: typeof raw?.connectionState === "string" ? raw.connectionState.slice(0, 40) : "unknown",
     rttMs: typeof raw?.rttMs === "number" && Number.isFinite(raw.rttMs) && raw.rttMs >= 0 ? raw.rttMs : null,
+    peerConnectivity: unmeasuredWebRtcPeerConnectivity(),
     error: raw?.error ? String(raw.error).slice(0, 1024) : outcome === "error" ? "Invalid or missing WebRTC probe result" : null,
     summary: summarizeRaw(normalized).slice(0, 2048),
   };

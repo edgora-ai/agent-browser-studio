@@ -223,7 +223,7 @@ export interface BrowserProfileInfo {
   platform: "windows" | "macos" | string;
   timezone: string | null;
   locale: string | null;
-  webrtcMode: "auto" | "real" | "altered" | "disable";
+  webrtcMode: "auto" | "proxy-only" | "real" | "altered" | "disable";
   webrtcIp: string | null;
   geolocationMode: "real" | "disable" | "custom";
   geolocationLatitude: number | null;
@@ -631,6 +631,27 @@ export interface AgentBrowserAPI {
     reloadConfig: () => Promise<any>;
     openDir: (dirPath: string) => Promise<any>;
     version: () => Promise<string>;
+    /** Read-only build/host identity for the About dialog. */
+    buildInfo: () => Promise<{
+      name: string;
+      version: string;
+      appId: string;
+      packaged: boolean;
+      appPath: string;
+      resourcesPath: string | null;
+      bundle: { path: string; mtime: string | null } | null;
+      appArchive: { path: string; mtime: string | null } | null;
+      mainEntry: { path: string; mtime: string | null } | null;
+      engines: Record<"chromium" | "firefox", {
+        bundledVersion: string | null;
+        bundledSource: "manifest" | "archive" | null;
+        appArchive: { path: string; mtime: string | null } | null;
+      }>;
+      engineInstalled: Record<"chromium" | "firefox", string | null>;
+      runtime: { electron: string; chrome: string; node: string; v8: string; modules: string };
+      host: { platform: string; arch: string; release: string; osName: string | null; osVersion: string | null };
+      locale: { app: string; system: string };
+    }>;
     openUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
     setLanguage: (lang: string) => Promise<{ success: boolean; language: string }>;
     getLanguage: () => Promise<{ language: string }>;

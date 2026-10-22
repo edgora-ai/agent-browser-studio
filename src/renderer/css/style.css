@@ -477,6 +477,28 @@ svg { vertical-align: middle; }
   overflow: hidden;
   white-space: nowrap;
 }
+/* The About entry reads as a quiet footer link, not a second primary action:
+   text-weight only, no plate, so it cannot compete with the theme switch. */
+.sidebar-about-link {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.sidebar-about-link:hover { color: var(--text); }
+.sidebar-about-link:focus-visible {
+  outline: 2px solid var(--primary-text);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .sidebar-controls { flex-wrap: wrap; }
 .sidebar-controls .theme-toggle {
   min-width: 0;
@@ -1104,6 +1126,15 @@ dialog h4[data-icon] > svg {
    height — so it painted as a 338px-tall empty box with the counters pinned to
    the top (measured: children 338px tall, counters at cy 111 in a box centred
    at 270). Claim the whole row and size to content instead. */
+/* The banner is wrapped in .proxy-health-summary-host, so the rule has to name
+   the element that is actually a grid item. Targeting the inner element left
+   the host in the first cell: the summary occupied column 1 of row 1, hk01 sat
+   beside it, and every later card shifted one column right (observed: row 1
+   held the banner + one card, row 2 started at column 1). */
+.profile-grid > .proxy-health-summary-host {
+  grid-column: 1 / -1;
+  align-self: start;
+}
 .profile-grid > .proxy-health-summary {
   grid-column: 1 / -1;
   align-self: start;
@@ -4058,3 +4089,38 @@ details.run-layer[open] > .run-layer-title { color: var(--text); }
   border-radius: 10px;
   word-break: break-word;
 }
+
+/* ═══════ About dialog ═══════ */
+/* A two-column definition list reads as a build report: labels stay quiet and
+   fixed-width, values take the remaining room and wrap anywhere, because file
+   paths are long and must not blow the dialog out. */
+.about-grid {
+  margin: 0 0 16px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.about-group + .about-group { margin-top: 14px; }
+.about-group h4 {
+  margin: 0 0 6px;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.about-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 34%) 1fr;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+}
+.about-row:last-child { border-bottom: 0; }
+.about-label { color: var(--text-muted); }
+.about-value { overflow-wrap: anywhere; word-break: break-word; }
+.about-value.mono { font-family: var(--mono); font-size: 11px; }
+/* Missing facts are marked, not hidden: an empty cell would read as "nothing
+   wrong" when the value simply could not be observed. */
+.about-row.is-missing .about-value { color: var(--text-muted); font-style: italic; }

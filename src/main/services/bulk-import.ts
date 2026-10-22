@@ -8,7 +8,7 @@ export interface ProfileSpec {
   timezone?: string;
   fingerprintSeed?: number;
   proxyName?: string;
-  webrtcMode?: "auto" | "real" | "altered" | "disable";
+  webrtcMode?: "auto" | "proxy-only" | "real" | "altered" | "disable";
   webrtcIp?: string;
   geolocationMode?: "real" | "disable" | "custom";
   geolocationLatitude?: number;
@@ -74,7 +74,7 @@ export function parseBulkCsv(text: string): ProfileSpec[] {
           if (mode === "real" || mode === "disable" || mode === "custom") spec.geolocationMode = mode;
         } else if (key === "webrtcMode") {
           const mode = cell.toLowerCase();
-          if (mode === "auto" || mode === "real" || mode === "altered" || mode === "disable") spec.webrtcMode = mode;
+          if (mode === "auto" || mode === "proxy-only" || mode === "real" || mode === "altered" || mode === "disable") spec.webrtcMode = mode;
         } else if (key === "tags") {
           spec.tags = normalizeTags(cell);
         } else if (key === "platform") {

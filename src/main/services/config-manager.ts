@@ -604,9 +604,11 @@ export function getProfileProxyMode(dirId: string): ProxyMode {
 }
 
 export function setProfileProxy(dirId: string, proxyName: string | null, mode?: ProxyMode): void {
-  const cfg = getConfig();
-  setProfileProxyOnConfig(cfg, dirId, proxyName, mode);
-  saveConfig(cfg);
+  // Mutate the transaction draft, not the committed object. The old path edited
+  // the live config first and then saved, so a failed write (ENOSPC/EACCES)
+  // left memory on the new proxy while disk kept the old one — and any later
+  // unrelated save silently persisted the edit that had reported failure.
+  storeTransact((draft: MgmtConfig) => { setProfileProxyOnConfig(draft, dirId, proxyName, mode); });
 }
 
 export function setProfileProxyOnConfig(cfg: MgmtConfig, dirId: string, proxyName: string | null, mode?: ProxyMode): void {
@@ -747,11 +749,11 @@ export function sanitizeAppUrl(value: unknown): string | null {
   return raw;
 }
 
-function sanitizeWebRtcMode(value: unknown, legacyIp?: unknown): "auto" | "real" | "altered" | "disable" {
+function sanitizeWebRtcMode(value: unknown, legacyIp?: unknown): "auto" | "proxy-only" | "real" | "altered" | "disable" {
   if (value === undefined || value === null || value === "") {
     return sanitizeOptionalIp(legacyIp) ? "altered" : "auto";
   }
-  if (value === "auto" || value === "real" || value === "altered" || value === "disable") return value;
+  if (value === "auto" || value === "proxy-only" || value === "real" || value === "altered" || value === "disable") return value;
   throw new Error(`Invalid WebRTC mode: ${JSON.stringify(value)}`);
 }
 
@@ -1248,7 +1250,7 @@ export function portableProfileContent(raw: unknown): PortableProfileContent {
     timezone: sanitizeOptionalTimezone(cp.timezone),
     locale: sanitizeOptionalLocale(cp.locale),
     webrtcMode,
-    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : sanitizeOptionalIp(cp.webrtcIp),
+    webrtcIp: webrtcMode === "proxy-only" || webrtcMode === "real" || webrtcMode === "disable" ? null : sanitizeOptionalIp(cp.webrtcIp),
     geolocationMode: sanitizeGeolocationMode(cp.geolocationMode),
     geolocationLatitude: sanitizeOptionalNumber(cp.geolocationLatitude, -90, 90),
     geolocationLongitude: sanitizeOptionalNumber(cp.geolocationLongitude, -180, 180),
@@ -1316,7 +1318,7 @@ export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
     platform: sanitizeBrowserPlatform(pickMode(p.platform, ["windows", "macos", "android"] as const, "windows")),
     timezone: sanitizeOptionalTimezone(p.timezone),
     locale: sanitizeOptionalLocale(p.locale),
-    webrtcMode: sanitizeWebRtcMode(pickMode(p.webrtcMode, ["auto", "altered", "disable", "real"] as const, "auto")),
+    webrtcMode: sanitizeWebRtcMode(pickMode(p.webrtcMode, ["auto", "proxy-only", "altered", "disable", "real"] as const, "auto")),
     webrtcIp: sanitizeOptionalIp(p.webrtcIp),
     geolocationMode: sanitizeGeolocationMode(pickMode(p.geolocationMode, ["real", "disable", "custom"] as const, "real")),
     geolocationLatitude: sanitizeOptionalNumber(p.geolocationLatitude, -90, 90),
@@ -1343,7 +1345,7 @@ export function normalizePortableProfileMeta(raw: unknown): BrowserProfileMeta {
     fingerprintBaseline: sanitizePortableFingerprintBaseline(p.fingerprintBaseline),
     updatedAt: Date.now(),
   };
-  if (profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
+  if (profile.webrtcMode === "proxy-only" || profile.webrtcMode === "real" || profile.webrtcMode === "disable") profile.webrtcIp = null;
   validateGeolocationMeta(profile);
   if (profile.fingerprintMode !== "off") validateBrowserHardwareProfile(profile, engine);
   return profile;
@@ -1415,7 +1417,7 @@ export function setProfileMeta(dirId: string, meta: Partial<BrowserProfileMeta>,
   if (meta.locale !== undefined) next.locale = sanitizeOptionalLocale(meta.locale);
   if (meta.webrtcMode !== undefined) next.webrtcMode = sanitizeWebRtcMode(meta.webrtcMode, next.webrtcIp);
   if (meta.webrtcIp !== undefined) next.webrtcIp = sanitizeOptionalIp(meta.webrtcIp);
-  if (next.webrtcMode === "real" || next.webrtcMode === "disable") next.webrtcIp = null;
+  if (next.webrtcMode === "proxy-only" || next.webrtcMode === "real" || next.webrtcMode === "disable") next.webrtcIp = null;
   if (meta.geolocationMode !== undefined) next.geolocationMode = sanitizeGeolocationMode(meta.geolocationMode);
   if (meta.geolocationLatitude !== undefined) next.geolocationLatitude = sanitizeOptionalNumber(meta.geolocationLatitude, -90, 90);
   if (meta.geolocationLongitude !== undefined) next.geolocationLongitude = sanitizeOptionalNumber(meta.geolocationLongitude, -180, 180);

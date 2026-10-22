@@ -9,6 +9,7 @@ const f = vi.hoisted(() => ({
   inspect: vi.fn(), legacy: vi.fn(), proxy: vi.fn(), audit: vi.fn(), release: vi.fn(), lock: vi.fn(),
   spawn: vi.fn(), version: vi.fn(), managedBinary: vi.fn(), fetch: vi.fn(), netCreate: vi.fn(), kill: vi.fn(),
   proxyProbe: vi.fn(), proxyUrl: vi.fn(), geoDetect: vi.fn(), geoObservedAt: vi.fn(), persistDetection: vi.fn(), diagnostics: vi.fn(), gpuContext: vi.fn(),
+  webRtcPreferencesValidate: vi.fn(), webRtcPreferencesApply: vi.fn(),
   captureDetectionTarget: vi.fn(), commitObservation: vi.fn(), targets: new WeakMap<object, { name: string; config: ProxyConfig }>(), policies: [] as string[],
   secrets: vi.fn(() => { throw new Error("No secret access allowed"); }), saveConfig: vi.fn(), transact: vi.fn(),
   fs: {
@@ -140,6 +141,10 @@ vi.mock("../../src/main/services/native-proxy-auth.js", () => ({
 vi.mock("../../src/main/services/browser-command.js", () => ({ runBrowserCommand: f.version }));
 vi.mock("../../src/main/services/browser/launch-diagnostics.js", () => ({ prepareChromiumDiagnosticNetLogArgs: f.diagnostics }));
 vi.mock("../../src/main/services/browser/chromium-gpu-context.js", () => ({ readChromiumGpuContext: f.gpuContext }));
+vi.mock("../../src/main/services/browser/webrtc-preferences.js", () => ({
+  validateChromiumWebRtcPreferences: f.webRtcPreferencesValidate,
+  applyChromiumWebRtcPreferences: f.webRtcPreferencesApply,
+}));
 vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => "/virtual/bundled" }));
 vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => "/virtual/firefox" }));
 vi.mock("../../src/main/services/browser-engine.js", async (importOriginal) => ({
@@ -175,9 +180,10 @@ import { runningProcesses } from "../../src/main/services/browser/runtime-table.
 import { emitEvent } from "../../src/main/services/event-bus.js";
 import {
   assertChromiumLaunchProvenance, chromiumLaunchRequestHash, chromiumLaunchStampArg, stampChromiumLaunch,
-  CHROMIUM_LAUNCH_STAMP_SWITCH,
+  CHROMIUM_LAUNCH_STAMP_SWITCH, cachedChromiumProxy,
 } from "../../src/main/services/browser/launch-provenance.js";
 import { buildBrowserFingerprintArg, buildBrowserFingerprintConfig, type ChromiumGpuContext } from "../../src/main/services/browser-fingerprint-config.js";
+import { resolveChromiumWebRtcRoutingPolicy, chromiumWebRtcRoutingArgs } from "../../src/main/services/browser/webrtc-policy.js";
 import { inspectBrowserLaunchLines } from "../../src/main/services/process-discovery.js";
 
 const dirId = "ab_task525";
@@ -190,10 +196,16 @@ const currentMeta = (): BrowserProfileMeta => f.cfg.browserProfiles[dirId];
 function launchedFixture(profile: BrowserProfileMeta = currentMeta(), gpuContext?: ChromiumGpuContext) {
   const mode = profile.fingerprintMode === "off" ? "off" : "managed";
   const requestHash = chromiumLaunchRequestHash(profile, f.cfg, { gpuContext });
-  const native = buildBrowserFingerprintConfig(profile, "150.0.7800.1", null, "chromium", gpuContext);
-  const args = [`--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`, ...(mode === "managed" ? [
+  const proxy = cachedChromiumProxy(profile, f.cfg);
+  const routing = resolveChromiumWebRtcRoutingPolicy({ requestedMode: profile.webrtcMode || (profile.webrtcIp ? "altered" : "auto"),
+    fingerprintMode: mode, hasProxy: Boolean(proxy), webrtcIp: profile.webrtcIp });
+  const nativeMeta = { ...profile, webrtcMode: routing.nativeMode, webrtcIp: routing.nativeIp };
+  const native = buildBrowserFingerprintConfig(nativeMeta, "150.0.7800.1", null, "chromium", gpuContext);
+  const args = [`--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`,
+    ...(proxy ? [`--proxy-server=${proxy.type === "http" ? "http" : "socks5"}://${proxy.host}:${proxy.port}`] : []),
+    ...chromiumWebRtcRoutingArgs(routing), ...(mode === "managed" ? [
     `--fingerprint=${profile.fingerprintSeed}`, `--fingerprint-platform=${profile.platform}`,
-    buildBrowserFingerprintArg(profile, "150.0.7800.1", undefined, null, "chromium", gpuContext), `--user-agent=${native.userAgent}`,
+    buildBrowserFingerprintArg(nativeMeta, "150.0.7800.1", undefined, null, "chromium", gpuContext), `--user-agent=${native.userAgent}`,
   ] : [])];
   const provenance = stampChromiumLaunch(args, requestHash, mode);
   args.push(chromiumLaunchStampArg(provenance));
@@ -209,6 +221,8 @@ function noLaunchEffects() {
   expect(f.firefoxSpawn).not.toHaveBeenCalled();
   expect(f.netCreate).not.toHaveBeenCalled();
   expect(f.diagnostics).not.toHaveBeenCalled();
+  expect(f.webRtcPreferencesValidate).not.toHaveBeenCalled();
+  expect(f.webRtcPreferencesApply).not.toHaveBeenCalled();
   for (const write of [f.fs.mkdirSync, f.fs.writeFileSync, f.fs.openSync, f.fs.writeSync, f.fs.renameSync, f.fs.rmSync, f.fs.unlinkSync]) expect(write).not.toHaveBeenCalled();
   expect(f.kill.mock.calls.every((call) => call[1] === 0)).toBe(true);
 }
@@ -225,6 +239,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   f.host = "macos";
   f.lines = [];
+  f.webRtcPreferencesValidate.mockImplementation(() => undefined);
+  f.webRtcPreferencesApply.mockImplementation((_dir, policy) => ({ policy: policy.restrictNonProxiedUdp || policy.effectiveMode === "disable" ? "disable_non_proxied_udp" : "default", changed: true, readbackVerified: true, directorySynced: true }));
   f.cfg = {
     chromiumBin: bin, proxies: {}, blockOnFingerprintDrift: false, blockOnEnvironmentRisk: false,
     browserProfiles: { [dirId]: {
@@ -295,8 +311,8 @@ beforeEach(() => {
   f.version.mockResolvedValue({ stdout: "Chromium 150.0.7800.1", stderr: "" });
   f.managedBinary.mockResolvedValue({ binaryPath: bin, version: "150.0.7800.1" });
   f.netCreate.mockImplementation(() => ({
-    once: vi.fn(), listen: (_port: number, _host: string, ready: () => void) => ready(),
-    address: () => ({ port }), close: (closed: () => void) => closed(),
+    once: vi.fn(), listen: vi.fn((_port: number, _host: string, ready: () => void) => ready()),
+    address: () => ({ port }), close: vi.fn((closed: () => void) => closed()),
   }));
   f.fetch.mockResolvedValue({ ok: true, json: async () => ({ Browser: "Chrome/150.0.7800.1", webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/task525` }) });
   vi.stubGlobal("fetch", f.fetch);
@@ -367,6 +383,34 @@ describe("actual common-create entry with fake storage", () => {
 });
 
 describe("actual exported launch ordering", () => {
+  it.each(["validate", "apply"] as const)("refuses a %s routing preference failure without spawning", boundary => {
+    const target = boundary === "validate" ? f.webRtcPreferencesValidate : f.webRtcPreferencesApply;
+    target.mockImplementation(() => { throw Object.assign(new Error("Owned preference refusal"), { code: "webrtc-preferences-unavailable" }); });
+    return expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "webrtc-preferences-unavailable" }).then(() => {
+      expect(f.spawn).not.toHaveBeenCalled(); expect(f.fetch).not.toHaveBeenCalled(); expect(f.diagnostics).not.toHaveBeenCalled();
+      // The earlier ephemeral loopback port reservation is already released; no browser/CDP endpoint exists.
+      expect(f.netCreate).toHaveBeenCalledOnce();
+      const reservation = f.netCreate.mock.results[0].value;
+      expect(reservation.listen).toHaveBeenCalledWith(0, "127.0.0.1", expect.any(Function));
+      expect(reservation.close).toHaveBeenCalledOnce();
+      expect(runningProcesses.has(dirId)).toBe(false); expect(f.release).toHaveBeenCalledOnce();
+      if (boundary === "validate") {
+        expect(f.webRtcPreferencesApply).not.toHaveBeenCalled(); expect(f.fs.writeFileSync).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  it("validates before locale writes, applies before spawning and pins Default", async () => {
+    await launchBrowser(dirId);
+    expect(f.webRtcPreferencesValidate).toHaveBeenCalledExactlyOnceWith(profileDir);
+    expect(f.webRtcPreferencesApply).toHaveBeenCalledOnce();
+    const validated = f.webRtcPreferencesValidate.mock.invocationCallOrder[0], applied = f.webRtcPreferencesApply.mock.invocationCallOrder[0];
+    expect(validated).toBeLessThan(f.fs.writeFileSync.mock.invocationCallOrder[0]);
+    expect(applied).toBeGreaterThan(f.fs.writeFileSync.mock.invocationCallOrder.at(-1)!);
+    expect(applied).toBeLessThan(f.spawn.mock.invocationCallOrder[0]);
+    expect(f.spawn.mock.calls[0][1].filter((arg: string) => arg.startsWith("--profile-directory"))).toEqual(["--profile-directory=Default"]);
+  });
+
   it("reports the checked empty Cookie queue without claiming any applied Cookie", async () => {
     const result = await launchBrowser(dirId);
     expect(result).toMatchObject({ pid, cdpPort: port, cookieCheck: { checked: true, applied: 0, pending: 0 } });
@@ -900,8 +944,8 @@ describe("exported Chromium reuse", () => {
     const fixture = launchedFixture();
     let line = fixture.line;
     if (kind === "legacy") line = `${pid} ${bin} ${fixture.args.slice(0, -1).join(" ")}`;
-    if (kind === "malformed-stamp") line = line.replace(/v1\.[a-f0-9]+\.[a-f0-9]+$/, "v1.invalid.invalid");
-    if (kind === "unknown-version") line = line.replace(CHROMIUM_LAUNCH_STAMP_SWITCH + "v1.", CHROMIUM_LAUNCH_STAMP_SWITCH + "v2.");
+    if (kind === "malformed-stamp") line = line.replace(/v2\.[a-f0-9]+\.[a-f0-9]+$/, "v2.invalid.invalid");
+    if (kind === "unknown-version") line = line.replace(CHROMIUM_LAUNCH_STAMP_SWITCH + "v2.", CHROMIUM_LAUNCH_STAMP_SWITCH + "v3.");
     if (kind === "duplicate-stamp") line += " " + fixture.args.at(-1);
     if (kind === "payload") line = line.replace(/--agent-browser-fingerprint-config=\S+/, "--agent-browser-fingerprint-config=malformed");
     if (kind === "wrong-exe") line = line.replace(bin, "/virtual/OtherChromium");
@@ -1104,7 +1148,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     const [actualBin, args] = f.spawn.mock.calls[0] as [string, string[]];
     expect(args.at(-1)).toBe(`--agent-browser-window-title-prefix=QA ${pseudoFlag}`);
     f.lines = [`${pid} ${actualBin} ${args.join(" ")}`];
-    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, ...Object.values(f.fs)]) mock.mockClear();
+    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, f.webRtcPreferencesValidate, f.webRtcPreferencesApply, ...Object.values(f.fs)]) mock.mockClear();
     expect(await launchBrowser(dirId)).toMatchObject({ pid, cdpPort: port });
     noLaunchEffects();
     runningProcesses.clear();
@@ -1124,7 +1168,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     if (failure === "exited-child") entry.process.exitCode = 0;
     if (failure === "reused-pid") entry.process.pid = pid + 1;
     if (failure === "wrong-observed-exe") f.lines = [`${pid} /virtual/OtherChromium ${args.join(" ")}`];
-    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, ...Object.values(f.fs)]) mock.mockClear();
+    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, f.webRtcPreferencesValidate, f.webRtcPreferencesApply, ...Object.values(f.fs)]) mock.mockClear();
     await blocked("restart-required");
     expect(runningProcesses.get(dirId)).toBe(entry);
   });
@@ -1143,7 +1187,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     expect(args.some((arg) => arg.startsWith("--user-agent="))).toBe(mode === "managed");
     f.lines = [`${pid} ${actualBin} ${args.join(" ")}`];
     runningProcesses.clear(); // App restart: no persistent registry is available.
-    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, ...Object.values(f.fs)]) mock.mockClear();
+    for (const mock of [f.proxy, f.spawn, f.netCreate, f.diagnostics, f.webRtcPreferencesValidate, f.webRtcPreferencesApply, ...Object.values(f.fs)]) mock.mockClear();
     expect(await launchBrowser(dirId)).toMatchObject({ pid, cdpPort: port });
     noLaunchEffects();
   });
@@ -1405,7 +1449,10 @@ describe("Firefox effective Auto launch identity", () => {
 
   it.each(["named", "none"] as const)("keeps off fields dormant with a %s route, on fresh launch and reuse", async route => {
     autoProxy();
-    Object.assign(currentMeta(), { fingerprintMode: "off", timezone: "inactive/invalid", locale: "inactive_invalid", webrtcMode: "inactive", webrtcIp: "inactive", proxyMode: route });
+    // Identity fields stay dormant garbage on purpose. WebRTC routing does NOT:
+    // the selector remains live with fingerprinting off, so it must carry a
+    // valid stored value and is validated on every launch.
+    Object.assign(currentMeta(), { fingerprintMode: "off", timezone: "inactive/invalid", locale: "inactive_invalid", webrtcMode: "auto", webrtcIp: "inactive", proxyMode: route });
     const before = structuredClone(currentMeta());
     const owned = await launchOwned();
     expect(f.firefoxManaged).not.toHaveBeenCalled();

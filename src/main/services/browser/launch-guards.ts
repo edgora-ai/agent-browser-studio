@@ -8,6 +8,11 @@ import { analyzeFingerprintDrift, type FingerprintDriftAnalysis } from "../finge
 import type { FingerprintComparisonReport } from "../fingerprint-drift-reports.js";
 import { getHostBrowserPlatform } from "../browser-platform-policy.js";
 import type { BrowserProfileMeta } from "../../types.js";
+import { AGENT_BROWSER_FINGERPRINT_SWITCH, LEGACY_FINGERPRINT_SWITCH } from "../browser-fingerprint-config.js";
+import {
+  assertChromiumWebRtcRoutingArgs, chromiumWebRtcSwitchName, resolveChromiumWebRtcRoutingPolicy, WebRtcRoutingPolicyError,
+  type ChromiumWebRtcRoutingInput, type ChromiumWebRtcRoutingPolicy,
+} from "./webrtc-policy.js";
 
 export interface LaunchDriftCheck {
   checked: boolean;
@@ -29,6 +34,52 @@ export class LaunchBlockedError extends Error {
     this.name = "LaunchBlockedError";
     this.code = code;
     this.driftBlocked = code === "fingerprint-drift" || code === "fingerprint-check-unavailable";
+  }
+}
+
+/** Preserve stable launch error codes without coupling the pure policy to other guards. */
+export function resolveChromiumWebRtcLaunchPolicy(input: ChromiumWebRtcRoutingInput): ChromiumWebRtcRoutingPolicy {
+  try { return resolveChromiumWebRtcRoutingPolicy(input); }
+  catch (error) {
+    if (error instanceof WebRtcRoutingPolicyError) throw new LaunchBlockedError(error.code, error.message);
+    throw error;
+  }
+}
+
+/** Decode only in-memory argv; never reads a saved profile or a running browser. */
+export function readChromiumLaunchWebRtcPayload(args: readonly string[]): { mode: "real" | "altered" | "disable"; publicIp: string | null } | null {
+  const prefixes = [AGENT_BROWSER_FINGERPRINT_SWITCH, LEGACY_FINGERPRINT_SWITCH];
+  const native = args.filter(arg => prefixes.some(prefix => chromiumWebRtcSwitchName(arg) === prefix.slice(0, -1)));
+  if (!native.length) return null;
+  try {
+    if (native.length !== 1 || !prefixes.some(prefix => native[0].startsWith(prefix))) throw new Error("ambiguous native payload");
+    const encoded = native[0].slice(native[0].indexOf("=") + 1);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length > 131072) throw new Error("invalid encoding");
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    const payload = JSON.parse(decoded);
+    const webrtc = payload.webrtc;
+    if (Buffer.from(decoded).toString("base64url") !== encoded || JSON.stringify(payload) !== decoded || payload.schemaVersion !== 1 ||
+        !webrtc || !["real", "altered", "disable"].includes(webrtc.mode) ||
+        (webrtc.mode === "altered" ? typeof webrtc.publicIp !== "string" || !webrtc.publicIp.trim() : webrtc.publicIp !== null)) {
+      throw new Error("invalid native WebRTC policy");
+    }
+    return { mode: webrtc.mode, publicIp: webrtc.publicIp };
+  } catch {
+    throw new LaunchBlockedError("webrtc-routing-policy", "Native WebRTC payload is malformed, ambiguous, or uses an unsupported native mode");
+  }
+}
+
+/** Last-line argv assertion: routing and the native JSON must describe the same policy. */
+export function assertChromiumWebRtcLaunchPolicy(args: readonly string[], policy: ChromiumWebRtcRoutingPolicy): void {
+  try { assertChromiumWebRtcRoutingArgs(args, policy); }
+  catch (error) {
+    if (error instanceof WebRtcRoutingPolicyError) throw new LaunchBlockedError(error.code, error.message);
+    throw error;
+  }
+  const native = readChromiumLaunchWebRtcPayload(args);
+  if (policy.fingerprintMode === "off" ? native !== null :
+      !native || native.mode !== policy.nativeMode || native.publicIp !== policy.nativeIp) {
+    throw new LaunchBlockedError("webrtc-routing-policy", "Native WebRTC payload conflicts with the resolved routing policy; no browser was spawned or adopted");
   }
 }
 

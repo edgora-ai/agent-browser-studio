@@ -93,6 +93,10 @@ export function buildFirefoxFingerprintPrefs(
   // the real IP cannot appear in any candidate). TURN/relay stays functional
   // when an app configures it. (Verified against the Firefox 154 binary
   // inventory: `media.peerconnection.stun.client.enabled` does not exist.)
+  // Firefox 154 (PeerConnectionImpl::ShouldForceProxy) checks this pref before
+  // the "only behind a proxy" variants, so it applies in off mode as well and
+  // overrides an explicit Real selection. The launch writer therefore owns the
+  // routing decision via FirefoxWebRtcPrefs and strips these keys for Real.
   prefs["media.peerconnection.ice.obfuscate_host_addresses"] = true;
   prefs["media.peerconnection.ice.proxy_only"] = true;
   return prefs;

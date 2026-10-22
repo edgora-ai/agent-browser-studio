@@ -203,7 +203,11 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
           const r = await Promise.resolve(handle.result);
           assertActionNotAborted(context.signal);
           const summary = logs.length ? ` (logs: ${logs.slice(0, 3).join(" | ")})` : "";
-          return `js result: ${JSON.stringify(r).slice(0, 200)}${summary}`;
+          // JSON.stringify(undefined) returns undefined, and .slice() on it
+          // threw — so a script that finished successfully but returned nothing
+          // (console.log only, or a bare statement) was reported as failed.
+          const rendered = r === undefined ? "undefined" : (JSON.stringify(r) ?? String(r)).slice(0, 200);
+          return `js result: ${rendered}${summary}`;
         } finally {
           handle.dispose();
         }

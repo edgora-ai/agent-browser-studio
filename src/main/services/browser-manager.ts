@@ -23,7 +23,10 @@ import {
   type FingerprintDrift,
 } from "./fingerprint-baseline.js";
 import { checkEnvironmentRiskRuntime, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "./environment-risk.js";
-import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible, type LaunchDriftCheck } from "./browser/launch-guards.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible, assertChromiumWebRtcLaunchPolicy, resolveChromiumWebRtcLaunchPolicy, type LaunchDriftCheck } from "./browser/launch-guards.js";
+import { chromiumWebRtcRoutingArgs } from "./browser/webrtc-policy.js";
+import { firefoxWebRtcCheckpointHash, firefoxWebRtcCheckpointMatches, resolveFirefoxWebRtcRoutingPolicy, type FirefoxWebRtcRoutingPolicy } from "./browser/firefox-webrtc-policy.js";
+import { applyChromiumWebRtcPreferences, validateChromiumWebRtcPreferences } from "./browser/webrtc-preferences.js";
 export type { LaunchDriftCheck } from "./browser/launch-guards.js";
 import { analyzeFingerprintDrift, type FingerprintDriftAnalysis } from "./fingerprint-drift-policy.js";
 import {
@@ -31,7 +34,7 @@ import {
 } from "./fingerprint-drift-reports.js";
 import { getHostBrowserPlatform } from "./browser-platform-policy.js";
 import {
-  assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence,
+  assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence, assertChromiumReuseWebRtcCompatible,
   chromiumLaunchRequestHash, chromiumLaunchStampArg, restartRequired, stampChromiumLaunch,
 } from "./browser/launch-provenance.js";
 import { prepareChromiumDiagnosticNetLogArgs } from "./browser/launch-diagnostics.js";
@@ -120,7 +123,20 @@ interface OwnedFirefoxLaunch {
   profileDir: string;
   argvHash: string;
   userJsHash: string;
+  webrtcCheckpoint: string;
   connection: BidiConnection;
+}
+
+function firefoxWebRtcPolicyFor(meta: BrowserProfileMeta, resolved: ResolvedProfileProxy): FirefoxWebRtcRoutingPolicy {
+  const fingerprintMode = normalizeFingerprintMode(meta.fingerprintMode);
+  const hasProxy = resolved.config != null;
+  // Mirror launchFirefoxProfile: routing is independent of the dormant identity
+  // fields, so the stored selection is what gets validated and applied.
+  const requestedMode = normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  return resolveFirefoxWebRtcRoutingPolicy({
+    requestedMode, fingerprintMode, hasProxy,
+    webrtcIp: fingerprintMode === "off" ? null : meta.webrtcIp,
+  });
 }
 const ownedFirefoxLaunches = new WeakMap<object, OwnedFirefoxLaunch>();
 import { buildProxyDnsArgs, resolveChromiumDnsPolicy } from "./browser-dns-policy.js";
@@ -542,7 +558,7 @@ export function createBrowserProfile(opts: {
     timezone: normalizeOptionalTimezone(opts.timezone),
     locale: normalizeOptionalLocale(opts.locale),
     webrtcMode,
-    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : normalizeOptionalIp(opts.webrtcIp),
+    webrtcIp: webrtcMode === "real" || webrtcMode === "disable" || webrtcMode === "proxy-only" ? null : normalizeOptionalIp(opts.webrtcIp),
     ...normalizeGeolocationMeta(opts),
     ...normalizeHardwareFingerprintMeta(opts),
     proxyMode,
@@ -738,7 +754,9 @@ export function trashBrowserProfile(dirId: string, opts?: { force?: boolean }): 
   // Share export/restore/launch ownership, including any F09 compensation.
   const release = acquireRestoreLock(dirId);
   try {
-    if (statusBrowser(dirId).running) throw new Error("Cannot delete profile while managed Chromium is running");
+    const trashStatus = statusBrowser(dirId);
+    if (trashStatus.running) throw new Error("Cannot delete profile while managed Chromium is running");
+    if (trashStatus.unknown) throw new Error("Cannot move profile to trash: runtime state is unknown. Stop it normally and retry after exit is confirmed.");
 
     const entries = readTrashIndex(); // read and validate BEFORE any mutation
     const cfg = getConfig() as any;
@@ -937,6 +955,9 @@ export function deleteBrowserProfile(dirId: string, opts?: { force?: boolean }):
   try {
     const st = statusBrowser(dirId);
     if (st.running) throw new Error("Cannot delete profile while managed Chromium is running");
+    // `unknown` means discovery failed (EPERM, unreadable ps, strict-scan error),
+    // NOT that the browser exited. Deleting here removed a live profile's data.
+    if (st.unknown) throw new Error("Cannot delete profile: runtime state is unknown. Stop it normally and retry after exit is confirmed.");
     const profileDir = path.join(getProfilesDir(), dirId);
     try {
       if (fs.existsSync(profileDir)) fs.rmSync(profileDir, { recursive: true, force: true });
@@ -1282,7 +1303,13 @@ export async function launchBrowser(
   if (engine === "firefox") {
     const requestOptions = () => ({ headless: opts?.headless, binaryOverride: getFirefoxBinaryOverride(),
       managedRoot: getManagedFirefoxRoot(), nativeRequested: firefoxNativeModeRequested() });
-    const firefoxRequestHash = firefoxLaunchRequestHash(meta, cfg, requestOptions());
+    // WebRTC routing is route material, not a session identity: the request
+    // hash already covers mode/IP, and the live process is bound separately by
+    // its applied checkpoint (and user.js digest). Folding the checkpoint into
+    // this HMAC would also make a corrected policy permanently unreusable in
+    // the same Studio session after the first opposite-valued launch.
+    const firefoxRequestHash = (() => { try { return firefoxLaunchRequestHash(meta, cfg, requestOptions()); }
+      catch (error) { if (releaseLaunchLock) releaseLaunchLock(); throw error; } })();
     const assertFirefoxRequest = () => {
       // Gecko treats presence (even "0" or an empty string) as disabling the
       // content sandbox; prefs alone cannot restore its secure default.
@@ -1354,6 +1381,10 @@ export async function launchBrowser(
       assertOwnedSession();
       const resolvedProxy = resolveFirefoxProxy(dirId, meta, cfg);
       assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
+      const expectedRoute = firefoxWebRtcPolicyFor(meta, resolvedProxy);
+      if (!firefoxWebRtcCheckpointMatches(owned.webrtcCheckpoint, expectedRoute)) {
+        throw restartRequired("Firefox WebRTC routing policy changed since this browser launched");
+      }
       const effective = await resolveFirefoxLaunchIdentity(meta, resolvedProxy, assertFirefoxRequest);
       assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
       if (firefoxEffectiveLaunchHash(effective.meta, resolvedProxy) !== owned.effectiveHash) {
@@ -1403,6 +1434,7 @@ export async function launchBrowser(
     }
     // Reject changed/legacy/ambiguous inputs before binary probing or proxy I/O.
     assertChromiumLaunchProvenance(candidate.args, requestHash!, fingerprintMode);
+    assertChromiumReuseWebRtcCompatible(candidate.args, meta, cfg);
     const expectedBin = configuredBin || envBin || (await findManagedChromiumBinaryAsync(normalizeManagedChromiumVersion(meta.browserVersion)))?.binaryPath;
     assertCurrentRequest();
     if (!expectedBin || !fs.existsSync(expectedBin)) throw restartRequired("the expected Chromium executable is unavailable");
@@ -1498,8 +1530,10 @@ export async function launchBrowser(
       detail: "failed: proxy DNS configuration is invalid or unsupported; browser was not spawned" });
     throw error;
   }
-  const requestedWebRtcMode = passThrough ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
-  const shouldResolveWebRtc = requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered";
+  // Identity-off is not consent to direct WebRTC. Only explicit real opts out
+  // of proxy-only routing; Auto never needs an exit-IP observation.
+  const requestedWebRtcMode = normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  const shouldResolveWebRtc = requestedWebRtcMode === "altered";
   console.log(`[agent-browser] Preparing profile ${dirId.slice(0, 8)} mode=${fingerprintMode} browser=${requestedVersion || "auto"}`);
 
   // Pre-launch consistency check (timezone / locale / WebRTC vs proxy). Warns
@@ -1574,31 +1608,17 @@ export async function launchBrowser(
     ]);
   }
 
-  // Resolve the exit identity through our bounded proxy detector. Explicit
-  // altered mode must never
-  // silently degrade to real-IP WebRTC.
-  if (shouldResolveWebRtc && !webrtcIp) {
-    webrtcIp = normalizeOptionalIp(getLaunchArgValue(args, "--fingerprint-webrtc-ip"));
-    if (!webrtcIp && activeProxy) {
-      if (!geoDetection) {
-        const target = resolvedProxy.name ? captureProxyDetectionTarget(resolvedProxy.name, activeProxy) : null;
-        geoDetection = await resolveGeoFromProxy(activeProxy, target);
-        assertCurrentRequest();
-        if (target && geoDetection.detection) persistLaunchDetection(target, geoDetection.detection);
-      }
-      webrtcIp = geoDetection.exitIp;
-      assertCurrentRequest();
-    }
-  }
-  if (requestedWebRtcMode === "altered" && !webrtcIp) {
-    throw new Error("WebRTC altered mode requires a custom IP or a proxy with a detectable exit IP");
-  }
-  const effectiveWebRtcMode = requestedWebRtcMode === "auto"
-    ? (webrtcIp ? "altered" : "real")
-    : requestedWebRtcMode;
+  // Only explicit altered consumes a custom/detected exit IP. A failed Geo-IP
+  // lookup cannot downgrade Auto/proxy-only to real, or supply policy via argv.
+  const webRtcPolicy = resolveChromiumWebRtcLaunchPolicy({
+    requestedMode: requestedWebRtcMode,
+    fingerprintMode,
+    hasProxy: Boolean(activeProxy),
+    webrtcIp: normalizeOptionalIp(webrtcIp),
+  });
 
-  // Our Chromium fork consumes one versioned, base64url JSON identity. Add it
-  // after bounded proxy resolution so native WebRTC uses the final exit IP.
+  // Native accepts only real/altered/disable. Proxy-only is native real with
+  // no rewrite IP; the launcher separately owns the stock routing switch.
   if (!passThrough) {
     const nativeFingerprintMeta = {
       ...meta,
@@ -1606,8 +1626,8 @@ export async function launchBrowser(
       platform,
       timezone: effectiveTimezone,
       locale: effectiveLocale,
-      webrtcMode: effectiveWebRtcMode,
-      webrtcIp,
+      webrtcMode: webRtcPolicy.nativeMode,
+      webrtcIp: webRtcPolicy.nativeIp,
     };
     // Fixed proxies resolve origin hostnames at egress by default. Only an
     // explicit, validated provider selects the engine's strict proxy DoH path.
@@ -1735,6 +1755,7 @@ export async function launchBrowser(
 
   // No stale preparation may mutate profile preferences or mint a stamp.
   assertCurrentRequest();
+  validateChromiumWebRtcPreferences(profileDir);
   // If bounded egress resolution is unavailable, use a deterministic locale
   // fallback instead of leaking the host UI language.
   if (!passThrough) {
@@ -1749,12 +1770,20 @@ export async function launchBrowser(
     profileDir,
     !passThrough && normalizeBoolean(meta.allowThirdPartyCookies, "third-party cookie compatibility"),
   );
+  const webRtcPreferences = applyChromiumWebRtcPreferences(profileDir, webRtcPolicy);
+  if (!webRtcPreferences.directorySynced) console.warn("[browser] WebRTC preference readback passed; directory fsync is unsupported on this platform");
 
   assertCurrentRequest();
   args.push(...prepareChromiumDiagnosticNetLogArgs(getAppDataDir(), diagnosticNetLogRequest));
+  // Append exactly once after every other producer/deduper. Pre-existing,
+  // split-value, duplicate or weaker routing switches must fail, not be merged.
+  args.push(...chromiumWebRtcRoutingArgs(webRtcPolicy));
+  assertChromiumWebRtcLaunchPolicy(args, webRtcPolicy);
   const launchProvenance = stampChromiumLaunch(args, requestHash!, fingerprintMode);
   args.push(chromiumLaunchStampArg(launchProvenance));
   if (windowTitlePrefix) args.push(`--agent-browser-window-title-prefix=${windowTitlePrefix}`);
+  // These are the actual final spawn arguments; no producer runs after this.
+  assertChromiumWebRtcLaunchPolicy(args, webRtcPolicy);
   const logFile = getLaunchLogPath(dirId);
   const logFd = fs.openSync(logFile, "a");
   fs.writeSync(logFd, `\n[${new Date().toISOString()}] Launching ${bin}\n${maskSensitiveLaunchArgs(args).join(" ")}\n`);
@@ -2204,11 +2233,30 @@ async function launchFirefoxProfile(
   // R12 P2-1: normalize like the Chromium path — real/disable modes carry no
   // effective IP at runtime, so a stale meta.webrtcIp must not trigger
   // webrtc-no-proxy on Firefox while Chromium stays silent.
-  const requestedWebRtcMode = fingerprintMode === "off" ? "real" : normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  // WebRTC routing is NOT part of the dormant identity set. The Firefox dialog
+  // keeps this selector enabled while fingerprinting is off, so silently
+  // replacing the user's choice here made the UI claim a restriction that was
+  // never applied (off + Proxy-only without a proxy used to launch as Real).
+  // The stored selection is therefore honoured on every launch; the resolver
+  // enforces proxy-required / managed-required and refuses instead.
+  const requestedWebRtcMode = normalizeWebRtcMode(meta.webrtcMode, meta.webrtcIp);
+  // Firefox has its own engine prefs; keep the same explicit boundaries as
+  // Chromium instead of assuming identity-off means native WebRTC.
+  const webRtcPolicy = (() => {
+    try {
+      return resolveFirefoxWebRtcRoutingPolicy({
+        requestedMode: requestedWebRtcMode, fingerprintMode,
+        hasProxy: resolvedProxy.config != null, webrtcIp: fingerprintMode === "off" ? null : meta.webrtcIp,
+      });
+    } catch (error) {
+      if (releaseLaunchLock) releaseLaunchLock();
+      throw error;
+    }
+  })();
   runConsistencyGate(dirId, cfg, {
     passThrough: fingerprintMode === "off",
     timezone: effectiveMeta.timezone, locale: effectiveMeta.locale,
-    webrtcIp: requestedWebRtcMode === "auto" || requestedWebRtcMode === "altered" ? meta.webrtcIp : null,
+    webrtcIp: requestedWebRtcMode === "altered" ? meta.webrtcIp : null,
     platform: meta.platform,
     proxyMode: resolvedProxy.mode,
     proxyGeo: effective.geo ?? (effective.timezoneSource === "explicit" && effective.localeSource === "explicit" && resolvedProxy.name ? getProxyDetection(resolvedProxy.name) : null),
@@ -2227,6 +2275,10 @@ async function launchFirefoxProfile(
     useGpu: true,
     sandboxPermission: true,
     colorScheme: "system",
+    webrtcRouting: { forceProxy: webRtcPolicy.forceProxy, obfuscateHostAddresses: webRtcPolicy.obfuscateHostAddresses,
+      disablePeerConnectionApi: webRtcPolicy.disablePeerConnectionApi },
+    proxyRouting: resolvedProxy.config != null,
+    webrtcCheckpointHash: firefoxWebRtcCheckpointHash(webRtcPolicy),
     ...(managedIdentity ? { extraPrefs: nativeMode ? managedIdentity.nativePrefs : managedIdentity.prefs } : {}),
   });
 
@@ -2485,7 +2537,8 @@ async function launchFirefoxProfile(
     assertFirefoxProxyCurrent(dirId, meta, resolvedProxy);
     ownedFirefoxLaunches.set(child, {
       requestHash: opts.requestHash, effectiveHash, executablePath: bin, binaryIdentity, profileDir,
-      argvHash: firefoxLaunchDigest(JSON.stringify(child.spawnargs)), userJsHash, connection,
+      argvHash: firefoxLaunchDigest(JSON.stringify(child.spawnargs)), userJsHash,
+      webrtcCheckpoint: firefoxWebRtcCheckpointHash(webRtcPolicy), connection,
     });
   } catch (e: any) {
     // Drift-blocked or fatal post-launch gate failure: terminate and clean up.
@@ -2858,7 +2911,7 @@ function normalizeWebRtcMode(value: unknown, legacyIp?: unknown): WebRtcMode {
   if (value === undefined || value === null || value === "") {
     return normalizeOptionalIp(legacyIp) ? "altered" : "auto";
   }
-  if (value === "auto" || value === "real" || value === "altered" || value === "disable") return value;
+  if (value === "auto" || value === "proxy-only" || value === "real" || value === "altered" || value === "disable") return value;
   throw new Error(`Invalid WebRTC mode: ${JSON.stringify(value)}`);
 }
 

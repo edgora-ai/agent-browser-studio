@@ -97,8 +97,13 @@
     return agentBrowser.ipc.call(key, fn, { kind: "list" });
   }
 
-  function profileErrorMessage(error) {
+  function profileErrorMessage(error, code) {
     var message = error && error.message ? error.message : String(error || "");
+    var rtcCode = code || error && error.code;
+    if (rtcCode === "webrtc-proxy-required" || message.indexOf("WebRTC proxy-only mode requires") !== -1) return t("launch.webrtc.proxy-required", "WebRTC Proxy-only requires a configured proxy. No direct fallback was started.");
+    if (rtcCode === "webrtc-managed-required" || message.indexOf("WebRTC altered/disable mode requires") !== -1) return t("launch.webrtc.managed-required", "Legacy WebRTC replacement/disable needs managed fingerprinting. With fingerprinting off, choose Auto, Proxy-only or explicitly choose Real.");
+    if (rtcCode === "webrtc-routing-policy") return t("launch.webrtc.policy-conflict", "The WebRTC routing configuration could not be verified. No browser was started or adopted; check the profile's proxy and restart explicitly.");
+    if (rtcCode === "webrtc-preferences-unavailable" || message.indexOf("WebRTC routing preferences could not be validated") !== -1) return t("launch.webrtc.preferences-unavailable", "WebRTC privacy preferences could not be saved and verified. No browser was started. Preserve the profile data and inspect its Preferences; do not reset site data.");
     // IPC may wrap the stable backend prefix. Do not infer host/kernel support
     // from renderer UA or app.paths; only main can validate the selected tuple.
     if (message.indexOf("Unsupported GPU overrides for Chromium:") !== -1) {
@@ -205,6 +210,14 @@
         section.querySelectorAll(tag).forEach(function (field) { field.disabled = isFirefox; });
       });
     });
+    // The dedicated Firefox routing selector is visible only for Firefox and
+    // must stay disabled for Chromium so hidden values are never submitted.
+    dialog.querySelectorAll(".firefox-webrtc-section").forEach(function (section) {
+      section.style.display = isFirefox ? "block" : "none";
+      ["select"].forEach(function (tag) {
+        section.querySelectorAll(tag).forEach(function (field) { field.disabled = !isFirefox; });
+      });
+    });
   }
 
   // Imported profiles can contain a valid explicit TZ/locale outside the short
@@ -298,7 +311,7 @@
             if (!r.success && r.code === "PROXY_UNREACHABLE" && !force) {
               setCardBusy(dirId, false);
               agentBrowser.confirm(
-                t("launch.force-proxy.msg", "The proxy is unreachable, so this profile may not load pages. Launch anyway? Without a working proxy the browser may fall back to a direct connection and expose your real IP."),
+                t("launch.force-proxy.msg", "The proxy is unreachable, so pages or calls may fail. Launch with this proxy anyway? This does not remove the proxy or enable direct fallback. Explicit WebRTC Real network mode may still bypass it."),
                 function () { launchInner(dirId, { forceDeadProxy: true, fingerprintViewEpoch: fingerprintEpoch }); },
                 { title: t("launch.force-proxy.title", "Launch without a working proxy?") },
               );
@@ -334,7 +347,7 @@
               }
               // Stable main-process codes carry localized recovery guidance;
               // saving metadata or restarting Studio never applies identity live.
-              var launchError = profileErrorMessage(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"));
+              var launchError = profileErrorMessage(r.error || t("toast.profile.launch-failed", "Managed Chromium launch failed"), r.code);
               if (r.code === "host-platform-mismatch") {
                 launchError = t("launch.host-platform-mismatch", "This managed profile uses a different OS from this computer. Edit the profile OS to match the host, save, then stop the browser if it is running and start it again. Restarting Studio is not enough.");
               } else if (r.code === "restart-required") {
@@ -435,6 +448,19 @@
           writeIdentitySelect("agent-browser-meta-locale", metaData.locale);
           document.getElementById("agent-browser-meta-webrtc-mode").value = metaData.webrtcMode;
           document.getElementById("agent-browser-meta-webrtc").value = metaData.webrtcIp;
+          // Firefox has no altered address rewrite; map it to Auto rather than
+          // silently claiming an equivalent. A saved altered profile is refused
+          // at launch by the Firefox policy, not rewritten here.
+          var fxMode = metaData.webrtcMode === "altered" ? "auto" : metaData.webrtcMode;
+          var fxSelect = document.getElementById("agent-browser-meta-webrtc-mode-fx");
+          if (fxSelect) {
+            fxSelect.value = fxMode === "proxy-only" || fxMode === "real" || fxMode === "disable" ? fxMode : "auto";
+            // Remember what was loaded so Save can tell "untouched" from "the
+            // user picked Auto". Submitting Auto for an untouched legacy
+            // `altered` profile would silently rewrite persisted identity.
+            fxSelect.setAttribute("data-loaded-value", fxSelect.value);
+          }
+          syncWebRtcIpControl("agent-browser-meta-");
           document.getElementById("agent-browser-meta-render-scale-mode").value = p.renderScaleMode === "strict" ? "strict" : "native";
           writeGeolocationFields("agent-browser-meta-", metaData);
           writeHardwareFields("agent-browser-meta-", metaData);
@@ -572,6 +598,8 @@
         document.getElementById("new-agent-browser-locale").value = "";
         document.getElementById("new-agent-browser-webrtc").value = "";
         document.getElementById("new-agent-browser-webrtc-mode").value = "auto";
+        if (document.getElementById("new-agent-browser-webrtc-mode-fx")) document.getElementById("new-agent-browser-webrtc-mode-fx").value = "auto";
+        syncWebRtcIpControl("new-agent-browser-");
         document.getElementById("new-agent-browser-window-title-enabled").checked = true;
         document.getElementById("new-agent-browser-render-scale-mode").value = "native";
         writeGeolocationFields("new-agent-browser-", {});
@@ -631,6 +659,7 @@
         writeIdentitySelect("new-agent-browser-locale", preset.profile.locale);
         if (document.getElementById("new-profile-browser").value !== "firefox") {
           document.getElementById("new-agent-browser-webrtc-mode").value = preset.profile.webrtcMode;
+          syncWebRtcIpControl("new-agent-browser-");
           writeGeolocationFields("new-agent-browser-", {
             geolocationMode: preset.profile.geolocationMode,
             geolocationLatitude: preset.profile.geolocationLatitude,
@@ -792,7 +821,7 @@
               allowThirdPartyCookies: document.getElementById("new-agent-browser-allow-third-party-cookies").checked,
               drm: document.getElementById("new-agent-browser-drm").checked,
               webrtcMode: webrtcMode,
-              webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? undefined : document.getElementById("new-agent-browser-webrtc").value.trim() || undefined,
+              webrtcIp: webrtcMode === "altered" ? document.getElementById("new-agent-browser-webrtc").value.trim() || undefined : undefined,
               renderScaleMode: document.getElementById("new-agent-browser-render-scale-mode").value || "native",
               windowTitlePrefix: document.getElementById("new-agent-browser-window-title-enabled").checked ? "" : null,
               // Firefox takes only the supported common preset prefill. The
@@ -801,6 +830,15 @@
               businessPresetId: businessPresetId,
             });
           } catch (e) { toast(e.message || String(e), "error"); return; }
+        } else {
+          // Firefox has its own engine prefs (see firefox-webrtc-policy.ts).
+          // Altered is Chromium-only; the select hides it and the server refuses
+          // it rather than pretending to rewrite addresses.
+          var fxWebrtcMode = document.getElementById("new-agent-browser-webrtc-mode-fx").value || "auto";
+          options.webrtcMode = fxWebrtcMode;
+          // Firefox never has an IP-rewrite address. Omit the key rather than
+          // sending null, matching the Chromium Auto shape: a null here reads
+          // as an explicit field on the wire and hides intent.
         }
         wcall("browser.create", function () { return api.browser.create(options); }).then(function(r) {
           // Sale-90/92: trial expiry / profile cap opens the paywall dialog
@@ -1991,12 +2029,22 @@
           allowThirdPartyCookies: document.getElementById("agent-browser-meta-allow-third-party-cookies").checked,
           drm: document.getElementById("agent-browser-meta-drm").checked,
           webrtcMode: webrtcMode,
-          webrtcIp: webrtcMode === "real" || webrtcMode === "disable" ? null : document.getElementById("agent-browser-meta-webrtc").value.trim() || null,
+          webrtcIp: webrtcMode === "altered" ? document.getElementById("agent-browser-meta-webrtc").value.trim() || null : null,
           renderScaleMode: document.getElementById("agent-browser-meta-render-scale-mode").value === "strict" ? "strict" : "native",
           appUrl: document.getElementById("agent-browser-meta-app-url").value.trim() || null,
           windowTitlePrefix: document.getElementById("agent-browser-meta-window-title-enabled").checked ? document.getElementById("agent-browser-meta-window-title-prefix").value.trim() || "" : null,
         });
       } catch (e) { toast(e.message || String(e), "error"); return; }
+    } else {
+      var fxSelectMeta = document.getElementById("agent-browser-meta-webrtc-mode-fx");
+      var fxMetaMode = fxSelectMeta ? fxSelectMeta.value || "auto" : "auto";
+      // Only send the routing mode when the user actually changed it. An
+      // untouched select keeps the persisted value (including a legacy
+      // `altered` pin, which launch refuses explicitly rather than rewriting);
+      // webrtcIp belongs to Chromium's rewrite mode and is never sent here.
+      if (!fxSelectMeta || fxSelectMeta.getAttribute("data-loaded-value") !== fxMetaMode) {
+        meta.webrtcMode = fxMetaMode;
+      }
     }
     // Firefox's existing version pin and other explicit identity metadata are
     // deliberately omitted from this patch, not cleared by hidden controls.
@@ -3193,6 +3241,17 @@
   agentBrowser.envRiskClear = function() { clearHealthHistory("env"); };
 
 
+  function syncWebRtcIpControl(prefix) {
+    var mode = document.getElementById(prefix + "webrtc-mode");
+    var ip = document.getElementById(prefix + "webrtc");
+    if (!mode || !ip) return;
+    ip.disabled = mode.value !== "altered";
+    if (typeof mode.addEventListener === "function" && !mode.dataset.routingBound) {
+      mode.dataset.routingBound = "1";
+      mode.addEventListener("change", function () { syncWebRtcIpControl(prefix); });
+    }
+  }
+
   function rtcRttText(result) {
     return typeof result.rttMs === "number" && Number.isFinite(result.rttMs) ? result.rttMs + "ms" : t("health.rtt-unmeasured", "Not measured (requires a connected peer)");
   }
@@ -3212,6 +3271,7 @@
     var rows = [];
     rows.push('<div class="card-header"><span class="name">WebRTC · ' + esc(when) + '</span><span>' + badge + '</span></div>');
     rows.push('<div style="font-size:12px;color:var(--text);margin-top:4px;">' + esc(res.summary || "") + '</div>');
+    rows.push('<div class="hint-line" style="margin-top:6px;">' + esc(t("webrtc.peer.not-tested", "Peer connection: not tested (ICE exposure does not verify TCP/UDP relay or calls)")) + '</div>');
     rows.push('<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">RTCPeerConnection: ' + (res.rtcAvailable ? t("webrtc.available", "available") : t("webrtc.unavailable", "unavailable")) + ' · ' + esc(t("webrtc.ice-candidates", "ICE candidates")) + ': ' + (res.candidates || []).length + ' · ' + esc(t("webrtc.conn-state", "connection state")) + ': ' + esc(res.connectionState || "") + " · RTT: " + esc(rtcRttText(res)) + '</div>');
     if ((res.mdnsHosts || []).length) rows.push('<div style="font-size:11px;margin-top:4px;"><span style="color:var(--text-muted);">' + esc(t("webrtc.mdns", "mDNS hostnames")) + ': </span>' + res.mdnsHosts.map(esc).join(", ") + '</div>');
     if (hasLeak) rows.push('<div style="font-size:11px;margin-top:4px;"><span class="icon-text" style="color: var(--danger-text);">' + icon("alert", 11) + esc(t("webrtc.local-ip-leak", "Local IP leak")) + ': </span>' + res.hostIps.map(esc).join(", ") + '</div>');

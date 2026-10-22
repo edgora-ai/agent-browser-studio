@@ -122,6 +122,9 @@ const DIALOGS = [
       description: "Run UPDATE on the profiles table (3 rows)", detail: "UPDATE profiles SET note = ? WHERE dirId = ?",
       createdAt: 1757000000000,
     } },
+  // The About entry lives in the sidebar footer, so the audit also proves the
+  // button itself is visible and labelled — not just that the command works.
+  { id: "dlg-about", cmd: "showAbout", opener: "sidebar-about" },
   { id: "dlg-license", cmd: null, skip: "opens from the license surface" },
   { id: "dlg-terms", cmd: null, skip: "first-run only; accepted in setup" },
   { id: "dlg-confirm", cmd: null, skip: "covered separately (see probeConfirm)" },
@@ -159,14 +162,33 @@ async function boot(browser, lang, theme) {
 
 // Open one dialog and return what the user would see.
 async function inspect(page, d) {
-  return page.evaluate(async ({ id, cmd, arg, arg2, accountRefIndex, emit, emitArg }) => {
+  return page.evaluate(async ({ id, cmd, arg, arg2, accountRefIndex, emit, emitArg, opener }) => {
     document.querySelectorAll("dialog[open]").forEach((x) => x.close());
+    // An entry point the user must be able to find without knowing a command
+    // name: visible, enabled, and carrying an accessible label.
+    let openerState = null;
+    if (opener) {
+      const el = document.getElementById(opener);
+      if (!el) return { unavailable: `no entry point #${opener}` };
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      openerState = {
+        visible: rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none",
+        label: (el.getAttribute("aria-label") || el.textContent || "").trim(),
+        disabled: el.disabled === true,
+      };
+      if (!openerState.visible) return { unavailable: `entry point #${opener} is not visible` };
+      if (!openerState.label) return { unavailable: `entry point #${opener} has no accessible label` };
+      if (openerState.disabled) return { unavailable: `entry point #${opener} is disabled` };
+      el.click();
+      await new Promise((r) => setTimeout(r, 450));
+    }
     if (emit) {
       // Fire the same IPC channel the main process broadcasts on.
       if (typeof window.agentBrowserAPI.emit !== "function") return { unavailable: "mock has no emit" };
       if (window.agentBrowserAPI.listenerCount(emit) === 0) return { unavailable: `no listener for ${emit}` };
       window.agentBrowserAPI.emit(emit, emitArg);
-    } else {
+    } else if (!opener) {
       // cmd may be dotted (e.g. "batch.showResult") — resolve through the path
       // so nested exports are reachable, not just top-level ones.
       const fn = cmd.split(".").reduce((o, k) => (o == null ? o : o[k]), window.agentBrowser);
@@ -210,6 +232,7 @@ async function inspect(page, d) {
       cardCount: dlg.querySelectorAll(".profile-card, .card, .info-row").length,
       overflow,
       emptyish: dlg.querySelectorAll(".empty-state, .loading, .skeleton-list").length,
+      opener: openerState,
     };
   }, d);
 }
@@ -293,7 +316,9 @@ for (const theme of THEMES) {
       if (!r.open) continue;
       const garbage = GARBAGE.exec(r.text);
       if (garbage) findings.push({ id: d.id, kind: "garbage-text", detail: `${tag}[${lang}] ${JSON.stringify(garbage[0])}` });
-      const m = r.text.split("\n").map((l) => l.trim()).filter((l) => RAW_KEY.test(l) && !/https?:|\.(com|cn|org|io|example)\b/.test(l));
+      // A reverse-DNS bundle id (com.example.app) is data, not an unresolved
+      // translation key, so it is excluded alongside URLs.
+      const m = r.text.split("\n").map((l) => l.trim()).filter((l) => RAW_KEY.test(l) && !/https?:|\.(com|cn|org|io|example)\b/.test(l) && !/^(?:com|org|net|io)\.[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(l));
       if (m.length) findings.push({ id: d.id, kind: "raw-key-leak", detail: `${tag}[${lang}] ${m[0].slice(0, 60)}` });
       if (r.overflow > 0) findings.push({ id: d.id, kind: "cell-overflow", detail: `${tag}[${lang}] ${r.overflow} element(s) spill their box` });
     }

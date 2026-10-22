@@ -590,6 +590,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { proxies: getProxyList() } };
   }
   if (method === "POST" && p === "/api/proxies") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
     const body = await readJson(req);
     if (!body || typeof body.name !== "string" || !body.name.trim() || !body.config || typeof body.config !== "object") {
       return { status: 400, body: { error: "name and config are required" } };
@@ -606,6 +608,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { entries: listProxyHealth(), summary: proxyHealthSummary() } };
   }
   if (method === "POST" && p === "/api/proxies/import") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
     const body = await readJson(req);
     if (!body || typeof body.text !== "string") {
       return { status: 400, body: { error: "text is required" } };

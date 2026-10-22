@@ -267,7 +267,13 @@ async function fixture() {
       if (logical === "services/config/paths.ts") return { getConfigPath: () => configPath };
       if (logical === "services/browser-manager.ts") return browser;
       if (logical === "services/process-discovery.ts") return discovery;
-      if (logical === "services/team.ts") return { requireProfileMutation: () => ({ ok: true }) };
+      if (logical === "services/team.ts") return {
+        requireProfileMutation: () => ({ ok: true }),
+        // Export now requires the same member+ rule as plaintext proxy export;
+        // this fixture has no team workspace, so the gate allows.
+        requireAccountSecret: () => ({ ok: true }),
+        requireSettingsMutation: () => ({ ok: true }),
+      };
       if (logical === "services/license.ts") return { checkCreateAllowed: () => ({ allowed: true }) };
       if (logical === "services/utils.ts") return { validateDirId: (id: string) => { if (typeof id !== "string" || !/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid fixture dirId"); } };
       if (logical === "services/audit-log.ts") return { recordAudit: (_event: any) => undefined };

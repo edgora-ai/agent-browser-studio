@@ -14,7 +14,7 @@ import {
 import { getProxySecret } from "../services/config-manager.js";
 import { clearProxyHealth, listProxyHealth, proxyHealthSummary, recordProxyRotation } from "../services/proxy-health.js";
 import { recordAudit } from "../services/audit-log.js";
-import { requireAccountSecret } from "../services/team.js";
+import { requireAccountSecret, requireSettingsMutation } from "../services/team.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "../services/proxy-import.js";
 import type { ProxyConfig, ProxyMode } from "../types.js";
 import QRCode from "qrcode";
@@ -53,6 +53,10 @@ export function registerProxyHandlers(): void {
     config: ProxyConfig;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       addProxy(name, config);
       return { success: true };
     } catch (e: any) {
@@ -63,6 +67,10 @@ export function registerProxyHandlers(): void {
   // Delete a named proxy
   ipcMain.handle("proxy:delete", async (_event, name: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const result = deleteProxy(name);
       return { success: result, error: result ? undefined : "Cannot delete this proxy" };
     } catch (e: any) {
@@ -79,6 +87,10 @@ export function registerProxyHandlers(): void {
     config: ProxyConfig;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const result = updateProxy(name, config);
       return { success: result, error: result ? undefined : "Proxy not found" };
     } catch (e: any) {
@@ -97,6 +109,10 @@ export function registerProxyHandlers(): void {
     config: ProxyConfig;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const result = renameProxy(oldName, newName, config);
       return { success: result, error: result ? undefined : "Proxy not found" };
     } catch (e: any) {
@@ -107,6 +123,10 @@ export function registerProxyHandlers(): void {
   // Set the default proxy
   ipcMain.handle("proxy:set-default", async (_event, name: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const result = setDefaultProxyName(name);
       return { success: result, error: result ? undefined : "Proxy not found" };
     } catch (e: any) {
@@ -125,6 +145,10 @@ export function registerProxyHandlers(): void {
     mode?: ProxyMode;
   }): Promise<{ success: boolean; error?: string }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       setProfileProxy(dirId, proxyName, mode);
       return { success: true };
     } catch (e: any) {
@@ -143,6 +167,10 @@ export function registerProxyHandlers(): void {
   // Clear one proxy's health history, or all when name is omitted
   ipcMain.handle("proxy:health-clear", async (_event, name?: string): Promise<{ success: boolean; error?: string; cleared?: number }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const cleared = clearProxyHealth(name);
       return { success: true, cleared };
     } catch (e: any) {
@@ -154,6 +182,10 @@ export function registerProxyHandlers(): void {
   // fallback would be used; record the rotation event when one is selected.
   ipcMain.handle("proxy:rotate", async (_event, name: string): Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }> => {
     try {
+      // Team RBAC: proxy edits change every bound profile's egress route and
+      // stored credentials, so they are a settings mutation (member+).
+      const gate = requireSettingsMutation();
+      if (!gate.ok) return { success: false, error: gate.error };
       const info = getProxyRotationInfo(name);
       if (!info) return { success: false, error: "Proxy not found" };
       if (info.to && info.to !== info.from) {

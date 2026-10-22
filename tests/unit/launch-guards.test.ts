@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible } from "../../src/main/services/browser/launch-guards.js";
+import { runFingerprintDriftGuard, runEnvironmentRiskGuard, LaunchBlockedError, assertHostPlatformCompatible, assertChromiumWebRtcLaunchPolicy, resolveChromiumWebRtcLaunchPolicy } from "../../src/main/services/browser/launch-guards.js";
+import { CHROMIUM_WEBRTC_PROFILE_ARG, CHROMIUM_WEBRTC_PROXY_ONLY_ARG } from "../../src/main/services/browser/webrtc-policy.js";
 import type { BrowserPlatform } from "../../src/main/types.js";
 
 describe("native-GPU host launch guard", () => {
@@ -32,6 +33,63 @@ describe("native-GPU host launch guard", () => {
     expect(() => assertHostPlatformCompatible({}, "win32")).not.toThrow();
     expect(() => assertHostPlatformCompatible({}, "linux")).toThrow(LaunchBlockedError);
     expect(() => assertHostPlatformCompatible({}, "darwin")).toThrow(LaunchBlockedError);
+  });
+});
+
+describe("final native WebRTC launch guard", () => {
+  const proxyArg = "--proxy-server=http://proxy.example.test:8080";
+  const nativeArg = (mode: string, publicIp: string | null = null) => "--agent-browser-fingerprint-config=" +
+    Buffer.from(JSON.stringify({ schemaVersion: 1, webrtc: { mode, publicIp } })).toString("base64url");
+  const proxyOnly = () => resolveChromiumWebRtcLaunchPolicy({ requestedMode: "auto", fingerprintMode: "managed", hasProxy: true });
+
+  it("requires proxy-only to remain native real/null plus the separate routing flag", () => {
+    const args = [CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, nativeArg("real"), CHROMIUM_WEBRTC_PROXY_ONLY_ARG];
+    expect(() => assertChromiumWebRtcLaunchPolicy(args, proxyOnly())).not.toThrow();
+    for (const native of [nativeArg("proxy-only"), nativeArg("altered", "203.0.113.19"), nativeArg("real", "203.0.113.19"), nativeArg("disable")]) {
+      expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, native, CHROMIUM_WEBRTC_PROXY_ONLY_ARG], proxyOnly())).toThrow(LaunchBlockedError);
+    }
+    expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, CHROMIUM_WEBRTC_PROXY_ONLY_ARG], proxyOnly())).toThrow(LaunchBlockedError);
+    expect(() => assertChromiumWebRtcLaunchPolicy([...args, "--fingerprint-webrtc-ip=203.0.113.19"], proxyOnly())).toThrow(LaunchBlockedError);
+  });
+
+  it("rejects missing, malformed, duplicated or alternate-prefix native JSON channels", () => {
+    const native = nativeArg("real");
+    for (const natives of [
+      ["--agent-browser-fingerprint-config=malformed"], [native, native],
+      [native, native.replace("--agent-browser-", "--roxy-")],
+      [native.replace(/^--/, "-")], [native.replace(/^--/, "/")],
+    ]) {
+      expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, ...natives, CHROMIUM_WEBRTC_PROXY_ONLY_ARG], proxyOnly())).toThrow(LaunchBlockedError);
+    }
+  });
+
+  it("keeps disable as the native all-ICE block and altered tied to its resolved IP", () => {
+    const disabled = resolveChromiumWebRtcLaunchPolicy({ requestedMode: "disable", fingerprintMode: "managed", hasProxy: true });
+    expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, nativeArg("disable")], disabled)).not.toThrow();
+    expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, nativeArg("real")], disabled)).toThrow(LaunchBlockedError);
+    const altered = resolveChromiumWebRtcLaunchPolicy({ requestedMode: "altered", fingerprintMode: "managed", hasProxy: true, webrtcIp: "203.0.113.19" });
+    expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, nativeArg("altered", "203.0.113.19"), CHROMIUM_WEBRTC_PROXY_ONLY_ARG], altered)).not.toThrow();
+    expect(() => assertChromiumWebRtcLaunchPolicy([CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, nativeArg("altered", "203.0.113.20"), CHROMIUM_WEBRTC_PROXY_ONLY_ARG], altered)).toThrow(LaunchBlockedError);
+  });
+
+  it("off+proxy requires the routing switch but never a native identity payload", () => {
+    const off = resolveChromiumWebRtcLaunchPolicy({ requestedMode: "auto", fingerprintMode: "off", hasProxy: true });
+    const args = [CHROMIUM_WEBRTC_PROFILE_ARG, proxyArg, CHROMIUM_WEBRTC_PROXY_ONLY_ARG];
+    expect(() => assertChromiumWebRtcLaunchPolicy(args, off)).not.toThrow();
+    expect(() => assertChromiumWebRtcLaunchPolicy([proxyArg], off)).toThrow(LaunchBlockedError);
+    expect(() => assertChromiumWebRtcLaunchPolicy([...args, nativeArg("real")], off)).toThrow(LaunchBlockedError);
+  });
+
+  it.each([
+    ["proxy-only", "managed", false, "webrtc-proxy-required"],
+    ["altered", "managed", true, "webrtc-ip-required"],
+    ["altered", "off", true, "webrtc-managed-required"],
+    ["disable", "off", true, "webrtc-managed-required"],
+  ] as const)("preserves stable %s/%s launch refusal %s/%s", (requestedMode, fingerprintMode, hasProxy, code) => {
+    let blocked: unknown;
+    try { resolveChromiumWebRtcLaunchPolicy({ requestedMode, fingerprintMode, hasProxy }); } catch (error) { blocked = error; }
+    expect(blocked).toBeInstanceOf(LaunchBlockedError);
+    expect(blocked).toMatchObject({ code });
   });
 });
 

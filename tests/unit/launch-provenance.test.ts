@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import type { BrowserProfileMeta, ProxyConfig } from "../../src/main/types.js";
 
 // Pure fixtures only: neither import-time config/userData nor OS/CDP access.
@@ -11,10 +12,11 @@ vi.mock("node:child_process", () => ({
 import { buildBrowserFingerprintArg, buildBrowserFingerprintConfig } from "../../src/main/services/browser-fingerprint-config.js";
 import { LaunchBlockedError } from "../../src/main/services/browser/launch-guards.js";
 import {
-  assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence,
+  assertChromiumLaunchProvenance, assertChromiumReuseDnsCompatible, assertChromiumReuseEvidence, assertChromiumReuseWebRtcCompatible,
   chromiumLaunchPayloadHash, chromiumLaunchRequestHash, chromiumLaunchStampArg, parseChromiumLaunchStamp,
   stampChromiumLaunch, CHROMIUM_LAUNCH_STAMP_SWITCH,
 } from "../../src/main/services/browser/launch-provenance.js";
+import { CHROMIUM_WEBRTC_PROFILE_ARG, CHROMIUM_WEBRTC_IP_HANDLING_SWITCH, CHROMIUM_WEBRTC_PROXY_ONLY_ARG } from "../../src/main/services/browser/webrtc-policy.js";
 import {
   inspectBrowserLaunchLines, normalizeBrowserProcessPath, parseBrowserLaunchProcessLine, parseBrowserProcessLine, browserLaunchProcessFromArgv,
   type BrowserLaunchProcess,
@@ -40,7 +42,7 @@ function fixture(profile: BrowserProfileMeta = meta): {
   const requestHash = chromiumLaunchRequestHash(profile, cfg);
   const native = buildBrowserFingerprintConfig(profile, "150.0.7800.1");
   const args = [
-    `--user-data-dir=${profileDir}`, "--remote-debugging-port=9222",
+    `--user-data-dir=${profileDir}`, CHROMIUM_WEBRTC_PROFILE_ARG, "--remote-debugging-port=9222",
     ...(mode === "managed" ? [
       `--fingerprint=${profile.fingerprintSeed}`, `--fingerprint-platform=${profile.platform}`,
       buildBrowserFingerprintArg(profile, "150.0.7800.1"), `--user-agent=${native.userAgent}`, "--lang=en-US",
@@ -110,6 +112,65 @@ describe("versioned Chromium startup request", () => {
   });
 });
 
+describe("WebRTC policy request and reuse binding", () => {
+  const proxyCfg = { ...cfg, proxies: { primary: { type: "http", host: "proxy.example.test", port: 8080 } as ProxyConfig } };
+  const named = { ...meta, proxyMode: "named" as const, proxyName: "primary", webrtcMode: "auto" as const };
+  const proxyArg = "--proxy-server=http://proxy.example.test:8080";
+
+  it("binds explicit real consent even in off mode and ignores unused Auto rewrite IPs", () => {
+    const off = { ...named, fingerprintMode: "off" as const };
+    expect(chromiumLaunchRequestHash({ ...off, webrtcMode: "real" }, proxyCfg)).not.toBe(chromiumLaunchRequestHash(off, proxyCfg));
+    expect(chromiumLaunchRequestHash({ ...off, webrtcMode: "proxy-only" }, proxyCfg)).not.toBe(chromiumLaunchRequestHash(off, proxyCfg));
+    expect(chromiumLaunchRequestHash({ ...named, webrtcIp: "203.0.113.19" }, proxyCfg)).toBe(chromiumLaunchRequestHash(named, proxyCfg));
+    expect(chromiumLaunchRequestHash({ ...named, webrtcMode: "altered", webrtcIp: "203.0.113.19" }, proxyCfg))
+      .not.toBe(chromiumLaunchRequestHash({ ...named, webrtcMode: "altered", webrtcIp: "203.0.113.20" }, proxyCfg));
+  });
+
+  it.each(["managed", "off"] as const)("requires the actual proxy-only flag on %s Auto reuse, even on newly self-consistent stamps", fingerprintMode => {
+    const profile = { ...named, fingerprintMode };
+    const f = fixture({ ...meta, fingerprintMode });
+    const requestHash = chromiumLaunchRequestHash(profile, proxyCfg);
+    const args = [...f.args, proxyArg, CHROMIUM_WEBRTC_PROXY_ONLY_ARG];
+    const stamp = stampChromiumLaunch(args, requestHash, fingerprintMode);
+    const stamped = [...args, chromiumLaunchStampArg(stamp)];
+    expect(() => assertChromiumLaunchProvenance(stamped, requestHash, fingerprintMode)).not.toThrow();
+    expect(() => assertChromiumReuseWebRtcCompatible(stamped, profile, proxyCfg)).not.toThrow();
+    const oldPolicyArgs = args.filter(arg => arg !== CHROMIUM_WEBRTC_PROXY_ONLY_ARG);
+    const restamped = [...oldPolicyArgs, chromiumLaunchStampArg(stampChromiumLaunch(oldPolicyArgs, requestHash, fingerprintMode))];
+    expectRestart(() => assertChromiumReuseWebRtcCompatible(restamped, profile, proxyCfg));
+    expect(() => assertChromiumReuseWebRtcCompatible([...f.args, proxyArg], { ...profile, webrtcMode: "real" }, proxyCfg)).not.toThrow();
+  });
+
+  it.each(["managed", "off"] as const)("binds the exact selected Default Chrome profile in %s mode", fingerprintMode => {
+    const f = fixture({ ...meta, fingerprintMode });
+    for (const selected of [[], ["--profile-directory=Profile 1"], ["--profile-directory", "Default"], [CHROMIUM_WEBRTC_PROFILE_ARG, CHROMIUM_WEBRTC_PROFILE_ARG], ["/profile-directory=Default"]]) {
+      const args = [...f.args.filter(arg => arg !== CHROMIUM_WEBRTC_PROFILE_ARG), ...selected];
+      expectRestart(() => stampChromiumLaunch(args, f.requestHash, f.mode));
+      expectRestart(() => assertChromiumLaunchProvenance([...args, chromiumLaunchStampArg(f.stamp)], f.requestHash, f.mode));
+    }
+  });
+
+  it("retains an already stamped detected altered IP without Geo lookup but rejects a conflicting custom IP", () => {
+    const altered = { ...named, webrtcMode: "altered" as const, webrtcIp: null };
+    const f = fixture({ ...altered, webrtcIp: "203.0.113.19" });
+    const args = [...f.args, proxyArg, CHROMIUM_WEBRTC_PROXY_ONLY_ARG];
+    expect(() => assertChromiumReuseWebRtcCompatible(args, altered, proxyCfg)).not.toThrow();
+    expectRestart(() => assertChromiumReuseWebRtcCompatible(args, { ...altered, webrtcIp: "203.0.113.20" }, proxyCfg));
+  });
+
+  it.each([
+    [CHROMIUM_WEBRTC_IP_HANDLING_SWITCH, "default"],
+    [CHROMIUM_WEBRTC_IP_HANDLING_SWITCH, "disable_non_proxied_udp"],
+    [`${CHROMIUM_WEBRTC_IP_HANDLING_SWITCH}=default`],
+    [CHROMIUM_WEBRTC_PROXY_ONLY_ARG, CHROMIUM_WEBRTC_PROXY_ONLY_ARG],
+    [CHROMIUM_WEBRTC_PROXY_ONLY_ARG, "-force-webrtc-ip-handling-policy=default"],
+    [CHROMIUM_WEBRTC_PROXY_ONLY_ARG, "/force-webrtc-ip-handling-policy=default"],
+  ])("cannot stamp split, duplicate, or downgraded routing tokens %j", (...tokens) => {
+    const f = fixture();
+    expectRestart(() => stampChromiumLaunch([...f.args, ...tokens], f.requestHash, f.mode));
+  });
+});
+
 describe("managed Apple GPU generation request binding", () => {
   const gpuContext = { hostPlatform: "darwin", hostArchitecture: "arm64", kernelArchitecture: "arm64" };
 
@@ -151,7 +212,7 @@ describe("managed Apple GPU generation request binding", () => {
 describe("opaque startup payload and reuse proof", () => {
   it("survives an app restart with no registry and an unchanged, exact process", () => {
     const f = fixture();
-    expect(f.stamp).toEqual({ version: 1, requestHash: expect.stringMatching(/^[a-f0-9]{64}$/), payloadHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(f.stamp).toEqual({ version: 2, requestHash: expect.stringMatching(/^[a-f0-9]{64}$/), payloadHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(parseChromiumLaunchStamp(chromiumLaunchStampArg(f.stamp).slice(CHROMIUM_LAUNCH_STAMP_SWITCH.length))).toEqual(f.stamp);
     expect(assertChromiumReuseEvidence(f.evidence, { profileDir, executablePath, requestHash: f.requestHash, mode: "managed" })).toEqual(f.stamp);
     expect(assertChromiumReuseEvidence(f.evidence, { profileDir, executablePath, requestHash: f.requestHash, mode: "managed", pid: 4101, port: 9222, provenance: f.stamp })).toEqual(f.stamp);
@@ -163,9 +224,22 @@ describe("opaque startup payload and reuse proof", () => {
     expect(assertChromiumLaunchProvenance(f.stamped, f.requestHash, f.mode)).toEqual(f.stamp);
   });
 
-  it.each(["v0", "v2", "unknown", "v1.short.short", "v1." + "a".repeat(64) + "." + "G".repeat(64)])("rejects malformed/unknown stamp %s", (value) => {
+  it.each(["v0", "v3", "unknown", "v2.short.short", "v2." + "a".repeat(64) + "." + "G".repeat(64)])("rejects malformed/unknown stamp %s", (value) => {
     const f = fixture();
     expectRestart(() => assertChromiumLaunchProvenance([...f.args, CHROMIUM_LAUNCH_STAMP_SWITCH + value], f.requestHash, f.mode));
+  });
+
+  it.each(["managed", "off"] as const)("refuses a self-consistent v1 %s stamp even with an otherwise matching request", (mode) => {
+    const f = fixture({ ...meta, fingerprintMode: mode });
+    const legacyPayloadHash = createHash("sha256").update(JSON.stringify({ version: 1, mode, args: [...f.args].sort() })).digest("hex");
+    const legacy = `${CHROMIUM_LAUNCH_STAMP_SWITCH}v1.${f.requestHash}.${legacyPayloadHash}`;
+    expect(legacyPayloadHash).not.toBe(f.stamp.payloadHash);
+    expect(parseChromiumLaunchStamp(legacy.slice(CHROMIUM_LAUNCH_STAMP_SWITCH.length))).toBeNull();
+    expectRestart(() => assertChromiumLaunchProvenance([...f.args, legacy], f.requestHash, mode));
+    expectRestart(() => assertChromiumReuseEvidence({ ...f.evidence, args: [...f.args, legacy] }, {
+      profileDir, executablePath, requestHash: f.requestHash, mode,
+      provenance: { version: 1, requestHash: f.requestHash, payloadHash: legacyPayloadHash } as any,
+    }));
   });
 
   it("rejects duplicate, bare and changed-request stamps", () => {
@@ -191,7 +265,7 @@ describe("opaque startup payload and reuse proof", () => {
     "--no-proxy-server", "--proxy-auto-detect", "--proxy-pac-url=https://pac.example.test/proxy.pac", "--proxy-pac-mandatory",
     "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE proxy.example.test",
     "--disable-quic", "--enable-quic", "--ignore-certificate-errors-spki-list=public-spki-hash",
-    "--origin-to-force-quic-on=bridge.example.test:443",
+    "--origin-to-force-quic-on=bridge.example.test:443", CHROMIUM_WEBRTC_PROXY_ONLY_ARG,
   ])("binds actual non-credential DNS/transport argv: %s cannot be changed or removed", (transportArg) => {
     const f = fixture();
     const args = [...f.args, transportArg];
@@ -208,7 +282,7 @@ describe("opaque startup payload and reuse proof", () => {
     expectRestart(() => assertChromiumLaunchProvenance([...f.stamped, override], f.requestHash, f.mode));
   });
 
-  it.each(["--proxy-server", "--proxy-pac-url"])("never includes inline credentials from %s in the hashed payload", (key) => {
+  it.each(["--proxy-server", "--proxy-pac-url", "-proxy-server", "/proxy-server", "--Proxy-Pac-Url"])("never includes inline credentials from %s in the hashed payload", (key) => {
     const f = fixture();
     expectRestart(() => stampChromiumLaunch([...f.args, `${key}=http://user:private-password@proxy.example.test:8080`], f.requestHash, f.mode));
   });

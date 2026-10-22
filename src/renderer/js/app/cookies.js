@@ -48,8 +48,11 @@
   var normalizeBrowserPlatform = helpers.normalizeBrowserPlatform;
   var updateBrowserStatus = helpers.updateBrowserStatus;
   var renderBrowserBinaryCard = helpers.renderBrowserBinaryCard;
+  // Generation counter for async cookie reads; see loadCookies.
+  var cookieRequestSeq = 0;
   Object.assign(agentBrowser, {
   showCookies: function (dirId) {
+        cookieRequestSeq++;
         document.getElementById("cookie-dir-id").value = dirId;
         document.getElementById("cookie-list").innerHTML = '<div class="loading">' + esc(t("cookies.loading", "Loading...")) + '</div>';
         document.getElementById("cookie-search").value = "";
@@ -59,7 +62,14 @@
 
   loadCookies: function (dirId, filter) {
         var list = document.getElementById("cookie-list");
+        // A late reply from the previous dialog must not paint into this one:
+        // the rows would belong to another profile and Delete would act on it.
+        var request = ++cookieRequestSeq;
+        var stillCurrent = function () {
+          return request === cookieRequestSeq && document.getElementById("cookie-dir-id").value === dirId;
+        };
         api.profile.cookies(dirId, filter || "").then(function (cookies) {
+          if (!stillCurrent()) return;
           if (!cookies || cookies.length === 0) {
             list.innerHTML = '<div class="empty-state">' + esc(window.i18n ? window.i18n.t("cookies.empty", "No cookies found.") : "No cookies found.") + '</div>';
             return;
@@ -83,7 +93,7 @@
             var cookie = cookies[Number(btn.dataset.cookieIndex)];
             if (cookie) agentBrowser.delCookie(dirId, cookie.domain, cookie.name);
           };
-        }).catch(function (e) { list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message) + '</div>'; });
+        }).catch(function (e) { if (stillCurrent()) list.innerHTML = '<div class="empty-state">Error: ' + esc(e.message) + '</div>'; });
       },
 
   cookieSearch: function () {

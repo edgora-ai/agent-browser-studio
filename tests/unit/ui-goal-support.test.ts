@@ -330,9 +330,20 @@ describe('Firefox managed identity UI', () => {
     expect(h.api.browser.create).toHaveBeenCalledTimes(1);
     const payload = h.api.browser.create.mock.calls[0][0];
     expect(payload).toMatchObject({ name: 'Firefox common identity', engine: 'firefox', fingerprintMode: 'managed', fingerprintSeed: 43210, timezone: 'America/Los_Angeles', locale: 'en-US' });
-    for (const key of ['browserVersion', 'drm', 'allowThirdPartyCookies', 'renderScaleMode', 'gpuVendor', 'gpuRenderer', 'deviceMemory', 'hardwareConcurrency', 'screenWidth', 'screenHeight', 'storageQuota', 'taskbarHeight', 'fontsDir', 'geolocationMode', 'geolocationLatitude', 'geolocationLongitude', 'geolocationAccuracy', 'webrtcMode', 'webrtcIp', 'windowTitlePrefix']) {
+    for (const key of ['browserVersion', 'drm', 'allowThirdPartyCookies', 'renderScaleMode', 'gpuVendor', 'gpuRenderer', 'deviceMemory', 'hardwareConcurrency', 'screenWidth', 'screenHeight', 'storageQuota', 'taskbarHeight', 'fontsDir', 'geolocationMode', 'geolocationLatitude', 'geolocationLongitude', 'geolocationAccuracy', 'webrtcIp', 'windowTitlePrefix']) {
       expect.soft(Object.hasOwn(payload, key), 'hidden field leaked: ' + key).toBe(false);
     }
+    // WebRTC routing is not Chromium-only any more: Firefox has its own
+    // selector backed by firefox-webrtc-policy.ts. It must submit that
+    // selector's value, not the hidden Chromium draft (which stays on Auto).
+    h.el('new-agent-browser-webrtc-mode').value = 'altered';
+    h.el('new-agent-browser-webrtc').value = '203.0.113.77';
+    h.el('new-agent-browser-webrtc-mode-fx').value = 'real';
+    h.api.browser.create.mockClear();
+    h.agent.createProfile(); await flush();
+    const routed = h.api.browser.create.mock.calls[0][0];
+    expect(routed).toMatchObject({ engine: 'firefox', webrtcMode: 'real' });
+    expect(Object.hasOwn(routed, 'webrtcIp')).toBe(false);
   });
 
   it('renders actual managed/off mode on Firefox and Chromium cards', async () => {
