@@ -535,6 +535,10 @@
         return Promise.resolve({ running: !!(found && found.running), pid: found && found.pid });
       },
       batchMaxConcurrency: function () { return Promise.resolve({ max: 6 }); },
+      // browser.ts:326 returns { entries } or { ok:false, entries:[], outcome:"error",
+      // code }. The renderer throws when this is missing, so the audit counted
+      // two runtime exceptions on the profiles tab instead of rendering.
+      healthHistory: function () { return Promise.resolve({ entries: [] }); },
       // R183: the dialog sweep found the renderer calling these but the mock
       // modelling nothing — the miss proxy answered [], which passes a null
       // guard and then reads as undefined. Shapes mirror the real handlers.
