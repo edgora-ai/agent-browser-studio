@@ -284,9 +284,14 @@ describe("owned staging source-to-receiver SQLite credential conversion", () => 
     if (fault === "rollback-journal") fs.writeFileSync(fileOf(options) + "-journal", randomBytes(512));
     if (fault === "symlink") { fs.renameSync(fileOf(options), path.join(root, "not-a-profile.sqlite")); fs.symlinkSync(path.join(root, "not-a-profile.sqlite"), fileOf(options)); }
     if (fault === "hardlink") fs.linkSync(fileOf(options), path.join(root, "aliased.sqlite"));
-    if (fault === "owner") options.stagingOwner = { dev: options.stagingOwner.dev, ino: options.stagingOwner.ino + 1 };
+    if (fault === "owner") {
+      // Native Windows inode numbers can exceed precise +1 arithmetic.
+      const ino = options.stagingOwner.ino === 0 ? 1 : 0;
+      expect(ino).not.toBe(options.stagingOwner.ino);
+      options.stagingOwner = { dev: options.stagingOwner.dev, ino };
+    }
     if (fault === "path") options.profileRelativePath = "../outside";
-    await expectCode(inspectProfileCredentials(options), /^(DATABASE_OR_WAL_INVALID|ORPHAN_DATABASE_SIDECAR|ROLLBACK_JOURNAL_UNSUPPORTED|STAGING_FILE_UNSAFE|STAGING_OWNER_MISMATCH|STAGING_PATH_INVALID)$/);
+    await expectCode(inspectProfileCredentials(options), fault === "owner" ? "STAGING_OWNER_MISMATCH" : /^(DATABASE_OR_WAL_INVALID|ORPHAN_DATABASE_SIDECAR|ROLLBACK_JOURNAL_UNSUPPORTED|STAGING_FILE_UNSAFE|STAGING_OWNER_MISMATCH|STAGING_PATH_INVALID)$/);
   });
   it.each(["trigger", "view", "virtual", "generated", "check", "expression-index", "partial-index", "unknown-table", "unknown-column", "future-version", "oversized-field"])("does not execute/admit source %s", async fault => {
     const { options } = staging(), source = basic("linux"); options.sourceAdapter = source; await seedLogin(fileOf(options), source);

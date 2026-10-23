@@ -1,18 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import fsMutable from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 
-const fixture = vi.hoisted(() => ({
-  dataDir: `${process.env.TMPDIR}/agent-tool-local`,
-  profiles: [] as any[],
-  ports: new Set<number>(),
-  wire: [] as any[],
-  dns: new Map<string, Array<{ address: string; family: number }>>(),
-  forbidden: vi.fn((capability: string): never => { throw new Error(`Undeclared capability: ${capability}`); }),
-}));
+const fixture = await vi.hoisted(async () => {
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-tool-local-"));
+  return {
+    root, rootOwner: fs.lstatSync(root), dataDir: path.join(root, "data"),
+    profiles: [] as any[],
+    ports: new Set<number>(),
+    wire: [] as any[],
+    dns: new Map<string, Array<{ address: string; family: number }>>(),
+    forbidden: vi.fn((capability: string): never => { throw new Error(`Undeclared capability: ${capability}`); }),
+  };
+});
 vi.mock("electron", () => ({
   app: { getPath: () => fixture.dataDir, isPackaged: false }, BrowserWindow: { getAllWindows: () => [] },
   safeStorage: { isEncryptionAvailable: () => fixture.forbidden("Keychain"), encryptString: () => fixture.forbidden("Keychain"), decryptString: () => fixture.forbidden("Keychain") },
@@ -70,7 +76,12 @@ async function httpFixture(handler: http.RequestListener) {
   return `http://api.task49.test:${port}`;
 }
 
+function assertFixtureOwner(): void {
+  const current = fs.lstatSync(fixture.root);
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== fixture.rootOwner.dev || current.ino !== fixture.rootOwner.ino) throw new Error("Local tool fixture owner changed");
+}
 beforeEach(() => {
+  assertFixtureOwner();
   closeAgentDb();
   fs.rmSync(fixture.dataDir, { recursive: true, force: true });
   fixture.profiles.length = 0; fixture.wire.length = 0; fixture.dns.clear(); fixture.forbidden.mockClear();
@@ -85,14 +96,23 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   expect(fixture.forbidden).not.toHaveBeenCalled();
 });
+afterAll(() => { assertFixtureOwner(); fs.rmSync(fixture.root, { recursive: true }); });
 
 describe("real local file and SQL tools", () => {
   it("writes real bytes, directly verifies disk, reloads configuration and searches readback", async () => {
-    const result = await agent.executeToolCall("write_file", { path: "reports/task49.json", content: { error: "business field", count: 49 } });
     const target = path.join(getAppDataDir(), "agent-files/reports/task49.json");
-    expect(result.bytesWritten).toBe(fs.statSync(target).size);
-    expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual({ error: "business field", count: 49 });
-    expect(fs.statSync(target).mode & 0o777).toBe(0o600);
+    const content = { error: "business field", count: 49 }, write = vi.spyOn(fsMutable, "writeFileSync");
+    syncBuiltinESMExports();
+    try {
+      const result = await agent.executeToolCall("write_file", { path: "reports/task49.json", content });
+      expect(write.mock.calls.filter(([file]) => file === target)).toEqual([[target, JSON.stringify(content), { encoding: "utf8", mode: 0o600 }]]);
+      const stat = fs.lstatSync(target);
+      expect(stat.isFile()).toBe(true); expect(stat.isSymbolicLink()).toBe(false); expect(stat.nlink).toBe(1);
+      expect(result.bytesWritten).toBe(stat.size);
+      expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual(content);
+      // Observe the requested mode everywhere, but do not infer Windows ACL privacy from stat bits.
+      if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o600);
+    } finally { write.mockRestore(); syncBuiltinESMExports(); }
     reloadConfig();
     const readback = await agent.executeToolCall("read_file", { path: "reports/task49.json" });
     expect(JSON.parse(readback.content).count).toBe(49);

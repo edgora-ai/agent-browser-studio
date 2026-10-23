@@ -9,16 +9,21 @@ import type { CookieInfo } from "../../src/main/types.js";
 
 const fixture = await vi.hoisted(async () => {
   const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
-  return { root: fs.mkdtempSync(path.join(os.tmpdir(), "abs-firefox-cookie-import-")), port: 0, status: vi.fn(), failUnlink: false };
+  return { root: fs.mkdtempSync(path.join(os.tmpdir(), "abs-firefox-cookie-import-")), port: 0, status: vi.fn(), failUnlink: false,
+    opens: [] as Parameters<typeof fs.openSync>[], renames: [] as Parameters<typeof fs.renameSync>[] };
 });
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, unlinkSync: (target: fs.PathLike) => {
-    if (fixture.failUnlink && String(target) === path.join(fixture.root, "pending-cookie-imports", "ff_synthetic_cookie_import.json")) {
-      throw Object.assign(new Error("synthetic-unlink-denied"), { code: "EACCES" });
-    }
-    return actual.unlinkSync(target);
-  } };
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { fixture.opens.push(args); return actual.openSync(...args); },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { fixture.renames.push(args); return actual.renameSync(...args); },
+    unlinkSync: (target: fs.PathLike) => {
+      if (fixture.failUnlink && String(target) === path.join(fixture.root, "pending-cookie-imports", "ff_synthetic_cookie_import.json")) {
+        throw Object.assign(new Error("synthetic-unlink-denied"), { code: "EACCES" });
+      }
+      return actual.unlinkSync(target);
+    },
+  };
 });
 vi.mock("../../src/main/services/config-manager.js", () => ({
   getAppDataDir: () => fixture.root, getProfilesDir: () => path.join(fixture.root, "profiles"),
@@ -59,10 +64,19 @@ async function owned(): Promise<{ conn: BidiConnection; entry: RunningEntry }> {
   return { conn, entry };
 }
 function queued(cookies = [COOKIE]): Buffer {
+  const opensBefore = fixture.opens.length, renamesBefore = fixture.renames.length;
   queue.writeQueuedCookieImports(ID, cookies);
+  const staged = fixture.opens.slice(opensBefore).filter(([candidate]) =>
+    typeof candidate === "string" && candidate.startsWith(file + ".") && candidate.endsWith(".tmp"));
+  expect(staged).toHaveLength(1);
+  expect(staged[0]).toEqual([expect.any(String), "wx", 0o600]);
+  expect(fixture.renames.slice(renamesBefore)).toEqual([[staged[0][0], file]]);
   const bytes = fs.readFileSync(file);
   expect(JSON.parse(bytes.toString("utf8"))).toEqual(cookies);
-  expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  const stat = fs.lstatSync(file);
+  expect(stat.isFile()).toBe(true); expect(stat.isSymbolicLink()).toBe(false); expect(stat.nlink).toBe(1);
+  // Native Windows stat bits do not establish POSIX permissions or ACL privacy.
+  if (process.platform !== "win32") expect(stat.mode & 0o777).toBe(0o600);
   expect(queue.readQueuedCookieImports(ID, { strict: true })).toEqual(cookies);
   return bytes;
 }
@@ -90,6 +104,7 @@ function apply(target?: { port: number; isCurrent: () => boolean }, signal?: Abo
 
 beforeEach(async () => {
   calls = []; jar = new Map(); clients = []; active = null; onSet = undefined; fixture.failUnlink = false;
+  fixture.opens.length = 0; fixture.renames.length = 0;
   runningProcesses.clear(); fixture.status.mockReset().mockImplementation(() => ({ running: true, cdpPort: fixture.port }));
   fs.rmSync(path.dirname(file), { recursive: true, force: true });
   vi.spyOn(console, "error").mockImplementation(() => undefined);
