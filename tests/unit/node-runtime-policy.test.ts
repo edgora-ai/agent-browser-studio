@@ -52,8 +52,8 @@ describe("source-build Node runtime policy", () => {
       "        run: npx vitest run tests/unit/created-directory-ancestry.test.ts tests/unit/webrtc-preferences.test.ts --bail=1 --maxWorkers=1 --reporter=default",
     ].join("\n"));
     expect(windows.indexOf("Cold-profile directory ancestry regressions")).toBeLessThan(windows.indexOf("Unit + smoke tests"));
-    expect(windows).toContain("run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process");
-    expect(windows).toContain("run: npx vitest run --coverage tests/unit tests/smoke --bail=1");
+    expect(windows).toContain("run: npx vitest run tests/unit tests/smoke --bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process");
+    expect(windows).toContain("run: npx vitest run --coverage tests/unit tests/smoke --bail=0 --maxWorkers=1");
   });
 
   it("bounds native recovery diagnostics without suppressing failures or replacing full gates", () => {
@@ -108,8 +108,12 @@ describe("source-build Node runtime policy", () => {
     const windows = source(".github/workflows/ci.yml").split(/^  checks-windows:\n/m)[1]?.split(/^  [\w-]+:/m)[0] ?? "";
     const unit = windows.split("      - name: Unit + smoke tests\n")[1]?.split("\n      - ")[0] ?? "";
     expect(unit).toContain("        id: unit_smoke");
-    expect(unit).toContain("run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile=\"$TMPDIR/unit-smoke.json\"");
-    expect(unit).not.toMatch(/continue-on-error/);
+    expect(unit.match(/^        run: (.+)$/m)?.[1]).toBe("npx vitest run tests/unit tests/smoke --bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile=\"$TMPDIR/unit-smoke.json\"");
+    expect(unit).not.toMatch(/continue-on-error|\bif:/);
+    const coverage = windows.split("      - name: Coverage (unit + smoke, threshold gated)\n")[1]?.split("\n      - ")[0] ?? "";
+    expect(coverage.match(/^        run: (.+)$/m)?.[1]).toBe("npx vitest run --coverage tests/unit tests/smoke --bail=0 --maxWorkers=1");
+    expect(coverage).not.toMatch(/continue-on-error|\bif:/);
+    expect(windows).toContain("    timeout-minutes: 75");
     const summary = windows.split("      - name: Summarize unit + smoke results\n")[1]?.split("\n      - ")[0] ?? "";
     expect(summary).toContain("if: always() && (steps.unit_smoke.outcome == 'success' || steps.unit_smoke.outcome == 'failure')");
     expect(summary).toContain("run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/unit-smoke.json\" all");

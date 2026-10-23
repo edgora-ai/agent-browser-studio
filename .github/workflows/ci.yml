@@ -83,9 +83,9 @@ jobs:
   checks-windows:
     name: Build + unit/smoke (Windows)
     runs-on: windows-latest
-    # Bound the combined plain + coverage workload. A larger job budget does
-    # not fix a blocked worker; fail fast below so assertion diagnostics are
-    # printed before another test can consume the remaining budget.
+    # Keep filesystem-heavy runs on the native diagnostics' one-worker budget.
+    # Collect all failures per revision without increasing individual deadlines
+    # or the combined plain + coverage job budget.
     timeout-minutes: 75
     defaults:
       run:
@@ -174,12 +174,12 @@ jobs:
       - name: Unit + smoke tests
         id: unit_smoke
         # Failure still exits nonzero; a green run must execute the whole suite.
-        run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile="$TMPDIR/unit-smoke.json"
+        run: npx vitest run tests/unit tests/smoke --bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile="$TMPDIR/unit-smoke.json"
       - name: Summarize unit + smoke results
         if: always() && (steps.unit_smoke.outcome == 'success' || steps.unit_smoke.outcome == 'failure')
         run: node scripts/ci-native-test-summary.mjs "$TMPDIR/unit-smoke.json" all
       - name: Coverage (unit + smoke, threshold gated)
-        run: npx vitest run --coverage tests/unit tests/smoke --bail=1
+        run: npx vitest run --coverage tests/unit tests/smoke --bail=0 --maxWorkers=1
 
   e2e-macos:
     name: E2E (macOS, needs locally built engine — see engine-verify)
