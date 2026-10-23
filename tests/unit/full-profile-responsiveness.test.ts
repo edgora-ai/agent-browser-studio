@@ -59,7 +59,7 @@ function artifactRealm(scheduler: () => Promise<unknown> = timers.setImmediate) 
 
 /** Observe real reads/closure only inside this fresh root. Identify a read-only
  * OPEN, not a reusable fd number or the extraction writer for the same pathname. */
-function observeReads(root: string, matches: (file: string) => boolean, onFirstRead: () => void, guards?: () => number) {
+function observeReads(root: string, matches: (file: string) => boolean, onFirstRead: () => void, guards?: () => number, onSelectedClose?: () => void) {
   const open = fsMutable.openSync, read = fsMutable.readSync, close = fsMutable.closeSync;
   const owned = new Map<number, { file: string; serial: number }>();
   const chunks: Array<{ position: number; bytes: number }> = [], buffers: Buffer[] = [], guardsAtRead: number[] = [];
@@ -90,6 +90,7 @@ function observeReads(root: string, matches: (file: string) => boolean, onFirstR
     if (record && record.serial === selected) guardsAtClose = guards?.();
     close(fd);
     if (owned.delete(fd)) closed++;
+    if (record && record.serial === selected) onSelectedClose?.();
   });
   syncBuiltinESMExports();
   return { chunks, guardsAtRead, get tailReads() { return tailReads; }, get guardsAtClose() { return guardsAtClose; },
@@ -175,9 +176,16 @@ describe("cooperative full-profile artifact traversal", () => {
         fs.writeFileSync(replacement, expected, { flag: "wx", mode: 0o600 }); fs.renameSync(replacement, f.file);
       }
     });
-    const observed = observeReads(f.directory, file => file === f.file, () => nextTurn(mutate));
-    await expect(captureFullProfile(f.options)).rejects.toThrow(/changed|unstable/i);
-    expect(mutate).toHaveBeenCalledTimes(1); expect(readsAtMutation).toBe(1); observed.assertClosed();
+    // Replacing a pinned file depends on OS share/delete semantics. Queue that
+    // inode change after the real read descriptor closes, before the await
+    // continuation can publish its earlier witness. Append still races chunk 1.
+    const observed = observeReads(f.directory, file => file === f.file,
+      () => { if (kind === "append") nextTurn(mutate); }, undefined,
+      () => { if (kind === "replace") queueMicrotask(mutate); });
+    await expect(captureFullProfile(f.options)).rejects.toThrow(kind === "append"
+      ? /changed|unstable/i : "Full-profile ZIP member SHA-256 mismatch");
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(readsAtMutation).toBe(kind === "append" ? 1 : Math.ceil(f.bytes.length / CHUNK)); observed.assertClosed();
     expect(fs.readFileSync(f.file)).toEqual(expected); expect(fs.readdirSync(f.options.stagingDir)).toEqual([]);
   });
 

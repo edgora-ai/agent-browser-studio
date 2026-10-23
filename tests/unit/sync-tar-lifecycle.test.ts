@@ -3,9 +3,11 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as vm from "node:vm";
+import * as zlib from "node:zlib";
 import ts from "typescript";
+import { isPathInside } from "../../src/main/services/zip-writer.js";
 
 // Execute the actual private helper, not a copied implementation. Process and
 // clock boundaries are controlled; the final case also holds a real owned writer.
@@ -113,12 +115,14 @@ it("exports with a relative archive argument in an owned cwd and reads back real
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-tar-command-"))), owner = fs.lstatSync(root);
   const stage = path.join(root, "stage"), input = path.join(root, "input"), restored = path.join(root, "restored");
   for (const directory of [stage, input, restored]) fs.mkdirSync(directory, { mode: 0o700 });
-  const payload = "owned-native-leveldb-data";
-  fs.writeFileSync(path.join(input, "CURRENT"), payload, { flag: "wx", mode: 0o600 });
+  const payload = "owned-native-leveldb-data", current = "MANIFEST-000001\n";
+  fs.writeFileSync(path.join(input, "CURRENT"), current, { flag: "wx", mode: 0o600 });
+  fs.writeFileSync(path.join(input, "MANIFEST-000001"), payload, { flag: "wx", mode: 0o600 });
   fs.writeFileSync(path.join(input, "LOCK"), "owned-inert-lock", { flag: "wx", mode: 0o600 });
   const exportStart = source.indexOf("async function exportLocalStorage("), exportEnd = source.indexOf("\ninterface PreparedLocalStorage", exportStart);
-  if (exportStart < 0 || exportEnd < exportStart) throw new Error("Production LocalStorage exporter not found");
-  const exporter = ts.transpileModule(source.slice(exportStart, exportEnd), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const readStart = source.indexOf("function extractSafeLocalStorageArchive("), readEnd = source.indexOf("\nfunction validatePreferencesJson", readStart);
+  if (exportStart < 0 || exportEnd < exportStart || readStart < 0 || readEnd < readStart) throw new Error("Production LocalStorage transport functions not found");
+  const exporter = ts.transpileModule(source.slice(exportStart, exportEnd) + "\n" + source.slice(readStart, readEnd), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const launch = vi.fn((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
     const archive = args[args.indexOf("-czf") + 1];
     expect(path.isAbsolute(archive) || path.win32.isAbsolute(archive) || /[:\\]/.test(archive)).toBe(false);
@@ -126,23 +130,27 @@ it("exports with a relative archive argument in an owned cwd and reads back real
     expect(String(options!.cwd).startsWith(stage + path.sep)).toBe(true);
     return spawn(command, args, options!);
   });
-  const run = vm.runInNewContext(exporter + "\n" + code + "\nexportLocalStorage;", {
-    fs, path, spawn: launch, setTimeout, clearTimeout,
+  const transport = vm.runInNewContext(exporter + "\n" + code + "\n({ create: exportLocalStorage, read: extractSafeLocalStorageArchive });", {
+    fs, path, zlib, Buffer, isPathInside, spawn: launch, setTimeout, clearTimeout,
     assertSyncNotAborted: (signal?: AbortSignal) => { if (signal?.aborted) throw new Error("Owned fixture cancelled"); },
     assertLocalStorageRestorable: (id: string) => { expect(id).toBe("owned_tar_profile"); },
-    localStorageFormat: () => "leveldb", resolveProfileFile: () => input, MAX_LOCAL_STORAGE_TGZ_BYTES: 1024 * 1024,
-  }) as (id: string, stage: string) => Promise<Buffer | null>;
+    localStorageFormat: () => "leveldb", resolveProfileFile: () => input,
+    MAX_LOCAL_STORAGE_TGZ_BYTES: 1024 * 1024, MAX_PULL_LOCAL_STORAGE_BYTES: 1024 * 1024,
+    MAX_LOCAL_STORAGE_TAR_BYTES: 2 * 1024 * 1024, MAX_LOCAL_STORAGE_FILES: 64,
+  }) as { create: (id: string, stage: string) => Promise<Buffer | null>; read: (bytes: Buffer, target: string) => { files: number; bytesWritten: number } };
   try {
-    const archive = await run("owned_tar_profile", stage);
+    const archive = await transport.create("owned_tar_profile", stage);
     expect(launch).toHaveBeenCalledTimes(1);
     if (!archive) throw new Error("Owned native TAR export failed");
-    fs.writeFileSync(path.join(root, "readback.tgz"), archive, { flag: "wx", mode: 0o600 });
-    const extracted = spawnSync("tar", ["-xzf", "readback.tgz", "-C", restored], { cwd: root, timeout: 5000, maxBuffer: 8192 });
-    expect(extracted.error).toBeUndefined(); expect(extracted.status).toBe(0);
-    expect(fs.readdirSync(restored)).toEqual(["CURRENT"]);
-    expect(fs.readFileSync(path.join(restored, "CURRENT"), "utf8")).toBe(payload);
+    // The product reads TAR itself; do not test GNU tar's unrelated extraction
+    // metadata/permission behavior as though it were the application reader.
+    expect(transport.read(archive, restored)).toEqual({ files: 2, bytesWritten: Buffer.byteLength(current + payload) });
+    expect(fs.readdirSync(restored).sort()).toEqual(["CURRENT", "MANIFEST-000001"]);
+    expect(fs.readFileSync(path.join(restored, "CURRENT"), "utf8")).toBe(current);
+    expect(fs.readFileSync(path.join(restored, "MANIFEST-000001"), "utf8")).toBe(payload);
     expect(fs.readdirSync(stage)).toEqual([]);
-    expect(fs.readFileSync(path.join(input, "CURRENT"), "utf8")).toBe(payload);
+    expect(fs.readFileSync(path.join(input, "CURRENT"), "utf8")).toBe(current);
+    expect(fs.readFileSync(path.join(input, "MANIFEST-000001"), "utf8")).toBe(payload);
     expect(fs.readFileSync(path.join(input, "LOCK"), "utf8")).toBe("owned-inert-lock");
   } finally {
     const current = fs.lstatSync(root);
