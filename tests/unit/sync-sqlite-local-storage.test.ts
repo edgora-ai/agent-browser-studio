@@ -9,6 +9,9 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 
+type FsObservation = { op: "open" | "close" | "fsync" | "rename" | "link" | "unlink"; file: string; to?: string;
+  fd?: number; flags?: string | number; kind?: "directory" | "file" | "other"; ok: boolean; error?: unknown };
+
 const h = vi.hoisted(() => {
   const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-sqlite-owned-")));
@@ -16,7 +19,7 @@ const h = vi.hoisted(() => {
   return { root, ownerDev: owner.dev, ownerIno: owner.ino, appData: path.join(root, "device"),
     objects: new Map<string, Buffer>(), requests: [] as Array<{ method: string; url: string }>,
     running: new Set<string>(), fault: null as null | ((op: string, from: string, to?: string) => void),
-    reads: [] as string[], fds: new Map<number, string>(), snapshot: vi.fn(),
+    reads: [] as string[], fds: new Map<number, string>(), io: null as FsObservation[] | null, snapshot: vi.fn(),
     checkerFactory: null as null | ((source: string, options: any) => any), checkerHook: null as null | ((worker: any, options: any) => void), checkerStarts: 0 };
 });
 vi.mock("node:worker_threads", async (original) => {
@@ -29,19 +32,42 @@ vi.mock("node:worker_threads", async (original) => {
 });
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
+  const observe = <T>(event: FsObservation, action: () => T): T => {
+    h.io?.push(event);
+    try { const value = action(); event.ok = true; return value; }
+    catch (error) { event.error = error; throw error; }
+  };
   return { ...actual,
     openSync: (file: any, flags: any, mode?: any) => {
-      h.fault?.("open", String(file));
-      const fd = actual.openSync(file, flags, mode); h.fds.set(fd, String(file)); return fd;
+      const event: FsObservation = { op: "open", file: String(file), flags, ok: false };
+      return observe(event, () => {
+        h.fault?.("open", String(file));
+        const fd = actual.openSync(file, flags, mode); event.fd = fd; h.fds.set(fd, String(file)); return fd;
+      });
     },
-    closeSync: (fd: number) => { h.fds.delete(fd); return actual.closeSync(fd); },
+    closeSync: (fd: number) => observe({ op: "close", file: h.fds.get(fd) || "", fd, ok: false }, () => {
+      actual.closeSync(fd); h.fds.delete(fd);
+    }),
+    fsyncSync: (fd: number) => {
+      const stat = actual.fstatSync(fd);
+      // Observe the real descriptor and real syscall; never manufacture either
+      // successful durability or a platform-specific refusal.
+      return observe({ op: "fsync", file: h.fds.get(fd) || "", fd,
+        kind: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other", ok: false }, () => actual.fsyncSync(fd));
+    },
     readSync: (fd: number, ...args: any[]) => {
       const file = h.fds.get(fd) || ""; h.reads.push(file);
       const n = (actual.readSync as any)(fd, ...args); h.fault?.("read", file); return n;
     },
-    renameSync: (from: any, to: any) => { h.fault?.("rename", String(from), String(to)); return actual.renameSync(from, to); },
-    linkSync: (from: any, to: any) => { h.fault?.("link", String(from), String(to)); return actual.linkSync(from, to); },
-    unlinkSync: (file: any) => { h.fault?.("unlink", String(file)); return actual.unlinkSync(file); },
+    renameSync: (from: any, to: any) => observe({ op: "rename", file: String(from), to: String(to), ok: false }, () => {
+      h.fault?.("rename", String(from), String(to)); return actual.renameSync(from, to);
+    }),
+    linkSync: (from: any, to: any) => observe({ op: "link", file: String(from), to: String(to), ok: false }, () => {
+      h.fault?.("link", String(from), String(to)); return actual.linkSync(from, to);
+    }),
+    unlinkSync: (file: any) => observe({ op: "unlink", file: String(file), ok: false }, () => {
+      h.fault?.("unlink", String(file)); return actual.unlinkSync(file);
+    }),
   };
 });
 vi.mock("electron", () => ({ app: { getPath: (name: string) => name === "home" ? path.join(h.root, "home") : h.appData },
@@ -152,8 +178,163 @@ function assertBackupBusiness(root: string, value: string): void {
   try { assertBusiness(path.join(copy, "LocalStorage"), value); } finally { fs.rmSync(copy, { recursive: true }); }
 }
 
+// A real owned-directory probe labels the cases, not an OS-based skip. Each
+// pull below must independently prove its actual mandatory transaction gate.
+const directoryCapability = (() => {
+  assertOwner();
+  const fd = fs.openSync(h.root, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory() || stat.dev !== h.ownerDev || stat.ino !== h.ownerIno) throw new Error("Directory probe owner changed");
+    fs.fsyncSync(fd); return "confirmed";
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException;
+    if (process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
+    return "refused";
+  } finally { fs.closeSync(fd); }
+})();
+const directoryCase = directoryCapability === "confirmed" ? " [native directory fsync confirmed: restore/rollback assertions required]"
+  : " [native directory fsync EPERM: conservation-only; downstream rollback NOT exercised]";
+const sqliteNames = ["LocalStorage", "LocalStorage-wal", "LocalStorage-shm", "LocalStorage-journal"];
+type IncomingSqlite = { main: Buffer; wal?: Buffer };
+function liveBytes(): Map<string, Buffer | null> {
+  return new Map([getConfigPath(), ...sqliteNames.map((name) => path.join(defaultDir(), name))].map((file) => {
+    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (stat) expect(stat.isFile() && !stat.isSymbolicLink(), file).toBe(true);
+    return [file, stat ? fs.readFileSync(file) : null];
+  }));
+}
+async function observeSqlitePull(incoming: IncomingSqlite) {
+  const before = { live: liveBytes(), config: structuredClone(getConfig()),
+    remote: new Map([...h.objects].map(([key, bytes]) => [key, Buffer.from(bytes)])),
+    puts: h.requests.filter((request) => request.method === "PUT"), checkerStarts: h.checkerStarts };
+  const io: FsObservation[] = []; expect(h.fds.size).toBe(0); h.io = io;
+  try { return { result: await syncService.pull(undefined, { strategy: "remote" }), before, io, incoming }; }
+  finally { h.io = null; }
+}
+type SqlitePullAttempt = Awaited<ReturnType<typeof observeSqlitePull>>;
+function assertObservedIo(io: FsObservation[]): void {
+  const opened = new Map<number, FsObservation>();
+  for (const event of io) {
+    expect(event.file.startsWith(h.root + path.sep), "I/O must remain in the owned fixture").toBe(true);
+    if (event.to) expect(event.to.startsWith(h.root + path.sep)).toBe(true);
+    if (event.op === "open") {
+      expect(event.ok, `open ${event.file}`).toBe(true); expect(event.fd).toBeTypeOf("number");
+      expect(opened.has(event.fd!)).toBe(false); opened.set(event.fd!, event);
+    } else if (event.op === "close" || event.op === "fsync") {
+      expect(opened.get(event.fd!)?.file, `${event.op} must have a real successful open`).toBe(event.file);
+      if (event.op === "close") { expect(event.ok, `close ${event.file}`).toBe(true); opened.delete(event.fd!); }
+      else {
+        expect(event.kind).not.toBe("other");
+        if (event.kind === "directory" && !event.ok) expect(opened.get(event.fd!)!.flags).toBe(fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      }
+    }
+  }
+  expect(opened.size).toBe(0); expect(h.fds.size).toBe(0);
+  expect(io.filter((event) => event.op === "close")).toHaveLength(io.filter((event) => event.op === "open").length);
+  expect(io.filter((event) => event.op === "fsync" && event.kind !== "directory" && !event.ok), "regular-file fsync is mandatory").toEqual([]);
+}
+function assertNoLiveMoves(io: FsObservation[]): void {
+  const live = new Set(sqliteNames.map((name) => path.join(defaultDir(), name)));
+  expect(io.filter((event) => ["rename", "link", "unlink"].includes(event.op) && (live.has(event.file) || live.has(event.to || ""))),
+    "not even an attempted live SQLite move is permitted before the directory gate").toEqual([]);
+}
+function assertConserved(before: SqlitePullAttempt["before"]): void {
+  expect(liveBytes()).toEqual(before.live); expect(getConfig()).toEqual(before.config);
+  expect(getConfig().browserProfiles[ID]?.syncBaseline).toEqual(before.config.browserProfiles[ID]?.syncBaseline);
+  reloadConfig(); expect(liveBytes()).toEqual(before.live); expect(getConfig()).toEqual(before.config);
+  expect(h.objects).toEqual(before.remote); expect(h.requests.filter((request) => request.method === "PUT")).toEqual(before.puts);
+}
+async function assertConservationIfDirectoryRefused(attempt: SqlitePullAttempt, oldValue?: string, downstreamHits: Record<string, number> = {}): Promise<boolean> {
+  const { result, before, io, incoming } = attempt;
+  assertObservedIo(io);
+  const gates = io.filter((event) => event.op === "fsync" && event.kind === "directory" &&
+    path.dirname(event.file) === defaultDir() && path.basename(event.file).startsWith(".sqlite-localstorage-backup-"));
+  expect(gates.length, "actual owned transaction-directory fsync must have been attempted").toBeGreaterThan(0);
+  const gate = gates[0], transaction = gate.file;
+  const pendingFile = path.join(transaction, "pending.json");
+  const pendingFlush = io.find((event) => event.op === "fsync" && event.file === pendingFile);
+  expect(pendingFlush).toMatchObject({ kind: "file", ok: true }); expect(io.indexOf(pendingFlush!)).toBeLessThan(io.indexOf(gate));
+  expect(h.checkerStarts - before.checkerStarts, "incoming SQLite must have passed the real native checker before publication").toBe(1);
+  if (gate.ok) {
+    expect(directoryCapability).toBe("confirmed");
+    expect(io.filter((event) => event.op === "fsync" && !event.ok)).toEqual([]);
+    expect(io.some((event) => event.op === "fsync" && event.file === defaultDir() && event.kind === "directory" && event.ok)).toBe(true);
+    expect(io.some((event) => event.op === "rename" && event.to === path.join(transaction, "new") && event.ok)).toBe(true);
+    return false; // The caller must still exercise every original positive/fault assertion.
+  }
+
+  // No arbitrary failure qualifies. This is the exact native refusal recognized
+  // by syncArchiveDirectory, with successful opens and no regular-file failures.
+  expect(directoryCapability).toBe("refused"); expect(process.platform).toBe("win32");
+  const failures = io.filter((event) => !event.ok);
+  expect(failures.map((event) => [event.op, event.kind, event.file])).toEqual([
+    ["fsync", "directory", h.appData], ["fsync", "directory", path.join(h.appData, "profile-data-revisions")],
+    ["fsync", "directory", transaction], ["fsync", "directory", defaultDir()],
+    ["fsync", "directory", transaction], ["fsync", "directory", path.join(h.appData, "sync-recovery")],
+  ]);
+  for (const event of failures) expect(event.error).toMatchObject({ code: "EPERM", syscall: "fsync" });
+  expect(failures[2]).toBe(gate); assertNoLiveMoves(io);
+  expect(io.filter((event) => event.op === "rename" && event.to === path.join(transaction, "new"))).toEqual([]);
+  for (const [name, hits] of Object.entries(downstreamHits)) expect(hits, `${name} was not reached: native directory gate refused first`).toBe(0);
+  const message = "SQLite localStorage publication/compensation is incomplete; old/new material retained for recovery";
+  expect(result).toMatchObject({ success: false, outcome: "recovery-required", localCommit: "partial", remoteCommit: "none",
+    code: "LOCAL_STORAGE_RECOVERY_REQUIRED", message });
+  expect(result.items?.filter((item) => ["applied", "queued"].includes(item.state))).toEqual([]);
+  expect(result.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ scope: "profiles", id: ID, state: "preserved", code: "PROFILE_RESTORE_INCOMPLETE" }),
+    expect.objectContaining({ scope: "localStorage", id: ID, state: "failed", message }),
+  ]));
+  expect(result.recovery).toEqual([{ resource: "localStorage", id: ID, paths: [transaction, defaultDir()], receiptPath: undefined }]);
+  expect(backupRoots()).toEqual([transaction]);
+  expect(fs.readdirSync(transaction).sort()).toEqual(["old", "pending.json", "recovery-required.json"]);
+  expect(fs.readdirSync(path.join(transaction, "old"))).toEqual([]);
+  expect(fs.existsSync(path.join(transaction, "new"))).toBe(false); expect(fs.existsSync(path.join(transaction, "published.json"))).toBe(false);
+  const old = sqliteNames.flatMap((name) => {
+    const bytes = before.live.get(path.join(defaultDir(), name)); return bytes == null ? [] : [{ name, hash: sha(bytes) }];
+  });
+  const inventory = [{ name: "LocalStorage", hash: sha(incoming.main) }, ...(incoming.wal === undefined ? [] : [{ name: "LocalStorage-wal", hash: sha(incoming.wal) }])];
+  const pending = { version: 1, format: "sqlite", operationId: result.operationId, dirId: ID, target: defaultDir(), old, incoming: inventory };
+  expect(JSON.parse(fs.readFileSync(pendingFile, "utf8"))).toEqual(pending);
+  const recovery = { operationId: result.operationId, dirId: ID, state: "recovery-required", format: "sqlite", transaction, target: defaultDir(),
+    old: old.map((entry) => ({ ...entry, backupPath: path.join(transaction, "old", entry.name), livePath: path.join(defaultDir(), entry.name) })),
+    incoming: inventory.map((entry) => ({ ...entry, retainedPath: path.join(transaction, "new", entry.name), livePath: path.join(defaultDir(), entry.name) })) };
+  const externalReceipt = path.join(h.appData, "sync-recovery", `${ID}.localStorage.json`);
+  const receipts = new Map([pendingFile, path.join(transaction, "recovery-required.json"), externalReceipt].map((file) => {
+    expect(io.filter((event) => event.op === "open" && event.file === file && event.flags === "wx" && event.ok)).toHaveLength(1);
+    expect(io.filter((event) => event.op === "fsync" && event.file === file && event.kind === "file" && event.ok)).toHaveLength(1);
+    const stat = fs.lstatSync(file); expect(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1).toBe(true);
+    const bytes = fs.readFileSync(file); expect(JSON.parse(bytes.toString("utf8"))).toEqual(file === pendingFile ? pending : recovery);
+    return [file, bytes] as const;
+  }));
+  assertConserved(before);
+  if (oldValue !== undefined) {
+    const copy = fs.mkdtempSync(path.join(h.root, "conserved-readback-"));
+    try {
+      for (const name of ["LocalStorage", "LocalStorage-wal"]) if (before.live.get(path.join(defaultDir(), name)) !== null) fs.copyFileSync(path.join(defaultDir(), name), path.join(copy, name));
+      assertBusiness(path.join(copy, "LocalStorage"), oldValue);
+    } finally { fs.rmSync(copy, { recursive: true }); }
+  } else expect(before.live.get(dbPath()), "fresh target must remain absent, not adopt incoming metadata").toBeNull();
+
+  const assertBlocked = async (retryMessage: string, paths: string[], receiptPath?: string) => {
+    const retry = await observeSqlitePull(incoming); assertObservedIo(retry.io); assertNoLiveMoves(retry.io);
+    expect(retry.io.filter((event) => event.op === "fsync")).toEqual([]);
+    expect(retry.result).toMatchObject({ success: false, outcome: "recovery-required", localCommit: "none", remoteCommit: "none",
+      code: "LOCAL_STORAGE_RECOVERY_REQUIRED", message: retryMessage });
+    expect(retry.result.recovery).toEqual([{ resource: "localStorage", id: ID, paths, receiptPath }]);
+    expect(retry.result.items?.filter((item) => ["applied", "queued"].includes(item.state))).toEqual([]);
+    expect(h.checkerStarts - before.checkerStarts).toBe(1); expect(backupRoots()).toEqual([transaction]); assertConserved(before);
+    for (const [file, bytes] of receipts) expect(fs.readFileSync(file)).toEqual(bytes);
+  };
+  await assertBlocked("LocalStorage recovery is unresolved; refusing to overwrite its rescue copies", [], externalReceipt);
+  fs.unlinkSync(externalReceipt); receipts.delete(externalReceipt); // Owned fault simulation: pending must independently block publication.
+  await assertBlocked("SQLite LocalStorage recovery is unresolved; refusing to overwrite its rescue copies", [transaction]);
+  console.info(`[SQLite directory contract] conservation-only: native EPERM/syscall=fsync at pending transaction; ${failures.length} directory refusals, no file/open failures, no live moves, ${io.filter((event) => event.op === "open").length} opens/closes, no tracked fd leaks; downstream rollback NOT exercised.`);
+  return true;
+}
+
 beforeEach(() => {
-  h.fault = null; h.reads = []; h.running.clear(); h.objects.clear(); h.requests = [];
+  h.fault = null; h.io = null; h.reads = []; h.running.clear(); h.objects.clear(); h.requests = [];
   h.checkerFactory = null; h.checkerHook = null; h.checkerStarts = 0;
   h.snapshot.mockReset().mockResolvedValue({ state: "available", cookies: [] }); resetDevice("sqlite-sender");
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
@@ -164,11 +345,11 @@ beforeEach(() => {
     return bytes ? new Response(new Uint8Array(bytes), { status: 200 }) : new Response("owned missing object", { status: 404 });
   }));
 });
-afterEach(() => { h.fault = null; expect(isRestoreLocked(ID)).toBe(false); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { h.fault = null; h.io = null; expect(h.fds.size, "owned fixture descriptors must all close").toBe(0); expect(isRestoreLocked(ID)).toBe(false); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 afterAll(() => { assertOwner(); fs.rmSync(h.root, { recursive: true }); });
 
 describe("SQLite LocalStorage actual sync data flow", () => {
-  it("captures/publishes main+WAL (not SHM), pulls fresh, directly reads the WAL-only row, integrity checks and reloads", async () => {
+  it("captures/publishes main+WAL (not SHM), pulls fresh, directly reads the WAL-only row, integrity checks and reloads" + directoryCase, async () => {
     seedProfile(); const source = installSqlite(undefined, true);
     const noWal = fs.mkdtempSync(path.join(h.root, "main-only-control-")); fs.writeFileSync(path.join(noWal, "LocalStorage"), source.main);
     const control = new DatabaseSync(path.join(noWal, "LocalStorage"), { readOnly: true });
@@ -181,15 +362,17 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     expect(summary.files).toBe(2); expect(fs.readdirSync(extracted).sort()).toEqual(["LocalStorage", "LocalStorage-wal"]);
     expect(fs.readFileSync(path.join(extracted, "LocalStorage"))).toEqual(source.main);
     expect(fs.readFileSync(path.join(extracted, "LocalStorage-wal"))).toEqual(source.wal); assertBusiness(path.join(extracted, "LocalStorage"));
-    resetDevice("sqlite-fresh-receiver"); const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    resetDevice("sqlite-fresh-receiver"); const attempt = await observeSqlitePull(source), pulled = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt)) return;
     expect(pulled.success, pulled.message).toBe(true); expect(pulled.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "localStorage", id: ID, state: "applied" })]));
     expect(fs.existsSync(path.join(defaultDir(), "Local Storage", "leveldb"))).toBe(false);
     assertBusiness(dbPath()); reloadConfig(); expect(getProfileMeta(ID)?.name).toBe("SQLite source"); assertBusiness(dbPath());
     expect(h.objects.get(MAIN)).toEqual(Buffer.from(JSON.stringify(document)));
   });
 
-  it("prepares and publishes a main+WAL archive at Default, not the legacy directory", async () => {
-    remoteArchive(sqliteArchive()); const result = await syncService.pull(undefined, { strategy: "remote" });
+  it("prepares and publishes a main+WAL archive at Default, not the legacy directory" + directoryCase, async () => {
+    const incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming)); const attempt = await observeSqlitePull(incoming), result = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt)) return;
     expect(result.success, result.message).toBe(true); assertBusiness(dbPath());
     expect(fs.existsSync(path.join(defaultDir(), "Local Storage", "leveldb"))).toBe(false);
   });
@@ -200,7 +383,7 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     expect(fs.readFileSync(path.join(defaultDir(), "Local Storage", "leveldb", "CURRENT"), "utf8")).toBe("MANIFEST-000001\n");
   });
 
-  it("treats the observed Chromium maps/map_entries/meta schema as opaque data without requiring test-table names", async () => {
+  it("treats the observed Chromium maps/map_entries/meta schema as opaque data without requiring test-table names" + directoryCase, async () => {
     seedProfile(); const generator = fs.mkdtempSync(path.join(h.root, "observed-schema-")), file = path.join(generator, "LocalStorage");
     const db = new DatabaseSync(file); let bytes: ReturnType<typeof sqliteBytes>;
     try {
@@ -210,7 +393,9 @@ describe("SQLite LocalStorage actual sync data flow", () => {
       bytes = { main: fs.readFileSync(file), wal: fs.readFileSync(file + "-wal") };
     } finally { db.close(); fs.rmSync(generator, { recursive: true }); }
     installSqlite(bytes!); const push = await syncService.push(undefined, true); expect(push.success, push.message).toBe(true);
-    resetDevice("observed-schema-receiver"); const pull = await syncService.pull(undefined, { strategy: "remote" }); expect(pull.success, pull.message).toBe(true);
+    resetDevice("observed-schema-receiver"); const attempt = await observeSqlitePull(bytes!), pull = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt)) return;
+    expect(pull.success, pull.message).toBe(true);
     const reader = new DatabaseSync(dbPath(), { readOnly: true });
     try {
       const row = reader.prepare("SELECT key,value FROM map_entries WHERE map_id=1").get() as any;
@@ -221,11 +406,13 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     // has interpreted it. That semantic claim belongs to the real browser gate.
   });
 
-  it("replaces old main/WAL/SHM with an empty valid main-only database without reviving old WAL rows", async () => {
+  it("replaces old main/WAL/SHM with an empty valid main-only database without reviving old WAL rows" + directoryCase, async () => {
     seedProfile("old target"); const old = installSqlite(sqliteBytes("old-WAL-business-row"), true);
-    const shmHash = sha(fs.readFileSync(dbPath() + "-shm"));
-    remoteArchive(archive([["LocalStorage", mainOnlyBytes()]]));
-    const result = await syncService.pull(undefined, { strategy: "remote" }); expect(result.success, result.message).toBe(true);
+    const shmHash = sha(fs.readFileSync(dbPath() + "-shm")), incoming = { main: mainOnlyBytes() };
+    remoteArchive(archive([["LocalStorage", incoming.main]]));
+    const attempt = await observeSqlitePull(incoming), result = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt, "old-WAL-business-row")) return;
+    expect(result.success, result.message).toBe(true);
     expect(fs.existsSync(dbPath() + "-wal")).toBe(false); expect(fs.existsSync(dbPath() + "-shm")).toBe(false);
     for (let i = 0; i < 2; i++) {
       const db = new DatabaseSync(dbPath(), { readOnly: true });
@@ -243,9 +430,11 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     expect(result.warnings?.some((warning) => warning.includes(path.join(roots[0], "old")))).toBe(true);
   });
 
-  it("replaces existing SQLite with a committed WAL-only row and retains a directly readable previous copy", async () => {
-    seedProfile(); installSqlite(sqliteBytes("previous-business")); remoteArchive(sqliteArchive());
-    const result = await syncService.pull(undefined, { strategy: "remote" }); expect(result.success, result.message).toBe(true);
+  it("replaces existing SQLite with a committed WAL-only row and retains a directly readable previous copy" + directoryCase, async () => {
+    seedProfile(); installSqlite(sqliteBytes("previous-business")); const incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming));
+    const attempt = await observeSqlitePull(incoming), result = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt, "previous-business")) return;
+    expect(result.success, result.message).toBe(true);
     assertBusiness(dbPath()); assertBackupBusiness(backupRoots()[0], "previous-business");
     reloadConfig(); assertBusiness(dbPath());
   });
@@ -261,19 +450,23 @@ describe("SQLite LocalStorage actual sync data flow", () => {
     expect(h.reads.filter((file) => [dbPath(), dbPath() + "-wal"].includes(file))).toEqual([]);
   });
 
-  it("preserves an explicit reset zero-byte WAL and ignores only a proven empty source journal", async () => {
+  it("preserves an explicit reset zero-byte WAL and ignores only a proven empty source journal" + directoryCase, async () => {
     seedProfile(); const main = mainOnlyBytes(); fs.writeFileSync(dbPath(), main); fs.writeFileSync(dbPath() + "-wal", Buffer.alloc(0)); fs.writeFileSync(dbPath() + "-journal", Buffer.alloc(0));
     const pushed = await syncService.push(undefined, true); expect(pushed.success, pushed.message).toBe(true);
     const extracted = fs.mkdtempSync(path.join(h.root, "empty-wal-")); __syncTestHooks.extractSafeLocalStorageArchive(Buffer.from(payload().localStorage[ID], "base64"), extracted);
     expect(fs.readdirSync(extracted).sort()).toEqual(["LocalStorage", "LocalStorage-wal"]); expect(fs.statSync(path.join(extracted, "LocalStorage-wal")).size).toBe(0);
-    resetDevice("empty-wal-receiver"); const pulled = await syncService.pull(undefined, { strategy: "remote" }); expect(pulled.success, pulled.message).toBe(true);
+    resetDevice("empty-wal-receiver"); const attempt = await observeSqlitePull({ main, wal: Buffer.alloc(0) }), pulled = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt)) return;
+    expect(pulled.success, pulled.message).toBe(true);
     const db = new DatabaseSync(dbPath(), { readOnly: true });
     try { expect(db.prepare("SELECT COUNT(*) AS n FROM business_storage").get()).toEqual({ n: 0 }); } finally { db.close(); }
   });
 
-  it("moves an old empty rollback journal into backup rather than leaving it beside a replacement main", async () => {
-    seedProfile(); installSqlite(sqliteBytes("old with empty journal")); fs.writeFileSync(dbPath() + "-journal", Buffer.alloc(0)); remoteArchive(sqliteArchive());
-    const result = await syncService.pull(undefined, { strategy: "remote" }); expect(result.success, result.message).toBe(true);
+  it("moves an old empty rollback journal into backup rather than leaving it beside a replacement main" + directoryCase, async () => {
+    seedProfile(); installSqlite(sqliteBytes("old with empty journal")); fs.writeFileSync(dbPath() + "-journal", Buffer.alloc(0));
+    const incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming)); const attempt = await observeSqlitePull(incoming), result = attempt.result;
+    if (await assertConservationIfDirectoryRefused(attempt, "old with empty journal")) return;
+    expect(result.success, result.message).toBe(true);
     expect(fs.existsSync(dbPath() + "-journal")).toBe(false); expect(fs.statSync(path.join(backupRoots()[0], "old", "LocalStorage-journal")).size).toBe(0);
     assertBusiness(dbPath()); assertBackupBusiness(backupRoots()[0], "old with empty journal");
   });
@@ -456,40 +649,43 @@ describe("SQLite archive/source prepare fails closed before live mutation", () =
 });
 
 describe("SQLite multi-file publication compensation and durable recovery", () => {
-  it.each(["first backup", "second backup", "second publication"])("compensates an injected %s failure without losing old values", async (point) => {
-    seedProfile(); installSqlite(sqliteBytes("original transaction value"), true); const before = liveSnapshot(); remoteArchive(sqliteArchive()); let hits = 0;
+  it.each(["first backup", "second backup", "second publication"])("compensates an injected %s failure without losing old values" + directoryCase, async (point) => {
+    seedProfile(); installSqlite(sqliteBytes("original transaction value"), true); const before = liveSnapshot(), incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming)); let hits = 0;
     h.fault = (op, from, to) => {
-      const hit = point === "first backup" ? op === "rename" && from === dbPath() && to?.includes("/old/")
-        : point === "second backup" ? op === "rename" && from === dbPath() + "-wal" && to?.includes("/old/")
-        : op === "link" && from.includes("/new/") && to === dbPath() + "-wal";
+      const hit = point === "first backup" ? op === "rename" && from === dbPath() && to?.includes(`${path.sep}old${path.sep}`)
+        : point === "second backup" ? op === "rename" && from === dbPath() + "-wal" && to?.includes(`${path.sep}old${path.sep}`)
+        : op === "link" && from.includes(`${path.sep}new${path.sep}`) && to === dbPath() + "-wal";
       if (hit) { hits++; throw Object.assign(new Error("injected SQLite publication failure"), { code: "EIO" }); }
     };
-    const result = await syncService.pull(undefined, { strategy: "remote" }); h.fault = null;
+    const attempt = await observeSqlitePull(incoming), result = attempt.result; h.fault = null;
+    if (await assertConservationIfDirectoryRefused(attempt, "original transaction value", { [point]: hits })) return;
     expect(hits).toBe(1); expect(result).toMatchObject({ success: false, localCommit: "none", outcome: "failed" });
     assertLiveUnchanged(before); expect(backupRoots()).toEqual([]); assertBusiness(dbPath(), "original transaction value");
   });
 
-  it("preserves a concurrent target WAL edit between the first guard and backup moves", async () => {
-    seedProfile(); installSqlite(sqliteBytes("original before edit")); const config = fs.readFileSync(getConfigPath()), edited = sqliteBytes("late target owner value"); remoteArchive(sqliteArchive()); let injected = false;
+  it("preserves a concurrent target WAL edit between the first guard and backup moves" + directoryCase, async () => {
+    seedProfile(); installSqlite(sqliteBytes("original before edit")); const config = fs.readFileSync(getConfigPath()), edited = sqliteBytes("late target owner value"), incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming)); let injected = false;
     h.fault = (op, from, to) => {
-      if (!injected && op === "rename" && from === dbPath() && to?.includes("/old/")) {
+      if (!injected && op === "rename" && from === dbPath() && to?.includes(`${path.sep}old${path.sep}`)) {
         injected = true; fs.writeFileSync(dbPath() + "-wal", edited.wal);
       }
     };
-    const result = await syncService.pull(undefined, { strategy: "remote" }); h.fault = null;
+    const attempt = await observeSqlitePull(incoming), result = attempt.result; h.fault = null;
+    if (await assertConservationIfDirectoryRefused(attempt, "original before edit", { "concurrent WAL edit": Number(injected) })) return;
     expect(injected).toBe(true); expect(result).toMatchObject({ success: false, localCommit: "none", outcome: "failed" });
     expect(fs.readFileSync(dbPath() + "-wal")).toEqual(edited.wal); expect(fs.readFileSync(getConfigPath())).toEqual(config);
     assertBusiness(dbPath(), "late target owner value"); expect(backupRoots()).toEqual([]);
   });
 
-  it("retains unique old/new bytes and durable per-file recovery mapping when publication and compensation fail", async () => {
+  it("retains unique old/new bytes and durable per-file recovery mapping when publication and compensation fail" + directoryCase, async () => {
     seedProfile(); const old = installSqlite(sqliteBytes("unique old business"), true), incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming));
     let publishHits = 0, restoreHits = 0;
     h.fault = (op, from, to) => {
-      if (op === "link" && to === dbPath() + "-wal" && from.includes("/new/")) { publishHits++; throw new Error("injected WAL publish fault"); }
-      if (op === "link" && to === dbPath() && from.includes("/old/")) { restoreHits++; throw new Error("injected main restore fault"); }
+      if (op === "link" && to === dbPath() + "-wal" && from.includes(`${path.sep}new${path.sep}`)) { publishHits++; throw new Error("injected WAL publish fault"); }
+      if (op === "link" && to === dbPath() && from.includes(`${path.sep}old${path.sep}`)) { restoreHits++; throw new Error("injected main restore fault"); }
     };
-    const result = await syncService.pull(undefined, { strategy: "remote" }); h.fault = null;
+    const attempt = await observeSqlitePull(incoming), result = attempt.result; h.fault = null;
+    if (await assertConservationIfDirectoryRefused(attempt, "unique old business", { "WAL publication": publishHits, "main compensation": restoreHits })) return;
     expect(publishHits).toBe(1); expect(restoreHits).toBe(1); expect(result).toMatchObject({ success: false, outcome: "recovery-required", localCommit: "partial", code: "LOCAL_STORAGE_RECOVERY_REQUIRED" });
     const roots = backupRoots(); expect(roots).toHaveLength(1); const root = roots[0];
     expect(fs.readFileSync(path.join(root, "old", "LocalStorage"))).toEqual(old.main);
@@ -512,12 +708,13 @@ describe("SQLite multi-file publication compensation and durable recovery", () =
     assertBusiness(path.join(rescued, "LocalStorage"), "unique old business");
   });
 
-  it("never overwrites a target created between backup and new publication", async () => {
-    seedProfile(); installSqlite(sqliteBytes("rescued old")); remoteArchive(sqliteArchive()); let planted = false;
+  it("never overwrites a target created between backup and new publication" + directoryCase, async () => {
+    seedProfile(); installSqlite(sqliteBytes("rescued old")); const incoming = sqliteBytes(); remoteArchive(sqliteArchive(incoming)); let planted = false;
     h.fault = (op, from, to) => {
-      if (!planted && op === "link" && from.includes("/new/") && to === dbPath()) { planted = true; fs.writeFileSync(dbPath(), "new unrelated owner"); }
+      if (!planted && op === "link" && from.includes(`${path.sep}new${path.sep}`) && to === dbPath()) { planted = true; fs.writeFileSync(dbPath(), "new unrelated owner"); }
     };
-    const result = await syncService.pull(undefined, { strategy: "remote" }); h.fault = null;
+    const attempt = await observeSqlitePull(incoming), result = attempt.result; h.fault = null;
+    if (await assertConservationIfDirectoryRefused(attempt, "rescued old", { "concurrent target creation": Number(planted) })) return;
     expect(planted).toBe(true); expect(result.outcome).toBe("recovery-required"); expect(fs.readFileSync(dbPath(), "utf8")).toBe("new unrelated owner");
     // WAL compensation succeeded while main compensation was correctly refused
     // by the new owner's file: reconstruct the preserved split old group.

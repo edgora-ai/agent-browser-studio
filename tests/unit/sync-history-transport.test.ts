@@ -11,13 +11,21 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+type IoFailure = { code?: string; syscall?: string };
+type HistoryIoTrace = {
+  fds: Map<number, string>; opened: number; closed: number;
+  errors: Array<IoFailure & { operation: "open" | "close"; file?: string }>;
+  flushes: Array<IoFailure & { file: string; kind: "file" | "directory" | "other"; ok: boolean }>;
+  moves: Array<{ operation: "rename" | "link"; from: string; to: string }>;
+};
+
 const h = vi.hoisted(() => {
   const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-history-owned-")));
   const owner = fs.lstatSync(root);
   return { root, owner, device: path.join(root, "device"), running: new Set<string>(), unknownRunning: false,
     oversizedPath: "", cookieHook: null as null | (() => void | Promise<void>), checkerFactory: null as null | ((source: string, options: any) => any),
-    fault: null as null | ((op: string, from: string, to?: string) => void) };
+    fault: null as null | ((op: string, from: string, to?: string) => void), io: null as HistoryIoTrace | null };
 });
 vi.mock("electron", () => ({ app: { getPath: (name: string) => name === "home" ? path.join(h.root, "home") : h.device },
   safeStorage: { isEncryptionAvailable: () => false }, BrowserWindow: { getAllWindows: () => [] } }));
@@ -35,15 +43,46 @@ vi.mock("node:worker_threads", async (original) => {
 });
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
+  const failure = (error: unknown): IoFailure => {
+    const { code, syscall } = error as NodeJS.ErrnoException;
+    return { code, syscall }; // Scalar native facts only; never retain error text.
+  };
+  const move = (operation: "rename" | "link", from: any, to: any) => {
+    h.io?.moves.push({ operation, from: String(from), to: String(to) });
+    h.fault?.(operation, String(from), String(to));
+    return operation === "rename" ? actual.renameSync(from, to) : actual.linkSync(from, to);
+  };
   return { ...actual,
     lstatSync: (file: any, ...args: any[]) => {
       const stat = (actual.lstatSync as any)(file, ...args);
       if (stat && String(file) === h.oversizedPath) return Object.defineProperty(Object.create(stat), "size", { value: 64 * 1024 * 1024 + 1 });
       return stat;
     },
-    openSync: (file: any, flags: any, mode?: any) => { h.fault?.("open", String(file)); return actual.openSync(file, flags, mode); },
-    renameSync: (from: any, to: any) => { h.fault?.("rename", String(from), String(to)); return actual.renameSync(from, to); },
-    linkSync: (from: any, to: any) => { h.fault?.("link", String(from), String(to)); return actual.linkSync(from, to); },
+    openSync: (file: any, flags: any, mode?: any) => {
+      h.fault?.("open", String(file));
+      try {
+        const fd = actual.openSync(file, flags, mode);
+        if (h.io) { h.io.opened++; h.io.fds.set(fd, String(file)); }
+        return fd;
+      } catch (error) { h.io?.errors.push({ operation: "open", file: String(file), ...failure(error) }); throw error; }
+    },
+    closeSync: (fd: number) => {
+      const trace = h.io, file = trace?.fds.get(fd);
+      try { actual.closeSync(fd); }
+      catch (error) { trace?.errors.push({ operation: "close", file, ...failure(error) }); throw error; }
+      if (trace) { trace.closed++; trace.fds.delete(fd); }
+    },
+    fsyncSync: (fd: number) => {
+      const trace = h.io;
+      if (!trace) return actual.fsyncSync(fd);
+      const file = trace.fds.get(fd);
+      if (file === undefined) throw new Error("Unobserved descriptor in owned history fsync");
+      const stat = actual.fstatSync(fd), kind = stat.isDirectory() ? "directory" : stat.isFile() ? "file" : "other";
+      try { actual.fsyncSync(fd); trace.flushes.push({ file, kind, ok: true }); }
+      catch (error) { trace.flushes.push({ file, kind, ok: false, ...failure(error) }); throw error; }
+    },
+    renameSync: (from: any, to: any) => move("rename", from, to),
+    linkSync: (from: any, to: any) => move("link", from, to),
   };
 });
 
@@ -155,14 +194,57 @@ function assertRows(file: string, engine: Engine): void {
     if (engine === "firefox") { const bookmarks = db.prepare("SELECT fk,title FROM moz_bookmarks WHERE fk=?"); bookmarks.setReadBigInts(true); expect(bookmarks.get(EXACT_ID)).toEqual({ fk: EXACT_ID, title: "Explicitly consented bookmark" }); }
   } finally { db.close(); }
 }
+function assertEmptyRows(file: string, engine: Engine): void {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    for (const table of engine === "firefox" ? ["moz_places", "moz_historyvisits", "moz_bookmarks"] : ["urls", "visits"]) {
+      expect(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 });
+    }
+    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  } finally { db.close(); }
+}
 const payload = () => JSON.parse(fixture.objects.get(CONFIG_KEY)!.toString("utf8"));
 
-beforeEach(async () => { h.running.clear(); h.unknownRunning = false; h.fault = null; h.oversizedPath = ""; h.cookieHook = null; h.checkerFactory = null; fixture = await loopbackFixture(); resetDevice("sender"); });
-afterEach(async () => { h.fault = null; expect(isRestoreLocked(ID)).toBe(false); await fixture.close(); vi.restoreAllMocks(); });
+// Observe this filesystem, not process.platform alone. Native fsync results pass
+// through unchanged; syncArchiveDirectory is not mocked. Open/file failures are
+// never capability.
+const directoryDurability = (() => {
+  owner(); const directory = fs.mkdtempSync(path.join(h.root, "durability-probe-")), file = path.join(directory, "probe");
+  try {
+    const bytes = Buffer.from("owned history durability probe"), fd = fs.openSync(file, "wx", 0o600);
+    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    expect(fs.readFileSync(file)).toEqual(bytes);
+    const directoryFd = fs.openSync(directory, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      expect(fs.fstatSync(directoryFd).isDirectory()).toBe(true);
+      try { fs.fsyncSync(directoryFd); }
+      catch (error) {
+        const failure = error as NodeJS.ErrnoException;
+        if (process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
+        return "native-win32-fsync-EPERM" as const;
+      }
+      return "confirmed" as const;
+    } finally { fs.closeSync(directoryFd); }
+  } finally { owner(); fs.rmSync(directory, { recursive: true }); }
+})();
+const receiverContract = directoryDurability === "confirmed" ? "durable publication exercised" : "conservation-only: native directory fsync EPERM; later checkpoints unreached";
+
+beforeEach(async () => { h.running.clear(); h.unknownRunning = false; h.fault = null; h.io = null; h.oversizedPath = ""; h.cookieHook = null; h.checkerFactory = null; fixture = await loopbackFixture(); resetDevice("sender"); });
+afterEach(async () => {
+  h.fault = null; const trace = h.io; h.io = null;
+  try {
+    if (trace) {
+      expect(trace.closed, "all actually opened publication descriptors must close").toBe(trace.opened);
+      expect(trace.fds.size, "no publication descriptor leaks").toBe(0);
+      expect(trace.errors.filter((entry) => entry.operation === "close")).toEqual([]);
+    }
+    expect(isRestoreLocked(ID)).toBe(false);
+  } finally { await fixture.close(); vi.restoreAllMocks(); }
+});
 afterAll(() => { owner(); fs.rmSync(h.root, { recursive: true }); });
 
 describe("production history/Places main+WAL transport", () => {
-  it.each(["chromium", "firefox"] as const)("publishes %s History/Places WAL bytes before the envelope and restores exact searchable relations", async (engine) => {
+  it.each(["chromium", "firefox"] as const)(`publishes %s History/Places WAL bytes before the envelope; receiver ${receiverContract}`, async (engine) => {
     seedProfile(engine); const source = install(engine);
     const controlDirectory = fs.mkdtempSync(path.join(h.root, "main-only-control-")), controlFile = path.join(controlDirectory, "db"); fs.writeFileSync(controlFile, source.main);
     const control = new DatabaseSync(controlFile, { readOnly: true });
@@ -190,8 +272,9 @@ describe("production history/Places main+WAL transport", () => {
     const get = fixture.journal.findIndex((item) => item.method === "GET" && item.key === artifact.object.key);
     const envelope = fixture.journal.findIndex((item) => item.method === "PUT" && item.key === CONFIG_KEY);
     expect(put).toBeGreaterThan(-1); expect(get).toBeGreaterThan(put); expect(envelope).toBeGreaterThan(get);
-    resetDevice("receiver");
+    resetDevice("receiver"); const observed = observeHistoryRestore(engine);
     const pulled = await syncService.pull(undefined, { strategy: "remote", history: true } as any);
+    if (directoryDurability !== "confirmed") { await expectDirectoryConservation(pulled, observed, engine); return; }
     expect(pulled.success, pulled.message).toBe(true); expect(pulled.items).toContainEqual(expect.objectContaining({ scope: "history", id: ID, state: "applied" }));
     expect(pulled.items?.find((item) => item.scope === "profiles" && item.id === ID)?.identity).toMatchObject({ configuration: { state: "retained" }, runtime: { state: "not-verified" } });
     expect(getConfig().browserProfiles[ID].fingerprintSeed).toBe(42);
@@ -205,6 +288,106 @@ describe("production history/Places main+WAL transport", () => {
 function liveSnapshot(engine: Engine): Record<string, string | null> {
   return Object.fromEntries([getConfigPath(), ...["", "-wal", "-shm", "-journal"].map((suffix) => livePath(engine) + suffix)]
     .map((file) => [file, fs.existsSync(file) ? sha(fs.readFileSync(file)) : null]));
+}
+function observeHistoryRestore(engine: Engine) {
+  owner(); expect(h.io).toBeNull();
+  const group = ["", "-wal", "-shm", "-journal"].map((suffix) => livePath(engine) + suffix);
+  const files = new Map([getConfigPath(), ...group].map((file) => [file, fs.existsSync(file) ? fs.readFileSync(file) : null] as const));
+  const config = structuredClone(getConfig()), remote = new Map([...fixture.objects].map(([key, bytes]) => [key, Buffer.from(bytes)]));
+  const trace: HistoryIoTrace = { fds: new Map(), opened: 0, closed: 0, errors: [], flushes: [], moves: [] };
+  h.io = trace;
+  return { group, files, config, remote, journalStart: fixture.journal.length, trace };
+}
+function expectReceiverConserved(observed: ReturnType<typeof observeHistoryRestore>): void {
+  for (const [file, bytes] of observed.files) expect(fs.existsSync(file) ? fs.readFileSync(file) : null).toEqual(bytes);
+  expect(getConfig()).toEqual(observed.config);
+  expect(getConfig().browserProfiles[ID]?.historySyncBaseline).toEqual(observed.config.browserProfiles[ID]?.historySyncBaseline);
+  expect(fixture.objects).toEqual(observed.remote);
+  expect(fixture.journal.slice(observed.journalStart).filter((entry) => entry.method === "PUT")).toEqual([]);
+  expect(observed.trace.moves.filter(({ from, to }) => observed.group.includes(from) || observed.group.includes(to))).toEqual([]);
+}
+
+// This is a conservation contract, NOT a simulated successful restore, rollback
+// or permission revocation. Only the probe's exact native unsupported case may
+// enter it, and the actual publication trace must independently corroborate it.
+async function expectDirectoryConservation(result: Awaited<ReturnType<typeof syncService.pull>>, observed: ReturnType<typeof observeHistoryRestore>, engine: Engine, emptyOld = false): Promise<void> {
+  expect(directoryDurability).toBe("native-win32-fsync-EPERM");
+  expect(process.platform).toBe("win32");
+  expect(result).toMatchObject({ success: false, outcome: "recovery-required", code: "HISTORY_RECOVERY_REQUIRED", localCommit: "partial", remoteCommit: "none" });
+  expect(result.message).toBe("SQLite history publication/compensation is incomplete; old/new material retained for recovery");
+  expect(syncMayRetryAutomatically(result)).toBe(false);
+  expect(result.items?.filter((entry) => ["applied", "queued", "uploaded"].includes(entry.state))).toEqual([]);
+  expect(result.recovery).toHaveLength(1);
+  const recovery = result.recovery![0], directory = path.dirname(livePath(engine)), transaction = recovery.paths[0];
+  expect(recovery).toMatchObject({ resource: "history", id: ID, paths: [transaction, directory] });
+  expect(recovery.receiptPath, "external receipt directory was not confirmed durable").toBeUndefined();
+  expect(path.dirname(transaction)).toBe(directory); expect(path.basename(transaction)).toMatch(/^\.history-backup-/);
+  const transactionOwner = fs.lstatSync(transaction);
+  expect(transactionOwner.isDirectory() && !transactionOwner.isSymbolicLink()).toBe(true);
+
+  const pendingPath = path.join(transaction, "pending.json"), journalPath = path.join(transaction, "recovery-required.json");
+  const externalPath = path.join(h.device, "sync-recovery", `${ID}.history.json`);
+  const { trace } = observed, directories = trace.flushes.filter((entry) => entry.kind === "directory");
+  expect(directories, "first fatal mandatory flush is the pending transaction directory, before staging/live moves").toEqual([
+    h.device, path.join(h.device, "profile-data-revisions"), transaction, directory, transaction, path.dirname(externalPath),
+  ].map((file) => ({ file, kind: "directory", ok: false, code: "EPERM", syscall: "fsync" })));
+  const fatal = trace.flushes.findIndex((entry) => entry.file === transaction && entry.kind === "directory");
+  expect(trace.flushes[fatal - 1]).toEqual({ file: pendingPath, kind: "file", ok: true });
+  expect(trace.errors, "no preceding native open/close error may masquerade as unsupported directory fsync").toEqual([]);
+  expect(trace.flushes.filter((entry) => entry.kind === "file").length).toBeGreaterThan(0);
+  expect(trace.flushes.filter((entry) => entry.kind !== "directory" && (!entry.ok || entry.kind !== "file"))).toEqual([]);
+  for (const file of [pendingPath, journalPath, externalPath]) expect(trace.flushes).toContainEqual({ file, kind: "file", ok: true });
+  expect(fs.existsSync(path.join(transaction, "published.json"))).toBe(false);
+  expect(fs.existsSync(path.join(transaction, "new")), "incoming stage move was not reached").toBe(false);
+  expect(fs.readdirSync(path.join(transaction, "old")), "no old group member was moved").toEqual([]);
+
+  const material = new Map([pendingPath, journalPath, externalPath].map((file) => {
+    const stat = fs.lstatSync(file);
+    expect(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size <= 16384).toBe(true);
+    return [file, fs.readFileSync(file)] as const;
+  }));
+  const old = observed.group.flatMap((file) => {
+    const bytes = observed.files.get(file)!;
+    return bytes === null ? [] : [{ name: path.basename(file), hash: sha(bytes) }];
+  });
+  const artifact = JSON.parse(observed.remote.get(CONFIG_KEY)!.toString("utf8")).history[ID].artifact;
+  const incoming = artifact.members.map((member: any) => ({ name: path.posix.basename(member.path), hash: member.sha256 }));
+  expect(JSON.parse(material.get(pendingPath)!.toString("utf8"))).toEqual({ version: 1, format: "sqlite", scope: "history", operationId: result.operationId, dirId: ID, target: directory, old, incoming });
+  expect(JSON.parse(material.get(journalPath)!.toString("utf8"))).toEqual({ operationId: result.operationId, dirId: ID, state: "recovery-required", format: "sqlite", transaction, target: directory,
+    old: old.map((entry) => ({ ...entry, backupPath: path.join(transaction, "old", entry.name), livePath: path.join(directory, entry.name) })),
+    incoming: incoming.map((entry: any) => ({ ...entry, retainedPath: path.join(transaction, "new", entry.name), livePath: path.join(directory, entry.name) })),
+  });
+  expect(material.get(externalPath)).toEqual(material.get(journalPath));
+  expect(fixture.journal.slice(observed.journalStart).filter((entry) => entry.method === "GET" && entry.key === artifact.object.key)).toHaveLength(1);
+  expectReceiverConserved(observed); reloadConfig(); expectReceiverConserved(observed);
+
+  const main = observed.files.get(livePath(engine))!;
+  if (main === null) expect(observed.group.map((file) => observed.files.get(file))).toEqual([null, null, null, null]);
+  else {
+    // Query an independently opened owned copy, never checkpoint/rebuild SHM in
+    // the live group whose exact main/WAL/SHM/journal bytes must be conserved.
+    const copy = fs.mkdtempSync(path.join(h.root, "conserved-history-readback-")), file = path.join(copy, path.basename(livePath(engine)));
+    try {
+      fs.writeFileSync(file, fs.readFileSync(livePath(engine)));
+      if (observed.files.get(livePath(engine) + "-wal") !== null) fs.writeFileSync(file + "-wal", fs.readFileSync(livePath(engine) + "-wal"));
+      if (emptyOld) assertEmptyRows(file, engine); else assertRows(file, engine);
+    } finally { fs.rmSync(copy, { recursive: true }); }
+  }
+
+  const flushStart = trace.flushes.length, moveStart = trace.moves.length;
+  const retry = await syncService.pull(undefined, { strategy: "remote", history: true });
+  expect(retry).toMatchObject({ success: false, outcome: "recovery-required", code: "HISTORY_RECOVERY_REQUIRED", localCommit: "none", remoteCommit: "none" });
+  expect(retry.message).toBe("History recovery is unresolved; original/new groups retained");
+  expect(retry.recovery).toEqual([{ resource: "history", id: ID, receiptPath: externalPath, paths: [externalPath] }]);
+  expect(syncMayRetryAutomatically(retry)).toBe(false);
+  expect(retry.items?.filter((entry) => ["applied", "queued", "uploaded"].includes(entry.state))).toEqual([]);
+  expect(trace.flushes.slice(flushStart).filter((entry) => entry.kind === "directory"), "unresolved gate blocks later publication, before mandatory flushes").toEqual([]);
+  expect(trace.moves.slice(moveStart)).toEqual([]);
+  expect(fs.readdirSync(directory).filter((name) => name.startsWith(".history-backup-"))).toEqual([path.basename(transaction)]);
+  for (const [file, bytes] of material) expect(fs.readFileSync(file)).toEqual(bytes);
+  expect(trace.errors).toEqual([]);
+  expect(trace.flushes.filter((entry) => entry.kind === "file" && !entry.ok)).toEqual([]);
+  expectReceiverConserved(observed); reloadConfig(); expectReceiverConserved(observed);
 }
 async function publish(engine: Engine = "chromium", empty = false) {
   seedProfile(engine); install(engine, sqliteBytes(engine, empty));
@@ -366,15 +549,19 @@ describe("in-flight history permission/freshness checkpoints", () => {
       for (const [file, hash] of Object.entries(before)) if (file !== getConfigPath()) expect(fs.existsSync(file) ? sha(fs.readFileSync(file)) : null).toBe(hash);
       expect(getConfig().browserProfiles[ID].historySyncBaseline).toBeUndefined();
     });
-    it.each(["between main/WAL", "after published receipt"] as const)("compensates exact receiver group when authorization changes %s, before config commit", async (phase) => {
+    it.each(["between main/WAL", "after published receipt"] as const)(`${directoryDurability === "confirmed" ? "compensates exact receiver group when authorization changes %s, before config commit" : "conserves receiver without reaching %s authorization change"} (${receiverContract})`, async (phase) => {
       await publish(); resetDevice("late-permission-receiver"); seedProfile("chromium"); install("chromium", sqliteBytes("chromium", true));
-      fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium"); let changes = 0;
+      fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium"), observed = observeHistoryRestore("chromium"); let changes = 0;
       h.fault = (op, from, to) => {
         const hit = phase === "between main/WAL" ? op === "link" && from.includes(path.sep + "new" + path.sep) && to === livePath("chromium")
           : op === "open" && from.includes(path.sep + ".history-backup-") && path.basename(from) === "published.json";
         if (!changes && hit) { changes++; changeHistoryPermission(kind); }
       };
       const result = await syncService.pull(undefined, { strategy: "remote", history: true }); h.fault = null;
+      if (directoryDurability !== "confirmed") {
+        expect(changes, "conservation-only: late authorization injection was not reached").toBe(0);
+        await expectDirectoryConservation(result, observed, "chromium", true); return;
+      }
       expect(changes).toBe(1); expect(result).toMatchObject({ success: false, code: permissionCode(kind), localCommit: "none" });
       for (const [file, hash] of Object.entries(before)) if (file !== getConfigPath()) expect(fs.existsSync(file) ? sha(fs.readFileSync(file)) : null).toBe(hash);
       expect(getConfig().browserProfiles[ID].historySyncBaseline).toBeUndefined();
@@ -479,14 +666,19 @@ describe("history pull prepares all bytes and compensates complete groups", () =
     const before = liveSnapshot("chromium"), result = await syncService.pull(undefined, { strategy: "remote", history: true });
     expect(result).toMatchObject({ success: false, localCommit: "none" }); expect(result.message).toMatch(/Incompatible target history schema/); expect(liveSnapshot("chromium")).toEqual(before);
   });
-  it("retains durable old/new groups and typed history recovery receipts after failed compensation", async () => {
-    await publish(); resetDevice("recovery-receiver"); seedProfile("chromium"); const old = install("chromium"); const config = fs.readFileSync(getConfigPath());
+  it(`${directoryDurability === "confirmed" ? "retains durable old/new groups and typed history recovery receipts after failed compensation" : "conserves original group before publication/compensation fault points"} (${receiverContract})`, async () => {
+    await publish(); resetDevice("recovery-receiver"); seedProfile("chromium"); const old = install("chromium"); const config = fs.readFileSync(getConfigPath()), observed = observeHistoryRestore("chromium");
     let publishFailure = 0, compensationFailure = 0;
     h.fault = (op, from, to) => {
       if (op === "link" && from.includes(path.sep + "new" + path.sep) && to === livePath("chromium") + "-wal") { publishFailure++; throw new Error("Synthetic incoming WAL publication failure"); }
       if (op === "link" && from.includes(path.sep + "old" + path.sep) && to === livePath("chromium")) { compensationFailure++; throw new Error("Synthetic old main compensation failure"); }
     };
     const result = await syncService.pull(undefined, { strategy: "remote", history: true }); h.fault = null;
+    if (directoryDurability !== "confirmed") {
+      expect(publishFailure, "conservation-only: incoming WAL publication fault was not reached").toBe(0);
+      expect(compensationFailure, "conservation-only: old main compensation fault was not reached").toBe(0);
+      await expectDirectoryConservation(result, observed, "chromium"); return;
+    }
     expect(publishFailure).toBe(1); expect(compensationFailure).toBe(1); expect(result).toMatchObject({ success: false, outcome: "recovery-required", code: "HISTORY_RECOVERY_REQUIRED" });
     const recovery = result.recovery?.find((entry) => entry.resource === "history"); expect(recovery?.receiptPath).toBeTruthy();
     const receipt = JSON.parse(fs.readFileSync(recovery!.receiptPath!, "utf8")); expect(receipt.state).toBe("recovery-required");
@@ -497,13 +689,14 @@ describe("history pull prepares all bytes and compensates complete groups", () =
     expect(fs.readFileSync(getConfigPath())).toEqual(config);
     const retry = await syncService.pull(undefined, { strategy: "remote", history: true }); expect(retry.outcome).toBe("recovery-required"); expect(fs.readFileSync(getConfigPath())).toEqual(config);
   });
-  it.each(["chromium", "firefox"] as const)("restores a complete empty %s database, replacing old WAL/SHM without reviving visits", async (engine) => {
+  it.each(["chromium", "firefox"] as const)(`${directoryDurability === "confirmed" ? "restores a complete empty %s database, replacing old WAL/SHM without reviving visits" : "conserves old %s visits/group instead of publishing a complete empty database"} (${receiverContract})`, async (engine) => {
     await publish(engine, true); resetDevice("empty-receiver"); seedProfile(engine); const previous = install(engine);
-    const oldShm = fs.readFileSync(livePath(engine) + "-shm");
-    const result = await syncService.pull(undefined, { strategy: "remote", history: true }); expect(result.success, result.message).toBe(true);
+    const oldShm = fs.readFileSync(livePath(engine) + "-shm"), observed = observeHistoryRestore(engine);
+    const result = await syncService.pull(undefined, { strategy: "remote", history: true });
+    if (directoryDurability !== "confirmed") { await expectDirectoryConservation(result, observed, engine); return; }
+    expect(result.success, result.message).toBe(true);
     expect(fs.existsSync(livePath(engine) + "-shm")).toBe(false);
-    const db = new DatabaseSync(livePath(engine), { readOnly: true });
-    try { expect(db.prepare(`SELECT count(*) AS n FROM ${engine === "firefox" ? "moz_historyvisits" : "visits"}`).get()).toEqual({ n: 0 }); expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" }); } finally { db.close(); }
+    assertEmptyRows(livePath(engine), engine);
     const directory = path.dirname(livePath(engine)), root = fs.readdirSync(directory).find((name) => name.startsWith(".history-backup-"))!;
     expect(root).toBeTruthy(); const backup = path.join(directory, root, "old"), name = path.basename(livePath(engine));
     expect(fs.readFileSync(path.join(backup, name))).toEqual(previous.main); expect(fs.readFileSync(path.join(backup, name + "-wal"))).toEqual(previous.wal);
@@ -525,8 +718,8 @@ describe("history pull prepares all bytes and compensates complete groups", () =
     expect(liveSnapshot("chromium")).toEqual(before); reloadConfig(); expect(liveSnapshot("chromium")).toEqual(before);
   });
 
-  it.each(["backup-WAL", "publish-WAL", "config-commit", "cancel"] as const)("rolls back the exact old DB/WAL/SHM/journal group after %s", async (point) => {
-    await publish(); resetDevice("compensation-receiver"); seedProfile("chromium"); install("chromium"); fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium");
+  it.each(["backup-WAL", "publish-WAL", "config-commit", "cancel"] as const)(`${directoryDurability === "confirmed" ? "rolls back the exact old DB/WAL/SHM/journal group after %s" : "conserves exact old DB/WAL/SHM/journal before the unreached %s checkpoint"} (${receiverContract})`, async (point) => {
+    await publish(); resetDevice("compensation-receiver"); seedProfile("chromium"); install("chromium"); fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium"), observed = observeHistoryRestore("chromium");
     const controller = new AbortController(); let hits = 0;
     h.fault = (op, from, to) => {
       const hit = point === "backup-WAL" ? op === "rename" && from === livePath("chromium") + "-wal" && Boolean(to?.includes(path.sep + "old" + path.sep))
@@ -534,8 +727,17 @@ describe("history pull prepares all bytes and compensates complete groups", () =
         : op === "rename" && to === getConfigPath();
       if (hit && !hits++) { if (point === "cancel") controller.abort(); else throw Object.assign(new Error("Synthetic history publication fault"), { code: "EIO" }); }
     };
-    const result = await syncService.pull(controller.signal, { strategy: "remote", history: true }).catch((error) => error.syncResult);
-    h.fault = null; expect(hits).toBeGreaterThan(0); expect(result.success).toBe(false); expect(result.localCommit).toBe("none");
+    const result = await syncService.pull(controller.signal, { strategy: "remote", history: true }).catch((error) => {
+      if (!controller.signal.aborted || !error.syncResult) throw error;
+      return error.syncResult;
+    });
+    h.fault = null;
+    if (directoryDurability !== "confirmed") {
+      expect(hits, "conservation-only: requested fault/cancellation checkpoint was not reached").toBe(0);
+      expect(controller.signal.aborted, "conservation-only is not cancellation coverage").toBe(false);
+      await expectDirectoryConservation(result, observed, "chromium"); return;
+    }
+    expect(hits).toBe(1); expect(result).toMatchObject({ success: false, localCommit: "none", code: point === "cancel" ? "SYNC_CANCELLED" : "EIO" });
     // Cookie queue publication (empty snapshot does not write) and Preferences
     // remain absent; after successful history compensation no history changes.
     expect(liveSnapshot("chromium")).toEqual(before);

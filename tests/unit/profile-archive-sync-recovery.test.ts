@@ -1,5 +1,6 @@
-// Owned on-disk SQLite/LevelDB + real ZIP and sync entry points. No browser,
-// user profile or cloud; the bounded test runner provides a private HOME/TMPDIR.
+// Owned on-disk SQLite/LevelDB + real ZIP and sync entry points. Consumer-only
+// synthetic historical references are labeled below; they never certify a local
+// producer commit. No browser, user profile or cloud; use a private HOME/TMPDIR.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -227,7 +228,88 @@ function assertHistoryRows(engine: HistoryEngine, directory: string, title: stri
     }
   } finally { db.close(); fs.rmSync(copy, { recursive: true }); }
 }
-async function completedHistory(engine: HistoryEngine) {
+type ArchiveFixturePolicy = "native-capability" | "synthetic-historical-reference";
+type ArchiveConsumerFixture = {
+  authority: "native-producer" | "synthetic-historical-reference";
+  transaction: string; relative: string; backup: string; target: string;
+  old: { main: Buffer; wal: Buffer }; zipPath: string;
+};
+function nativeProducerDirectoryDurability(): boolean {
+  // Choose a fixture authority from real owned-fd results, never platform alone.
+  // In particular, open/file-flush failures must not select synthetic fixtures.
+  expect(h.fault).toBeNull(); expect(h.descriptors.size).toBe(0);
+  const start = h.events.length, tracing = h.tracing;
+  let confirmed: boolean;
+  h.tracing = true;
+  try { confirmed = syncArchiveDirectory(h.root); } finally { h.tracing = tracing; }
+  const probe = h.events.slice(start);
+  expect(probe.map((event) => event.op)).toEqual(["open", "fsync", "close"]);
+  expect(probe.every((event) => event.role === "capability-root" && event.directory === true)).toBe(true);
+  expect(probe.map((event) => event.ok)).toEqual([true, confirmed, true]);
+  expect(h.descriptors.size).toBe(0);
+  if (!confirmed) {
+    expect(process.platform).toBe("win32");
+    expect(probe.filter((event) => !event.ok).map(({ op, code, syscall }) => ({ op, code, syscall })))
+      .toEqual([{ op: "fsync", code: "EPERM", syscall: "fsync" }]);
+  }
+  return confirmed;
+}
+async function syntheticHistoricalArchiveInput(scope: "localStorage" | "history", engine: HistoryEngine = "chromium"): Promise<ArchiveConsumerFixture> {
+  // Invented old-device receipts are UNTRUSTED ARCHIVE INPUT, not evidence that
+  // this host ran a producer. On disk they exist only in inert quarantine, with
+  // a foreign target, never beside the live database as active completion proof.
+  // Refuse to reuse a current recovery gate; no marker or baseline is cleared.
+  expect(backupRoots()).toEqual([]);
+  expect(historyBackups("chromium")).toEqual([]); expect(historyBackups("firefox")).toEqual([]);
+  expect(fs.existsSync(path.join(h.appData, "sync-recovery"))).toBe(false);
+  expect(fs.lstatSync(path.join(profileDir(), HISTORY), { throwIfNoEntry: false })).toBeUndefined();
+  expect(getConfig().browserProfiles[ID].syncBaseline).toBeUndefined(); expect(h.requests).toEqual([]);
+  const history = scope === "history";
+  if (history) {
+    const cfg = structuredClone(getConfig()); cfg.browserProfiles[ID].engine = engine; saveConfig(cfg);
+    setSyncConfig({ includeHistory: true, historyConsent: true });
+  }
+  const incoming = history ? historyBytes(engine, "published history 中文") : sqliteBytes("published-new-business-row");
+  const old = history ? historyBytes(engine, "unique original history 中文") : sqliteBytes("unique-old-rescue-row-中文");
+  const directory = history ? historyDirectory(engine) : defaultDir(), main = history ? historyMain(engine) : "LocalStorage";
+  for (const name of [main, main + "-wal", main + "-shm", main + "-journal"]) {
+    expect(fs.lstatSync(path.join(directory, name), { throwIfNoEntry: false }), "synthetic input requires a fresh owned source").toBeUndefined();
+  }
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, main), incoming.main); fs.writeFileSync(path.join(directory, main + "-wal"), incoming.wal);
+  const backup = (history ? HISTORY_PREFIX : SQLITE_PREFIX) + "synthetic-historical-reference";
+  const relative = (history && engine === "firefox" ? "" : "Default/") + backup;
+  const target = path.posix.join("/synthetic-historical-reference", ID, history && engine === "firefox" ? "" : "Default");
+  const transaction = path.join(profileDir(), HISTORY, ID, relative);
+  const inventory = (bytes: { main: Buffer; wal: Buffer }) => [
+    { name: main, hash: sha(bytes.main) }, { name: main + "-wal", hash: sha(bytes.wal) },
+  ];
+  const pending = Buffer.from(JSON.stringify({ version: 1, format: "sqlite", ...(history ? { scope: "history" } : {}),
+    operationId: "synthetic_historical_reference_not_a_local_commit", dirId: ID, target, old: inventory(old), incoming: inventory(incoming) }));
+  fs.mkdirSync(path.join(transaction, "old"), { recursive: true }); fs.mkdirSync(path.join(transaction, "new"));
+  fs.writeFileSync(path.join(transaction, "old", main), old.main); fs.writeFileSync(path.join(transaction, "old", main + "-wal"), old.wal);
+  fs.writeFileSync(path.join(transaction, "pending.json"), pending);
+  fs.writeFileSync(path.join(transaction, "published.json"), JSON.stringify({ state: "published", pendingHash: sha(pending) }));
+  const config = fs.readFileSync(getConfigPath()), memory = JSON.stringify(getConfig()), requests = [...h.requests];
+  const before = tree(profileDir()), inertZip = path.join(h.appData, `${scope}-${engine}-synthetic-inert-export.zip`);
+  // Exercise the real export classifier against inert history first. Rebase
+  // names ONLY inside a ZIP to model an older device's archive; never install
+  // those active-looking receipt paths into the current source profile.
+  await exportProfileArchive(ID, inertZip);
+  expect(tree(profileDir())).toEqual(before);
+  const ancestors = new Set([`${HISTORY}/`, `${HISTORY}/${ID}/`, `${HISTORY}/${ID}/Default/`]);
+  const entries = zipEntries(inertZip).filter((entry) => !ancestors.has(entry.name)).map((entry) =>
+    entry.name.startsWith(`${HISTORY}/${ID}/`) ? { ...entry, name: entry.name.slice(`${HISTORY}/${ID}/`.length) } : entry);
+  const zipPath = path.join(h.appData, `${scope}-${engine}-synthetic-historical-input.zip`);
+  await writeZipArchive(zipPath, entries);
+  expect(backupRoots()).toEqual([]); expect(historyBackups(engine)).toEqual([]);
+  expect(fs.existsSync(path.join(h.appData, "sync-recovery"))).toBe(false);
+  expect(fs.readFileSync(getConfigPath())).toEqual(config); expect(JSON.stringify(getConfig())).toBe(memory);
+  expect(h.requests).toEqual(requests); expect(h.objects.size).toBe(0);
+  return { authority: "synthetic-historical-reference", transaction, relative, backup, target, old, zipPath };
+}
+async function historyArchiveFixture(engine: HistoryEngine, policy: ArchiveFixturePolicy): Promise<ArchiveConsumerFixture> {
+  if (policy === "synthetic-historical-reference" || !nativeProducerDirectoryDurability()) return syntheticHistoricalArchiveInput("history", engine);
   const cfg = structuredClone(getConfig()); cfg.browserProfiles[ID].engine = engine; saveConfig(cfg);
   setSyncConfig({ includeHistory: true, historyConsent: true });
   installHistory(engine, "published history 中文");
@@ -237,9 +319,10 @@ async function completedHistory(engine: HistoryEngine) {
   const [backup] = historyBackups(engine); expect(historyBackups(engine)).toHaveLength(1);
   const relative = (engine === "chromium" ? "Default/" : "") + backup, transaction = path.join(profileDir(), relative);
   const zipPath = path.join(h.appData, `${engine}-history-recovery.zip`); await exportProfileArchive(ID, zipPath);
-  return { transaction, relative, backup, old, zipPath };
+  return { authority: "native-producer", transaction, relative, backup, target: historyDirectory(engine), old, zipPath };
 }
-async function completedSqlite(): Promise<{ transaction: string; backup: string; old: ReturnType<typeof sqliteBytes>; zipPath: string }> {
+async function sqliteArchiveFixture(policy: ArchiveFixturePolicy): Promise<ArchiveConsumerFixture> {
+  if (policy === "synthetic-historical-reference" || !nativeProducerDirectoryDurability()) return syntheticHistoricalArchiveInput("localStorage");
   installSqlite(sqliteBytes("published-new-business-row"));
   const pushed = await syncService.push(undefined, true); expect(pushed.success, pushed.message).toBe(true);
   const old = sqliteBytes("unique-old-rescue-row-中文"); installSqlite(old);
@@ -247,7 +330,7 @@ async function completedSqlite(): Promise<{ transaction: string; backup: string;
   const [backup] = backupRoots(); expect(backupRoots()).toHaveLength(1);
   const transaction = path.join(defaultDir(), backup), zipPath = path.join(h.appData, "completed-recovery.zip");
   await exportProfileArchive(ID, zipPath);
-  return { transaction, backup, old, zipPath };
+  return { authority: "native-producer", transaction, relative: `Default/${backup}`, backup, target: defaultDir(), old, zipPath };
 }
 function expectRejectedImport(zipPath: string, label = "unresolved recovery"): void {
   const before = tree(h.appData), config = fs.readFileSync(getConfigPath()), zip = fs.readFileSync(zipPath);
@@ -257,11 +340,13 @@ function expectRejectedImport(zipPath: string, label = "unresolved recovery"): v
   reloadConfig(); expect(getProfileMeta(ID)?.name).toBe("Recovery archive");
   expect(Object.keys(getConfig().browserProfiles)).toEqual([ID]); expect(isRestoreLocked(ID)).toBe(false);
 }
-async function expectRejectedExport(label: string): Promise<void> {
+async function expectRejectedExport(label: string, reason?: RegExp): Promise<void> {
   const destination = path.join(h.appData, "previous-good.zip");
   if (!fs.existsSync(destination)) await writeZipArchive(destination, [{ name: "last-valid-copy", data: Buffer.from("unique previous ZIP bytes") }]);
   const before = tree(h.appData);
-  await expect(exportProfileArchive(ID, destination, { overwrite: true }), label).rejects.toThrow(expect.objectContaining({ code: "ARCHIVE_RECOVERY_REQUIRED" }));
+  await expect(exportProfileArchive(ID, destination, { overwrite: true }), label).rejects.toThrow(expect.objectContaining({
+    code: "ARCHIVE_RECOVERY_REQUIRED", ...(reason ? { message: expect.stringMatching(reason) } : {}),
+  }));
   expect(tree(h.appData), label).toEqual(before);
 }
 function setPending(entries: TestZipEntry[], backup: string, edit: (pending: any) => void, relative = `Default/${backup}`): void {
@@ -467,6 +552,7 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
   });
 
   it("refuses a real failed SQLite publication/compensation on export and old-ZIP import without touching any rescue or prior ZIP", async () => {
+    const directoryConfirmed = nativeProducerDirectoryDurability();
     const incoming = sqliteBytes("unfinished-incoming-row"), old = sqliteBytes("unfinished-unique-old-row");
     installSqlite(incoming); const pushed = await syncService.push(undefined, true); expect(pushed.success, pushed.message).toBe(true);
     installSqlite(old); assertBusiness(defaultDir(), "unfinished-unique-old-row");
@@ -478,11 +564,25 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
     };
     const pulled = await syncService.pull(undefined, { strategy: "remote" }); h.fault = null;
     expect(pulled).toMatchObject({ success: false, outcome: "recovery-required", code: "LOCAL_STORAGE_RECOVERY_REQUIRED" });
-    expect(publication).toBe(1); expect(rollback).toBe(1);
-    const [backup] = backupRoots(), transaction = path.join(defaultDir(), backup);
-    expect(fs.readFileSync(path.join(transaction, "old", "LocalStorage"))).toEqual(old.main);
-    expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage-wal"))).toEqual(old.wal);
-    expect(fs.readFileSync(path.join(transaction, "new", "LocalStorage-wal"))).toEqual(incoming.wal);
+    const [backup] = backupRoots(); expect(backupRoots()).toHaveLength(1);
+    const transaction = path.join(defaultDir(), backup);
+    if (directoryConfirmed) {
+      expect(publication).toBe(1); expect(rollback).toBe(1);
+      expect(fs.readFileSync(path.join(transaction, "old", "LocalStorage"))).toEqual(old.main);
+      expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage-wal"))).toEqual(old.wal);
+      expect(fs.readFileSync(path.join(transaction, "new", "LocalStorage-wal"))).toEqual(incoming.wal);
+    } else {
+      // The real producer stopped BEFORE either injected link fault. This is
+      // unfinished native material, not a synthetic completed transaction.
+      expect(publication).toBe(0); expect(rollback).toBe(0);
+      expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage"))).toEqual(old.main);
+      expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage-wal"))).toEqual(old.wal);
+      assertBusiness(defaultDir(), "unfinished-unique-old-row");
+      expect(fs.readdirSync(transaction).sort()).toEqual(["old", "pending.json", "recovery-required.json"]);
+      expect(fs.readdirSync(path.join(transaction, "old"))).toEqual([]);
+      expect(fs.existsSync(path.join(transaction, "new"))).toBe(false);
+      expect(fs.existsSync(path.join(transaction, "published.json"))).toBe(false);
+    }
     expect(fs.existsSync(path.join(transaction, "recovery-required.json"))).toBe(true);
     expect(fs.existsSync(path.join(h.appData, "sync-recovery", ID + ".localStorage.json"))).toBe(true);
     await expectRejectedExport("unfinished SQLite");
@@ -539,11 +639,75 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
   });
 });
 
-describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_000 }, () => {
+describe("synthetic historical-reference archive input is not native producer authority", { timeout: 30_000 }, () => {
+  it.each([
+    { scope: "localStorage", engine: "chromium" },
+    { scope: "history", engine: "chromium" },
+    { scope: "history", engine: "firefox" },
+  ] as const)("consumes $scope/$engine references portably without active completion proof or clearing a current gate", async ({ scope, engine }) => {
+    // Run this fixture path on supported hosts too; no fsync failure/success is
+    // modeled to get coverage of the Windows consumer-input fallback.
+    const directoryConfirmed = nativeProducerDirectoryDurability();
+    const fixture = await syntheticHistoricalArchiveInput(scope, engine), sourceBefore = tree(profileDir());
+    expect(fixture.authority).toBe("synthetic-historical-reference");
+    expect(fs.existsSync(path.join(profileDir(), fixture.relative))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(fixture.transaction, "pending.json"), "utf8")))
+      .toMatchObject({ operationId: "synthetic_historical_reference_not_a_local_commit", dirId: ID, target: fixture.target });
+    expect(fixture.target).not.toBe(scope === "history" ? historyDirectory(engine) : defaultDir());
+    expect(h.opened.some((file) => file.startsWith(fixture.target))).toBe(false);
+    expect(h.requests).toEqual([]); expect(getConfig().browserProfiles[ID].syncBaseline).toBeUndefined();
+    const input = fs.readFileSync(fixture.zipPath), imported = importProfileArchive(fixture.zipPath);
+    const retainedRelative = `${HISTORY}/${ID}/${fixture.relative}`, retained = path.join(profileDir(imported.dirId), retainedRelative);
+    expect(tree(retained)).toEqual(tree(fixture.transaction)); expect(tree(profileDir())).toEqual(sourceBefore);
+    expect(fs.readFileSync(fixture.zipPath)).toEqual(input);
+    expect(imported.warnings).toContainEqual(expect.stringMatching(/inert history.*not a recovery\/commit proof/i));
+    if (!directoryConfirmed) {
+      expect(imported.warnings).toContain("Directory fsync is unsupported on Windows; recovery history directory durability is not guaranteed.");
+      expect(imported.warnings).toContain("Directory fsync is unsupported on Windows; imported files were synced, but directory durability is not guaranteed.");
+    }
+    const secondZip = path.join(h.appData, "synthetic-history-consumer-roundtrip.zip");
+    await exportProfileArchive(imported.dirId, secondZip);
+    const secondBytes = fs.readFileSync(secondZip), second = importProfileArchive(secondZip);
+    expect(tree(path.join(profileDir(second.dirId), retainedRelative))).toEqual(tree(fixture.transaction));
+    expect(fs.readFileSync(secondZip)).toEqual(secondBytes);
+    for (const id of [ID, imported.dirId, second.dirId]) {
+      expect(backupRoots(id)).toEqual([]); expect(historyBackups(engine, id)).toEqual([]);
+      const rescue = id === ID ? fixture.transaction : path.join(profileDir(id), retainedRelative);
+      if (scope === "history") {
+        assertHistoryRows(engine, historyDirectory(engine, id), "published history 中文");
+        assertHistoryRows(engine, path.join(rescue, "old"), "unique original history 中文");
+      } else {
+        assertBusiness(defaultDir(id), "published-new-business-row"); assertBusiness(path.join(rescue, "old"), "unique-old-rescue-row-中文");
+      }
+    }
+    reloadConfig();
+    expect(getProfileMeta(second.dirId)?.engine).toBe(engine);
+    expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[second.dirId].name).toBe(second.name);
+    expect(getConfig().browserProfiles[ID].syncBaseline).toBeUndefined(); expect(h.requests).toEqual([]);
+    expect(h.opened.some((file) => file.startsWith(fixture.target))).toBe(false);
+    // A synthetic current alarm exercises the real gate. Historical references
+    // must neither satisfy it nor erase it, even after two successful imports.
+    const receipts = path.join(h.appData, "sync-recovery"); fs.mkdirSync(receipts, { mode: 0o700 });
+    const alarm = path.join(receipts, `${ID}.${scope}.json`); fs.writeFileSync(alarm, '{"state":"recovery-required"}');
+    await expectRejectedExport("inert historical references cannot clear a current recovery alarm", /local recovery-required receipt is still present/);
+    const beforeBlocked = tree(h.appData), blocked = await syncService.push(undefined, true, undefined, { history: scope === "history" });
+    expect(blocked).toMatchObject({ success: false, outcome: "recovery-required",
+      code: scope === "history" ? "HISTORY_RECOVERY_REQUIRED" : "LOCAL_STORAGE_RECOVERY_REQUIRED", localCommit: "none", remoteCommit: "none" });
+    expect(tree(h.appData)).toEqual(beforeBlocked); expect(tree(profileDir())).toEqual(sourceBefore);
+    expect(fs.readFileSync(alarm, "utf8")).toBe('{"state":"recovery-required"}');
+    // Push may GET the owned remote config before checking local gates, but it
+    // must not publish anything or turn an inert reference into a local commit.
+    expect(h.requests.filter((request) => request.method === "PUT")).toEqual([]); expect(h.objects.size).toBe(0);
+  });
+});
+
+// Both policies run the same consumer attacks. Supported hosts still exercise
+// real producers, and also validate the synthetic-input path without fs spoofing.
+describe.each(["native-capability", "synthetic-historical-reference"] as const)("History rescue groups across real ZIP new-ID imports (%s fixture policy)", { timeout: 30_000 }, (fixturePolicy) => {
   it.each(["chromium", "firefox"] as const)("namespaces completed %s history rescue bytes and keeps the next production push searchable", async (engine) => {
-    const fixture = await completedHistory(engine), before = tree(profileDir()), zip = fs.readFileSync(fixture.zipPath);
+    const fixture = await historyArchiveFixture(engine, fixturePolicy), before = tree(profileDir()), zip = fs.readFileSync(fixture.zipPath);
     const pending = JSON.parse(fs.readFileSync(path.join(fixture.transaction, "pending.json"), "utf8"));
-    expect(pending).toMatchObject({ version: 1, format: "sqlite", scope: "history", dirId: ID, target: historyDirectory(engine) });
+    expect(pending).toMatchObject({ version: 1, format: "sqlite", scope: "history", dirId: ID, target: fixture.target });
     assertHistoryRows(engine, historyDirectory(engine), "published history 中文");
     assertHistoryRows(engine, path.join(fixture.transaction, "old"), "unique original history 中文");
     const imported = importProfileArchive(fixture.zipPath), retained = path.join(profileDir(imported.dirId), HISTORY, ID, fixture.relative);
@@ -566,11 +730,15 @@ describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_0
   });
 
   it.each(["chromium", "firefox"] as const)("refuses unresolved %s History transactions and external alarms without overwriting prior archives", async (engine) => {
-    const fixture = await completedHistory(engine), published = fs.readFileSync(path.join(fixture.transaction, "published.json"));
+    const fixture = await historyArchiveFixture(engine, fixturePolicy), published = fs.readFileSync(path.join(fixture.transaction, "published.json"));
     fs.unlinkSync(path.join(fixture.transaction, "published.json"));
     await expectRejectedExport("unconfirmed History publication");
-    const raw = path.join(h.appData, "old-unconfirmed-history.zip"); await rawProfileZip(raw, engine); expectRejectedImport(raw);
-    const entries = zipEntries(raw).map((entry) => entry.name.startsWith(fixture.relative + "/")
+    // Mutate the old-device ZIP input too: the synthetic source is already
+    // inert on disk, so blindly re-namespacing a raw source export would test
+    // malformed ancestry instead of the missing publication receipt.
+    const unresolved = zipEntries(fixture.zipPath).filter((entry) => entry.name !== `${fixture.relative}/published.json`);
+    const raw = path.join(h.appData, "old-unconfirmed-history.zip"); await writeZipArchive(raw, unresolved); expectRejectedImport(raw);
+    const entries = unresolved.map((entry) => entry.name.startsWith(fixture.relative + "/")
       ? { ...entry, name: `${HISTORY}/${ID}/` + entry.name } : entry);
     const inertZip = path.join(h.appData, "unconfirmed-history-replay.zip"); await writeZipArchive(inertZip, entries); expectRejectedImport(inertZip);
     fs.writeFileSync(path.join(fixture.transaction, "published.json"), published);
@@ -581,8 +749,8 @@ describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_0
   });
 
   it.each(["chromium", "firefox"] as const)("accepts %s foreign target text without reading it or claiming new-ID transaction ownership", async (engine) => {
-    const fixture = await completedHistory(engine), leaf = engine === "chromium" ? "/Default" : "";
-    const targets = [path.join(h.root, "absent-source-device", ID) + leaf,
+    const fixture = await historyArchiveFixture(engine, fixturePolicy), leaf = engine === "chromium" ? "/Default" : "";
+    const targets = [path.posix.join("/absent-source-device", ID) + leaf,
       `C:\\OwnedSourceDevice\\profiles\\${ID}` + leaf.replaceAll("/", "\\"),
       `\\\\owned-source-device\\share\\profiles\\${ID}` + leaf.replaceAll("/", "\\")];
     for (const [index, target] of targets.entries()) {
@@ -599,7 +767,7 @@ describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_0
   });
 
   it.each(["chromium", "firefox"] as const)("rejects forged %s History completion, foreign paths, case aliases and inert destination collisions", async (engine) => {
-    const fixture = await completedHistory(engine);
+    const fixture = await historyArchiveFixture(engine, fixturePolicy);
     const mutations: Array<[string, (pending: any) => void]> = [
       ["wrong scope", (p) => { p.scope = "localStorage"; }], ["wrong source ID", (p) => { p.dirId = "ab_other"; }],
       ["wrong target", (p) => { p.target = "/owned/ab_other/Default"; }], ["path traversal", (p) => { p.old[0].name = "../History"; }],
@@ -621,9 +789,9 @@ describe("History rescue groups across real ZIP new-ID imports", { timeout: 30_0
   });
 });
 
-describe("untrusted recovery JSON/path boundaries use the real archive importer", { timeout: 30_000 }, () => {
+describe.each(["native-capability", "synthetic-historical-reference"] as const)("untrusted recovery JSON/path boundaries use the real archive importer (%s fixture policy)", { timeout: 30_000 }, (fixturePolicy) => {
   it("rejects hostile pending fields and paths even with a matching recomputed publication hash", async () => {
-    const fixture = await completedSqlite();
+    const fixture = await sqliteArchiveFixture(fixturePolicy);
     const mutations: Array<[string, (pending: any) => void]> = [
       ["wrong version", (p) => { p.version = 2; }], ["wrong format", (p) => { p.format = "leveldb"; }],
       ["wrong source ID", (p) => { p.dirId = "ab_another_source"; }], ["object source ID", (p) => { p.dirId = { value: ID }; }],
@@ -669,7 +837,7 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("rejects duplicate, malformed, non-object and noncanonical JSON receipts without accepting last-key-wins", async () => {
-    const fixture = await completedSqlite();
+    const fixture = await sqliteArchiveFixture(fixturePolicy);
     const bad = ["null", "[]", "1", '"string"', "{", "{}", "\n", '{"__proto__":{}}'];
     for (const receipt of ["pending.json", "published.json"]) {
       const original = (zipEntries(fixture.zipPath).find((entry) => entry.name === `Default/${fixture.backup}/${receipt}`) as ZipFileEntry).data!;
@@ -690,7 +858,7 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("rejects incomplete rescue inventories, forged completion, explicit alarms and inert replays while preserving every input byte", async () => {
-    const fixture = await completedSqlite(), prefix = `Default/${fixture.backup}/`;
+    const fixture = await sqliteArchiveFixture(fixturePolicy), prefix = `Default/${fixture.backup}/`;
     const variants: Array<[string, (entries: TestZipEntry[]) => TestZipEntry[]]> = [
       ["missing pending", (entries) => entries.filter((entry) => entry.name !== prefix + "pending.json")],
       ["missing published", (entries) => entries.filter((entry) => entry.name !== prefix + "published.json")],
@@ -716,7 +884,7 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("refuses source identity/path attacks and fixed-history destination collisions without overwriting either copy", async () => {
-    const fixture = await completedSqlite();
+    const fixture = await sqliteArchiveFixture(fixturePolicy);
     for (const [index, sourceDirId] of [undefined, null, {}, [], "../escape", "/escape", "C:\\escape", "ab_other", "__proto__", "constructor"].entries()) {
       const entries = zipEntries(fixture.zipPath), meta = entries.find((entry) => entry.name === "meta.json") as ZipFileEntry;
       const document = JSON.parse(meta.data!.toString("utf8")); document.sourceDirId = sourceDirId; meta.data = Buffer.from(JSON.stringify(document));
@@ -739,8 +907,8 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it.each(["POSIX", "Windows drive", "Windows UNC"])("accepts a completed %s foreign target as identity text only, never a filesystem read or a new-ID commit proof", async (style) => {
-    const fixture = await completedSqlite(), entries = zipEntries(fixture.zipPath);
-    const target = style === "POSIX" ? path.join(h.root, "absent-source-device", ID, "Default")
+    const fixture = await sqliteArchiveFixture(fixturePolicy), entries = zipEntries(fixture.zipPath);
+    const target = style === "POSIX" ? path.posix.join("/absent-source-device", ID, "Default")
       : style === "Windows drive" ? `C:\\OwnedSourceDevice\\profiles\\${ID}\\Default` : `\\\\owned-source-device\\share\\profiles\\${ID}\\Default`;
     setPending(entries, fixture.backup, (pending) => { pending.target = target; });
     const zipPath = path.join(h.appData, "foreign-source.zip"); await writeZipArchive(zipPath, entries);
@@ -756,7 +924,7 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("does not follow receipt/rescue symlinks or omit them as ordinary cache/lock material", async () => {
-    const fixture = await completedSqlite();
+    const fixture = await sqliteArchiveFixture(fixturePolicy);
     const target = path.join(h.root, "owned-unrelated-receipt"); fs.writeFileSync(target, "must not be read through a link");
     fs.unlinkSync(path.join(fixture.transaction, "pending.json")); fs.symlinkSync(target, path.join(fixture.transaction, "pending.json"));
     h.opened = []; await expectRejectedExport("receipt symlink");
@@ -765,15 +933,22 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("refuses an active source transaction bound to another absolute path and embedded legacy recovery alarms", async () => {
-    const fixture = await completedSqlite(), entries = zipEntries(fixture.zipPath);
+    const fixture = await sqliteArchiveFixture(fixturePolicy), entries = zipEntries(fixture.zipPath);
     setPending(entries, fixture.backup, (pending) => { pending.target = path.join(h.root, "absent-other-owner", ID, "Default"); });
     for (const receipt of ["pending.json", "published.json"]) {
       const entry = entries.find((entry) => entry.name === `Default/${fixture.backup}/${receipt}`) as ZipFileEntry;
       fs.writeFileSync(path.join(fixture.transaction, receipt), entry.data!);
     }
-    await expectRejectedExport("same ID but wrong active source path");
+    let transaction = fixture.transaction;
+    if (fixture.authority === "synthetic-historical-reference") {
+      // Only this already INVALID wrong-source-path attack goes into the active
+      // namespace. No receipt matching the current target is ever installed.
+      expect(JSON.parse(fs.readFileSync(path.join(fixture.transaction, "pending.json"), "utf8")).target).not.toBe(defaultDir());
+      transaction = path.join(defaultDir(), fixture.backup); fs.renameSync(fixture.transaction, transaction);
+    }
+    await expectRejectedExport("same ID but wrong active source path", /belongs to another source path/);
     // A separate owned legacy fixture has no SQLite transaction at all.
-    fs.rmSync(fixture.transaction, { recursive: true });
+    fs.rmSync(transaction, { recursive: true });
     for (const name of ["LocalStorage", "LocalStorage-wal"]) fs.unlinkSync(path.join(defaultDir(), name));
     const parent = path.join(defaultDir(), "Local Storage"), backup = path.join(parent, ".leveldb-backup-legacy-alarm");
     fs.mkdirSync(path.join(parent, "leveldb"), { recursive: true }); fs.mkdirSync(backup);
@@ -784,7 +959,7 @@ describe("untrusted recovery JSON/path boundaries use the real archive importer"
   });
 
   it("rejects malformed history ancestry/case aliases instead of guessing an inert path", async () => {
-    const fixture = await completedSqlite(), prefix = `Default/${fixture.backup}/`;
+    const fixture = await sqliteArchiveFixture(fixturePolicy), prefix = `Default/${fixture.backup}/`;
     const variants = [
       ["prototype history ID", (name: string) => `${HISTORY}/__proto__/` + name],
       ["unrecognized history layout", (name: string) => `${HISTORY}/${ID}/Other/` + name.slice("Default/".length)],
