@@ -104,7 +104,9 @@ export function applyChromiumWebRtcPreferences(profileDir: string, policy: Chrom
     }
     const actual = read(file);
     if (!actual.bytes.equals(expected) || actual.value.webrtc.ip_handling_policy !== handling || !Array.isArray(actual.value.webrtc.ip_handling_url) || actual.value.webrtc.ip_handling_url.length !== 0) throw new WebRtcPreferencesError();
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW);
+    // Windows FlushFileBuffers requires write access even for unchanged bytes.
+    const flushAccess = process.platform === "win32" ? fs.constants.O_RDWR : fs.constants.O_RDONLY;
+    const fd = fs.openSync(file, flushAccess | NOFOLLOW);
     try { if (!actual.stat || !same(actual.stat, fs.fstatSync(fd))) throw new WebRtcPreferencesError(); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
     directorySynced = syncArchiveDirectory(defaultDir) && directorySynced;

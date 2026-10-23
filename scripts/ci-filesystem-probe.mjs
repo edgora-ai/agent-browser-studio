@@ -31,6 +31,9 @@ for (const { label, directory } of roots) {
     const opened = fields(fs.fstatSync(fd));
     const beforeBig = identity(fs.lstatSync(file, { bigint: true })), openedBig = identity(fs.fstatSync(fd, { bigint: true }));
     if (fs.readFileSync(fd).toString("utf8") !== "owned metadata fixture") throw new Error("Owned fixture readback changed");
+    let readOnlyFileSync;
+    try { fs.fsyncSync(fd); readOnlyFileSync = { confirmed: true }; }
+    catch (error) { readOnlyFileSync = { confirmed: false, code: error.code, syscall: error.syscall }; }
     const after = fields(fs.fstatSync(fd));
     fs.closeSync(fd); fd = undefined;
     const created = path.join(root, "created", "profile"), first = fs.mkdirSync(created, { recursive: true });
@@ -41,7 +44,7 @@ for (const { label, directory } of roots) {
     } catch (error) { directorySync = { confirmed: false, code: error.code, syscall: error.syscall }; }
     finally { if (fd !== undefined) { fs.closeSync(fd); fd = undefined; } }
     const facts = { probe: "owned-filesystem", node: process.version, label, before, opened, after,
-      pathAfter: fields(fs.lstatSync(file)), beforeBig, openedBig, directorySync,
+      pathAfter: fields(fs.lstatSync(file)), beforeBig, openedBig, directorySync, readOnlyFileSync,
       firstCreated: typeof first === "string" ? path.relative(root, first) : null,
       expectedFirstCreated: path.relative(root, path.dirname(created)),
       mkdirBoundaryEquivalent: typeof first === "string" && path.relative(first, path.dirname(created)) === "",
