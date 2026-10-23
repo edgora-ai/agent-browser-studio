@@ -12,6 +12,13 @@ export default defineConfig({
     exclude: ["node_modules", "dist", "tests/e2e/j[1-4]-*.test.ts"],
     globals: true,
     environment: "node",
+    // A hung test used to stall a CI job until its whole-job timeout killed it,
+    // with no indication of which test hung (observed on the Windows runner:
+    // 70 minutes of silence after the last completed file). A global deadline
+    // turns that into a named failure. It sits above the longest explicit
+    // per-test budget in the suite (120 s) so it never cuts healthy work short.
+    testTimeout: 180_000,
+    hookTimeout: 180_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html"],

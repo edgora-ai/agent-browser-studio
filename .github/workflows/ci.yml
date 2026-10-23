@@ -42,7 +42,9 @@ jobs:
       - name: Build
         run: npm run build
       - name: Unit + smoke tests
-        run: npx vitest run tests/unit tests/smoke
+        # `hanging-process` names the test holding the worker open instead of
+        # letting it stall until the job budget expires.
+        run: npx vitest run tests/unit tests/smoke --reporter=default --reporter=hanging-process
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
       - name: i18n + file size checks
@@ -122,7 +124,9 @@ jobs:
           cp resources/icon.icns resources/icon.ico dist/resources/
           node scripts/build-masque-bridge.mjs
       - name: Unit + smoke tests
-        run: npx vitest run tests/unit tests/smoke
+        # Same hang diagnostics as the Linux job; this is the runner that
+        # previously went silent for 70 minutes with no failing test named.
+        run: npx vitest run tests/unit tests/smoke --reporter=default --reporter=hanging-process
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
 
