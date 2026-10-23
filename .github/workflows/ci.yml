@@ -42,8 +42,8 @@ jobs:
       - name: Build
         run: npm run build
       - name: Unit + smoke tests
-        # `hanging-process` names the test holding the worker open instead of
-        # letting it stall until the job budget expires.
+        # Report leaked handles if Vitest reaches its shutdown deadline;
+        # synchronous loops must be bounded in the code under test.
         run: npx vitest run tests/unit tests/smoke --reporter=default --reporter=hanging-process
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke
@@ -80,10 +80,9 @@ jobs:
   checks-windows:
     name: Build + unit/smoke (Windows)
     runs-on: windows-latest
-    # Windows runners are markedly slower per test file than Linux, and this
-    # job runs the whole suite twice (plain, then with V8 coverage). Measured:
-    # ~1024 tests in the first five minutes, against ~7900 total — the 30 min
-    # cap killed a run that was still progressing, not one that had hung.
+    # Bound the combined plain + coverage workload. A larger job budget does
+    # not fix a blocked worker; fail fast below so assertion diagnostics are
+    # printed before another test can consume the remaining budget.
     timeout-minutes: 75
     defaults:
       run:
@@ -124,11 +123,10 @@ jobs:
           cp resources/icon.icns resources/icon.ico dist/resources/
           node scripts/build-masque-bridge.mjs
       - name: Unit + smoke tests
-        # Same hang diagnostics as the Linux job; this is the runner that
-        # previously went silent for 70 minutes with no failing test named.
-        run: npx vitest run tests/unit tests/smoke --reporter=default --reporter=hanging-process
+        # Failure still exits nonzero; a green run must execute the whole suite.
+        run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process
       - name: Coverage (unit + smoke, threshold gated)
-        run: npx vitest run --coverage tests/unit tests/smoke
+        run: npx vitest run --coverage tests/unit tests/smoke --bail=1
 
   e2e-macos:
     name: E2E (macOS, needs locally built engine — see engine-verify)

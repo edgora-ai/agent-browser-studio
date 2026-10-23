@@ -12,11 +12,9 @@ export default defineConfig({
     exclude: ["node_modules", "dist", "tests/e2e/j[1-4]-*.test.ts"],
     globals: true,
     environment: "node",
-    // A hung test used to stall a CI job until its whole-job timeout killed it,
-    // with no indication of which test hung (observed on the Windows runner:
-    // 70 minutes of silence after the last completed file). A global deadline
-    // turns that into a named failure. It sits above the longest explicit
-    // per-test budget in the suite (120 s) so it never cuts healthy work short.
+    // Bound asynchronous test/hook waits. These timers cannot preempt a
+    // synchronous loop; those paths need their own progress/ancestry bounds.
+    // Explicit per-test deadlines still apply to expensive typecheck fixtures.
     testTimeout: 180_000,
     hookTimeout: 180_000,
     coverage: {
