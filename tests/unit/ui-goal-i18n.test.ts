@@ -338,10 +338,14 @@ const BACKUP_COPY = {
 
 // Run the actual shipped guard against a private quoted dictionary fixture.
 // Link the existing offline parser read-only; do not copy dependencies.
-function checkParityFixture(source: string, strict = true) {
+function checkParityFixture(source: string, strict = true, appSource?: string) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "roxy-i18n-parity-"));
   try {
     for (const dir of ["scripts", "src/renderer/js", "node_modules"]) fs.mkdirSync(path.join(fixture, dir), { recursive: true });
+    if (appSource !== undefined) {
+      fs.mkdirSync(path.join(fixture, "src/renderer/js/app"));
+      fs.writeFileSync(path.join(fixture, "src/renderer/js/app/fixture.js"), appSource);
+    }
     fs.copyFileSync(path.join(ROOT, "scripts/check-i18n.mjs"), path.join(fixture, "scripts/check-i18n.mjs"));
     const require = createRequire(path.join(ROOT, "package.json"));
     const parser = require.resolve("typescript");
@@ -366,6 +370,14 @@ function injectAfterMerges(source: string, statement: string) {
   return source.replace(marker, statement + "\n" + marker);
 }
 
+const COMMENT_DETECTOR_CASES = [
+  ["js-hardcoded-cjk", 'const label = "未翻译";'],
+  ["i18n-key-not-defined", 't("__i18n_fixture_missing__", "Missing");'],
+  ["i18n-separator-in-fallback", 't("sync.use-global", " Use global strategy");'],
+  ["i18n-value-drops-placeholder", 't("sync.use-global", "Use global strategy {detail}");'],
+  ["i18n-shadowed-placeholder-leak", 't("auto.template-using", "Using template {id} — {title}");'],
+] as const;
+
 // This does not claim linguistic correctness of every legacy translation.
 // It checks all own keys and the runtime's actual last-merge winners.
 describe("full merged renderer parity and scoped truthful copies", () => {
@@ -385,6 +397,24 @@ describe("full merged renderer parity and scoped truthful copies", () => {
     expect(output).toContain(`i18n key parity: zh=${Object.keys(bundles["zh-CN"]).length} en=${Object.keys(bundles["en-US"]).length}`);
     expect(output).toMatch(/main-process key parity: zh=[1-9]\d* en=[1-9]\d*/);
     expect(output).toContain("i18n check passed");
+  });
+
+  it.each(["\n", "\r\n"])("ignores documented JS counterexamples in standalone and trailing comments with %j line endings", eol => {
+    const appSource = COMMENT_DETECTOR_CASES.flatMap(([, statement]) => [
+      `// ${statement}`,
+      `"safe"; // ${statement}`,
+    ]).join(eol) + eol;
+    const result = checkParityFixture(SOURCE, true, appSource);
+    expect(result.exit, result.output).toBe(0);
+    expect(result.output).toContain("i18n check passed");
+  });
+
+  it.each(["\n", "\r\n"])("still rejects live violations from every comment-sensitive JS detector with %j line endings", eol => {
+    for (const [diagnostic, statement] of COMMENT_DETECTOR_CASES) {
+      const result = checkParityFixture(SOURCE, true, ["// Inert public-source fixture", statement, ""].join(eol));
+      expect(result.exit, result.output).toBe(1);
+      expect(result.output).toContain(`src${path.sep}renderer${path.sep}js${path.sep}app${path.sep}fixture.js:2  [${diagnostic}]`);
+    }
   });
 
   it("checks own keys after all three merge layers, not only the first block", () => {
