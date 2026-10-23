@@ -8,11 +8,9 @@ const h = vi.hoisted(() => {
   const path = require("node:path");
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "ipc-browser-"));
   const forbidden = vi.fn((...args: unknown[]) => { throw new Error(`Undeclared native capability: ${String(args[0])}`); });
-  const execFileSync = vi.fn((file: string) => {
-    if (file === "ps" || file === "/bin/ps") return "";
-    return forbidden(file);
-  });
-  return { root, handlers: new Map<string, (...args: any[]) => any>(), forbidden, execFileSync };
+  const execFileSync = vi.fn((...args: unknown[]) => forbidden(...args));
+  const findBrowserByProfileSync = vi.fn<typeof import("../../src/main/services/process-discovery.js").findBrowserByProfileSync>(() => null);
+  return { root, handlers: new Map<string, (...args: any[]) => any>(), forbidden, execFileSync, findBrowserByProfileSync };
 });
 vi.mock("electron", () => ({
   ipcMain: { handle: (channel: string, handler: any) => {
@@ -33,9 +31,16 @@ vi.mock("node:child_process", async (importOriginal) => ({
   execFileSync: h.execFileSync, spawn: h.forbidden, spawnSync: h.forbidden,
 }));
 
+// Only runtime discovery is synthetic. Keep the real IPC, lifecycle and
+// license/team gates, without permitting either Unix or Windows host commands.
+vi.mock("../../src/main/services/process-discovery.js", async (original) => ({
+  ...await original<typeof import("../../src/main/services/process-discovery.js")>(),
+  findBrowserByProfileSync: h.findBrowserByProfileSync,
+}));
+
 import { registerBrowserHandlers } from "../../src/main/ipc/browser.js";
 import { registerWebRtcHandlers } from "../../src/main/ipc/webrtc.js";
-import { getConfig, getConfigPath, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
+import { getConfig, getConfigPath, getProfilesDir, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
 import { runningProcesses } from "../../src/main/services/browser/runtime-table.js";
 registerBrowserHandlers();
 registerWebRtcHandlers();
@@ -53,6 +58,7 @@ function role(value: "owner" | "viewer") {
 }
 
 beforeEach(() => {
+  h.findBrowserByProfileSync.mockReset().mockReturnValue(null);
   fs.rmSync(h.root, { recursive: true, force: true });
   fs.mkdirSync(h.root);
   reloadConfig();
@@ -68,6 +74,8 @@ afterEach(() => {
   runningProcesses.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  expect(h.forbidden).not.toHaveBeenCalled();
+  expect(h.execFileSync).not.toHaveBeenCalled();
 });
 afterAll(() => fs.rmSync(h.root, { recursive: true, force: true }));
 
@@ -115,14 +123,28 @@ describe("real browser IPC security", () => {
     const cfg = structuredClone(getConfig()) as any;
     cfg.trialStartedAt = Date.now() - 30 * 24 * 60 * 60 * 1000;
     saveConfig(cfg);
+    const before = fs.readFileSync(getConfigPath(), "utf8");
     expect(await invoke("webrtc:diag", { sender: sender() }, { dirId: PROFILE, allowLaunch: true, requestId: "rtc-expired" })).toMatchObject({ ok: false, code: "LICENSE_EXPIRED" });
+    expect(h.findBrowserByProfileSync).toHaveBeenCalledExactlyOnceWith(PROFILE, path.join(getProfilesDir(), PROFILE), { strict: true });
     expect(h.forbidden).not.toHaveBeenCalled();
+    expect(h.execFileSync).not.toHaveBeenCalled();
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(before);
+    reloadConfig();
+    expect((await invoke("browser:list", { sender: sender() })).find((entry: any) => entry.dirId === PROFILE)).toMatchObject({ name: "IPC browser fixture", fingerprintSeed: 12345 });
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(before);
   });
 
   it("WebRTC explicit auto-launch cannot bypass the team launch policy", async () => {
     role("viewer");
+    const before = fs.readFileSync(getConfigPath(), "utf8");
     expect(await invoke("webrtc:diag", { sender: sender() }, { dirId: PROFILE, allowLaunch: true, requestId: "rtc-viewer" })).toMatchObject({ ok: false, code: "TEAM_ROLE_DENIED" });
+    expect(h.findBrowserByProfileSync).toHaveBeenCalledExactlyOnceWith(PROFILE, path.join(getProfilesDir(), PROFILE), { strict: true });
     expect(h.forbidden).not.toHaveBeenCalled();
+    expect(h.execFileSync).not.toHaveBeenCalled();
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(before);
+    reloadConfig();
+    expect((await invoke("browser:list", { sender: sender() })).find((entry: any) => entry.dirId === PROFILE)).toMatchObject({ name: "IPC browser fixture", fingerprintSeed: 12345 });
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(before);
   });
 
   it("expired trial blocks single and batch launches before native I/O", async () => {

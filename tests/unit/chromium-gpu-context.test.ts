@@ -52,7 +52,8 @@ describe("bounded Mach-O GPU policy context (synthetic headers, not runtime proo
   it.each([[false, false], [false, true], [true, false], [true, true]])("verifies universal slices wide=%s little=%s", (wide, little) => {
     const read = vi.spyOn(fs, "readSync");
     expect(readChromiumGpuContext(file(universal(wide, little)), host).kernelArchitecture).toBe("arm64");
-    const total = read.mock.calls.reduce((sum, call) => sum + Number(call[3]), 0);
+    // readSync's final type overload uses options; production calls use positional length.
+    const total = read.mock.calls.reduce((sum, call) => sum + Number((call as readonly unknown[])[3]), 0);
     expect(total).toBeLessThan(4096);
   });
   it.each([
@@ -94,14 +95,45 @@ describe("bounded Mach-O GPU policy context (synthetic headers, not runtime proo
     expect(readChromiumGpuContext(executable, host)).toMatchObject({ kernelArchitecture: null, architectureReason: "executable-header-read-failed:EIO" });
     expect(close).toHaveBeenCalledOnce();
   });
-  it("rejects a path replaced while its original descriptor is being read", () => {
-    const executable = file(thin()), replacement = file(thin(0x01000007), "replacement");
-    const originalRead = fs.readSync;
-    vi.spyOn(fs, "readSync").mockImplementation((...args: any[]) => {
+  it("keeps a real path replacement or exact native Windows rename denial unknown while the original descriptor is being read", () => {
+    const originalBytes = thin(), replacementBytes = thin(0x01000007);
+    const executable = file(originalBytes), replacement = file(replacementBytes, "replacement");
+    const originalOwner = fs.lstatSync(executable, { bigint: true }), replacementOwner = fs.lstatSync(replacement, { bigint: true });
+    const originalRead = fs.readSync, close = vi.spyOn(fs, "closeSync");
+    let attempts = 0, replacements = 0, readCount = 0, readOwner: fs.BigIntStats | undefined, replacementError: unknown;
+    const read = vi.spyOn(fs, "readSync").mockImplementation((...args: any[]) => {
       const count = (originalRead as any)(...args);
-      fs.renameSync(replacement, executable);
+      readCount = count; readOwner = fs.fstatSync(args[0], { bigint: true }); attempts++;
+      try { fs.renameSync(replacement, executable); replacements++; }
+      catch (error) { replacementError = error; throw error; }
       return count;
     });
-    expect(readChromiumGpuContext(executable, host)).toMatchObject({ kernelArchitecture: null, architectureReason: "executable-changed-during-read" });
+    const result = readChromiumGpuContext(executable, host);
+    expect(read).toHaveBeenCalledOnce(); expect(attempts).toBe(1); expect(readCount).toBe(32);
+    expect(readOwner?.isFile()).toBe(true); expect(readOwner).toMatchObject({ dev: originalOwner.dev, ino: originalOwner.ino });
+    const fd = read.mock.calls[0][0];
+    expect(close).toHaveBeenCalledExactlyOnceWith(fd); expect(close.mock.results[0].type).toBe("return");
+    expect(() => fs.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    read.mockRestore(); close.mockRestore();
+    const expectOwnedBytes = (name: string, bytes: Buffer, owner: fs.BigIntStats) => {
+      const current = fs.lstatSync(name, { bigint: true });
+      expect(current.isFile()).toBe(true); expect(current.nlink).toBe(owner.nlink);
+      expect([current.dev, current.ino]).toEqual([owner.dev, owner.ino]);
+      expect(fs.readFileSync(name)).toEqual(bytes);
+    };
+    if (replacementError !== undefined) {
+      // This is an observed failed mutation, NOT replacement/identity-change
+      // coverage. Reject any other errno, syscall or non-Windows failure.
+      expect(process.platform).toBe("win32"); expect(replacements).toBe(0);
+      expect(replacementError).toMatchObject({ code: "EPERM", syscall: "rename", path: replacement, dest: executable });
+      expect(result).toMatchObject({ kernelArchitecture: null, architectureObservation: "unknown", architectureReason: "executable-header-read-failed:EPERM" });
+      expectOwnedBytes(executable, originalBytes, originalOwner); expectOwnedBytes(replacement, replacementBytes, replacementOwner);
+    } else {
+      expect(replacements).toBe(1);
+      expect(result).toMatchObject({ kernelArchitecture: null, architectureObservation: "unknown", architectureReason: "executable-changed-during-read" });
+      expectOwnedBytes(executable, replacementBytes, replacementOwner);
+      expect(fs.lstatSync(replacement, { throwIfNoEntry: false })).toBeUndefined();
+      expect([replacementOwner.dev, replacementOwner.ino]).not.toEqual([originalOwner.dev, originalOwner.ino]);
+    }
   });
 });

@@ -6,7 +6,8 @@ import * as os from "node:os";
 const h = vi.hoisted(() => {
   const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
   return { root: fs.mkdtempSync(path.join(os.tmpdir(), "profile-data-revision-")), failSyncAt: 0, syncCalls: 0, failRename: false,
-    failCode: "EIO", failSyscall: undefined as string | undefined, failDirectoryOpen: false, corruptReadAfterSync: 0 };
+    failCode: "EIO", failSyscall: undefined as string | undefined, failDirectoryOpen: false, corruptReadAfterSync: 0,
+    syncFaults: [] as Array<{ fd: number; directory: boolean }> };
 });
 vi.mock("../../src/main/services/config-manager.js", () => ({ getAppDataDir: () => h.root }));
 vi.mock("node:fs", async (original) => {
@@ -22,7 +23,10 @@ vi.mock("node:fs", async (original) => {
       return count;
     },
     fsyncSync: (fd: number) => {
-      if (++h.syncCalls === h.failSyncAt) throw Object.assign(new Error("Synthetic revision fsync failure"), { code: h.failCode, syscall: h.failSyscall });
+      if (++h.syncCalls === h.failSyncAt) {
+        h.syncFaults.push({ fd, directory: actual.fstatSync(fd).isDirectory() });
+        throw Object.assign(new Error("Synthetic revision fsync failure"), { code: h.failCode, syscall: h.failSyscall });
+      }
       return actual.fsyncSync(fd);
     },
     renameSync: (from: any, to: any) => {
@@ -44,7 +48,7 @@ function cleanup(): void {
 }
 beforeEach(() => {
   h.failSyncAt = 0; h.syncCalls = 0; h.failRename = false;
-  h.failCode = "EIO"; h.failSyscall = undefined; h.failDirectoryOpen = false; h.corruptReadAfterSync = 0;
+  h.failCode = "EIO"; h.failSyscall = undefined; h.failDirectoryOpen = false; h.corruptReadAfterSync = 0; h.syncFaults = [];
   cleanup(); fs.mkdirSync(h.root, { mode: 0o700 });
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -200,10 +204,36 @@ describe("local-only durable profile data revisions", () => {
   });
 
   it("does not waive EPERM/fsync on a non-Windows platform", () => {
-    vi.stubGlobal("process", { ...process, platform: "linux" });
-    h.failSyncAt = 1; h.failCode = "EPERM"; h.failSyscall = "fsync";
-    expect(() => markProfileDataChanging(ID)).toThrow(/restore was not authorized/i);
+    const nativeProcess = process, open = vi.spyOn(fs, "openSync"), close = vi.spyOn(fs, "closeSync");
+    const warning = vi.spyOn(console, "warn");
+    expect(fs.lstatSync(store(), { throwIfNoEntry: false })).toBeUndefined();
+    vi.stubGlobal("process", { ...nativeProcess, platform: "linux" });
+    try {
+      h.failSyncAt = 1; h.failCode = "EPERM"; h.failSyscall = "fsync";
+      let failure: unknown;
+      try { markProfileDataChanging(ID); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ code: "PROFILE_DATA_REVISION_UNAVAILABLE", message: expect.stringMatching(/restore was not authorized/i),
+        cause: { code: "EPERM", syscall: "fsync" } });
+      expect(h.syncCalls).toBe(1); expect(warning).not.toHaveBeenCalled();
+      expect(open.mock.calls.map(([file]) => String(file))).toEqual([h.root, h.root]);
+      expect(open.mock.results.every(result => result.type === "return")).toBe(true);
+      const fds = open.mock.results.map(result => result.value as number);
+      expect(h.syncFaults).toEqual([{ fd: fds[1], directory: true }]);
+      expect(close.mock.calls).toEqual([[fds[1]], [fds[0]]]);
+      for (const fd of fds) expect(() => fs.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    } finally {
+      // Scope the spoof to the refusal predicate. Windows POSIX mode bits are
+      // not ACL evidence and must not be interpreted as Linux permissions.
+      vi.unstubAllGlobals();
+    }
+    expect(process === nativeProcess, "restore the real process before native filesystem readback").toBe(true);
+    const owner = fs.lstatSync(store(), { bigint: true });
+    expect(owner.isDirectory()).toBe(true); expect(owner.isSymbolicLink()).toBe(false);
     expect(getProfileDataRevision(ID)).toBe("initial");
+    expect(h.syncCalls).toBe(1); expect(fs.lstatSync(record(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.readdirSync(store())).toEqual([]);
+    const after = fs.lstatSync(store(), { bigint: true });
+    expect([after.dev, after.ino]).toEqual([owner.dev, owner.ino]);
   });
 
   it("still requires publication readback after recognized unsupported Windows directory fsync", () => {

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -7,7 +7,11 @@ const h = vi.hoisted(() => {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "ipc-profile-"));
   delete process.env.AGENT_BROWSER_CHROMIUM_BINARY_PATH;
   const forbidden = vi.fn((...args: unknown[]) => { throw new Error(`Undeclared native capability: ${String(args[0])}`); });
-  return { root, handlers: new Map<string, (...args: any[]) => any>(), forbidden, openDialog: vi.fn(), saveDialog: vi.fn(), confirm: vi.fn() };
+  const findBrowserByProfileSync = vi.fn<typeof import("../../src/main/services/process-discovery.js").findBrowserByProfileSync>(() => null);
+  const findCdpPortSync = vi.fn<typeof import("../../src/main/services/process-discovery.js").findCdpPortSync>(() => null);
+  const getRunningProcessesAsync = vi.fn<typeof import("../../src/main/services/process-discovery.js").getRunningProcessesAsync>(async () => []);
+  return { root, handlers: new Map<string, (...args: any[]) => any>(), forbidden, openDialog: vi.fn(), saveDialog: vi.fn(), confirm: vi.fn(),
+    findBrowserByProfileSync, findCdpPortSync, getRunningProcessesAsync };
 });
 vi.mock("electron", () => ({
   ipcMain: { handle: (channel: string, handler: any) => { if (h.handlers.has(channel)) throw new Error(`Duplicate IPC channel: ${channel}`); h.handlers.set(channel, handler); } },
@@ -16,13 +20,19 @@ vi.mock("electron", () => ({
   dialog: { showOpenDialog: h.openDialog, showSaveDialog: h.saveDialog, showMessageBox: h.confirm },
 }));
 vi.mock("node:child_process", async (original) => ({ ...await original<typeof import("node:child_process")>(),
-  exec: (command: string, ...args: any[]) => {
-    if (command !== "ps -eo pid,args") return h.forbidden(command);
-    queueMicrotask(() => args.at(-1)(null, "", ""));
-  },
-  execFile: h.forbidden, execSync: h.forbidden, spawn: h.forbidden, spawnSync: h.forbidden,
-  execFileSync: (file: string) => file === "ps" || file === "/bin/ps" ? "" : h.forbidden(file),
+  exec: h.forbidden, execFile: h.forbidden, execSync: h.forbidden,
+  execFileSync: h.forbidden, spawn: h.forbidden, spawnSync: h.forbidden,
 }));
+// These owned fixtures have no runtime. Isolate the discovery entry points,
+// not lifecycle refusal, cookie validation, config/files or archive operations.
+// findCdpPortSync has its own internal lookup, so it needs its own boundary.
+vi.mock("../../src/main/services/process-discovery.js", async (original) => ({
+  ...await original<typeof import("../../src/main/services/process-discovery.js")>(),
+  findBrowserByProfileSync: h.findBrowserByProfileSync,
+  findCdpPortSync: h.findCdpPortSync,
+  getRunningProcessesAsync: h.getRunningProcessesAsync,
+}));
+
 import { registerProfileHandlers } from "../../src/main/ipc/profile.js";
 import { getConfig, getConfigPath, getProfilesDir, reloadConfig, saveConfig } from "../../src/main/services/config-manager.js";
 registerProfileHandlers();
@@ -36,9 +46,13 @@ async function create(name = "IPC fixture") {
   return invoke("profile:create", { name, fingerprintSeed: 23456, platform: "macos", timezone: "Europe/London", locale: "en-GB", proxyMode: "none" });
 }
 beforeEach(() => {
+  h.findBrowserByProfileSync.mockReset().mockReturnValue(null);
+  h.findCdpPortSync.mockReset().mockReturnValue(null);
+  h.getRunningProcessesAsync.mockReset().mockResolvedValue([]);
   fs.rmSync(h.root, { recursive: true, force: true }); fs.mkdirSync(h.root); reloadConfig(); getConfig();
   h.forbidden.mockClear(); h.openDialog.mockReset(); h.saveDialog.mockReset(); h.confirm.mockReset();
 });
+afterEach(() => { expect(h.forbidden).not.toHaveBeenCalled(); });
 afterAll(() => fs.rmSync(h.root, { recursive: true, force: true }));
 
 describe("profile IPC with real profile, trash and archive stores", () => {
@@ -106,6 +120,54 @@ describe("profile IPC with real profile, trash and archive stores", () => {
     h.openDialog.mockResolvedValue({ canceled: true }); expect(await invoke("profile:import-archives")).toMatchObject({ success: false, cancelled: true });
     expect(await invoke("profile:export-archive", { dirId, destPath: path.join(h.root, "wrong.txt") })).toMatchObject({ success: false });
     expect(await invoke("profile:import-archive", { zipPath: path.join(h.root, "missing.zip") })).toMatchObject({ success: false });
+  });
+
+  it.each(["unknown", "running"] as const)("%s runtime refuses delete/trash and archives while conserving real stored bytes", async (runtime) => {
+    const { dirId } = await create();
+    const profileDir = path.join(getProfilesDir(), dirId), sentinel = path.join(profileDir, "Default", "refusal-fixture");
+    fs.writeFileSync(sentinel, "owned refusal bytes");
+    const index = path.join(h.root, "trash", "index.json");
+    fs.mkdirSync(path.dirname(index), { recursive: true }); fs.writeFileSync(index, "[]");
+    const destDir = path.join(h.root, "refused-exports"), destPath = path.join(destDir, "unchanged.zip");
+    fs.mkdirSync(destDir);
+    expect(await invoke("profile:export-archive", { dirId, destPath })).toMatchObject({ success: true, outcome: "completed" });
+    const savedArchive = fs.readFileSync(destPath), savedConfig = fs.readFileSync(getConfigPath(), "utf8"), savedIndex = fs.readFileSync(index, "utf8");
+    const savedMeta = structuredClone(disk().browserProfiles[dirId]);
+    h.findBrowserByProfileSync.mockClear();
+    if (runtime === "unknown") {
+      h.findBrowserByProfileSync.mockImplementation(() => {
+        throw Object.assign(new Error("Synthetic process discovery unavailable"), { code: "PROCESS_DISCOVERY_UNAVAILABLE" });
+      });
+    } else {
+      // Exercise the real running-owner refusal without adopting a fake PID
+      // that a later readback would probe with a real process operation.
+      h.findBrowserByProfileSync.mockReturnValue({ pid: 1234, cdpPort: 0, unknown: true });
+    }
+    const reason = runtime === "unknown" ? /runtime state is unknown/ : /while managed Chromium is running/;
+    for (const channel of ["profile:delete", "profile:trash"]) {
+      expect(await invoke(channel, dirId)).toMatchObject({ success: false, error: expect.stringMatching(reason) });
+    }
+    expect(await invoke("profile:export-archive", { dirId, destPath, overwrite: true })).toMatchObject({
+      success: false, outcome: "failed", code: "PROFILE_STOP_REQUIRED",
+    });
+    expect(await invoke("profile:export-archives", { dirIds: [dirId], destDir, overwrite: true })).toEqual({
+      success: false, outcome: "skipped", report: { exported: [], failed: [], skipped: [{ dirId, reason: "running-or-unconfirmed", code: "PROFILE_STOP_REQUIRED" }] },
+    });
+    expect(h.findBrowserByProfileSync.mock.calls).toEqual(Array.from({ length: 4 }, () => [dirId, profileDir, { strict: true }]));
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(savedConfig);
+    expect(fs.readFileSync(index, "utf8")).toBe(savedIndex);
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("owned refusal bytes");
+    expect(fs.readFileSync(destPath)).toEqual(savedArchive);
+    expect(fs.readdirSync(destDir)).toEqual(["unchanged.zip"]);
+    expect(fs.existsSync(path.join(h.root, "trash", "profiles", dirId))).toBe(false);
+    h.findBrowserByProfileSync.mockReset().mockReturnValue(null);
+    reloadConfig();
+    expect(disk().browserProfiles[dirId]).toEqual(savedMeta);
+    expect(await invoke("profile:get", dirId)).toMatchObject({ dirId, name: "IPC fixture" });
+    expect(await invoke("profile:list")).toContainEqual(expect.objectContaining({ dirId, name: "IPC fixture", fingerprint: expect.objectContaining({ fingerprintSeed: 23456 }) }));
+    expect((await invoke("profile:trash-list")).entries).toEqual([]);
+    expect(fs.readFileSync(getConfigPath(), "utf8")).toBe(savedConfig);
+    expect(fs.readFileSync(index, "utf8")).toBe(savedIndex);
   });
 
   it("invalid IDs/cookie parameters and stopped-profile mutation fail before native capabilities", async () => {
