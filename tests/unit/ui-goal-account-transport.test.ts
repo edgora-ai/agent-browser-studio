@@ -565,16 +565,23 @@ describe("actual shipped SDK header compatibility without network", () => {
     expect(f.requests).toHaveLength(1);
   });
   it("Python optional headers preserve positional auth/body and expose 412 without retry", () => {
-    const script = `import json,sys,urllib.request,urllib.error,socket,io
+    const script = `import sys
+def phase(name):
+ print('SDK_FIXTURE_PHASE:'+name,file=sys.stderr,flush=True)
+phase('python-started')
+assert sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1
+import json,urllib.request,urllib.error,socket,io
+phase('stdlib-ready')
 socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError('network forbidden'))
 ns={}; exec(compile(open(sys.argv[1],encoding='utf-8').read(),sys.argv[1],'exec'),ns)
+phase('sdk-loaded')
 c=ns['AgentBrowserClient']('https://sdk.synthetic.invalid','synthetic-python-token')
 requests=[]
 class Response:
  def __enter__(self): return self
  def __exit__(self,*a): pass
  def read(self): return b'{"success":true}'
-def fake(req,timeout): requests.append(req); return Response()
+def fake(req,timeout): assert timeout == 15.0; requests.append(req); return Response()
 urllib.request.urlopen=fake
 h={'If-Match':'"550e8400-e29b-41d4-a716-446655440000"'}
 for fn,args in [(c.request,('PATCH','/api/accounts/1',{'username':'changed'},True,h)),(c.patch,('/api/accounts/1',{'username':'changed'},True,h)),(c.delete,('/api/accounts/1',True,h)),(c.get,('/api/accounts/1/password',True,h)),(c.put,('/x',{'old':True},True,h)),(c.post,('/x',{'old':True},True,h))]:
@@ -591,24 +598,38 @@ for name in ['AUTHORIZATION','X-Agent-Browser-Token','x-cloak-token']:
  else: raise AssertionError('auth override accepted')
 assert len(requests)==count
 def conflict(req,timeout):
+ assert timeout == 15.0
  requests.append(req); raise urllib.error.HTTPError(req.full_url,412,'conflict',{},io.BytesIO(b'{"error":"ACCOUNT_REFERENCE_CONFLICT: explicitly reselect"}'))
 urllib.request.urlopen=conflict
 try: c.delete('/api/accounts/1',headers=h)
 except ns['AgentBrowserError'] as e: assert '412' in str(e) and 'ACCOUNT_REFERENCE_CONFLICT' in str(e)
 else: raise AssertionError('conflict did not reject')
 assert len(requests)==count+1
+phase('contracts-checked')
 print(json.dumps({'requests':len(requests),'prohibited':0,'positionalAuthPreserved':True,'conflictNoRetry':True}))`;
     const interpreter = process.platform === "win32" ? "python" : "python3";
-    const result = spawnSync(interpreter, ["-I", "-B", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT } });
+    const pythonRoot = process.env.pythonLocation;
+    if (process.env.GITHUB_ACTIONS === "true") expect(pythonRoot, "CI must provide its configured Python runtime").toBeTruthy();
+    if (pythonRoot) expect(path.isAbsolute(pythonRoot)).toBe(true);
+    const executable = pythonRoot ? path.join(pythonRoot, process.platform === "win32" ? "python.exe" : "bin/python3") : interpreter;
+    // Only stdlib and the explicitly selected source file are needed. No site
+    // startup hooks, user packages, launcher aliases or bytecode writes in CI.
+    const result = spawnSync(executable, ["-I", "-S", "-B", "-u", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT } });
     const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
     const errorCode = result.error ? code && ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(code) ? code : "UNKNOWN" : null;
-    const receipt = { interpreter, status: result.status, signal: result.signal, errorCode };
+    const phases = (result.stderr ?? "").split(/\r?\n/).flatMap(line => {
+      const match = /^SDK_FIXTURE_PHASE:(python-started|stdlib-ready|sdk-loaded|contracts-checked)$/.exec(line);
+      return match ? [match[1]] : [];
+    });
+    const receipt = { interpreter, fromSetup: Boolean(pythonRoot), status: result.status, signal: result.signal, errorCode, phases };
     if (process.env.GITHUB_ACTIONS === "true") console.info("::notice title=Python SDK fixture process::" + JSON.stringify(receipt));
     const proofFile = path.join(ROOT, "python-proof.json");
     fs.writeFileSync(proofFile, JSON.stringify({ ...receipt, stdout: result.stdout, stderr: result.stderr }));
     const proof = JSON.parse(fs.readFileSync(proofFile, "utf8"));
     expect(proof.errorCode).toBeNull(); expect(proof.signal).toBeNull();
-    expect(proof.status, proof.stderr).toBe(0); expect(JSON.parse(proof.stdout).conflictNoRetry).toBe(true);
+    expect(proof.status, proof.stderr).toBe(0);
+    expect(proof.phases).toEqual(["python-started", "stdlib-ready", "sdk-loaded", "contracts-checked"]);
+    expect(JSON.parse(proof.stdout).conflictNoRetry).toBe(true);
   });
 });
 
