@@ -1476,9 +1476,11 @@ async function exportLocalStorage(dirId: string, stageRoot: string, signal?: Abo
       if (archive.length > MAX_LOCAL_STORAGE_TGZ_BYTES) throw new Error("SQLite LocalStorage compressed byte limit exceeded");
       return archive;
     }
-    const tmpFile = path.join(tmpDir, "localstorage.tgz");
+    const archiveName = "localstorage.tgz", tmpFile = path.join(tmpDir, archiveName);
     const lsDir = resolveProfileFile(dirId, "Default", "Local Storage", "leveldb");
-    const result = await spawnTar(["--no-xattrs", "--format", "ustar", "-czf", tmpFile, "-C", lsDir, "--exclude", "LOCK", "."], 15000, signal);
+    // GNU tar treats a drive-colon archive argument as a remote host. Write only
+    // a relative name inside this operation's private working directory.
+    const result = await spawnTar(["--no-xattrs", "--format", "ustar", "-czf", archiveName, "-C", lsDir, "--exclude", "LOCK", "."], 15000, signal, tmpDir);
     if (!result || !fs.existsSync(tmpFile)) return null;
     assertSyncNotAborted(signal);
     const archive = fs.readFileSync(tmpFile);
@@ -1843,11 +1845,19 @@ function importSqliteLocalStorage(dirId: string, prepared: PreparedLocalStorage,
   }
 }
 
-function spawnTar(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+function spawnTar(args: string[], timeoutMs: number, signal?: AbortSignal, cwd?: string): Promise<boolean> {
   assertSyncNotAborted(signal);
   return new Promise((resolve, reject) => {
-    const child = spawn("tar", args, { stdio: "ignore" });
-    let settled = false;
+    const child = spawn("tar", args, { stdio: "ignore", ...(cwd ? { cwd } : {}) });
+    let settled = false, stopRequested = false, timedOut = false, terminalError: Error | undefined;
+    const recordError = (error: Error) => {
+      if (settled) return;
+      if (!terminalError) terminalError = error;
+      else {
+        const previous = terminalError;
+        terminalError = Object.assign(new AggregateError([previous, error], previous.message, { cause: previous }), { code: (previous as NodeJS.ErrnoException).code });
+      }
+    };
     const finish = (ok: boolean, err?: Error) => {
       if (settled) return;
       settled = true;
@@ -1856,17 +1866,24 @@ function spawnTar(args: string[], timeoutMs: number, signal?: AbortSignal): Prom
       if (err) reject(err);
       else resolve(ok);
     };
-    const onAbort = () => {
-      child.kill("SIGTERM");
-      finish(false, new Error("Sync operation cancelled"));
+    const requestStop = (error?: Error) => {
+      if (settled) return;
+      if (error) recordError(error);
+      if (stopRequested) return;
+      stopRequested = true;
+      // A termination request (including false/throw) is not proof of exit.
+      // Retain the caller's lease and staging until the real close event.
+      try { child.kill("SIGTERM"); } catch (failure) { recordError(failure as Error); }
     };
+    const onAbort = () => requestStop(Object.assign(new Error("Sync operation cancelled"), { code: "ABORT_ERR" }));
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      finish(false);
+      timedOut = true;
+      requestStop();
     }, timeoutMs);
-    child.on("error", (e) => finish(false, e));
-    child.on("exit", (code) => finish(code === 0));
+    child.on("error", recordError);
+    child.on("close", (code) => finish(code === 0 && !stopRequested && !timedOut, terminalError));
     signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
