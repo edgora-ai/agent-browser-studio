@@ -370,8 +370,8 @@ describe("in-flight history permission/freshness checkpoints", () => {
       await publish(); resetDevice("late-permission-receiver"); seedProfile("chromium"); install("chromium", sqliteBytes("chromium", true));
       fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium"); let changes = 0;
       h.fault = (op, from, to) => {
-        const hit = phase === "between main/WAL" ? op === "link" && from.includes("/new/") && to === livePath("chromium")
-          : op === "open" && from.includes("/.history-backup-") && from.endsWith("/published.json");
+        const hit = phase === "between main/WAL" ? op === "link" && from.includes(path.sep + "new" + path.sep) && to === livePath("chromium")
+          : op === "open" && from.includes(path.sep + ".history-backup-") && path.basename(from) === "published.json";
         if (!changes && hit) { changes++; changeHistoryPermission(kind); }
       };
       const result = await syncService.pull(undefined, { strategy: "remote", history: true }); h.fault = null;
@@ -483,8 +483,8 @@ describe("history pull prepares all bytes and compensates complete groups", () =
     await publish(); resetDevice("recovery-receiver"); seedProfile("chromium"); const old = install("chromium"); const config = fs.readFileSync(getConfigPath());
     let publishFailure = 0, compensationFailure = 0;
     h.fault = (op, from, to) => {
-      if (op === "link" && from.includes("/new/") && to === livePath("chromium") + "-wal") { publishFailure++; throw new Error("Synthetic incoming WAL publication failure"); }
-      if (op === "link" && from.includes("/old/") && to === livePath("chromium")) { compensationFailure++; throw new Error("Synthetic old main compensation failure"); }
+      if (op === "link" && from.includes(path.sep + "new" + path.sep) && to === livePath("chromium") + "-wal") { publishFailure++; throw new Error("Synthetic incoming WAL publication failure"); }
+      if (op === "link" && from.includes(path.sep + "old" + path.sep) && to === livePath("chromium")) { compensationFailure++; throw new Error("Synthetic old main compensation failure"); }
     };
     const result = await syncService.pull(undefined, { strategy: "remote", history: true }); h.fault = null;
     expect(publishFailure).toBe(1); expect(compensationFailure).toBe(1); expect(result).toMatchObject({ success: false, outcome: "recovery-required", code: "HISTORY_RECOVERY_REQUIRED" });
@@ -529,8 +529,8 @@ describe("history pull prepares all bytes and compensates complete groups", () =
     await publish(); resetDevice("compensation-receiver"); seedProfile("chromium"); install("chromium"); fs.writeFileSync(livePath("chromium") + "-journal", Buffer.alloc(0)); const before = liveSnapshot("chromium");
     const controller = new AbortController(); let hits = 0;
     h.fault = (op, from, to) => {
-      const hit = point === "backup-WAL" ? op === "rename" && from === livePath("chromium") + "-wal" && Boolean(to?.includes("/old/"))
-        : point === "publish-WAL" || point === "cancel" ? op === "link" && to === livePath("chromium") + "-wal" && from.includes("/new/")
+      const hit = point === "backup-WAL" ? op === "rename" && from === livePath("chromium") + "-wal" && Boolean(to?.includes(path.sep + "old" + path.sep))
+        : point === "publish-WAL" || point === "cancel" ? op === "link" && to === livePath("chromium") + "-wal" && from.includes(path.sep + "new" + path.sep)
         : op === "rename" && to === getConfigPath();
       if (hit && !hits++) { if (point === "cancel") controller.abort(); else throw Object.assign(new Error("Synthetic history publication fault"), { code: "EIO" }); }
     };

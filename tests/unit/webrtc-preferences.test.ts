@@ -40,12 +40,13 @@ vi.mock("../../src/main/services/zip-writer.js", async original => {
     h.directorySyncs.push(directory);
     // Bound a regressed ancestry walk before it can escape this fixture or
     // block the worker at the filesystem root (test timeouts cannot preempt it).
-    if (h.firstCreated && !actual.isPathInside(directory, path.dirname(h.firstCreated))) throw new Error("Directory sync escaped the created ancestry");
+    if (h.firstCreated && !actual.isPathInside(path.toNamespacedPath(directory), path.toNamespacedPath(path.dirname(h.firstCreated)))) throw new Error("Directory sync escaped the created ancestry");
     return actual.syncArchiveDirectory(directory);
   } };
 });
 import { applyChromiumWebRtcPreferences, validateChromiumWebRtcPreferences } from "../../src/main/services/browser/webrtc-preferences.js";
 import { resolveChromiumWebRtcRoutingPolicy } from "../../src/main/services/browser/webrtc-policy.js";
+import { syncArchiveDirectory } from "../../src/main/services/zip-writer.js";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "webrtc-preferences-"));
 const profile = path.join(root, "owned-profile"), file = path.join(profile, "Default", "Preferences");
 const strict = (fingerprintMode: "managed" | "off" = "managed") => resolveChromiumWebRtcRoutingPolicy({ requestedMode: "auto", hasProxy: true, fingerprintMode });
@@ -114,6 +115,10 @@ describe("Chrome-consumed WebRTC profile preferences", () => {
     expect(applyChromiumWebRtcPreferences(fresh, strict())).toMatchObject({ changed: true, readbackVerified: true });
     expect(h.directorySyncs).toEqual([freshRoot, root, fresh, path.join(fresh, "Default")]);
     expect(JSON.parse(fs.readFileSync(path.join(fresh, "Default", "Preferences"), "utf8")).webrtc.ip_handling_policy).toBe("disable_non_proxied_udp");
+  });
+  it("keeps the fixture fence closed outside the owned ancestry after namespace normalization", () => {
+    h.firstCreated = path.join(root, "fresh");
+    expect(() => syncArchiveDirectory(path.dirname(root))).toThrow(/escaped the created ancestry/);
   });
   it("rejects a recursive mkdir result outside the created ancestry before syncing it", () => {
     h.mkdirFirstSpelling = "unrelated";
