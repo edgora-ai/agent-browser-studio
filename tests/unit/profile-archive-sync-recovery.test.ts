@@ -790,50 +790,57 @@ describe.each(["native-capability", "synthetic-historical-reference"] as const)(
 });
 
 describe.each(["native-capability", "synthetic-historical-reference"] as const)("untrusted recovery JSON/path boundaries use the real archive importer (%s fixture policy)", { timeout: 30_000 }, (fixturePolicy) => {
-  it("rejects hostile pending fields and paths even with a matching recomputed publication hash", async () => {
+  // Each mutation owns its fixture/deadline: a shared batch can time out while
+  // the real ZIP writer still owns its staging descriptor across an await.
+  const mutations: Array<[string, (pending: any, transaction: string) => void]> = [
+    ["wrong version", (p) => { p.version = 2; }], ["wrong format", (p) => { p.format = "leveldb"; }],
+    ["wrong source ID", (p) => { p.dirId = "ab_another_source"; }], ["object source ID", (p) => { p.dirId = { value: ID }; }],
+    ["traversal operation", (p) => { p.operationId = "../elsewhere"; }], ["object operation", (p) => { p.operationId = {}; }],
+    ["relative target", (p) => { p.target = `${ID}/Default`; }],
+    ["parent target", (p) => { p.target = `/owned/${ID}/../${ID}/Default`; }],
+    ["alias target", (p) => { p.target = `/owned//${ID}/Default`; }],
+    ["wrong profile target", (p) => { p.target = "/owned/ab_other/Default"; }],
+    ["wrong leaf", (p) => { p.target = `/owned/${ID}/Other`; }],
+    ["trailing separator", (p) => { p.target = `/owned/${ID}/Default/`; }],
+    ["URL target", (p) => { p.target = `file:///owned/${ID}/Default`; }],
+    ["NUL target", (p) => { p.target = `/owned/\u0000/${ID}/Default`; }],
+    ["Windows relative drive", (p) => { p.target = `C:${ID}\\Default`; }],
+    ["Windows root-relative", (p) => { p.target = `\\owned\\${ID}\\Default`; }],
+    ["Windows traversal", (p) => { p.target = `C:\\owned\\..\\${ID}\\Default`; }],
+    ["mixed separators", (p) => { p.target = `C:\\owned/${ID}\\Default`; }],
+    ["Windows ADS ancestor", (p) => { p.target = `C:\\owned:ads\\${ID}\\Default`; }],
+    ["Windows trailing-dot alias", (p) => { p.target = `C:\\owned.\\${ID}\\Default`; }],
+    ["Windows device alias", (p) => { p.target = `C:\\NUL\\${ID}\\Default`; }],
+    ["Windows namespace target", (p) => { p.target = `\\\\?\\C:\\owned\\${ID}\\Default`; }],
+    ["object target", (p, transaction) => { p.target = { path: transaction }; }],
+    ["inventory traversal", (p) => { p.old[0].name = "../LocalStorage"; }],
+    ["inventory absolute", (p) => { p.old[0].name = "/LocalStorage"; }],
+    ["inventory backslash", (p) => { p.old[0].name = "..\\LocalStorage"; }],
+    ["inventory prototype", (p) => { p.old[0].name = "__proto__"; }],
+    ["inventory object name", (p) => { p.old[0].name = {}; }],
+    ["inventory duplicate", (p) => { p.old.push({ ...p.old[0] }); }],
+    ["inventory bad hash", (p) => { p.old[0].hash = "not-a-hash"; }],
+    ["inventory lying hash", (p) => { p.old[0].hash = "0".repeat(64); }],
+    ["inventory missing main", (p) => { p.old = p.old.filter((item: any) => item.name !== "LocalStorage"); }],
+    ["inventory absent", (p) => { delete p.old; }], ["inventory null", (p) => { p.old = null; }],
+    ["incoming missing main", (p) => { p.incoming = []; }],
+    ["incoming unsafe sidecar", (p) => { p.incoming.push({ name: "LocalStorage-shm", hash: "a".repeat(64) }); }],
+    ["inventory unknown field", (p) => { p.old[0].backupPath = "/not-a-readable-source"; }],
+    ["prototype field", (p) => { Object.defineProperty(p, "__proto__", { value: {}, enumerable: true }); }],
+    ["constructor field", (p) => { p.constructor = {}; }], ["oversized receipt", (p) => { p.padding = "x".repeat(16384); }],
+  ];
+  it.each(mutations)("rejects hostile pending fields and paths even with a matching recomputed publication hash: %s", async (label, edit) => {
     const fixture = await sqliteArchiveFixture(fixturePolicy);
-    const mutations: Array<[string, (pending: any) => void]> = [
-      ["wrong version", (p) => { p.version = 2; }], ["wrong format", (p) => { p.format = "leveldb"; }],
-      ["wrong source ID", (p) => { p.dirId = "ab_another_source"; }], ["object source ID", (p) => { p.dirId = { value: ID }; }],
-      ["traversal operation", (p) => { p.operationId = "../elsewhere"; }], ["object operation", (p) => { p.operationId = {}; }],
-      ["relative target", (p) => { p.target = `${ID}/Default`; }],
-      ["parent target", (p) => { p.target = `/owned/${ID}/../${ID}/Default`; }],
-      ["alias target", (p) => { p.target = `/owned//${ID}/Default`; }],
-      ["wrong profile target", (p) => { p.target = "/owned/ab_other/Default"; }],
-      ["wrong leaf", (p) => { p.target = `/owned/${ID}/Other`; }],
-      ["trailing separator", (p) => { p.target = `/owned/${ID}/Default/`; }],
-      ["URL target", (p) => { p.target = `file:///owned/${ID}/Default`; }],
-      ["NUL target", (p) => { p.target = `/owned/\u0000/${ID}/Default`; }],
-      ["Windows relative drive", (p) => { p.target = `C:${ID}\\Default`; }],
-      ["Windows root-relative", (p) => { p.target = `\\owned\\${ID}\\Default`; }],
-      ["Windows traversal", (p) => { p.target = `C:\\owned\\..\\${ID}\\Default`; }],
-      ["mixed separators", (p) => { p.target = `C:\\owned/${ID}\\Default`; }],
-      ["Windows ADS ancestor", (p) => { p.target = `C:\\owned:ads\\${ID}\\Default`; }],
-      ["Windows trailing-dot alias", (p) => { p.target = `C:\\owned.\\${ID}\\Default`; }],
-      ["Windows device alias", (p) => { p.target = `C:\\NUL\\${ID}\\Default`; }],
-      ["Windows namespace target", (p) => { p.target = `\\\\?\\C:\\owned\\${ID}\\Default`; }],
-      ["object target", (p) => { p.target = { path: fixture.transaction }; }],
-      ["inventory traversal", (p) => { p.old[0].name = "../LocalStorage"; }],
-      ["inventory absolute", (p) => { p.old[0].name = "/LocalStorage"; }],
-      ["inventory backslash", (p) => { p.old[0].name = "..\\LocalStorage"; }],
-      ["inventory prototype", (p) => { p.old[0].name = "__proto__"; }],
-      ["inventory object name", (p) => { p.old[0].name = {}; }],
-      ["inventory duplicate", (p) => { p.old.push({ ...p.old[0] }); }],
-      ["inventory bad hash", (p) => { p.old[0].hash = "not-a-hash"; }],
-      ["inventory lying hash", (p) => { p.old[0].hash = "0".repeat(64); }],
-      ["inventory missing main", (p) => { p.old = p.old.filter((item: any) => item.name !== "LocalStorage"); }],
-      ["inventory absent", (p) => { delete p.old; }], ["inventory null", (p) => { p.old = null; }],
-      ["incoming missing main", (p) => { p.incoming = []; }],
-      ["incoming unsafe sidecar", (p) => { p.incoming.push({ name: "LocalStorage-shm", hash: "a".repeat(64) }); }],
-      ["inventory unknown field", (p) => { p.old[0].backupPath = "/not-a-readable-source"; }],
-      ["prototype field", (p) => { Object.defineProperty(p, "__proto__", { value: {}, enumerable: true }); }],
-      ["constructor field", (p) => { p.constructor = {}; }], ["oversized receipt", (p) => { p.padding = "x".repeat(16384); }],
-    ];
-    for (const [index, [label, edit]] of mutations.entries()) {
-      const entries = zipEntries(fixture.zipPath); setPending(entries, fixture.backup, edit);
-      const zipPath = path.join(h.appData, `hostile-pending-${index}.zip`); await writeZipArchive(zipPath, entries);
-      expectRejectedImport(zipPath, label); fs.unlinkSync(zipPath);
-    }
+    const entries = zipEntries(fixture.zipPath); setPending(entries, fixture.backup, (pending) => edit(pending, fixture.transaction));
+    const zipPath = path.join(h.appData, "hostile-pending.zip");
+    expect(h.descriptors.size, "fixture descriptors must close before hostile ZIP write").toBe(0);
+    h.tracing = true;
+    const writing = writeZipArchive(zipPath, entries), inFlight = [...h.descriptors.keys()];
+    await writing;
+    expect(inFlight, "real ZIP staging descriptor observed before await").toHaveLength(1);
+    expect(h.descriptors.size, "awaited ZIP write must close its descriptors before import").toBe(0);
+    for (const fd of inFlight) expect(() => fs.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    expectRejectedImport(zipPath, label); fs.unlinkSync(zipPath);
   });
 
   it("rejects duplicate, malformed, non-object and noncanonical JSON receipts without accepting last-key-wins", async () => {
