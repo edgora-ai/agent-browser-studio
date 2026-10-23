@@ -412,8 +412,15 @@ describe(`persistent full-profile recovery lease gate [native directory fsync: $
     "never deletes a receipt under a replaced locks directory",
     "rejects an inert orphan input under a replaced directory without moving the refused-begin gate",
   ), async () => {
-    const attempt = beginObservedRecovery(), fixture = completionConsumer(attempt), file = fixture.record.file;
+    const attempt = beginObservedRecovery(), consumerMark = io.mark(), fixture = completionConsumer(attempt), file = fixture.record.file;
     const directory = path.dirname(file), retained = directory + "-retained";
+    if (attempt.kind === "refused") {
+      // Windows may refuse directory replacement while its child lease is open.
+      // Close only the inert consumer lease; the real refused-begin gate stays untouched.
+      fixture.release(); io.expectClosedSince(consumerMark);
+      expect(fs.lstatSync(path.join(directory, `${fixture.dirId}.restore.lock`), { throwIfNoEntry: false })).toBeUndefined();
+      expectUnchanged(attempt.record);
+    }
     fs.renameSync(directory, retained); fs.mkdirSync(directory); pending("foreign-directory-receipt", fixture.dirId);
     const foreign = snapshot(file), mark = io.mark();
     try {
