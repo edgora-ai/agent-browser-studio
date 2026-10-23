@@ -117,10 +117,8 @@ function printOwnedIo(phase: string, directoryConfirmed: boolean | null, events:
     fileFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === false).length,
     directoryFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === true).length,
     liveSqliteMoves: events.filter((event) => ["rename", "link"].includes(event.op) && (event.role === "live-sqlite" || event.targetRole === "live-sqlite")).length,
-  });
-  for (const [index, event] of failures.entries()) printOwnedObservation({
-    phase, failure: index + 1, op: event.op, role: event.role, directory: event.directory,
-    flags: event.flags, code: event.code, syscall: event.syscall,
+    failureDetails: failures.map((event) => ({ op: event.op, role: event.role, directory: event.directory,
+      flags: event.flags, code: event.code, syscall: event.syscall })),
   });
 }
 function sqliteBytes(value: string): { main: Buffer; wal: Buffer } {
