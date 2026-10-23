@@ -5,7 +5,13 @@ import * as path from "node:path";
 import * as zlib from "node:zlib";
 import { createHmac, createHash } from "node:crypto";
 
-const fixture = vi.hoisted(() => ({ root: "" }));
+const fixture = vi.hoisted(() => ({ root: "", status: vi.fn(), hasRuntime: vi.fn(),
+  forbiddenNative: vi.fn((name: string): never => { throw new Error(`Unexpected native process operation: ${name}`); }) }));
+// Runtime evidence is explicit synthetic input. The real transfer guard still
+// validates it and the owned marker files; unit tests never inspect host browsers.
+vi.mock("../../src/main/services/browser-manager.js", () => ({ statusBrowser: fixture.status }));
+vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ runtimeCookieOps: { hasRunningBrowser: fixture.hasRuntime } }));
+vi.mock("node:child_process", () => Object.fromEntries(["exec", "execFile", "execSync", "execFileSync", "spawn", "spawnSync", "fork"].map(name => [name, () => fixture.forbiddenNative(name)])));
 vi.mock("electron", async () => {
   const { mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -22,6 +28,7 @@ const TEST_HOME = path.join(fixture.root, "home");
 afterAll(() => {
   expect(path.dirname(fixture.root)).toBe(os.tmpdir());
   expect(path.basename(fixture.root)).toMatch(/^studio-sync-unit-/);
+  expect(fixture.forbiddenNative).not.toHaveBeenCalled();
   fs.rmSync(fixture.root, { recursive: true, force: true });
 });
 
@@ -169,6 +176,8 @@ describe("AWS Signature V4 (signS3Request)", () => {
 describe("Sync service hardening", () => {
   beforeEach(() => {
     setMainLanguage("zh-CN");
+    fixture.status.mockReset().mockReturnValue({ running: false, pid: null, state: "stopped" });
+    fixture.hasRuntime.mockReset().mockReturnValue(false);
     fs.rmSync(TEST_HOME, { recursive: true, force: true });
   });
 
@@ -371,6 +380,27 @@ describe("Sync service hardening", () => {
     fs.mkdirSync(lockDir, { recursive: true });
     fs.writeFileSync(path.join(lockDir, "LOCK"), "");
     expect(__syncTestHooks.isProfileRunningForRestore(dirId)).toBe(false);
+    expect(fixture.hasRuntime.mock.calls).toEqual([[dirId]]);
+    expect(fixture.status.mock.calls).toEqual([[dirId]]);
+    expect(fs.readFileSync(path.join(lockDir, "LOCK"))).toEqual(Buffer.alloc(0));
+  });
+
+  it.each(["runtime-active", "runtime-unconfirmed", "running", "stopping", "unknown", "missing-pid", "discovery-error", "browser-marker"] as const)("still blocks restore for %s with the same inert LevelDB LOCK", condition => {
+    const dirId = "cb_guard_" + condition.replaceAll("-", "_");
+    const directory = path.join(getProfilesDir(), dirId), marker = path.join(directory, "Default", "Local Storage", "leveldb", "LOCK");
+    fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, "");
+    if (condition === "runtime-active") fixture.hasRuntime.mockReturnValue(true);
+    else if (condition === "runtime-unconfirmed") fixture.hasRuntime.mockReturnValue(undefined);
+    else if (condition === "running") fixture.status.mockReturnValue({ running: true, pid: 710001, state: "running" });
+    else if (condition === "stopping") fixture.status.mockReturnValue({ running: false, pid: null, stopping: true, state: "stopping" });
+    else if (condition === "unknown") fixture.status.mockReturnValue({ running: false, pid: null, unknown: true, state: "unknown" });
+    else if (condition === "missing-pid") fixture.status.mockReturnValue({ running: false, state: "stopped" });
+    else if (condition === "discovery-error") fixture.status.mockImplementation(() => { throw new Error("Synthetic runtime discovery unavailable"); });
+    else fs.writeFileSync(path.join(directory, "SingletonLock"), "");
+    expect(__syncTestHooks.isProfileRunningForRestore(dirId)).toBe(true);
+    expect(fixture.hasRuntime.mock.calls).toEqual([[dirId]]);
+    expect(fixture.status.mock.calls).toEqual(condition.startsWith("runtime-") ? [] : [[dirId]]);
+    expect(fs.readFileSync(marker)).toEqual(Buffer.alloc(0));
   });
 
   it("fetches remote cookies from the Agent Browser Studio sync key", async () => {
