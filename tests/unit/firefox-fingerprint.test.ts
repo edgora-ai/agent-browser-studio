@@ -170,8 +170,8 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain("latitude: cfg.geolocation.latitude");
   });
 
-  it("patches media devices, speech voices, storage quota and audio noise", () => {
-    expect(script).toContain('"enumerateDevices"');
+  it("keeps media enumeration native while patching speech voices, storage quota and audio noise", () => {
+    expect(script).not.toContain('Object.defineProperty(devicesProto, "enumerateDevices"');
     expect(script).toContain('speechSynthesis.getVoices');
     expect(script).toContain("cfg.storageQuotaBytes");
     expect(script).toContain("copyToChannel");
@@ -183,20 +183,13 @@ describe("buildFirefoxFingerprintPreloadScript", () => {
     expect(script).toContain("getByteTimeDomainData");
   });
 
-  it("reaches OffscreenCanvas 2d + WebGL and WebGPU adapter identity (Slice 79.1)", () => {
-    // OffscreenCanvas 2D noise — same deterministic seed family as the page.
+  it("retains OffscreenCanvas 2d noise without page-only WebGL or WebGPU identity patches", () => {
     expect(script).toContain("OffscreenCanvasRenderingContext2D.prototype");
     expect(script).toContain('patchProto(typeof OffscreenCanvasRenderingContext2D !== "undefined" ? OffscreenCanvasRenderingContext2D.prototype : null)');
-    // Shared WebGL patch helper used by BOTH the page canvas and offscreen.
-    expect(script).toContain("function patchWebglContext(ctx)");
-    expect(script).toContain('typeof OffscreenCanvas !== "undefined" ? OffscreenCanvas.prototype : null');
-    // Firefox 154 exposes GPUAdapter.info as a SameObject attribute. Patch the
-    // shared native info prototype so adapter and device identity agree while
-    // subgroup sizes/features/limits remain native.
-    expect(script).toContain('typeof GPUAdapterInfo === "function"');
-    expect(script).toContain('var fields = ["vendor", "architecture", "device", "description"]');
-    expect(script).toContain('Object.defineProperty(Ctor.prototype, field');
-    expect(script).toContain("GPUDevice.adapterInfo");
+    // Engine preferences, not fabricated JS extensions, supply WebGL identity.
+    expect(script).not.toContain("function patchWebglContext(ctx)");
+    expect(script).not.toContain("UNMASKED_VENDOR =");
+    expect(script).not.toContain('Object.defineProperty(Ctor.prototype, field');
     expect(script).not.toContain('typeof adapter.info === "function"');
     expect(script).not.toContain("out.subgroupMinSize");
   });
@@ -261,10 +254,12 @@ describe("buildFirefoxManagedIdentity", () => {
     expect(bundle.config.appVersion).toBe("5.0 (Windows)");
     expect(bundle.prefs["general.useragent.override"]).toBe(bundle.userAgent);
     expect(bundle.prefs["dom.maxHardwareConcurrency"]).toBe(bundle.config.hardwareConcurrency);
-    expect(bundle.nativePrefs).toEqual(buildFirefoxNativeFingerprintPrefs(bundle.config, "138.0"));
+    expect(bundle.nativePrefs).toEqual(buildFirefoxNativeFingerprintPrefs(bundle.nativeConfig, "138.0"));
+    expect(bundle.config.webgpu.mode).toBe("native");
+    expect(bundle.nativeConfig.webgpu.mode).toBe("webgl");
     const encoded = bundle.nativePrefs[FIREFOX_NATIVE_CONFIG_PREF];
     expect(typeof encoded).toBe("string");
-    expect(JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"))).toEqual(bundle.config);
+    expect(JSON.parse(Buffer.from(String(encoded), "base64url").toString("utf8"))).toEqual(bundle.nativeConfig);
     expect(bundle.prefs[FIREFOX_NATIVE_CONFIG_PREF]).toBeUndefined();
     expect(bundle.preloadScript).toContain(bundle.config.seed.toString());
     expect(bundle.preloadScript).toContain("cfg.screen.width");

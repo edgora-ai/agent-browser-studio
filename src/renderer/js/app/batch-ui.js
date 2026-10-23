@@ -127,7 +127,14 @@
       ? function () { return api.browser.batchStop(dirIds, concurrency, jobId); }
       : function () { return api.browser.batchLaunch(dirIds, concurrency, jobId); };
 
-    return agentBrowser.ipc.call("browser.batch." + kind, invoke, { kind: "write" })
+    // A long but healthy batch (two launch waves can exceed the generic
+    // 15s write timeout) must keep UI ownership: clearing activeJob here would
+    // hide cancellation and let a second batch start while this one still runs.
+    return agentBrowser.ipc.call("browser.batch." + kind, invoke, {
+      kind: "write",
+      timeoutMs: 0,
+      slowNoticeMs: 15000,
+    })
       .then(function (result) {
         activeJob = null;
         hideProgress();
@@ -195,7 +202,7 @@
   }
 
   function summaryText(result, kind) {
-    var verb = kind === "stop" ? t("batch.stopped", "stopped") : t("batch.started", "started");
+    var verb = kind === "stop" ? t("batch.stopped", "stop requests accepted; waiting for browser exit") : t("batch.started", "started");
     return t("batch.summary", "{ok} of {total} {verb}").replace("{ok}", result.succeeded).replace("{total}", result.total).replace("{verb}", verb);
   }
 

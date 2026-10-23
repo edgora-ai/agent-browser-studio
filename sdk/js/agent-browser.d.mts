@@ -2,13 +2,29 @@
 // unknown: readJson also returns {} for an empty body or { raw } for non-JSON.
 // These declarations describe the controller protocol, not runtime validation.
 import type { Browser } from 'playwright-core';
-import type { AgentRun, LlmConfig } from '../../src/main/types.js';
+import type { AgentRun, LlmConfig, SyncResult, SyncConfig, SyncComparisonToken, ProfileHistorySyncState } from '../../src/main/types.js';
+export type SyncHistoryOptions = { history?: boolean; comparisonToken?: SyncComparisonToken };
+export type SyncSettings = Pick<Partial<SyncConfig>, 'enabled' | 'endpoint' | 'bucket' | 'accessKey' | 'secretKey' | 'includeHistory' | 'includeFullProfile' | 'fullProfilePassphrase'> & { custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean };
+export type SyncStatus = { enabled: boolean; configured: boolean; endpoint: string; bucket: string; accessKeyMasked: string;
+  includeHistory: boolean; custodyConsentAt: number | null; historyConsentAt: number | null; history: Record<string, ProfileHistorySyncState>;
+  includeFullProfile: boolean; fullProfileConsentAt: number | null; fullProfilePassphraseSet: boolean; operation: unknown };
 import type { Conversation } from '../../src/main/services/agent/conversation-store.js';
 import type { QueryResult, TableInfo } from '../../src/main/services/agent-db.js';
 import type { ApprovalRequest, ApprovalDecision } from '../../src/main/services/approval-gate.js';
 
+export interface AgentBrowserErrorOptions {
+  status?: number;
+  body?: unknown;
+  bodyTruncated?: boolean;
+  bodyReadError?: string;
+}
 export class AgentBrowserError extends Error {
-  constructor(message: string);
+  constructor(message: string, options?: AgentBrowserErrorOptions);
+  status?: number;
+  /** Complete JSON (or { raw } for non-JSON), bounded to 2 MiB. Undefined when truncated/unavailable. */
+  body?: unknown;
+  bodyTruncated: boolean;
+  bodyReadError?: string;
 }
 export interface ClientOptions { token?: string; timeout?: number }
 export type RequestHeaders = Record<string, string>;
@@ -25,6 +41,12 @@ export interface ProfileSummary {
   proxy: string | null;
   version: string;
   tags: string[];
+  syncedAt: number | null;
+  syncStatus: 'synced' | 'dirty' | 'never' | 'unknown';
+  syncScope: 'portable-profile+preferences';
+  syncReason: 'baseline-match' | 'content-changed' | 'no-baseline' | 'legacy-marker' |
+    'invalid-baseline' | 'target-mismatch' | 'target-unavailable' |
+    'preferences-unavailable' | 'content-unavailable';
 }
 export interface AgentBrowserClient {
   // Unreviewed response payloads are intentionally unknown, never wildcard any.
@@ -65,6 +87,11 @@ export class AgentBrowserClient {
   health(): Promise<{ status: string; service: string; port: number; mode: 'headless' | 'gui'; version: string; profiles: number; uptimeSeconds: number }>;
   version(): Promise<{ name: string; slug: string; version: string; chromium: { path: string | null; version: string | null } }>;
   openapi(): Promise<{ paths: Record<string, unknown> }>;
+  syncStatus(): Promise<SyncStatus>;
+  configureSync(settings: SyncSettings): Promise<{ success: boolean } & Partial<SyncStatus>>;
+  syncPush(options?: SyncHistoryOptions & { force?: boolean }): Promise<SyncResult>;
+  syncPull(options?: SyncHistoryOptions & { strategy?: 'local' | 'remote' | 'newest'; resolutions?: Record<string, 'local' | 'remote' | 'newest'> }): Promise<SyncResult>;
+  syncHistoryState(dirId: string): Promise<{ dirId: string } & ProfileHistorySyncState>;
   listProfiles(): Promise<ProfileSummary[]>;
   createProfile(name: string, options?: Record<string, unknown>): Promise<{ success: boolean; dirId: string }>;
   llmConfig(): Promise<{ config: RedactedLlmConfig | null }>;

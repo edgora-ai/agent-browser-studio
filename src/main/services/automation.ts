@@ -6,6 +6,7 @@ import { launchBrowser, stopBrowser, statusBrowser, touchProfileActivity } from 
 import { agentChat, getOrDetectLlmConfig, type LlmConfig } from "./local-agent.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
 import { syncService } from "./sync-service.js";
+import { syncMayRetryAutomatically } from "./sync/operation-result.js";
 import { onEvent } from "./event-bus.js";
 import { resolveRetryTarget, listJobRetryCandidates } from "./automation-retry.js";
 import { JobGuard, withTimeout, DEFAULT_JOB_GUARD_CONFIG } from "./job-guard.js";
@@ -178,14 +179,14 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         assertActionNotAborted(context.signal);
         const r = await syncService.push(context.signal);
         assertActionNotAborted(context.signal);
-        if (!r.success) throw new Error(`push failed: ${r.message}`);
+        if (!r.success) throw Object.assign(new Error(`push failed: ${r.message}`), { automaticRetry: syncMayRetryAutomatically(r), syncResult: r });
         return `pushed: ${r.message}`;
       }
       case "sync-pull": {
         assertActionNotAborted(context.signal);
         const r = await syncService.pull(context.signal);
         assertActionNotAborted(context.signal);
-        if (!r.success) throw new Error(`pull failed: ${r.message}`);
+        if (!r.success) throw Object.assign(new Error(`pull failed: ${r.message}`), { automaticRetry: syncMayRetryAutomatically(r), syncResult: r });
         return `pulled: ${r.message}`;
       }
       case "custom-js": {
@@ -202,7 +203,11 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
           const r = await Promise.resolve(handle.result);
           assertActionNotAborted(context.signal);
           const summary = logs.length ? ` (logs: ${logs.slice(0, 3).join(" | ")})` : "";
-          return `js result: ${JSON.stringify(r).slice(0, 200)}${summary}`;
+          // JSON.stringify(undefined) returns undefined, and .slice() on it
+          // threw — so a script that finished successfully but returned nothing
+          // (console.log only, or a bare statement) was reported as failed.
+          const rendered = r === undefined ? "undefined" : (JSON.stringify(r) ?? String(r)).slice(0, 200);
+          return `js result: ${rendered}${summary}`;
         } finally {
           handle.dispose();
         }
@@ -211,6 +216,9 @@ async function executeAction(rule: AutomationRule, context: ExecuteActionContext
         throw new Error(`unknown action type: ${a.type}`);
     }
   } catch (e: any) {
+    if ((a.type === "sync-push" || a.type === "sync-pull") && typeof e?.automaticRetry !== "boolean") {
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { automaticRetry: false });
+    }
     throw e;
   }
 }
@@ -517,6 +525,7 @@ async function runRule(
     let ok = false;
     let resultText = "";
     let errMsg: string | undefined;
+    let retryAllowed = true;
     try {
       resultText = await withTimeout((signal) => {
         const controller = new AbortController();
@@ -539,6 +548,7 @@ async function runRule(
       console.log(`[automation] ✅ ${rule.name}: ${resultText}`);
     } catch (e: any) {
       errMsg = e.message || String(e);
+      retryAllowed = e?.automaticRetry !== false;
       resultText = `error: ${errMsg}`;
       console.error(`[automation] ❌ ${rule.name} (attempt ${attempt + 1}):`, errMsg);
     }
@@ -546,7 +556,7 @@ async function runRule(
     const end = cancelled
       ? jobGuard.cancel(rule.id, Date.now())
       : jobGuard.end(rule.id, ok, errMsg, attempt, {
-        maxRetries: cfg.maxRetries,
+        maxRetries: retryAllowed ? cfg.maxRetries : 0,
         cooldownAfterFailures: DEFAULT_JOB_GUARD_CONFIG.cooldownAfterFailures,
         cooldownMs: DEFAULT_JOB_GUARD_CONFIG.cooldownMs,
         retryBaseMs: DEFAULT_JOB_GUARD_CONFIG.retryBaseMs,

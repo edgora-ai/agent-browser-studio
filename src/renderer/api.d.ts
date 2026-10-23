@@ -1,3 +1,15 @@
+import type { SyncConfig, SyncResult, SyncComparisonToken, ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry, ProxyDetectionCacheEntry, ProxyObservationMetadata } from "../main/types.js";
+import type { FingerprintComparisonReport } from "../main/services/fingerprint-drift-reports.js";
+export type { FingerprintComparisonReport } from "../main/services/fingerprint-drift-reports.js";
+import type { ProxyDetectionResult } from "../main/services/proxy-detector.js";
+export type { ProxyDetectionCacheEntry, ProxyObservationMetadata, ProxyDetectionResult };
+export type { ProfileHealthKind, ProfileHealthOutcome, ProfileHealthEntry, WebRtcDiagnosticsEntry } from "../main/types.js";
+import type { ProfileNetworkPage, ProfileNetworkPagesResult, ProfileNetworkObservationResult, ProfileNetworkArmedEvent } from "../main/types.js";
+export type { ProfileNetworkPage, ProfileNetworkPagesResult, ProfileNetworkObservationResult, ProfileNetworkArmedEvent,
+  NetworkCounts, NetworkCoverage, NetworkObservationSummary, NetworkObservationPayload, ObservedNetworkHop, NetworkHttpStatusEvidence } from "../main/types.js";
+import type { SyncDiffResult } from "../main/services/sync-service.js";
+import type { ActiveSyncOperation } from "../main/services/sync/operation-state.js";
+
 export type ProxyMode = "none" | "default" | "named";
 
 export interface ProxyConfig {
@@ -50,7 +62,11 @@ export interface ResolvedProfileProxy {
 export type ProxyRiskLevel = "good" | "watch" | "poor";
 
 export interface ProxyHealthHistoryPoint {
-  at: number;
+  at: number | null;
+  source?: ProxyObservationMetadata["source"];
+  observationId?: string | null;
+  hosting?: boolean | null;
+  isProxy?: boolean | null;
   success: boolean;
   exitIp: string | null;
   countryCode: string | null;
@@ -65,8 +81,8 @@ export interface ProxyHealthHistoryPoint {
 
 export interface ProxyHealthEntry {
   proxyName: string;
-  firstSeenAt: number;
-  lastCheckedAt: number;
+  firstSeenAt: number | null;
+  lastCheckedAt: number | null;
   lastSuccessAt: number | null;
   checks: number;
   successes: number;
@@ -77,6 +93,8 @@ export interface ProxyHealthEntry {
   avgLatencyMs: number | null;
   score: number;
   risk: ProxyRiskLevel;
+  freshness?: "fresh" | "stale" | "unknown";
+  observationAgeMs?: number | null;
   history: ProxyHealthHistoryPoint[];
   bindings: string[];
   cooldownUntil: number | null;
@@ -92,10 +110,96 @@ export interface ProxyHealthSummary {
   watch: number;
   poor: number;
   inCooldown: number;
+  stale: number;
+  unknown: number;
   lastCheckedAt: number | null;
 }
 
+export interface HealthResponse<T> {
+  /** Transport/probe success is separate from the business conclusion. */
+  ok: boolean;
+  outcome: ProfileHealthOutcome;
+  requestId?: string;
+  result?: T;
+  code?: string;
+  error?: string;
+}
+
+export interface EnvRiskResult {
+  at?: number;
+  ok: boolean;
+  summary?: string;
+  hostPlatform: string;
+  hostLocale: string | null;
+  findings: Array<{ severity: string; code: string; message: string; fix: string }>;
+  resolvers: Array<{ address: string; isCn?: boolean }>;
+  cnFonts: string[];
+  proxy?: { mode: string; type?: string; dnsLeakRisk?: string };
+  raf?: { samples: number; medianMs: number; refreshHz: number; standard: boolean };
+}
+
+export interface BaselineCaptureResult extends Omit<HealthResponse<never>, "result"> {
+  fields?: number;
+  risky?: boolean;
+  partial?: boolean;
+  review?: boolean;
+  report?: FingerprintComparisonReport;
+  currentConfigMatches?: boolean;
+  canUpdateBaseline?: boolean;
+  drift?: Array<{ field: string; baseline: unknown; current: unknown }>;
+  baseline?: Record<string, unknown>;
+  /** Opaque, single-use review bound to baseline/config/runtime/live snapshot. */
+  confirmationToken?: string;
+  baselineCommitted?: boolean;
+  warning?: string;
+}
+
+export interface LaunchDriftCheck {
+  checked: boolean;
+  risky?: boolean;
+  drift?: Array<{ field: string; baseline: unknown; current: unknown }>;
+  observedAt?: number;
+  partial?: boolean;
+  review?: boolean;
+  blockingUnavailable?: boolean;
+  report?: FingerprintComparisonReport;
+  error?: string;
+}
+
+export interface FingerprintDriftCheckResult extends Omit<HealthResponse<never>, "result"> {
+  hasBaseline?: boolean;
+  checked?: boolean;
+  risky?: boolean;
+  partial?: boolean;
+  review?: boolean;
+  blockingUnavailable?: boolean;
+  observedAt?: number;
+  fields?: number;
+  report?: FingerprintComparisonReport;
+  currentConfigMatches?: boolean;
+  canUpdateBaseline?: boolean;
+  historySaved?: boolean;
+  warning?: string;
+  drift?: Array<{ field: string; baseline: unknown; current: unknown }>;
+  /** Historical audit evidence only; not a live check or current configuration verdict. */
+  lastBlocked?: { at: number; fields: string[] };
+}
+
+export interface BaselineResetResult {
+  ok: boolean;
+  code?: string;
+  outcome?: ProfileHealthOutcome;
+  /** Server-issued review token; send only after explicit human confirmation. */
+  confirmationToken?: string;
+  baselineReset?: boolean;
+  error?: string;
+  warning?: string;
+}
+
 export interface EnvRiskDiagnosticsEntry {
+  outcome?: ProfileHealthOutcome;
+  requestId?: string;
+  source?: ProfileHealthEntry["source"];
   at: number;
   ok: boolean;
   high: number;
@@ -119,7 +223,7 @@ export interface BrowserProfileInfo {
   platform: "windows" | "macos" | string;
   timezone: string | null;
   locale: string | null;
-  webrtcMode: "auto" | "real" | "altered" | "disable";
+  webrtcMode: "auto" | "proxy-only" | "real" | "altered" | "disable";
   webrtcIp: string | null;
   geolocationMode: "real" | "disable" | "custom";
   geolocationLatitude: number | null;
@@ -141,9 +245,16 @@ export interface BrowserProfileInfo {
   note: string | null;
   tags: string[];
   syncedAt: number | null;
-  syncStatus: "synced" | "dirty" | "never";
+  /** Content proof covers portable profile metadata and Preferences, not all browser data. */
+  syncStatus: "synced" | "dirty" | "never" | "unknown";
+  syncScope: "portable-profile+preferences";
+  syncReason: "baseline-match" | "content-changed" | "no-baseline" | "legacy-marker" |
+    "invalid-baseline" | "target-mismatch" | "target-unavailable" |
+    "preferences-unavailable" | "content-unavailable";
   lastModified: number;
   running: boolean;
+  unknown?: boolean;
+  stopping?: boolean;
   pid: number | null;
   cdpPort: number | null;
 }
@@ -466,16 +577,16 @@ export interface AgentBrowserAPI {
     trashList: () => Promise<{ success: boolean; entries: Array<{ dirId: string; name: string; deletedAt: number; recoverable: boolean; incomplete: boolean; recoveryRequired: boolean }>; error?: string }>;
     trashPurge: (dirId: string) => Promise<{ success: boolean; error?: string }>;
     rename: (dirId: string, name: string) => Promise<{ success: boolean; error?: string }>;
-    exportArchive: (dirId: string, destPath?: string) => Promise<{ success: boolean; filePath?: string; entries?: number; bytes?: number; error?: string }>;
-    importArchive: (zipPath?: string) => Promise<{ success: boolean; dirId?: string; name?: string; files?: number; bytes?: number; warnings?: string[]; error?: string }>;
-    exportArchives: (dirIds: string[], destDir?: string) => Promise<{ success: boolean; report?: { exported: Array<{ dirId: string; filePath: string; entries: number; bytes: number }>; skipped: Array<{ dirId: string; reason: string }>; failed: Array<{ dirId: string; error: string }> }; error?: string }>;
-    importArchives: (zipPaths?: string[]) => Promise<{ success: boolean; report?: { imported: Array<{ zipPath: string; dirId: string; name: string; files: number; bytes: number; warnings: string[] }>; failed: Array<{ zipPath: string; error: string }> }; error?: string }>;
+    exportArchive: (dirId: string, destPath?: string, options?: { overwrite?: boolean }) => Promise<{ success: boolean; outcome?: "completed" | "failed" | "cancelled"; cancelled?: boolean; code?: string; filePath?: string; entries?: number; bytes?: number; warnings?: string[]; error?: string }>;
+    importArchive: (zipPath?: string) => Promise<{ success: boolean; outcome?: "completed" | "failed" | "cancelled"; cancelled?: boolean; code?: string; dirId?: string; name?: string; files?: number; bytes?: number; warnings?: string[]; error?: string }>;
+    exportArchives: (dirIds: string[], destDir?: string, options?: { overwrite?: boolean }) => Promise<{ success: boolean; outcome?: "completed" | "partial" | "skipped" | "failed" | "cancelled"; cancelled?: boolean; code?: string; report?: { exported: Array<{ dirId: string; filePath: string; entries: number; bytes: number; warnings?: string[] }>; skipped: Array<{ dirId: string; reason: string }>; failed: Array<{ dirId: string; error: string; code?: string }> }; error?: string }>;
+    importArchives: (zipPaths?: string[]) => Promise<{ success: boolean; outcome?: "completed" | "partial" | "skipped" | "failed" | "cancelled"; cancelled?: boolean; code?: string; report?: { imported: Array<{ zipPath: string; dirId: string; name: string; files: number; bytes: number; warnings: string[] }>; failed: Array<{ zipPath: string; error: string; code?: string }> }; error?: string }>;
     cookies: (dirId: string, filter?: string) => Promise<any[]>;
     setCookie: (dirId: string, cookie: any) => Promise<{ success: boolean; error?: string }>;
     deleteCookie: (dirId: string, domain: string, name: string) => Promise<{ success: boolean; error?: string }>;
   };
   proxy: {
-    list: () => Promise<Array<{ name: string; config: RedactedProxyConfig; isDefault: boolean }>>;
+    list: () => Promise<Array<{ name: string; config: RedactedProxyConfig; isDefault: boolean; detection?: ProxyDetectionCacheEntry }>>;
     get: (name: string) => Promise<RedactedProxyConfig | null>;
     getProfile: (dirId: string) => Promise<ResolvedProfileProxy>;
     add: (name: string, config: ProxyConfig) => Promise<{ success: boolean; error?: string }>;
@@ -490,9 +601,9 @@ export interface AgentBrowserAPI {
     rotationInfo: (name: string) => Promise<{ success: boolean; error?: string; info?: { from: string; to: string | null; reason: string | null; active: boolean } }>;
   };
   detect: {
-    proxy: (config: ProxyConfig) => Promise<any>;
-    proxyPing: (config: ProxyConfig) => Promise<any>;
-    proxyByName: (name: string) => Promise<any>;
+    proxy: (config: ProxyConfig) => Promise<ProxyDetectionResult>;
+    proxyPing: (config: ProxyConfig) => Promise<{ success: boolean; latencyMs: number | null; error: string | null }>;
+    proxyByName: (name: string) => Promise<Partial<ProxyDetectionResult> & { success: boolean; code?: "PROXY_DETECTION_TARGET_CHANGED" | "PROXY_DETECTION_STALE" | "PROXY_DETECTION_UNOBSERVED" | "PROXY_DETECTION_SAVE_FAILED" }>;
     webrtcLeak: (config: ProxyConfig) => Promise<any>;
   };
   storage: {
@@ -501,11 +612,17 @@ export interface AgentBrowserAPI {
     availableDisk: () => Promise<any>;
   };
   sync: {
-    push: () => Promise<any>;
-    pull: () => Promise<any>;
-    status: () => Promise<any>;
+    push: (opts?: { force?: boolean; comparisonToken?: SyncComparisonToken; history?: boolean }) => Promise<SyncResult>;
+    pull: (opts?: { strategy?: "local" | "remote" | "newest"; resolutions?: Record<string, "local" | "remote" | "newest">; comparisonToken?: SyncComparisonToken; history?: boolean; allowRunningPartial?: boolean }) => Promise<SyncResult>;
+    status: () => Promise<{ enabled: boolean; configured: boolean; endpoint: string; bucket: string; accessKeyMasked: string; custodyConsentAt: number | null;
+      includeHistory?: boolean; historyConsentAt?: number | null;
+      includeFullProfile: boolean; fullProfileConsentAt: number | null; fullProfilePassphraseSet: boolean;
+      operation: { generation: number; active: ActiveSyncOperation | null; last: SyncResult | null } }>;
     preview: () => Promise<{ configured: boolean; profiles: number; runningProfiles: string[]; proxies: number; accounts: number; extensions: number; message: string }>;
-    configure: (config: any) => Promise<any>;
+    previewDiff: () => Promise<SyncDiffResult>;
+    configure: (config: Partial<Pick<SyncConfig, "enabled" | "endpoint" | "bucket" | "accessKey" | "secretKey" | "includeHistory" | "includeFullProfile" | "fullProfilePassphrase">> & {
+      custodyConsent?: boolean; historyConsent?: boolean; fullProfileConsent?: boolean;
+    }) => Promise<{ success: boolean; error?: string; code?: string }>;
   };
   app: {
     /** Acknowledges an exit request; actual termination must be observed separately. */
@@ -514,6 +631,27 @@ export interface AgentBrowserAPI {
     reloadConfig: () => Promise<any>;
     openDir: (dirPath: string) => Promise<any>;
     version: () => Promise<string>;
+    /** Read-only build/host identity for the About dialog. */
+    buildInfo: () => Promise<{
+      name: string;
+      version: string;
+      appId: string;
+      packaged: boolean;
+      appPath: string;
+      resourcesPath: string | null;
+      bundle: { path: string; mtime: string | null } | null;
+      appArchive: { path: string; mtime: string | null } | null;
+      mainEntry: { path: string; mtime: string | null } | null;
+      engines: Record<"chromium" | "firefox", {
+        bundledVersion: string | null;
+        bundledSource: "manifest" | "archive" | null;
+        appArchive: { path: string; mtime: string | null } | null;
+      }>;
+      engineInstalled: Record<"chromium" | "firefox", string | null>;
+      runtime: { electron: string; chrome: string; node: string; v8: string; modules: string };
+      host: { platform: string; arch: string; release: string; osName: string | null; osVersion: string | null };
+      locale: { app: string; system: string };
+    }>;
     openUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
     setLanguage: (lang: string) => Promise<{ success: boolean; language: string }>;
     getLanguage: () => Promise<{ language: string }>;
@@ -556,20 +694,29 @@ export interface AgentBrowserAPI {
     verifyBinary: () => Promise<{ success: boolean; status: ManagedChromiumStatus; error?: string }>;
     create: (opts: any) => Promise<{ dirId: string } | { success: false; error: string; code?: string }>;
     delete: (dirId: string) => Promise<{ success: boolean; error?: string }>;
-    launch: (dirId: string, opts?: { forceDeadProxy?: boolean }) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string; code?: string }>;
+    launch: (dirId: string, opts?: { forceDeadProxy?: boolean }) => Promise<{ success: boolean; pid?: number; cdpPort?: number; error?: string; code?: string; driftCheck?: LaunchDriftCheck; cookieCheck?: { checked: boolean; applied?: number; pending?: number; error?: string } }>;
     stop: (dirId: string) => Promise<{ success: boolean; error?: string }>;
-    status: (dirId: string) => Promise<{ running: boolean; pid?: number | null; cdpPort?: number | null; error?: string }>;
+    status: (dirId: string) => Promise<{ running: boolean; unknown?: boolean; stopping?: boolean; pid?: number | null; cdpPort?: number | null; error?: string }>;
     setSeed: (dirId: string, seed: number) => Promise<{ success: boolean }>;
     setMeta: (dirId: string, meta: any) => Promise<{ success: boolean }>;
     openRiskCheck: (dirId: string, opts?: { allowLaunch?: boolean; url?: string }) => Promise<{ success: boolean; error?: string; code?: string; autoLaunched?: boolean }>;
-    envRisk: (dirId: string) => Promise<{ ok: boolean; result?: any; error?: string }>;
-    envRiskHistory: (dirId: string) => Promise<{ ok: boolean; entries: EnvRiskDiagnosticsEntry[]; error?: string }>;
-    envRiskClear: (dirId: string) => Promise<{ ok: boolean; error?: string }>;
-    // Audit R1 (#107): these existed in main + preload but were missing
-    // here, hiding wiring breaks from the type checker.
-    consistencyCheck: (dirId: string) => Promise<{ ok: boolean; warnings: any[]; blockers: any[] }>;
-    checkDrift: (dirId: string) => Promise<any>;
-    captureBaseline: (dirId: string) => Promise<{ ok: boolean; fields?: number; error?: string }>;
+    envRisk: (dirId: string, options?: { requestId?: string }) => Promise<HealthResponse<EnvRiskResult>>;
+    envRiskHistory: (dirId: string) => Promise<{ ok: boolean; entries: EnvRiskDiagnosticsEntry[] | null; code?: string; error?: string }>;
+    envRiskClear: (dirId: string) => Promise<{ ok: boolean; code?: string; error?: string }>;
+    /** Authoritative main-process history; renderer localStorage is only a cache. */
+    healthHistory: (dirId: string) => Promise<{ entries: ProfileHealthEntry[] | null; ok?: boolean; outcome?: ProfileHealthOutcome; code?: string; error?: string }>;
+    /** Acknowledges a request; cancelled=true is not evidence that the run settled or the browser stopped. */
+    healthCancel: (dirId: string, options: { kind: ProfileHealthKind; requestId: string }) => Promise<{ success: boolean; cancelled: boolean; code?: string }>;
+    healthClear: (dirId: string, kind?: ProfileHealthKind) => Promise<{ ok: boolean; code?: string }>;
+    /** Lists already-owned HTTP(S) pages; does not start an observation or browser. */
+    networkPages: (dirId: string) => Promise<ProfileNetworkPagesResult>;
+    networkObserve: (dirId: string, options: { selection: string; requestId: string }) => Promise<ProfileNetworkObservationResult>;
+    onNetworkArmed: (callback: (event: ProfileNetworkArmedEvent) => void) => () => void;
+    consistencyCheck: (dirId: string) => Promise<Omit<HealthResponse<never>, "result"> & { warnings?: Array<{ severity: string; code: string; message: string }>; blockers?: Array<{ severity: string; code: string; message: string }> }>;
+    checkDrift: (dirId: string) => Promise<FingerprintDriftCheckResult>;
+    driftReport: (dirId: string) => Promise<{ ok: boolean; report: FingerprintComparisonReport | null; currentConfigMatches: boolean; canUpdateBaseline: boolean; code?: string; warning?: string; error?: string }>;
+    captureBaseline: (dirId: string, options?: { confirmationToken?: string; reportId?: string }) => Promise<BaselineCaptureResult>;
+    resetBaseline: (dirId: string, options?: { confirmationToken?: string }) => Promise<BaselineResetResult>;
     setLock: (dirId: string, locked: boolean) => Promise<{ success: boolean; error?: string }>;
     openApp: (dirId: string, url?: string) => Promise<{ success: boolean; error?: string; code?: string; appUrl?: string }>;
     logs: (dirId: string) => Promise<any>;
@@ -579,6 +726,11 @@ export interface AgentBrowserAPI {
     batchCancel: (jobId: string) => Promise<{ success: boolean; error?: string }>;
     batchMaxConcurrency: () => Promise<{ max: number }>;
     parseBulkCsv: (text: string) => Promise<{ ok: boolean; specs?: any[]; error?: string }>;
+  };
+  webrtc: {
+    diag: (dirId: string, options?: { allowLaunch?: boolean; requestId?: string }) => Promise<HealthResponse<WebRtcDiagnosticsEntry>>;
+    diagHistory: (dirId: string) => Promise<{ entries: WebRtcDiagnosticsEntry[] | null; ok?: boolean; outcome?: ProfileHealthOutcome; code?: string; error?: string }>;
+    diagClear: (dirId: string) => Promise<{ success: boolean; code?: string; error?: string }>;
   };
   agent: {
     llmConfig: () => Promise<RedactedLlmConfig | null>;

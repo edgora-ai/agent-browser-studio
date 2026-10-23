@@ -11,7 +11,7 @@ vi.mock("playwright", () => ({ _electron: { launch: vi.fn() } }));
 vi.mock("../e2e/helpers/diag.js", () => ({ closeAllDialogs: vi.fn() }));
 
 let root: string;
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "abs-launch-env-test-")); });
+beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "abs-launch-env-test-"))); });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 function build(hostEnv: NodeJS.ProcessEnv, fixtureEnv?: NodeJS.ProcessEnv) {

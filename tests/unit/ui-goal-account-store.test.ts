@@ -76,14 +76,22 @@ export function fixture(reuse?: string) {
       if (name === "node:crypto") return { ...crypto, randomUUID: () => { if (faults.nonce) throw new Error("synthetic nonce preparation failure"); return crypto.randomUUID(); } };
       if (name === "node:zlib") return zlib;
       if (name === "node:util") return util;
-      if (name === "node:os") return { homedir: () => dir, hostname: () => "synthetic-host", platform: () => process.platform };
+      if (name === "node:os") return { homedir: () => dir, hostname: () => "synthetic-host", platform: () => process.platform, tmpdir: () => dir };
       if (name === "node:net") return { isIP: net.isIP, isIPv4: net.isIPv4, isIPv6: net.isIPv6 };
+      // Real SQLite helper code is loaded, but these account-only paths must
+      // never start its native checker. Construction records a forbidden call.
+      if (name === "node:worker_threads") return { Worker: class {
+        constructor(...args: any[]) { fail("native SQLite worker")(...args); }
+      } };
       if (name.startsWith("node:")) return denied(name);
       if (name === "electron") return { app: { getPath: () => dir }, safeStorage: denied("native storage"), clipboard: denied("clipboard") };
       const resolved = path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"));
       // Module IDs are logical slash-delimited names, not native file paths.
       const rel = path.relative(SOURCE, resolved).replace(/\\/g, "/");
-      if (["services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts", "services/secrets.ts", "services/local-agent.ts", "services/sync-service.ts", "services/sync/limits.ts", "branding.ts", "services/browser-engine.ts"].includes(rel)) return load(rel);
+      if (["services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts", "services/secrets.ts", "services/local-agent.ts", "services/sync-service.ts", "services/sync/limits.ts", "branding.ts", "services/browser-engine.ts",
+        "services/profile-portability.ts", "services/sync/profile-state.ts", "services/sync/operation-state.ts", "services/sync/operation-result.ts", "services/event-bus.ts", "services/team.ts",
+        "services/sync/sqlite-local-storage.ts", "services/zip-writer.ts", "services/proxy-observation.ts",
+      ].includes(rel)) return load(rel);
       if (rel === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("invalid synthetic dirId"); } };
       if (rel === "services/main-i18n.ts") return { tMain: (key: string) => key };
       if (rel === "services/browser-fingerprint-config.ts") return { validateBrowserHardwareProfile: (x: any) => x };
@@ -94,7 +102,6 @@ export function fixture(reuse?: string) {
         cleanupNormalizedRunEvictions: () => { if (faults.cleanup) throw new Error("synthetic cleanup failure"); },
       };
       if (rel === "services/skill-repository.ts") return { BUILTIN_SKILLS: [], getEnabledSkillPrompts: fail("skills") };
-      if (rel === "services/team.ts") return { sanitizeTeam: () => undefined, mergeTeam: (local: any) => local };
       if (rel === "services/extension-repository.ts") return { listExtensionRepository: () => [] };
       if (rel === "services/browser-manager.ts") return {
         listBrowserProfiles: () => [],
@@ -122,7 +129,9 @@ export function fixture(reuse?: string) {
   const seed = () => {
     agent.saveAccounts(["A", "B", "C"].map((name) => ({ platformUrl: "https://synthetic.invalid", platformUserName: name, platformPassword: `synthetic-${name}`, tags: [name], profileIds: [`profile_${name}`], createdAt: 1, updatedAt: 1 })));
   };
-  return { dir, agent, cfg, store, secrets, faults, bytes, rows, ref, seed, sync: () => load("services/sync-service.ts").syncService };
+  return { dir, agent, cfg, store, secrets, faults, bytes, rows, ref, seed,
+    loadedModules: () => [...modules.keys()].map(file => path.relative(SOURCE, file).replace(/\\/g, "/")),
+    events: load("services/event-bus.ts"), sync: () => load("services/sync-service.ts").syncService };
 }
 function rejected(fn: () => any, code: string) {
   let error: any;
@@ -300,17 +309,52 @@ accounts:f.rows(), deviceId:f.cfg.getConfig().deviceId }));
   });
   for (const outcome of ["success", "fetch-failure", "rename-failure"]) it(`whole Sync account-assignment ${outcome} uses committed invalidation only`, async () => {
     const f = fixture(); f.agent.saveAccounts([{ ...row, profileIds: ["profile"], tags: ["sync"] }]);
-    f.cfg.setSyncConfig({ enabled: true, endpoint: "https://synthetic.invalid", bucket: "synthetic-bucket", accessKey: "synthetic", secretKey: "synthetic", custodyConsent: true });
-    const ref = f.ref(0), cached = f.agent.getAccounts(), before = f.bytes();
-    f.faults.syncPayload = { timestamp: 1, data: zlib.gzipSync(Buffer.from(JSON.stringify(f.cfg.getConfig()))).toString("base64") };
-    f.faults.failFetch = outcome === "fetch-failure"; f.faults.rename = outcome === "rename-failure";
-    const result = await f.sync().pull(undefined, { strategy: "local" });
-    expect(result.success, result.message).toBe(outcome === "success"); expect(f.faults.fetches).toBe(1);
-    if (outcome === "success") {
-      expect(f.rows()).toEqual(JSON.parse(before.toString()).accounts);
-      expect(f.ref(0).revision).not.toBe(ref.revision);
-      rejected(() => f.agent.getAccountPassword(0, ref), "ACCOUNT_REFERENCE_CONFLICT");
-    } else { expect(f.bytes()).toEqual(before); expect(f.agent.getAccounts()).toEqual(cached); expect(f.ref(0)).toEqual(ref); }
+    const events: Array<{ payload: any; bytes: Buffer }> = [];
+    // Real operation-state emits onto the same real bus that the UI transport
+    // subscribes to. Observe actual disk bytes at publication, not a fake event.
+    const unsubscribe = f.events.onEvent("sync:state-changed", (payload: any) => {
+      events.push({ payload: structuredClone(payload), bytes: f.bytes() });
+    });
+    try {
+      f.cfg.setSyncConfig({ enabled: true, endpoint: "https://synthetic.invalid", bucket: "synthetic-bucket", accessKey: "synthetic", secretKey: "synthetic", custodyConsent: true });
+      const ref = f.ref(0), cached = f.agent.getAccounts(), before = f.bytes();
+      expect(JSON.parse(before.toString()).sync).toMatchObject({ enabled: true, endpoint: "https://synthetic.invalid", bucket: "synthetic-bucket" });
+      expect(events).toHaveLength(1);
+      expect(events[0].payload).toMatchObject({ kind: "configure", phase: "completed", scopes: ["profiles", "accounts", "sync", "team"] });
+      expect(events[0].bytes).toEqual(before);
+      f.faults.syncPayload = { timestamp: 1, data: zlib.gzipSync(Buffer.from(JSON.stringify(f.cfg.getConfig()))).toString("base64") };
+      f.faults.failFetch = outcome === "fetch-failure"; f.faults.rename = outcome === "rename-failure";
+      const result = await f.sync().pull(undefined, { strategy: "local" });
+      expect(f.loadedModules()).toEqual(expect.arrayContaining(["services/sync/sqlite-local-storage.ts", "services/zip-writer.ts"]));
+      expect(result.success, result.message).toBe(outcome === "success"); expect(f.faults.fetches).toBe(1);
+      const pullEvents = events.filter(event => event.payload.kind === "pull");
+      expect(pullEvents.map(event => event.payload.phase)).toEqual(["started", "completed"]);
+      const started = pullEvents[0].payload, completed = pullEvents[1].payload;
+      expect(started.scopes).toContain("accounts");
+      expect(started.generation).toBeGreaterThan(events[0].payload.generation);
+      expect(completed.generation).toBeGreaterThan(started.generation);
+      expect(completed.operationId).toBe(started.operationId);
+      expect(completed.operationId).toBe(result.operationId);
+      expect(completed.result).toMatchObject({ success: result.success, outcome: result.outcome, localCommit: result.localCommit, remoteCommit: result.remoteCommit });
+      if (outcome === "success") {
+        expect(f.rows()).toEqual(JSON.parse(before.toString()).accounts);
+        expect(f.ref(0).revision).not.toBe(ref.revision);
+        rejected(() => f.agent.getAccountPassword(0, ref), "ACCOUNT_REFERENCE_CONFLICT");
+        expect(completed.scopes).toContain("accounts");
+        expect(result.localCommit).toBe("committed");
+      } else {
+        expect(f.bytes()).toEqual(before); expect(f.agent.getAccounts()).toEqual(cached); expect(f.ref(0)).toEqual(ref);
+        expect(completed.scopes).toEqual(["sync"]); expect(result.localCommit).toBe("none");
+      }
+      const committed = f.bytes(), stored = JSON.parse(committed.toString()).accounts;
+      expect(pullEvents[1].bytes).toEqual(committed);
+      f.cfg.reloadConfig();
+      expect(f.bytes()).toEqual(committed); expect(f.rows()).toEqual(stored);
+      const found = f.agent.getProfileAccounts("profile").find((account: any) => account.platformUserName === row.platformUserName && account.platformUrl === row.platformUrl);
+      expect(found?.ref.index).toBe(0); expect(found?.profileIds).toEqual(["profile"]); expect(found?.tags).toEqual(["sync"]);
+      expect(f.agent.getRedactedAccounts().filter((account: any) => account.tags?.includes("sync"))).toHaveLength(1);
+      expect(f.agent.getAccountPassword(0, found.ref)).toBe(row.platformPassword);
+    } finally { unsubscribe(); }
   });
 });
 

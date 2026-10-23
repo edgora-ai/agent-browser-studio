@@ -3,11 +3,14 @@
 // Claude Code, Cursor, or any MCP client can connect and control browser profiles.
 
 import * as http from "node:http";
-import { readBody as httpReadBody } from "./http/body.js";
+import { readBody as httpReadBody, HttpError } from "./http/body.js";
+import { classifyAgentToolOutcome } from "./agent/tool-outcome.js";
 import { isAuthorized as isAuthorizedShared } from "./http/auth.js";
 import { randomBytes } from "node:crypto";
 import { listProfiles, getProfileInfo } from "./profile-manager.js";
-import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig } from "./config-manager.js";
+import { getConfig, getProfileMeta, resolveProfileProxy, saveConfig, setSyncConfig } from "./config-manager.js";
+import { syncService } from "./sync-service.js";
+import { readProfileSyncState } from "./sync/profile-state.js";
 import { getAccounts, executeToolCall, AGENT_TOOLS, agentChat, llmChat, getLlmConfig, getOrDetectLlmConfig, redactLlmConfig, createConversation, getConversation, listConversations, deleteConversation, renameConversation, addMessage, repairMessageSequence, type LlmMessage } from "./local-agent.js";
 import { listJobs } from "./job-store.js";
 import { agentRunRecorder } from "./agent-run-trace.js";
@@ -159,7 +162,9 @@ const MCP_PASSTHROUGH = [
   "browser_navigate", "browser_click", "browser_type", "browser_evaluate",
   "browser_snapshot", "browser_get_text", "browser_get_url", "browser_wait_for_load",
   "browser_screenshot", "browser_scroll", "browser_new_tab", "browser_press_key",
-  "http_request", "db_query", "db_exec", "read_file", "write_file", "set_var", "get_var",
+  // Variables belong to an active agent run. Standalone MCP requests have no
+  // run context, so set_var/get_var are neither advertised nor dispatched.
+  "http_request", "db_query", "db_exec", "read_file", "write_file",
 ];
 function publicPassthroughToolName(toolName: string): string {
   const suffix = toolName.startsWith("browser_") ? toolName.slice("browser_".length) : toolName;
@@ -177,6 +182,17 @@ const MCP_PASSTHROUGH_DEFS = MCP_PASSTHROUGH.map((toolName) => {
   };
 });
 const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
+  { name: "agent_browser_sync_status", description: "Read sync configuration/operation receipts and separately scoped history coverage; configuration sync is not full browser restore proof", inputSchema: { type: "object", properties: {} } },
+  { name: "agent_browser_sync_history_state", description: "Compare stopped profile History/Places semantically against its independent baseline, including WAL; requires saved history consent. No runtime/browser-UI proof", inputSchema: { type: "object", properties: { dirId: { type: "string" } }, required: ["dirId"] } },
+  { name: "agent_browser_sync_configure", description: "Configure sync (member+). Ordinary consent keeps limited scope. History is opt-in and includes Firefox Places bookmarks. Full environment migration includes history, site login/session data, saved browser passwords and required proxy credentials; fullProfileConsent:true must reflect the human user's explicit scope intent, never inferred from ordinary/history consent or autonomously approved by an AI. Main stamps consent. includeFullProfile:true requires custody/full consent and a migration passphrase; revoking full/history consent disables it. No guaranteed login or hardware-passkey portability", inputSchema: { type: "object", additionalProperties: false, properties: {
+    enabled: { type: "boolean" }, endpoint: { type: "string" }, bucket: { type: "string" }, accessKey: { type: "string" }, secretKey: { type: "string" }, custodyConsent: { type: "boolean" },
+    historyConsent: { type: "boolean", description: "Explicit user consent for History and Firefox bookmarks; false also disables full environment migration" }, includeHistory: { type: "boolean" },
+    includeFullProfile: { type: "boolean", description: "Select separately consented full migration for future manual/automatic sync; absent keeps limited legacy scope" },
+    fullProfileConsent: { type: "boolean", description: "Explicit human authorization for history, site data, saved browser passwords and required proxy credentials; also records History consent. Never infer or auto-approve" },
+    fullProfilePassphrase: { type: "string", maxLength: 1024, format: "password", writeOnly: true, description: "Plaintext migration passphrase: 12–1024 UTF-8 bytes, spaces preserved; empty keeps the saved passphrase. Same passphrase needed on the new machine; forgotten is unrecoverable. Not the S3 Secret Key. Saved encrypted locally, never returned or synced" },
+  } } },
+  { name: "agent_browser_sync_push", description: "Push the frozen selected sync scope. Optional history boolean overrides saved scope only; true needs separate saved consent and includes Firefox bookmarks. Inspect per-item freshness and commit receipts; no automatic retries", inputSchema: { type: "object", additionalProperties: false, properties: { history: { type: "boolean" }, force: { type: "boolean" }, comparisonToken: { type: "object" } } } },
+  { name: "agent_browser_sync_pull", description: "Pull selected remote metadata/artifacts into the same profile IDs. Optional history boolean needs separate consent; legacy/config-only backups cannot restore visits. Inspect skipped/preserved/failure and rollback receipts", inputSchema: { type: "object", additionalProperties: false, properties: { history: { type: "boolean" }, strategy: { type: "string", enum: ["local", "remote", "newest"] }, resolutions: { type: "object" }, comparisonToken: { type: "object" } } } },
  { name: "agent_browser_automation_list", description: "List automation rules", inputSchema: { type: "object", properties: {} } },
  { name: "agent_browser_runs_list", description: "List recent agent runs (optionally filtered by profile dirId)", inputSchema: { type: "object", properties: { limit: { type: "number" }, dirId: { type: "string" } } } },
  { name: "agent_browser_jobs_list", description: "List automation jobs", inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "number" } } } },
@@ -199,16 +215,23 @@ const MCP_EXPANDED_TOOLS = [...MCP_TOOLS, ...MCP_PASSTHROUGH_DEFS,
   { name: "agent_browser_db_tables", description: "List agent SQLite tables with row counts", inputSchema: { type: "object", properties: {} } },
 ];
 
+function canonicalMcpToolName(name: string): string {
+  if (!name.startsWith("cloak_")) return name;
+  const suffix = name.slice("cloak_".length);
+  return MCP_PASSTHROUGH.includes(suffix) ? publicPassthroughToolName(suffix) : `agent_browser_${suffix}`;
+}
+
 async function executeMcpTool(name: string, args: any): Promise<any> {
-  if (name.startsWith("cloak_")) {
-    const legacySuffix = name.slice("cloak_".length);
-    name = MCP_PASSTHROUGH.includes(legacySuffix)
-      ? publicPassthroughToolName(legacySuffix)
-      : `agent_browser_${legacySuffix}`;
-  }
+  name = canonicalMcpToolName(name);
   // Passthrough to the agent tool layer (browser_*/db/http/file).
   const passthroughToolName = MCP_PASSTHROUGH_BY_PUBLIC_NAME.get(name);
   if (passthroughToolName) {
+    // Match REST /api/agent/db/exec's existing settings mutation policy.
+    // Read-only db_query and other read tools keep their current contract.
+    if (passthroughToolName === "db_exec") {
+      const denied = denyMcpMutation();
+      if (denied) return { error: denied };
+    }
     try {
       return await executeToolCall(passthroughToolName, args || {});
     } catch (e: any) {
@@ -216,6 +239,23 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
     }
   }
   switch (name) {
+    case "agent_browser_sync_status": return syncService.getStatus();
+    case "agent_browser_sync_history_state": validateDirId(args?.dirId); return syncService.historyState(args.dirId);
+    case "agent_browser_sync_configure": {
+      const denied = denyMcpMutation(); if (denied) return { success: false, code: "TEAM_ROLE_DENIED", error: denied };
+      try { setSyncConfig(args); return { success: true, ...syncService.getStatus() }; }
+      catch (error) { return { success: false, code: (error as any).code, error: (error as Error).message }; }
+    }
+    case "agent_browser_sync_push":
+    case "agent_browser_sync_pull": {
+      if (!args || typeof args !== "object" || Array.isArray(args) || args.history !== undefined && typeof args.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", error: "History scope must be a boolean" };
+      if (name === "agent_browser_sync_push") return args.history === undefined ? syncService.push(undefined, args.force === true, args.comparisonToken)
+        : syncService.push(undefined, args.force === true, args.comparisonToken, { history: args.history });
+      const resolutions: Record<string, "local" | "remote" | "newest"> = {};
+      for (const [key, value] of Object.entries(args.resolutions || {})) if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
+      return syncService.pull(undefined, { strategy: args.strategy === "remote" || args.strategy === "newest" ? args.strategy : "local", resolutions, comparisonToken: args.comparisonToken,
+        ...(args.history === undefined ? {} : { history: args.history }) });
+    }
     case "agent_browser_list_profiles": {
       const runtime = getProfileRuntimeSnapshot();
       const browserProfiles = listBrowserProfiles(runtime);
@@ -226,6 +266,10 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           proxyMode: p.proxyMode,
           proxy: p.proxyMode === "none" ? "(no proxy)" : (p.proxyName || "(missing proxy)"),
           sizeMB: "0",
+          syncedAt: p.syncedAt,
+          syncStatus: p.syncStatus,
+          syncScope: p.syncScope,
+          syncReason: p.syncReason,
         })),
         binary: { path: runtime.chromiumPath, version: runtime.chromiumVersion, pending: runtime.pending },
       };
@@ -242,7 +286,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
           hint: "Managed Chromium launched. Use the MCP or Agent CDP tools to automate.",
         };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        const code = ["host-platform-mismatch", "restart-required"].includes(e?.code) ? e.code : undefined;
+        return { success: false, error: e.message, ...(code ? { code } : {}) };
       }
     }
     case "agent_browser_stop_profile": {
@@ -288,6 +333,7 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       const resolvedProxy = resolveProfileProxy(args.dirId);
       return {
         ...meta,
+        ...readProfileSyncState(args.dirId, getConfig().browserProfiles?.[args.dirId]),
         proxyMode: resolvedProxy.mode,
         proxyName: resolvedProxy.name,
         proxy: resolvedProxy.config ? {
@@ -315,18 +361,32 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       };
     }
     case "agent_browser_install_extension": {
+      const denied = denyMcpMutation();
+      if (denied) return { error: denied };
       validateDirId(args.dirId);
       validateExtensionId(args.extId);
+      let entry: Awaited<ReturnType<typeof addOrUpdateChromeStoreExtension>> | undefined;
+      let enableAttempted = false;
+      const committedFacts = () => entry ? {
+        outcome: entry.repositoryCommit?.committed === true ? "partial" : "unknown",
+        extId: args.extId, dirId: args.dirId, extension: entry, repositoryCommit: entry.repositoryCommit ?? null,
+        profileEnable: enableAttempted ? "unknown" : "not-applied",
+      } : {};
       try {
         assertBrowserProfileExists(args.dirId);
-        const entry = await addOrUpdateChromeStoreExtension(args.extId);
+        entry = await addOrUpdateChromeStoreExtension(args.extId);
+        const currentPermission = requireSettingsMutation();
+        if (!currentPermission.ok) return { success: false, error: currentPermission.error, code: "TEAM_ROLE_DENIED", ...committedFacts() };
+        enableAttempted = true;
         setProfileExtensionEnabled(args.dirId, args.extId, true);
         return { success: true, extId: args.extId, dirId: args.dirId, extension: entry };
       } catch (e: any) {
-        return { success: false, error: e.message || String(e) };
+        return { success: false, error: e.message || String(e), ...committedFacts() };
       }
     }
     case "agent_browser_delete_extension": {
+      const denied = denyMcpMutation();
+      if (denied) return { error: denied };
       validateDirId(args.dirId);
       validateExtensionId(args.extId);
       setProfileExtensionEnabled(args.dirId, args.extId, false);
@@ -355,6 +415,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       };
     }
     case "agent_browser_conversation_create": {
+      const denied = denyMcpMutation();
+      if (denied) return { error: denied };
       const title = typeof args?.title === "string" && args.title.trim()
         ? args.title.trim().slice(0, 200) : undefined;
       const c = createConversation(title);
@@ -462,6 +524,8 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       return { skill };
     }
     case "agent_browser_skill_install": {
+      const denied = denyMcpMutation();
+      if (denied) return { error: denied };
       try {
         const skill = installSkill(args?.skillId);
         return { success: true, skill };
@@ -524,8 +588,36 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
 
 const sseClients = new Map<string, http.ServerResponse>();
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Validate before reading id/method, including the legacy root handshake. */
+function invalidMcpRequest(json: unknown): any | null {
+  const record = isRecord(json) ? json : null;
+  const validId = record && (record.id === undefined || record.id === null || typeof record.id === "string" ||
+    (typeof record.id === "number" && Number.isFinite(record.id)));
+  const id = validId ? record!.id ?? null : null;
+  const failure = (code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
+  if (!record || !validId || record.jsonrpc !== "2.0" || typeof record.method !== "string" || !record.method.trim()) {
+    return failure(-32600, "Invalid JSON-RPC request");
+  }
+  if (record.params !== undefined && !isRecord(record.params)) return failure(-32602, "params must be an object");
+  if (record.method === "tools/call") {
+    if (!record.params || typeof record.params.name !== "string" || !record.params.name.trim()) {
+      return failure(-32602, "Tool name must be a non-empty string");
+    }
+    if (record.params.arguments !== undefined && !isRecord(record.params.arguments)) {
+      return failure(-32602, "Tool arguments must be an object");
+    }
+  }
+  return null;
+}
+
 async function buildMcpResponse(json: any): Promise<any | null> {
-  const response: any = { jsonrpc: "2.0", id: json.id };
+  const invalid = invalidMcpRequest(json);
+  if (invalid) return invalid;
+  const response: any = { jsonrpc: "2.0", id: json.id ?? null };
 
   try {
     if (json.method === "initialize") {
@@ -537,8 +629,9 @@ async function buildMcpResponse(json: any): Promise<any | null> {
     } else if (json.method === "tools/list") {
       response.result = { tools: MCP_EXPANDED_TOOLS };
     } else if (json.method === "tools/call") {
-      const result = await executeMcpTool(json.params?.name, json.params?.arguments || {});
-      const isError = Boolean(result && result.error);
+      const name = canonicalMcpToolName(json.params.name);
+      const result = await executeMcpTool(name, json.params.arguments ?? {});
+      const isError = !classifyAgentToolOutcome(MCP_PASSTHROUGH_BY_PUBLIC_NAME.get(name) || name, result).ok;
       response.result = {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         ...(isError ? { isError: true } : {}),
@@ -572,6 +665,12 @@ async function processMcpRequest(json: any, sessionId: string): Promise<void> {
   }
 }
 
+function sendMcpJson(res: http.ServerResponse, status: number, body: unknown): void {
+  const serialized = JSON.stringify(body);
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(serialized);
+}
+
 export function startMcpServer(): { port: number; ready: Promise<void> } {
   if (server) return { port: mcpPort, ready: serverListening ? Promise.resolve() : waitForMcpReady() };
 
@@ -581,10 +680,9 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
   let markFailed: (error: Error) => void;
   const ready = new Promise<void>((resolve, reject) => { markReady = resolve; markFailed = reject; });
 
-  server = http.createServer(async (req, res) => {
+  const handleHttpRequest = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (!isTrustedOrigin(req.headers.origin)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Forbidden origin" }));
+      sendMcpJson(res, 403, { error: "Forbidden origin" });
       return;
     }
     res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
@@ -598,16 +696,14 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
     }
 
     if (isMcpRateLimited(mcpRateKey(req))) {
-      res.writeHead(429, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Too many requests" }));
+      sendMcpJson(res, 429, { error: "Too many requests" });
       return;
     }
     const url = new URL(req.url || "/", `http://127.0.0.1:${mcpPort}`);
     const sessionId = url.searchParams.get("sessionId") || "default";
 
     if (url.pathname !== "/health" && !isAuthorized(req, url)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized" }));
+      sendMcpJson(res, 401, { error: "Unauthorized" });
       return;
     }
 
@@ -620,8 +716,12 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
       } catch {
         // Malformed JSON is a client error (R7 #38) — never silently treat
         // it as an empty request the way safeJson did (200 result:null).
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } }));
+        sendMcpJson(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } });
+        return;
+      }
+      const invalid = invalidMcpRequest(json);
+      if (invalid) {
+        sendMcpJson(res, 400, invalid);
         return;
       }
       const sseRes = sseClients.get(sessionId);
@@ -633,16 +733,14 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
         });
       } else {
         const response = await buildMcpResponse(json);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(response || { jsonrpc: "2.0", id: json.id, result: null }));
+        sendMcpJson(res, 200, response || { jsonrpc: "2.0", id: json.id, result: null });
       }
       return;
     }
 
     // Health check
     if (url.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", service: "agent-browser-studio-mcp", port: mcpPort }));
+      sendMcpJson(res, 200, { status: "ok", service: "agent-browser-studio-mcp", port: mcpPort });
       return;
     }
 
@@ -682,23 +780,43 @@ export function startMcpServer(): { port: number; ready: Promise<void> } {
       try {
         json = JSON.parse(body);
       } catch {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } }));
+        sendMcpJson(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error: invalid JSON" } });
         return;
       }
+      const invalid = invalidMcpRequest(json);
+      if (invalid) {
+        sendMcpJson(res, 400, invalid);
+        return;
+      }
+      // Root is the legacy initialize-only handshake, not another tools route.
       if (json.method === "initialize") {
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({
-          jsonrpc: "2.0", id: json.id,
-          result: { protocolVersion: "2024-11-05", serverInfo: { name: "agent-browser-studio", version: "1.0.0" }, capabilities: { tools: {} } },
-        }));
+        sendMcpJson(res, 200, await buildMcpResponse(json));
         return;
       }
     }
 
     // 404
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Not found" }));
+    sendMcpJson(res, 404, { error: "Not found" });
+  };
+
+  server = http.createServer(async (req, res) => {
+    // IncomingMessage body failures are asynchronous too. Node does not await
+    // listener promises, so await the complete dispatch inside this boundary.
+    try {
+      await handleHttpRequest(req, res);
+    } catch (error) {
+      // A disconnected/over-limit streaming request may already have lost its
+      // socket. Do not try to write a second response or reject the listener.
+      if (res.destroyed || res.writableEnded) return;
+      if (res.headersSent) { res.destroy(); return; }
+      const invalidUrl = (error as NodeJS.ErrnoException)?.code === "ERR_INVALID_URL";
+      const status = error instanceof HttpError ? error.status : invalidUrl ? 400 : 500;
+      if (status >= 500) console.error("[mcp] request failed:", error);
+      sendMcpJson(res, status, { jsonrpc: "2.0", id: null, error: {
+        code: status >= 500 ? -32603 : -32600,
+        message: error instanceof HttpError ? error.message : invalidUrl ? "Invalid request URL" : "Internal error",
+      } });
+    }
   });
 
   let fallbackAttempted = false;

@@ -154,12 +154,14 @@ function collectDefinedKeys() {
 }
 const DEFINED_KEYS = collectDefinedKeys();
 
+// Drop CRLF's CR before the end-anchored comment filters below, so documented
+// counterexamples are ignored consistently across checkout line endings.
 function findUndefinedKeys() {
   if (!DEFINED_KEYS) return [];
   const found = [];
   for (const dir of JS_DIRS) {
     for (const file of walk(dir)) {
-      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/);
       lines.forEach((line, index) => {
         // Strip comments first: a comment that *names* a key (as the fix for one
         // of these writes does) is documentation, not a call site.
@@ -213,7 +215,7 @@ function findSeparatorLeaks() {
   const found = [];
   for (const dir of JS_DIRS) {
     for (const file of walk(dir)) {
-      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/);
       lines.forEach((line, index) => {
         const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
         if (!code.includes("t(")) return;
@@ -347,7 +349,7 @@ function findShadowedPlaceholderLeaks() {
   for (const dir of JS_DIRS) {
     for (const file of walk(dir)) {
       const src = fs.readFileSync(file, "utf-8");
-      const lines = src.split("\n");
+      const lines = src.split(/\r?\n/);
       lines.forEach((line, index) => {
         const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
         if (!code.includes("t(")) return;
@@ -422,7 +424,7 @@ function findDroppedPlaceholders() {
   const found = [];
   for (const dir of JS_DIRS) {
     for (const file of walk(dir)) {
-      const lines = fs.readFileSync(file, "utf-8").split("\n");
+      const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/);
       lines.forEach((line, index) => {
         const code = line.replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
         if (!code.includes("t(")) return;
@@ -464,7 +466,7 @@ function walk(dir, out = []) {
 
 for (const dir of JS_DIRS) {
   for (const file of walk(dir)) {
-    const lines = fs.readFileSync(file, "utf-8").split("\n");
+    const lines = fs.readFileSync(file, "utf-8").split(/\r?\n/);
     lines.forEach((raw, index) => {
       const code = raw.replace(/\/\/.*$/, "");
       if (!CJK.test(code)) return;

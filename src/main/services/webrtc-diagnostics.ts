@@ -2,17 +2,20 @@
 // performance diagnostics" parity) ──
 // Runs a real RTCPeerConnection probe inside the profile's own managed
 // browser via CDP (Chromium) or WebDriver BiDi (Firefox), and reports what ICE
-// candidates expose (mDNS hostnames vs raw host IPs), connection state and
-// RTT. This verifies the engine's WebRTC hiding from the actual browser
-// surface, not from a curl proxy test.
+// candidates expose (mDNS hostnames vs raw host IPs). This is an ICE exposure
+// check, not proof of a peer connection, UDP forwarding, or proxy routing.
+// Real two-peer challenge/selected-pair verification lives in webrtc-peer-probe.
 
-import { statusBrowser, launchBrowser } from "./browser-manager.js";
+import { isIP } from "node:net";
+import { statusBrowser } from "./browser-manager.js";
 import { getWebRtcDiagnostics, setWebRtcDiagnostics } from "./config-manager.js";
-import { clearWebRtcDiagnostics as clearStoredWebRtcDiagnostics } from "./config-manager.js";
 import { recordAudit } from "./audit-log.js";
 import { tMain } from "./main-i18n.js";
-import { evaluateInPage, navigateInPage, getProfileEngineByDirId } from "./page-eval.js";
-import type { WebRtcDiagnosticsEntry } from "../types.js";
+import { evaluateInPage, getProfileEngineByDirId } from "./page-eval.js";
+import { beginProfileHealthRun, clearProfileHealthHistory, ProfileHealthError, profileHealthFailure } from "./profile-health.js";
+import type { ProfileHealthOptions, ProfileHealthRun } from "./profile-health.js";
+import type { ProfileHealthOutcome, WebRtcDiagnosticsEntry } from "../types.js";
+import { unmeasuredWebRtcPeerConnectivity } from "./webrtc-peer-probe.js";
 
 /** Probe injected via CDP Runtime.evaluate (awaitPromise). Plain ES5-ish. */
 const PROBE_JS = `(async () => {
@@ -32,6 +35,7 @@ const PROBE_JS = `(async () => {
     var settled = false;
     var pc = null;
     var timer = null;
+    var statsTimer = null;
     function merge(base, extra) {
       var m = {};
       for (var k in base) { m[k] = base[k]; }
@@ -42,7 +46,8 @@ const PROBE_JS = `(async () => {
       if (settled) { return; }
       settled = true;
       if (timer) { clearTimeout(timer); }
-      try { if (pc) { pc.close(); } } catch (e) {}
+      if (statsTimer) { clearTimeout(statsTimer); }
+      try { if (pc) { pc.close(); } } catch (e) { out.error = "close failed: " + e.message; }
       resolve(merge(out, extra));
     }
     try {
@@ -55,6 +60,7 @@ const PROBE_JS = `(async () => {
     pc.onicecandidate = function (ev) {
       if (!ev.candidate) { finish({ gatheringState: "complete" }); return; }
       var cand = ev.candidate.candidate || "";
+      if (!cand) { return; } // Empty generation markers are not candidate evidence.
       out.candidates.push(cand);
       var t = cand.split(" ");
       var typIdx = t.indexOf("typ");
@@ -68,10 +74,10 @@ const PROBE_JS = `(async () => {
       }
     };
     pc.onconnectionstatechange = function () { out.connectionState = pc.connectionState; };
-    try { pc.createDataChannel("probe"); } catch (e) {}
+    try { pc.createDataChannel("probe"); } catch (e) { finish({ error: "data channel failed: " + e.message }); return; }
     pc.createOffer().then(function (offer) { return pc.setLocalDescription(offer); })
       .catch(function (e) { finish({ error: "offer failed: " + e.message }); });
-    setTimeout(function () {
+    statsTimer = setTimeout(function () {
       if (!pc) { return; }
       pc.getStats().then(function (stats) {
         stats.forEach(function (s) {
@@ -79,14 +85,10 @@ const PROBE_JS = `(async () => {
             out.rttMs = Math.round(s.currentRoundTripTime * 1000);
           }
         });
-      }).catch(function () {});
+      }).catch(function () { out.rttMs = null; });
     }, 2500);
   });
 })()`;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 // R146: this summary is rendered verbatim in the WebRTC diagnostics panel, so
 // hardcoded Chinese showed up in the English UI. It goes through tMain now,
@@ -95,11 +97,16 @@ function sleep(ms: number): Promise<void> {
 // the same verdict and the emoji set was retired from this UI in R127.
 function summarizeRaw(res: any): string {
   if (!res) return tMain("webrtc.sum.no-result", "No result from the probe");
+  if (res.error) {
+    return tMain("webrtc.sum.error", "Probe error: ") + String(res.error);
+  }
   if (res.rtcAvailable === false) {
     return tMain("webrtc.sum.unavailable", "WebRTC unavailable (disabled or removed by fingerprint policy)");
   }
-  if (res.error) {
-    return tMain("webrtc.sum.error", "Probe error: ") + String(res.error);
+  const outcome = webRtcHealthOutcome(res);
+  if (outcome === "error") return tMain("webrtc.sum.error", "Probe error: ") + "Invalid or missing WebRTC probe result";
+  if (outcome === "inconclusive") {
+    return tMain("webrtc.sum.inconclusive", "The probe did not complete with usable ICE evidence");
   }
   const hostIps: string[] = Array.isArray(res.hostIps) ? res.hostIps : [];
   const mdns: string[] = Array.isArray(res.mdnsHosts) ? res.mdnsHosts : [];
@@ -110,10 +117,102 @@ function summarizeRaw(res: any): string {
 
 export interface WebRtcDiagRunResult {
   ok: boolean;
+  outcome: ProfileHealthOutcome;
+  requestId?: string;
   error?: string;
+  warnings?: string[];
   /** Machine-readable failure reason; "PROFILE_NOT_RUNNING" asks the UI to confirm a launch. */
   code?: string;
   result?: WebRtcDiagnosticsEntry;
+}
+
+function stringList(value: unknown, limit = 64): string[] {
+  return Array.isArray(value) ? value.slice(0, limit).filter((entry) => typeof entry === "string").map((entry) => entry.slice(0, 2048)) : [];
+}
+
+function isMdnsHost(address: string): boolean {
+  return address.length <= 253 && /\.local\.?$/i.test(address)
+    && address.replace(/\.$/, "").split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+}
+
+function candidateEvidence(raw: any): { hostIps: string[]; mdnsHosts: string[]; srflxIps: string[]; usable: boolean } | null {
+  for (const key of ["candidates", "mdnsHosts", "hostIps", "srflxIps"]) {
+    if (!Array.isArray(raw[key]) || raw[key].length > 64 || raw[key].some((value: unknown) => typeof value !== "string" || value.length > 2048 || /[\r\n\x00]/.test(value))) return null;
+  }
+  if (raw.hostIps.some((address: string) => !isIP(address)) || raw.srflxIps.some((address: string) => !isIP(address))
+    || raw.mdnsHosts.some((address: string) => !isMdnsHost(address))) return null;
+  const specified = (address: string) => address !== "0.0.0.0" && address !== "::";
+  const hostIps = new Set<string>(raw.hostIps.filter(specified));
+  const mdnsHosts = new Set<string>(raw.mdnsHosts);
+  const srflxIps = new Set<string>(raw.srflxIps.filter(specified));
+  let usable = false;
+  for (const candidate of raw.candidates as string[]) {
+    const fields = candidate.trim().split(/\s+/);
+    const [foundation, component, protocol, priority, address, port, marker, type] = fields;
+    const uint = (value: string | undefined, maximum: number, minimum = 1) => value !== undefined && /^\d+$/.test(value)
+      && Number.isSafeInteger(Number(value)) && Number(value) >= minimum && Number(value) <= maximum;
+    if (!/^candidate:[a-z0-9+/]{1,32}$/i.test(foundation) || !uint(component, 256) || !/^(?:udp|tcp)$/i.test(protocol)
+      || !uint(priority, 0xffffffff) || !(isIP(address || "") || isMdnsHost(address || "")) || !uint(port, 65535)
+      || marker !== "typ" || !["host", "srflx", "prflx", "relay"].includes(type) || fields.length % 2 !== 0) return null;
+    if (type !== "host" && !isIP(address)) return null;
+    for (let i = 8; i < fields.length; i += 2) {
+      if (fields[i] === "raddr") {
+        const related = fields[i + 1];
+        if (!(isIP(related) || isMdnsHost(related))) return null;
+        if (related !== "0.0.0.0" && related !== "::") {
+          if (isMdnsHost(related)) mdnsHosts.add(related);
+          else hostIps.add(related);
+        }
+      }
+      if (fields[i] === "rport" && !uint(fields[i + 1], 65535, 0)) return null;
+      if (fields[i] === "tcptype" && (!/^tcp$/i.test(protocol) || !["active", "passive", "so"].includes(fields[i + 1]))) return null;
+    }
+    if (/^tcp$/i.test(protocol) && !fields.slice(8).some((field, i) => i % 2 === 0 && field === "tcptype")) return null;
+    if (address === "0.0.0.0" || address === "::") continue;
+    usable = true;
+    if (type === "host") {
+      if (isMdnsHost(address)) mdnsHosts.add(address);
+      else hostIps.add(address);
+    } else if (type === "srflx") srflxIps.add(address);
+  }
+  return { hostIps: [...hostIps], mdnsHosts: [...mdnsHosts], srflxIps: [...srflxIps], usable };
+}
+
+export function webRtcHealthOutcome(raw: any): ProfileHealthOutcome {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || typeof raw.rtcAvailable !== "boolean") return "error";
+  if (raw.error) return "error";
+  if (raw.rtcAvailable === false) return "unavailable";
+  const evidence = candidateEvidence(raw);
+  if (!evidence) return "error";
+  if (evidence.hostIps.length) return "risk";
+  if (raw.gatheringState !== "complete" || !evidence.usable) return "inconclusive";
+  return "pass";
+}
+
+function webRtcEntry(raw: any, requestId: string): WebRtcDiagnosticsEntry {
+  const outcome = webRtcHealthOutcome(raw);
+  const evidence = raw?.rtcAvailable === true ? candidateEvidence(raw) : null;
+  const normalized = evidence ? { ...raw, ...evidence } : raw;
+  return {
+    at: Date.now(), requestId, outcome,
+    success: outcome === "pass" || outcome === "risk",
+    rtcAvailable: raw?.rtcAvailable === true,
+    candidates: stringList(raw?.candidates), mdnsHosts: stringList(normalized?.mdnsHosts),
+    hostIps: stringList(normalized?.hostIps), srflxIps: stringList(normalized?.srflxIps),
+    gatheringState: typeof raw?.gatheringState === "string" ? raw.gatheringState.slice(0, 40) : "unknown",
+    connectionState: typeof raw?.connectionState === "string" ? raw.connectionState.slice(0, 40) : "unknown",
+    rttMs: typeof raw?.rttMs === "number" && Number.isFinite(raw.rttMs) && raw.rttMs >= 0 ? raw.rttMs : null,
+    peerConnectivity: unmeasuredWebRtcPeerConnectivity(),
+    error: raw?.error ? String(raw.error).slice(0, 1024) : outcome === "error" ? "Invalid or missing WebRTC probe result" : null,
+    summary: summarizeRaw(normalized).slice(0, 2048),
+  };
+}
+
+function persistWebRtcEntry(dirId: string, entry: WebRtcDiagnosticsEntry): void {
+  setWebRtcDiagnostics(dirId, [...getWebRtcDiagnostics(dirId), entry], {
+    kind: "webrtc", at: entry.at, outcome: entry.outcome!, summary: entry.summary,
+    requestId: entry.requestId, source: "runtime",
+  });
 }
 
 /**
@@ -123,53 +222,49 @@ export interface WebRtcDiagRunResult {
  * Review item PL-03: launching a stopped profile used to be implicit. It now
  * requires `allowLaunch`, which the UI only passes after the user confirms.
  */
-export async function runWebRtcDiagnostics(dirId: string, opts?: { allowLaunch?: boolean }): Promise<WebRtcDiagRunResult> {
+export async function runWebRtcDiagnostics(dirId: string, opts: ProfileHealthOptions & { allowLaunch?: boolean } = {}): Promise<WebRtcDiagRunResult> {
+  let run: ProfileHealthRun | undefined;
   try {
-    let status = statusBrowser(dirId);
-    let cdpPort = status.cdpPort || 0;
-    if (!status.running) {
-      if (!opts?.allowLaunch) {
-        return { ok: false, code: "PROFILE_NOT_RUNNING", error: "The profile is not running. This diagnostic needs a running browser." };
-      }
-      const launched = await launchBrowser(dirId);
-      cdpPort = launched.cdpPort || 0;
-      status = statusBrowser(dirId);
-    }
-    if (!cdpPort || !status.running) {
-      return { ok: false, error: "Profile is not running and the debug port could not be obtained" };
+    run = beginProfileHealthRun(dirId, "webrtc", opts);
+    run.assertCurrent();
+    const status = statusBrowser(dirId);
+    if (!status.running || !status.cdpPort) {
+      // Launch is admitted by the public entry point's normal permission and
+      // license gates. A diagnostics helper must never bypass them itself.
+      throw new ProfileHealthError("PROFILE_NOT_RUNNING", "The profile is not running. This diagnostic needs a running browser.", "unavailable");
     }
     const engine = getProfileEngineByDirId(dirId);
+    let raw: any;
     try {
-      let res: any = await evaluateInPage(cdpPort, engine, PROBE_JS, { timeoutMs: 15000 });
-      // Privileged chrome:// (or otherwise locked) pages can hide WebRTC;
-      // retry once on a plain page.
-      if (res && res.rtcAvailable === false) {
-        await navigateInPage(cdpPort, engine, "about:blank");
-        await sleep(600);
-        res = await evaluateInPage(cdpPort, engine, PROBE_JS, { timeoutMs: 15000 });
-      }
-      const entry: WebRtcDiagnosticsEntry = {
-        at: Date.now(),
-        success: Boolean(res),
-        rtcAvailable: Boolean(res && res.rtcAvailable),
-        candidates: Array.isArray(res?.candidates) ? res.candidates : [],
-        mdnsHosts: Array.isArray(res?.mdnsHosts) ? res.mdnsHosts : [],
-        hostIps: Array.isArray(res?.hostIps) ? res.hostIps : [],
-        srflxIps: Array.isArray(res?.srflxIps) ? res.srflxIps : [],
-        connectionState: String(res?.connectionState || "unknown"),
-        rttMs: typeof res?.rttMs === "number" ? res.rttMs : null,
-        error: res?.error ? String(res.error) : null,
-        summary: summarizeRaw(res),
-      };
-      const history = getWebRtcDiagnostics(dirId);
-      setWebRtcDiagnostics(dirId, [...history, entry]);
-      recordAudit({ category: "profile", action: "webrtc-diagnostic", target: dirId, actor: "user", detail: entry.summary });
-      return { ok: true, result: entry };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) };
+      raw = await evaluateInPage(status.cdpPort, engine, PROBE_JS, { timeoutMs: 15000, signal: run.signal });
+    } catch (error) {
+      run.assertCurrent();
+      raw = { rtcAvailable: false, error: error instanceof Error ? error.message : String(error) };
     }
-  } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
+    run.assertCurrent();
+    // Unavailable is an observation, not permission to navigate away from the
+    // user's current page or to call an empty candidate list a clean result.
+    const entry = webRtcEntry(raw, run.requestId);
+    persistWebRtcEntry(dirId, entry);
+    const warnings: string[] = [];
+    try {
+      recordAudit({ category: "profile", action: "webrtc-diagnostic", target: dirId, actor: "user", detail: entry.summary });
+    } catch (error) {
+      warnings.push("The diagnostic was saved, but its audit entry could not be written");
+      console.error("[webrtc-diagnostic] post-commit audit failed:", error);
+    }
+    const outcome = entry.outcome!;
+    return { ok: entry.success, outcome, requestId: run.requestId, result: entry,
+      ...(entry.error ? { code: "WEBRTC_PROBE_FAILED", error: entry.error } : {}),
+      ...(warnings.length ? { warnings } : {}) };
+  } catch (error) {
+    let failure = error;
+    if (run) {
+      try { run.assertCurrent(); } catch (current) { failure = current; }
+    }
+    return profileHealthFailure(failure, run?.requestId ?? opts?.requestId);
+  } finally {
+    run?.finish();
   }
 }
 
@@ -178,5 +273,5 @@ export function listWebRtcDiagnostics(dirId: string): WebRtcDiagnosticsEntry[] {
 }
 
 export function clearWebRtcDiagnostics(dirId: string): void {
-  clearStoredWebRtcDiagnostics(dirId);
+  clearProfileHealthHistory(dirId, "webrtc");
 }

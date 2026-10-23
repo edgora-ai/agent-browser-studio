@@ -54,9 +54,11 @@ Do **not** use Agent Browser Studio for fraud, spam, credential attacks, unautho
 ### Requirements
 
 - macOS on Apple Silicon
-- Node.js 22.16 or newer
+- Node.js 22.23.4 or newer
 - Go 1.25 or newer (builds the packaged MASQUE/SOCKS helper)
 - npm
+
+This source-build patch floor avoids inconsistent path/fd volume identities reported by older Windows Node.js runtimes; storage identity guards remain strict.
 
 ### Install and run
 

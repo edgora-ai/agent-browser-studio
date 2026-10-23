@@ -51,7 +51,33 @@ describe("Chromium macOS source and build scripts", () => {
 
     const patchedSourceBytes = fs.readFileSync(PATCHED_SOURCE);
     const patchedSource = patchedSourceBytes.toString("utf8").trim().split(/\r?\n/);
-    expect(patchedSource).toHaveLength(95);
+    // Every entry must be a single well-formed "<sha256>  <path>" line, and the
+    // count must equal the number of distinct patch-final files. Do not pin a
+    // literal: a new append-only patch legitimately adds entries, and a stale
+    // literal would fail on a correct patch set.
+    const sourceEntries = patchedSource.map((line) => {
+      const match = /^([0-9a-f]{64}) {2}(\S+)$/.exec(line);
+      expect(match, `malformed PATCHED_SOURCE line: ${line}`).not.toBeNull();
+      return match![2];
+    });
+    expect(new Set(sourceEntries).size).toBe(sourceEntries.length);
+    expect(sourceEntries.length).toBeGreaterThanOrEqual(111);
+    const patchNames = fs.readdirSync(path.join(ROOT, "patches", "chromium", "patches"))
+      .filter((name) => name.endsWith(".patch")).sort();
+    const patchset = fs.readFileSync(path.join(ROOT, "patches", "chromium", "PATCHSET.sha256"), "utf8").trim().split(/\r?\n/);
+    // PATCHSET lists exactly one hash line per patch file, plus its other
+    // inputs; a missing or duplicated patch entry is a real failure.
+    for (const name of patchNames) {
+      expect(patchset.filter((line) => line.endsWith("  " + path.posix.join("patches", name))), name).toHaveLength(1);
+    }
+    for (const required of [
+      "build/toolchain/apple/toolchain.gni",
+      "services/network/public/cpp/agent_browser_local_dns_policy.cc",
+      "services/network/public/mojom/network_context.mojom",
+      "content/browser/preloading/preconnect/preconnect_manager_impl.cc",
+      "content/public/browser/preconnect_manager.h",
+      "chrome/browser/predictors/loading_predictor.cc",
+    ]) expect(patchedSource.some((line) => line.endsWith("  " + required))).toBe(true);
     expect(patchedSource.some((line) => line.endsWith("  third_party/blink/public/common/roxy_fingerprint_config.h"))).toBe(true);
     const patchedSourceSha = createHash("sha256").update(patchedSourceBytes).digest("hex");
     expect(fs.readFileSync(path.join(ROOT, "patches", "chromium", "PATCHSET.sha256"), "utf8"))
@@ -60,6 +86,23 @@ describe("Chromium macOS source and build scripts", () => {
     const check = fs.readFileSync(CHECK_PATCHES, "utf8");
     expect(check).toContain("verify_source_manifest");
     expect(check).toContain("apply --cached --reverse --check");
+  });
+
+  it("appends the macOS cross-volume bundle-copy fix without changing the Linux copy command", () => {
+    const relative = "patches/0054-fix-cross-volume-macos-bundle-copy.patch";
+    const bytes = fs.readFileSync(path.join(ROOT, "patches", "chromium", relative));
+    const patch = bytes.toString("utf8");
+    const added = patch.split("\n").filter(line => line.startsWith("+") && !line.startsWith("+++"));
+    expect(patch.match(/^diff --git /gm)).toHaveLength(1);
+    expect(patch).toContain("+++ b/build/toolchain/apple/toolchain.gni");
+    expect(added).toContain('+        command = "rm -rf {{output}} && /bin/cp -R {{source}} {{output}}"');
+    expect(added.some(line => line.includes("/bin/cp -Rc"))).toBe(false);
+    expect(patch).toContain('         command = "rm -rf {{output}} && /bin/cp -Rld {{source}} {{output}}"');
+    expect(fs.readFileSync(PATCHED_SOURCE, "utf8"))
+      .toContain("a93cd30b3e5092aea3f926bbe0c6b37990be0b72bbbb0b6352221d8a3211da61  build/toolchain/apple/toolchain.gni");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    expect(fs.readFileSync(path.join(ROOT, "patches", "chromium", "PATCHSET.sha256"), "utf8"))
+      .toContain(`${digest}  ${relative}`);
   });
 
   it("prepares a standard resumable gclient root/src checkout", () => {

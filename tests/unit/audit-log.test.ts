@@ -74,6 +74,15 @@ describe("audit-log", () => {
     }
   });
 
+  it("redacts migration passphrases with spaces and local ciphertext before disk append and readback", () => {
+    const phrase = "synthetic migration phrase with spaces", cipher = "v2:c3ludGhldGlj";
+    recordAudit({ category: "sync", action: "configure", detail: JSON.stringify({ fullProfilePassphrase: phrase, vault: cipher }) });
+    const bytes = fs.readFileSync(tmp, "utf8"), back = listAudit(10);
+    expect(bytes.includes(phrase)).toBe(false); expect(bytes.includes(cipher)).toBe(false);
+    expect(JSON.stringify(back).includes(phrase)).toBe(false); expect(JSON.stringify(back).includes(cipher)).toBe(false);
+    expect(back[0].category).toBe("sync"); expect(back[0].action).toBe("configure");
+  });
+
   it("truncates unbounded entry fields (R7 #37)", () => {
     recordAudit({ category: "x", action: "y", detail: "A".repeat(50_000), at: 1 });
     const list = listAudit(10);

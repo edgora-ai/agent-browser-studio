@@ -20,11 +20,95 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
+vi.mock("../../src/main/services/config-manager.js", () => ({ getAppDataDir: () => TEST_USER_DATA }));
+
 import {
   assertSafeArchiveExportPath,
   assertSafeArchiveExportDir,
   assertSafeArchiveImportPath,
 } from "../../src/main/services/archive-path-guard.js";
+
+// The real guard runs with Windows path semantics and metadata-only fs mocks.
+// Drive/UNC fixtures must never cause a local-drive or network-share access.
+async function windowsAncestorFixture(root: string, escape = false) {
+  const owned = path.win32.join(root, "owned");
+  const allowed = path.win32.join(owned, "exports");
+  const link = path.win32.join(allowed, "link");
+  const sub = path.win32.join(link, "sub");
+  const outside = path.win32.join(root, "outside");
+  const directories = new Set([root, owned, allowed, link, sub]);
+  const missing = () => Object.assign(new Error("Synthetic path not found"), { code: "ENOENT" });
+  const metadata = {
+    existsSync: vi.fn((file: string) => directories.has(file)),
+    lstatSync: vi.fn((file: string) => {
+      if (!directories.has(file)) throw missing();
+      return { isSymbolicLink: () => escape && file === link, isFile: () => false, isDirectory: () => true };
+    }),
+    realpathSync: vi.fn((file: string) => {
+      if (!directories.has(file)) throw missing();
+      return escape && (file === link || file === sub)
+        ? path.win32.join(outside, path.win32.relative(link, file)) : file;
+    }),
+  };
+  vi.resetModules();
+  vi.doMock("node:path", () => path.win32);
+  vi.doMock("node:fs", () => metadata);
+  vi.doMock("node:os", () => ({ tmpdir: () => allowed, homedir: () => path.win32.join(root, "synthetic-home") }));
+  vi.doMock("electron", () => ({ app: { getPath: () => allowed } }));
+  vi.doMock("../../src/main/services/config-manager.js", () => ({ getAppDataDir: () => allowed }));
+  const guard = await import("../../src/main/services/archive-path-guard.js");
+  return { guard, metadata, owned, allowed, link, sub };
+}
+
+const windowsRoots = [
+  ["drive", "C:\\"],
+  ["UNC", "\\\\synthetic-host\\synthetic-share\\"],
+] as const;
+
+describe("archive-path-guard Windows ancestor metadata", () => {
+  afterEach(() => {
+    vi.doUnmock("node:path");
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:os");
+    vi.doUnmock("electron");
+    vi.doUnmock("../../src/main/services/config-manager.js");
+    vi.resetModules();
+  });
+
+  it.each(windowsRoots)("preserves the %s root while checking every ancestor", async (_kind, root) => {
+    const { guard, metadata, owned, allowed, link, sub } = await windowsAncestorFixture(root);
+    const archive = path.win32.join(sub, "out.zip");
+    const batch = path.win32.join(sub, "batch");
+    expect(guard.assertSafeArchiveExportPath(archive)).toBe(archive);
+    expect(metadata.lstatSync.mock.calls.slice(1, 5).map(([file]) => file)).toEqual([owned, allowed, link, sub]);
+    metadata.lstatSync.mockClear();
+    expect(guard.assertSafeArchiveExportDir(batch)).toBe(batch);
+    expect(metadata.lstatSync.mock.calls.slice(0, 4).map(([file]) => file)).toEqual([owned, allowed, link, sub]);
+    expect(metadata.lstatSync).not.toHaveBeenCalledWith(root);
+    expect(guard.assertSafeArchiveExportPath(path.win32.join(allowed, "missing", "sub", "out.zip")))
+      .toBe(path.win32.join(allowed, "missing", "sub", "out.zip"));
+  });
+
+  it.each(windowsRoots)("rejects an escaping %s ancestor above the immediate parent", async (_kind, root) => {
+    const { guard, metadata, link, sub } = await windowsAncestorFixture(root, true);
+    expect(() => guard.assertSafeArchiveExportPath(path.win32.join(sub, "out.zip"))).toThrow(/Refusing symlink ancestor/);
+    expect(() => guard.assertSafeArchiveExportDir(path.win32.join(sub, "batch"))).toThrow(/Refusing symlink ancestor/);
+    expect(metadata.lstatSync).toHaveBeenCalledWith(link);
+    expect(metadata.realpathSync).toHaveBeenCalledWith(link);
+  });
+
+  it.each(windowsRoots)("does not treat an unreadable %s ancestor as missing", async (_kind, root) => {
+    const { guard, metadata, owned, sub } = await windowsAncestorFixture(root);
+    const lstat = metadata.lstatSync.getMockImplementation()!;
+    const denied = Object.assign(new Error("Synthetic permission denied"), { code: "EACCES" });
+    metadata.lstatSync.mockImplementation(file => {
+      if (file === owned) throw denied;
+      return lstat(file);
+    });
+    expect(() => guard.assertSafeArchiveExportPath(path.win32.join(sub, "out.zip"))).toThrow(denied);
+    expect(() => guard.assertSafeArchiveExportDir(path.win32.join(sub, "batch"))).toThrow(denied);
+  });
+});
 
 describe("archive-path-guard", () => {
   const downloadsDir = path.join(os.homedir(), "Downloads");
@@ -46,7 +130,8 @@ describe("archive-path-guard", () => {
   it("rejects export destinations outside the allowlist (e.g. /etc/hosts, ~/.zshrc)", () => {
     expect(() => assertSafeArchiveExportPath("/etc/hosts.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
     expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc"))).toThrow(/must be a \.zip/i);
-    expect(() => assertSafeArchiveExportPath(path.join(os.homedir(), ".zshrc.zip"))).toThrow(/not in allowed directory/i);
+    // Exercise the allowlist, not an unrelated symlink in the runner's HOME path.
+    expect(() => assertSafeArchiveExportPath(path.join(fs.realpathSync(os.homedir()), ".zshrc.zip"))).toThrow(/not in allowed directory/i);
     expect(() => assertSafeArchiveExportPath("/tmp/../etc/passwd.zip")).toThrow(/Refusing symlink|not in allowed directory/i);
   });
 

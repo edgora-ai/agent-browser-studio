@@ -39,7 +39,7 @@
     "check:marketing": "node scripts/check-marketing-copy.mjs"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.23.4"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",

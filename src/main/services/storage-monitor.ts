@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import { exec } from "node:child_process";
 import { getProfileMeta, getProfilesDir } from "./config-manager.js";
 import type { StorageInfo } from "../types.js";
 import { getDirectorySizeAsync, getLatestModifiedAsync, validateDirId } from "./utils.js";
@@ -50,13 +49,8 @@ export const storageMonitor = {
     profiles.sort((a, b) => b.sizeBytes - a.sizeBytes);
 
     const totalProfileBytes = profiles.reduce((sum, p) => sum + p.sizeBytes, 0);
-    const [availableDiskBytes, totalDiskBytes] = await Promise.all([
-      getAvailableDiskSpaceAsync(),
-      getTotalDiskSpaceAsync(),
-    ]);
-    const diskUsagePercent = totalDiskBytes > 0
-      ? Math.round(((totalDiskBytes - availableDiskBytes) / totalDiskBytes) * 100)
-      : 0;
+    const { availableDiskBytes, totalDiskBytes } = await getDiskSpaceAsync(profilesDir);
+    const diskUsagePercent = Math.round(((totalDiskBytes - availableDiskBytes) / totalDiskBytes) * 100);
 
     return {
       profiles,
@@ -95,7 +89,7 @@ export const storageMonitor = {
    * Get available disk space in bytes.
    */
   async getAvailableDiskSpace(): Promise<number> {
-    return getAvailableDiskSpaceAsync();
+    return (await getDiskSpaceAsync(getProfilesDir())).availableDiskBytes;
   },
 };
 
@@ -133,78 +127,42 @@ function resolveProfileDir(dirId: string): string {
   return profilePath;
 }
 
-function getAvailableDiskSpaceAsync(): Promise<number> {
-  return new Promise((resolve) => {
-    const cmd = process.platform === "win32"
-      ? "wmic logicaldisk get size,freespace,deviceid"
-      : "df -k .";
-    exec(cmd, { timeout: 2000 }, (error, stdout) => {
-      if (error || !stdout) {
-        resolve(1024 * 1024 * 1024 * 10); // 10 GB default
-        return;
-      }
-      if (process.platform === "win32") {
-        try {
-          const lines = stdout.trim().split("\n");
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 2 && !isNaN(parseInt(parts[0]))) {
-              resolve(parseInt(parts[0]) * 1024); // freespace in KB
-              return;
-            }
-          }
-        } catch { /* fallback */ }
-      } else {
-        try {
-          const lines = stdout.trim().split("\n");
-          if (lines.length >= 2) {
-            const parts = lines[1].trim().split(/\s+/);
-            if (parts.length >= 4 && !isNaN(parseInt(parts[3]))) {
-              resolve(parseInt(parts[3]) * 1024); // KB to bytes
-              return;
-            }
-          }
-        } catch { /* fallback */ }
-      }
-      resolve(1024 * 1024 * 1024 * 10);
-    });
-  });
+function storageDirectoryIdentity(stats: fs.BigIntStats): { dev: bigint; ino: bigint; type: bigint } {
+  if (typeof stats?.dev !== "bigint" || typeof stats?.ino !== "bigint" || typeof stats?.mode !== "bigint") {
+    throw new Error("Invalid configured storage directory identity metadata");
+  }
+  const type = stats.mode & BigInt(fs.constants.S_IFMT);
+  if (type !== BigInt(fs.constants.S_IFDIR)) {
+    throw new Error("Configured storage path is not a directory");
+  }
+  return { dev: stats.dev, ino: stats.ino, type };
 }
 
-function getTotalDiskSpaceAsync(): Promise<number> {
-  return new Promise((resolve) => {
-    const cmd = process.platform === "win32"
-      ? "wmic logicaldisk get size,freespace,deviceid"
-      : "df -k .";
-    exec(cmd, { timeout: 2000 }, (error, stdout) => {
-      if (error || !stdout) {
-        resolve(1024 * 1024 * 1024 * 100); // 100 GB default
-        return;
-      }
-      if (process.platform === "win32") {
-        try {
-          const lines = stdout.trim().split("\n");
-          for (const line of lines) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length >= 3 && !isNaN(parseInt(parts[2]))) {
-              resolve(parseInt(parts[2]) * 1024); // size in KB
-              return;
-            }
-          }
-        } catch { /* fallback */ }
-      } else {
-        try {
-          const lines = stdout.trim().split("\n");
-          if (lines.length >= 2) {
-            const parts = lines[1].trim().split(/\s+/);
-            if (parts.length >= 2 && !isNaN(parseInt(parts[1]))) {
-              resolve(parseInt(parts[1]) * 1024); // KB to bytes
-              return;
-            }
-          }
-        } catch { /* fallback */ }
-      }
-      resolve(1024 * 1024 * 1024 * 100);
-    });
-  });
+// A current-path capacity observation, not historical mount identity or write
+// authority. Bracketing dev/ino/type checks detect ordinary path replacement;
+// they are not atomic and do not prove a historical mount UUID.
+async function getDiskSpaceAsync(profilesDir: string): Promise<{ availableDiskBytes: number; totalDiskBytes: number }> {
+  // Missing/dangling profiles are unavailable. Never create the directory or
+  // query app-data, an ancestor, cwd, or another root as a fallback filesystem.
+  const before = storageDirectoryIdentity(await fsPromises.stat(profilesDir, { bigint: true }));
+  const stats = await fsPromises.statfs(profilesDir, { bigint: true });
+  const after = storageDirectoryIdentity(await fsPromises.stat(profilesDir, { bigint: true }));
+  if (before.dev !== after.dev || before.ino !== after.ino || before.type !== after.type) {
+    throw new Error("Configured storage directory changed during filesystem capacity query");
+  }
+  if (typeof stats?.bsize !== "bigint" || typeof stats?.blocks !== "bigint"
+    || typeof stats?.bfree !== "bigint" || typeof stats?.bavail !== "bigint"
+    || stats.bsize <= 0n || stats.blocks <= 0n || stats.bfree < 0n || stats.bavail < 0n
+    || stats.bfree > stats.blocks || stats.bavail > stats.bfree) {
+    throw new Error("Invalid filesystem capacity metadata for configured storage");
+  }
+
+  // bavail excludes reserved blocks; statfs counts blocks, not KB or WMIC bytes.
+  const availableDiskBytes = stats.bavail * stats.bsize;
+  const totalDiskBytes = stats.blocks * stats.bsize;
+  const maxSafeBytes = BigInt(Number.MAX_SAFE_INTEGER);
+  if (availableDiskBytes > maxSafeBytes || totalDiskBytes > maxSafeBytes) {
+    throw new RangeError("Filesystem capacity exceeds the safe integer byte range");
+  }
+  return { availableDiskBytes: Number(availableDiskBytes), totalDiskBytes: Number(totalDiskBytes) };
 }

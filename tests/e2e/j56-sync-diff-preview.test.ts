@@ -4,13 +4,14 @@
 // leaves remote-only data so push warnings surface before overwrite.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { setupTestApp, closeApp, TestAppHandle } from "./helpers/app.js";
 import { filterKnownConsoleErrors } from "./helpers/diag.js";
 
-const REPO = path.resolve(__dirname, "..", "..");
-const USERDATA = path.join(REPO, "tests", "e2e", "userdata", "j56");
+const USERDATA = fs.mkdtempSync(path.join(os.tmpdir(), "j56-sync-diff-"));
 const CONFIG_KEY = "agent-browser-studio-config.json";
 
 function startMockS3(): Promise<{ port: number; get: (key: string) => Buffer | undefined; put: (key: string, body: Buffer) => void; close: () => Promise<void> }> {
@@ -57,19 +58,23 @@ describe("J56 — sync team-workspace diff preview", () => {
   beforeAll(async () => {
     s3 = await startMockS3();
     h = await setupTestApp({ userDataDir: USERDATA });
-    await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
+    const configured = await h.page.evaluate((cfg) => (window as any).agentBrowser.api.sync.configure(cfg), {
       enabled: true,
       endpoint: "http://127.0.0.1:" + s3.port,
       bucket: "bucket",
       accessKey: "testak",
       secretKey: "testsk",
+      custodyConsent: true,
     });
+    expect(configured.success).toBe(true);
     const r = await h.page.evaluate(async () => (window as any).agentBrowser.api.browser.create({ name: "J56", platform: "windows", fingerprintSeed: 61616 }));
     dirId = r.dirId;
   }, 60000);
   afterAll(async () => {
     if (h) await closeApp(h);
     if (s3) await s3.close();
+    if (path.dirname(USERDATA) !== os.tmpdir() || !path.basename(USERDATA).startsWith("j56-sync-diff-")) throw new Error("Unsafe J56 cleanup path");
+    fs.rmSync(USERDATA, { recursive: true, force: true });
   }, 90000);
 
   it("first previewDiff reports firstPush and local-only profiles", async () => {

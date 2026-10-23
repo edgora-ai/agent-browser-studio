@@ -76,6 +76,24 @@ afterEach(() => {
 });
 
 describe("awaited managed-browser shutdown", () => {
+  it.each(["EPERM", "EIO", "EINVAL", undefined])("does not certify exit or release a bridge on kill(0) error %s", async (code) => {
+    const id = "profile-unconfirmed-exit", pid = 40001;
+    register(id, pid);
+    const close = vi.fn(async () => undefined);
+    runningProcesses.get(id)!.proxyBridge = { close } as any;
+    const previous = vi.mocked(process.kill).getMockImplementation()!;
+    vi.mocked(process.kill).mockImplementation(((target: number, signal?: NodeJS.Signals | number) => {
+      if (target === pid && signal === 0) throw Object.assign(new Error("Synthetic liveness discovery error"), { code });
+      return previous(target, signal as NodeJS.Signals | undefined);
+    }) as typeof process.kill);
+    const pending = shutdownAllBrowserProfiles(100);
+    await vi.advanceTimersByTimeAsync(100);
+    const report = await pending;
+    expect(report).toMatchObject({ timedOut: true, exited: [], unfinished: [{ dirId: id, pid }] });
+    expect(runningProcesses.get(id)?.pid).toBe(pid);
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("observes a real exit after SIGTERM and clears the pending escalation", async () => {
     register("profile-term", 41_001);
     termExitAfter.set(41_001, 50);

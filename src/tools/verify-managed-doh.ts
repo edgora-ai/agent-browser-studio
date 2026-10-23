@@ -190,14 +190,14 @@ function resolveExecutable(input: string): string {
   throw new Error("Browser executable not found");
 }
 
-interface LoggingProxy {
+export interface LoggingProxy {
   port: number;
   records: ConnectRecord[];
   overflow: boolean;
   close: () => Promise<void>;
 }
 
-function startLoggingProxy(upstreamHost: string, upstreamPort: number): Promise<LoggingProxy> {
+export function startLoggingProxy(upstreamHost: string, upstreamPort: number): Promise<LoggingProxy> {
   const records: ConnectRecord[] = [];
   const sockets = new Set<net.Socket>();
   const server = http.createServer((_request, response) => { response.writeHead(502); response.end(); });

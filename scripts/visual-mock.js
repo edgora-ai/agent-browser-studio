@@ -497,6 +497,35 @@
   def("app", {
       setLanguage: function () { return Promise.resolve(); },
       reloadConfig: function () { return Promise.resolve({}); },
+      // Mirrors the real app:get-build-info shape (build-info.ts). The bundle
+      // and asar stamps use fixed fixtures so a screenshot is comparable run
+      // to run; the "installed" engine is null on purpose, so the audit also
+      // covers the honest "unavailable" path.
+      buildInfo: function () {
+        // app.version is replaced by each harness with the real package
+        // version; read it at call time so the fixture cannot drift.
+        return Promise.resolve(window.agentBrowserAPI.app.version()).then(function (version) {
+        return {
+          name: "agent-browser-studio",
+          version: version,
+          appId: "com.ahoo.agent-browser-studio",
+          packaged: true,
+          appPath: "/Applications/Agent Browser Studio.app/Contents/Resources/app.asar",
+          resourcesPath: "/Applications/Agent Browser Studio.app/Contents/Resources",
+          bundle: { path: "/Applications/Agent Browser Studio.app", mtime: "2026-10-22T12:10:06.000Z" },
+          appArchive: { path: "/Applications/Agent Browser Studio.app/Contents/Resources/app.asar", mtime: "2026-10-22T12:02:41.000Z" },
+          mainEntry: { path: "/Applications/Agent Browser Studio.app/Contents/Resources/app.asar/dist/main/index.js", mtime: "2026-10-22T12:02:41.000Z" },
+          engines: {
+            chromium: { bundledVersion: "152.0.7977.72", bundledSource: "manifest", appArchive: null },
+            firefox: { bundledVersion: "154.0", bundledSource: "manifest", appArchive: null },
+          },
+          engineInstalled: { chromium: null, firefox: null },
+          runtime: { electron: "42.4.0", chrome: "152.0.7977.72", node: "22.16.0", v8: "15.2.244.12", modules: "136" },
+          host: { platform: "darwin", arch: "arm64", release: "25.3.0", osName: "Darwin", osVersion: "macOS 26.3" },
+          locale: { app: "en-US", system: "en-US" },
+        };
+        });
+      },
   });
   def("browser", {
       binary: function () { return Promise.resolve({ installed: true, version: "152.0.7977.72", path: "~/.agent-browser-studio/chromium/152", label: "Chromium 152.0.7977.72" }); },
@@ -506,6 +535,10 @@
         return Promise.resolve({ running: !!(found && found.running), pid: found && found.pid });
       },
       batchMaxConcurrency: function () { return Promise.resolve({ max: 6 }); },
+      // browser.ts:326 returns { entries } or { ok:false, entries:[], outcome:"error",
+      // code }. The renderer throws when this is missing, so the audit counted
+      // two runtime exceptions on the profiles tab instead of rendering.
+      healthHistory: function () { return Promise.resolve({ entries: [] }); },
       // R183: the dialog sweep found the renderer calling these but the mock
       // modelling nothing — the miss proxy answered [], which passes a null
       // guard and then reads as undefined. Shapes mirror the real handlers.

@@ -48,6 +48,42 @@ describe("friendlyError translation", () => {
     expect(en).toContain("Launch was refused");
   });
 
+  it.each(["zh-CN", "en-US"])("maps only explicit fingerprint drift blocks to reviewed-snapshot recovery in %s", language => {
+    const helpers = loadHelpers(language);
+    const raw = "Fingerprint drift blocked (platform: MacIntel → Win32). The baseline is unchanged.";
+    const expected = window_i18n_value(language, "err.drift.blocked", "__missing__");
+    for (const input of [raw, "Error invoking remote method browser:launch: Error: " + raw]) {
+      expect(helpers.friendlyError(input)).toBe(expected);
+      expect(helpers.friendlyErrorEx(input)).toEqual({ text: expected, action: null });
+    }
+    if (language === "zh-CN") {
+      expect(expected).toContain("专用对比详情");
+      expect(expected).toContain("单独确认新参考");
+      expect(expected).toContain("重试正常启动");
+    } else {
+      expect(expected).toContain("Review old/new values and reasons in the comparison dialog");
+      expect(expected).toContain("If intentional and eligible, separately confirm a new reference");
+      expect(expected).toContain("retry normal launch");
+    }
+    expect(expected).not.toContain(window_i18n_value(language, "profile.health.reset", "__missing-reset-entry__"));
+    expect(expected).not.toMatch(/Reset fingerprint baseline|重置指纹基线/);
+    expect(expected).not.toMatch(/run.*(?:live|Drift) check|先.*实时.*检测|关闭.*门/i);
+  });
+
+  it.each(["zh-CN", "en-US"])("does not turn generic drift or failed capture into a drift block in %s", language => {
+    const helpers = loadHelpers(language);
+    for (const raw of ["drift", "configuration drift detected", "fingerprint drift check failed: synthetic capture failure", "Fingerprint drift check unavailable"]) {
+      expect(helpers.friendlyError(raw)).toBe(raw);
+      expect(helpers.friendlyErrorEx(raw)).toEqual({ text: raw, action: null });
+      expect(helpers.friendlyError.translate(raw)).toBeNull();
+    }
+    const raw = "Fingerprint check unavailable: the locked baseline could not be verified.";
+    const expected = window_i18n_value(language, "err.drift.unavailable", "__missing__");
+    expect(helpers.friendlyError(raw)).toBe(expected);
+    expect(helpers.friendlyErrorEx(raw)).toEqual({ text: expected, action: null });
+    expect(expected).not.toBe(window_i18n_value(language, "err.drift.blocked", "__missing-blocked__"));
+  });
+
   it("maps connection failures to specific network copy", () => {
     const zh = loadErrorsJs("zh-CN");
     expect(zh("Error: connect ECONNREFUSED 127.0.0.1:7890")).toContain("连接被拒绝");

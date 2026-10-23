@@ -55,7 +55,7 @@ const DEFAULTS = {
   timingSamples: 200,
 };
 
-const SENSITIVE_KEY = /(pass|pwd|token|secret|apikey|api_key|accesskey|access_key|authorization|bearer|cookie|credential|private|mnemonic|session|sid\b)/i;
+const SENSITIVE_KEY = /(pass|pwd|token|secret|vault|apikey|api_key|accesskey|access_key|authorization|bearer|cookie|credential|private|mnemonic|session|sid\b)/i;
 const REDACTED = "[redacted]";
 
 let options: Required<Pick<ObservabilityOptions, "maxFileBytes" | "retentionDays" | "enabled">> & { dir: string | null } = {
@@ -171,13 +171,22 @@ function pruneOldFiles(dir: string): void {
 
 // ── Redaction ──────────────────────────────────────────────────────────────
 
+/** Also protect serialized/free-text migration fields and local vault values.
+ * Quoted passphrases may contain spaces; unquoted fields redact to end of line. */
+export function redactLocalSecretText(text: string): string {
+  return text.replace(
+    /\b(?:fullProfilePassphrase|passphrase|(?:local)?vault(?:Key)?)["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]*)/gi,
+    "[redacted]",
+  ).replace(/\b(?:v1|v2|os1):[A-Za-z0-9+/]+={0,2}/g, REDACTED);
+}
+
 /** Deep-copy a value with sensitive-looking keys replaced. */
 export function redactSensitive<T>(value: T, depth = 0): T {
   if (depth > 6) return "[depth-limit]" as unknown as T;
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
     // Never let a proxy URL with inline credentials leak into a log file.
-    return scrubUrlCredentials(value) as unknown as T;
+    return scrubUrlCredentials(redactLocalSecretText(value)) as unknown as T;
   }
   if (Array.isArray(value)) {
     return value.map((item) => redactSensitive(item, depth + 1)) as unknown as T;

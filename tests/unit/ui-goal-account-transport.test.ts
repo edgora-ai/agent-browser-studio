@@ -15,7 +15,7 @@ import ts from "typescript";
 
 const SOURCE = path.resolve(__dirname, "../../src/main");
 const PROJECT = path.resolve(SOURCE, "../..");
-const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "account-transport-proof-"));
+const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "account-transport-proof-")));
 const prohibited: string[] = [];
 const compiled = new Map<string, string>();
 function fail(name: string): (...args: any[]) => never {
@@ -53,7 +53,7 @@ function realm(globals: any): vm.Context {
   };`, context);
   return context;
 }
-function fixture() {
+function fixture(transport: "rest" | "mcp" = "rest") {
   const dir = fs.mkdtempSync(path.join(ROOT, "data-"));
   const faults = { rename: false };
   const modules = new Map<string, any>();
@@ -61,11 +61,16 @@ function fixture() {
   const audits: any[] = [];
   const clipboardAttempts: string[] = [];
   const calls: any[] = [];
+  // Controlled browser-manager boundary only; native/common-create behavior is
+  // tested separately. Record creation options or inject refusals, never launch success.
+  const createdProfileOpts: any[] = [];
+  const browserLaunch = { error: undefined as Error | undefined, calls: [] as any[], activityCalls: [] as string[] };
   let callback: ((req: any, res: any) => Promise<void>) | undefined;
   const context = realm({
     process: { platform: process.platform, argv: ["node", "synthetic-entry"], execPath: process.execPath, env: {
       HOME: dir, NODE_ENV: "test", AGENT_BROWSER_SECRET_BACKEND: "file",
       AGENT_BROWSER_API_TOKEN: "synthetic-transport-token", AGENT_BROWSER_API_PORT: "0",
+      AGENT_BROWSER_MCP_TOKEN: "synthetic-transport-token", AGENT_BROWSER_MCP_PORT: "0",
     }, uptime: () => 1 },
     console: { log() {}, error() {}, warn() {} },
     setTimeout: fail("unexpected timer"), clearTimeout: fail("unexpected timer"),
@@ -73,8 +78,13 @@ function fixture() {
   });
   const allow = new Set([
     "services/config-manager.ts", "services/config/store.ts", "services/config/paths.ts", "services/config/limits.ts",
+    "services/observability.ts", "services/data-export.ts", "services/event-bus.ts",
+    "services/sync/operation-state.ts", "services/sync/operation-result.ts",
     "services/secrets.ts", "services/local-agent.ts", "services/team.ts", "services/browser-engine.ts",
-    "services/rest-api-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/server-mode.ts", "branding.ts", "ipc/agent.ts",
+    // Receipt classification is part of the real MCP dispatch, not an optional
+    // capability. Compile the production classifier in this realm as well.
+    "services/agent/tool-outcome.ts",
+    "services/rest-api-server.ts", "services/mcp-server.ts", "services/http/auth.ts", "services/http/body.ts", "services/server-mode.ts", "branding.ts", "ipc/agent.ts",
   ]);
   function load(relative: string): any {
     const full = path.resolve(SOURCE, relative.replace(/\.js$/, ".ts"));
@@ -107,6 +117,19 @@ function fixture() {
       // Normalize only logical module IDs; keep actual filesystem paths native.
       const relative = path.relative(SOURCE, path.resolve(path.dirname(full), name.replace(/\.js$/, ".ts"))).replace(/\\/g, "/");
       if (allow.has(relative)) return load(relative);
+      if (relative === "services/browser-manager.ts") return new Proxy({
+        listBrowserProfiles: () => createdProfileOpts.map((opts, index) => ({ ...opts, dirId: `synthetic_created_${index}` })),
+        createBrowserProfile: (opts: any) => {
+          const index = createdProfileOpts.push(structuredClone(opts)) - 1;
+          return { dirId: `synthetic_created_${index}` };
+        },
+        launchBrowser: async (dirId: string, opts?: any) => {
+          browserLaunch.calls.push({ dirId, opts: structuredClone(opts) });
+          if (!browserLaunch.error) return fail("unconfigured browser launch")();
+          throw browserLaunch.error;
+        },
+        touchProfileActivity: (dirId: string) => { browserLaunch.activityCalls.push(dirId); },
+      } as Record<string, any>, { get: (target, key: string) => key in target ? target[key] : opaque(relative)[key] });
       if (relative === "services/utils.ts") return { validateDirId: (s: string) => { if (!/^[\w-]+$/.test(s)) throw new Error("bad dirId"); } };
       if (relative === "services/main-i18n.ts") return { tMain: (key: string) => key };
       if (relative === "services/browser-fingerprint-config.ts") return { validateBrowserHardwareProfile: (value: any) => value };
@@ -146,8 +169,10 @@ function fixture() {
       }
     } },
   }) }));
-  const rest = load("services/rest-api-server.ts");
-  rest.startRestApiServer();
+  const rest = transport === "rest" ? load("services/rest-api-server.ts") : undefined;
+  const mcp = transport === "mcp" ? load("services/mcp-server.ts") : undefined;
+  if (mcp) mcp.startMcpServer();
+  else rest.startRestApiServer();
   function request(method: string, route: string, body?: any, headers: any = {}, queued = false) {
     const req: any = new EventEmitter();
     req.method = method; req.url = route; req.headers = { host: "127.0.0.1", authorization: "Bearer synthetic-transport-token", ...headers };
@@ -172,7 +197,9 @@ function fixture() {
       enabled, members: [{ deviceId: draft.deviceId, name: "synthetic", role: value, addedAt: 1 }],
     }; });
   }
-  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls };
+  return { dir, agent, config, store, vault, api: api.agent.accounts, rest, request, ref, bytes, rows, role, faults, audits, clipboardAttempts, calls, createdProfileOpts, browserLaunch,
+    exportData: (scope: string) => load("services/data-export.ts").exportData(scope),
+    syncState: () => load("services/sync/operation-state.ts").getSyncOperationState(), handlers };
 }
 async function rejection(pending: Promise<any>, code: string) {
   let error: any;
@@ -196,6 +223,31 @@ afterAll(() => {
   fs.writeFileSync(path.join(ROOT, "proof-storage-manifest.json"), JSON.stringify({ root: ROOT, prohibitedCalls: prohibited, stored }, null, 2));
   expect(prohibited).toEqual([]);
   if (!process.env.ACCOUNT_TRANSPORT_RETAIN) fs.rmSync(ROOT, { recursive: true, force: true });
+});
+
+describe("migration passphrase stays outside generic account/export surfaces", () => {
+  it.each(["rest", "mcp"] as const)("isolates local sync ciphertext from %s account replies and structured exports", async transport => {
+    const f = fixture(transport), phrase = "synthetic migration isolation phrase";
+    const generation = f.syncState().generation;
+    f.config.setSyncConfig({ fullProfilePassphrase: phrase });
+    expect(f.syncState().generation).toBeGreaterThan(generation); expect(f.syncState().active).toBeNull();
+    const cipher = JSON.parse(f.bytes().toString("utf8")).sync.fullProfilePassphrase;
+    expect(cipher).toMatch(/^v2:/); expect(f.vault.decryptSecret(cipher) === phrase).toBe(true);
+    // A foreign account row must not smuggle configuration secrets through a
+    // metadata response; the real config normalizer drops non-account fields.
+    f.store.transact((draft: any) => { draft.accounts[0].fullProfilePassphrase = phrase; draft.accounts[0].localVault = cipher; });
+    expect(f.rows()[0]).not.toHaveProperty("fullProfilePassphrase"); expect(f.rows()[0]).not.toHaveProperty("localVault");
+    const ipc = await f.api.list(), exported = f.exportData("accounts");
+    const response = transport === "rest"
+      ? await f.request("GET", "/api/accounts").pending
+      : await f.request("POST", "/mcp", { jsonrpc: "2.0", id: "migration-isolation", method: "tools/call", params: { name: "agent_browser_list_accounts", arguments: {} } }).pending;
+    expect(response.status).toBe(200);
+    const publicData = JSON.stringify({ ipc, exported, reply: response.body });
+    expect(publicData.includes(phrase)).toBe(false); expect(publicData.includes(cipher)).toBe(false);
+    expect(publicData).not.toContain("fullProfilePassphrase"); expect(publicData).not.toContain("localVault");
+    expect(f.handlers.has("config:get")).toBe(false); expect(f.handlers.has("config:export")).toBe(false);
+    f.config.reloadConfig(); expect(f.vault.decryptSecret(f.config.getSyncConfig().fullProfilePassphrase) === phrase).toBe(true);
+  });
 });
 
 describe("whole preload/IPC account targeting", () => {
@@ -276,6 +328,70 @@ describe("whole preload/IPC account targeting", () => {
     f.faults.rename = true;
     await expect(f.api.bind(1, ["other"], ref)).rejects.toThrow("synthetic rename rejected");
     expect(f.bytes()).toEqual(before); expect(f.ref(1)).toEqual(ref); expect(f.audits).toEqual([]);
+  });
+});
+
+describe("stable launch refusals through whole REST/MCP modules", () => {
+  it.each(["host-platform-mismatch", "restart-required"])("REST launch retains structured %s and the original error detail", async code => {
+    const f = fixture();
+    const error = "Synthetic launch recovery detail";
+    f.browserLaunch.error = Object.assign(new Error(error), { code });
+    const response = await f.request("POST", "/api/profiles/ab_synthetic_launch/launch", { headless: true }).pending;
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error, code });
+    expect(f.browserLaunch.calls).toEqual([{ dirId: "ab_synthetic_launch", opts: { headless: true } }]);
+    expect(f.audits).toEqual([]);
+  });
+
+  it.each(["host-platform-mismatch", "restart-required"])("MCP launch tool retains structured %s and error inside its text result", async code => {
+    const f = fixture("mcp");
+    const error = "Synthetic launch recovery detail";
+    f.browserLaunch.error = Object.assign(new Error(error), { code });
+    const response = await f.request("POST", "/mcp", {
+      jsonrpc: "2.0", id: "synthetic-launch-refusal", method: "tools/call",
+      params: { name: "agent_browser_launch_profile", arguments: { dirId: "ab_synthetic_launch" } },
+    }).pending;
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ jsonrpc: "2.0", id: "synthetic-launch-refusal", result: { isError: true } });
+    expect(response.body.error).toBeUndefined();
+    expect(response.body.result.content).toHaveLength(1);
+    expect(response.body.result.content[0].type).toBe("text");
+    expect(JSON.parse(response.body.result.content[0].text)).toEqual({ success: false, error, code });
+    expect(f.browserLaunch.calls).toEqual([{ dirId: "ab_synthetic_launch", opts: undefined }]);
+    expect(f.browserLaunch.activityCalls).toEqual([]);
+  });
+});
+
+describe("bulk account profile creation-default forwarding (whole entrypoints)", () => {
+  it.each([undefined, "windows", "macos", "android"])("local-agent preserves %s, including omission, at the common-create boundary", platform => {
+    const f = fixture();
+    const items = [{ url: "https://defaults.synthetic.invalid", username: "local-default", tags: ["keep-region"] }];
+    const result = f.agent.bulkCreateProfilesWithAccounts(items, platform === undefined ? undefined : { platform });
+    expect(result).toEqual({ added: 1, skipped: 0, created: 1, errors: [] });
+    expect(f.createdProfileOpts).toHaveLength(1);
+    expect(f.createdProfileOpts[0]).toEqual({ name: "defaults.synthetic.invalid · local-default", platform, tags: ["keep-region"] });
+    const stored = f.rows().find((row: any) => row.platformUserName === "local-default");
+    expect(stored.profileIds).toEqual(["synthetic_created_0"]);
+    f.config.reloadConfig();
+    expect(f.agent.getProfileAccounts("synthetic_created_0").find((row: any) => row.platformUserName === "local-default").profileIds).toEqual(stored.profileIds);
+  });
+
+  it.each([undefined, "windows", "macos", "android"])("REST account bulk preserves %s, including omission, through the real dispatcher", async platform => {
+    const f = fixture();
+    const body = { text: "https://defaults.synthetic.invalid,rest-default,,keep-region", createProfiles: true, ...(platform === undefined ? {} : { platform }) };
+    const denied = await f.request("POST", "/api/accounts/bulk", body, { authorization: undefined }).pending;
+    expect(denied.status).toBe(401);
+    expect(f.createdProfileOpts).toEqual([]);
+    const result = await f.request("POST", "/api/accounts/bulk", body).pending;
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ success: true, report: { added: 1, skipped: 0, created: 1, errors: [] } });
+    expect(f.createdProfileOpts).toEqual([{ name: "defaults.synthetic.invalid · rest-default", platform, tags: ["keep-region"] }]);
+    const disk = f.rows();
+    expect(disk.find((row: any) => row.platformUserName === "rest-default").profileIds).toEqual(["synthetic_created_0"]);
+    f.config.reloadConfig();
+    expect(f.rows()).toEqual(disk);
+    const list = await f.request("GET", "/api/accounts").pending;
+    expect(list.body.accounts.filter((row: any) => row.username.includes("rest-default"))).toHaveLength(1);
   });
 });
 
@@ -449,16 +565,23 @@ describe("actual shipped SDK header compatibility without network", () => {
     expect(f.requests).toHaveLength(1);
   });
   it("Python optional headers preserve positional auth/body and expose 412 without retry", () => {
-    const script = `import json,sys,urllib.request,urllib.error,socket,io
+    const script = `import sys
+def phase(name):
+ print('SDK_FIXTURE_PHASE:'+name,file=sys.stderr,flush=True)
+phase('python-started')
+assert sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1
+import json,urllib.request,urllib.error,socket,io
+phase('stdlib-ready')
 socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError('network forbidden'))
-ns={}; exec(compile(open(sys.argv[1]).read(),sys.argv[1],'exec'),ns)
+ns={}; exec(compile(open(sys.argv[1],encoding='utf-8').read(),sys.argv[1],'exec'),ns)
+phase('sdk-loaded')
 c=ns['AgentBrowserClient']('https://sdk.synthetic.invalid','synthetic-python-token')
 requests=[]
 class Response:
  def __enter__(self): return self
  def __exit__(self,*a): pass
  def read(self): return b'{"success":true}'
-def fake(req,timeout): requests.append(req); return Response()
+def fake(req,timeout): assert timeout == 15.0; requests.append(req); return Response()
 urllib.request.urlopen=fake
 h={'If-Match':'"550e8400-e29b-41d4-a716-446655440000"'}
 for fn,args in [(c.request,('PATCH','/api/accounts/1',{'username':'changed'},True,h)),(c.patch,('/api/accounts/1',{'username':'changed'},True,h)),(c.delete,('/api/accounts/1',True,h)),(c.get,('/api/accounts/1/password',True,h)),(c.put,('/x',{'old':True},True,h)),(c.post,('/x',{'old':True},True,h))]:
@@ -475,16 +598,38 @@ for name in ['AUTHORIZATION','X-Agent-Browser-Token','x-cloak-token']:
  else: raise AssertionError('auth override accepted')
 assert len(requests)==count
 def conflict(req,timeout):
+ assert timeout == 15.0
  requests.append(req); raise urllib.error.HTTPError(req.full_url,412,'conflict',{},io.BytesIO(b'{"error":"ACCOUNT_REFERENCE_CONFLICT: explicitly reselect"}'))
 urllib.request.urlopen=conflict
 try: c.delete('/api/accounts/1',headers=h)
 except ns['AgentBrowserError'] as e: assert '412' in str(e) and 'ACCOUNT_REFERENCE_CONFLICT' in str(e)
 else: raise AssertionError('conflict did not reject')
 assert len(requests)==count+1
+phase('contracts-checked')
 print(json.dumps({'requests':len(requests),'prohibited':0,'positionalAuthPreserved':True,'conflictNoRetry':True}))`;
-    const result = spawnSync("python3", ["-I", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT, PYTHONDONTWRITEBYTECODE: "1" } });
-    fs.writeFileSync(path.join(ROOT, "python-proof.json"), JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }));
-    expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout).conflictNoRetry).toBe(true);
+    const interpreter = process.platform === "win32" ? "python" : "python3";
+    const pythonRoot = process.env.pythonLocation;
+    if (process.env.GITHUB_ACTIONS === "true") expect(pythonRoot, "CI must provide its configured Python runtime").toBeTruthy();
+    if (pythonRoot) expect(path.isAbsolute(pythonRoot)).toBe(true);
+    const executable = pythonRoot ? path.join(pythonRoot, process.platform === "win32" ? "python.exe" : "bin/python3") : interpreter;
+    // Only stdlib and the explicitly selected source file are needed. No site
+    // startup hooks, user packages, launcher aliases or bytecode writes in CI.
+    const result = spawnSync(executable, ["-I", "-S", "-B", "-u", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT } });
+    const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    const errorCode = result.error ? code && ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(code) ? code : "UNKNOWN" : null;
+    const phases = (result.stderr ?? "").split(/\r?\n/).flatMap(line => {
+      const match = /^SDK_FIXTURE_PHASE:(python-started|stdlib-ready|sdk-loaded|contracts-checked)$/.exec(line);
+      return match ? [match[1]] : [];
+    });
+    const receipt = { interpreter, fromSetup: Boolean(pythonRoot), status: result.status, signal: result.signal, errorCode, phases };
+    if (process.env.GITHUB_ACTIONS === "true") console.info("::notice title=Python SDK fixture process::" + JSON.stringify(receipt));
+    const proofFile = path.join(ROOT, "python-proof.json");
+    fs.writeFileSync(proofFile, JSON.stringify({ ...receipt, stdout: result.stdout, stderr: result.stderr }));
+    const proof = JSON.parse(fs.readFileSync(proofFile, "utf8"));
+    expect(proof.errorCode).toBeNull(); expect(proof.signal).toBeNull();
+    expect(proof.status, proof.stderr).toBe(0);
+    expect(proof.phases).toEqual(["python-started", "stdlib-ready", "sdk-loaded", "contracts-checked"]);
+    expect(JSON.parse(proof.stdout).conflictNoRetry).toBe(true);
   });
 });
 

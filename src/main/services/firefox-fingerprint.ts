@@ -7,12 +7,11 @@
 // profile-pref snapshot whenever the binary advertises the required capability.
 //
 //   1. prefs (`user.js` family) — what Firefox can express as preferences:
-//      UA override, hardwareConcurrency, language, DNT, WebGL enabled;
-//   2. a WebDriver BiDi preload script (`script.addPreloadScript`) — the
-//      renderer-level shims Chromium's patch provides natively: platform,
-//      languages, screen metrics, devicePixelRatio, canvas/WebGL/audio noise
-//      seeding, timezone, geolocation, media devices, speech voices, storage
-//      quota, navigator.webdriver disarm.
+//      UA override, hardwareConcurrency, language, DNT, WebGL identity;
+//   2. a WebDriver BiDi preload script (`script.addPreloadScript`) — partial
+//      JS-level support for platform, languages, screen, devicePixelRatio,
+//      canvas/audio noise, timezone, geolocation, speech voices, storage
+//      quota and navigator.webdriver. WebGPU and media enumeration stay native.
 //
 // Honest scope note: JS-level injection is provably weaker than renderer-level
 // patching (a page that grabs the original function before the preload runs,
@@ -75,6 +74,10 @@ export function buildFirefoxFingerprintPrefs(
     "dom.maxHardwareConcurrency": config.hardwareConcurrency,
     "intl.accept_languages": config.languages.join(","),
     "webgl.disabled": false,
+    // Gecko reads these in ClientWebGLContext for both Window and Worker.
+    // Keep its extension checks and privacy sanitization, not page-only shims.
+    "webgl.override-unmasked-vendor": config.webgl.vendor,
+    "webgl.override-unmasked-renderer": config.webgl.renderer,
   };
   if (config.doNotTrack) {
     prefs["privacy.donottrackheader.enabled"] = true;
@@ -90,6 +93,10 @@ export function buildFirefoxFingerprintPrefs(
   // the real IP cannot appear in any candidate). TURN/relay stays functional
   // when an app configures it. (Verified against the Firefox 154 binary
   // inventory: `media.peerconnection.stun.client.enabled` does not exist.)
+  // Firefox 154 (PeerConnectionImpl::ShouldForceProxy) checks this pref before
+  // the "only behind a proxy" variants, so it applies in off mode as well and
+  // overrides an explicit Real selection. The launch writer therefore owns the
+  // routing decision via FirefoxWebRtcPrefs and strips these keys for Real.
   prefs["media.peerconnection.ice.obfuscate_host_addresses"] = true;
   prefs["media.peerconnection.ice.proxy_only"] = true;
   return prefs;
@@ -131,12 +138,26 @@ export function buildFirefoxFingerprintPreloadScript(config: BrowserFingerprintC
     languages: (config.languages || ["en-US"]).slice(0, 3),
     timezone: config.timezone,
     canvasSeed: config.canvas && config.canvas.enabled ? config.canvas.seed : null,
+    storageQuotaBytes: config.storageQuotaBytes,
   });
   const preload = `(function(){
 "use strict";
 var cfg = ${json};
 var seedFromHex = function(hex){ var n=0; for(var i=0;i<hex.length&&i<8;i++){ n=(n*16+parseInt(hex[i],16))>>>0; } return n||1; };
 var mulberry32 = function(a){ return function(){ a|=0; a=(a+0x6D2B79F5)|0; var t=Math.imul(a^(a>>>15),1|a); t=(t+Math.imul(t^(t>>>7),61|t))^t; return ((t^(t>>>14))>>>0)/4294967296; }; };
+// Serialized into the Worker shim too; keep this helper closure-free.
+var installStorageQuota = function(storage, quota){
+  if (!storage || typeof storage.estimate !== "function" || !Number.isFinite(quota) || quota <= 0) return null;
+  var proto = Object.getPrototypeOf(storage);
+  var original = proto.estimate;
+  var estimate = function(){
+    return original.apply(this, arguments).then(function(info){
+      return Object.assign({}, info, { quota: quota });
+    });
+  };
+  Object.defineProperty(proto, "estimate", { configurable: true, writable: true, value: estimate });
+  return estimate;
+};
 var has = Object.prototype.hasOwnProperty;
 var ok = function(){ try{ return !!document; }catch(e){ return false; } };
 var maskLen = function(fn){ try { if (Object.defineProperty && fn.length !== 0) Object.defineProperty(fn, "length", { value: 0, configurable: true }); } catch (e) {} return fn; };
@@ -316,17 +337,21 @@ if (cfg.timezone) {
         var parts = new Intl.DateTimeFormat("ia", { timeZone: tz, timeZoneName: "shortOffset" }).formatToParts(date);
         var name = "";
         for (var i = 0; i < parts.length; i++) if (parts[i].type === "timeZoneName") { name = parts[i].value; break; }
-        var m = /GMT([+-])(\\d{2})(?::?(\\d{2}))?/.exec(name);
+        var m = /^(?:GMT|UTC)(?:([+-])([0-9]{1,2})(?::?([0-9]{2}))?)?$/.exec(name);
         if (!m) return null;
+        if (!m[1]) return 0;
         var sign = m[1] === "-" ? -1 : 1;
         var mins = parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0);
-        return -(sign * mins);
+        return mins === 0 ? 0 : -(sign * mins);
       } catch (e) { return null; }
     };
     var RealOffset = Date.prototype.getTimezoneOffset;
+    var RealTime = Date.prototype.getTime;
     defValue(Date.prototype, "getTimezoneOffset", function(){
-      var v = offsetOf(this);
-      return v === null ? RealOffset.call(this) : v;
+      var nativeOffset = RealOffset.call(this);
+      if (nativeOffset !== nativeOffset) return nativeOffset;
+      var v = offsetOf(RealTime.call(this));
+      return v === null ? nativeOffset : v;
     });
     // Date.prototype.toString() renders the HOST timezone's region name in
     // parentheses (e.g. "GMT+0800 (中国标准时间)") — a scanner comparing the
@@ -429,90 +454,10 @@ if (cfg.canvas.enabled) {
   }
 })();
 
-// ── WebGL vendor/renderer identity (shared by page + OffscreenCanvas) ──
-function patchWebglContext(ctx){
-  if (!ctx || typeof ctx.getParameter !== "function" || typeof ctx.getExtension !== "function") return;
-  try {
-    var vendor = cfg.webgl.vendor, renderer = cfg.webgl.renderer;
-    var realParam = ctx.getParameter.bind(ctx);
-    var realExt = ctx.getExtension.bind(ctx);
-    var UNMASKED_VENDOR = 0x9245, UNMASKED_RENDERER = 0x9246;
-    try {
-      var paramFn = function(pname){
-        if (pname === UNMASKED_VENDOR && vendor) return vendor;
-        if (pname === UNMASKED_RENDERER && renderer) return renderer;
-        return realParam(pname);
-      };
-      if (fakeFns) fakeFns.add(maskLen(paramFn));
-      Object.defineProperty(ctx, "getParameter", {
-        configurable: true,
-        value: paramFn,
-      });
-    } catch (e) {}
-    try {
-      var extFn = function(name){
-        if (/WEBGL_debug_renderer_info/i.test(String(name))) {
-          return { UNMASKED_VENDOR_WEBGL: UNMASKED_VENDOR, UNMASKED_RENDERER_WEBGL: UNMASKED_RENDERER };
-        }
-        return realExt(name);
-      };
-      if (fakeFns) fakeFns.add(maskLen(extFn));
-      Object.defineProperty(ctx, "getExtension", {
-        configurable: true,
-        value: extFn,
-      });
-    } catch (e) {}
-  } catch (e) {}
-}
-(function(){
-  var origGetContext = HTMLCanvasElement.prototype.getContext;
-  if (typeof origGetContext !== "function") return;
-  var ctxFn = function(kind){
-    var ctx = origGetContext.apply(this, arguments);
-    patchWebglContext(ctx);
-    return ctx;
-  };
-  if (fakeFns) fakeFns.add(maskLen(ctxFn));
-  HTMLCanvasElement.prototype.getContext = ctxFn;
-})();
-(function(){
-  var proto = typeof OffscreenCanvas !== "undefined" ? OffscreenCanvas.prototype : null;
-  if (!proto || typeof proto.getContext !== "function") return;
-  var origGetContext = proto.getContext;
-  var ctxFn = function(kind){
-    var ctx = origGetContext.apply(this, arguments);
-    patchWebglContext(ctx);
-    return ctx;
-  };
-  if (fakeFns) fakeFns.add(maskLen(ctxFn));
-  proto.getContext = ctxFn;
-})();
-
-// ── WebGPU adapter identity (Firefox 154 exposes adapter.info as an object) ──
-// Patch the native GPUAdapterInfo prototype so both GPUAdapter.info and
-// GPUDevice.adapterInfo share one identity without adding instance properties or
-// wrapping requestAdapter promises. Features, limits, subgroup sizes and WGSL
-// exposure remain native.
-(function(){
-  var gpuInfo = cfg.webgpu;
-  var Ctor = typeof GPUAdapterInfo === "function" ? GPUAdapterInfo : null;
-  if (!gpuInfo || !Ctor || !Ctor.prototype) return;
-  var fields = ["vendor", "architecture", "device", "description"];
-  for (var gi = 0; gi < fields.length; gi++) {
-    let field = fields[gi];
-    let value = gpuInfo[field];
-    if (typeof value !== "string" || !value) continue;
-    let descriptor = Object.getOwnPropertyDescriptor(Ctor.prototype, field);
-    if (!descriptor || descriptor.configurable !== true) continue;
-    let getter = function(){ return value; };
-    if (fakeFns) fakeFns.add(maskLen(getter));
-    Object.defineProperty(Ctor.prototype, field, {
-      configurable: true,
-      enumerable: descriptor.enumerable,
-      get: getter,
-    });
-  }
-})();
+// GPU identity is not patched in this realm. Gecko's WebGL prefs cover
+// Window/Worker/OffscreenCanvas without inventing extensions or bypassing
+// getParameter errors. Fallback WebGPU stays native in every realm; only
+// the explicitly selected patched-native route can consume its config.
 
 // ── audio noise (AudioBuffer readback paths) ──
 // NOTE (honest scope): the fallback preload noises copyToChannel AND the
@@ -524,23 +469,21 @@ if (cfg.audio.enabled) {
   (function(){
     var audioSeed = seedFromHex(cfg.audio.seed);
     var amp = cfg.audio.amplitude > 0 ? cfg.audio.amplitude : 0.0000001;
-    // Fixed-stream deterministic noise (stable-x3 fix): the old shared
-    // mulberry32 stream made readback depend on call history — any change in
-    // how many times a probe touches a buffer shifted every later value.
-    // Instead every noisify rebuilds the stream from the bare seed, so the
-    // same input always yields the same output regardless of probe call order
-    // or count; each owner object is noised at most once (getChannelData
-    // returns a live view — re-noising would accumulate). Identical renderings
-    // therefore always read back identical.
-    var noisedOwners = typeof WeakSet !== "undefined" ? new WeakSet() : null;
-    var noisify = function(data, owner){
+    // Live AudioBuffer channels are noised once per channel. Analyser outputs
+    // are refilled by native code on every call, so they must not share that
+    // cache. The intrinsic tag getter recognizes cross-realm typed arrays
+    // without trusting a caller's constructor or Symbol.toStringTag property.
+    var noisedChannels = new WeakMap();
+    var typedArrayTag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Float32Array.prototype), Symbol.toStringTag).get;
+    var arrayKind = function(data){ return typedArrayTag.call(data); };
+    var noisify = function(data, bytes, length){
       if (!data || !data.length) return data;
-      if (owner && noisedOwners) {
-        if (noisedOwners.has(owner)) return data;
-        noisedOwners.add(owner);
-      }
       var stream = mulberry32(audioSeed >>> 0);
-      for (var i = 0; i < data.length; i++) data[i] = data[i] + (stream() - 0.5) * amp;
+      var count = length === undefined ? data.length : Math.min(data.length, length);
+      for (var i = 0; i < count; i++) {
+        var value = data[i] + (stream() - 0.5) * amp;
+        data[i] = bytes ? Math.max(0, Math.min(255, Math.round(value))) : value;
+      }
       return data;
     };
     var proto = typeof AudioBuffer !== "undefined" ? AudioBuffer.prototype : null;
@@ -548,8 +491,9 @@ if (cfg.audio.enabled) {
       var origCopy = proto.copyToChannel;
       try {
         var copyFn = function(source){
-          var copy = source instanceof Float32Array ? new Float32Array(source) : source;
-          noisify(copy, null);
+          if (arguments.length < 2) return origCopy.apply(this, arguments);
+          var copy = arrayKind(source) === "Float32Array" ? new Float32Array(source) : source;
+          if (copy !== source) noisify(copy, false);
           return origCopy.call(this, copy, arguments[1], arguments[2]);
         };
         if (fakeFns) fakeFns.add(maskLen(copyFn));
@@ -561,12 +505,19 @@ if (cfg.audio.enabled) {
     }
     if (proto && typeof proto.getChannelData === "function") {
       var origGet = proto.getChannelData;
+      var channelCount = Object.getOwnPropertyDescriptor(proto, "numberOfChannels").get;
       try {
         var getFn = function(channel){
-          // Noise the live channel view in place (getChannelData returns the
-          // buffer's own data, not a copy) — idempotent per buffer, so
-          // repeated reads never accumulate.
-          return noisify(origGet.call(this, channel), this);
+          if (!arguments.length) return origGet.call(this);
+          // Preserve the native receiver check, then perform WebIDL unsigned
+          // long conversion once (including BigInt/Symbol rejection).
+          channelCount.call(this);
+          var index = +channel >>> 0;
+          var data = origGet.call(this, index);
+          var seen = noisedChannels.get(this);
+          if (!seen) { seen = new Set(); noisedChannels.set(this, seen); }
+          if (!seen.has(index)) { noisify(data, false); seen.add(index); }
+          return data;
         };
         if (fakeFns) fakeFns.add(maskLen(getFn));
         Object.defineProperty(proto, "getChannelData", {
@@ -581,9 +532,12 @@ if (cfg.audio.enabled) {
         try {
           if (typeof analyserProto[name] !== "function") return;
           var orig = analyserProto[name];
+          var countName = name.indexOf("Frequency") !== -1 ? "frequencyBinCount" : "fftSize";
+          var countGet = Object.getOwnPropertyDescriptor(analyserProto, countName).get;
           var fn = function(array){
             var out = orig.call(this, array);
-            if (array && (array instanceof Float32Array || array instanceof Uint8Array)) noisify(array, array);
+            var kind = arrayKind(array);
+            if (kind === "Float32Array" || kind === "Uint8Array") noisify(array, kind === "Uint8Array", countGet.call(this));
             return out;
           };
           if (fakeFns) fakeFns.add(maskLen(fn));
@@ -624,35 +578,10 @@ if (cfg.audio.enabled) {
   });
 })();
 
-// ── media devices ──
-// enumerateDevices is a MediaDevices.prototype method; an own-property on the
-// navigator.mediaDevices instance is a descriptor giveaway.
-(function(){
-  if (!cfg.mediaDevices.enabled || !navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") return;
-  var devicesProto = null;
-  try { devicesProto = navigator.mediaDevices.constructor.prototype; } catch (e) {}
-  if (!devicesProto) return;
-  var deviceIdSeed = mulberry32(seedFromHex(cfg.mediaDevices ? (cfg.canvas.seed || cfg.audio.seed) : "0"));
-  function deviceId(prefix){ return prefix + Math.floor(deviceIdSeed() * 0x7fffffff).toString(36); }
-  function makeDevice(kind, label, groupId){
-    var d = { deviceId: deviceId(kind), kind: kind, label: label, groupId: groupId };
-    try { d.toJSON = function(){ return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; }; } catch (e) {}
-    return d;
-  }
-  var groupAudio = deviceId("group-a"), groupVideo = deviceId("group-v");
-  var list = [];
-  var mobile = cfg.screen.mobile === true;
-  var micLabel = mobile ? "Microphone" : "Default - 'default'";
-  var camLabel = mobile ? "Rear Camera" : "FaceTime HD Camera (Built-in)";
-  for (var a = 0; a < cfg.mediaDevices.audioInputs; a++) list.push(makeDevice("audioinput", a === 0 ? micLabel : "Microphone (" + (a + 1) + ")", groupAudio));
-  for (var v = 0; v < cfg.mediaDevices.videoInputs; v++) list.push(makeDevice("videoinput", v === 0 ? camLabel : "Camera (" + (v + 1) + ")", groupVideo));
-  for (var o = 0; o < cfg.mediaDevices.audioOutputs; o++) list.push(makeDevice("audiooutput", o === 0 ? "Default - 'default'" : "Speaker (" + (o + 1) + ")", groupAudio));
-  try {
-    var enumerateFn = function(){ return Promise.resolve(list); };
-    if (fakeFns) fakeFns.add(maskLen(enumerateFn));
-    Object.defineProperty(devicesProto, "enumerateDevices", { configurable: true, value: enumerateFn });
-  } catch (e) {}
-})();
+// Media enumeration remains native in the fallback. A fabricated roster
+// bypasses permission-policy filtering and exposes labels before permission;
+// invented device IDs also cannot be used to select real capture devices.
+// Only the separately selected native route can consume media identity intent.
 
 // ── speech synthesis voices ──
 // getVoices is a SpeechSynthesis.prototype method; an own-property on the
@@ -992,8 +921,9 @@ if (cfg.audio.enabled) {
         var realText = C2D[targetName];
         var textFn = function(){
           var self = this;
-          const wrapped = function(){ return realText.apply(self, arguments); };
-          return withAllowedFont(self, wrapped) || undefined;
+          var args = arguments;
+          const wrapped = function(){ return realText.apply(self, args); };
+          return withAllowedFont(self, wrapped);
         };
         if (fakeFns) fakeFns.add(maskLen(textFn));
         try { Object.defineProperty(C2D, targetName, { configurable: true, value: textFn }); } catch (e) {}
@@ -1195,7 +1125,7 @@ if (cfg.audio.enabled) {
         'var sanitizeFontSpecSrc=' + JSON.stringify("return " + sanitizeFontSpec.toString()) + ';' +
         'var sanitizeFontSpec=Function("familyAllowed",sanitizeFontSpecSrc)(familyAllowed);' +
         'var O2D=typeof OffscreenCanvasRenderingContext2D!=="undefined"?OffscreenCanvasRenderingContext2D.prototype:null;' +
-        'if(!O2D||typeof O2D.measureText!=="function"||O2D.__roxyFontsInstalled)return;' +
+        'var installStorageQuota=' + installStorageQuota.toString() + ';' +
         // Workers are real browser agents too: their navigator (platform,
         // oscpu, appVersion, hardwareConcurrency, maxTouchPoints, webdriver,
         // languages) and timezone would otherwise expose the HOST identity the
@@ -1206,6 +1136,7 @@ if (cfg.audio.enabled) {
         // and the worker realm would read every field as undefined (R3 #56).
         'var wcfg=__WCFG_LITERAL__;' +
         'if(typeof navigator!=="undefined"){try{' +
+        'installStorageQuota(navigator.storage,wcfg.storageQuotaBytes);' +
         'var WNP=Object.getPrototypeOf(navigator)||navigator;' +
         'function wval(o,k,v){try{var d=Object.getOwnPropertyDescriptor(o,k);if(d&&!d.configurable)return;Object.defineProperty(o,k,{configurable:true,get:function(){return v;}});}catch(e){}}' +
         'function wget(o,k,f){try{var d=Object.getOwnPropertyDescriptor(o,k);if(d&&!d.configurable)return;Object.defineProperty(o,k,{configurable:true,get:f});}catch(e){}}' +
@@ -1219,13 +1150,14 @@ if (cfg.audio.enabled) {
         'if(wcfg.timezone){' +
         'var rrs=Intl.DateTimeFormat.prototype.resolvedOptions;' +
         'Intl.DateTimeFormat.prototype.resolvedOptions=function(){var r=rrs.call(this);try{r=Object.assign({},r,{timeZone:wcfg.timezone});}catch(e){}return r;};' +
-        'var woff=function(date){try{var p=new Intl.DateTimeFormat("ia",{timeZone:wcfg.timezone,timeZoneName:"shortOffset"}).formatToParts(date);var n="";for(var i=0;i<p.length;i++)if(p[i].type==="timeZoneName"){n=p[i].value;break;}var m=/GMT([+-])(\\d{2})(?::?(\\d{2}))?/.exec(n);if(!m)return null;var s=m[1]==="-"?-1:1;return -(s*(parseInt(m[2],10)*60+(m[3]?parseInt(m[3],10):0)));}catch(e){return null;}};' +
-        'var rod=Date.prototype.getTimezoneOffset;' +
-        'Date.prototype.getTimezoneOffset=function(){var v=woff(this);return v===null?rod.call(this):v;};' +
+        'var woff=function(date){try{var p=new Intl.DateTimeFormat("ia",{timeZone:wcfg.timezone,timeZoneName:"shortOffset"}).formatToParts(date);var n="";for(var i=0;i<p.length;i++)if(p[i].type==="timeZoneName"){n=p[i].value;break;}var m=/^(?:GMT|UTC)(?:([+-])([0-9]{1,2})(?::?([0-9]{2}))?)?$/.exec(n);if(!m)return null;if(!m[1])return 0;var s=m[1]==="-"?-1:1;var minutes=parseInt(m[2],10)*60+(m[3]?parseInt(m[3],10):0);return minutes===0?0:-(s*minutes);}catch(e){return null;}};' +
+        'var rod=Date.prototype.getTimezoneOffset,rtm=Date.prototype.getTime;' +
+        'Date.prototype.getTimezoneOffset=function(){var nativeOffset=rod.call(this);if(nativeOffset!==nativeOffset)return nativeOffset;var v=woff(rtm.call(this));return v===null?nativeOffset:v;};' +
         '}' +
         '}catch(e){}}' +
         // Mirror the window realm's deterministic canvas noise so Offscreen
         // canvas draws here carry persona-formatted pixels, not host-noise.
+        'if(!O2D||typeof O2D.measureText!=="function"||O2D.__roxyFontsInstalled)return;' +
         'if(wcfg.canvasSeed){try{' +
         'var seedFromHex=function(hex){var n=0;for(var i=0;i<hex.length&&i<8;i++){n=(n*16+parseInt(hex[i],16))>>>0;}return n||1;};' +
         'var mulberry32=function(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;var t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};};' +
@@ -1240,7 +1172,7 @@ if (cfg.audio.enabled) {
         'var rM=O2D.measureText;' +
         'O2D.measureText=function(text){var self=this;return withAllowed(self,function(){return rM.call(self,text);});};' +
         'var TT=[["fillText","fillText"],["strokeText","strokeText"]];' +
-        'for(var i=0;i<TT.length;i++){(function(n){var rT=O2D[n];O2D[n]=function(){var self=this;var w=function(){return rT.apply(self,arguments);};return withAllowed(self,w)||undefined;};})(TT[i][0]);}' +
+        'for(var i=0;i<TT.length;i++){(function(n){var rT=O2D[n];O2D[n]=function(){var self=this;var args=arguments;var w=function(){return rT.apply(self,args);};return withAllowed(self,w);};})(TT[i][0]);}' +
         'try{O2D.__roxyFontsInstalled=true;}catch(e){}' +
         'var __d={};try{__d.sanitize=sanitizeFontSpec;__d.known=allowed;__d.generic=GENERIC;self.__roxyFontDiag=__d;}catch(e){}' +
         'var _t=Function.prototype.toString;' +
@@ -1331,23 +1263,10 @@ if (cfg.audio.enabled) {
 // estimate is a StorageManager.prototype method; own-property on the
 // navigator.storage instance breaks the native descriptor shape.
 (function(){
-  if (!navigator.storage || typeof navigator.storage.estimate !== "function") return;
-  var storageProto = null;
-  try { storageProto = navigator.storage.constructor.prototype; } catch (e) {}
-  if (!storageProto) return;
-  var orig = storageProto.estimate;
   try {
-    var estimateFn = function(){
-      return orig.call(this).then(function(info){
-        return { usage: info.usage || 0, quota: cfg.storageQuotaBytes || info.quota || 0 };
-      });
-    };
-    if (fakeFns) fakeFns.add(maskLen(estimateFn));
-    Object.defineProperty(storageProto, "estimate", {
-      configurable: true,
-      value: estimateFn,
-    });
-  } catch (e) {}
+    var estimateFn = installStorageQuota(navigator.storage, cfg.storageQuotaBytes);
+    if (estimateFn && fakeFns) fakeFns.add(maskLen(estimateFn));
+  } catch (e) { console.warn("[firefox-storage-quota]", e && (e.message || e)); }
 })();
 })();`;
   if (!preload.includes("__WCFG_LITERAL__")) throw new Error("wcfg placeholder missing from preload template");
@@ -1365,16 +1284,28 @@ export function buildFirefoxManagedIdentity(
   secureDns: SecureDnsConfig | null = null,
 ): {
   config: BrowserFingerprintConfig;
+  nativeConfig: BrowserFingerprintConfig;
   prefs: Record<string, string | number | boolean>;
   nativePrefs: Record<string, string | number | boolean>;
   preloadScript: string;
   userAgent: string;
 } {
-  const config = buildBrowserFingerprintConfig(meta, firefoxVersion ?? null, secureDns, "firefox");
+  const nativeConfig = buildBrowserFingerprintConfig(meta, firefoxVersion ?? null, secureDns, "firefox");
+  // The fallback has no engine-level WebGPU or media-device override. Keep
+  // cross-realm GPU identity and native permission/device-selection semantics.
+  const config: BrowserFingerprintConfig = {
+    ...nativeConfig,
+    webgpu: {
+      mode: "native", vendor: "", architecture: "", device: "", description: "",
+      subgroupMinSize: 0, subgroupMaxSize: 0,
+    },
+    mediaDevices: { ...nativeConfig.mediaDevices, enabled: false },
+  };
   return {
     config,
+    nativeConfig,
     prefs: buildFirefoxFingerprintPrefs(config, firefoxVersion),
-    nativePrefs: buildFirefoxNativeFingerprintPrefs(config, firefoxVersion),
+    nativePrefs: buildFirefoxNativeFingerprintPrefs(nativeConfig, firefoxVersion),
     preloadScript: buildFirefoxFingerprintPreloadScript(config),
     userAgent: buildFirefoxUserAgent(config.platform, firefoxVersion, config.platformVersion),
   };

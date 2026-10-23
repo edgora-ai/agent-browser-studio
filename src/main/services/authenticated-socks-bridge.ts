@@ -157,8 +157,19 @@ export async function startAuthenticatedSocksBridge(proxy: ProxyConfig): Promise
                 return;
               }
               upstreamSockets.add(upstream);
-              upstream.on("error", () => upstream.destroy());
-              upstream.once("close", () => upstreamSockets.delete(upstream));
+              // Tear the pair down together. `pipe()` only propagates `end`, so a
+              // client reset (RST) closed the inbound socket while the upstream
+              // stayed open until the whole bridge shut down.
+              let paired = false;
+              const teardownPair = (): void => {
+                if (paired) return;
+                paired = true;
+                upstream.destroy();
+                if (!client.destroyed) client.destroy();
+              };
+              upstream.on("error", teardownPair);
+              upstream.once("close", () => { upstreamSockets.delete(upstream); teardownPair(); });
+              client.once("close", teardownPair);
               state.connected++;
               client.setTimeout(0);
               client.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));

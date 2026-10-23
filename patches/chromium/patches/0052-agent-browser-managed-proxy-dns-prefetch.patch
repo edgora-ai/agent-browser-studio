@@ -1,0 +1,238 @@
+From: Agent Browser contributors
+Subject: [PATCH] Allow DNS-only hints over explicitly managed strict proxy DoH
+
+Preserve the default fixed-proxy DNS skip and every preloading gate. Only an
+embedder with validated, configured managed secure DNS may opt DNS-only jobs
+into the existing resolver path. Keep socket preconnects unchanged. The
+existing managed resolver enforces secure-only DNS and proxy forwarding.
+
+This is not a per-site rule and does not alter page findings or GPU identity.
+Native compilation, DNS route verification and real-page acceptance remain
+separate requirements; source policy tests do not establish runtime success.
+
+diff --git a/chrome/browser/predictors/loading_predictor.cc b/chrome/browser/predictors/loading_predictor.cc
+--- a/chrome/browser/predictors/loading_predictor.cc
++++ b/chrome/browser/predictors/loading_predictor.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/predictors/loading_predictor.h"
+ 
+ #include <algorithm>
++#include <string>
+ #include <vector>
+ 
+ #include "base/metrics/histogram_functions.h"
+@@ -25,10 +26,12 @@
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/common/origin_util.h"
+ #include "net/base/network_anonymization_key.h"
++#include "net/dns/public/dns_over_https_config.h"
+ #include "services/network/public/cpp/constants.h"
+ #include "services/network/public/cpp/network_quality_tracker.h"
+ #include "services/network/public/cpp/request_destination.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/roxy_fingerprint_config.h"
+ #include "third_party/blink/public/common/storage_key/storage_key.h"
+ #include "url/origin.h"
+ 
+@@ -488,6 +491,22 @@
+   return IsPreconnectAllowed(profile_);
+ }
+ 
++bool LoadingPredictor::ShouldPreresolveThroughProxy() {
++  const auto& config = blink::RoxyFingerprintConfig::Get();
++  if (!config.enabled() || !config.secure_dns_enabled() ||
++      config.secure_dns_templates().empty()) {
++    return false;
++  }
++  std::string templates;
++  for (const std::string& server : config.secure_dns_templates()) {
++    if (!templates.empty())
++      templates.append(" ");
++    templates.append(server);
++  }
++  const auto doh_config = net::DnsOverHttpsConfig::FromString(templates);
++  return doh_config.has_value() && !doh_config->servers().empty();
++}
++
+ void LoadingPredictor::PrefetchInitiated(const GURL& url,
+                                          const GURL& prefetch_url) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+diff --git a/chrome/browser/predictors/loading_predictor.h b/chrome/browser/predictors/loading_predictor.h
+--- a/chrome/browser/predictors/loading_predictor.h
++++ b/chrome/browser/predictors/loading_predictor.h
+@@ -123,6 +123,7 @@
+   void PreconnectFinished(
+       std::unique_ptr<content::PreconnectStats> stats) override;
+   bool IsPreconnectEnabled() override;
++  bool ShouldPreresolveThroughProxy() override;
+ 
+   // PrefetchManager::Delegate:
+   void PrefetchInitiated(const GURL& url, const GURL& prefetch_url) override;
+diff --git a/content/browser/preloading/preconnect/preconnect_manager_impl.cc b/content/browser/preloading/preconnect/preconnect_manager_impl.cc
+--- a/content/browser/preloading/preconnect/preconnect_manager_impl.cc
++++ b/content/browser/preloading/preconnect/preconnect_manager_impl.cc
+@@ -388,18 +388,26 @@
+ }
+ 
+ void PreconnectManagerImpl::OnProxyLookupFinished(PreresolveJobId job_id,
+-                                                  bool success) {
++                                                  bool has_proxy) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   PreresolveJob* job = preresolve_jobs_.Lookup(job_id);
+   DCHECK(job);
+ 
+   if (observer_) {
+     observer_->OnProxyLookupFinished(job->url, job->network_anonymization_key,
+-                                     success);
+-  }
+-
+-  if (success) {
+-    FinishPreresolveJob(job_id, success);
++                                     has_proxy);
++  }
++
++  // HostResolver's ANY source sends .local address queries to the system
++  // resolver even in secure mode. Preserve the proxy skip for those names.
++  const auto host = job->url.host_piece();
++  const bool multicast_name =
++      host.ends_with(".local") || host.ends_with(".local.");
++  const bool allow_proxy_dns =
++      has_proxy && job->num_sockets == 0 && !multicast_name && delegate_ &&
++      delegate_->ShouldPreresolveThroughProxy();
++  if (has_proxy && !allow_proxy_dns) {
++    FinishPreresolveJob(job_id, has_proxy);
+   } else {
+     job->resolve_host_client = PreresolveUrl(
+         job->url, job->network_anonymization_key,
+diff --git a/content/browser/preloading/preconnect/preconnect_manager_impl_unittest.cc b/content/browser/preloading/preconnect/preconnect_manager_impl_unittest.cc
+--- a/content/browser/preloading/preconnect/preconnect_manager_impl_unittest.cc
++++ b/content/browser/preloading/preconnect/preconnect_manager_impl_unittest.cc
+@@ -70,11 +70,20 @@
+                void(const GURL& url, const GURL& preconnect_url));
+   MOCK_METHOD0(IsPreconnectEnabled, bool());
+ 
++  bool ShouldPreresolveThroughProxy() override {
++    return preresolve_through_proxy_;
++  }
++
++  void set_preresolve_through_proxy(bool value) {
++    preresolve_through_proxy_ = value;
++  }
++
+   base::WeakPtr<MockPreconnectManagerDelegate> AsWeakPtr() {
+     return weak_ptr_factory_.GetWeakPtr();
+   }
+ 
+  private:
++  bool preresolve_through_proxy_ = false;
+   base::WeakPtrFactory<MockPreconnectManagerDelegate> weak_ptr_factory_{this};
+ };
+ 
+@@ -1211,6 +1220,93 @@
+                                              GetIndirectProxyInfo());
+ }
+ 
++TEST_F(PreconnectManagerImplTest, TestProxyDnsOnlyRequiresEmbedderOptIn) {
++  mock_network_context_->EnableProxyTesting();
++  const GURL origin("https://dns-only.example");
++  const auto key = CreateNetworkAnonymizationKey(origin);
++  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
++  preconnect_manager_->StartPreresolveHost(
++      origin, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++      network::GetTestNetworkRestrictionsId());
++  // StrictMock rejects any DNS request or socket without the opt-in.
++  mock_network_context_->CompleteProxyLookup(origin, GetIndirectProxyInfo());
++}
++
++TEST_F(PreconnectManagerImplTest, TestProxyDnsOnlyUsesAllowedSecureRoute) {
++  mock_network_context_->EnableProxyTesting();
++  mock_delegate_->set_preresolve_through_proxy(true);
++  const GURL origin("https://dns-only.example");
++  const auto key = CreateNetworkAnonymizationKey(origin);
++  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
++  EXPECT_CALL(*mock_network_context_, ResolveHostProxy(origin.GetHost()));
++  preconnect_manager_->StartPreresolveHost(
++      origin, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++      network::GetTestNetworkRestrictionsId());
++  mock_network_context_->CompleteProxyLookup(origin, GetIndirectProxyInfo());
++  mock_network_context_->CompleteHostLookup(origin.GetHost(), key, net::OK);
++}
++
++TEST_F(PreconnectManagerImplTest, TestProxyDnsOptInStillSkipsMulticastNames) {
++  mock_network_context_->EnableProxyTesting();
++  mock_delegate_->set_preresolve_through_proxy(true);
++  for (const char* name : {"https://probe.local", "https://probe.local.",
++                           "https://PROBE.LOCAL"}) {
++    const GURL origin(name);
++    const auto key = CreateNetworkAnonymizationKey(origin);
++    EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
++    preconnect_manager_->StartPreresolveHost(
++        origin, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++        network::GetTestNetworkRestrictionsId());
++    // StrictMock rejects reaching ANY/system/multicast DNS for these hints.
++    mock_network_context_->CompleteProxyLookup(origin, GetIndirectProxyInfo());
++    VerifyAndClearExpectations();
++  }
++}
++
++TEST_F(PreconnectManagerImplTest, TestProxyDnsSecureRouteLookupFailure) {
++  mock_network_context_->EnableProxyTesting();
++  mock_delegate_->set_preresolve_through_proxy(true);
++  const GURL origin("https://dns-only.example");
++  const auto key = CreateNetworkAnonymizationKey(origin);
++  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
++  EXPECT_CALL(*mock_network_context_, ResolveHostProxy(origin.GetHost()));
++  preconnect_manager_->StartPreresolveHost(
++      origin, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++      network::GetTestNetworkRestrictionsId());
++  mock_network_context_->CompleteProxyLookup(origin, GetIndirectProxyInfo());
++  mock_network_context_->CompleteHostLookup(origin.GetHost(), key,
++                                           net::ERR_NAME_NOT_RESOLVED);
++}
++
++TEST_F(PreconnectManagerImplTest, TestProxyDnsOptInRespectsDisabledPreloading) {
++  mock_network_context_->EnableProxyTesting();
++  mock_delegate_->set_preresolve_through_proxy(true);
++  const GURL origin("https://dns-only.example");
++  const auto key = CreateNetworkAnonymizationKey(origin);
++  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(false));
++  preconnect_manager_->StartPreresolveHost(
++      origin, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++      network::GetTestNetworkRestrictionsId());
++}
++
++TEST_F(PreconnectManagerImplTest, TestProxyPreconnectStillSkipsDnsWithOptIn) {
++  mock_network_context_->EnableProxyTesting();
++  mock_delegate_->set_preresolve_through_proxy(true);
++  const GURL origin("https://preconnect.example");
++  const auto key = CreateNetworkAnonymizationKey(origin);
++  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
++  preconnect_manager_->StartPreconnectUrl(
++      origin, false, key, TRAFFIC_ANNOTATION_FOR_TESTS, nullptr,
++      network::GetTestNetworkRestrictionsId(), std::nullopt, mojo::NullRemote());
++  EXPECT_CALL(*mock_network_context_,
++              PreconnectSockets(1, origin,
++                                network::mojom::CredentialsMode::kOmit, key, _,
++                                net::MutableNetworkTrafficAnnotationTag(
++                                    TRAFFIC_ANNOTATION_FOR_TESTS),
++                                _, _));
++  mock_network_context_->CompleteProxyLookup(origin, GetIndirectProxyInfo());
++}
++
+ TEST_F(PreconnectManagerImplTest, TestStartDisabled) {
+   mock_network_context_->EnableProxyTesting();
+   GURL main_frame_url("http://google.com");
+diff --git a/content/public/browser/preconnect_manager.h b/content/public/browser/preconnect_manager.h
+--- a/content/public/browser/preconnect_manager.h
++++ b/content/public/browser/preconnect_manager.h
+@@ -80,6 +80,10 @@
+ 
+     // Returns true if the preconnect functionality is enabled.
+     virtual bool IsPreconnectEnabled() = 0;
++
++    // Opt-in for DNS-only hints when the embedder has a strict, proxied DNS
++    // route. Ordinary proxy preconnects must continue to skip local DNS.
++    virtual bool ShouldPreresolveThroughProxy() { return false; }
+   };
+ 
+   // An observer for testing.

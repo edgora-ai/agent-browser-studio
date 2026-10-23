@@ -477,6 +477,28 @@ svg { vertical-align: middle; }
   overflow: hidden;
   white-space: nowrap;
 }
+/* The About entry reads as a quiet footer link, not a second primary action:
+   text-weight only, no plate, so it cannot compete with the theme switch. */
+.sidebar-about-link {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.sidebar-about-link:hover { color: var(--text); }
+.sidebar-about-link:focus-visible {
+  outline: 2px solid var(--primary-text);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
 .sidebar-controls { flex-wrap: wrap; }
 .sidebar-controls .theme-toggle {
   min-width: 0;
@@ -1104,6 +1126,15 @@ dialog h4[data-icon] > svg {
    height — so it painted as a 338px-tall empty box with the counters pinned to
    the top (measured: children 338px tall, counters at cy 111 in a box centred
    at 270). Claim the whole row and size to content instead. */
+/* The banner is wrapped in .proxy-health-summary-host, so the rule has to name
+   the element that is actually a grid item. Targeting the inner element left
+   the host in the first cell: the summary occupied column 1 of row 1, hk01 sat
+   beside it, and every later card shifted one column right (observed: row 1
+   held the banner + one card, row 2 started at column 1). */
+.profile-grid > .proxy-health-summary-host {
+  grid-column: 1 / -1;
+  align-self: start;
+}
 .profile-grid > .proxy-health-summary {
   grid-column: 1 / -1;
   align-self: start;
@@ -2523,6 +2554,67 @@ dialog h3 {
 }
 .dialog-close:hover { background: var(--pill-bg); color: var(--text); }
 .dialog-close:active { transform: scale(0.94); }
+
+/* Snapshot ledger: neutral information is deliberately not styled as a warning.
+   All rules stay inside this dialog; technical values must survive narrow views. */
+#dlg-fingerprint-drift { max-width: min(860px, calc(100vw - 32px)); width: 94%; }
+#dlg-fingerprint-drift [hidden] { display: none; }
+#dlg-fingerprint-drift h3 { margin-bottom: 4px; }
+#dlg-fingerprint-drift .fingerprint-drift-profile { margin: 0 0 12px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-scope { margin-bottom: 18px; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-body { min-width: 0; }
+#dlg-fingerprint-drift h4 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--text); }
+#dlg-fingerprint-drift h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-summary { padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+#dlg-fingerprint-drift .fingerprint-drift-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0; margin: 8px 0 0; list-style: none; font-size: 12px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-counts b { margin-left: 4px; font-variant-numeric: tabular-nums; }
+#dlg-fingerprint-drift [data-fingerprint-severity="risk"] .fingerprint-drift-severity,
+#dlg-fingerprint-drift li[data-fingerprint-severity="risk"] { color: var(--danger-text); }
+#dlg-fingerprint-drift [data-fingerprint-severity="review"] .fingerprint-drift-severity,
+#dlg-fingerprint-drift li[data-fingerprint-severity="review"] { color: var(--warning-text); }
+#dlg-fingerprint-drift .fingerprint-drift-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; margin: 14px 0; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-meta div { min-width: 0; }
+#dlg-fingerprint-drift dt { color: var(--text-muted); }
+#dlg-fingerprint-drift dd { margin: 2px 0 0; color: var(--text); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-boundary,
+#dlg-fingerprint-drift .fingerprint-drift-notice { margin: 8px 0; padding: 10px 12px; border-left: 2px solid var(--border); background: var(--surface2); font-size: 12px; overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-boundary > svg { vertical-align: -2px; }
+#dlg-fingerprint-drift .fingerprint-drift-notice { border-left-color: var(--warning-text); }
+#dlg-fingerprint-drift .fingerprint-drift-next { margin: 16px 0 20px; }
+#dlg-fingerprint-drift .fingerprint-drift-next p { margin: 0; font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-group { margin-top: 20px; }
+#dlg-fingerprint-drift .fingerprint-drift-row { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+#dlg-fingerprint-drift .fingerprint-drift-row > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 14px; background: var(--surface2); }
+#dlg-fingerprint-drift .fingerprint-drift-row > header > div { min-width: 0; }
+#dlg-fingerprint-drift .fingerprint-drift-key { display: block; margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+#dlg-fingerprint-drift .fingerprint-drift-severity { flex: 0 0 auto; max-width: 40%; font-size: 11px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border); }
+#dlg-fingerprint-drift .fingerprint-drift-value-cell { min-width: 0; padding: 12px 14px; background: var(--surface); }
+#dlg-fingerprint-drift .fingerprint-drift-value-label { margin-bottom: 6px; font-size: 11px; color: var(--text-muted); }
+#dlg-fingerprint-drift .fingerprint-drift-value,
+#dlg-fingerprint-drift .fingerprint-drift-preview { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-family: var(--mono); font-size: 12px; color: var(--text); }
+#dlg-fingerprint-drift .fingerprint-drift-value { max-height: 300px; overflow-y: auto; }
+#dlg-fingerprint-drift .fingerprint-drift-value-cell summary { cursor: pointer; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-expand { display: block; margin: 8px 0; color: var(--primary-text); font-size: 11px; }
+#dlg-fingerprint-drift .fingerprint-drift-reason { padding: 10px 14px; margin: 0; border-top: 1px solid var(--border); font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-reason code { font-size: 11px; overflow-wrap: anywhere; color: var(--text-muted); }
+#dlg-fingerprint-drift .fingerprint-drift-empty { padding: 20px 0; margin: 0; color: var(--text-secondary); font-size: 13px; }
+#dlg-fingerprint-drift .fingerprint-drift-status,
+#dlg-fingerprint-drift .fingerprint-drift-close-boundary { font-size: 11px; color: var(--text-muted); margin: 12px 0 0; }
+#dlg-fingerprint-drift .fingerprint-drift-advanced { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border-light); font-size: 12px; color: var(--text-secondary); }
+#dlg-fingerprint-drift .fingerprint-drift-advanced > summary { cursor: pointer; }
+#dlg-fingerprint-drift .fingerprint-drift-advanced p { font-size: 12px; }
+#dlg-fingerprint-drift .fingerprint-drift-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-light); }
+#dlg-fingerprint-drift .fingerprint-drift-actions .btn { max-width: 100%; white-space: normal; text-align: center; }
+#dlg-fingerprint-drift :is(button, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--primary-text); outline-offset: 3px; }
+@media (max-width: 600px) {
+  #dlg-fingerprint-drift { padding: 20px; }
+  #dlg-fingerprint-drift .fingerprint-drift-meta,
+  #dlg-fingerprint-drift .fingerprint-drift-values { grid-template-columns: minmax(0, 1fr); }
+  #dlg-fingerprint-drift .fingerprint-drift-row > header { flex-wrap: wrap; }
+  #dlg-fingerprint-drift .fingerprint-drift-severity { max-width: 100%; }
+  #dlg-fingerprint-drift .fingerprint-drift-actions .btn { flex: 1 1 100%; }
+}
 /* R68: titles inside flex card headers must not carry the 10px block
    margin — the header row owns spacing. Covers team/preview/jobs cards. */
 .card div[style*="justify-content:space-between"] h3,
@@ -3997,3 +4089,38 @@ details.run-layer[open] > .run-layer-title { color: var(--text); }
   border-radius: 10px;
   word-break: break-word;
 }
+
+/* ═══════ About dialog ═══════ */
+/* A two-column definition list reads as a build report: labels stay quiet and
+   fixed-width, values take the remaining room and wrap anywhere, because file
+   paths are long and must not blow the dialog out. */
+.about-grid {
+  margin: 0 0 16px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.about-group + .about-group { margin-top: 14px; }
+.about-group h4 {
+  margin: 0 0 6px;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.about-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 34%) 1fr;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12px;
+}
+.about-row:last-child { border-bottom: 0; }
+.about-label { color: var(--text-muted); }
+.about-value { overflow-wrap: anywhere; word-break: break-word; }
+.about-value.mono { font-family: var(--mono); font-size: 11px; }
+/* Missing facts are marked, not hidden: an empty cell would read as "nothing
+   wrong" when the value simply could not be observed. */
+.about-row.is-missing .about-value { color: var(--text-muted); font-style: italic; }

@@ -1,12 +1,13 @@
 // Profile archive export/import round-trip: meta + browser data survive the
 // zip, cache/lock files are excluded, names dedupe on re-import, and corrupt /
 // foreign archives are rejected.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const TEST_USER_DATA = path.join(os.tmpdir(), `agent-browser-archive-test-${process.pid}`);
+const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-archive-test-"));
+const TEST_USER_DATA = path.join(TEST_ROOT, "user-data");
 vi.mock("electron", () => ({
   app: {
     getPath: (name: string) => (name === "userData" || name === "home" ? TEST_USER_DATA : "/tmp"),
@@ -25,9 +26,11 @@ vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) =
 import { createBrowserProfile, deleteBrowserProfile } from "../../src/main/services/browser-manager.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../../src/main/services/profile-archive.js";
 import { getProfilesDir, getProfileMeta, getConfig, getConfigPath, reloadConfig, saveConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
-import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
+import { writeZipArchive, readZipEntries, extractZipEntry, syncArchiveDirectory } from "../../src/main/services/zip-writer.js";
+import { getProfileDataRevision } from "../../src/main/services/profile-data-revision.js";
 
-const ARCHIVES = path.join(os.tmpdir(), `agent-browser-archive-export-${process.pid}`);
+const ARCHIVES = path.join(TEST_ROOT, "exports");
+afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 function profileDir(dirId: string): string {
   return path.join(getProfilesDir(), dirId);
@@ -42,6 +45,16 @@ function archiveMeta(zipPath: string): any {
 
 function diskProfile(dirId: string): any {
   return JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[dirId];
+}
+
+function expectedImportDirectoryWarnings(dirId: string): string[] {
+  // Observe both owned directories, just as import does; do not assume every
+  // Windows filesystem rejects fsync, or turn open/other fsync errors into warnings.
+  const profileSynced = syncArchiveDirectory(profileDir(dirId));
+  const rootSynced = syncArchiveDirectory(getProfilesDir());
+  return profileSynced && rootSynced ? [] : [
+    "Directory fsync is unsupported on Windows; imported files were synced, but directory durability is not guaranteed.",
+  ];
 }
 
 describe("profile archive export/import", () => {
@@ -68,15 +81,19 @@ describe("profile archive export/import", () => {
     fs.mkdirSync(path.join(dir, "Default"), { recursive: true });
     fs.writeFileSync(path.join(dir, "Default", "Preferences"), JSON.stringify({ profile: { name: "x" } }));
     fs.writeFileSync(path.join(dir, "bookmarks"), "bookmarks-data");
-    // Cache + lock files must be excluded.
+    // Cache and inert database LOCK files are excluded. Browser ownership
+    // markers instead require a confirmed stop; they are not silently ignored.
     fs.mkdirSync(path.join(dir, "Cache"), { recursive: true });
     fs.writeFileSync(path.join(dir, "Cache", "f"), "cache");
-    fs.writeFileSync(path.join(dir, "SingletonLock"), "lock");
+    fs.writeFileSync(path.join(dir, "Default", "LOCK"), "database lock placeholder");
+    const sourceRevision = getProfileDataRevision(created.dirId);
 
     const zipPath = path.join(ARCHIVES, "export.zip");
     const exported = await exportProfileArchive(created.dirId, zipPath);
     expect(exported.dirId).toBe(created.dirId);
     expect(fs.existsSync(zipPath)).toBe(true);
+    expect(getProfileDataRevision(created.dirId)).toBe(sourceRevision);
+    expect(readZipEntries(fs.readFileSync(zipPath)).some((entry) => entry.name.includes("profile-data-revisions"))).toBe(false);
     // Remove the source so the import lands with its original name.
     expect(deleteBrowserProfile(created.dirId)).toBe(true);
 
@@ -96,7 +113,12 @@ describe("profile archive export/import", () => {
     expect(JSON.parse(fs.readFileSync(path.join(idir, "Default", "Preferences"), "utf8")).profile.name).toBe("x");
     expect(fs.readFileSync(path.join(idir, "bookmarks"), "utf8")).toBe("bookmarks-data");
     expect(fs.existsSync(path.join(idir, "Cache"))).toBe(false);
-    expect(fs.existsSync(path.join(idir, "SingletonLock"))).toBe(false);
+    expect(fs.existsSync(path.join(idir, "Default", "LOCK"))).toBe(false);
+    const importedRevision = getProfileDataRevision(imported.dirId);
+    expect(importedRevision).not.toBe("initial");
+    expect(importedRevision).not.toBe(sourceRevision);
+    expect(JSON.parse(fs.readFileSync(path.join(TEST_USER_DATA, "profile-data-revisions", imported.dirId + ".json"), "utf8")).revision).toBe(importedRevision);
+    reloadConfig(); expect(getProfileDataRevision(imported.dirId)).toBe(importedRevision);
 
     // Source profile was removed; the imported one fully replaces it.
     expect(getProfileMeta(created.dirId)).toBeNull();
@@ -212,7 +234,7 @@ describe("profile archive export/import", () => {
       for (const note of ["before" + control + "after", control + "note", "note" + control, control, "n".repeat(2000) + control]) {
         setProfileMeta(created.dirId, { note });
         const zipPath = path.join(ARCHIVES, "rejected-note.zip");
-        await exportProfileArchive(created.dirId, zipPath);
+        await exportProfileArchive(created.dirId, zipPath, { overwrite: true });
         expect(archiveMeta(zipPath).profile.note).toBe(note);
         const beforeConfig = fs.readFileSync(getConfigPath(), "utf8");
         const beforeIds = fs.readdirSync(getProfilesDir()).sort();
@@ -224,7 +246,7 @@ describe("profile archive export/import", () => {
         expect(getProfileMeta(created.dirId)?.note).toBe(note);
         expect(Object.keys(getConfig().browserProfiles)).toEqual([created.dirId]);
       }
-      expect(stoppedFixture.discover).toHaveBeenCalledWith(created.dirId, path.resolve(getProfilesDir(), created.dirId));
+      expect(stoppedFixture.discover).toHaveBeenCalledWith(created.dirId, path.resolve(getProfilesDir(), created.dirId), { strict: true });
     },
   );
 
@@ -276,7 +298,10 @@ describe("profile archive export/import", () => {
       },
     })) }]);
     const imported = importProfileArchive(zipPath);
-    expect(imported.warnings).toEqual([expect.stringMatching(/fonts directory.*not included/i)]);
+    expect(imported.warnings).toEqual([
+      "Custom fonts directory is device-local and not included in this backup; configure a local fonts directory before launching.",
+      ...expectedImportDirectoryWarnings(imported.dirId),
+    ]);
     const disk = diskProfile(imported.dirId);
     expect(disk).toMatchObject({ name: "Legacy", drm: false, renderScaleMode: "native", appUrl: null, fontsDir: null });
     for (const field of ["syncedAt", "syncedHash", "lock", "secretKey"]) expect(disk).not.toHaveProperty(field);
@@ -357,11 +382,13 @@ describe("profile archive export/import", () => {
     saveConfig(cfg);
     const zipPath = path.join(ARCHIVES, "extensions.zip");
     await writeZipArchive(zipPath, [{ name: "meta.json", data: Buffer.from(JSON.stringify({ formatVersion: 1, profile: {
-      name: "Referenced", extensions: { [installedId]: true, [missingId]: true },
+      name: "Referenced", fingerprintSeed: 12345, extensions: { [installedId]: true, [missingId]: true },
     } })) }]);
     const imp = importProfileArchive(zipPath);
-    expect(imp.warnings).toHaveLength(1);
-    expect(imp.warnings[0]).toContain(missingId);
+    expect(imp.warnings).toEqual([
+      `Extension ${missingId} package is not included in this backup; install it in the private repository before launching.`,
+      ...expectedImportDirectoryWarnings(imp.dirId),
+    ]);
     const stored = diskProfile(imp.dirId);
     expect(stored.extensions).toEqual({ [installedId]: true, [missingId]: true });
     expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).extensionRepository).toHaveProperty(installedId);
@@ -373,10 +400,11 @@ describe("profile archive export/import", () => {
     // manifest must trigger the same warning as a missing extension ID.
     fs.rmSync(path.join(unpackedPath, "manifest.json"));
     const stale = importProfileArchive(zipPath);
-    expect(stale.warnings).toHaveLength(2);
-    expect(stale.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining(installedId), expect.stringContaining(missingId),
-    ]));
+    expect(stale.warnings).toEqual([
+      `Extension ${installedId} package is not included in this backup; install it in the private repository before launching.`,
+      `Extension ${missingId} package is not included in this backup; install it in the private repository before launching.`,
+      ...expectedImportDirectoryWarnings(stale.dirId),
+    ]);
     expect(diskProfile(stale.dirId).extensions).toEqual(stored.extensions);
   });
 

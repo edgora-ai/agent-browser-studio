@@ -11,9 +11,10 @@ import * as dns from "node:dns";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ResolvedProfileProxy } from "../types.js";
+import type { ProfileHealthOutcome, ResolvedProfileProxy } from "../types.js";
 import { evaluateInPage } from "./page-eval.js";
 import type { BrowserEngine } from "./browser-engine.js";
+import { tMain } from "./main-i18n.js";
 
 export type EnvSeverity = "high" | "medium" | "info";
 
@@ -27,7 +28,8 @@ export interface EnvRiskFinding {
 export interface EnvResolverInfo {
   address: string;
   label?: string;
-  /** true when the resolver is a known Chinese public/ISP resolver. */
+  /** A provider table or prefix hint is not a measured upstream DNS transaction. */
+  source: "table" | "heuristic" | "unknown";
   isCn: boolean;
 }
 
@@ -40,13 +42,16 @@ export interface EnvRafResult {
 }
 
 export interface EnvironmentRiskResult {
-  ok: boolean; // true iff no high-severity findings
+  outcome?: ProfileHealthOutcome;
+  measurements?: { raf: "complete" | "unavailable" | "not-running"; fonts: "complete" | "static" | "unavailable" };
+  ok: boolean; // true iff no high-severity findings, not proof that every check completed
   hostPlatform: NodeJS.Platform;
   hostLocale: string;
   resolvers: EnvResolverInfo[];
   cnFonts: string[];
   proxy: {
     mode: string;
+    source?: "fresh-launch" | "configured" | "unknown";
     type?: string;
     dnsLeakRisk: "low" | "high" | "none";
     note: string;
@@ -77,12 +82,10 @@ const KNOWN_RESOLVERS: Array<{ ip: string; label: string; isCn: boolean }> = [
   { ip: "210.2.4.8", label: "CNNIC DNS", isCn: true },
 ];
 
-const CN_RESOLVER = new Set(KNOWN_RESOLVERS.filter((r) => r.isCn).map((r) => r.ip));
-
 /** Classify a resolver address (known public/ISP tables + heuristic CN ranges). */
 export function classifyResolver(address: string): EnvResolverInfo {
   const known = KNOWN_RESOLVERS.find((r) => r.ip === address);
-  if (known) return { address, label: known.label, isCn: known.isCn };
+  if (known) return { address, label: known.label, isCn: known.isCn, source: "table" };
   // Heuristic: well-known Chinese ISP resolver prefixes (first 3 octets).
   const CN_ISP_PREFIXES = [
     "202.96","202.97","202.98","202.99","61.144","61.49","61.135","61.148","61.155","61.157","61.164","61.177","61.183","61.184","61.185","61.186","61.187","61.188","61.191",
@@ -98,7 +101,7 @@ export function classifyResolver(address: string): EnvResolverInfo {
     "124.11","124.12","124.13","124.14","124.15","124.16","124.17","124.18","124.19","125.30","125.31","125.32","125.33","125.34","125.35","125.36","125.37","125.38","125.39",
   ];
   const isCn = CN_ISP_PREFIXES.some((prefix) => address.startsWith(prefix + "."));
-  return { address, isCn };
+  return { address, isCn, source: isCn ? "heuristic" : "unknown" };
 }
 
 /** Read the system's configured DNS resolver addresses. */
@@ -196,30 +199,31 @@ function fontSearchDirs(): string[] {
   return dirs;
 }
 
-function listFontFiles(dir: string, depth: number): string[] {
+function listFontFiles(dir: string, depth: number, unavailable?: () => void): string[] {
   if (depth > 2) return [];
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch (e) {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") unavailable?.();
     return [];
   }
   const files: string[] = [];
   for (const ent of entries) {
     const full = path.join(dir, ent.name);
-    if (ent.isDirectory()) files.push(...listFontFiles(full, depth + 1));
+    if (ent.isDirectory()) files.push(...listFontFiles(full, depth + 1, unavailable));
     else if (ent.isFile() && FONT_EXT_RE.test(ent.name)) files.push(ent.name);
   }
   return files;
 }
 
 /** Detect Chinese-language font names installed on the host (injectable dirs). */
-export function scanSystemFonts(dirs?: string[]): string[] {
+export function scanSystemFonts(dirs?: string[], unavailable?: () => void): string[] {
   const scan = dirs || fontSearchDirs();
   const found: string[] = [];
   const seen = new Set<string>();
   for (const dir of scan) {
-    for (const file of listFontFiles(dir, 0)) {
+    for (const file of listFontFiles(dir, 0, unavailable)) {
       for (const marker of CN_FONT_MARKERS) {
         if (marker.match.test(file) && !seen.has(marker.name)) {
           seen.add(marker.name);
@@ -235,17 +239,10 @@ export function scanSystemFonts(dirs?: string[]): string[] {
 /** Pure proxy DNS-leak classification. */
 export function proxyDnsLeak(proxy: Pick<ResolvedProfileProxy, "mode"> & { config?: { type?: string } | null }): { mode: string; type?: string; dnsLeakRisk: "low" | "high" | "none"; note: string } {
   if (proxy.mode === "none" || !proxy.config) {
-    return { mode: proxy.mode, dnsLeakRisk: "none", note: "直连：系统 DNS 即出口解析（无代理隔离，出口 IP 与 DNS 均来自本机）" };
+    return { mode: proxy.mode, dnsLeakRisk: "none", note: tMain("health.env.proxy-direct", "Direct configuration: host DNS settings were read, but the browser's actual resolver path still needs transaction evidence.") };
   }
-  const type = proxy.config.type;
-  if (type === "socks5") {
-    // On current engines (Chromium 150 + MASQUE bridge) SOCKS5 targets are
-    // forwarded as domain names (ATYP=domain) to the proxy, which resolves at
-    // egress — i.e. proxy-side DNS. Chromium's stock socks5:// path would
-    // resolve locally, but managed profiles never use it on these builds.
-    return { mode: proxy.mode, type, dnsLeakRisk: "low", note: "SOCKS5 经受管桥以代理端 DNS 转发（当前引擎），浏览器查询走代理，泄漏风险低" };
-  }
-  return { mode: proxy.mode, type, dnsLeakRisk: "low", note: "HTTP/SOCKS5h 由代理端解析 DNS，泄漏风险低" };
+  return { mode: proxy.mode, type: proxy.config.type, dnsLeakRisk: "low",
+    note: tMain("health.env.proxy-configured", "The proxy protocol is configured for proxy-side DNS; without DNS transactions, its type alone does not prove that no queries leak.") };
 }
 
 const STANDARD_REFRESH_HZ = [60, 75, 90, 120, 144, 165, 240];
@@ -292,14 +289,18 @@ export const RAF_MEASURE_EXPRESSION = `(async () => {
 })()`;
 
 /** Measure rAF timing over a running profile (CDP or BiDi by engine). Returns null when unavailable. */
-export async function measureRaf(cdpPort: number, engine: BrowserEngine = "chromium"): Promise<EnvRafResult | null> {
+export async function measureRaf(cdpPort: number, engine: BrowserEngine = "chromium", signal?: AbortSignal): Promise<EnvRafResult | null> {
   try {
-    const rawValue = await evaluateInPage(cdpPort, engine, RAF_MEASURE_EXPRESSION, { timeoutMs: 8000 });
+    const rawValue = await evaluateInPage(cdpPort, engine, RAF_MEASURE_EXPRESSION, { timeoutMs: 8000, signal });
     const raw = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue?.value || rawValue;
     const value = typeof raw === "string" ? JSON.parse(raw) : raw;
-    const classified = classifyRaf(Number(value?.median) || 0, Number(value?.samples) || 0);
-    return { ...classified, meanMs: Number(value?.mean) || 0 };
-  } catch (e) {
+    if (!Number.isSafeInteger(value?.samples) || value.samples < 0 || value.samples > 240
+      || !Number.isFinite(value?.median) || value.median < 0 || !Number.isFinite(value?.mean) || value.mean < 0
+      || value.samples > 0 && (value.median === 0 || value.mean === 0)) return null;
+    const classified = classifyRaf(value.median, value.samples);
+    return { ...classified, meanMs: value.mean };
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
@@ -331,28 +332,35 @@ export const FONT_EXPOSURE_EXPRESSION = `(async () => {
  * names. On any engine-eval failure returns the full candidate list
  * (conservative: keep the static risk rather than under-report).
  */
-export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames: string[], engine: BrowserEngine = "chromium"): Promise<string[]> {
+async function measureFontExposure(cdpPort: number, fontDisplayNames: string[], engine: BrowserEngine, signal?: AbortSignal): Promise<{ families: string[]; complete: boolean }> {
   const families: string[] = [];
   const seen = new Set<string>();
   for (const name of fontDisplayNames) {
-    for (const fam of CN_FONT_FAMILIES[name] || []) {
-      if (!seen.has(fam)) { seen.add(fam); families.push(fam); }
+    for (const family of CN_FONT_FAMILIES[name] || []) {
+      if (!seen.has(family)) { seen.add(family); families.push(family); }
     }
   }
-  if (!families.length) return [];
+  if (!families.length) return { families: [], complete: true };
   const expression = FONT_EXPOSURE_EXPRESSION.replace("globalThis.__agentBrowserFontProbeList || []", JSON.stringify(families));
   try {
-    const rawValue = await evaluateInPage(cdpPort, engine, expression, { timeoutMs: 10000 });
+    const rawValue = await evaluateInPage(cdpPort, engine, expression, { timeoutMs: 10000, signal });
     const raw = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue?.value || rawValue;
     const value = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!value || typeof value !== "object") return families;
-    return families.filter((fam) => value[fam] === true);
-  } catch (e) {
-    return families; // conservative: assume exposed when verification fails
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || !families.every((family) => Object.hasOwn(value, family) && typeof value[family] === "boolean")) return { families, complete: false };
+    return { families: families.filter((family) => value[family] === true), complete: true };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { families, complete: false };
   }
 }
 
+export async function verifyFontExposureViaCdp(cdpPort: number, fontDisplayNames: string[], engine: BrowserEngine = "chromium", signal?: AbortSignal): Promise<string[]> {
+  return (await measureFontExposure(cdpPort, fontDisplayNames, engine, signal)).families;
+}
+
 export interface EnvCheckOptions {
+  signal?: AbortSignal;
   /** Also measure rAF over a running profile (requires cdpPort). */
   runtime?: boolean;
   cdpPort?: number | null;
@@ -376,9 +384,11 @@ export function checkEnvironmentRisk(profile: {
   locale?: string | null;
   platform?: string | null;
 }, opts: EnvCheckOptions = {}): EnvironmentRiskResult {
+  if (opts.signal?.aborted) throw new Error("Environment check cancelled");
   const hostLocale = opts.hostLocale ?? (typeof Intl !== "undefined" ? (Intl.DateTimeFormat().resolvedOptions().locale || "") : "");
   const resolvers = (opts.resolvers ?? getDnsResolvers()).map(classifyResolver);
-  const cnFonts = scanSystemFonts(opts.fontDirs);
+  let fontsUnavailable = false;
+  const cnFonts = scanSystemFonts(opts.fontDirs, () => { fontsUnavailable = true; });
   const proxy = opts.proxy ? proxyDnsLeak(opts.proxy) : { mode: "unknown", dnsLeakRisk: "none" as const, note: "proxy unavailable" };
 
   const profileCountry = (profile.locale || "").match(/[-_]([a-zA-Z]{2})$/)?.[1]?.toUpperCase() || null;
@@ -388,8 +398,15 @@ export function checkEnvironmentRisk(profile: {
   const declaredMac = declaredPlatform.includes("mac") || declaredPlatform.includes("darwin") || declaredPlatform.includes("intel");
 
   const findings: EnvRiskFinding[] = [];
+  if (fontsUnavailable) findings.push({ severity: "info", code: "font-scan-unavailable",
+    message: tMain("health.env.font-scan-unavailable", "Some host font directories could not be read; an empty list is not proof that no fonts are installed."),
+    fix: tMain("health.env.font-scan-retry", "Check access to the font directories and retry.") });
   const cnResolvers = resolvers.filter((r) => r.isCn);
-  const foreignResolvers = resolvers.filter((r) => !r.isCn);
+  if (!resolvers.length || resolvers.some((resolver) => resolver.source !== "table")) {
+    findings.push({ severity: "info", code: "dns-resolver-unknown",
+      message: tMain("health.env.dns-resolver-unknown", "The upstream resolver is unverified; a local stub, router or unknown address does not establish its country."),
+      fix: tMain("health.env.dns-resolver-retry", "Verify the actual upstream DNS transactions; the configured address alone is insufficient.") });
+  }
   if (cnResolvers.length) {
     if (profileIsCn) {
       findings.push({
@@ -399,15 +416,13 @@ export function checkEnvironmentRisk(profile: {
         fix: "无（与 profile 国家一致）",
       });
     } else if (proxy.dnsLeakRisk === "low") {
-      // HTTP / socks5h proxies take over DNS: the browser resolves through the
-      // proxy (managed profiles additionally route DoH through it), so the host
-      // system resolvers never see browser DNS traffic.
-      findings.push({
-        severity: "info",
-        code: "dns-resolver-proxy-takeover",
-        message: `宿主解析器含国内解析器 ${cnResolvers.map((r) => r.address + (r.label ? " (" + r.label + ")" : "")).join(", ")}，但当前代理（HTTP/socks5h）已接管 DNS，浏览器查询走代理端，不构成泄漏`,
-        fix: "无（代理已接管 DNS）",
-      });
+      // A launch configuration is not a captured DNS transaction. Retain the
+      // protocol hint, but do not use it to certify an unobserved upstream.
+      findings.push({ severity: "info", code: "dns-resolver-proxy-takeover",
+        message: proxy.note, fix: tMain("health.env.dns-resolver-retry", "Verify the actual upstream DNS transactions; the configured address alone is insufficient.") });
+      findings.push({ severity: "info", code: "proxy-dns-unknown",
+        message: tMain("health.env.proxy-dns-unknown", "A proxy route is configured, but this check did not observe browser DNS transactions and cannot certify that host resolvers were bypassed."),
+        fix: tMain("health.env.dns-resolver-retry", "Verify the actual upstream DNS transactions; the configured address alone is insufficient.") });
     } else {
       findings.push({
         severity: "high",
@@ -416,8 +431,6 @@ export function checkEnvironmentRisk(profile: {
         fix: "直连：把系统 DNS 改为 8.8.8.8 / 1.1.1.1 等海外解析器；或给 profile 配 HTTP/socks5h 代理让代理接管 DNS",
       });
     }
-  } else if (!foreignResolvers.length) {
-    findings.push({ severity: "info", code: "dns-resolver-unknown", message: "无法识别当前 DNS 解析器归属", fix: "手动核对系统 DNS 是否为海外解析器" });
   }
 
   if (cnFonts.length) {
@@ -436,11 +449,15 @@ export function checkEnvironmentRisk(profile: {
       }
       const macUniversal = (opts.exposedFonts ?? cnFonts).filter((n) => classifyCnFont(n) === "macos-universal");
       if (macUniversal.length) {
+        const mismatch = !declaredMac && hasRuntimeEvidence;
         findings.push({
-          severity: "info",
-          code: "cn-fonts-macos-universal",
-          message: declaredMac ? `检测到 macOS 系统字体 ${macUniversal.join(", ")}（所有真实 Mac 均自带），与 macOS profile 一致，不构成泄漏` : `检测到 macOS 系统字体 ${macUniversal.join(", ")}；Windows profile 由引擎隔离，实测确认不可加载`,
-          fix: "无",
+          severity: mismatch ? "medium" : "info",
+          code: mismatch ? "font-platform-mismatch" : "cn-fonts-macos-universal",
+          message: declaredMac ? `检测到 macOS 系统字体 ${macUniversal.join(", ")}（所有真实 Mac 均自带），与 macOS profile 一致，不构成泄漏`
+            : tMain(mismatch ? "health.env.font-platform-mismatch" : "health.env.font-platform-unverified",
+              mismatch ? "The browser exposed fonts inconsistent with its declared platform: {fonts}"
+                : "Host fonts were found, but browser isolation has not been verified: {fonts}").replace("{fonts}", macUniversal.join(", ")),
+          fix: declaredMac ? "无" : tMain("health.env.font-platform-retry", "Review the declared platform and verify font exposure in the running browser."),
         });
       }
     }
@@ -478,6 +495,7 @@ export function checkEnvironmentRisk(profile: {
     cnFonts,
     proxy: { mode: proxy.mode, type: proxy.type, dnsLeakRisk: proxy.dnsLeakRisk, note: proxy.note },
     raf,
+    measurements: { raf: "not-running", fonts: fontsUnavailable ? "unavailable" : "static" },
     findings,
   };
 }
@@ -493,15 +511,24 @@ export async function checkEnvironmentRiskRuntime(profile: {
   // Chinese fonts installed while the engine isolates them (Windows profiles),
   // so the report uses runtime evidence when available.
   const base = checkEnvironmentRisk(profile, { ...opts, runtime: false });
-  let exposedFonts: string[] = [];
-  if (base.cnFonts.length && base.findings.some((f) => f.code === "cn-fonts-exposed" || f.code === "cn-fonts-macos-universal")) {
-    exposedFonts = await verifyFontExposureViaCdp(cdpPort, base.cnFonts, engine);
+  let fontProbe: { families: string[]; complete: boolean } | undefined;
+  if (base.cnFonts.length && base.findings.some((finding) => finding.code === "cn-fonts-exposed" || finding.code === "cn-fonts-macos-universal")) {
+    fontProbe = await measureFontExposure(cdpPort, base.cnFonts, engine, opts.signal);
   }
-  const result = exposedFonts.length || base.findings.some((f) => f.code === "cn-fonts-exposed")
-    ? checkEnvironmentRisk(profile, { ...opts, runtime: false, exposedFonts })
+  const result = fontProbe?.complete
+    ? checkEnvironmentRisk(profile, { ...opts, runtime: false, exposedFonts: fontProbe.families })
     : base;
-  const raf = await measureRaf(cdpPort, engine);
+  const raf = await measureRaf(cdpPort, engine, opts.signal);
+  if (opts.signal?.aborted) throw new Error("Environment check cancelled");
   result.raf = raf;
+  result.measurements = { raf: raf && raf.samples > 0 ? "complete" : "unavailable",
+    fonts: base.measurements?.fonts === "unavailable" || fontProbe?.complete === false ? "unavailable" : fontProbe ? "complete" : "static" };
+  if (fontProbe?.complete === false) result.findings.push({ severity: "info", code: "font-probe-unavailable",
+    message: tMain("health.env.font-probe-unavailable", "Browser font exposure could not be verified; host presence is not runtime exposure evidence."),
+    fix: tMain("health.env.font-probe-retry", "Retry with a running profile on a normal page.") });
+  if (!raf) result.findings.push({ severity: "info", code: "raf-unavailable",
+    message: tMain("health.env.raf-unavailable", "Frame timing could not be measured; it has not been verified."),
+    fix: tMain("health.env.raf-retry", "Bring the profile to the foreground and retry.") });
   if (raf && raf.samples > 0 && !raf.standard) {
     result.findings.push({
       severity: "medium",

@@ -117,7 +117,8 @@ function getExistingParentRealPath(p: string): string | null {
  */
 function assertNoSymlinkAncestors(p: string, roots: string[]): void {
   const abs = path.resolve(p);
-  const parts = abs.split(path.sep).filter(Boolean);
+  const root = path.parse(abs).root;
+  const parts = path.relative(root, abs).split(path.sep).filter(Boolean);
   // Check every prefix from the root down (skip the filesystem root itself),
   // but resolve the ALLOWED ROOTS first: system symlinks such as /etc ->
   // private/etc, /tmp -> private/tmp and /var -> private/var (macOS) are
@@ -149,7 +150,8 @@ function assertNoSymlinkAncestors(p: string, roots: string[]): void {
       }
     }
   }
-  let cur: string = path.sep;
+  // Start at the parsed drive/UNC root, not the current drive's separator.
+  let cur = root;
   for (const part of parts.slice(0, -1)) {
     cur = path.join(cur, part);
     let st: fs.Stats;

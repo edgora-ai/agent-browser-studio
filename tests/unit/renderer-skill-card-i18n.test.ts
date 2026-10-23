@@ -53,7 +53,9 @@ vm.compileFunction(fs.readFileSync(fixtureFile, "utf8"), ["exports", "require", 
 );
 const HANDLER_CASE = "real page/marketplace handlers dispatch untouched IDs and mutate only IPC-boundary fixture state";
 const register: RegisterTest = (name, body) => {
-  test(name, body, name === HANDLER_CASE ? 5_000 : undefined);
+  // This case executes 96 fresh DOM/VM fixtures, not one renderer action.
+  // Bound the full CPU workload with headroom for V8 coverage on shared runners.
+  test(name, body, name === HANDLER_CASE ? 15_000 : undefined);
 };
 afterAll(() => {
   console.info(`[skill-card script cache] outputs=${scriptCache.size}, hits=${scriptHits}`);

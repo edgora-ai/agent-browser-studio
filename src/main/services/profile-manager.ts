@@ -1,16 +1,18 @@
 import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   getProfilesDir,
   resolveProfileProxy,
   getProfileMeta,
+  getConfig,
   removeProfileMeta,
 } from "./config-manager.js";
 import { getRunningProcessesAsync } from "./process-discovery.js";
+import { acquireRestoreLock } from "./profile-restore-lock.js";
+import { readProfileSyncState } from "./sync/profile-state.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { getProfileEngineByDirId } from "./page-eval.js";
 import { validateDirId, getDirectorySizeAsync } from "./utils.js";
@@ -88,13 +90,7 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
     }
   } catch { /* ignore */ }
 
-  const syncedAt = meta?.syncedAt ?? null;
-  let syncStatus: "synced" | "dirty" | "never" = "never";
-  if (syncedAt) {
-    const syncedHash = (meta as any)?.syncedHash;
-    if (syncedHash) syncStatus = hashProfileMeta(meta) === syncedHash ? "synced" : "dirty";
-    else syncStatus = lastModified > syncedAt ? "dirty" : "synced";
-  }
+  const syncState = readProfileSyncState(dirId, getConfig().browserProfiles?.[dirId]);
 
   const resolvedProxy = resolveProfileProxy(dirId);
 
@@ -109,8 +105,7 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
     proxyMode: resolvedProxy.mode,
     proxyName: resolvedProxy.name,
     proxy: resolvedProxy.config,
-    syncedAt,
-    syncStatus,
+    ...syncState,
     tags: meta?.tags ?? [],
     fingerprint: {
       fingerprintSeed: meta?.fingerprintSeed ?? 12345,
@@ -129,23 +124,30 @@ export async function getProfileInfo(dirId: string, preloadedProcesses?: Running
 
 export async function deleteProfile(dirId: string): Promise<boolean> {
   validateDirId(dirId);
-  const profilePath = path.join(getProfilesDir(), dirId);
-  if (!fs.existsSync(profilePath)) return false;
-
+  // Acquire before the first await, and outside the discovery catch: a busy
+  // export/restore must reject rather than be swallowed as discovery failure.
+  const release = acquireRestoreLock(dirId);
   try {
-    const targetPath = profilePath;
-    const processes = await getRunningProcesses();
-    const isRunning = processes.some(proc => proc.args.includes("Chromium") && proc.args.includes(targetPath));
-    if (isRunning) {
-      throw new Error("Cannot delete profile while browser is running");
-    }
-  } catch (e: any) {
-    if (e.message.includes("Cannot delete")) throw e;
-  }
+    const profilePath = path.join(getProfilesDir(), dirId);
+    if (!fs.existsSync(profilePath)) return false;
 
-  await fsPromises.rm(profilePath, { recursive: true, force: true });
-  removeProfileMeta(dirId);
-  return true;
+    try {
+      const targetPath = profilePath;
+      const processes = await getRunningProcesses();
+      const isRunning = processes.some(proc => proc.args.includes("Chromium") && proc.args.includes(targetPath));
+      if (isRunning) {
+        throw new Error("Cannot delete profile while browser is running");
+      }
+    } catch (e: any) {
+      if (e.message.includes("Cannot delete")) throw e;
+    }
+
+    await fsPromises.rm(profilePath, { recursive: true, force: true });
+    removeProfileMeta(dirId);
+    return true;
+  } finally {
+    release();
+  }
 }
 
 export async function listCookies(dirId: string, filter?: string): Promise<CookieInfo[]> {
@@ -246,21 +248,6 @@ function listCookiesFromSqlite(dirId: string, filter?: string): CookieInfo[] {
 export function getProfileSubdir(dirId: string): string {
   validateDirId(dirId);
   return PROFILE_DIR_NAME;
-}
-
-function hashProfileMeta(meta: any): string {
-  const clean = JSON.parse(JSON.stringify(meta || {}));
-  delete clean.syncedAt;
-  delete clean.syncedHash;
-  return createHash("sha256").update(JSON.stringify(sortKeys(clean))).digest("hex");
-}
-
-function sortKeys(value: any): any {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (!value || typeof value !== "object") return value;
-  const out: Record<string, any> = {};
-  for (const key of Object.keys(value).sort()) out[key] = sortKeys(value[key]);
-  return out;
 }
 
 function resolveProfilePath(dirId: string): string {

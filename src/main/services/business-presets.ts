@@ -10,6 +10,7 @@
 // here also derives a self-consistent identity set and is validated by the same
 // launch-time safety gates used across the app.
 import type { BrowserPlatform, GeolocationMode, WebRtcMode } from "../types.js";
+import { getHostBrowserPlatform } from "./browser-platform-policy.js";
 
 export type BusinessPresetCategory = "ecommerce" | "social" | "ads" | "ai" | "crypto";
 
@@ -210,14 +211,22 @@ const CATALOG: BusinessPreset[] = [
   },
 ];
 
-export function listBusinessPresets(): BusinessPreset[] {
-  return CATALOG.map((p) => structuredClone(p));
+function clonePresetForHost(preset: BusinessPreset, host: string): BusinessPreset {
+  const clone = structuredClone(preset);
+  const platform = getHostBrowserPlatform(host);
+  // Unsupported hosts retain the portable catalog, not native launch eligibility.
+  if (platform !== null) clone.profile.platform = platform;
+  return clone;
 }
 
-export function resolveBusinessPreset(id: string): BusinessPreset {
+export function listBusinessPresets(host: string = process.platform): BusinessPreset[] {
+  return CATALOG.map((p) => clonePresetForHost(p, host));
+}
+
+export function resolveBusinessPreset(id: string, host: string = process.platform): BusinessPreset {
   const preset = CATALOG.find((p) => p.id === id);
   if (!preset) throw new Error(`Unknown business preset: ${id}`);
-  return structuredClone(preset);
+  return clonePresetForHost(preset, host);
 }
 
 /**

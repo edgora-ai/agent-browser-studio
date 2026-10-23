@@ -1,24 +1,104 @@
 import {
-  diffFingerprints, hasRiskyDrift, summarizeDrift,
+  diffFingerprints, summarizeDrift,
   checkPersonaConsistency, mismatchesAsDrift,
 } from "../fingerprint-baseline.js";
 import { checkEnvironmentRisk, shouldBlockEnvironmentRisk, summarizeEnvFindings, type EnvRiskFinding } from "../environment-risk.js";
-import type { FingerprintDrift } from "../fingerprint-baseline.js";
+import type { Fingerprint, FingerprintDrift } from "../fingerprint-baseline.js";
+import { analyzeFingerprintDrift, type FingerprintDriftAnalysis } from "../fingerprint-drift-policy.js";
+import type { FingerprintComparisonReport } from "../fingerprint-drift-reports.js";
+import { getHostBrowserPlatform } from "../browser-platform-policy.js";
+import type { BrowserProfileMeta } from "../../types.js";
+import { AGENT_BROWSER_FINGERPRINT_SWITCH, LEGACY_FINGERPRINT_SWITCH } from "../browser-fingerprint-config.js";
+import {
+  assertChromiumWebRtcRoutingArgs, chromiumWebRtcSwitchName, resolveChromiumWebRtcRoutingPolicy, WebRtcRoutingPolicyError,
+  type ChromiumWebRtcRoutingInput, type ChromiumWebRtcRoutingPolicy,
+} from "./webrtc-policy.js";
 
 export interface LaunchDriftCheck {
   checked: boolean;
   risky?: boolean;
   drift?: FingerprintDrift[];
+  observedAt?: number;
+  partial?: boolean;
+  review?: boolean;
+  blockingUnavailable?: boolean;
+  report?: FingerprintComparisonReport;
   error?: string;
 }
 
 export class LaunchBlockedError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  readonly driftBlocked: boolean;
+  constructor(code: string, message: string, readonly driftCheck?: LaunchDriftCheck) {
     super(message);
     this.name = "LaunchBlockedError";
     this.code = code;
+    this.driftBlocked = code === "fingerprint-drift" || code === "fingerprint-check-unavailable";
   }
+}
+
+/** Preserve stable launch error codes without coupling the pure policy to other guards. */
+export function resolveChromiumWebRtcLaunchPolicy(input: ChromiumWebRtcRoutingInput): ChromiumWebRtcRoutingPolicy {
+  try { return resolveChromiumWebRtcRoutingPolicy(input); }
+  catch (error) {
+    if (error instanceof WebRtcRoutingPolicyError) throw new LaunchBlockedError(error.code, error.message);
+    throw error;
+  }
+}
+
+/** Decode only in-memory argv; never reads a saved profile or a running browser. */
+export function readChromiumLaunchWebRtcPayload(args: readonly string[]): { mode: "real" | "altered" | "disable"; publicIp: string | null } | null {
+  const prefixes = [AGENT_BROWSER_FINGERPRINT_SWITCH, LEGACY_FINGERPRINT_SWITCH];
+  const native = args.filter(arg => prefixes.some(prefix => chromiumWebRtcSwitchName(arg) === prefix.slice(0, -1)));
+  if (!native.length) return null;
+  try {
+    if (native.length !== 1 || !prefixes.some(prefix => native[0].startsWith(prefix))) throw new Error("ambiguous native payload");
+    const encoded = native[0].slice(native[0].indexOf("=") + 1);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length > 131072) throw new Error("invalid encoding");
+    const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    const payload = JSON.parse(decoded);
+    const webrtc = payload.webrtc;
+    if (Buffer.from(decoded).toString("base64url") !== encoded || JSON.stringify(payload) !== decoded || payload.schemaVersion !== 1 ||
+        !webrtc || !["real", "altered", "disable"].includes(webrtc.mode) ||
+        (webrtc.mode === "altered" ? typeof webrtc.publicIp !== "string" || !webrtc.publicIp.trim() : webrtc.publicIp !== null)) {
+      throw new Error("invalid native WebRTC policy");
+    }
+    return { mode: webrtc.mode, publicIp: webrtc.publicIp };
+  } catch {
+    throw new LaunchBlockedError("webrtc-routing-policy", "Native WebRTC payload is malformed, ambiguous, or uses an unsupported native mode");
+  }
+}
+
+/** Last-line argv assertion: routing and the native JSON must describe the same policy. */
+export function assertChromiumWebRtcLaunchPolicy(args: readonly string[], policy: ChromiumWebRtcRoutingPolicy): void {
+  try { assertChromiumWebRtcRoutingArgs(args, policy); }
+  catch (error) {
+    if (error instanceof WebRtcRoutingPolicyError) throw new LaunchBlockedError(error.code, error.message);
+    throw error;
+  }
+  const native = readChromiumLaunchWebRtcPayload(args);
+  if (policy.fingerprintMode === "off" ? native !== null :
+      !native || native.mode !== policy.nativeMode || native.publicIp !== policy.nativeIp) {
+    throw new LaunchBlockedError("webrtc-routing-policy", "Native WebRTC payload conflicts with the resolved routing policy; no browser was spawned or adopted");
+  }
+}
+
+/** Native GPU identity cannot make a foreign OS persona truthful. Storage stays portable. */
+export function assertHostPlatformCompatible(
+  meta: Pick<BrowserProfileMeta, "engine" | "fingerprintMode" | "platform">,
+  host: string = process.platform,
+): void {
+  if (meta.engine === "firefox" || meta.fingerprintMode === "off") return;
+  const hostPlatform = getHostBrowserPlatform(host);
+  const requestedPlatform = meta.platform || "windows";
+  if (hostPlatform !== null && requestedPlatform === hostPlatform) return;
+  const remedy = hostPlatform
+    ? `Use a ${hostPlatform} profile on this host, or run this portable profile on a matching host.`
+    : "Run managed Chromium on a supported macOS or Windows host.";
+  throw new LaunchBlockedError(
+    "host-platform-mismatch",
+    `Managed Chromium launch blocked: profile platform ${requestedPlatform} does not match the native GPU host ${hostPlatform || host}. ${remedy} Alternatively, explicitly select fingerprint-off or Firefox. The saved profile has not been changed; GPU compatibility is not verified by renaming GPU strings.`,
+  );
 }
 
 export interface DriftGuardDeps {
@@ -26,16 +106,20 @@ export interface DriftGuardDeps {
   audit: (detail: string) => void;
   auditBlock: (detail: string) => void;
   auditError?: (detail: string) => void;
+  assertCurrent?: () => void;
+  recordComparison?: (current: Fingerprint, analysis: FingerprintDriftAnalysis, observedAt: number) => FingerprintComparisonReport;
 }
 
 export async function runFingerprintDriftGuard(
   deps: DriftGuardDeps,
-  opts: { cdpPort: number; meta: any; cfg: any; passThrough: boolean },
+  opts: { cdpPort: number; meta: any; cfg: any; passThrough: boolean; expectedBrowserVersion?: string | null },
 ): Promise<LaunchDriftCheck> {
   let driftCheck: LaunchDriftCheck = { checked: false };
   if (opts.passThrough || !opts.meta.fingerprintBaseline) return driftCheck;
   try {
+    deps.assertCurrent?.();
     const current = await deps.captureFingerprint(opts.cdpPort);
+    deps.assertCurrent?.();
     const drift = diffFingerprints(opts.meta.fingerprintBaseline, current);
     const personaCheck = checkPersonaConsistency(
       { platform: opts.meta.platform || "windows", timezone: opts.meta.timezone },
@@ -43,23 +127,43 @@ export async function runFingerprintDriftGuard(
     );
     const personaDrift = mismatchesAsDrift(personaCheck);
     const combinedDrift = [...drift, ...personaDrift];
-    const risky = hasRiskyDrift(drift) || personaDrift.length > 0;
-    driftCheck = { checked: true, risky, drift: combinedDrift };
-    if (drift.length || personaDrift.length) {
-      deps.audit(combinedDrift.length + " field(s) changed" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift));
+    const observedAt = Date.now();
+    const analysis = analyzeFingerprintDrift(opts.meta.fingerprintBaseline, current, combinedDrift, {
+      expectedBrowserVersion: opts.expectedBrowserVersion, observedAt,
+    });
+    const { risky } = analysis;
+    driftCheck = { checked: !analysis.blockingUnavailable, risky, drift: combinedDrift, observedAt,
+      partial: analysis.partial, review: analysis.counts.review > 0, blockingUnavailable: analysis.blockingUnavailable,
+      ...(analysis.blockingUnavailable ? { error: "Required fingerprint evidence is unavailable" } : {}) };
+    if (deps.recordComparison) {
+      try { driftCheck.report = deps.recordComparison(current, analysis, observedAt); }
+      catch (error) { console.warn("[launch-guards] could not retain fingerprint comparison:", error); }
+    }
+    if (combinedDrift.length) {
+      deps.audit(combinedDrift.length + " field(s) compared" + (risky ? " (risky)" : "") + ": " + summarizeDrift(combinedDrift));
     }
     if (risky && opts.cfg.blockOnFingerprintDrift !== false) {
-      const reason = "Fingerprint drift blocked (" + summarizeDrift(combinedDrift) + "). Re-capture the baseline or set blockOnFingerprintDrift=false to launch.";
+      const riskFields = analysis.changes.filter(change => change.severity === "risk");
+      const reason = "Fingerprint drift blocked (" + summarizeDrift(riskFields) + "). The baseline is unchanged. Open fingerprint details to review exact values. If an identity change was intended, explicitly accept the reviewed snapshot while stopped, then start and verify again; conflicts with profile settings must be fixed instead.";
       deps.auditBlock(reason);
-      throw new LaunchBlockedError("fingerprint-drift", reason);
+      throw new LaunchBlockedError("fingerprint-drift", reason, driftCheck);
+    }
+    if (analysis.blockingUnavailable && opts.cfg.blockOnFingerprintDrift !== false) {
+      throw new LaunchBlockedError("fingerprint-check-unavailable",
+        "Fingerprint check unavailable: required probes could not verify the locked baseline. Review unavailable fields and retry; missing evidence is not observed identity drift.", driftCheck);
     }
   } catch (e: any) {
     if (e instanceof LaunchBlockedError) throw e;
     const msg = (e && e.message) || String(e);
-    try { deps.auditError?.("fingerprint drift capture failed: " + msg); } catch {}
+    try { deps.auditError?.("fingerprint drift capture failed: " + msg); }
+    catch (error) { console.warn("[launch-guards] failed to record fingerprint capture error:", error); }
     // eslint-disable-next-line no-console
     console.warn("[launch-guards] fingerprint drift check failed:", msg);
     driftCheck = { checked: false, error: msg };
+    if (opts.cfg.blockOnFingerprintDrift !== false) {
+      throw new LaunchBlockedError("fingerprint-check-unavailable",
+        "Fingerprint check unavailable: the locked baseline could not be verified, so launch was refused. Retry the capture; this is not evidence of fingerprint drift.", driftCheck);
+    }
   }
   return driftCheck;
 }

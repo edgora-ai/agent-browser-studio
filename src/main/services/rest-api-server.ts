@@ -5,7 +5,7 @@
 // Open endpoints: GET /health and GET /openapi.json (loopback only).
 
 import * as http from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { isAuthorized as isAuthorizedShared } from "./http/auth.js";
 import { readJson as readJsonShared, HttpError } from "./http/body.js";
 import * as fs from "node:fs";
@@ -13,7 +13,7 @@ import * as path from "node:path";
 import {
   getConfig, getProxyList, addProxy, deleteProxy, updateProxy,
   setDefaultProxyName, getProxyRotationInfo, getProfileMeta,
-  resolveProfileProxy, saveConfig, getAppDataDir,
+  resolveProfileProxy, saveConfig, getAppDataDir, setSyncConfig,
 } from "./config-manager.js";
 import { listProxyHealth, proxyHealthSummary, recordProxyRotation } from "./proxy-health.js";
 import { parseProxyText, importProxies, exportProxiesCsv } from "./proxy-import.js";
@@ -52,11 +52,14 @@ import {
   touchProfileActivity, listRunningProfileIdle, getIdlePolicyTimeoutMs,
 } from "./browser-manager.js";
 import { validateDirId } from "./utils.js";
-import { checkEnvironmentRisk, checkEnvironmentRiskRuntime } from "./environment-risk.js";
-import { getProfileEngineByDirId } from "./page-eval.js";
-import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "./profile-archive.js";
+import { runProfileEnvironmentRisk } from "./profile-health.js";
+import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives,
+  archiveOperationFailure, classifyArchiveBatchReport,
+} from "./profile-archive.js";
 import { assertSafeArchiveExportDir, assertSafeArchiveExportPath, assertSafeArchiveImportPath } from "./archive-path-guard.js";
 import { syncService } from "./sync-service.js";
+import { readProfileSyncState } from "./sync/profile-state.js";
+import type { SyncResult } from "../types.js";
 import { retryAgentRun, retryJobRuns, testRunRule, reloadSchedule, cancelRunningJob } from "./automation.js";
 import { PRODUCT_NAME, PRODUCT_SLUG } from "../branding.js";
 import { AccountOperationError } from "./config/store.js";
@@ -120,6 +123,10 @@ function profileSummary(p: any): any {
     proxy: p.proxyMode === "none" ? null : (p.proxyName || null),
     version: p.version || "?",
     tags: Array.isArray(p.tags) ? p.tags : [],
+    syncedAt: p.syncedAt ?? null,
+    syncStatus: p.syncStatus ?? "unknown",
+    syncScope: p.syncScope ?? "portable-profile+preferences",
+    syncReason: p.syncReason ?? "content-unavailable",
   };
 }
 
@@ -152,6 +159,21 @@ function requireRestAccountSecret(): { status: number; body: any } | null {
 function requireRestSettingsMutation(): { status: number; body: any } | null {
   const r = requireSettingsMutation();
   return r.ok ? null : { status: 403, body: { error: r.error } };
+}
+
+// Import services retain different report shapes. Only derive the completion
+// flags; never rewrite their per-item facts or change the full-success shape.
+function importCompletion(completed: number, skipped: number, failed: number): { success: boolean; outcome?: "partial" | "failed" | "skipped" } {
+  if (skipped === 0 && failed === 0) return { success: true };
+  return { success: false, outcome: completed > 0 ? "partial" : failed > 0 ? "failed" : "skipped" };
+}
+
+function syncRestStatus(result: SyncResult): number {
+  if (result.success) return 200;
+  if (result.code === "TEAM_ROLE_DENIED") return 403;
+  if (result.code === "SYNC_BUSY" || result.code === "SYNC_PREVIEW_STALE" || result.outcome === "recovery-required" ||
+      (result.localCommit && result.localCommit !== "none") || (result.remoteCommit && result.remoteCommit !== "none")) return 409;
+  return 400;
 }
 
 // Map a service-layer "not found" error to a 404 instead of a generic 400.
@@ -293,6 +315,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     try {
       const dirId = mExtList[1];
       validateDirId(dirId);
+      assertProfileExists(dirId);
       const cfg = getConfig() as any;
       const enabledMap = cfg.browserProfiles?.[dirId]?.extensions || {};
       return {
@@ -309,23 +332,38 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
 
   const mExtInstall = p.match(/^\/api\/profiles\/([^/]+)\/extensions\/([^/]+)\/install$/);
   if (mExtInstall && method === "POST") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
+    const dirId = mExtInstall[1], extId = mExtInstall[2];
+    let entry: Awaited<ReturnType<typeof addOrUpdateChromeStoreExtension>> | undefined;
+    let enableAttempted = false;
+    const committedFacts = () => entry ? {
+      success: false, outcome: entry.repositoryCommit?.committed === true ? "partial" : "unknown",
+      dirId, extId, extension: entry, repositoryCommit: entry.repositoryCommit ?? null,
+      profileEnable: enableAttempted ? "unknown" : "not-applied",
+    } : {};
     try {
-      const dirId = mExtInstall[1];
-      const extId = mExtInstall[2];
       validateDirId(dirId);
       validateExtensionId(extId);
       assertProfileExists(dirId);
-      const entry = await addOrUpdateChromeStoreExtension(extId);
+      entry = await addOrUpdateChromeStoreExtension(extId);
+      // The repository may already be committed. Recheck permission before the
+      // separate profile enable write, retaining both facts rather than rolling back.
+      const currentDeny = requireRestSettingsMutation();
+      if (currentDeny) return { status: currentDeny.status, body: { ...currentDeny.body, ...committedFacts(), code: "TEAM_ROLE_DENIED" } };
+      enableAttempted = true;
       setProfileExtensionEnabled(dirId, extId, true);
       recordAudit({ category: "profile", action: "extension.install", target: dirId, actor: "api", detail: "installed " + extId });
       return { status: 200, body: { success: true, dirId, extId, extension: entry } };
     } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      return { status: 400, body: { error: e.message || String(e), ...committedFacts() } };
     }
   }
 
   const mExtDelete = p.match(/^\/api\/profiles\/([^/]+)\/extensions\/([^/]+)$/);
   if (mExtDelete && method === "DELETE") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
     try {
       const dirId = mExtDelete[1];
       const extId = mExtDelete[2];
@@ -349,7 +387,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       recordAudit({ category: "profile", action: "launch", target: dirId, actor: "api" });
       return { status: 200, body: { success: true, dirId, pid: r.pid, cdpPort: r.cdpPort, driftCheck: r.driftCheck, envCheck: r.envCheck, cookieCheck: (r as any).cookieCheck ?? { checked: false } } };
     } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      const code = ["host-platform-mismatch", "restart-required"].includes(e?.code) ? e.code : undefined;
+      return { status: 400, body: { error: e.message || String(e), ...(code ? { code } : {}) } };
     }
   }
   const mStop = p.match(/^\/api\/profiles\/([^/]+)\/stop$/);
@@ -377,17 +416,30 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   }
   const mEnvRisk = p.match(/^\/api\/profiles\/([^/]+)\/env-risk$/);
   if (mEnvRisk && method === "GET") {
+    const requestId = randomUUID();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    req.once("aborted", abort);
+    req.socket.once("close", abort);
+    if (req.aborted || req.socket.destroyed) abort();
     try {
       const dirId = mEnvRisk[1];
       validateDirId(dirId);
-      const meta = getProfileMeta(dirId);
-      if (!meta) return { status: 404, body: { error: "Profile not found" } };
-      const st = statusBrowser(dirId);
-      const profile = { timezone: meta.timezone, locale: meta.locale, platform: meta.platform };
-      if (st.running && st.cdpPort) return { status: 200, body: await checkEnvironmentRiskRuntime(profile, st.cdpPort, {}, getProfileEngineByDirId(dirId)) };
-      return { status: 200, body: checkEnvironmentRisk(profile) };
+      const health = await runProfileEnvironmentRisk(dirId, { requestId, owner: `rest:${requestId}`, signal: controller.signal });
+      if (health.result) {
+        // Keep the legacy bare EnvironmentRiskResult, including its ok flag
+        // (no high findings), distinct from completion/outcome evidence.
+        return { status: 200, body: { ...health.result, outcome: health.outcome, requestId: health.requestId,
+          ...(health.code ? { code: health.code } : {}), ...(health.error ? { error: health.error } : {}) } };
+      }
+      const status = health.code === "PROFILE_NOT_FOUND" ? 404
+        : health.code === "HEALTH_BUSY" || health.outcome === "cancelled" ? 409 : 400;
+      return { status, body: health };
     } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      return { status: 400, body: { ok: false, outcome: "error", requestId, error: e.message || String(e) } };
+    } finally {
+      req.off("aborted", abort);
+      req.socket.off("close", abort);
     }
   }
   const mDrift = p.match(/^\/api\/profiles\/([^/]+)\/drift$/);
@@ -408,62 +460,49 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     if (!mutationGate.ok) return { status: 403, body: { error: mutationGate.error } };
     const body = await readJson(req).catch(() => null);
     if (!body || typeof body.zipPath !== "string" || !body.zipPath.trim()) {
-      return { status: 400, body: { error: "zipPath is required" } };
-    }
-    let zipPath: string;
-    try {
-      zipPath = assertSafeArchiveImportPath(body.zipPath);
-    } catch (e: any) {
-      return { status: 400, body: { error: e?.message || String(e) } };
+      return { status: 400, body: { success: false, code: "ARCHIVE_INVALID_INPUT", error: "zipPath is required" } };
     }
     try {
+      const zipPath = assertSafeArchiveImportPath(body.zipPath);
       const r = importProfileArchive(zipPath);
       recordAudit({ category: "profile", action: "import", target: r.dirId, actor: "api", detail: "imported " + zipPath });
-      return { status: 200, body: { success: true, dirId: r.dirId, name: r.name, files: r.files, bytes: r.bytes, warnings: r.warnings } };
-    } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
-    }
+      return { status: 200, body: { success: true, outcome: "completed", ...r } };
+    } catch (error) { return { status: 400, body: archiveOperationFailure(error) }; }
   }
-  // Batch import of several profile backup ZIPs.
+  // Batch import of several profile backup ZIPs. An accepted request is not
+  // proof that every item committed; retain its full report on partial results.
   if (method === "POST" && p === "/api/profiles/import-batch") {
     const mutationGate = requireProfileMutation();
     if (!mutationGate.ok) return { status: 403, body: { error: mutationGate.error } };
     const body = await readJson(req).catch(() => null);
-    if (!body || !Array.isArray(body.zipPaths) || !body.zipPaths.length) {
-      return { status: 400, body: { error: "zipPaths (non-empty array) is required" } };
+    if (!body || !Array.isArray(body.zipPaths) || !body.zipPaths.length || body.zipPaths.some((file: unknown) => typeof file !== "string" || !file.trim())) {
+      return { status: 400, body: { success: false, code: "ARCHIVE_INVALID_INPUT", error: "zipPaths (non-empty array of non-empty strings) is required" } };
     }
-    const raw = body.zipPaths.filter((z: any) => typeof z === "string");
-    let validated: string[] = [];
-    for (const z of raw) {
-      try {
-        validated.push(assertSafeArchiveImportPath(z));
-      } catch (e: any) {
-        return { status: 400, body: { error: e?.message || String(e), zipPath: z } };
-      }
-    }
-    const report = importProfileArchives(validated);
-    recordAudit({ category: "profile", action: "import-batch", actor: "api", detail: "imported " + report.imported.length + ", failed " + report.failed.length });
-    return { status: 200, body: { success: true, report } };
+    try {
+      const validated = body.zipPaths.map((file: string) => assertSafeArchiveImportPath(file));
+      const report = importProfileArchives(validated);
+      recordAudit({ category: "profile", action: "import-batch", actor: "api", detail: "imported " + report.imported.length + ", failed " + report.failed.length });
+      return { status: 200, body: { ...classifyArchiveBatchReport(report), report } };
+    } catch (error) { return { status: 400, body: archiveOperationFailure(error) }; }
   }
   // Batch export of several stopped profiles into one directory.
   if (method === "POST" && p === "/api/profiles/export") {
     try {
       const body = await readJson(req).catch(() => null);
-      if (!body || !Array.isArray(body.dirIds) || !body.dirIds.length) {
-        return { status: 400, body: { error: "dirIds (non-empty array) is required" } };
+      if (!body || !Array.isArray(body.dirIds) || !body.dirIds.length || body.dirIds.some((id: unknown) => typeof id !== "string" || !id.trim())) {
+        return { status: 400, body: { success: false, code: "ARCHIVE_INVALID_INPUT", error: "dirIds (non-empty array of non-empty strings) is required" } };
       }
-      const destDirRaw = typeof body?.destDir === "string" && body.destDir.trim() ? body.destDir : defaultBackupPathForBatch();
-      let destDir: string;
-      try {
-        destDir = assertSafeArchiveExportDir(destDirRaw);
-      } catch (e: any) {
-        return { status: 400, body: { error: e?.message || String(e) } };
+      if (body.overwrite !== undefined && typeof body.overwrite !== "boolean") {
+        return { status: 400, body: { success: false, code: "ARCHIVE_INVALID_INPUT", error: "overwrite must be a boolean" } };
       }
-      const report = await exportProfileArchives(body.dirIds.filter((d: any) => typeof d === "string"), destDir);
+      const destDirRaw = typeof body.destDir === "string" && body.destDir.trim() ? body.destDir : defaultBackupPathForBatch();
+      const destDir = assertSafeArchiveExportDir(destDirRaw);
+      const report = await exportProfileArchives(body.dirIds, destDir, { overwrite: body.overwrite === true });
       recordAudit({ category: "profile", action: "export-batch", actor: "api", detail: "exported " + report.exported.length + ", skipped " + report.skipped.length + ", failed " + report.failed.length });
-      return { status: 200, body: { success: true, destDir, report } };
-    } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      return { status: 200, body: { ...classifyArchiveBatchReport(report), destDir, report } };
+    } catch (error) {
+      const failure = archiveOperationFailure(error);
+      return { status: failure.code === "ARCHIVE_DESTINATION_EXISTS" || failure.code === "ARCHIVE_DESTINATION_CHANGED" ? 409 : 400, body: failure };
     }
   }
   const mExport = p.match(/^\/api\/profiles\/([^/]+)\/export$/);
@@ -471,19 +510,18 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     try {
       const dirId = mExport[1];
       validateDirId(dirId);
-      const body = await readJson(req).catch(() => null);
-      const destPathRaw = typeof body?.destPath === "string" && body.destPath.trim() ? body.destPath : defaultBackupPath(dirId);
-      let destPath: string;
-      try {
-        destPath = assertSafeArchiveExportPath(destPathRaw);
-      } catch (e: any) {
-        return { status: 400, body: { error: e?.message || String(e) } };
+      const body = await readJsonObject(req);
+      if (body?.overwrite !== undefined && typeof body.overwrite !== "boolean") {
+        return { status: 400, body: { success: false, code: "ARCHIVE_INVALID_INPUT", error: "overwrite must be a boolean" } };
       }
-      const r = await exportProfileArchive(dirId, destPath);
+      const destPathRaw = typeof body?.destPath === "string" && body.destPath.trim() ? body.destPath : defaultBackupPath(dirId);
+      const destPath = assertSafeArchiveExportPath(destPathRaw);
+      const r = await exportProfileArchive(dirId, destPath, { overwrite: body?.overwrite === true });
       recordAudit({ category: "profile", action: "export", target: dirId, actor: "api", detail: r.filePath });
-      return { status: 200, body: { success: true, filePath: r.filePath, entries: r.entries, bytes: r.bytes } };
-    } catch (e: any) {
-      return { status: 400, body: { error: e.message || String(e) } };
+      return { status: 200, body: { success: true, outcome: "completed", ...r } };
+    } catch (error) {
+      const failure = archiveOperationFailure(error);
+      return { status: failure.code === "ARCHIVE_DESTINATION_EXISTS" || failure.code === "ARCHIVE_DESTINATION_CHANGED" ? 409 : 400, body: failure };
     }
   }
 
@@ -500,6 +538,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
         status: 200,
         body: {
           ...meta,
+          ...readProfileSyncState(dirId, meta),
           dirId,
           running: st.running,
           pid: st.pid,
@@ -551,6 +590,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { proxies: getProxyList() } };
   }
   if (method === "POST" && p === "/api/proxies") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
     const body = await readJson(req);
     if (!body || typeof body.name !== "string" || !body.name.trim() || !body.config || typeof body.config !== "object") {
       return { status: 400, body: { error: "name and config are required" } };
@@ -567,6 +608,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     return { status: 200, body: { entries: listProxyHealth(), summary: proxyHealthSummary() } };
   }
   if (method === "POST" && p === "/api/proxies/import") {
+    const deny = requireRestSettingsMutation();
+    if (deny) return deny;
     const body = await readJson(req);
     if (!body || typeof body.text !== "string") {
       return { status: 400, body: { error: "text is required" } };
@@ -576,7 +619,7 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const report = importProxies(parsed.proxies, { replace: !!body.replace });
       report.failed = report.failed.concat(parsed.errors.map((e) => ({ line: e.line, error: e.error })));
       recordAudit({ category: "proxy", action: "import", target: report.imported.length + " proxies", actor: "api", detail: `imported ${report.imported.length}, skipped ${report.skipped.length}, failed ${report.failed.length}` });
-      return { status: 200, body: { success: true, report } };
+      return { status: 200, body: { ...importCompletion(report.imported.length, report.skipped.length, report.failed.length), report } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -820,14 +863,14 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
       const parsed = parseAccountsBulkText(body.text);
       if (body.createProfiles) {
         const platform = body.platform === "windows" || body.platform === "macos" || body.platform === "android"
-          ? body.platform : "windows";
+          ? body.platform : undefined;
         const r = bulkCreateProfilesWithAccounts(parsed, { platform });
         recordAudit({ category: "account", action: "bulk-create-profiles", target: "", actor: "api", detail: "added=" + r.added + " created=" + r.created + " skipped=" + r.skipped });
-        return { status: 200, body: { success: true, report: r } };
+        return { status: 200, body: { ...importCompletion(r.added, r.skipped, r.errors.length), report: r } };
       }
       const r = bulkAddAccounts(parsed);
       recordAudit({ category: "account", action: "bulk-add", target: "", actor: "api", detail: "added=" + r.added + " skipped=" + r.skipped });
-      return { status: 200, body: { success: true, report: r } };
+      return { status: 200, body: { ...importCompletion(r.added, r.skipped, r.errors.length), report: r } };
     } catch (e: any) {
       return { status: 400, body: { error: e.message || String(e) } };
     }
@@ -1185,7 +1228,9 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "POST" && p === "/api/agent/conversations") {
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
-    const body = await readJson(req);
+    const body = await readJsonObject(req);
+    const currentDeny = requireRestSettingsMutation();
+    if (currentDeny) return currentDeny;
     const title = typeof body?.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : undefined;
     const c = createConversation(title);
     recordAudit({ category: "llm", action: "conversation-create", target: c.id, actor: "api" });
@@ -1201,6 +1246,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
     const body = await readJson(req);
+    const currentDeny = requireRestSettingsMutation();
+    if (currentDeny) return currentDeny;
     if (!body || typeof body.title !== "string" || !body.title.trim()) {
       return { status: 400, body: { error: "title is required" } };
     }
@@ -1250,6 +1297,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
     const body = await readJson(req);
+    const currentDeny = requireRestSettingsMutation();
+    if (currentDeny) return currentDeny;
     if (!body || typeof body.conversationId !== "string" || !body.conversationId.trim()
       || typeof body.message !== "string" || !body.message.trim()) {
       return { status: 400, body: { error: "conversationId and message are required" } };
@@ -1371,6 +1420,8 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
     const deny = requireRestSettingsMutation();
     if (deny) return deny;
     const body = await readJson(req);
+    const currentDeny = requireRestSettingsMutation();
+    if (currentDeny) return currentDeny;
     if (!body || typeof body.sql !== "string" || !body.sql.trim()) {
       return { status: 400, body: { error: "sql is required" } };
     }
@@ -1405,29 +1456,54 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   }
 
   // ── Sync (team workspace) ──
+  if (method === "POST" && p === "/api/sync/config") {
+    const denied = requireRestSettingsMutation(); if (denied) return denied;
+    const settings = await readJsonObject(req);
+    const currentDenied = requireRestSettingsMutation(); if (currentDenied) return currentDenied;
+    try { setSyncConfig(settings); return { status: 200, body: { success: true, ...syncService.getStatus() } }; }
+    catch (error) { return { status: 400, body: { success: false, code: (error as any).code, error: (error as Error).message } }; }
+  }
   if (method === "GET" && p === "/api/sync/status") {
     return { status: 200, body: syncService.getStatus() };
   }
+  const historyStateMatch = p.match(/^\/api\/sync\/history\/([^/]+)$/);
+  if (method === "GET" && historyStateMatch) {
+    const dirId = decodeURIComponent(historyStateMatch[1]); validateDirId(dirId);
+    if (!getConfig().browserProfiles?.[dirId]) return { status: 404, body: { error: "Profile not found" } };
+    return { status: 200, body: { dirId, ...await syncService.historyState(dirId) } };
+  }
+  if (method === "GET" && p === "/api/sync/preview") {
+    return { status: 200, body: syncService.preview() };
+  }
+  if (method === "GET" && p === "/api/sync/preview-diff") {
+    const result = await syncService.previewDiff();
+    return { status: result.ok ? 200 : 400, body: result };
+  }
   if (method === "POST" && p === "/api/sync/push") {
-    const opts = await readJson(req).catch(() => null);
+    const opts = await readJsonObject(req);
     try {
-      const r = await syncService.push(undefined, Boolean(opts?.force));
-      return { status: r.success ? 200 : 400, body: r };
+      if (opts?.history !== undefined && typeof opts.history !== "boolean") return { status: 400, body: { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" } };
+      const r = opts?.history === undefined ? await syncService.push(undefined, opts?.force === true, opts?.comparisonToken)
+        : await syncService.push(undefined, opts?.force === true, opts?.comparisonToken, { history: opts.history });
+      return { status: syncRestStatus(r), body: r };
     } catch (e: any) {
+      if (e.syncResult) return { status: syncRestStatus(e.syncResult), body: e.syncResult };
       return { status: 500, body: { success: false, message: e.message || String(e) } };
     }
   }
   if (method === "POST" && p === "/api/sync/pull") {
-    const opts = await readJson(req).catch(() => null);
+    const opts = await readJsonObject(req);
     try {
       const strategy = opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local";
       const resolutions: Record<string, "local" | "remote" | "newest"> = {};
       for (const [key, value] of Object.entries(opts?.resolutions || {})) {
         if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
       }
-      const r = await syncService.pull(undefined, { strategy, resolutions });
-      return { status: r.success ? 200 : 400, body: { ...r, strategy } };
+      if (opts?.history !== undefined && typeof opts.history !== "boolean") return { status: 400, body: { success: false, code: "INVALID_HISTORY_SCOPE", message: "History scope must be a boolean" } };
+      const r = await syncService.pull(undefined, { strategy, resolutions, comparisonToken: opts?.comparisonToken, ...(opts?.history === undefined ? {} : { history: opts.history }) });
+      return { status: syncRestStatus(r), body: { ...r, strategy } };
     } catch (e: any) {
+      if (e.syncResult) return { status: syncRestStatus(e.syncResult), body: e.syncResult };
       return { status: 500, body: { success: false, message: e.message || String(e) } };
     }
   }
@@ -1458,6 +1534,14 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
 // HTTP Server lifecycle
 // ═══════════════════════════════════════════════════════════════
 
+function sendRestJson(res: http.ServerResponse, status: number, body: unknown, headers?: Record<string, string>): void {
+  // Serialize first: a broken service payload must not commit a successful
+  // status/header block before the request boundary can report its failure.
+  const serialized = JSON.stringify(body);
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
+  res.end(serialized);
+}
+
 export function startRestApiServer(): { port: number; ready: Promise<void> } {
   if (server) return { port: apiPort, ready: serverListening ? Promise.resolve() : waitForApiReady() };
 
@@ -1468,47 +1552,46 @@ export function startRestApiServer(): { port: number; ready: Promise<void> } {
   const ready = new Promise<void>((resolve, reject) => { markReady = resolve; markFailed = reject; });
 
   server = http.createServer(async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Browser-Token, X-Cloak-Token, If-Match");
-    res.setHeader("Access-Control-Expose-Headers", "ETag");
-    // Apply before auth/body parsing so errors and credential responses are
-    // never cached either. These paths do not change any unrelated API policy.
-    if (/^\/api\/accounts(?:\/|\?|$)/.test(req.url || "")) res.setHeader("Cache-Control", "no-store");
-
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    if (isRateLimited(loopbackRateKey(req))) {
-      res.writeHead(429, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Too many requests" }));
-      return;
-    }
-    if (!isTrustedOrigin(req.headers.origin, req)) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Forbidden origin" }));
-      return;
-    }
-    const url = new URL(req.url || "/", "http://127.0.0.1:" + apiPort);
-    const openPath = (url.pathname === "/health" || url.pathname === "/openapi.json") && req.method === "GET";
-    if (!openPath && !isAuthorized(req)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized" }));
-      return;
-    }
-
+    let url: URL | undefined;
     try {
+      res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Agent-Browser-Token, X-Cloak-Token, If-Match");
+      res.setHeader("Access-Control-Expose-Headers", "ETag");
+      // Apply before auth/body parsing so errors and credential responses are
+      // never cached either. These paths do not change any unrelated API policy.
+      if (/^\/api\/accounts(?:\/|\?|$)/.test(req.url || "")) res.setHeader("Cache-Control", "no-store");
+
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (isRateLimited(loopbackRateKey(req))) {
+        sendRestJson(res, 429, { error: "Too many requests" });
+        return;
+      }
+      if (!isTrustedOrigin(req.headers.origin, req)) {
+        sendRestJson(res, 403, { error: "Forbidden origin" });
+        return;
+      }
+      url = new URL(req.url || "/", "http://127.0.0.1:" + apiPort);
+      const openPath = (url.pathname === "/health" || url.pathname === "/openapi.json") && req.method === "GET";
+      if (!openPath && !isAuthorized(req)) {
+        sendRestJson(res, 401, { error: "Unauthorized" });
+        return;
+      }
+
       const { status, body, headers } = await handleRequest(req, url);
-      res.writeHead(status, { "Content-Type": "application/json", ...headers });
-      res.end(JSON.stringify(body));
+      if (res.destroyed || res.writableEnded) return;
+      sendRestJson(res, status, body, headers);
     } catch (e: any) {
-      const status = e instanceof HttpError || (e && typeof e.status === "number") ? e.status : 500;
-      if (status >= 500) console.error("[api] request failed:", url.pathname, e);
-      res.writeHead(status, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: e.message || "Internal error" }));
+      if (res.destroyed || res.writableEnded) return;
+      if (res.headersSent) { res.destroy(); return; }
+      const status = e instanceof HttpError || (e && typeof e.status === "number") ? e.status : e?.code === "ERR_INVALID_URL" ? 400 : 500;
+      if (status >= 500) console.error("[api] request failed:", url?.pathname, e);
+      sendRestJson(res, status, { error: e.message || "Internal error" });
     }
   });
 
@@ -1683,23 +1766,23 @@ function buildOpenApi(): any {
       "/api/profiles/import-batch": {
         post: {
           summary: "Import several profile backup ZIPs at once (per-archive success/failure report)",
-          requestBody: { content: { "application/json": { schema: { type: "object", required: ["zipPaths"], properties: { zipPaths: { type: "array", items: { type: "string" }, description: "Absolute paths to profile backup ZIPs" } } } } } },
-          responses: ok("Batch import report"),
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["zipPaths"], properties: { zipPaths: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Absolute paths to profile backup ZIPs; invalid entries are rejected, never silently filtered" } } } } } },
+          responses: { ...ok("Batch import report; success is true only for completed, never partial/skipped/failed. Per-item warnings and error codes are retained."), "400": { description: "Invalid archive input" } },
         },
       },
       "/api/profiles/export": {
         post: {
           summary: "Export several stopped profiles into one directory (running profiles are skipped)",
-          requestBody: { content: { "application/json": { schema: { type: "object", required: ["dirIds"], properties: { dirIds: { type: "array", items: { type: "string" }, description: "Profile dirIds to export" }, destDir: { type: "string", description: "Optional destination directory; defaults to <appData>/backups" } } } } } },
-          responses: ok("Batch export report"),
+          requestBody: { content: { "application/json": { schema: { type: "object", required: ["dirIds"], properties: { dirIds: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Profile dirIds to export; invalid entries are rejected, never silently filtered" }, destDir: { type: "string", description: "Optional destination directory; defaults to <appData>/backups" }, overwrite: { type: "boolean", default: false, description: "Explicit confirmation to replace existing backup files for these profiles; a destination directory alone is not confirmation" } } } } } },
+          responses: { ...ok("Batch export report with completed/partial/skipped/failed outcome; success is true only for completed. All per-item warnings and error codes are retained."), "400": { description: "Invalid archive input" } },
         },
       },
       "/api/profiles/{dirId}/export": {
         parameters: [dirIdParam],
         post: {
           summary: "Export a stopped profile into a portable ZIP backup",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { destPath: { type: "string", description: "Optional absolute destination path; defaults to <appData>/backups/profile-<dirId>-<timestamp>.zip" } } } } } },
-          responses: ok("Export result with filePath"),
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { destPath: { type: "string", description: "Optional absolute destination path; defaults to <appData>/backups/profile-<dirId>-<timestamp>.zip" }, overwrite: { type: "boolean", default: false, description: "Explicit confirmation to replace an existing destination; conflicts are never automatically retried" } } } } } },
+          responses: { ...ok("Committed export result with filePath and optional post-publication warnings"), "400": { description: "Invalid archive input" }, "409": { description: "ARCHIVE_DESTINATION_EXISTS or ARCHIVE_DESTINATION_CHANGED; explicit reconfirmation required" } },
         },
       },
       "/api/proxies": {
@@ -2008,19 +2091,36 @@ function buildOpenApi(): any {
           responses: ok("Resolve result"),
         },
       },
-      "/api/sync/status": { get: { summary: "Sync configuration / connectivity status", responses: ok("Sync status") } },
+      "/api/sync/config": { post: {
+        summary: "Save sync settings (member+); explicitly consent/select limited History or full environment migration",
+        description: "Full migration includes history, site login/session data, saved browser passwords and required proxy credentials. Consent must express the human user's explicit scope intent: never infer it from ordinary/history consent or let an AI approve password sync autonomously. Existing configs stay limited. No guaranteed login or hardware-passkey portability.",
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+          enabled: { type: "boolean" }, endpoint: { type: "string" }, bucket: { type: "string" }, accessKey: { type: "string" }, secretKey: { type: "string" }, custodyConsent: { type: "boolean" },
+          historyConsent: { type: "boolean", description: "Explicit user consent including Firefox bookmarks; main stamps time, false revokes history and disables full migration" },
+          includeHistory: { type: "boolean", description: "Select separately consented history for future automatic operations; default false" },
+          includeFullProfile: { type: "boolean", description: "Select full migration for future manual/automatic sync; requires custody/full consent and a valid locally encrypted passphrase. Absent keeps limited legacy scope" },
+          fullProfileConsent: { type: "boolean", description: "Explicit human consent for history, site data, saved browser passwords and required proxy credentials. Main stamps full and History consent; false disables full migration" },
+          fullProfilePassphrase: { type: "string", maxLength: 1024, format: "password", writeOnly: true, description: "12–1024 UTF-8 bytes, spaces preserved; empty keeps existing. Enter the same passphrase on the new machine; forgotten is unrecoverable. Not S3 Secret Key. Saved encrypted locally only; neither plaintext nor vault ciphertext is returned or synced" },
+        } } } } },
+        responses: { ...ok("Settings saved; status contains only fullProfilePassphraseSet, never the passphrase or vault ciphertext"), "400": { description: "Invalid input, unavailable encrypted secret storage, or missing separate scope consent/passphrase" }, "401": { description: "Authentication required" }, "403": { description: "Team role denied" } },
+      } },
+      "/api/sync/history/{dirId}": { get: { summary: "Read independent WAL-aware semantic history state on an owned copy; no runtime UI proof", parameters: [{ in: "path", name: "dirId", required: true, schema: { type: "string" } }], responses: ok("History state, coverage and freshness") } },
+      "/api/sync/status": { get: { summary: "Sync configuration and active/last operation state; history coverage is independent of the config badge", responses: ok("Sync status") } },
+      "/api/sync/preview": { get: { summary: "Local sync coverage preview", responses: ok("Local preview") } },
+      "/api/sync/preview-diff": { get: { summary: "Read-only comparison with coverage and a content-bound comparisonToken", responses: ok("Comparison preview") } },
       "/api/sync/push": {
         post: {
           summary: "Push local config + artifacts to the team workspace",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { force: { type: "boolean", description: "Force push past remote profile locks" } } } } } },
-          responses: ok("Push result"),
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Override saved history scope for this operation only; true requires separate consent and includes Firefox bookmarks" }, force: { type: "boolean", description: "Admin-only override of remote profile locks" }, comparisonToken: { type: "object", description: "Unmodified token from preview-diff; stale content returns 409", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } } } } } } },
+          responses: { ...ok("Push result with commit facts, per-item states and warnings"), "403": { description: "Team role denied" }, "409": { description: "Busy, stale comparison, partial/unconfirmed commit or recovery required; inspect result before retrying" } },
         },
       },
       "/api/sync/pull": {
         post: {
           summary: "Pull + merge remote config (global or per-entry conflict strategy)",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
-          responses: ok("Pull result with merge summary"),
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Select History/Places explicitly; never invent visits from legacy/config-only backups" }, comparisonToken: { type: "object", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } }, strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
+          description: "Member+ when team RBAC is enabled. comparisonToken from preview-diff may be supplied to reject stale decisions before changing data.",
+          responses: { ...ok("Pull result with merge summary and commit facts"), "403": { description: "Team role denied" }, "409": { description: "Busy, stale comparison, partial/unconfirmed commit or recovery required; inspect result before retrying" } },
         },
       },
       "/api/audit": {
@@ -2136,6 +2236,14 @@ function isTrustedOrigin(origin: string | undefined, req?: http.IncomingMessage)
 
 function createLocalToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+async function readJsonObject(req: http.IncomingMessage): Promise<Record<string, any>> {
+  const body = await readJson(req);
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "JSON body must be an object");
+  }
+  return body;
 }
 
 async function readJson(req: http.IncomingMessage): Promise<any> {

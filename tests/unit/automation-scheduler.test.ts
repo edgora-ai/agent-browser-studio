@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   saveConfig: vi.fn(),
   launchBrowser: vi.fn(),
   stopBrowser: vi.fn(),
+  syncPush: vi.fn(),
+  syncPull: vi.fn(),
   enqueueJob: vi.fn(),
   markRunning: vi.fn(),
   markRunningAttempt: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock("../../src/main/services/browser-manager.js", () => ({
 }));
 vi.mock("../../src/main/services/local-agent.js", () => ({ agentChat: vi.fn(), getOrDetectLlmConfig: vi.fn() }));
 vi.mock("../../src/main/services/agent-run-trace.js", () => ({ agentRunRecorder: {} }));
-vi.mock("../../src/main/services/sync-service.js", () => ({ syncService: {} }));
+vi.mock("../../src/main/services/sync-service.js", () => ({ syncService: { push: mocks.syncPush, pull: mocks.syncPull } }));
 vi.mock("../../src/main/services/event-bus.js", () => ({ onEvent: () => vi.fn() }));
 // Applies the mutation to the mock config so assertions can read the result
 // through current(), mirroring what the real store does via its hook.
@@ -100,6 +102,8 @@ beforeEach(() => {
   mocks.saveConfig.mockImplementation((cfg) => { mocks.config = structuredClone(cfg); });
   mocks.launchBrowser.mockReset().mockResolvedValue({ pid: 10, cdpPort: 20 });
   mocks.stopBrowser.mockReturnValue(true);
+  mocks.syncPush.mockReset().mockResolvedValue({ success: true, message: "synthetic sync" });
+  mocks.syncPull.mockReset().mockResolvedValue({ success: true, message: "synthetic sync" });
   let jobId = 0;
   mocks.enqueueJob.mockImplementation(() => ({ id: `job_${++jobId}` }));
   jobGuard.reset();
@@ -110,6 +114,44 @@ afterEach(async () => {
   for (const release of pending.splice(0)) release();
   await vi.advanceTimersByTimeAsync(0);
   vi.useRealTimers();
+});
+
+describe("synchronization retry commit boundaries", () => {
+  for (const action of ["sync-push", "sync-pull"] as const) {
+    const execute = () => action === "sync-push" ? mocks.syncPush : mocks.syncPull;
+    it.each([
+      { outcome: "partial", localCommit: "committed", remoteCommit: "committed" },
+      { outcome: "partial", localCommit: "none", remoteCommit: "unknown" },
+      { outcome: "recovery-required", localCommit: "partial", remoteCommit: "none" },
+      { outcome: "failed", localCommit: "unknown", remoteCommit: "none" },
+    ])(`${action} never automatically replays a committed/unconfirmed attempt: %j`, async (facts) => {
+      execute().mockResolvedValue({ success: false, message: "synthetic commit requires review", ...facts });
+      once({ action: { type: action }, maxRetries: 2 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(execute()).toHaveBeenCalledTimes(1);
+      expect(mocks.markRetryWaiting).not.toHaveBeenCalled();
+      expect(mocks.markFailed).toHaveBeenCalledWith("job_1", expect.stringContaining("requires review"));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(execute()).toHaveBeenCalledTimes(1);
+    });
+    it(`${action} keeps configured retry for a proven no-commit preparation failure`, async () => {
+      execute().mockResolvedValueOnce({ success: false, message: "synthetic preparation failure", outcome: "failed", localCommit: "none", remoteCommit: "none" });
+      once({ action: { type: action }, maxRetries: 1 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.markRetryWaiting).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(execute()).toHaveBeenCalledTimes(2);
+      expect(mocks.markDone).toHaveBeenCalledTimes(1);
+    });
+    it(`${action} does not retry an untyped transport failure with unknown effects`, async () => {
+      execute().mockRejectedValue(new Error("synthetic transport lost"));
+      once({ action: { type: action }, maxRetries: 2 });
+      startScheduler(); await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.markRetryWaiting).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(execute()).toHaveBeenCalledTimes(1);
+    });
+  }
 });
 
 describe("once scheduler execution lifecycle", () => {

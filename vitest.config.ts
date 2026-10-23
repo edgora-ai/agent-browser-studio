@@ -12,6 +12,11 @@ export default defineConfig({
     exclude: ["node_modules", "dist", "tests/e2e/j[1-4]-*.test.ts"],
     globals: true,
     environment: "node",
+    // Bound asynchronous test/hook waits. These timers cannot preempt a
+    // synchronous loop; those paths need their own progress/ancestry bounds.
+    // Explicit per-test deadlines still apply to expensive typecheck fixtures.
+    testTimeout: 180_000,
+    hookTimeout: 180_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html"],

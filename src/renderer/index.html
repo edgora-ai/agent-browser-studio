@@ -39,6 +39,7 @@
  </ul>
  <div class="sidebar-footer">
  <span id="sidebar-chrome-status" class="sidebar-version"></span>
+ <button id="sidebar-about" type="button" class="sidebar-about-link" data-role="cmd" data-cmd="showAbout" data-i18n="about.open">About</button>
  <div class="sidebar-controls" style="display:flex;gap:4px;margin-top:8px;align-items:center;">
  <!-- R181: was a bare <div> with a click handler — no tabindex, no role, so
       the theme switch was mouse-only and announced as plain text. role=switch
@@ -113,7 +114,7 @@
   </div>
  <div id="backup-hint" class="card backup-hint" style="display:none;">
   <div style="flex:1;">
-   <b data-icon="lock"><span data-i18n="backup.hint.title">Your data lives only on this machine</span></b>
+   <b data-icon="lock"><span data-i18n="backup.hint.title">Keep an independent backup of your profile data</span></b>
    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="backup.hint.body">Profiles contain real account data. Keep export backups on a separate disk or independently stored cloud/S3 backup. The local 7-day trash only protects against accidental deletion, not disk failure. Encrypted cookies and sessions may require signing in again on another machine.</div>
   </div>
   <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="dismissBackupHint" data-i18n="backup.hint.dismiss">Don't remind me again</button>
@@ -173,7 +174,8 @@
  <p><span data-i18n="sync.status.label">Sync is</span> <strong id="sync-enabled-text" data-i18n="sync.status.disabled">disabled</strong></p>
  <p><span data-i18n="sync.endpoint">Endpoint</span>: <span id="sync-endpoint">--</span></p>
  <p><span data-i18n="sync.bucket">Bucket</span>: <span id="sync-bucket">--</span></p>
- <p class="hint-line" data-i18n="sync.synced-scope">Synced: config · cookies (CDP) · localStorage · bookmarks · preferences</p>
+ <p class="hint-line" data-i18n="sync.synced-scope">Supported sync data: the configuration badge covers portable settings and Preferences only. History/Firefox bookmarks require separate consent and scope; Cookies and LocalStorage depend on capture. Check the operation result for per-item coverage/freshness and skips; this is not a full-restore claim.</p>
+ <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="syncRecheckHistory" data-i18n="sync.history.recheck">Recheck stopped profiles’ history</button>
  </div>
  <div class="btn-row">
  <button class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncPush" data-i18n="sync.push" data-icon="upload">Push</button>
@@ -184,6 +186,7 @@
    <option value="newest" data-i18n="sync.strategy.newest">Newest wins</option>
  </select>
  </div>
+ <p id="sync-full-profile-pull-note" class="status-note" style="display:none;" data-i18n="sync.full-profile.pull-strategy">Full migration defaults to a complete remote restore; the original directory is kept as a backup. You can explicitly change the strategy.</p>
  </div>
  <div class="card">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;">
@@ -205,7 +208,7 @@
  <h3 data-i18n="sync.diff.title">Team Diff preview (changes before push/pull)</h3>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="loadSyncDiff" data-i18n="sync.diff.compare" data-icon="sync">Compare with remote</button>
  </div>
- <p id="sync-diff-message" class="section-desc" data-i18n="sync.diff.desc">Shows the profiles, proxies, accounts and extensions that exist only locally or only remotely, and what a push would overwrite or remove. This also runs automatically before every push.</p>
+ <p id="sync-diff-message" class="section-desc" data-i18n="sync.diff.desc">Compares portable profile settings and Preferences, proxy/account metadata and extension inventory only; not live Cookies, LocalStorage databases or full profile files. Push checks automatically; Pull uses the comparison and per-item choices actually shown here. Compare again after changes.</p>
  <div id="sync-diff"><div class="empty-state" data-i18n="sync.diff.empty">Not compared yet — click "Compare with remote"</div></div>
  </div>
  <div class="card">
@@ -219,9 +222,23 @@
  <!-- sale-93: data-custody consent is SEPARATE from the enable checkbox. -->
  <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
   <input type="checkbox" id="sync-custody-consent" style="margin-top:2px;">
-  <span data-i18n="sync.custody">I agree that enabling sync uploads my profile data (cookies, sessions, localStorage, bookmarks) to my own bucket above, for as long as sync stays enabled. I can delete it by disabling sync and deleting the remote objects.</span>
+  <span data-i18n="sync.custody">I agree to upload portable settings and Preferences, plus Cookies, LocalStorage and extension packages available for this capture, to my bucket. This may include login-session Cookies. Consent remains active while sync is enabled; to remove remote data, disable sync and delete the remote objects.</span>
  </label>
  <div id="sync-custody-state" class="status-note"></div>
+ <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
+  <input type="checkbox" id="sync-history-consent" style="margin-top:2px;">
+  <span data-i18n="sync.history.consent">I separately consent to syncing browsing History and Firefox Places, which may include bookmarks, URLs and titles, to my bucket. Disabling this scope does not delete existing remote objects. Limited-mode History uses custodial bucket storage, not an additionally end-to-end-encrypted backup.</span>
+ </label>
+ <label><input type="checkbox" id="sync-include-history"><span data-i18n="sync.history.include">Include consented history/bookmarks in future push/pull and automatic sync (save first)</span></label>
+ <p class="status-note" data-i18n="sync.history.restore-note">Only stopped, stable SQLite groups are captured/restored. Legacy backups cannot recover history they never uploaded; absent, empty, preserved and failed snapshots are distinct. A restored file group is not browser-UI or live identity verification.</p>
+ <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;margin:6px 0;">
+  <input type="checkbox" id="sync-full-profile-consent" aria-describedby="sync-full-profile-notice" style="margin-top:2px;">
+  <span data-i18n="sync.full-profile.consent">Full environment migration (includes saved browser passwords, history and site data)</span>
+ </label>
+ <p id="sync-full-profile-notice" class="status-note" data-i18n="sync.full-profile.notice">I separately authorize migrating history/bookmarks, site login/session data, saved browser passwords and required proxy credentials in a passphrase-encrypted artifact. Staying signed in is not guaranteed; hardware-bound passkeys cannot be migrated. Disabling this scope does not delete existing remote objects.</p>
+ <div class="form-row"><label for="sync-full-profile-passphrase" data-i18n="sync.full-profile.passphrase">Migration passphrase</label><input id="sync-full-profile-passphrase" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="sync-full-profile-passphrase-help"></div>
+ <p id="sync-full-profile-passphrase-help" class="status-note" data-i18n="sync.full-profile.passphrase-help">12–1024 UTF-8 bytes; spaces are preserved. Enter the same passphrase on the new machine. A forgotten passphrase cannot be recovered. This is not your S3 Secret Key. Saved encrypted on this machine only; leave blank to keep it.</p>
+ <div id="sync-full-profile-state" class="status-note" role="status" aria-live="polite"></div>
  <button type="button" class="btn btn-primary btn-sm" data-role="cmd" data-cmd="syncSave" data-i18n="common.save">Save</button>
  </div>
  </div>
@@ -625,7 +642,7 @@
  </section>
 
 <!-- Approval dialog (risky-operation authorization) -->
-<dialog id="dlg-approval" data-no-close>
+<dialog id="dlg-approval" aria-labelledby="dlg-approval-title" data-no-close>
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
  <h3 id="dlg-approval-title" style="margin:0;" data-icon="alert"><span data-i18n="approval.dialog-title">Operation Authorization</span></h3>
  <button type="button" class="btn-icon btn btn-secondary btn-sm" data-role="cmd" data-cmd="approvalDeny" data-cmd-arg="close" data-icon="close" data-i18n-aria-label="common.close" aria-label="Close"></button>
@@ -647,13 +664,37 @@
 
 <!-- ── New Profile Dialog ── -->
 
-<!-- ── Bulk Import Dialog ── -->
+<!-- ── Read-only fingerprint comparison; mutations require separate consent ── -->
+<dialog id="dlg-fingerprint-drift" class="fingerprint-drift-dialog" aria-labelledby="dlg-fingerprint-drift-title" aria-describedby="fingerprint-drift-scope">
+ <h3 id="dlg-fingerprint-drift-title" data-icon="chip"><span data-i18n="fingerprint.title">Fingerprint comparison</span></h3>
+ <p id="fingerprint-drift-profile" class="fingerprint-drift-profile"></p>
+ <p id="fingerprint-drift-scope" class="fingerprint-drift-scope" data-i18n="fingerprint.scope">Captured fields only, not proof that a site or account is safe. Reading this view does not change the reference or start a browser. Matching saved settings is not proof of the current runtime.</p>
+ <div id="fingerprint-drift-body" class="fingerprint-drift-body" aria-busy="true"><p data-i18n="common.loading">Loading...</p></div>
+ <p id="fingerprint-drift-status" class="fingerprint-drift-status" role="status" aria-live="polite" aria-atomic="true"></p>
+ <p class="fingerprint-drift-close-boundary" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</p>
+ <details id="fingerprint-drift-advanced" class="fingerprint-drift-advanced" hidden>
+  <summary data-i18n="fingerprint.advanced">Advanced reference actions</summary>
+  <p data-i18n="fingerprint.reset-boundary">Reset only removes the stored comparison reference. It does not fix a changed identity, restore a session, or verify safety.</p>
+  <button id="fingerprint-drift-reset" type="button" class="btn btn-secondary" disabled data-i18n="profile.health.reset">Advanced: reset fingerprint baseline…</button>
+ </details>
+ <div class="fingerprint-drift-actions">
+  <button id="fingerprint-drift-recheck" type="button" class="btn btn-secondary" data-icon="refresh" hidden disabled><span data-i18n="fingerprint.recheck">Check running browser again</span></button>
+  <button id="fingerprint-drift-capture" type="button" class="btn btn-secondary" data-icon="chip" hidden disabled><span data-i18n="fingerprint.capture">Capture/update live reference…</span></button>
+  <button id="fingerprint-drift-update" type="button" class="btn btn-secondary" hidden disabled data-i18n="fingerprint.update">Use reviewed launch snapshot as reference…</button>
+  <button id="fingerprint-drift-launch" type="button" class="btn btn-secondary" hidden disabled><span id="fingerprint-drift-launch-label" data-i18n="fingerprint.retry-launch">Retry normal launch for fresh evidence</span></button>
+  <button id="fingerprint-drift-close" type="button" class="btn btn-primary" data-i18n="common.close" autofocus>Close</button>
+ </div>
+</dialog>
+
+<!-- ── Host Environment Dialog ── -->
 <dialog id="dlg-env-risk" aria-labelledby="dlg-env-risk-title" style="max-width:660px;width:94%;">
  <div>
   <h3 id="dlg-env-risk-title" data-icon="monitor"><span data-i18n="env.risk.title">Host environment risk check</span></h3>
-  <div id="env-risk-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
+  <div id="env-risk-body" style="max-height:52vh;overflow:auto;" role="status" aria-live="polite"><span data-i18n="common.loading">Loading...</span></div>
   <div id="env-risk-history"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+  <div class="hint-line" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="env-risk-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelEnvRisk" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskExport" data-icon="download"><span data-i18n="env.risk.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="envRiskClear" data-icon="trash"><span data-i18n="env.risk.clear">Clear history</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
@@ -665,11 +706,39 @@
 <dialog id="dlg-webrtc-diag" aria-labelledby="dlg-webrtc-diag-title" style="max-width:640px;width:94%;">
  <div>
   <h3 id="dlg-webrtc-diag-title" data-icon="globe"><span data-i18n="webrtc.diag.title">浏览器内 WebRTC 诊断</span></h3>
-  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" data-i18n="common.loading">Loading...</div>
+  <div id="webrtc-diag-body" style="max-height:52vh;overflow:auto;" role="status" aria-live="polite"><span data-i18n="common.loading">Loading...</span></div>
   <div id="webrtc-diag-history"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+  <div class="hint-line" data-i18n="health.close-boundary">Closing this dialog only hides the view. It does not cancel the check or stop the browser.</div>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="webrtc-diag-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelWebRtcDiag" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagExport" data-icon="download"><span data-i18n="webrtc.diag.export">Export report</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="webRtcDiagClear" data-icon="trash"><span data-i18n="webrtc.diag.clear">Clear history</span></button>
+   <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
+  </div>
+ </div>
+</dialog>
+
+<!-- ── Explicit selected-page network observation (no launch or navigation) ── -->
+<dialog id="dlg-network-observation" aria-labelledby="dlg-network-observation-title" style="max-width:760px;width:94%;">
+ <div style="min-width:0;">
+  <h3 id="dlg-network-observation-title" data-icon="activity"><span data-i18n="network.title">Observe this page’s network for 10 seconds</span></h3>
+  <p class="hint-line" data-i18n="network.privacy">Only origins and allowlisted request facts appear here. Current page details stay in this dialog’s memory and are not exported.</p>
+  <label for="network-page-select" data-i18n="network.pages.label">Already-running owned Chromium page</label>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;min-width:0;">
+   <select id="network-page-select" data-role="change" data-change-cmd="networkPageChanged" style="flex:1 1 260px;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;" disabled>
+    <option value="" data-i18n="network.pages.placeholder">Choose a page by origin and ordinal</option>
+   </select>
+   <button id="network-page-refresh" type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="refreshNetworkPages" data-icon="refresh"><span data-i18n="network.pages.refresh">Refresh pages</span></button>
+  </div>
+  <div id="network-page-origin" style="min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word;font-size:12px;font-family:var(--mono);margin-top:6px;"></div>
+  <div id="network-observation-status" role="status" aria-live="polite" data-network-phase="idle" style="font-size:12px;color:var(--text-muted);margin:10px 0;"><span data-i18n="network.choose">Choose a page, then explicitly start the next observation window.</span></div>
+  <div id="network-observation-body" style="max-height:46vh;overflow:auto;min-width:0;overflow-wrap:anywhere;"></div>
+  <p class="hint-line" data-i18n="network.limits">Workers, out-of-process frames, console and storage are not observed. Bridge and upstream fault attribution remain unknown.</p>
+  <p class="hint-line" data-i18n="network.close-boundary">Closing requests cancellation of this observation and discards page details. Its slot stays occupied until the original work and cleanup settle; the browser is not stopped.</p>
+  <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:10px;">
+   <button id="network-observation-start" type="button" class="btn btn-primary" data-role="cmd" data-cmd="startNetworkObservation" data-icon="play" disabled><span data-i18n="network.start">Start 10-second observation</span></button>
+   <button id="network-observation-cancel" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="cancelNetworkObservation" data-icon="stop" disabled><span data-i18n="health.cancel">Request cancellation</span></button>
+   <button id="network-observation-clear" type="button" class="btn btn-secondary" data-role="cmd" data-cmd="networkObservationClear" data-icon="trash"><span data-i18n="network.clear">Clear network summaries</span></button>
    <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close">Close</button>
   </div>
  </div>
@@ -712,7 +781,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <form method="dialog" data-role="submit" data-submit-cmd="createProfile">
  <h3 id="dlg-profile-title" data-icon="profile"><span data-i18n="profile.new.title">Create New Profile</span></h3>
  <div class="form-row"><label for="new-profile-name" data-i18n="profile.new.field.name">Name *</label><input id="new-profile-name" data-i18n-placeholder="profile.new.field.name.placeholder" placeholder="My Profile" required></div>
- <p style="font-size:var(--fs-micro);color:var(--text-muted);margin:2px 0 6px;" data-i18n="profile.new.hint">Only Name is required — everything else uses defaults. More identity and fingerprint options live under “Advanced configuration”, and you can change them any time from the profile editor.</p>
+ <p style="font-size:var(--fs-micro);color:var(--text-muted);margin:2px 0 6px;" data-i18n="profile.new.hint">Only Name is required. Common identity settings are below; Chromium-only options are under “Advanced configuration”. You can edit saved settings later.</p>
  <div class="form-row"><label for="new-profile-preset" data-icon="target"><span data-i18n="profile.new.preset">Business Preset</span></label>
  <select id="new-profile-preset" data-role="change" data-change-cmd="presetChanged">
  <option value="" data-i18n="profiles.preset.none">None — manual setup</option>
@@ -726,48 +795,51 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="firefox" data-i18n="profile.new.browser.firefox">Firefox (installed)</option>
  </select>
  </div>
- <div id="new-profile-firefox-opts" style="display:none;font-size:11px;color:var(--text-muted);margin:2px 0 8px;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox engine — launches the installed Firefox with a remote debugging port. Managed fingerprint injection parity is a known follow-up; Firefox profiles currently run in pass-through mode.</span></div>
+ <div id="new-profile-firefox-opts" class="field-note-tight" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></div>
+ <div id="new-profile-firefox-webrtc" class="firefox-webrtc-section" style="display:none;">
+ <div class="form-row"><label for="new-agent-browser-webrtc-mode-fx" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
+ <select id="new-agent-browser-webrtc-mode-fx">
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
+ </select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.firefox-routing-help">Firefox forces ICE through its configured proxy and hides host addresses; its WebRTC proxy path is TCP, not SOCKS UDP. Choose Real to use native routing, or Disabled to remove the WebRTC API. Address replacement is not available on this engine.</p>
+ </div>
  </div>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-platform" data-i18n="profile.new.field.platform">Platform</label>
  <select id="new-agent-browser-platform">
+ <option value="" selected data-i18n="profile.new.platform.auto">Auto (host OS)</option>
  <option value="windows">Windows</option>
  <option value="macos">macOS</option>
  </select>
  </div>
  <div class="form-row" id="new-profile-proxy-row"><label for="new-profile-proxy" data-i18n="profile.new.field.proxy">Proxy</label><select id="new-profile-proxy"><option value="" data-i18n="bulk.proxy.default">(default)</option></select></div>
  </div>
- <div id="new-profile-consistency" style="display:none;margin:6px 0;"></div>
- <!-- Managed Chromium-specific options -->
- <details id="new-profile-advanced">
- <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;" data-icon="settings"><span data-i18n="profile.new.advanced-config">Advanced configuration</span></summary>
- <div id="new-profile-agent-browser-opts" style="display:block;">
+ <p id="new-profile-platform-note" class="field-note-tight" data-profile-engine="chromium" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
+ <!-- Common managed identity controls for both engines. -->
+ <div id="new-profile-managed-identity">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-fingerprint-mode" data-i18n="profile.new.field.fingerprint-mode">Fingerprint Mode</label>
  <select id="new-agent-browser-fingerprint-mode">
  <option value="managed" data-i18n="profile.new.mode.managed">Managed identity</option>
- <option value="off" data-i18n="profile.new.mode.passthrough">Pass-through (real machine)</option>
+ <option value="off" data-i18n="profile.new.mode.passthrough">Off (no managed identity)</option>
  </select>
  </div>
- <div class="form-row"><label for="new-agent-browser-browser-version" data-i18n="profile.new.field.version">Chromium Build</label>
- <select id="new-agent-browser-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
- </div>
- </div>
- <p class="field-note-tight" data-i18n="profile.new.mode.help">Pass-through disables seed, platform, locale, timezone, WebRTC, geometry and native fingerprint overrides for stock comparison.</p>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies">Allow third-party cookies for embedded auth/payment/challenge compatibility</span></label>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm">Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</span></label>
-<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title">Show profile name in taskbar / window title (RoxyBrowser-style)</span></label>
 <div class="form-row"><label for="new-agent-browser-seed" data-i18n="profile.new.field.seed">Fingerprint Seed</label>
  <div style="display:flex;gap:8px;align-items:center;">
  <input id="new-agent-browser-seed" type="number" data-i18n-placeholder="profile.new.field.seed.placeholder" placeholder="10000-99999 (empty = random)" min="1" max="999999" style="flex:1;">
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="random-seed" data-cmd-target="new-agent-browser-seed" data-icon="wand"><span data-i18n="profile.new.random">Random</span></button>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces; it does not guarantee an identical whole fingerprint. Chromium exposes the host GPU. Choose the host OS; cross-OS GPU compatibility is unverified.</p>
  </div>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.mode.help">Off disables managed identity overrides and retains the stored values. It is not an unmodified-browser or scheduling baseline.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-timezone" data-i18n="profile.new.field.timezone">Timezone</label>
  <select id="new-agent-browser-timezone">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
  <option value="Asia/Seoul">Asia/Seoul (UTC+9)</option>
@@ -790,11 +862,9 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="Australia/Sydney">Australia/Sydney (UTC+10)</option>
  </select>
  </div>
- </div>
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-locale" data-i18n="profile.new.field.locale">Language / Locale</label>
  <select id="new-agent-browser-locale">
- <option value="" data-i18n-option="profile.new.locale.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.locale.auto">Auto (resolved at launch)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
@@ -814,15 +884,32 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <option value="vi-VN">vi-VN (Vietnamese)</option>
  </select>
  </div>
+ </div>
+ </div>
+ <div id="new-profile-consistency" style="display:none;margin:6px 0;"></div>
+ <!-- Chromium-only advanced controls; hidden values are never Firefox input. -->
+ <details id="new-profile-advanced" data-profile-engine="chromium">
+ <summary style="cursor:pointer;font-size:12px;color:var(--text);font-weight:600;margin:10px 0 4px;" data-icon="settings"><span data-i18n="profile.new.advanced-config">Advanced configuration</span></summary>
+ <div id="new-profile-agent-browser-opts">
+ <div class="form-row"><label for="new-agent-browser-browser-version" data-i18n="profile.new.field.version">Chromium Build</label>
+ <select id="new-agent-browser-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.field.seed.help">Seed varies managed privacy surfaces, not the whole physical device. Supported macOS ARM64 managed setups also select a WebGL persona; GPU capabilities stay native.</p>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies">Allow third-party cookies for embedded auth/payment/challenge compatibility</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm">Enable Widevine/DRM (streaming sites) — uses a detected Widevine CDM</span></label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="new-agent-browser-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title">Show profile name in taskbar / window title (RoxyBrowser-style)</span></label>
+ <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label for="new-agent-browser-webrtc-mode" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
  <select id="new-agent-browser-webrtc-mode">
- <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
- <option value="real" data-i18n="profile.new.webrtc.real">Real network</option>
- <option value="altered" data-i18n="profile.new.webrtc.altered">Altered / custom exit IP</option>
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="altered" data-i18n="profile.new.webrtc.altered">Legacy address replacement (may break calls)</option>
  <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.routing-help">Proxy-only blocks non-proxied UDP and preserves relay candidates. Ordinary HTTP does not carry UDP; calls may require TURN/TCP or TURN/TLS. IP replacement is not forwarding. With fingerprinting off, use Auto, Proxy-only or explicit Real.</p>
  <div class="form-row"><label for="new-agent-browser-webrtc" data-i18n="profile.new.field.webrtc">WebRTC IP</label>
  <input id="new-agent-browser-webrtc" data-i18n-placeholder="profile.new.field.webrtc.placeholder" placeholder="Proxy exit IP or explicit override for altered mode">
  </div>
@@ -847,18 +934,21 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
- <p class="field-note-tight seed-note" data-i18n="profile.new.advanced.help">Leave empty to let the seed generate coherent hardware. Override only when a risk checker reports a specific mismatch.</p>
+ <p class="field-note-tight seed-note" data-i18n="profile.new.advanced.help">Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.</p>
+ <p id="new-profile-gpu-help" class="field-note-tight" data-i18n="profile.gpu.help">WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.</p>
+ <p id="new-profile-gpu-scope" class="field-note-tight" data-i18n="profile.gpu.scope">Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="new-agent-browser-gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="new-agent-browser-gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="new-agent-browser-gpu-vendor">GPU Vendor</label><input id="new-agent-browser-gpu-vendor" placeholder="Google Inc. (Apple)" aria-describedby="new-profile-gpu-help new-profile-gpu-scope" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="new-agent-browser-gpu-renderer">GPU Renderer</label><input id="new-agent-browser-gpu-renderer" placeholder="Apple M2" aria-describedby="new-profile-gpu-help new-profile-gpu-scope" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.cpu" for="new-agent-browser-hardware-concurrency">CPU Cores</label><input id="new-agent-browser-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="new-agent-browser-device-memory">Device Memory (GB)</label><input id="new-agent-browser-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="new-agent-browser-screen-width">Screen Width</label><input id="new-agent-browser-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="new-agent-browser-screen-height">Screen Height</label><input id="new-agent-browser-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage" for="new-agent-browser-storage-quota">Storage Quota (MB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="new-agent-browser-storage-quota">Reported quota (MiB)</label><input id="new-agent-browser-storage-quota" type="number" min="1" max="1048576" placeholder="auto" aria-describedby="new-profile-storage-quota-help" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="new-agent-browser-taskbar-height">Taskbar Height</label><input id="new-agent-browser-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
  <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="new-agent-browser-fonts-dir">Fonts Directory</label><input id="new-agent-browser-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
+ <p id="new-profile-storage-quota-help" class="field-note-tight" data-i18n="profile.storage-quota.help">Managed Chromium changes the quota reported to sites, not writable capacity or the LocalStorage limit. MiB = 1,048,576 bytes. Auto reports 120,000 MiB, not free disk space. Increasing this value does not resolve LocalStorage QuotaExceededError.</p>
  </details>
  </div>
  </details>
@@ -994,7 +1084,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ── Extensions Dialog ── -->
-<dialog id="dlg-extensions" class="dialog-wide">
+<dialog id="dlg-extensions" class="dialog-wide" aria-labelledby="ext-dlg-title">
  <form method="dialog" style="display:flex;flex-direction:column;max-height:80vh;">
  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
  <h3 data-icon="extensions"><span id="ext-dlg-title" data-i18n="ext.dlg.title">Extensions</span></h3>
@@ -1016,9 +1106,9 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ── Extension Repository Dialog ── -->
-<dialog id="dlg-extension-repo">
+<dialog id="dlg-extension-repo" aria-labelledby="dlg-extension-repo-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveRepositoryExtension">
- <h3 data-icon="extensions"><span data-i18n="ext.repo.dlg.title">Add Chrome Extension to Repository</span></h3>
+ <h3 data-icon="extensions"><span id="dlg-extension-repo-title" data-i18n="ext.repo.dlg.title">Add Chrome Extension to Repository</span></h3>
  <p class="dialog-note" data-i18n="ext.dlg.description">Paste a Chrome Web Store URL or a 32-character extension ID. The package is cached once in the private repository and profiles can enable it later.</p>
  <div class="form-row"><label data-i18n="ext.dlg.field.url" for="repo-ext-input">Chrome Extension URL / ID *</label><input id="repo-ext-input" placeholder="https://chromewebstore.google.com/detail/..." data-i18n-en-ok required></div>
  <div class="form-row"><label data-i18n="ext.dlg.field.tags" for="repo-ext-tags">Tags</label><input id="repo-ext-tags" placeholder="wallet, captcha, work" data-i18n-en-ok></div>
@@ -1065,8 +1155,8 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  </form>
 </dialog>
-<dialog id="dlg-account-bind">
- <h3 data-icon="link"><span data-i18n="acct.bind.title">Bind Account to Profiles</span></h3>
+<dialog id="dlg-account-bind" aria-labelledby="dlg-account-bind-title">
+ <h3 data-icon="link"><span id="dlg-account-bind-title" data-i18n="acct.bind.title">Bind Account to Profiles</span></h3>
  <input type="hidden" id="acct-bind-index" value="-1">
  <p class="section-desc" data-i18n="acct.bind.desc">Select the profiles that should auto-fill with this account.</p>
  <div id="acct-bind-list" style="max-height:280px;overflow-y:auto;margin-bottom:10px;">
@@ -1077,15 +1167,16 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  <button class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
  </div>
 </dialog>
-<dialog id="dlg-account-import" class="dialog-wide">
- <h3 data-icon="download"><span data-i18n="acct.import.title">Bulk Import Accounts</span></h3>
+<dialog id="dlg-account-import" class="dialog-wide" aria-labelledby="dlg-account-import-title">
+ <h3 data-icon="download"><span id="dlg-account-import-title" data-i18n="acct.import.title">Bulk Import Accounts</span></h3>
  <p class="section-desc" data-i18n="acct.import.desc">One account per line: <code>url, username, password, tags</code>. Header row (url,username,password,tags) is optional; tags separated by <code>;</code> or <code>|</code>.</p>
  <textarea id="acct-import-text" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;" placeholder="https://twitter.com, alice, s3cret, social" data-i18n-en-ok></textarea>
  <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin:8px 0 4px;">
  <input type="checkbox" id="acct-import-create-profiles"> <span data-i18n="acct.import.create-profile">Also create a bound profile for each account</span>
  </label>
  <div id="acct-import-create-options" style="display:none;font-size:12px;color:var(--text-muted);margin-bottom:6px;">
- <span data-i18n="acct.import.platform">Platform: </span><select id="acct-import-platform" style="font-size:var(--fs-xs);"><option value="windows">Windows</option><option value="macos">macOS</option></select> <span data-i18n="acct.import.naming">— profiles are named <code>host · username</code> and auto-bound to the account.</span>
+ <span data-i18n="acct.import.platform">Platform: </span><select id="acct-import-platform" style="font-size:var(--fs-xs);"><option value="" selected data-i18n="profile.new.platform.auto">Auto (host OS)</option><option value="windows">Windows</option><option value="macos">macOS</option></select> <span data-i18n="acct.import.naming">— profiles are named <code>host · username</code> and auto-bound to the account.</span>
+ <p class="field-note-tight" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
  </div>
 
  <div id="acct-import-status" style="font-size:12px;margin:6px 0;"></div>
@@ -1283,35 +1374,50 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </details>
 </dialog>
 
-<!-- Managed Chromium fingerprint edit dialog -->
-<dialog id="dlg-agent-browser-seed">
+<!-- Shared profile identity editor; engine-specific options stay scoped. -->
+<dialog id="dlg-agent-browser-seed" aria-labelledby="dlg-agent-browser-seed-title">
  <form method="dialog" data-role="submit" data-submit-cmd="saveBrowserMeta">
- <h3 data-icon="browser"><span data-i18n="profile.meta.title">Managed Chromium Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <h3 data-icon="browser"><span id="dlg-agent-browser-seed-title" data-i18n="profile.meta.title">Browser Profile</span> — <span data-i18n="profile.meta.subtitle">Fingerprint &amp; Identity</span></h3>
+ <p id="agent-browser-meta-firefox-note" class="dialog-note" style="display:none;" data-icon="firefox"><span data-i18n="profile.new.firefox-note">Firefox Managed applies supported identity settings. Native/preload coverage depends on the installed engine and does not imply full capability parity. Off disables managed identity overrides; startup and scheduling policies still apply.</span></p>
+ <div id="agent-browser-meta-firefox-webrtc" class="firefox-webrtc-section" style="display:none;">
+ <div class="form-row"><label for="agent-browser-meta-webrtc-mode-fx" data-i18n="profile.new.field.webrtc-mode">WebRTC Mode</label>
+ <select id="agent-browser-meta-webrtc-mode-fx">
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
+ </select>
+ </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.firefox-routing-help">Firefox forces ICE through its configured proxy and hides host addresses; its WebRTC proxy path is TCP, not SOCKS UDP. Choose Real to use native routing, or Disabled to remove the WebRTC API. Address replacement is not available on this engine.</p>
+ </div>
  <!-- R146: --fingerprint=<seed> is a literal CLI flag, so it stays English; only
       the prose around it is translated. Split so the code span keeps its
       formatting instead of being folded into one data-i18n blob. -->
- <p class="dialog-note">
- <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">deterministically generates GPU, screen, hardware, canvas, audio and fonts.</span><br>
- <span data-i18n="profile.meta.flag-rule">Same seed + platform + timezone + locale = 100% identical fingerprint.</span>
+ <p class="dialog-note" data-profile-engine="chromium">
+ <strong data-i18n-en-ok>--fingerprint=&lt;seed&gt;</strong> <span data-i18n="profile.meta.flag-desc">varies managed privacy surfaces and, on supported macOS ARM64 setups, the WebGL persona; GPU capabilities stay native.</span><br>
+ <span data-i18n="profile.meta.flag-rule">The same seed and settings do not guarantee an identical whole fingerprint.</span>
  </p>
  <input type="hidden" id="agent-browser-meta-dir-id">
+ <input type="hidden" id="agent-browser-meta-engine">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.fingerprint-mode" for="agent-browser-meta-fingerprint-mode">Fingerprint Mode</label>
  <select id="agent-browser-meta-fingerprint-mode">
  <option value="managed" data-i18n="profile.new.mode.managed">Managed identity</option>
- <option value="off" data-i18n="profile.new.mode.passthrough">Pass-through (real machine)</option>
+ <option value="off" data-i18n="profile.new.mode.passthrough">Off (no managed identity)</option>
  </select>
  </div>
- <div class="form-row"><label data-i18n="profile.new.field.version" for="agent-browser-meta-browser-version">Chromium Build</label>
+ <div class="form-row" data-profile-engine="chromium"><label data-i18n="profile.new.field.version" for="agent-browser-meta-browser-version">Chromium Build</label>
  <select id="agent-browser-meta-browser-version"><option value="" data-i18n="profile.new.field.version.auto">Auto (newest installed)</option></select>
  </div>
  </div>
- <p class="field-note-tight" data-i18n="profile.new.mode.help.edit">Pass-through disables every managed identity consumer; stored fingerprint fields are retained for switching back.</p>
+ <p class="field-note-tight" data-i18n="profile.new.mode.help.edit">Off disables managed identity overrides; saved fields are retained for switching back. It does not restore unmodified browser startup or scheduling policies.</p>
+<div data-profile-engine="chromium">
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-allow-third-party-cookies" type="checkbox"> <span data-i18n="profile.new.opt.third-party-cookies.edit">Allow third-party cookies for embedded compatibility</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-drm" type="checkbox"> <span data-i18n="profile.new.opt.drm.edit">Enable Widevine/DRM (streaming sites)</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin:6px 0;"><input id="agent-browser-meta-window-title-enabled" type="checkbox" checked> <span data-i18n="profile.new.opt.window-title.edit">Show profile name in taskbar / window title (RoxyBrowser-style, document.title untouched)</span></label>
 <div class="form-row"><label for="agent-browser-meta-window-title-prefix" data-i18n="profile.new.field.title-prefix">Custom Title Prefix</label><input id="agent-browser-meta-window-title-prefix" data-i18n-placeholder="profile.new.field.title-prefix.placeholder" placeholder="Default: profile name"></div>
 <div class="form-row"><label for="agent-browser-meta-app-url" data-i18n="profile.new.field.app-url">Web App URL (PWA / Sub-apps)</label><input id="agent-browser-meta-app-url" data-i18n-placeholder="profile.new.field.app-url.placeholder" placeholder="https://example.com — profile launches as a standalone app window (empty = normal browser)"></div>
+ </div>
  <!-- Name + Proxy -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
  <div class="form-row"><label for="agent-browser-meta-name" data-i18n="profile.edit.field.name">Profile Name *</label><input id="agent-browser-meta-name" data-i18n-placeholder="profile.new.field.name.placeholder" placeholder="My Profile" required></div>
@@ -1332,11 +1438,13 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-profile-engine="chromium" data-i18n="profile.platform.host-help">Managed Chromium requires a supported matching host OS (macOS on Mac, Windows on Windows). A WebGL persona does not enable cross-OS launch. Other OS identities are portable storage only.</p>
+ <p class="field-note-tight" data-i18n="profile.platform.restart-help">After saving identity changes, explicitly stop and restart the browser. Saving or restarting Studio does not update a running browser.</p>
  <!-- Timezone + Locale -->
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.timezone" for="agent-browser-meta-timezone">Timezone</label>
  <select id="agent-browser-meta-timezone">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
  <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
  <option value="Asia/Seoul">Asia/Seoul (UTC+9)</option>
@@ -1360,7 +1468,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <div class="form-row"><label data-i18n="profile.new.field.locale" for="agent-browser-meta-locale">Language / Locale</label>
  <select id="agent-browser-meta-locale">
- <option value="" data-i18n-option="profile.new.tz.auto">Auto (match proxy exit IP)</option>
+ <option value="" data-i18n-option="profile.new.tz.auto">Auto (resolved at launch)</option>
  <option value="zh-CN">zh-CN (Chinese)</option>
  <option value="zh-TW">zh-TW (Traditional Chinese)</option>
  <option value="en-US">en-US (English US)</option>
@@ -1381,15 +1489,19 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </select>
  </div>
  </div>
+ <p class="field-note-tight" data-i18n="profile.identity.auto-help">Auto timezone / locale resolve at launch in Managed mode; not yet checked. Explicit values are kept. Cached proxy data is only a candidate, not proof of live alignment.</p>
+ <div data-profile-engine="chromium">
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
  <div class="form-row"><label data-i18n="profile.new.field.webrtc-mode" for="agent-browser-meta-webrtc-mode">WebRTC Mode</label>
  <select id="agent-browser-meta-webrtc-mode">
- <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (alter to proxy exit IP)</option>
- <option value="real" data-i18n="profile.new.webrtc.real">Real network</option>
- <option value="altered" data-i18n="profile.new.webrtc.altered">Altered / custom exit IP</option>
+ <option value="auto" data-i18n="profile.new.webrtc.auto">Auto (proxy-only with a proxy)</option>
+ <option value="proxy-only" data-i18n="profile.new.webrtc.proxy-only">Proxy-only (requires a proxy)</option>
+ <option value="real" data-i18n="profile.new.webrtc.real">Real network (may bypass proxy)</option>
+ <option value="altered" data-i18n="profile.new.webrtc.altered">Legacy address replacement (may break calls)</option>
  <option value="disable" data-i18n="profile.new.webrtc.disable">Disabled</option>
  </select>
  </div>
+ <p class="field-note-tight" data-i18n="profile.new.webrtc.routing-help">Proxy-only blocks non-proxied UDP and preserves relay candidates. Ordinary HTTP does not carry UDP; calls may require TURN/TCP or TURN/TLS. IP replacement is not forwarding. With fingerprinting off, use Auto, Proxy-only or explicit Real.</p>
  <div class="form-row"><label data-i18n="profile.new.field.webrtc" for="agent-browser-meta-webrtc">WebRTC IP</label>
  <input id="agent-browser-meta-webrtc" data-i18n-placeholder="profile.new.field.webrtc.placeholder" placeholder="Proxy exit IP or explicit override">
  </div>
@@ -1415,19 +1527,23 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
  </div>
  <details style="margin-top:8px;">
  <summary style="cursor:pointer;font-size:12px;color:var(--text);" data-icon="chip"><span data-i18n="profile.new.advanced">Advanced hardware fingerprint</span></summary>
- <p class="field-note-tight seed-note" data-i18n="profile.edit.advanced.help">Leave empty to use seed-generated hardware. Explicit values are passed to managed Chromium launch flags and help tune ping0.cc/env risk items.</p>
+ <p class="field-note-tight seed-note" data-i18n="profile.edit.advanced.help">Leave empty for a seed-selected coherent persona. Explicit CPU, memory, screen and GPU values are partial constraints that must jointly match a supported platform persona, not independent overrides.</p>
+ <p id="edit-profile-gpu-help" class="field-note-tight" data-i18n="profile.gpu.help">WebGL identity only, not a physical GPU: managed mode requires a native ARM64 macOS main process and selected ARM64 Chromium. Vendor: Google Inc. (Apple). Renderers: Apple M1, Apple M2, Apple M3 or Apple M2 Pro. Supported legacy ANGLE/model aliases must exactly match the same persona.</p>
+ <p id="edit-profile-gpu-scope" class="field-note-tight" data-i18n="profile.gpu.scope">Intel, Rosetta, unknown architectures and other Chromium platforms keep native GPU identity; explicit overrides are refused at launch. Fingerprint-off stays native; Firefox is unchanged. WebGPU, GPU capabilities and drawing remain native. Editing is not proof of support; the main process validates at launch.</p>
  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
- <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="agent-browser-meta-gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. / Apple Inc." data-i18n-en-ok></div>
- <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="agent-browser-meta-gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="ANGLE (Intel UHD Graphics 620)" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-vendor" for="agent-browser-meta-gpu-vendor">GPU Vendor</label><input id="agent-browser-meta-gpu-vendor" placeholder="Google Inc. (Apple)" aria-describedby="edit-profile-gpu-help edit-profile-gpu-scope" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.gpu-renderer" for="agent-browser-meta-gpu-renderer">GPU Renderer</label><input id="agent-browser-meta-gpu-renderer" placeholder="Apple M2" aria-describedby="edit-profile-gpu-help edit-profile-gpu-scope" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.cpu" for="agent-browser-meta-hardware-concurrency">CPU Cores</label><input id="agent-browser-meta-hardware-concurrency" type="number" min="1" max="64" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.memory" for="agent-browser-meta-device-memory">Device Memory (GB)</label><input id="agent-browser-meta-device-memory" type="number" min="1" max="128" placeholder="8"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-w" for="agent-browser-meta-screen-width">Screen Width</label><input id="agent-browser-meta-screen-width" type="number" min="320" max="10000" placeholder="1920"></div>
  <div class="form-row"><label data-i18n="profile.new.field.screen-h" for="agent-browser-meta-screen-height">Screen Height</label><input id="agent-browser-meta-screen-height" type="number" min="240" max="10000" placeholder="1080"></div>
- <div class="form-row"><label data-i18n="profile.new.field.storage" for="agent-browser-meta-storage-quota">Storage Quota (MB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" data-i18n-en-ok></div>
+ <div class="form-row"><label data-i18n="profile.new.field.storage" for="agent-browser-meta-storage-quota">Reported quota (MiB)</label><input id="agent-browser-meta-storage-quota" type="number" min="1" max="1048576" placeholder="auto" aria-describedby="edit-profile-storage-quota-help" data-i18n-en-ok></div>
  <div class="form-row"><label data-i18n="profile.new.field.taskbar" for="agent-browser-meta-taskbar-height">Taskbar Height</label><input id="agent-browser-meta-taskbar-height" type="number" min="0" max="500" placeholder="40"></div>
  <div class="form-row" style="grid-column:1 / -1;"><label data-i18n="profile.new.field.fonts-dir" for="agent-browser-meta-fonts-dir">Fonts Directory</label><input id="agent-browser-meta-fonts-dir" data-i18n-placeholder="profile.new.field.fonts-dir.placeholder" placeholder="Absolute path to custom fonts directory"></div>
  </div>
+ <p id="edit-profile-storage-quota-help" class="field-note-tight" data-i18n="profile.storage-quota.help">Managed Chromium changes the quota reported to sites, not writable capacity or the LocalStorage limit. MiB = 1,048,576 bytes. Auto reports 120,000 MiB, not free disk space. Increasing this value does not resolve LocalStorage QuotaExceededError.</p>
  </details>
+ </div>
  <div class="btn-row">
  <button type="submit" class="btn btn-primary btn-sm" data-i18n="common.save">Save</button>
  <button type="button" class="btn btn-secondary btn-sm" data-role="cmd" data-cmd="close-dialog" data-i18n="common.cancel">Cancel</button>
@@ -1554,13 +1670,24 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 </dialog>
 
 <!-- ══════ Batch operation result (PL-01: honest success/failure tally) ══════ -->
-<dialog id="dlg-batch-result" style="min-width:420px;max-width:660px;">
+<dialog id="dlg-batch-result" aria-labelledby="batch-result-title" style="min-width:420px;max-width:660px;">
  <h3 id="batch-result-title" style="margin:0 0 10px;" data-i18n="batch.result">Batch result</h3>
  <div id="batch-result-summary"></div>
  <div id="batch-result-list"></div>
  <div class="btn-row" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
   <button class="btn btn-primary btn-sm" id="batch-result-retry" data-batch-cmd="retry" style="display:none;" data-i18n="batch.retry-failed">Retry failed</button>
   <button class="btn btn-secondary btn-sm" data-batch-cmd="close" data-i18n="common.close">Close</button>
+ </div>
+</dialog>
+
+<!-- ══════ About / build identity (read-only) ══════ -->
+<dialog id="dlg-about" class="dialog-wide" aria-labelledby="dlg-about-title">
+ <h3 id="dlg-about-title" data-icon="info"><span data-i18n="about.title">About Agent Browser Studio</span></h3>
+ <p class="dialog-note" data-i18n="about.scope">Read-only build facts for this copy of the app. Timestamps are file times, not a promise about when a release was published; “unavailable” means this build could not observe the value.</p>
+ <div id="about-body" class="about-grid" role="status" aria-live="polite"><div class="hint-line" data-i18n="common.loading">Loading...</div></div>
+ <div class="btn-row">
+  <button type="button" class="btn btn-secondary" data-role="cmd" data-cmd="copyAboutBuildInfo" data-icon="copy"><span data-i18n="about.copy">Copy technical details</span></button>
+  <button type="button" class="btn btn-primary" data-role="cmd" data-cmd="close-dialog" data-i18n="common.close" autofocus>Close</button>
  </div>
 </dialog>
 
@@ -1571,6 +1698,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <script src="js/app/errors.js"></script>
  <script src="js/app/ipc.js"></script>
 <script src="js/app/tabs.js"></script>
+<script src="js/app/fingerprint-drift.js"></script>
 <script src="js/app/profiles.js"></script>
 <script src="js/app/batch-ui.js"></script>
 <script src="js/app/proxies.js"></script>
@@ -1592,6 +1720,7 @@ Personal, macos, en-GB, Europe/London, 67890," data-i18n-en-ok></textarea>
 <script src="js/app/activity.js"></script>
 <script src="js/app/delegation.js"></script>
 <script src="js/app/license.js"></script>
+<script src="js/app/about.js"></script>
 <script src="js/app/init.js"></script>
 </body>
 </html>

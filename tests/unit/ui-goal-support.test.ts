@@ -19,7 +19,9 @@ class El {
   checked = false;
   disabled = false;
   open = false;
-  value = '';
+  private inputValue = '';
+  get value() { return this.inputValue; }
+  set value(value: string | number) { this.inputValue = String(value); } // Native form controls coerce numeric writes.
   scrollTop = 0;
   onclick: ((e: any) => void) | null = null;
   onchange: ((e: any) => void) | null = null;
@@ -54,6 +56,7 @@ class El {
   contains(c: El | null): boolean { return this === c || this.children.some(n => n.contains(c)); }
   getAttribute(k: string) { return this.attrs[k] ?? null; }
   setAttribute(k: string, v: unknown) { this.attrs[k] = String(v); }
+  removeAttribute(k: string) { delete this.attrs[k]; }
   listeners: Record<string, Array<(e: any) => void>> = {};
   addEventListener(name: string, fn: (e: any) => void) { (this.listeners[name] ||= []).push(fn); }
   dispatch(name: string) { for (const fn of this.listeners[name] || []) fn({ target: this }); }
@@ -123,6 +126,7 @@ function deferred<T>() { let resolve!: (v: T) => void; let reject!: (e: Error) =
 function harness(modules: string[], fullCore = false) {
   const doc = new Doc();
   const api: any = {
+    app: { paths: vi.fn(async () => ({ platform: 'win32' })) },
     browser: { binary: vi.fn(async () => ({ installed: true, installedVersions: [] })), list: vi.fn(async () => [{ dirId: 'fixture-profile', name: 'Fixture profile', lastModified: 1 }]), presets: vi.fn(async () => []), create: vi.fn(async () => ({ dirId: 'fixture-created' })) },
     profile: { get: vi.fn(async (id: string) => ({ name: 'Fixture ' + id })) },
     proxy: { list: vi.fn(async () => []) },
@@ -134,13 +138,19 @@ function harness(modules: string[], fullCore = false) {
   };
   const helpers: any = {
     toast: vi.fn(), esc: escape, escAttr: escape, icon: (n: string) => '<svg data-icon="' + n + '"></svg>', fmt: (n: number) => n + ' bytes', shortPath: (s: string) => s,
-    renderBrowserBinaryCard: () => '<div>Fixture binary</div>', updateBrowserStatus: vi.fn(),
+    renderBrowserBinaryCard: () => '<div>Fixture binary</div>', updateBrowserStatus: vi.fn(), scheduleProfilesRefresh: vi.fn(),
     readHardwareFields: () => ({}), writeHardwareFields: vi.fn(), validateHardwareFields: () => [], bindHardwareFieldValidation: vi.fn(),
     parseProxySelection: (s: string) => ({ mode: s || 'default', name: null }), renderProxyOptions: () => '<option value="default">Default</option>', profileProxySelectionValue: () => 'default', proxyDisplayLabel: () => 'Default',
     hardwareSummary: () => 'Fixture hardware', fingerprintCompleteness: () => 100, platformIcon: () => '', getSyncStatus: () => 'never',
     renderSkillCard: (s: any) => '<div data-skill-id="' + escape(s.id) + '">' + escape(s.title) + '</div>', bindSkillCardActions: vi.fn(),
   };
-  const agent: any = { api, R: api, helpers, state: { currentTab: 'profiles' }, ipc: { call: (_k: string, f: () => unknown) => f() }, switchTab: vi.fn(), interceptLicenseGate: vi.fn(() => false), closeCardMenus: vi.fn() };
+  // Explicit synthetic IPC identity boundary for tests which do not load ipc.js.
+  // Tests that include the real module below replace this entire adapter.
+  let traceSeq = 0;
+  const agent: any = { api, R: api, helpers, state: { currentTab: 'profiles' }, ipc: {
+    call: (_k: string, f: () => unknown) => f(),
+    newTraceId: vi.fn(() => 'support-synthetic-' + (++traceSeq)),
+  }, switchTab: vi.fn(), interceptLicenseGate: vi.fn(() => false), closeCardMenus: vi.fn() };
   const timers: Array<() => void> = [];
   const window: any = { agentBrowser: agent, agentBrowserAPI: api, i18n: { t: (_k: string, f: string) => f }, localStorage: { getItem: () => null } };
   const context = vm.createContext({ window, document: doc, console, navigator: {}, setTimeout: (f: () => void) => { timers.push(f); return timers.length; }, clearTimeout() {}, Option: function(text: string, value: string) { const el = doc.createElement('option'); el.textContent = text; el.value = value; return el; } });
@@ -151,11 +161,459 @@ function harness(modules: string[], fullCore = false) {
     window.agentBrowser.helpers.toast = helpers.toast;
   }
   for (const m of modules) vm.runInContext(fs.readFileSync(path.join(ROOT, 'src/renderer/js/app', m + '.js'), 'utf8'), context, { filename: m + '.js' });
-  return { doc, api, window, agent: window.agentBrowser, helpers: window.agentBrowser.helpers, timers, el: (id: string) => doc.getElementById(id)! };
+  return { doc, api, window, context, agent: window.agentBrowser, helpers: window.agentBrowser.helpers, timers, el: (id: string) => doc.getElementById(id)! };
 }
 function adapter(id: string) { return { id, name: id, category: 'generic', selectorVersion: 1, lastVerifiedAt: '', domains: [], notes: '' }; }
 
+function fixtureBusinessPreset(id: string) {
+  return { id, icon: '', name: id, nameZh: id, nameSuffix: id, description: 'Synthetic regional preset', descriptionZh: '测试地区预设', region: 'United Kingdom', regionZh: '英国', proxyHint: 'UK exit', proxyHintZh: '英国出口', recommendedGates: {},
+    profile: { platform: 'macos', timezone: 'Europe/London', locale: 'en-GB', webrtcMode: 'auto', geolocationMode: 'custom', geolocationLatitude: 51.5074, geolocationLongitude: -0.1278, geolocationAccuracy: 100, tags: ['uk'] } };
+}
+
 // All provider data in this suite is synthetic, not real IPC/native proof.
+describe('host-aware profile defaults — whole renderer entrypoints', () => {
+  it.each([['darwin', 'macos'], ['win32', 'windows']])('newProfile/createProfile use trusted %s host metadata, not navigator', async (host, platform) => {
+    const h = harness(['profiles']);
+    Object.defineProperty(h.context.navigator, 'platform', { get() { throw new Error('untrusted navigator platform read'); } });
+    h.api.app.paths.mockResolvedValue({ platform: host });
+    h.agent.newProfile(); await flush();
+    expect(h.api.app.paths).toHaveBeenCalledTimes(1);
+    expect(h.el('new-agent-browser-platform').value).toBe(platform);
+    h.el('new-profile-name').value = 'Host default'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Host default', platform }));
+  });
+
+  it.each(['windows', ''])('late host metadata never overwrites an explicit user OS choice %j', async choice => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('new-profile-name').value = 'KEEP DRAFT';
+    const select = h.el('new-agent-browser-platform'); select.value = 'windows'; select.dispatch('change');
+    select.value = choice; select.dispatch('change'); pending.resolve({ platform: 'darwin' }); await flush();
+    expect(select.value).toBe(choice); expect(h.el('new-profile-name').value).toBe('KEEP DRAFT');
+    expect(h.api.browser.create).not.toHaveBeenCalled();
+  });
+
+  it('a closed form host reply cannot populate the next form while its own reply is pending', async () => {
+    const h = harness(['profiles']); const old = deferred<any>(); const current = deferred<any>();
+    h.api.app.paths.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close(); h.agent.newProfile();
+    old.resolve({ platform: 'darwin' }); await flush();
+    expect(h.el('new-agent-browser-platform').value).toBe('');
+    current.resolve({ platform: 'win32' }); await flush();
+    expect(h.el('new-agent-browser-platform').value).toBe('windows');
+  });
+
+  it.each(['resolve', 'reject'])('a closed form ignores its late host %s without changing its fields or guidance', async mode => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close();
+    const note = h.el('new-profile-platform-note').textContent;
+    if (mode === 'resolve') pending.resolve({ platform: 'linux' }); else pending.reject(new Error('old host read failure'));
+    await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').textContent).toBe(note); expect(h.helpers.toast).not.toHaveBeenCalled();
+  });
+
+  it.each(['linux', 'freebsd'])('unsupported %s is not inferred as Windows or presented as native eligibility', async platform => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform });
+    h.agent.newProfile(); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').attrs['data-i18n']).toBe('profile.platform.unsupported-host');
+    expect(h.el('new-profile-platform-note').textContent).toContain('does not support native managed Chromium');
+    h.el('new-profile-name').value = 'Portable only'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create.mock.calls[0][0].platform).toBeUndefined();
+  });
+
+  it('a failed host read retains automatic creation and reports that the host is unavailable', async () => {
+    const h = harness(['profiles']); h.api.app.paths.mockRejectedValue(new Error('synthetic unavailable'));
+    h.agent.newProfile(); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+    expect(h.el('new-profile-platform-note').attrs['data-i18n']).toBe('profile.platform.host-unavailable');
+  });
+
+  it('create while host metadata is pending omits platform and late metadata cannot change the closed form', async () => {
+    const h = harness(['profiles']); const pending = deferred<any>(); h.api.app.paths.mockReturnValue(pending.promise);
+    h.agent.newProfile(); h.el('new-profile-name').value = 'Fast submit'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create.mock.calls[0][0].platform).toBeUndefined(); expect(h.el('dlg-profile').open).toBe(false);
+    pending.resolve({ platform: 'darwin' }); await flush(); expect(h.el('new-agent-browser-platform').value).toBe('');
+  });
+
+  it('preset selection and catalog refresh preserve an explicit foreign OS while applying regional fields', async () => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform: 'darwin' });
+    h.api.browser.presets.mockResolvedValue([fixtureBusinessPreset('regional')]); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-platform').value = 'windows'; h.el('new-agent-browser-platform').dispatch('change');
+    h.el('new-profile-preset').value = 'regional'; h.agent.presetChanged();
+    expect(h.el('new-agent-browser-platform').value).toBe('windows');
+    expect(h.el('new-agent-browser-timezone').value).toBe('Europe/London'); expect(h.el('new-agent-browser-locale').value).toBe('en-GB');
+    expect(h.el('new-agent-browser-geolocation-accuracy').value).toBe('100');
+    await h.agent.loadBusinessPresets(); expect(h.el('new-profile-preset').value).toBe('regional');
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ platform: 'windows', businessPresetId: 'regional', timezone: 'Europe/London', locale: 'en-GB', geolocationMode: 'custom', geolocationLatitude: 51.5074, geolocationLongitude: -0.1278, geolocationAccuracy: 100 }));
+  });
+
+  it('an obsolete preset catalog cannot replace the next form catalog or its selected preset', async () => {
+    const h = harness(['profiles']); const old = deferred<any>(); const current = deferred<any>();
+    h.api.browser.presets.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    h.agent.newProfile(); h.el('dlg-profile').close(); h.agent.newProfile();
+    current.resolve([fixtureBusinessPreset('current')]); await flush(); h.el('new-profile-preset').value = 'current';
+    old.resolve([fixtureBusinessPreset('obsolete')]); await flush();
+    expect(h.el('new-profile-preset').value).toBe('current');
+    expect(h.el('new-profile-preset').querySelector('option[value="obsolete"]')).toBeNull();
+    h.agent.presetChanged(); expect(h.el('new-profile-name').value).toBe('current');
+  });
+
+  it('renderer CSV creation forwards omitted and explicit OS values unchanged', async () => {
+    const h = harness(['profiles']);
+    h.api.browser.parseBulkCsv = vi.fn(async () => ({ ok: true, specs: [{ name: 'Automatic' }, ...['windows', 'macos', 'android'].map(platform => ({ name: platform, platform }))] }));
+    h.el('bulk-import-text').value = 'synthetic CSV'; h.el('bulk-import-proxy').value = 'default';
+    h.agent.doBulkImport(); await flush(); expect(h.api.browser.create).toHaveBeenCalledTimes(4);
+    expect(h.api.browser.create.mock.calls.map((call: any[]) => call[0].platform)).toEqual([undefined, 'windows', 'macos', 'android']);
+  });
+
+  it.each([['firefox', 'managed', 'firefox'], ['chromium', 'off', undefined]])('host defaults preserve %s / %s contracts and explicit OS', async (browser, fingerprintMode, engine) => {
+    const h = harness(['profiles']); h.api.app.paths.mockResolvedValue({ platform: 'darwin' }); h.agent.newProfile(); await flush();
+    h.el('new-profile-browser').value = browser!; h.el('new-agent-browser-fingerprint-mode').value = fingerprintMode!;
+    h.el('new-agent-browser-platform').value = 'windows'; h.el('new-agent-browser-platform').dispatch('change'); h.el('new-profile-name').value = 'Unchanged contract';
+    h.agent.createProfile(); await flush(); expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({ platform: 'windows', fingerprintMode, engine }));
+  });
+
+  it.each(['host-platform-mismatch', 'restart-required'])('launch refusal %s explains the browser restart boundary without changing metadata', async code => {
+    const h = harness(['profiles']); h.api.browser.launch = vi.fn(async () => ({ success: false, code, error: 'low-level English refusal' }));
+    h.api.browser.setMeta = vi.fn(async () => ({ success: true }));
+    h.agent.launch('fixture-profile'); await flush();
+    const [message, level] = h.helpers.toast.mock.calls.at(-1)!;
+    expect(level).toBe('error'); expect(message).toContain('stop'); expect(message).toContain('browser'); expect(message).toContain('Studio');
+    expect(message).not.toContain('low-level English refusal');
+    if (code === 'host-platform-mismatch') expect(message).toContain('Edit the profile OS');
+    expect(h.api.browser.create).not.toHaveBeenCalled(); expect(h.api.browser.setMeta).not.toHaveBeenCalled();
+  });
+});
+
+// These are real renderer entrypoints over parsed production markup, not native
+// Firefox acceptance. Visibility includes hidden ancestors, not only the input.
+function fieldShown(el: El): boolean {
+  for (let node: El | null = el; node; node = node.parentElement) {
+    if (node.style.display === 'none' || 'hidden' in node.attrs) return false;
+    if ((node.tagName === 'DETAILS' || node.tagName === 'DIALOG') && !node.open) return false;
+  }
+  return true;
+}
+
+describe('Firefox managed identity UI', () => {
+  it('shows common managed fields without exposing the Chromium advanced panel', async () => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.el('new-profile-advanced').open = true;
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    for (const suffix of ['fingerprint-mode', 'timezone', 'locale', 'seed']) {
+      expect.soft(fieldShown(h.el('new-agent-browser-' + suffix)), suffix + ' must be reachable for Firefox').toBe(true);
+    }
+    for (const suffix of ['browser-version', 'drm', 'render-scale-mode', 'gpu-renderer', 'device-memory']) {
+      expect.soft(fieldShown(h.el('new-agent-browser-' + suffix)), suffix + ' is Chromium-only').toBe(false);
+    }
+  });
+
+  it('creates Firefox from common values only, not hidden Chromium draft values', async () => {
+    const h = harness(['ipc', 'profiles'], true); h.agent.newProfile(); await flush();
+    const version = h.doc.createElement('option'); version.value = '152.0.1.2';
+    h.el('new-agent-browser-browser-version').appendChild(version);
+    h.el('new-agent-browser-browser-version').value = version.value;
+    h.el('new-agent-browser-drm').checked = true;
+    h.el('new-agent-browser-allow-third-party-cookies').checked = true;
+    h.el('new-agent-browser-render-scale-mode').value = 'strict';
+    h.el('new-agent-browser-gpu-renderer').value = 'CHROMIUM-ONLY-DRAFT';
+    h.el('new-agent-browser-device-memory').value = '16';
+    h.el('new-agent-browser-geolocation-mode').value = 'custom';
+    h.el('new-agent-browser-geolocation-latitude').value = '12';
+    h.el('new-agent-browser-geolocation-longitude').value = '34';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-name').value = 'Firefox common identity';
+    h.el('new-agent-browser-seed').value = '43210';
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles';
+    h.el('new-agent-browser-locale').value = 'en-US';
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary; no real profile' });
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    const payload = h.api.browser.create.mock.calls[0][0];
+    expect(payload).toMatchObject({ name: 'Firefox common identity', engine: 'firefox', fingerprintMode: 'managed', fingerprintSeed: 43210, timezone: 'America/Los_Angeles', locale: 'en-US' });
+    for (const key of ['browserVersion', 'drm', 'allowThirdPartyCookies', 'renderScaleMode', 'gpuVendor', 'gpuRenderer', 'deviceMemory', 'hardwareConcurrency', 'screenWidth', 'screenHeight', 'storageQuota', 'taskbarHeight', 'fontsDir', 'geolocationMode', 'geolocationLatitude', 'geolocationLongitude', 'geolocationAccuracy', 'webrtcIp', 'windowTitlePrefix']) {
+      expect.soft(Object.hasOwn(payload, key), 'hidden field leaked: ' + key).toBe(false);
+    }
+    // WebRTC routing is not Chromium-only any more: Firefox has its own
+    // selector backed by firefox-webrtc-policy.ts. It must submit that
+    // selector's value, not the hidden Chromium draft (which stays on Auto).
+    h.el('new-agent-browser-webrtc-mode').value = 'altered';
+    h.el('new-agent-browser-webrtc').value = '203.0.113.77';
+    h.el('new-agent-browser-webrtc-mode-fx').value = 'real';
+    h.api.browser.create.mockClear();
+    h.agent.createProfile(); await flush();
+    const routed = h.api.browser.create.mock.calls[0][0];
+    expect(routed).toMatchObject({ engine: 'firefox', webrtcMode: 'real' });
+    expect(Object.hasOwn(routed, 'webrtcIp')).toBe(false);
+  });
+
+  it('renders actual managed/off mode on Firefox and Chromium cards', async () => {
+    const h = harness(['tabs', 'profiles']);
+    h.api.browser.list.mockResolvedValue(['firefox', 'chromium'].flatMap(engine => ['managed', 'off'].map(fingerprintMode => ({
+      dirId: engine + '-' + fingerprintMode, name: engine + '-' + fingerprintMode, engine, fingerprintMode,
+      fingerprintSeed: 43210, timezone: 'America/Los_Angeles', locale: 'en-US', lastModified: 1,
+    }))));
+    h.agent.loadProfiles(); await flush();
+    for (const engine of ['firefox', 'chromium']) {
+      for (const mode of ['managed', 'off']) {
+        const card = h.el('profile-list').querySelector('[data-dir-id="' + engine + '-' + mode + '"]')!;
+        expect(card, engine + '/' + mode).not.toBeNull();
+        const rows = card.querySelectorAll('.info-row');
+        const fingerprint = rows.find(row => row.children[0].textContent === 'Fingerprint')!.children[1];
+        if (mode === 'managed') {
+          expect.soft(fingerprint.textContent, engine).toContain('#43210');
+          expect.soft(fingerprint.textContent, engine).not.toMatch(/pass-through|stock/i);
+          const identity = rows.find(row => row.children[0].textContent === 'Identity')!.children[1].textContent;
+          expect.soft(identity, engine).toContain('America/Los_Angeles'); expect.soft(identity, engine).toContain('en-US');
+        } else {
+          expect.soft(fingerprint.textContent, engine).toMatch(/Off/i);
+          expect.soft(fingerprint.textContent, engine).not.toContain('#43210');
+        }
+      }
+    }
+  });
+});
+
+describe('Firefox identity form lifecycle and unknown preview', () => {
+  it('ignores invalid hidden Chromium constraints but still validates the common seed', async () => {
+    const h = harness(['ipc', 'profiles'], true); h.agent.newProfile(); await flush();
+    h.el('new-profile-name').value = 'Firefox validation';
+    h.el('new-agent-browser-hardware-concurrency').value = '0';
+    h.el('new-agent-browser-geolocation-mode').value = 'custom';
+    h.el('new-agent-browser-geolocation-latitude').value = '999';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-hardware-concurrency').disabled).toBe(true);
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary' });
+    h.agent.createProfile(); await flush(); expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    h.el('new-agent-browser-seed').value = '1000000'; h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledTimes(1);
+    expect(h.helpers.toast.mock.calls.at(-1)![1]).toBe('error');
+    h.el('new-profile-browser').value = 'chromium'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-hardware-concurrency').disabled).toBe(false);
+    expect(h.el('new-agent-browser-hardware-concurrency').value).toBe('0');
+  });
+
+  it('switches engines and presets without resetting common intent or submitting hidden preset defaults', async () => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.browser.presets.mockResolvedValue([fixtureBusinessPreset('regional')]); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-seed').value = '43210'; h.el('new-agent-browser-fingerprint-mode').value = 'off';
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-preset').value = 'regional'; h.agent.presetChanged();
+    expect(h.el('new-agent-browser-timezone').value).toBe('Europe/London'); expect(h.el('new-agent-browser-locale').value).toBe('en-GB');
+    h.el('new-profile-browser').value = 'chromium'; h.agent.profileBrowserChanged(); await flush();
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    expect(h.el('new-agent-browser-seed').value).toBe('43210'); expect(h.el('new-agent-browser-fingerprint-mode').value).toBe('off');
+    h.el('new-agent-browser-timezone').value = ''; h.el('new-agent-browser-locale').value = '';
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic boundary' });
+    h.agent.createProfile(); await flush();
+    const payload = h.api.browser.create.mock.calls[0][0];
+    expect(payload).toMatchObject({ engine: 'firefox', fingerprintMode: 'off', fingerprintSeed: 43210, timezone: null, locale: null });
+    // The current preset IPC fills omitted geo/WebRTC and replaces null Auto.
+    // Firefox uses only the supported common prefill, not that server expansion.
+    expect(payload.businessPresetId).toBeUndefined();
+    h.el('dlg-profile').close(); h.agent.newProfile(); await flush();
+    expect(h.el('new-profile-browser').value).toBe('chromium'); expect(h.el('new-profile-preset').value).toBe('');
+    expect(h.el('new-agent-browser-timezone').value).toBe(''); expect(h.el('new-agent-browser-locale').value).toBe('');
+    expect(h.el('new-agent-browser-seed').value).toBe(''); expect(h.el('new-agent-browser-fingerprint-mode').value).toBe('managed');
+  });
+
+  it.each([
+    { timezone: null, locale: null },
+    { timezone: 'America/Toronto', locale: 'en-CA' },
+  ])('edits/saves/reopens Firefox with $timezone / $locale without erasing hidden persisted identity', async identity => {
+    const h = harness(['tabs', 'ipc', 'profiles'], true);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'firefox-ui-roundtrip-'));
+    const rootIdentity = fs.lstatSync(dir); const file = path.join(dir, 'config.json');
+    const original = { dirId: 'fixture-firefox', name: 'Firefox saved identity', engine: 'firefox', fingerprintMode: 'managed', fingerprintSeed: 43210, platform: 'macos', ...identity,
+      browserVersion: '154.0', drm: true, renderScaleMode: 'strict', deviceMemory: 16, gpuRenderer: 'Persisted explicit identity', webrtcMode: 'altered', webrtcIp: '203.0.113.9', windowTitlePrefix: 'kept-prefix', lastModified: 1 };
+    try {
+      fs.writeFileSync(file, JSON.stringify([original]), { flag: 'wx', mode: 0o600 });
+      const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+      h.api.browser.list.mockImplementation(async () => read());
+      h.api.browser.setMeta = vi.fn(async (id: string, patch: any) => {
+        fs.writeFileSync(file, JSON.stringify(read().map((p: any) => p.dirId === id ? { ...p, ...patch } : p)));
+        return { success: true };
+      });
+      // Native selects reject values missing from their option list. Do not let
+      // this VM fixture hide the unlisted persisted timezone/locale regression.
+      for (const suffix of ['timezone', 'locale']) {
+        const el = h.el('agent-browser-meta-' + suffix); let selected = el.value;
+        Object.defineProperty(el, 'value', { get: () => el.querySelectorAll('option').some(o => o.value === selected) ? selected : '', set: v => { selected = String(v); } });
+      }
+      h.agent.editProfile(original.dirId); await flush();
+      expect(h.api.browser.binary).not.toHaveBeenCalled(); // No Chromium build list for a Firefox pin.
+      for (const suffix of ['fingerprint-mode', 'seed', 'timezone', 'locale']) expect(fieldShown(h.el('agent-browser-meta-' + suffix))).toBe(true);
+      for (const suffix of ['browser-version', 'drm', 'render-scale-mode', 'gpu-renderer']) expect(fieldShown(h.el('agent-browser-meta-' + suffix))).toBe(false);
+      expect(h.el('agent-browser-meta-timezone').value).toBe(identity.timezone || ''); expect(h.el('agent-browser-meta-locale').value).toBe(identity.locale || '');
+      // Hidden draft contamination must not overwrite the saved Firefox pin or hardware.
+      h.el('agent-browser-meta-browser-version').value = '152.0.1.2'; h.el('agent-browser-meta-drm').checked = false;
+      h.el('agent-browser-meta-device-memory').value = '0'; h.el('agent-browser-meta-gpu-renderer').value = 'Hidden stale draft';
+      for (const mode of ['off', 'managed']) {
+        h.el('agent-browser-meta-fingerprint-mode').value = mode; h.agent.saveBrowserMeta(); await flush();
+        const saved = read().find((p: any) => p.dirId === original.dirId);
+        expect(saved).toMatchObject({ ...original, fingerprintMode: mode });
+        const patch = h.api.browser.setMeta.mock.calls.at(-1)![1];
+        for (const key of ['browserVersion', 'drm', 'renderScaleMode', 'deviceMemory', 'gpuRenderer', 'webrtcIp', 'windowTitlePrefix']) expect(Object.hasOwn(patch, key), key).toBe(false);
+        h.agent.editProfile(original.dirId); await flush();
+        expect(h.el('agent-browser-meta-fingerprint-mode').value).toBe(mode);
+        expect(h.el('agent-browser-meta-timezone').value).toBe(identity.timezone || ''); expect(h.el('agent-browser-meta-locale').value).toBe(identity.locale || '');
+        expect(read().filter((p: any) => p.name.includes('Firefox saved'))).toHaveLength(1);
+        expect(h.el('profile-list').querySelector('[data-dir-id="fixture-firefox"]')).not.toBeNull();
+      }
+    } finally {
+      const current = fs.lstatSync(dir);
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino) throw new Error('Lost owned Firefox UI fixture');
+      fs.unlinkSync(file); fs.rmdirSync(dir);
+    }
+  });
+
+  it.each([{}, { ok: true, warnings: [], blockers: [] }, { ok: false, warnings: [], blockers: [], error: 'Synthetic unavailable' }])('Auto/no-findings preview is visible and neutral, never verified alignment: %j', async response => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.api.browser.consistencyPreview = vi.fn(async () => response);
+    h.el('new-profile-browser').value = 'firefox'; h.agent.profileBrowserChanged(); await flush();
+    h.agent.runConsistencyPreview(); await flush();
+    const preview = h.el('new-profile-consistency'); expect(fieldShown(preview)).toBe(true);
+    expect(preview.textContent).toContain('launch'); expect(preview.textContent).toMatch(/not.*checked/i);
+    expect(preview.querySelector('.health-text-good')).toBeNull();
+    expect(preview.textContent).not.toMatch(/looks good|verified alignment/i);
+    expect(h.el('new-agent-browser-timezone').value).toBe(''); expect(h.el('new-agent-browser-locale').value).toBe('');
+    expect(h.api.browser.consistencyPreview).not.toHaveBeenCalled(); // Null Auto is not an observed identity.
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles'; h.el('new-agent-browser-locale').value = 'en-US';
+    h.agent.runConsistencyPreview(); await flush();
+    expect(h.api.browser.consistencyPreview).toHaveBeenCalledTimes(1);
+    expect(fieldShown(preview)).toBe(true); expect(preview.textContent).toMatch(/cached/i);
+    expect(preview.textContent).toMatch(/not.*checked/i); expect(preview.querySelector('.health-text-good')).toBeNull();
+  });
+
+  it('labels cached-only explicit preview, keeps warnings, and ignores a closed form stale reply', async () => {
+    const h = harness(['profiles']); h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-timezone').value = 'America/Los_Angeles'; h.el('new-agent-browser-locale').value = 'en-US';
+    h.api.browser.consistencyPreview = vi.fn(async () => ({ ok: true, warnings: [{ message: 'Cached mismatch <literal>', code: 'proxy-tz' }], blockers: [] }));
+    h.agent.runConsistencyPreview(); await flush();
+    expect(h.el('new-profile-consistency').textContent).toMatch(/cached/i);
+    expect(h.el('new-profile-consistency').textContent).toContain('Cached mismatch <literal>'); expect(h.el('new-profile-consistency').querySelector('literal')).toBeNull();
+    const old = deferred<any>(); h.api.browser.consistencyPreview.mockReturnValueOnce(old.promise); h.agent.runConsistencyPreview();
+    h.el('dlg-profile').close(); h.agent.newProfile(); await flush();
+    old.resolve({ warnings: [{ message: 'OBSOLETE WARNING' }], blockers: [] }); await flush();
+    expect(h.el('new-profile-consistency').textContent).not.toContain('OBSOLETE WARNING');
+  });
+
+  it('empty/null alignment data never records or renders green health PASS', async () => {
+    const h = harness(['tabs', 'profiles']); const storage = new Map<string, string>();
+    h.context.localStorage = { getItem: (key: string) => storage.get(key) || null, setItem: (key: string, value: string) => storage.set(key, value) };
+    h.api.browser.list.mockResolvedValue([{ dirId: 'fixture-firefox', name: 'Auto Firefox', engine: 'firefox', fingerprintMode: 'managed', timezone: null, locale: null }]);
+    h.api.browser.consistencyCheck = vi.fn(async () => ({ ok: true, warnings: [], blockers: [] }));
+    // Main history is a declared empty fixture, not real persisted/native proof.
+    h.api.browser.healthHistory = vi.fn(async () => ({ entries: [] }));
+    storage.set('agent-browser-health-history-v1', JSON.stringify({ 'fixture-firefox': [{ kind: 'consistency', verdict: 'pass', at: 1, detail: 'Legacy cached-only result' }] }));
+    h.agent.loadProfiles(); await flush();
+    expect(h.el('profile-list').querySelector('.health-verdict')!.textContent).not.toContain('Pass');
+    h.agent.runConsistencyCheck('fixture-firefox'); await flush(); h.agent.loadProfiles(); await flush();
+    expect(h.helpers.toast.mock.calls.some((call: any[]) => call[1] === 'success' || call[1] === 'error')).toBe(false);
+    const records = JSON.parse(storage.get('agent-browser-health-history-v1')!);
+    expect(records['fixture-firefox'][0]).toMatchObject({ kind: 'consistency', verdict: 'inconclusive', outcome: 'inconclusive', source: 'cached' });
+    expect(h.agent.ipc.newTraceId).toHaveBeenCalledTimes(1);
+    expect(h.api.browser.consistencyCheck).toHaveBeenCalledExactlyOnceWith('fixture-firefox');
+    expect(h.api.browser.healthHistory).toHaveBeenCalledWith('fixture-firefox');
+    const card = h.el('profile-list').querySelector('[data-dir-id="fixture-firefox"]')!;
+    expect(card.querySelector('.health-verdict')!.textContent).not.toContain('Pass');
+  });
+});
+
+describe('WebGL profile editing — metadata transport, not native GPU acceptance', () => {
+  it.each([
+    { platform: 'darwin', arch: 'arm64' },
+    { platform: 'darwin', arch: 'x64' },
+    { platform: 'darwin' },
+    { platform: 'win32', arch: 'x64' },
+  ])('keeps macOS GPU fields editable without claiming capability from $platform / $arch', async paths => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.app.paths.mockResolvedValue(paths);
+    h.api.browser.create.mockResolvedValue({ success: false, error: 'Synthetic storage refusal' });
+    h.agent.newProfile(); await flush();
+    h.el('new-agent-browser-platform').value = 'macos';
+    h.el('new-profile-name').value = 'GPU metadata draft';
+    for (const suffix of ['gpu-vendor', 'gpu-renderer']) {
+      const field = h.el('new-agent-browser-' + suffix);
+      expect(field.disabled).toBe(false); expect(field.attrs.readonly).toBeUndefined();
+      expect((field as any).readOnly).not.toBe(true);
+      expect(field.attrs['aria-describedby']).toBe('new-profile-gpu-help new-profile-gpu-scope');
+    }
+    expect(h.el('new-profile-gpu-help').textContent).toContain('native ARM64 macOS main process and selected ARM64 Chromium');
+    expect(h.el('new-profile-gpu-scope').textContent).toContain('Editing is not proof of support');
+    h.el('new-agent-browser-gpu-vendor').value = 'Google Inc. (Apple)';
+    // A single explicit field remains a partial tuple constraint, not an invented renderer.
+    h.agent.createProfile(); await flush();
+    expect(h.api.browser.create).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: null,
+    }));
+    expect(h.el('dlg-profile').open).toBe(true);
+    expect(h.el('new-agent-browser-gpu-vendor').value).toBe('Google Inc. (Apple)');
+    expect(h.el('new-agent-browser-gpu-renderer').value).toBe('');
+  });
+
+  it.each(['Apple M2', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)'])('edits and forwards %s unchanged to authoritative main validation', async renderer => {
+    const h = harness(['ipc', 'profiles'], true);
+    h.api.browser.list.mockResolvedValue([{ dirId: 'fixture-profile', name: 'Saved GPU draft', platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: renderer }]);
+    h.api.browser.setMeta = vi.fn(async () => ({ success: false, error: 'Synthetic storage refusal' }));
+    h.agent.editProfile('fixture-profile'); await flush();
+    expect(h.el('agent-browser-meta-gpu-renderer').value).toBe(renderer);
+    expect(h.el('agent-browser-meta-gpu-vendor').disabled).toBe(false);
+    expect(h.el('agent-browser-meta-gpu-renderer').disabled).toBe(false);
+    expect(h.el('agent-browser-meta-gpu-renderer').attrs['aria-describedby']).toBe('edit-profile-gpu-help edit-profile-gpu-scope');
+    h.agent.saveBrowserMeta(); await flush();
+    expect(h.api.browser.setMeta).toHaveBeenCalledWith('fixture-profile', expect.objectContaining({ platform: 'macos', gpuVendor: 'Google Inc. (Apple)', gpuRenderer: renderer }));
+    expect(h.el('agent-browser-meta-gpu-renderer').value).toBe(renderer);
+    // Clearing is explicit and sent as null, not a renderer-side auto-migration.
+    h.el('agent-browser-meta-gpu-vendor').value = ''; h.el('agent-browser-meta-gpu-renderer').value = '';
+    h.agent.saveBrowserMeta(); await flush();
+    expect(h.api.browser.setMeta).toHaveBeenLastCalledWith('fixture-profile', expect.objectContaining({ gpuVendor: null, gpuRenderer: null }));
+  });
+
+  for (const locale of ['en-US', 'zh-CN']) {
+    for (const entrypoint of ['launch', 'create', 'save']) {
+      it.each(['response', 'throw'])(`${locale} localizes only the stable GPU backend refusal in ${entrypoint} (%s)`, async delivery => {
+        const h = harness(['ipc', 'profiles'], true);
+        // Load the shipped dictionary, all three merge layers included. The DOM
+        // fixture is not a browser/native-capability or persistence proof.
+        (h.doc as any).addEventListener = vi.fn();
+        h.context.localStorage = { getItem: () => null, setItem: vi.fn() };
+        h.context.navigator.language = locale;
+        vm.runInContext(fs.readFileSync(path.join(ROOT, 'src/renderer/js/i18n.js'), 'utf8'), h.context, { filename: 'i18n.js' });
+        expect(h.window.i18n.get()).toBe(locale);
+        const raw = "Error invoking remote method 'browser:launch': Error: Unsupported GPU overrides for Chromium: synthetic unsupported tuple";
+        const refuse = vi.fn(async () => {
+          if (delivery === 'throw') throw new Error(raw);
+          return { success: false, error: raw };
+        });
+        if (entrypoint === 'launch') {
+          h.api.browser.launch = refuse; h.agent.launch('fixture-profile');
+        } else if (entrypoint === 'create') {
+          h.api.browser.create = refuse; h.agent.newProfile(); await flush();
+          h.el('new-profile-name').value = 'GPU draft'; h.agent.createProfile();
+        } else {
+          h.api.browser.setMeta = refuse; h.agent.editProfile('fixture-profile'); await flush();
+          h.agent.saveBrowserMeta();
+        }
+        await flush();
+        expect(refuse).toHaveBeenCalledTimes(1);
+        const [message, level] = h.helpers.toast.mock.calls.at(-1)!;
+        expect(level).toBe('error');
+        expect(message).toBe(h.window.i18n.t('launch.gpu-unsupported'));
+        expect(message).toContain(locale === 'zh-CN' ? '主进程' : 'main process');
+        expect(message).not.toContain('synthetic unsupported tuple');
+        if (entrypoint === 'launch') expect(h.api.browser.create).not.toHaveBeenCalled();
+      });
+    }
+  }
+
+  it('does not replace an unrelated backend error with GPU guidance', async () => {
+    const h = harness(['profiles']);
+    h.api.browser.launch = vi.fn(async () => ({ success: false, error: 'Synthetic unrelated launch refusal' }));
+    h.agent.launch('fixture-profile'); await flush();
+    expect(h.helpers.toast.mock.calls.at(-1)).toEqual(['Synthetic unrelated launch refusal', 'error']);
+  });
+});
+
 describe('UI goal support — whole modules and production ID contracts', () => {
   it.each(['pending', 'missing', 'rejected', 'success'])('first full adapter detail is visible: %s', async mode => {
     const h = harness(['agent-adapters']); h.agent.agentLoadAdapters(); await flush(); h.agent.adapterToggle('fixture-adapter');

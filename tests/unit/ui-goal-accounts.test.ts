@@ -182,6 +182,32 @@ afterAll(() => {
   if (path.dirname(STORAGE_ROOT) !== os.tmpdir() || !path.basename(STORAGE_ROOT).startsWith("ui-goal-accounts-store-")) throw new Error("Unsafe cleanup");
   fs.rmSync(STORAGE_ROOT, { force: true, recursive: true });
 });
+describe("account-import OS defaults (whole renderer entrypoints)", () => {
+  it("offers an automatic host default in the real account-import markup", () => {
+    const html = fs.readFileSync(path.resolve(__dirname, "../../src/renderer/index.html"), "utf8");
+    const select = html.match(/<select id="acct-import-platform"[^>]*>([\s\S]*?)<\/select>/)?.[1];
+    expect(select).toMatch(/^\s*<option value="" selected data-i18n="profile\.new\.platform\.auto">Auto \(host OS\)<\/option>/);
+  });
+
+  it("opening a new account-import form resets a prior explicit OS to automatic", async () => {
+    const h = harness(); h.elements["acct-import-platform"].value = "windows";
+    await h.agentBrowser.agentImportAccounts();
+    expect(h.elements["dlg-account-import"].open).toBe(true);
+    expect(h.elements["acct-import-platform"].value).toBe("");
+    expect(h.accounts.bulkCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "windows", "macos"])("account import forwards %j without manufacturing Windows when automatic", async platform => {
+    const h = harness(); await h.agentBrowser.agentImportAccounts();
+    h.elements["acct-import-create-profiles"].checked = true;
+    h.elements["acct-import-platform"].value = platform;
+    h.elements["acct-import-text"].value = "https://defaults.synthetic.invalid,import-default";
+    await h.agentBrowser.agentRunAccountImport(); await flush();
+    expect(h.accounts.bulkCreate).toHaveBeenCalledExactlyOnceWith("https://defaults.synthetic.invalid,import-default", { platform: platform || undefined });
+    expect(h.accounts.bulkAdd).not.toHaveBeenCalled();
+  });
+});
+
 const realHarnesses = new WeakSet<object>();
 function realStore(h: ReturnType<typeof harness>) {
   realHarnesses.add(h);

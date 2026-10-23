@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as fs from "node:fs";
+import nodeFs, * as fs from "node:fs";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
+import { FIREFOX_HELPER_APPS, firefoxFixturePlistJson, writeFirefoxFixturePlist, writeFirefoxRuntimeFixture } from "../helpers/firefox-runtime-package.js";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(), execFileSync: vi.fn(), spawnSync: vi.fn(), spawn: vi.fn(),
-  bundled: vi.fn(), bundledSync: vi.fn(),
+  bundled: vi.fn(), bundledSync: vi.fn(), existsSync: vi.fn(),
+}));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:fs")>(), existsSync: mocks.existsSync,
 }));
 vi.mock("node:child_process", () => ({
   execFile: mocks.execFile, execFileSync: mocks.execFileSync,
@@ -16,10 +20,10 @@ vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({
   bundledFirefoxBinaryPath: mocks.bundledSync,
 }));
 import {
-  detectFirefoxVersion, detectFirefoxVersionAsync, findFirefoxBinaryAsync, getFirefoxStatusAsync, getFirefoxStatus,
+  detectFirefoxVersion, detectFirefoxVersionAsync, findFirefoxBinary, findFirefoxBinaryAsync, getFirefoxStatusAsync, getFirefoxStatus,
 } from "../../src/main/services/browser-engine.js";
 import {
-  findManagedFirefoxBinaryAsync, listManagedFirefoxBinariesAsync,
+  findManagedFirefoxBinary, findManagedFirefoxBinaryAsync, listManagedFirefoxBinariesAsync,
 } from "../../src/main/services/native-firefox-manager.js";
 import {
   FIREFOX_CAPABILITY_PRODUCT, FIREFOX_EXPECTED_SOURCE_STAMP,
@@ -30,6 +34,7 @@ import {
 let rootIdentity: fs.Stats;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const actualAccess = fs.promises.access.bind(fs.promises);
+const actualExistsSync = nodeFs.existsSync;
 type Reply = (error: Error | null, stdout: string, stderr: string) => void;
 interface FixtureResponse { report: Record<string, unknown>; version: string }
 let root: string;
@@ -46,11 +51,15 @@ function markerPath(file: string, platform: NodeJS.Platform = process.platform):
   return path.join(path.dirname(file), platform === "darwin" ? "XUL" : platform === "win32" ? "xul.dll" : "libxul.so");
 }
 function makeBinary(directory: string, value = report(), marker = true, version = "154.0", name = "firefox"): string {
+  if (process.platform === "darwin" && path.basename(directory) !== "MacOS") {
+    directory = path.join(directory, "Firefox.app", "Contents", "MacOS");
+  }
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, name);
   fs.writeFileSync(file, "fixture data; never executable", { mode: 0o600 });
   fs.writeFileSync(markerPath(file), marker ? `prefix-"product":"${FIREFOX_CAPABILITY_PRODUCT}"-suffix` : "stock-xul");
   responses.set(file, { report: value, version });
+  if (process.platform === "darwin") writeFirefoxRuntimeFixture(file, version);
   return file;
 }
 function install(version: string, value = report(FIREFOX_NATIVE_CONFIG_CAPABILITIES, version), marker = true, actual = version): string {
@@ -62,11 +71,19 @@ function env(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { AGENT_BROWSER_FIREFOX_CACHE_DIR: cache, ...overrides };
 }
 function execute(file: string, args: readonly string[], _options: unknown, callback: Reply): object {
+  if (file === "/usr/bin/plutil") {
+    const output = firefoxFixturePlistJson(args);
+    setImmediate(() => callback(null, output, ""));
+    return {};
+  }
   const response = responses.get(file);
   if (!response) throw new Error(`Unowned subprocess fixture: ${file}`);
   if (args[0] !== "--version" && args[0] !== FIREFOX_CAPABILITIES_SWITCH) throw new Error("Unexpected subprocess arguments");
   setImmediate(() => callback(null, args[0] === "--version" ? `Mozilla Firefox ${response.version}\n` : JSON.stringify(response.report), ""));
   return {};
+}
+function binaryCalls() {
+  return mocks.execFile.mock.calls.filter(([file]) => file !== "/usr/bin/plutil");
 }
 function capabilityCalls(): number {
   return mocks.execFile.mock.calls.filter((call) => call[1][0] === FIREFOX_CAPABILITIES_SWITCH).length;
@@ -80,7 +97,8 @@ beforeEach(() => {
   responses = new Map();
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.execFile.mockImplementation(execute);
-  mocks.execFileSync.mockImplementation((file: string) => JSON.stringify(responses.get(file)!.report));
+  mocks.execFileSync.mockImplementation((file: string, args: string[]) => file === "/usr/bin/plutil"
+    ? firefoxFixturePlistJson(args) : JSON.stringify(responses.get(file)!.report));
   mocks.spawnSync.mockImplementation((file: string) => ({ stdout: `Mozilla Firefox ${responses.get(file)!.version}\n`, stderr: "", status: 0 }));
   mocks.spawn.mockImplementation(() => { throw new Error("Real browser launch forbidden"); });
   mocks.bundled.mockResolvedValue(null);
@@ -88,6 +106,7 @@ beforeEach(() => {
   vi.stubEnv("HOME", root);
   vi.stubEnv("AGENT_BROWSER_FIREFOX_CACHE_DIR", cache);
   // Never touch host Firefox locations while testing the system-stock fallback.
+  mocks.existsSync.mockImplementation((file) => String(file).startsWith(root + path.sep) && actualExistsSync(file));
   vi.spyOn(fs.promises, "access").mockImplementation(async (file, mode) => {
     if (!String(file).startsWith(root + path.sep)) throw Object.assign(new Error("Fixture-only access"), { code: "ENOENT" });
     return actualAccess(file, mode);
@@ -95,7 +114,10 @@ beforeEach(() => {
 });
 afterEach(() => {
   for (const mock of [mocks.execFile, mocks.execFileSync, mocks.spawnSync]) {
-    for (const [file] of mock.mock.calls) expect(String(file).startsWith(root + path.sep)).toBe(true);
+    for (const [file, args] of mock.mock.calls) {
+      const fixture = file === "/usr/bin/plutil" ? args[args.length - 1] : file;
+      expect(String(fixture).startsWith(root + path.sep)).toBe(true);
+    }
   }
   expect(mocks.spawn).not.toHaveBeenCalled();
   Object.defineProperty(process, "platform", originalPlatform);
@@ -109,6 +131,80 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+describe.each([false, true])("Firefox bundled upgrade selection (async=%s)", (asynchronous) => {
+  const discover = (overrides: NodeJS.ProcessEnv = {}) => asynchronous
+    ? findFirefoxBinaryAsync(env(overrides)) : findFirefoxBinary(env(overrides));
+
+  it.each([
+    { label: "prefers the new bundle at the same version", managedVersion: "154.0", bundledVersion: "154.0", cliVersion: "154.0", preferBundled: true },
+    { label: "prefers an equivalent dotted bundle version", managedVersion: "154.0", bundledVersion: "154.0.0", cliVersion: "154.0.0", preferBundled: true },
+    { label: "prefers a newer bundled patch", managedVersion: "154.0", bundledVersion: "154.0.1", cliVersion: "154.0.1", preferBundled: true },
+    { label: "compares bundled patch versions numerically", managedVersion: "154.0.9", bundledVersion: "154.0.10", cliVersion: "154.0.10", preferBundled: true },
+    { label: "retains a newer managed installation", managedVersion: "154.0.1", bundledVersion: "154.0", cliVersion: "154.0", preferBundled: false },
+    { label: "uses the actual CLI version rather than newer package metadata", managedVersion: "154.0", bundledVersion: "155.0", cliVersion: "153.0", preferBundled: false },
+    { label: "retains managed when the bundled CLI version is unknown", managedVersion: "154.0", bundledVersion: "155.0", cliVersion: "unknown", preferBundled: false },
+    { label: "retains managed for malformed bundled version components", managedVersion: "154.0", bundledVersion: "155.0", cliVersion: "155..0", preferBundled: false },
+    { label: "retains managed for too many bundled version components", managedVersion: "154.0", bundledVersion: "155.0", cliVersion: "155.0.1.2", preferBundled: false },
+  ])("$label", async ({ managedVersion, bundledVersion, cliVersion, preferBundled }) => {
+    const managed = install(managedVersion);
+    const attested = asynchronous ? await findManagedFirefoxBinaryAsync(null, cache) : findManagedFirefoxBinary(null, cache);
+    expect(attested?.binaryPath).toBe(managed);
+    const bundled = makeBinary(path.join(root, "bundled-upgrade"), report(FIREFOX_NATIVE_CONFIG_CAPABILITIES, bundledVersion), true, bundledVersion);
+    responses.get(bundled)!.version = cliVersion;
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+    // Prove both probe mocks supply the requested CLI version before testing selection.
+    const expectedProbe = cliVersion === "unknown" ? "Mozilla Firefox unknown" : cliVersion;
+    expect(asynchronous ? await detectFirefoxVersionAsync(bundled) : detectFirefoxVersion(bundled)).toBe(expectedProbe);
+    mocks.execFile.mockClear();
+    mocks.spawnSync.mockClear();
+
+    // Async version probes may legitimately reuse the identity-bound command cache.
+    expect(await discover()).toBe(preferBundled ? bundled : managed);
+  });
+
+  it.each(["missing GRE omnijar", "empty browser omnijar", "developer helper"])("retains healthy managed when the bundle has %s", async (failure) => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const managed = install("154.0");
+    const bundled = makeBinary(path.join(root, "broken-bundled"), report(FIREFOX_NATIVE_CONFIG_CAPABILITIES, "155.0"), true, "155.0");
+    const contents = path.dirname(path.dirname(bundled));
+    if (failure === "missing GRE omnijar") fs.unlinkSync(path.join(contents, "Resources", "omni.ja"));
+    else if (failure === "empty browser omnijar") fs.truncateSync(path.join(contents, "Resources", "browser", "omni.ja"), 0);
+    else writeFirefoxFixturePlist(path.join(contents, "MacOS", "gpu-process.app", "Contents", "Info.plist"), { MozillaDeveloperObjPath: "/missing/objdir" });
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+
+    expect(await discover()).toBe(managed);
+    expect(mocks.execFile.mock.calls.some(([file]) => file === bundled)).toBe(false);
+    expect(mocks.spawnSync.mock.calls.some(([file]) => file === bundled)).toBe(false);
+  });
+
+  it.each(["AGENT_BROWSER_FIREFOX_BINARY_PATH", "FIREFOX_BINARY_PATH"])("preserves %s above a newer bundle and managed installation", async (key) => {
+    const explicit = makeBinary(path.join(root, "explicit-upgrade"));
+    install("154.0.1");
+    const bundled = makeBinary(path.join(root, "newer-bundled"), report(FIREFOX_NATIVE_CONFIG_CAPABILITIES, "154.0.2"), true, "154.0.2");
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+
+    expect(await discover({ [key]: explicit })).toBe(explicit);
+    expect(mocks.bundled).not.toHaveBeenCalled();
+    expect(mocks.bundledSync).not.toHaveBeenCalled();
+    expect(binaryCalls()).toEqual([]);
+    expect(mocks.spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("preserves the unversioned bundled fallback when no healthy managed installation exists", async () => {
+    const bundled = makeBinary(path.join(root, "unversioned-bundled"));
+    responses.get(bundled)!.version = "unknown";
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+
+    expect(await discover()).toBe(bundled);
+    expect(binaryCalls()).toEqual([]);
+    expect(mocks.spawnSync).not.toHaveBeenCalled();
+  });
+});
+
 describe("asynchronous Firefox discovery and status", () => {
   it("preserves primary/legacy override precedence and never falls back from a missing explicit override", async () => {
     const explicit = makeBinary(path.join(root, "explicit"));
@@ -118,19 +214,25 @@ describe("asynchronous Firefox discovery and status", () => {
     expect(await findFirefoxBinaryAsync(env({ AGENT_BROWSER_FIREFOX_BINARY_PATH: explicit, FIREFOX_BINARY_PATH: legacy }))).toBe(explicit);
     expect(await findFirefoxBinaryAsync(env({ FIREFOX_BINARY_PATH: legacy }))).toBe(legacy);
     const missing = env({ AGENT_BROWSER_FIREFOX_BINARY_PATH: path.join(root, "missing"), FIREFOX_BINARY_PATH: legacy, AGENT_BROWSER_FIREFOX_NATIVE: "1" });
-    expect(await findFirefoxBinaryAsync(missing)).toBeNull();
-    expect(await getFirefoxStatusAsync(missing)).toMatchObject({ installed: false, path: null, version: null, nativeRequested: true, nativeConfig: false, fingerprintParity: false });
+    if (process.platform === "darwin") {
+      await expect(findFirefoxBinaryAsync(missing)).rejects.toThrow(/Firefox.*runtime package/i);
+      await expect(getFirefoxStatusAsync(missing)).rejects.toThrow(/Firefox.*runtime package/i);
+    } else {
+      expect(await findFirefoxBinaryAsync(missing)).toBeNull();
+      expect(await getFirefoxStatusAsync(missing)).toMatchObject({ installed: false, path: null, version: null, nativeRequested: true, nativeConfig: false, fingerprintParity: false });
+    }
     expect(mocks.bundled).not.toHaveBeenCalled();
-    expect(mocks.execFile).not.toHaveBeenCalled();
+    expect(binaryCalls()).toEqual([]);
   });
 
-  it("prefers the newest attested managed installation over the bundled copy", async () => {
+  it("retains a newer attested managed installation after checking the bundled CLI version", async () => {
     install("154.0");
     const latest = install("154.0.1");
     const bundled = makeBinary(path.join(root, "bundled"));
     mocks.bundled.mockResolvedValue(bundled);
     expect(await findFirefoxBinaryAsync(env())).toBe(latest);
-    expect(mocks.bundled).not.toHaveBeenCalled();
+    expect(mocks.bundled).toHaveBeenCalledOnce();
+    expect(binaryCalls().some(([file, args]) => file === bundled && args[0] === "--version")).toBe(true);
     expect(mocks.spawnSync).not.toHaveBeenCalled();
     expect(mocks.execFileSync).not.toHaveBeenCalled();
   });
@@ -142,7 +244,66 @@ describe("asynchronous Firefox discovery and status", () => {
     mocks.bundled.mockResolvedValueOnce(bundled);
     expect(await findFirefoxBinaryAsync(env())).toBe(bundled);
     expect(await findFirefoxBinaryAsync(env())).toBe(stock);
-    expect(mocks.execFile).not.toHaveBeenCalled();
+    expect(binaryCalls()).toEqual([]);
+  });
+
+  it.each([false, true])("fails explicitly for a developer override without trying healthy fallbacks (async=%s)", async (asynchronous) => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const explicit = makeBinary(path.join(root, "explicit-developer"));
+    const contents = path.dirname(path.dirname(explicit));
+    writeFirefoxFixturePlist(path.join(contents, "Info.plist"), {
+      CFBundleShortVersionString: "154.0", MozillaDeveloperObjPath: "/missing/objdir",
+    });
+    fs.unlinkSync(path.join(contents, "Resources", "omni.ja"));
+    install("154.0.1");
+    mocks.bundled.mockResolvedValue(makeBinary(path.join(root, "healthy-bundled")));
+    mocks.bundledSync.mockReturnValue(makeBinary(path.join(root, "healthy-bundled-sync")));
+    const selected = env({ FIREFOX_BINARY_PATH: explicit });
+    if (asynchronous) await expect(findFirefoxBinaryAsync(selected)).rejects.toThrow(/Firefox.*runtime package/i);
+    else expect(() => findFirefoxBinary(selected)).toThrow(/Firefox.*runtime package/i);
+    expect(mocks.bundled).not.toHaveBeenCalled();
+    expect(mocks.bundledSync).not.toHaveBeenCalled();
+    expect(binaryCalls()).toEqual([]);
+    expect(mocks.spawnSync).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("skips invalid managed/bundled/system candidates and rechecks hot bundled hits (async=%s)", async (asynchronous) => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const managed = install("154.0.1");
+    fs.unlinkSync(path.join(path.dirname(path.dirname(managed)), "Resources", "omni.ja"));
+    const bundled = makeBinary(path.join(root, "bundled"));
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+    const stock = makeBinary(path.join(root, "Applications", "Firefox.app", "Contents", "MacOS"), report(), false, "139.0");
+    const discover = () => asynchronous ? findFirefoxBinaryAsync(env()) : findFirefoxBinary(env());
+    expect(await discover()).toBe(bundled);
+    fs.truncateSync(path.join(path.dirname(path.dirname(bundled)), "Resources", "browser", "omni.ja"), 0);
+    expect(await discover()).toBe(stock);
+    writeFirefoxFixturePlist(path.join(path.dirname(path.dirname(stock)), "MacOS", "gpu-process.app", "Contents", "Info.plist"), {
+      MozillaDeveloperRepoPath: "/missing/repo",
+    });
+    expect(await discover()).toBeNull();
+    expect(binaryCalls()).toEqual([]);
+    expect(mocks.spawnSync).not.toHaveBeenCalled();
+  });
+
+  it.each(["linux", "win32"] as const)("preserves %s engine selection without imposing an app/omnijar layout", async (platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    const explicit = makeBinary(path.join(root, "plain-executable"));
+    const selected = env({ AGENT_BROWSER_FIREFOX_BINARY_PATH: explicit });
+    expect(findFirefoxBinary(selected)).toBe(explicit);
+    expect(await findFirefoxBinaryAsync(selected)).toBe(explicit);
+    const managed = install("154.0");
+    expect(findFirefoxBinary(env())).toBe(managed);
+    expect(await findFirefoxBinaryAsync(env())).toBe(managed);
+    fs.unlinkSync(managed);
+    const bundled = makeBinary(path.join(root, "bundled-plain"));
+    mocks.bundled.mockResolvedValue(bundled);
+    mocks.bundledSync.mockReturnValue(bundled);
+    expect(findFirefoxBinary(env())).toBe(bundled);
+    expect(await findFirefoxBinaryAsync(env())).toBe(bundled);
+    expect(mocks.execFile.mock.calls.some(([file]) => file === "/usr/bin/plutil")).toBe(false);
+    expect(mocks.execFileSync.mock.calls.some(([file]) => file === "/usr/bin/plutil")).toBe(false);
   });
 
   it("returns not installed when all fixture-isolated sources are absent", async () => {
@@ -202,7 +363,7 @@ describe("asynchronous Firefox discovery and status", () => {
       const file = makeBinary(path.join(root, name.replace(/[^a-z]/g, "_")), report(), false, "154.0", name);
       expect(await (asynchronous ? detectFirefoxVersionAsync(file) : detectFirefoxVersion(file))).toBeNull();
     }
-    expect(mocks.execFile).not.toHaveBeenCalled();
+    expect(binaryCalls()).toEqual([]);
     expect(mocks.spawnSync).not.toHaveBeenCalled();
   });
 
@@ -259,6 +420,46 @@ describe("managed Firefox attestation and async XUL identity cache", () => {
     expect(await findManagedFirefoxBinaryAsync("155.0", cache)).toBeNull();
     await expect(findManagedFirefoxBinaryAsync("154", cache)).rejects.toThrow("Invalid Firefox version");
     expect(await listManagedFirefoxBinariesAsync(path.join(root, "absent"))).toEqual([]);
+  });
+
+  it.each(["omni.ja", "browser/omni.ja", ...FIREFOX_HELPER_APPS, "version"])("revalidates macOS package %s despite cached version/capability probes", async (mutation) => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const file = install("154.0.1");
+    const contents = path.dirname(path.dirname(file));
+    expect((await findManagedFirefoxBinaryAsync("154.0.1", cache))?.binaryPath).toBe(file);
+    const attested = capabilityCalls();
+    if (mutation.endsWith("omni.ja")) fs.unlinkSync(path.join(contents, "Resources", mutation));
+    else if (mutation === "version") writeFirefoxFixturePlist(path.join(contents, "Info.plist"), {
+      CFBundleShortVersionString: "154.0.2", CFBundleVersion: "154.0.2",
+    });
+    else writeFirefoxFixturePlist(path.join(contents, "MacOS", mutation, "Contents", "Info.plist"), { MozillaDeveloperObjPath: "" });
+    expect(await findManagedFirefoxBinaryAsync("154.0.1", cache)).toBeNull();
+    expect(capabilityCalls()).toBe(attested);
+  });
+
+  it.each(["154.0a1", "154.0.1.2"])("does not truncate the full probe version %s before comparison", async (actual) => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const version = actual === "154.0a1" ? "154.0" : "154.0.1";
+    const file = install(version, report(FIREFOX_NATIVE_CONFIG_CAPABILITIES, version), true, actual);
+    writeFirefoxFixturePlist(path.join(path.dirname(path.dirname(file)), "Info.plist"), {
+      CFBundleShortVersionString: version, CFBundleVersion: version,
+    });
+    expect(await findManagedFirefoxBinaryAsync(version, cache)).toBeNull();
+  });
+
+  it("rejects package changes while the separate version probe is pending", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    const file = install("154.0");
+    let finishVersion!: Reply;
+    mocks.execFile.mockImplementation((binary, args, options, callback: Reply) => {
+      if (args[0] === "--version") { finishVersion = callback; return {}; }
+      return execute(binary, args, options, callback);
+    });
+    const pending = findManagedFirefoxBinaryAsync("154.0", cache);
+    await vi.waitFor(() => expect(typeof finishVersion).toBe("function"));
+    fs.unlinkSync(path.join(path.dirname(path.dirname(file)), "Resources", "omni.ja"));
+    finishVersion(null, "Mozilla Firefox 154.0\n", "");
+    expect(await pending).toBeNull();
   });
 
   it.each([

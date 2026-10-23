@@ -57,7 +57,7 @@ export interface FontCorpus {
  * The function is self-contained so it can run unchanged in Stock Chrome,
  * RoxyChrome and the independent managed build.
  */
-export async function captureFontCorpusInPage(): Promise<FontCorpus> {
+export async function captureFontCorpusInPage(options: { includeLocalAccess?: boolean } = {}): Promise<FontCorpus> {
   const progress = (stage: string): void => {
     try { console.debug(`[font-corpus:page] ${stage}`); } catch { /* ignore */ }
   };
@@ -317,16 +317,20 @@ export async function captureFontCorpusInPage(): Promise<FontCorpus> {
   }).queryLocalFonts;
   if (typeof queryLocalFonts === "function") {
     localAccess.available = true;
-    try {
-      const entries = await queryLocalFonts();
-      localAccess.entries = entries.map((entry) => ({
-        postscriptName: String(entry.postscriptName || ""),
-        fullName: String(entry.fullName || ""),
-        family: String(entry.family || ""),
-        style: String(entry.style || ""),
-      })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
-    } catch (error) {
-      localAccess.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    if (options.includeLocalAccess === false) {
+      localAccess.error = "Local Font Access not requested by this capture";
+    } else {
+      try {
+        const entries = await queryLocalFonts();
+        localAccess.entries = entries.map((entry) => ({
+          postscriptName: String(entry.postscriptName || ""),
+          fullName: String(entry.fullName || ""),
+          family: String(entry.family || ""),
+          style: String(entry.style || ""),
+        })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+      } catch (error) {
+        localAccess.error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      }
     }
   }
   progress("Local Font Access complete");

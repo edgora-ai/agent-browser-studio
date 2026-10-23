@@ -54,9 +54,11 @@ Agent Browser Studio 是具有双用途属性的本地自动化工具。请仅�
 ### 环境要求
 
 - Apple Silicon macOS
-- Node.js 22.16 或更高版本
+- Node.js 22.23.4 或更高版本
 - Go 1.25 或更高版本（用于构建随包分发的 MASQUE/SOCKS helper）
 - npm
+
+此源码构建补丁版本下限用于避开旧版 Windows Node.js 运行时报告的路径与文件描述符（fd）卷标识不一致问题；存储身份校验仍保持严格。
 
 ### 安装与启动
 
