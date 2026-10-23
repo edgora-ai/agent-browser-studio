@@ -800,18 +800,30 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
 
   it("consumes a late committed archive completion exactly once rather than only showing a 15-second failure", async () => {
     const f = await fixture(); f.native.saveDeferred = deferred<any>();
-    f.agent.exportProfileArchive(A); await flush();
+    const directoryWarnings = f.zip.syncArchiveDirectory(f.out) ? [] : [WINDOWS_DIRECTORY_WARNING];
+    const pending = f.agent.exportProfileArchive(A); await flush();
     expect(f.trace.invokes).toHaveLength(1);
     f.clock.advance(15_001); await flush();
     f.native.saveDeferred.resolve({ canceled: false, filePath: f.native.savePath });
     await f.settle();
-    expect(f.trace.invokes[0].result.success).toBe(true);
+    const result = await pending;
+    expect(result).toEqual(f.trace.invokes[0].result);
+    expect(result).toMatchObject({ success: true, outcome: "completed" });
+    expect(result.warnings).toEqual(directoryWarnings.length ? directoryWarnings : undefined);
+    expect(f.trace.services).toHaveLength(1);
+    expect(result.warnings).toEqual(f.trace.services[0].result.warnings);
     expect(f.readEntry(f.native.savePath, "sentinel.txt").toString()).toContain(A);
     proof.lateCommittedReadbacks++;
     expect(f.agent.ipc.isBusy(f.trace.rendererKeys[0])).toBe(false);
-    expect.soft(f.toasts.filter((toast) => toast.level === "success"), "real main committed and CRC readback passed, but the renderer discarded late completion").toHaveLength(1);
+    const completion = "Exported backup: " + result.filePath + (directoryWarnings.length
+      ? `. ${directoryWarnings.length} warning(s): ${directoryWarnings.join("; ")}` : "");
+    const expectedToasts = [
+      { level: "warning", text: expect.stringMatching(/Still processing/) },
+      { level: directoryWarnings.length ? "warning" : "success", text: completion },
+    ];
+    expect.soft(f.toasts, "real main committed and CRC readback passed, but the renderer discarded late completion").toEqual(expectedToasts);
     expect.soft(f.toasts.filter((toast) => toast.level === "error"), "the 15-second waiting deadline must not claim the committed operation failed").toHaveLength(0);
     f.clock.advance(30_000); await flush();
-    expect(f.toasts.filter((toast) => toast.level === "success"), "late completion must be consumed exactly once").toHaveLength(1);
+    expect(f.toasts, "late completion must be consumed exactly once").toEqual(expectedToasts);
   });
 });
