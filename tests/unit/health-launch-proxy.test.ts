@@ -1,6 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as path from "node:path";
 import type { ProxyConfig, ResolvedProfileProxy } from "../../src/main/types.js";
 import * as runtime from "../../src/main/services/browser/runtime-table.js";
+
+// Match exported-launch-provenance: filesystem paths follow the host OS,
+// independently of the modeled browser platform. No real directory is used.
+const fixturePaths = await vi.hoisted(async () => {
+  const path = await import("node:path");
+  const root = path.resolve(path.sep, "virtual");
+  return {
+    root, profiles: path.join(root, "profiles"), state: path.join(root, "state"),
+    chromiumBin: path.join(root, "chromium-bin"), firefoxBin: path.join(root, "firefox-bin"),
+    chromium: path.join(root, "chromium"), firefox: path.join(root, "firefox"), bundled: path.join(root, "bundled"),
+  };
+});
 
 // Reuse the existing exported-launch-provenance test boundary pattern: import
 // the REAL launcher, replace only process/OS/network/storage effects. No real
@@ -27,7 +40,7 @@ vi.mock("node:child_process", () => ({ spawn: f.spawn, ...Object.fromEntries(["e
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] }, screen: { getPrimaryDisplay: () => ({ scaleFactor: 2 }) } }));
 vi.mock("../../src/main/services/browser-platform-policy.js", () => ({ getHostBrowserPlatform: () => "macos" }));
 vi.mock("../../src/main/services/config-manager.js", () => ({
-  getConfig: () => f.cfg, getProfilesDir: () => "/virtual/profiles", getAppDataDir: () => "/virtual/state",
+  getConfig: () => f.cfg, getProfilesDir: () => fixturePaths.profiles, getAppDataDir: () => fixturePaths.state,
   saveConfig: () => f.forbidden("config save"), resolveProfileProxy: () => f.forbidden("current config proxy lookup"), resolveProfileProxySecret: f.proxy,
   getProxyDetection: () => null, setProxyDetectionIfCurrent: () => f.forbidden("proxy detection persistence"),
   sanitizeAppUrl: (value: unknown) => value || null, getProxyHealthEntry: () => null, assertProfileWritable: () => undefined,
@@ -82,8 +95,8 @@ vi.mock("../../src/main/services/proxy-detection.js", () => ({
 }));
 vi.mock("../../src/main/services/proxy-health.js", () => ({ recordProxyRotation: () => undefined }));
 vi.mock("../../src/main/services/native-chromium-manager.js", () => ({
-  findManagedChromiumBinary: () => f.forbidden("sync engine discovery"), findManagedChromiumBinaryAsync: async () => ({ binaryPath: "/virtual/chromium-bin", version: "150.0.7800.1" }),
-  getManagedChromiumRoot: () => "/virtual/chromium", listManagedChromiumBinaries: () => [], listManagedChromiumBinariesAsync: async () => [], normalizeManagedChromiumVersion: (value: unknown) => value || null,
+  findManagedChromiumBinary: () => f.forbidden("sync engine discovery"), findManagedChromiumBinaryAsync: async () => ({ binaryPath: fixturePaths.chromiumBin, version: "150.0.7800.1" }),
+  getManagedChromiumRoot: () => fixturePaths.chromium, listManagedChromiumBinaries: () => [], listManagedChromiumBinariesAsync: async () => [], normalizeManagedChromiumVersion: (value: unknown) => value || null,
 }));
 vi.mock("../../src/main/services/native-proxy-auth.js", () => ({
   LEGACY_NATIVE_PROXY_AUTH_SWITCH: "--roxy-proxy-auth", NATIVE_PROXY_AUTH_SWITCH: "--agent-browser-proxy-auth", NATIVE_SUPPRESS_GOOGLE_API_KEY_INFOBAR_SWITCH: "--agent-browser-suppress-google-api-key-infobar",
@@ -100,11 +113,11 @@ vi.mock("../../src/main/services/browser/webrtc-preferences.js", () => ({
   applyChromiumWebRtcPreferences: f.webRtcPreferencesApply,
 }));
 vi.mock("../../src/main/services/browser/chromium-gpu-context.js", () => ({ readChromiumGpuContext: () => f.forbidden("GPU file inspection") }));
-vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => "/virtual/bundled" }));
-vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => "/virtual/firefox" }));
+vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => fixturePaths.bundled }));
+vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => fixturePaths.firefox }));
 vi.mock("../../src/main/services/browser-engine.js", async (original) => ({
   sanitizeBrowserEngine: (value: unknown) => value === "firefox" ? "firefox" : "chromium", normalizeManagedFirefoxVersion: (value: unknown) => value || null,
-  findFirefoxBinaryAsync: async () => "/virtual/firefox-bin", detectFirefoxVersionAsync: async () => "154.0", getFirefoxBinaryOverride: () => null,
+  findFirefoxBinaryAsync: async () => fixturePaths.firefoxBin, detectFirefoxVersionAsync: async () => "154.0", getFirefoxBinaryOverride: () => null,
   getFirefoxStatus: () => f.forbidden("Firefox status"), getFirefoxStatusAsync: () => f.forbidden("Firefox status"), defaultFirefoxBinaryPaths: () => [],
   buildFirefoxLaunchArgs: (await original<typeof import("../../src/main/services/browser-engine.js")>()).buildFirefoxLaunchArgs,
   spawnFirefoxWithDebugInfo: f.firefoxSpawn, writeFirefoxUserJs: f.firefoxPrefs,
@@ -128,6 +141,12 @@ import { checkFingerprintDrift, launchBrowser } from "../../src/main/services/br
 import { inspectBrowserLaunchLines } from "../../src/main/services/process-discovery.js";
 
 const ID = "ab_health_launch_proxy";
+const profileDir = path.join(fixturePaths.profiles, ID);
+const isVirtualPath = (file: unknown): file is string => {
+  if (typeof file !== "string" || !path.isAbsolute(file)) return false;
+  const relative = path.relative(fixturePaths.root, file);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
 const entry = (): runtime.RunningEntry => ({ pid: 4901, process: null, port: 49049, lastActivityAt: 0, engine: "chromium" });
 const resolved = (type: ProxyConfig["type"] = "http"): ResolvedProfileProxy => ({
   mode: "named", name: "actual-fallback", rotatedFrom: "requested-primary", rotationReason: "synthetic health selection",
@@ -137,10 +156,10 @@ beforeEach(() => {
   vi.clearAllMocks(); runtime.runningProcesses.clear(); f.sessions.clear(); f.lines = [];
   f.capture.mockImplementation(() => f.forbidden("fingerprint wire"));
   f.status.mockImplementation(() => f.forbidden("lifecycle.statusBrowser"));
-  f.cfg = { chromiumBin: "/virtual/chromium-bin", proxies: {}, proxyHealth: {}, blockOnFingerprintDrift: false, blockOnEnvironmentRisk: false,
+  f.cfg = { chromiumBin: fixturePaths.chromiumBin, proxies: {}, proxyHealth: {}, blockOnFingerprintDrift: false, blockOnEnvironmentRisk: false,
     browserProfiles: { [ID]: { name: "Health launch fixture", engine: "chromium", fingerprintMode: "off", platform: "macos", fingerprintSeed: 49, locale: "en-US", timezone: "UTC", proxyMode: "none" } } };
   f.proxyResult = { mode: "none", name: null, config: null }; f.proxy.mockImplementation(() => f.proxyResult);
-  f.inspect.mockImplementation((_directory, trackedPid) => inspectBrowserLaunchLines(["9 /virtual/unrelated-process", ...f.lines], `/virtual/profiles/${ID}`, trackedPid));
+  f.inspect.mockImplementation((_directory, trackedPid) => inspectBrowserLaunchLines([`9 ${path.join(fixturePaths.root, "unrelated-process")}`, ...f.lines], profileDir, trackedPid));
   f.kill.mockImplementation((_pid, signal) => signal === 0 ? true : f.forbidden(`process signal ${signal}`));
   vi.spyOn(process, "kill").mockImplementation(f.kill as any);
   f.netCreate.mockImplementation(() => ({ once: vi.fn(), listen: (_port: number, _host: string, ready: () => void) => ready(), address: () => ({ port: 49049 }), close: (done: () => void) => done() }));
@@ -150,9 +169,9 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", f.fetch);
   for (const key of ["AGENT_BROWSER_CHROMIUM_BINARY_PATH", "CLOAKLITE_CHROMIUM_BINARY_PATH", "AGENT_BROWSER_FIREFOX_BINARY_PATH", "FIREFOX_BINARY_PATH", "MOZ_DISABLE_CONTENT_SANDBOX", "AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", "AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE", "AGENT_BROWSER_DIAGNOSTIC_NETLOG_MODE"]) vi.stubEnv(key, undefined);
-  const virtual = (file: unknown) => typeof file === "string" && file.startsWith("/virtual/") ? undefined : f.forbidden(`filesystem ${String(file)}`);
+  const virtual = (file: unknown) => isVirtualPath(file) ? undefined : f.forbidden(`filesystem ${String(file)}`);
   for (const name of ["mkdirSync", "writeFileSync", "renameSync", "unlinkSync", "rmSync"]) f.fs[name].mockImplementation(virtual);
-  f.fs.existsSync.mockImplementation((file) => { virtual(file); return file === "/virtual/chromium-bin" || file === "/virtual/firefox-bin"; });
+  f.fs.existsSync.mockImplementation((file) => { virtual(file); return file === fixturePaths.chromiumBin || file === fixturePaths.firefoxBin; });
   f.fs.readFileSync.mockImplementation((file) => { virtual(file); return "{}"; });
   f.fs.openSync.mockImplementation((file) => { virtual(file); return 49; });
   f.fs.writeSync.mockImplementation((fd) => fd === 49 ? 0 : f.forbidden("file descriptor write"));
@@ -163,9 +182,9 @@ beforeEach(() => {
   f.spawn.mockImplementation(child);
   f.firefoxSpawn.mockImplementation(async (file, args) => ({ child: child(file, args), info: { actualPort: 49049, bidiWebSocketUrl: "ws://127.0.0.1:49049/session" } }));
   f.firefoxPrefs.mockImplementation(() => undefined);
-  f.webRtcPreferencesValidate.mockImplementation(directory => { if (directory !== `/virtual/profiles/${ID}`) f.forbidden("unexpected WebRTC preferences directory"); });
+  f.webRtcPreferencesValidate.mockImplementation(directory => { if (directory !== profileDir) f.forbidden("unexpected WebRTC preferences directory"); });
   f.webRtcPreferencesApply.mockImplementation((directory, policy) => {
-    if (directory !== `/virtual/profiles/${ID}`) f.forbidden("unexpected WebRTC preferences directory");
+    if (directory !== profileDir) f.forbidden("unexpected WebRTC preferences directory");
     return { policy: policy.restrictNonProxiedUdp || policy.effectiveMode === "disable" ? "disable_non_proxied_udp" : "default", changed: true, readbackVerified: true, directorySynced: true };
   });
 });
@@ -214,7 +233,8 @@ describe("minimal fresh-launch proxy evidence", () => {
   it("leaves old/adopted/hash-only entries unknown rather than inferring a configured fallback", () => {
     expect(runtime.getLaunchProxySnapshot(ID)).toBeNull();
     const legacy = { ...entry(), launchProvenance: { version: 1 as const, requestHash: "a".repeat(64), payloadHash: "b".repeat(64) } };
-    const before = structuredClone(legacy); runtime.setEntry(ID, legacy);
+    // Deliberately exercise a persisted v1 entry outside the current v2 type.
+    const before = structuredClone(legacy); runtime.setEntry(ID, legacy as unknown as runtime.RunningEntry);
     expect(runtime.getLaunchProxySnapshot(ID)).toBeNull();
     expect(runtime.getEntry(ID)).toBe(legacy); expect(legacy).toEqual(before); expect(legacy).not.toHaveProperty("launchProxy");
     runtime.clearEntry(ID); expect(runtime.getLaunchProxySnapshot(ID)).toBeNull();
@@ -239,8 +259,8 @@ describe("actual fresh launch entry producers with declared synthetic effect bou
     expect(launched).toMatchObject({ pid: 4901, cdpPort: 49049 });
     expect(engine === "chromium" ? f.spawn : f.firefoxSpawn).toHaveBeenCalledOnce();
     if (engine === "chromium") {
-      expect(f.webRtcPreferencesValidate).toHaveBeenCalledExactlyOnceWith(`/virtual/profiles/${ID}`);
-      expect(f.webRtcPreferencesApply).toHaveBeenCalledWith(`/virtual/profiles/${ID}`, expect.objectContaining({ fingerprintMode: "off", effectiveMode: "proxy-only", restrictNonProxiedUdp: true }));
+      expect(f.webRtcPreferencesValidate).toHaveBeenCalledExactlyOnceWith(profileDir);
+      expect(f.webRtcPreferencesApply).toHaveBeenCalledWith(profileDir, expect.objectContaining({ fingerprintMode: "off", effectiveMode: "proxy-only", restrictNonProxiedUdp: true }));
     } else { expect(f.webRtcPreferencesValidate).not.toHaveBeenCalled(); expect(f.webRtcPreferencesApply).not.toHaveBeenCalled(); }
     const stored = runtime.getEntry(ID)!;
     expect(stored.launchProxy).toEqual({ mode: "named", type: "http", source: "fresh-launch" });
@@ -251,7 +271,7 @@ describe("actual fresh launch entry producers with declared synthetic effect bou
     expect(runtime.getLaunchProxySnapshot(ID)).toEqual(retained);
     expect(runtime.getLaunchProxySnapshot(ID)).not.toHaveProperty("name");
     expect(runtime.getEntry(ID)).toBe(stored);
-    expect(f.fs.writeFileSync.mock.calls.every(([file]) => String(file).startsWith("/virtual/"))).toBe(true);
+    expect(f.fs.writeFileSync.mock.calls.every(([file]) => isVirtualPath(file))).toBe(true);
   });
 
   it.each(["chromium", "firefox"] as const)("retains an explicit direct receipt only for %s fresh launch", async (engine) => {
