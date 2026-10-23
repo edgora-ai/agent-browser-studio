@@ -15,6 +15,7 @@ vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ runtimeCookie
   hasRunningBrowser: () => h.running, exportCookiesSnapshot: h.snapshot, importCookies: h.importCookies,
 } }));
 import { syncService } from "../../src/main/services/sync-service.js";
+import { acquireRestoreLock } from "../../src/main/services/profile-restore-lock.js";
 import { getConfig, getConfigPath, getProfilesDir, reloadConfig, saveConfig, setProfileMeta, setSyncConfig } from "../../src/main/services/config-manager.js";
 import { onEvent } from "../../src/main/services/event-bus.js";
 
@@ -56,6 +57,46 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(() => { expect(path.dirname(h.root)).toBe(os.tmpdir()); fs.rmSync(h.root, { recursive: true, force: true }); });
 
 describe("shared synchronization operation ownership", () => {
+  it("completes the first service retry after reclaiming a proven-dead profile lease", async () => {
+    const file = path.join(h.root, "locks", `${ID}.restore.lock`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ pid: 123456, token: "synthetic-interrupted-sync" }), { mode: 0o600 });
+    const nativeKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal: any) => {
+      if (pid === 123456) throw Object.assign(new Error("Synthetic exited sync owner"), { code: "ESRCH" });
+      return nativeKill(pid, signal);
+    }) as any);
+    try {
+      const result = await syncService.push();
+      expect(result).toMatchObject({ success: true, localCommit: "committed", remoteCommit: "committed" });
+      expect(fs.lstatSync(file, { throwIfNoEntry: false })).toBeUndefined();
+      const stored = disk();
+      expect(stored.browserProfiles[ID].syncBaseline).toBeDefined();
+      reloadConfig();
+      expect(Object.entries(getConfig().browserProfiles).find(([id]) => id === ID)?.[1].syncBaseline).toEqual(stored.browserProfiles[ID].syncBaseline);
+      const published = JSON.parse(h.objects.get(MAIN)!.toString());
+      const remote = JSON.parse(zlib.gunzipSync(Buffer.from(published.data, "base64")).toString());
+      expect(remote.browserProfiles[ID].name).toBe("before");
+      expect((syncService.getStatus() as any).operation).toMatchObject({ active: null, last: { operationId: result.operationId, success: true } });
+    } finally { kill.mockRestore(); }
+  });
+
+  it("finishes a failed acquisition without stealing a live profile lease or blocking a later service retry", async () => {
+    const release = acquireRestoreLock(ID), file = path.join(h.root, "locks", `${ID}.restore.lock`);
+    const leaseBytes = fs.readFileSync(file), configBytes = fs.readFileSync(getConfigPath());
+    try {
+      const result = await syncService.push();
+      expect(result).toMatchObject({ success: false, code: "SYNC_FAILED", localCommit: "none", remoteCommit: "none" });
+      expect(result.message).toMatch(/Restore already in progress/);
+      expect(fs.readFileSync(file)).toEqual(leaseBytes);
+      expect(fs.readFileSync(getConfigPath())).toEqual(configBytes);
+      expect(h.requests.some(request => request.startsWith("PUT"))).toBe(false);
+      expect((syncService.getStatus() as any).operation.active).toBeNull();
+    } finally { release(); }
+    expect((await syncService.push()).success).toBe(true);
+    expect(fs.lstatSync(file, { throwIfNoEntry: false })).toBeUndefined();
+  });
+
   it("rejects push and pull conflicts without starting or queuing another operation", async () => {
     const started = deferred(), release = deferred();
     h.snapshot.mockImplementation(async () => { started.resolve(); await release.promise; return { state: "available", cookies: [] }; });
