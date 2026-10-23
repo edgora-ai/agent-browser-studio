@@ -30,4 +30,8 @@ it("typechecks Task49-owned production and test files with the real project opti
   console.log(`Task49 semantic diagnostics: owned=${ownedErrors.length}; outside-owned=${errors.length - ownedErrors.length}`);
   if (errors.length > ownedErrors.length) console.log(errors.filter((diagnostic) => !ownedErrors.includes(diagnostic)).map(display).join("\n"));
   expect(ownedErrors.map(display)).toEqual([]);
-}, 30_000);
+  // This builds a full project Program and typechecks it. 30 s was measured as
+  // insufficient on a loaded CI runner (30.75 s before the timeout fired, with
+  // owned=0 and outside-owned=0 diagnostics); the assertion still fails on any
+  // real error.
+}, 120_000);

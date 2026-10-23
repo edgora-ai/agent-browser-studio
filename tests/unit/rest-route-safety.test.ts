@@ -38,7 +38,11 @@ describe("REST route safety on actual sockets", () => {
       return [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)];
     })];
     expect(diagnostics.map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n"))).toEqual([]);
-  });
+    // Creating a TS Program is real work: it parses the project config and the
+    // transitive service graph. On a loaded CI runner that exceeds the 5 s
+    // default even when it produces zero diagnostics (measured 6.3 s), so the
+    // budget is explicit. A genuine type error still fails the assertion.
+  }, 30_000);
   it("invalid request targets are contained rather than rejecting the async HTTP listener", async () => {
     const response = await rawRequest(f.restPort, `GET //// HTTP/1.1\r\nHost: 127.0.0.1:${f.restPort}\r\nAuthorization: Bearer ${f.rest!.getRestApiToken()}\r\nConnection: close\r\n\r\n`);
     try { expect(response).toMatch(/^HTTP\/1\.1 400 /); } finally { expect((await f.api("/api/profiles")).status).toBe(200); }
