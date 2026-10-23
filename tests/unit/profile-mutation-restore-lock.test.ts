@@ -336,6 +336,27 @@ describe("confirmed-stopped transfer gates and active restore-lock owners", () =
       expect(fs.existsSync(LOCK)).toBe(false);
     } finally { kill.mockRestore(); }
   });
+  it("acquires in the same call after reclaiming an ESRCH-proven dead owner", () => {
+    fs.mkdirSync(path.dirname(LOCK), { recursive: true });
+    fs.writeFileSync(LOCK, JSON.stringify({ pid: 123456, token: "dead-direct-acquisition" }), { mode: 0o600 });
+    const nativeKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation(((pid: number, signal: any) => {
+      if (pid === 123456) throw Object.assign(new Error("synthetic dead owner"), { code: "ESRCH" });
+      return nativeKill(pid, signal);
+    }) as any);
+    let release: (() => void) | undefined;
+    try {
+      // No isRestoreLocked() preflight: production callers acquire directly.
+      release = acquireRestoreLock(ID);
+      const stored = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+      expect(stored).toMatchObject({ pid: process.pid, dirId: ID });
+      expect(stored.token).not.toBe("dead-direct-acquisition");
+      expect(isRestoreLocked(ID)).toBe(true);
+    } finally { release?.(); kill.mockRestore(); }
+    expect(fs.existsSync(LOCK)).toBe(false);
+    const retry = acquireRestoreLock(ID); retry();
+    expect(fs.existsSync(LOCK)).toBe(false);
+  });
   it("reclaims only an ESRCH-proven dead owner", () => {
     fs.mkdirSync(path.dirname(LOCK), { recursive: true });
     fs.writeFileSync(LOCK, JSON.stringify({ pid: 123456, token: "dead-owned-fixture" }), { mode: 0o600 });

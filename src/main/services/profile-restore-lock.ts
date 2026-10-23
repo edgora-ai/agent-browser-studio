@@ -291,28 +291,36 @@ export function acquireRestoreLock(dirId: string): () => void {
   if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error("Unsafe restore lock directory");
   assertNoFullProfileRecovery(dirId);
   let fd: number | null = null;
-  let created: fs.Stats | undefined;
   const token = randomUUID();
-  try {
-    fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
-    created = fs.fstatSync(fd);
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, dirId, token, createdAt: new Date().toISOString() }));
-    assertNoFullProfileRecovery(dirId);
-    heldLocks.set(dirId, { fd, token });
-  } catch (error: any) {
-    if (fd !== null) fs.closeSync(fd);
-    if (error?.code === "EEXIST") {
-      const snapshot = readRestoreLock(lockPath);
-      if (snapshot?.stale) removeRestoreLockIfTokenMatches(lockPath, snapshot.token, true);
-      throw new Error(`Restore already in progress for ${dirId}`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let created: fs.Stats | undefined;
+    try {
+      assertNoFullProfileRecovery(dirId);
+      const currentParent = fs.lstatSync(path.dirname(lockPath));
+      if (!currentParent.isDirectory() || currentParent.isSymbolicLink() || !recoveryIdentity(parent, currentParent)) throw new Error("Restore lock directory changed");
+      fd = fs.openSync(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+      created = fs.fstatSync(fd);
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, dirId, token, createdAt: new Date().toISOString() }));
+      assertNoFullProfileRecovery(dirId);
+      heldLocks.set(dirId, { fd, token });
+      break;
+    } catch (error: any) {
+      if (fd !== null) { const closing = fd; fd = null; fs.closeSync(closing); }
+      if (error?.code === "EEXIST") {
+        const snapshot = readRestoreLock(lockPath);
+        // A proven-dead lease is not an active restore. Reclaim by the same
+        // token/inode checks, then compete for O_EXCL once, never spin or steal.
+        if (attempt === 0 && snapshot?.stale && removeRestoreLockIfTokenMatches(lockPath, snapshot.token, true)) continue;
+        throw new Error(`Restore already in progress for ${dirId}`);
+      }
+      if (created) {
+        try {
+          const current = fs.lstatSync(lockPath, { throwIfNoEntry: false });
+          if (current && !current.isSymbolicLink() && current.dev === created.dev && current.ino === created.ino) fs.unlinkSync(lockPath);
+        } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") console.error(`[sync] failed to remove partial restore lock for ${dirId}:`, unlinkError); }
+      }
+      throw error;
     }
-    if (created) {
-      try {
-        const current = fs.lstatSync(lockPath, { throwIfNoEntry: false });
-        if (current && !current.isSymbolicLink() && current.dev === created.dev && current.ino === created.ino) fs.unlinkSync(lockPath);
-      } catch (unlinkError: any) { if (unlinkError?.code !== "ENOENT") console.error(`[sync] failed to remove partial restore lock for ${dirId}:`, unlinkError); }
-    }
-    throw error;
   }
 
   const ownedFd = fd!;
