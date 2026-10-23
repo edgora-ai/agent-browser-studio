@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import * as path from "node:path";
 import type { BrowserProfileMeta, ProxyConfig } from "../../src/main/types.js";
+
+// Filesystem paths follow the host OS, independently of the modeled browser platform.
+const fixturePaths = await vi.hoisted(async () => {
+  const path = await import("node:path");
+  const root = path.resolve(path.sep, "virtual");
+  return {
+    root, profiles: path.join(root, "profiles"), state: path.join(root, "state"),
+    chromium: path.join(root, "chromium"), firefox: path.join(root, "firefox"), bundled: path.join(root, "bundled"),
+  };
+});
 
 // Every external effect is replaced before importing the ACTUAL exported
 // launcher. Synthetic PIDs are only ever passed to a mocked process.kill.
@@ -44,7 +55,7 @@ vi.mock("node:child_process", () => ({
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => f.windows }, screen: { getPrimaryDisplay: () => ({ scaleFactor: 2 }) } }));
 vi.mock("../../src/main/services/browser-platform-policy.js", () => ({ getHostBrowserPlatform: () => f.host }));
 vi.mock("../../src/main/services/config-manager.js", () => ({
-  getConfig: () => f.cfg, getProfilesDir: () => "/virtual/profiles", getAppDataDir: () => "/virtual/state",
+  getConfig: () => f.cfg, getProfilesDir: () => fixturePaths.profiles, getAppDataDir: () => fixturePaths.state,
   saveConfig: f.saveConfig,
   resolveProfileProxy: vi.fn(), resolveProfileProxySecret: f.proxy, getProxyDetection: f.cachedDetection,
   setProxyDetectionIfCurrent: f.persistDetection,
@@ -125,7 +136,7 @@ vi.mock("../../src/main/services/proxy-detection.js", () => ({
 vi.mock("../../src/main/services/proxy-health.js", () => ({ recordProxyRotation: vi.fn() }));
 vi.mock("../../src/main/services/native-chromium-manager.js", () => ({
   findManagedChromiumBinary: vi.fn(), findManagedChromiumBinaryAsync: f.managedBinary,
-  getManagedChromiumRoot: () => "/virtual/chromium", listManagedChromiumBinaries: () => [], listManagedChromiumBinariesAsync: async () => [],
+  getManagedChromiumRoot: () => fixturePaths.chromium, listManagedChromiumBinaries: () => [], listManagedChromiumBinariesAsync: async () => [],
   normalizeManagedChromiumVersion: (value: unknown) => value || null,
 }));
 vi.mock("../../src/main/services/native-proxy-auth.js", () => ({
@@ -145,8 +156,8 @@ vi.mock("../../src/main/services/browser/webrtc-preferences.js", () => ({
   validateChromiumWebRtcPreferences: f.webRtcPreferencesValidate,
   applyChromiumWebRtcPreferences: f.webRtcPreferencesApply,
 }));
-vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => "/virtual/bundled" }));
-vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => "/virtual/firefox" }));
+vi.mock("../../src/main/services/bundled-native-browsers.js", () => ({ bundledBrowsersRoot: () => fixturePaths.bundled }));
+vi.mock("../../src/main/services/native-firefox-manager.js", () => ({ getManagedFirefoxRoot: () => fixturePaths.firefox }));
 vi.mock("../../src/main/services/browser-engine.js", async (importOriginal) => ({
   sanitizeBrowserEngine: (value: unknown) => value === "firefox" ? "firefox" : "chromium",
   normalizeManagedFirefoxVersion: (value: unknown) => value || null,
@@ -187,8 +198,9 @@ import { resolveChromiumWebRtcRoutingPolicy, chromiumWebRtcRoutingArgs } from ".
 import { inspectBrowserLaunchLines } from "../../src/main/services/process-discovery.js";
 
 const dirId = "ab_task525";
-const profileDir = `/virtual/profiles/${dirId}`;
-const bin = "/virtual/Chromium.app/Contents/MacOS/Chromium";
+const profileDir = path.join(fixturePaths.profiles, dirId);
+const bin = path.join(fixturePaths.root, "Chromium.app", "Contents", "MacOS", "Chromium");
+const firefoxBin = path.join(fixturePaths.root, "firefox-bin");
 const pid = 4101;
 const port = 9222;
 const currentMeta = (): BrowserProfileMeta => f.cfg.browserProfiles[dirId];
@@ -302,7 +314,7 @@ beforeEach(() => {
   });
   f.cachedDetection.mockReset().mockReturnValue(null);
   f.proxyUrl.mockImplementation((proxy: ProxyConfig) => `${proxy.type}://${proxy.host}:${proxy.port}`);
-  f.fs.existsSync.mockImplementation((file) => file === bin || file === "/virtual/firefox-bin");
+  f.fs.existsSync.mockImplementation((file) => file === bin || file === firefoxBin);
   f.fs.readFileSync.mockReturnValue("{}");
   f.fs.openSync.mockReturnValue(21);
   f.spawn.mockImplementation((file: string, args: string[]) => ({
@@ -360,7 +372,7 @@ describe("actual common-create entry with fake storage", () => {
     const created = createBrowserProfile({ name: "Factory default", fingerprintSeed: 12345 });
     const stored = f.cfg.browserProfiles[created.dirId];
     expect(stored).toMatchObject({ name: "Factory default", platform: expected, fingerprintMode: "managed" });
-    expect(f.fs.mkdirSync).toHaveBeenCalledWith(`/virtual/profiles/${created.dirId}/Default`, { recursive: true });
+    expect(f.fs.mkdirSync).toHaveBeenCalledWith(path.join(fixturePaths.profiles, created.dirId, "Default"), { recursive: true });
     if (hostPlatform === null) {
       await expect(launchBrowser(created.dirId)).rejects.toMatchObject({ code: "host-platform-mismatch" });
       expect(f.inspect).not.toHaveBeenCalled();
@@ -628,7 +640,7 @@ describe("late Chromium startup failures preserve a replacement owner", () => {
       currentMeta().engine = "firefox";
       currentMeta().fingerprintBaseline = { tz: "UTC" };
       f.cfg.blockOnFingerprintDrift = true;
-      f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+      f.firefoxBinary.mockResolvedValue(firefoxBin);
       if (code === "fingerprint-drift") f.captureFingerprint.mockResolvedValue({ tz: "Asia/Tokyo" });
       else f.captureFingerprint.mockRejectedValue(new Error("BiDi capture unavailable"));
       const error = await launchBrowser(dirId).then(() => null, (caught) => caught);
@@ -782,10 +794,10 @@ describe("late Chromium startup failures preserve a replacement owner", () => {
 });
 
 describe("explicit scoped NetLog launch wiring", () => {
-  const filePath = "/virtual/state/diagnostics/route.netlog.json";
+  const filePath = path.join(fixturePaths.state, "diagnostics", "route.netlog.json");
 
   it("forwards only the explicitly scoped request through the actual fresh launcher", async () => {
-    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", "/virtual/state");
+    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", fixturePaths.state);
     vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE", filePath);
     const diagnosticArgs = [
       `--log-net-log=${filePath}`, "--net-log-capture-mode=Default",
@@ -794,7 +806,7 @@ describe("explicit scoped NetLog launch wiring", () => {
     f.diagnostics.mockReturnValue(diagnosticArgs);
     expect(await launchBrowser(dirId)).toMatchObject({ pid, cdpPort: port });
     expect(f.diagnostics).toHaveBeenCalledOnce();
-    expect(f.diagnostics).toHaveBeenCalledWith("/virtual/state", { appDataDir: "/virtual/state", filePath });
+    expect(f.diagnostics).toHaveBeenCalledWith(fixturePaths.state, { appDataDir: fixturePaths.state, filePath });
     const args = f.spawn.mock.calls[0][1] as string[];
     expect(args).toEqual(expect.arrayContaining(diagnosticArgs));
     expect(args).not.toContain("--disable-infobars");
@@ -803,7 +815,7 @@ describe("explicit scoped NetLog launch wiring", () => {
   });
 
   it.each([20, 90])("forwards the explicit direct-fd %is mode and its fixed four flags on a fresh launch", async duration => {
-    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", "/virtual/state");
+    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", fixturePaths.state);
     vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE", filePath);
     vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_MODE", `direct-fd-${duration}s`);
     const diagnosticArgs = [
@@ -812,8 +824,8 @@ describe("explicit scoped NetLog launch wiring", () => {
     ];
     f.diagnostics.mockReturnValue(diagnosticArgs);
     expect(await launchBrowser(dirId)).toMatchObject({ pid, cdpPort: port });
-    expect(f.diagnostics).toHaveBeenCalledExactlyOnceWith("/virtual/state", {
-      appDataDir: "/virtual/state", filePath, mode: `direct-fd-${duration}s`,
+    expect(f.diagnostics).toHaveBeenCalledExactlyOnceWith(fixturePaths.state, {
+      appDataDir: fixturePaths.state, filePath, mode: `direct-fd-${duration}s`,
     });
     const args = f.spawn.mock.calls[0][1] as string[];
     expect(args.filter(arg => /^--(?:log-net-log|net-log-)/.test(arg))).toEqual(diagnosticArgs);
@@ -828,7 +840,7 @@ describe("explicit scoped NetLog launch wiring", () => {
       return [];
     });
     await expect(launchBrowser(dirId)).rejects.toThrow(/Invalid Chromium diagnostic NetLog/);
-    expect(f.diagnostics).toHaveBeenCalledExactlyOnceWith("/virtual/state", {
+    expect(f.diagnostics).toHaveBeenCalledExactlyOnceWith(fixturePaths.state, {
       appDataDir: undefined, filePath: undefined, mode,
     });
     expect(f.spawn).not.toHaveBeenCalled();
@@ -863,7 +875,7 @@ describe("explicit scoped NetLog launch wiring", () => {
     const fixture = launchedFixture();
     f.lines = [fixture.line];
     if (route === "cached") runningProcesses.set(dirId, fixture.entry);
-    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", "/virtual/state");
+    vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_APP_DATA_DIR", fixturePaths.state);
     vi.stubEnv("AGENT_BROWSER_DIAGNOSTIC_NETLOG_FILE", filePath);
     const error = await blocked("restart-required");
     expect(error.message).toContain("cannot be armed on a reused browser");
@@ -1154,7 +1166,9 @@ describe("spawn binding and retained off/Firefox routes", () => {
     runningProcesses.clear();
     await blocked("restart-required"); // Flat ps lost the display argv boundary.
     expect(runningProcesses.has(dirId)).toBe(false);
-    f.lines = [`${pid} ${JSON.stringify(actualBin)} ${args.map((arg) => JSON.stringify(arg)).join(" ")}`];
+    // CIM/CRT quoting preserves native path separators; JSON quoting doubles them.
+    const quoteCimArg = (arg: string) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
+    f.lines = [`${pid} ${[actualBin, ...args].map(quoteCimArg).join(" ")}`];
     expect(await launchBrowser(dirId)).toMatchObject({ pid, cdpPort: port }); // CIM retains that boundary.
     noLaunchEffects();
   });
@@ -1223,7 +1237,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     currentMeta().engine = "firefox";
     currentMeta().platform = "android";
     const firefox = { pid: 5101, process: null, port, lastActivityAt: 123, engine: "firefox" as const };
-    f.lines = [`5101 /virtual/firefox-bin -profile ${profileDir} --remote-debugging-port ${port} -no-remote`];
+    f.lines = [`5101 ${firefoxBin} -profile ${profileDir} --remote-debugging-port ${port} -no-remote`];
     if (route === "cached") runningProcesses.set(dirId, firefox);
     else f.legacy.mockReturnValue({ pid: 5101, cdpPort: port });
     await blocked("restart-required");
@@ -1234,7 +1248,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
   it("refuses a stopping Firefox entry instead of reporting it as running", async () => {
     currentMeta().engine = "firefox";
     runningProcesses.set(dirId, { pid: 5101, process: null, port, engine: "firefox", stopping: true, lastActivityAt: 123 });
-    f.lines = [`5101 /virtual/firefox-bin -profile ${profileDir} --remote-debugging-port ${port} -no-remote`];
+    f.lines = [`5101 ${firefoxBin} -profile ${profileDir} --remote-debugging-port ${port} -no-remote`];
     await blocked("restart-required");
   });
 
@@ -1242,7 +1256,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     currentMeta().engine = "firefox";
     f.firefoxBinary.mockImplementation(async () => {
       currentMeta().fingerprintSeed++;
-      return "/virtual/firefox-bin";
+      return firefoxBin;
     });
     await blocked("restart-required");
   });
@@ -1252,7 +1266,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     currentMeta().fingerprintMode = "off";
     currentMeta().locale = "fr-FR";
     currentMeta().timezone = "Europe/Paris";
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     await launchBrowser(dirId);
     expect(f.firefoxPrefs.mock.calls[0][1]).toMatchObject({ fingerprintMode: "off", locale: undefined });
     expect(f.firefoxSpawn.mock.calls[0][2]?.env).toBeUndefined();
@@ -1261,7 +1275,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
 
   it.each(["1", "0", ""])('rejects inherited sandbox-disable value "%s" before Firefox side effects', async (value) => {
     currentMeta().engine = "firefox";
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     vi.stubEnv("MOZ_DISABLE_CONTENT_SANDBOX", value);
     await expect(launchBrowser(dirId)).rejects.toThrow("MOZ_DISABLE_CONTENT_SANDBOX");
     noLaunchEffects();
@@ -1271,7 +1285,7 @@ describe("spawn binding and retained off/Firefox routes", () => {
     currentMeta().engine = "firefox";
     currentMeta().fingerprintMode = "off";
     currentMeta().platform = "android";
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     expect(await launchBrowser(dirId)).toMatchObject({ pid: 5101, cdpPort: port });
     expect(f.firefoxSpawn).toHaveBeenCalledOnce();
     const args = f.firefoxSpawn.mock.calls[0][1] as string[];
@@ -1293,7 +1307,7 @@ describe("Firefox effective Auto launch identity", () => {
   function autoProxy() {
     Object.assign(currentMeta(), { engine: "firefox", timezone: null, locale: null, proxyMode: "named", proxyName: "primary" });
     f.cfg.proxies = { primary: proxy };
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     f.proxy.mockReturnValue({ mode: "named", name: "primary", config: proxy });
     f.proxyProbe.mockResolvedValue(true);
     f.geoDetect.mockResolvedValue(geo());
@@ -1352,7 +1366,7 @@ describe("Firefox effective Auto launch identity", () => {
   async function launchOwned() {
     const response = await launchBrowser(dirId);
     const entry = runningProcesses.get(dirId)!;
-    f.lines = [`${response.pid} /virtual/firefox-bin ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
+    f.lines = [`${response.pid} ${firefoxBin} ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
     const effects = [f.firefoxSpawn, f.firefoxPrefs, f.bidiConnect, f.bidiPreload, f.persistDetection,
       f.fs.mkdirSync, f.fs.writeFileSync, f.fs.openSync, f.fs.writeSync, f.fs.renameSync, f.fs.unlinkSync, f.fs.rmSync];
     const counts = effects.map(effect => effect.mock.calls.length);
@@ -1382,7 +1396,7 @@ describe("Firefox effective Auto launch identity", () => {
     autoProxy();
     const response = await launchBrowser(dirId);
     const entry = runningProcesses.get(dirId)!;
-    f.lines = [`${response.pid} /virtual/firefox-bin ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
+    f.lines = [`${response.pid} ${firefoxBin} ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
     f.geoDetect.mockResolvedValue(geo("Asia/Tokyo", "JP"));
     await expect(launchBrowser(dirId)).rejects.toMatchObject({ code: "restart-required" });
     expect(runningProcesses.get(dirId)).toBe(entry);
@@ -1747,7 +1761,7 @@ describe("Firefox effective Auto launch identity", () => {
 describe("actual Firefox queued-Cookie launch evidence", () => {
   function setupQueue() {
     currentMeta().engine = "firefox"; currentMeta().fingerprintMode = "off";
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     f.queuedCookies = ["first", "second"].map((name) => ({ domain: "example.test", name, value: "synthetic-unit-cookie", path: "/", secure: false, httpOnly: false, expires: null, sameSite: 1 }));
   }
 
@@ -1801,10 +1815,10 @@ describe("owned Firefox startup evidence and live session reuse", () => {
   async function started(mode: "managed" | "off" = "managed", options?: { headless?: boolean }) {
     currentMeta().engine = "firefox";
     currentMeta().fingerprintMode = mode;
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     const response = await launchBrowser(dirId, options);
     const entry = runningProcesses.get(dirId)!;
-    f.lines = [`${response.pid} /virtual/firefox-bin ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
+    f.lines = [`${response.pid} ${firefoxBin} ${f.firefoxSpawn.mock.calls[0][1].join(" ")}`];
     const connection = f.bidiSessions.get(port);
     vi.clearAllMocks();
     return { entry, connection, response };
@@ -1848,7 +1862,7 @@ describe("owned Firefox startup evidence and live session reuse", () => {
     '--remote-debugging-port 9222 https://example.test/ --remote-debugging-port',
   ])("refuses malformed or duplicate Firefox port evidence without changing ownership: %s", async (portArgs) => {
     const { entry } = await started("off");
-    f.lines = [`${entry.pid} /virtual/firefox-bin -profile ${profileDir} ${portArgs} -no-remote`];
+    f.lines = [`${entry.pid} ${firefoxBin} -profile ${profileDir} ${portArgs} -no-remote`];
     await blocked("restart-required");
     expect(runningProcesses.get(dirId)).toBe(entry);
     expect(entry.process.kill).not.toHaveBeenCalled();
@@ -1910,7 +1924,7 @@ describe("owned Firefox startup evidence and live session reuse", () => {
       if (change === "replaced-session") entry.bidiConn = { ...connection };
       if (change === "prefs") f.fs.readFileSync.mockReturnValue("changed during health check");
       if (change === "binary") f.firefoxIdentity.mockResolvedValue("changed during health check");
-      if (change === "binary-selection") f.firefoxBinary.mockResolvedValue("/virtual/replacement-firefox");
+      if (change === "binary-selection") f.firefoxBinary.mockResolvedValue(path.join(fixturePaths.root, "replacement-firefox"));
       return { contexts: [{ context: "unit-context" }] };
     });
     await blocked("restart-required");
@@ -1919,7 +1933,7 @@ describe("owned Firefox startup evidence and live session reuse", () => {
 
   it("terminates only the newly spawned Firefox if intent changes before session setup", async () => {
     currentMeta().engine = "firefox";
-    f.firefoxBinary.mockResolvedValue("/virtual/firefox-bin");
+    f.firefoxBinary.mockResolvedValue(firefoxBin);
     const original = f.firefoxSpawn.getMockImplementation()!;
     f.firefoxSpawn.mockImplementation(async (...args) => {
       const spawned = await original(...args);
