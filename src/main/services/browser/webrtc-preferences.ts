@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import { isPathInside, syncArchiveDirectory } from "../zip-writer.js";
+import { syncArchiveDirectory } from "../zip-writer.js";
+import { createdDirectoryAncestry } from "./created-directory-ancestry.js";
 import type { ChromiumWebRtcRoutingPolicy } from "./webrtc-policy.js";
 
 const MAX_PREFERENCES_BYTES = 16 * 1024 * 1024;
@@ -75,17 +76,9 @@ export function applyChromiumWebRtcPreferences(profileDir: string, policy: Chrom
     if (!directory(profileDir)) {
       const first = fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
       if (first) {
-        const firstCreated = path.resolve(first);
-        if (!isPathInside(profileDir, firstCreated)) throw new WebRtcPreferencesError();
-        for (let at = profileDir; ;) {
+        for (const at of createdDirectoryAncestry(profileDir, first)) {
           directory(at);
           directorySynced = syncArchiveDirectory(path.dirname(at)) && directorySynced;
-          // mkdir can return an equivalent spelling. Raw string equality can
-          // miss it and strand this synchronous walk at the filesystem root.
-          if (path.relative(firstCreated, at) === "") break;
-          const parent = path.dirname(at);
-          if (parent === at) throw new WebRtcPreferencesError();
-          at = parent;
         }
       }
     }
