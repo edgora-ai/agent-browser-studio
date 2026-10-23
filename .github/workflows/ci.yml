@@ -78,7 +78,11 @@ jobs:
   checks-windows:
     name: Build + unit/smoke (Windows)
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Windows runners are markedly slower per test file than Linux, and this
+    # job runs the whole suite twice (plain, then with V8 coverage). Measured:
+    # ~1024 tests in the first five minutes, against ~7900 total — the 30 min
+    # cap killed a run that was still progressing, not one that had hung.
+    timeout-minutes: 75
     defaults:
       run:
         shell: bash
