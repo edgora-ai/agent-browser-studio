@@ -2,6 +2,8 @@
 // actual BiDi framing/client, actual engine dispatch and real private queue files.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import fsMutable from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import * as net from "node:net";
 import type { CookieInfo } from "../../src/main/types.js";
@@ -177,7 +179,7 @@ afterEach(async () => {
   fixture.abortOnConstruct = null;
   for (const socket of fixture.sockets) socket.close();
   await turn(); await turn();
-  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); syncBuiltinESMExports();
   for (const [id, directory] of fixture.findCalls) expect(directory).toBe(path.join(fixture.appData, "profiles", id));
 });
 afterAll(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
@@ -452,10 +454,20 @@ describe("cookie export snapshot availability", () => {
 describe("snapshot addition leaves coordinator cookie queue semantics intact", () => {
   it("round-trips normalized queue bytes through direct disk read, module reload and profile-ID lookup", async () => {
     const pending = [EXPECTED, { ...EXPECTED, name: "theme", value: "synthetic-theme" }];
+    const open = vi.spyOn(fsMutable, "openSync"), rename = vi.spyOn(fsMutable, "renameSync");
+    syncBuiltinESMExports();
     cdp.writeQueuedCookieImports(CHROMIUM, pending);
     const file = path.join(fixture.appData, "pending-cookie-imports", `${CHROMIUM}.json`);
+    const stagedOpens = open.mock.calls.filter(([candidate]) =>
+      typeof candidate === "string" && candidate.startsWith(file + ".") && candidate.endsWith(".tmp"));
+    expect(stagedOpens).toHaveLength(1);
+    expect(stagedOpens[0]).toEqual([expect.any(String), "wx", 0o600]);
+    expect(rename.mock.calls).toEqual([[stagedOpens[0][0], file]]);
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(pending);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    const stored = fs.lstatSync(file);
+    expect(stored.isFile()).toBe(true); expect(stored.isSymbolicLink()).toBe(false); expect(stored.nlink).toBe(1);
+    // The requested mode is checked on every platform; Windows stat bits do not prove ACL privacy.
+    if (process.platform !== "win32") expect(stored.mode & 0o777).toBe(0o600);
     expect(cdp.readQueuedCookieImports(CHROMIUM)).toEqual(pending);
     vi.resetModules();
     const fresh = await import("../../src/main/services/cdp-cookie-service.js");
