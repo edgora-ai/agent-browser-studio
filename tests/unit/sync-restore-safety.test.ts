@@ -10,12 +10,14 @@ const fixture = vi.hoisted(() => ({
   renameFault: null as null | ((from: string, to: string) => string | null),
   renameFaultHits: 0,
   removeFault: null as null | ((file: string) => string | null),
+  removeFaultHits: 0,
   running: new Set<string>(),
   importer: vi.fn(),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const owned = (p: unknown) => fixture.root && String(p).startsWith(fixture.root + "/");
+  const { sep } = await import("node:path");
+  const owned = (p: unknown) => fixture.root && String(p).startsWith(fixture.root + sep);
   const fail = (code: string) => { throw Object.assign(new Error(`${code}: synthetic filesystem fault`), { code }); };
   return {
     ...actual,
@@ -29,7 +31,7 @@ vi.mock("node:fs", async (importOriginal) => {
     rmSync: (file: any, ...args: any[]) => {
       if (owned(file)) {
         const code = fixture.removeFault?.(String(file));
-        if (code) fail(code);
+        if (code) { fixture.removeFaultHits++; fail(code); }
       }
       return (actual.rmSync as any)(file, ...args);
     },
@@ -125,6 +127,7 @@ beforeEach(() => {
   fixture.renameFault = null;
   fixture.renameFaultHits = 0;
   fixture.removeFault = null;
+  fixture.removeFaultHits = 0;
   fixture.running.clear();
   fixture.importer.mockReset().mockImplementation(async (_id: string, cookies: unknown[]) => cookies.length);
   ownedCleanup();
@@ -260,6 +263,7 @@ describe("sync restore data-commit safety", () => {
     const local = seed({ cookies: { [ID]: gzip([remoteCookie]) }, preferences: { [ID]: gzip({ safety: "remote" }) } });
     fixture.renameFault = (_from, to) => to === preferencesPath() ? "EACCES" : null;
     const result = await syncService.pull(undefined, { strategy: "remote" });
+    expect(fixture.renameFaultHits).toBe(1);
     expect(result).toMatchObject({ success: false, outcome: "partial", localCommit: "partial" });
     expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "cookies", id: ID, state: "queued" }), expect.objectContaining({ scope: "preferences", id: ID, state: "failed" })]));
     expect(JSON.parse(fs.readFileSync(queuePath(), "utf8"))).toEqual([remoteCookie]);
@@ -271,6 +275,7 @@ describe("sync restore data-commit safety", () => {
     seed({ preferences: { [ID]: gzip({ safety: "remote" }) } });
     fixture.removeFault = (file) => path.basename(file).startsWith(".sync-pull-stage-") ? "EACCES" : null;
     const result = await syncService.pull(undefined, { strategy: "remote" });
+    expect(fixture.removeFaultHits).toBe(1);
     expect(result).toMatchObject({ success: true, outcome: "complete", localCommit: "committed" });
     expect(result.warnings?.some((warning) => /staging.*synthetic filesystem fault/i.test(warning))).toBe(true);
     expect(JSON.parse(fs.readFileSync(preferencesPath(), "utf8"))).toEqual({ safety: "remote" });
@@ -283,6 +288,7 @@ describe("sync restore data-commit safety", () => {
     seed({ preferences: { [ID]: gzip({ safety: "remote" }) } });
     fixture.renameFault = (_from, to) => to === getConfigPath() ? "EACCES" : null;
     const result = await syncService.pull(undefined, { strategy: "remote" });
+    expect(fixture.renameFaultHits).toBe(1);
     expect(result).toMatchObject({ success: false, outcome: "partial", localCommit: "partial" });
     expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ scope: "preferences", id: ID, state: "applied" })]));
     expect(JSON.parse(fs.readFileSync(preferencesPath(), "utf8"))).toEqual({ safety: "remote" });
