@@ -149,8 +149,12 @@ jobs:
         if: always()
         run: node scripts/ci-native-test-summary.mjs "$TMPDIR/native-recovery.json" 10
       - name: Unit + smoke tests
+        id: unit_smoke
         # Failure still exits nonzero; a green run must execute the whole suite.
-        run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process
+        run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile="$TMPDIR/unit-smoke.json"
+      - name: Summarize unit + smoke results
+        if: always() && (steps.unit_smoke.outcome == 'success' || steps.unit_smoke.outcome == 'failure')
+        run: node scripts/ci-native-test-summary.mjs "$TMPDIR/unit-smoke.json" all
       - name: Coverage (unit + smoke, threshold gated)
         run: npx vitest run --coverage tests/unit tests/smoke --bail=1
 

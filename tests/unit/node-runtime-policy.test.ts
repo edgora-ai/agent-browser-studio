@@ -76,6 +76,19 @@ describe("source-build Node runtime policy", () => {
     }
   });
 
+  it("keeps the complete Windows suite separate from bounded recovery receipts", () => {
+    const windows = source(".github/workflows/ci.yml").split(/^  checks-windows:\n/m)[1]?.split(/^  [\w-]+:/m)[0] ?? "";
+    const unit = windows.split("      - name: Unit + smoke tests\n")[1]?.split("\n      - ")[0] ?? "";
+    expect(unit).toContain("        id: unit_smoke");
+    expect(unit).toContain("run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process --reporter=json --outputFile=\"$TMPDIR/unit-smoke.json\"");
+    expect(unit).not.toMatch(/continue-on-error/);
+    const summary = windows.split("      - name: Summarize unit + smoke results\n")[1]?.split("\n      - ")[0] ?? "";
+    expect(summary).toContain("if: always() && (steps.unit_smoke.outcome == 'success' || steps.unit_smoke.outcome == 'failure')");
+    expect(summary).toContain("run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/unit-smoke.json\" all");
+    expect(summary).not.toMatch(/continue-on-error/);
+    expect(windows.indexOf("Summarize unit + smoke results")).toBeLessThan(windows.indexOf("Coverage (unit + smoke, threshold gated)"));
+  });
+
   it.each([
     ["README.md", `- Node.js ${TESTED_NODE_FLOOR} or newer`],
     ["README.zh-CN.md", `- Node.js ${TESTED_NODE_FLOOR} 或更高版本`],

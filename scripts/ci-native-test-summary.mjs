@@ -9,12 +9,13 @@ if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Unsaf
 const root = fs.realpathSync(process.env.TMPDIR), runner = fs.realpathSync(process.env.RUNNER_TEMP);
 const relative = path.relative(runner, root);
 if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) throw new Error("CI report root is outside its owned runner subtree");
-const file = path.resolve(process.argv[2] || "");
-if (path.relative(path.toNamespacedPath(root), path.toNamespacedPath(file)) !== "native-recovery.json") throw new Error("Unexpected CI report path");
-const expectedFiles = Number(process.argv[3]);
-if (!Number.isSafeInteger(expectedFiles) || expectedFiles < 1 || expectedFiles > 64) throw new Error("A bounded expected module count is required");
-const before = fs.lstatSync(file);
-if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size < 1 || before.size > 8 * 1024 * 1024) throw new Error("Unsafe or oversized CI report");
+const file = path.resolve(process.argv[2] || ""), fullSuite = process.argv[3] === "all";
+const reportName = fullSuite ? "unit-smoke.json" : "native-recovery.json";
+if (path.relative(path.toNamespacedPath(root), path.toNamespacedPath(file)) !== reportName) throw new Error("Unexpected CI report path");
+const expectedFiles = fullSuite ? null : Number(process.argv[3]);
+if (!fullSuite && (!Number.isSafeInteger(expectedFiles) || expectedFiles < 1 || expectedFiles > 64)) throw new Error("A bounded expected module count is required");
+const before = fs.lstatSync(file), limit = (fullSuite ? 32 : 8) * 1024 * 1024;
+if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size < 1 || before.size > limit) throw new Error("Unsafe or oversized CI report");
 const same = (a, b) => ["dev", "ino", "size", "mtimeMs", "ctimeMs", "nlink", "mode"].every(key => a[key] === b[key]);
 const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
 let bytes;
@@ -31,11 +32,12 @@ try {
 const afterRoot = fs.lstatSync(root);
 if (!afterRoot.isDirectory() || afterRoot.isSymbolicLink() || afterRoot.dev !== rootStat.dev || afterRoot.ino !== rootStat.ino) throw new Error("CI report directory changed");
 const report = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-if (typeof report.success !== "boolean" || !Array.isArray(report.testResults) || report.testResults.length !== expectedFiles) throw new Error("Incomplete native diagnostic report");
+if (typeof report.success !== "boolean" || !Array.isArray(report.testResults) ||
+    (fullSuite ? report.testResults.length < 1 || report.testResults.length > 1024 : report.testResults.length !== expectedFiles)) throw new Error("Incomplete test report");
 const files = report.testResults.map(module => {
   if (typeof module.name !== "string" || !Array.isArray(module.assertionResults)) throw new Error("Malformed native module report");
   const file = path.relative(process.cwd(), module.name).split(path.sep).join("/");
-  if (!/^tests\/(?:unit|smoke)\/[a-zA-Z0-9_/-]+\.test\.ts$/.test(file) || !["passed", "failed", "pending"].includes(module.status)) throw new Error("Unexpected native diagnostic module");
+  if (!/^tests\/(?:unit|smoke)\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.test\.ts$/.test(file) || !["passed", "failed", "pending"].includes(module.status)) throw new Error("Unexpected test module");
   const row = { file, state: module.status, passed: 0, failed: 0, skipped: 0, failedCases: [] };
   module.assertionResults.forEach((test, index) => {
     if (test.status === "passed") row.passed++;
@@ -58,6 +60,11 @@ const files = report.testResults.map(module => {
 });
 const total = files.reduce((sum, file) => sum + file.passed + file.failed + file.skipped, 0);
 if (!Number.isSafeInteger(report.numTotalTests) || total !== report.numTotalTests || total < 1 || new Set(files.map(file => file.file)).size !== files.length) throw new Error("Inconsistent native diagnostic counts");
-const summary = JSON.stringify({ success: report.success, total, files });
-console.log("::notice title=Native recovery test summary::" + summary.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A"));
+const counts = files.reduce((sum, file) => ({ passed: sum.passed + file.passed, failed: sum.failed + file.failed, notRun: sum.notRun + file.skipped }), { passed: 0, failed: 0, notRun: 0 });
+// A bail-limited failure can report only part of the suite. These are observed
+// module/assertion counts, not a claim that the complete suite ran successfully.
+const summary = JSON.stringify({ scope: fullSuite ? "unit-smoke" : "native-recovery", success: report.success,
+  reportedModules: files.length, total, ...counts, files: fullSuite ? files.filter(file => file.state === "failed" || file.failed > 0) : files });
+const title = fullSuite ? "Unit and smoke test summary" : "Native recovery test summary";
+console.log("::notice title=" + title + "::" + summary.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A"));
 process.exitCode = report.success ? 0 : 1;
