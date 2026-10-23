@@ -143,11 +143,13 @@ jobs:
           tests/unit/profile-archive-safety.test.ts
           tests/unit/profile-archive.test.ts
           tests/unit/full-profile-config-durability.test.ts
+          tests/unit/cookie-export-snapshot.test.ts
+          tests/unit/fingerprint-drift-reports.test.ts
           --bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process
           --reporter=json --outputFile="$TMPDIR/native-recovery.json"
       - name: Summarize native recovery unit diagnostics
         if: always()
-        run: node scripts/ci-native-test-summary.mjs "$TMPDIR/native-recovery.json" 10
+        run: node scripts/ci-native-test-summary.mjs "$TMPDIR/native-recovery.json" 12
       - name: Unit + smoke tests
         id: unit_smoke
         # Failure still exits nonzero; a green run must execute the whole suite.

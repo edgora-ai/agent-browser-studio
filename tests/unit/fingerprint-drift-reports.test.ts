@@ -266,9 +266,10 @@ describe("fingerprint comparison persistence with a real isolated filesystem", (
   it("never refreshes observation/acceptance timestamps or rewrites the store on repeated reads/restart", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(OBSERVED_AT);
     const meta = profile();
+    const directoryWarning = expectedDirectoryWarning();
     const saved = save("profile_A", meta).report;
     clock.mockReturnValue(OBSERVED_AT + 1000);
-    expect(reports.markFingerprintReferenceAccepted("profile_A", saved.id)).toBeUndefined();
+    expect(reports.markFingerprintReferenceAccepted("profile_A", saved.id)).toBe(directoryWarning);
     const original = bytes();
     const stat = fs.statSync(reportFile());
     const initial = reports.readFingerprintComparison("profile_A", meta).report!;
