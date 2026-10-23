@@ -252,7 +252,7 @@ describe("confirmed-stopped transfer gates and active restore-lock owners", () =
     expect(fs.lstatSync(marker)).toBeDefined();
     if (kind === "symlink") expect(fs.readFileSync(target, "utf8")).toBe("untouched-owned-target");
   });
-  it.each(["content", "inode", "link-count", "timestamp", "disappeared", "symlink", "profile-directory"])("refuses a Firefox sentinel changed between stopped checks: %s", (kind) => {
+  it.each(["content", "inode", "link-count", "timestamp", "disappeared", "symlink"])("refuses a Firefox sentinel changed between stopped checks: %s", (kind) => {
     seedLive(); const marker = path.join(LIVE, ".parentlock"); fs.writeFileSync(marker, "");
     const before = fs.lstatSync(marker); let checks = 0;
     const status = () => {
@@ -263,15 +263,83 @@ describe("confirmed-stopped transfer gates and active restore-lock owners", () =
         if (kind === "timestamp") fs.utimesSync(marker, new Date(before.mtimeMs + 1000), new Date(before.mtimeMs + 1000));
         if (kind === "disappeared") fs.renameSync(marker, marker + ".moved");
         if (kind === "symlink") { fs.renameSync(marker, marker + ".old"); fs.symlinkSync(path.join(ROOT, "owned-missing-target"), marker); }
-        if (kind === "profile-directory") {
-          fs.renameSync(LIVE, LIVE + ".old"); fs.mkdirSync(LIVE); fs.renameSync(path.join(LIVE + ".old", ".parentlock"), marker);
-        }
       }
       return { running: false, pid: null };
     };
     expect(() => assertProfileTransferStopped(ID, status, undefined, { engine: "firefox" })).toThrow(/changed/);
     expect(checks).toBe(2);
   });
+  it.each(["native", "injected-denial"] as const)("refuses Firefox directory replacement or exact rename denial while its sentinel is pinned: %s", mode => {
+    seedLive();
+    const marker = path.join(LIVE, ".parentlock"), retained = LIVE + ".old";
+    fs.writeFileSync(marker, "");
+    const original = dataSnapshot(), directory = fs.lstatSync(LIVE, { bigint: true }), sentinel = fs.lstatSync(marker, { bigint: true });
+    const opened: number[] = [], closed: number[] = [];
+    const openActual = fs.openSync, closeActual = fs.closeSync;
+    const open = vi.spyOn(fs, "openSync").mockImplementation((file, flags, permissions) => {
+      const fd = openActual(file, flags, permissions);
+      if (String(file) === marker) opened.push(fd);
+      return fd;
+    });
+    const close = vi.spyOn(fs, "closeSync").mockImplementation(fd => {
+      closeActual(fd); if (opened.includes(fd)) closed.push(fd);
+    });
+    const mutation = { attempts: 0, applied: false, failure: undefined as NodeJS.ErrnoException | undefined };
+    let checks = 0, injectedHits = 0;
+    if (mode === "injected-denial") h.observe = (operation, from, to) => {
+      if (operation === "rename" && from === LIVE && to === retained) {
+        injectedHits++;
+        throw Object.assign(new Error("Synthetic pinned-directory rename refusal"), { code: "EPERM", syscall: "rename", path: from, dest: to });
+      }
+    };
+    const status = () => {
+      if (++checks === 2) {
+        mutation.attempts++;
+        try { fs.renameSync(LIVE, retained); }
+        catch (error) { mutation.failure = error as NodeJS.ErrnoException; throw error; }
+        fs.mkdirSync(LIVE); fs.renameSync(path.join(retained, ".parentlock"), marker);
+        mutation.applied = true;
+      }
+      return { running: false, pid: null };
+    };
+    try {
+      let failure: unknown;
+      try { assertProfileTransferStopped(ID, status, undefined, { engine: "firefox" }); }
+      catch (error) { failure = error; }
+      if (process.env.GITHUB_ACTIONS === "true") console.info("::notice title=Sentinel directory mutation::" + JSON.stringify({
+        mode, applied: mutation.applied, code: mutation.failure ? ["EPERM", "EACCES", "EBUSY"].includes(mutation.failure.code ?? "") ? mutation.failure.code : "OTHER" : null,
+        failClosed: (failure as { code?: string } | undefined)?.code === "PROFILE_STOP_REQUIRED",
+        checks, opens: opened.length, closes: closed.length,
+      }));
+      expect(failure).toMatchObject({ code: "PROFILE_STOP_REQUIRED", stopRequired: true, dirId: ID });
+      expect(checks).toBe(2); expect(mutation.attempts).toBe(1);
+      expect(opened).toHaveLength(1); expect(closed).toEqual(opened);
+      expect(injectedHits).toBe(mode === "injected-denial" ? 1 : 0);
+      if (mutation.failure) {
+        // A denied native attack is not coverage of a completed replacement.
+        if (mode === "native") expect(process.platform).toBe("win32");
+        expect(mutation.failure).toMatchObject({ code: "EPERM", syscall: "rename", path: LIVE, dest: retained });
+        expect((failure as Error).cause).toBe(mutation.failure);
+        expect((failure as Error).message).toMatch(/runtime discovery or lock inspection failed/);
+        expect(mutation.applied).toBe(false); expect(fs.existsSync(retained)).toBe(false);
+        expect(fs.lstatSync(LIVE, { bigint: true }).ino).toBe(directory.ino);
+        expect(fs.lstatSync(marker, { bigint: true }).ino).toBe(sentinel.ino);
+        expect(dataSnapshot()).toEqual(original);
+      } else {
+        expect(mode).toBe("native"); expect(mutation.applied).toBe(true);
+        expect((failure as Error).message).toMatch(/profile directory changed/);
+        expect(fs.lstatSync(retained, { bigint: true }).ino).toBe(directory.ino);
+        expect(fs.lstatSync(LIVE, { bigint: true }).ino).not.toBe(directory.ino);
+        expect(fs.lstatSync(marker, { bigint: true }).ino).toBe(sentinel.ino);
+        expect(fs.readFileSync(marker)).toEqual(Buffer.alloc(0));
+        expect(fs.readFileSync(path.join(retained, "Default", "sentinel.bin"))).toEqual(content);
+      }
+    } finally {
+      open.mockRestore(); close.mockRestore(); h.observe = null;
+      for (const fd of opened) if (!closed.includes(fd)) closeActual(fd);
+    }
+  });
+
   it.each(["unknown", "live", "discovery-error"])("does not accept inert Firefox sentinels when second stopped proof is %s", (kind) => {
     seedLive(); const marker = path.join(LIVE, "parent.lock"); fs.writeFileSync(marker, "");
     let checks = 0;
