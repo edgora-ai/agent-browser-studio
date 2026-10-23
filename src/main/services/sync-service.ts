@@ -705,7 +705,8 @@ function confirmFullProfileConfigCommitted(): void {
   const file = getConfigPath(), expected = Buffer.from(JSON.stringify(getConfig(), null, 2));
   const before = fs.lstatSync(file);
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== expected.length) throw new Error("Complete migration config readback is unconfirmed");
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  const flushAccess = process.platform === "win32" ? fs.constants.O_RDWR : fs.constants.O_RDONLY;
+  const fd = fs.openSync(file, flushAccess | (fs.constants.O_NOFOLLOW || 0));
   try {
     const opened = fs.fstatSync(fd);
     if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size || opened.nlink !== 1) throw new Error("Complete migration config identity changed");
