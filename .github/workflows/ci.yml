@@ -106,34 +106,18 @@ jobs:
           fs.chmodSync(root, 0o700);
           fs.appendFileSync(process.env.GITHUB_ENV, `TMPDIR=${root}\n`);
           NODE
-      - name: Inspect owned filesystem metadata
-        run: |
-          node --input-type=commonjs <<'NODE'
-          const fs = require("node:fs"), path = require("node:path");
-          const root = fs.mkdtempSync(path.join(process.env.TMPDIR, "metadata-probe-"));
-          const owner = fs.lstatSync(root), file = path.join(root, "owned.bin");
-          const fields = stat => Object.fromEntries(["dev", "ino", "size", "mode", "nlink", "uid", "gid", "mtimeMs", "ctimeMs", "birthtimeMs"].map(key => [key, stat[key]]));
-          let fd;
-          try {
-            fd = fs.openSync(file, "wx", 0o600);
-            fs.writeFileSync(fd, "owned metadata fixture"); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-            const before = fields(fs.lstatSync(file));
-            fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-            const opened = fields(fs.fstatSync(fd));
-            const beforeBig = fs.lstatSync(file, { bigint: true }), openedBig = fs.fstatSync(fd, { bigint: true });
-            const identity = stat => Object.fromEntries(["dev", "ino", "mtimeNs", "ctimeNs"].map(key => [key, String(stat[key])]));
-            fs.readFileSync(fd);
-            const after = fields(fs.fstatSync(fd));
-            fs.closeSync(fd); fd = undefined;
-            const created = path.join(root, "created", "profile"), first = fs.mkdirSync(created, { recursive: true });
-            console.log(JSON.stringify({ probe: "owned-filesystem", node: process.version, before, opened, after, pathAfter: fields(fs.lstatSync(file)), beforeBig: identity(beforeBig), openedBig: identity(openedBig), mkdirBoundaryEquivalent: path.relative(first, path.dirname(created)) === "" }));
-          } finally {
-            if (fd !== undefined) fs.closeSync(fd);
-            const current = fs.lstatSync(root);
-            if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owner.dev || current.ino !== owner.ino) throw new Error("Owned metadata fixture changed");
-            fs.rmSync(root, { recursive: true });
-          }
-          NODE
+      - name: Inspect minimum-runtime filesystem metadata
+        run: node scripts/ci-filesystem-probe.mjs
+      - name: Select current Node 22 for metadata comparison
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+      - name: Inspect current-runtime filesystem metadata
+        run: node scripts/ci-filesystem-probe.mjs
+      - name: Restore declared minimum Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build (bash on Windows)
