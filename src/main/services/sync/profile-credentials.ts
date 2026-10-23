@@ -381,7 +381,10 @@ function assertStaging(options: ProfileCredentialOptions): string {
   checkAbort(options); checkIdentity(options.source); relativeDirectory(options.profileRelativePath);
   if (!path.isAbsolute(options.stagingRoot) || path.resolve(options.stagingRoot) !== options.stagingRoot) fail("STAGING_PATH_INVALID");
   assertDirectories(options.stagingRoot); const stat = fs.lstatSync(options.stagingRoot);
-  if (!options.stagingOwner || stat.dev !== options.stagingOwner.dev || stat.ino !== options.stagingOwner.ino || (stat.mode & 0o077) !== 0 ||
+  // POSIX mode bits do not describe Windows ACLs. Inode ownership stays mandatory;
+  // accepting native Windows stat metadata is not proof of private ACLs.
+  if (!options.stagingOwner || stat.dev !== options.stagingOwner.dev || stat.ino !== options.stagingOwner.ino ||
+      process.platform !== "win32" && (stat.mode & 0o077) !== 0 ||
       typeof process.getuid === "function" && stat.uid !== process.getuid()) fail("STAGING_OWNER_MISMATCH");
   const profile = path.join(options.stagingRoot, options.profileRelativePath); assertDirectories(profile, true); return profile;
 }

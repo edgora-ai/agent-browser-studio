@@ -65,12 +65,17 @@ describe("source-build Node runtime policy", () => {
       "tests/unit/full-profile-config-durability.test.ts",
       "tests/unit/cookie-export-snapshot.test.ts",
       "tests/unit/fingerprint-drift-reports.test.ts",
+      "tests/unit/profile-credentials.test.ts",
+      "tests/unit/profile-credentials-staging.test.ts",
+      "tests/unit/full-profile-recovery-lock.test.ts",
+      "tests/unit/firefox-cookie-import.test.ts",
+      "tests/unit/agent-tool-local.test.ts",
       "--bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process",
       "--reporter=json --outputFile=\"$TMPDIR/native-recovery.json\"",
     ].join(" "));
     const summary = windows.split("      - name: Summarize native recovery unit diagnostics\n")[1]?.split("\n      - ")[0] ?? "";
     expect(summary).toContain("        if: always()");
-    expect(summary).toContain("        run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/native-recovery.json\" 12");
+    expect(summary).toContain("        run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/native-recovery.json\" 17");
     expect(summary).not.toMatch(/continue-on-error/);
     const gates = ["Cold-profile directory ancestry regressions", "Native recovery unit diagnostics", "Summarize native recovery unit diagnostics", "Unit + smoke tests", "Coverage (unit + smoke, threshold gated)"];
     for (let index = 1; index < gates.length; index++) {
