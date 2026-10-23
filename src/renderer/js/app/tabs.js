@@ -141,10 +141,29 @@
 
   agentBrowser.clearAllCaches = function () { return api.storage.clearCache().then(function (r) { toast(r.message || t("storage.caches-cleared", "Caches cleared"), "success"); agentBrowser.loadStorage(); }).catch(function (e) { toast(t("toast.browser.action-failed", "Failed: ") + (e.message || String(e)), "error"); }); };
 
+  function resetStorageStats() {
+    document.getElementById("stat-profile-total").textContent = "—";
+    document.getElementById("stat-disk-available").textContent = "—";
+    document.getElementById("stat-disk-usage").textContent = "—";
+    var usageBar = document.getElementById("stat-disk-usage-bar");
+    if (usageBar) {
+      usageBar.style.width = "";
+      var meter = usageBar.parentElement;
+      meter.style.display = "none";
+      meter.classList.remove("is-good", "is-watch", "is-poor");
+    }
+  }
+
+  // One current request identity: bounded state without a counter rollover.
+  var storageLoadEpoch = null;
   agentBrowser.loadStorage = function () {
+    var epoch = {};
+    storageLoadEpoch = epoch;
     var list = document.getElementById("storage-profile-list");
+    resetStorageStats();
     agentBrowser.renderViewState(list, { loading: t("common.loading", "Loading...") });
     lcall("storage.info", function () { return api.storage.info(); }).then(function (info) {
+      if (storageLoadEpoch !== epoch) return;
       document.getElementById("stat-profile-total").textContent = fmt(info.totalProfileBytes || 0);
       document.getElementById("stat-disk-available").textContent = fmt(info.availableDiskBytes || 0);
       document.getElementById("stat-disk-usage").textContent = (info.diskUsagePercent || 0) + "%";
@@ -155,6 +174,7 @@
         var pct = Math.max(0, Math.min(100, info.diskUsagePercent || 0));
         usageBar.style.width = pct + "%";
         var meter = usageBar.parentElement;
+        meter.style.display = "";
         meter.classList.remove("is-good", "is-watch", "is-poor");
         if (pct < 70) meter.classList.add("is-good");
         else if (pct < 90) meter.classList.add("is-watch");
@@ -182,6 +202,8 @@
         if (card && card.dataset.dirId) agentBrowser.clearCache(card.dataset.dirId);
       };
     }).catch(function (e) {
+      if (storageLoadEpoch !== epoch) return;
+      resetStorageStats();
       agentBrowser.renderViewState(list, { error: e.message || String(e), retry: { cmd: "loadStorage" } });
     });
   };
