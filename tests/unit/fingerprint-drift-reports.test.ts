@@ -60,6 +60,17 @@ const reportFile = () => path.join(environment.root, "fingerprint-comparisons.js
 const rawStore = (): Stored => JSON.parse(fs.readFileSync(reportFile(), "utf8"));
 const bytes = () => fs.readFileSync(reportFile(), "utf8");
 const metadataFile = (dirId: string) => path.join(environment.profilesRoot, dirId, "synthetic-metadata.json");
+function expectedDirectoryWarning(): string | undefined {
+  const fd = fs.openSync(environment.root, "r");
+  try {
+    try { fs.fsyncSync(fd); }
+    catch (error) {
+      const failure = error as NodeJS.ErrnoException;
+      if (process.platform !== "win32" || failure.code !== "EPERM" || failure.syscall !== "fsync") throw error;
+      return "FINGERPRINT_REPORT_DIRECTORY_SYNC_UNCONFIRMED";
+    }
+  } finally { fs.closeSync(fd); }
+}
 function profile(dirId = "profile_A", overrides: Partial<BrowserProfileMeta> = {}): BrowserProfileMeta {
   const meta: BrowserProfileMeta = {
     name: `Synthetic ${dirId}`, engine: "chromium", platform: "macos", fingerprintSeed: 12345,
@@ -151,11 +162,13 @@ describe("fingerprint comparison persistence with a real isolated filesystem", (
     const capture = Object.freeze({ ...CURRENT });
     const captureBytes = JSON.stringify(capture);
     const analysis = input("profile_A", metaA, capture).analysis;
+    const directoryWarning = expectedDirectoryWarning();
     const savedA = save("profile_A", metaA, capture, { source }).report;
     const savedB = save("profile_B", metaB, { ...CURRENT, canvasHash: "B-only-canvas" }, { observedAt: OBSERVED_AT + 1 }).report;
     expect(savedA).toMatchObject({ saved: true, baselineCandidate: true, observedAt: OBSERVED_AT, source });
-    expect(savedA.warning).toBeUndefined();
+    expect(savedA.warning).toBe(directoryWarning);
     expect(savedB.saved).toBe(true);
+    expect(savedB.warning).toBe(directoryWarning);
 
     const raw = rawStore();
     expect(raw.schemaVersion).toBe(1);
