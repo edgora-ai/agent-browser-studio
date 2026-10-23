@@ -28,6 +28,17 @@ describe("source-build Node runtime policy", () => {
     },
   );
 
+  it.each(["checks", "checks-windows"])("prepares the explicit Python SDK fixture runtime in %s", job => {
+    const block = source(".github/workflows/ci.yml").split(new RegExp(`^  ${job}:\\n`, "m"))[1]?.split(/^  [\w-]+:/m)[0] ?? "";
+    expect(block).toContain([
+      "      - uses: actions/setup-python@v5",
+      "        with:",
+      "          python-version: \"3.13\"",
+    ].join("\n"));
+    expect(block.indexOf("actions/setup-python@v5")).toBeLessThan(block.indexOf("Unit + smoke tests"));
+    expect(block).not.toContain("continue-on-error");
+  });
+
   it("keeps one owned metadata probe and an extra Windows ancestry gate before the full suite", () => {
     const ci = source(".github/workflows/ci.yml");
     const windows = ci.split(/^  checks-windows:\n/m)[1]?.split(/^  [\w-]+:/m)[0] ?? "";
@@ -70,12 +81,13 @@ describe("source-build Node runtime policy", () => {
       "tests/unit/full-profile-recovery-lock.test.ts",
       "tests/unit/firefox-cookie-import.test.ts",
       "tests/unit/agent-tool-local.test.ts",
+      "tests/unit/ui-goal-account-transport.test.ts",
       "--bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process",
       "--reporter=json --outputFile=\"$TMPDIR/native-recovery.json\"",
     ].join(" "));
     const summary = windows.split("      - name: Summarize native recovery unit diagnostics\n")[1]?.split("\n      - ")[0] ?? "";
     expect(summary).toContain("        if: always()");
-    expect(summary).toContain("        run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/native-recovery.json\" 17");
+    expect(summary).toContain("        run: node scripts/ci-native-test-summary.mjs \"$TMPDIR/native-recovery.json\" 18");
     expect(summary).not.toMatch(/continue-on-error/);
     const gates = ["Cold-profile directory ancestry regressions", "Native recovery unit diagnostics", "Summarize native recovery unit diagnostics", "Unit + smoke tests", "Coverage (unit + smoke, threshold gated)"];
     for (let index = 1; index < gates.length; index++) {

@@ -567,7 +567,7 @@ describe("actual shipped SDK header compatibility without network", () => {
   it("Python optional headers preserve positional auth/body and expose 412 without retry", () => {
     const script = `import json,sys,urllib.request,urllib.error,socket,io
 socket.socket=lambda *a,**k: (_ for _ in ()).throw(AssertionError('network forbidden'))
-ns={}; exec(compile(open(sys.argv[1]).read(),sys.argv[1],'exec'),ns)
+ns={}; exec(compile(open(sys.argv[1],encoding='utf-8').read(),sys.argv[1],'exec'),ns)
 c=ns['AgentBrowserClient']('https://sdk.synthetic.invalid','synthetic-python-token')
 requests=[]
 class Response:
@@ -598,9 +598,17 @@ except ns['AgentBrowserError'] as e: assert '412' in str(e) and 'ACCOUNT_REFEREN
 else: raise AssertionError('conflict did not reject')
 assert len(requests)==count+1
 print(json.dumps({'requests':len(requests),'prohibited':0,'positionalAuthPreserved':True,'conflictNoRetry':True}))`;
-    const result = spawnSync("python3", ["-I", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT, PYTHONDONTWRITEBYTECODE: "1" } });
-    fs.writeFileSync(path.join(ROOT, "python-proof.json"), JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }));
-    expect(result.status, result.stderr).toBe(0); expect(JSON.parse(result.stdout).conflictNoRetry).toBe(true);
+    const interpreter = process.platform === "win32" ? "python" : "python3";
+    const result = spawnSync(interpreter, ["-I", "-B", "-c", script, path.join(PROJECT, "sdk/python/agent_browser_client.py")], { timeout: 10000, encoding: "utf8", env: { ...process.env, HOME: ROOT, TMPDIR: ROOT } });
+    const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    const errorCode = result.error ? code && ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(code) ? code : "UNKNOWN" : null;
+    const receipt = { interpreter, status: result.status, signal: result.signal, errorCode };
+    if (process.env.GITHUB_ACTIONS === "true") console.info("::notice title=Python SDK fixture process::" + JSON.stringify(receipt));
+    const proofFile = path.join(ROOT, "python-proof.json");
+    fs.writeFileSync(proofFile, JSON.stringify({ ...receipt, stdout: result.stdout, stderr: result.stderr }));
+    const proof = JSON.parse(fs.readFileSync(proofFile, "utf8"));
+    expect(proof.errorCode).toBeNull(); expect(proof.signal).toBeNull();
+    expect(proof.status, proof.stderr).toBe(0); expect(JSON.parse(proof.stdout).conflictNoRetry).toBe(true);
   });
 });
 
