@@ -6,20 +6,66 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+type OwnedDescriptor = { role: string; directory: boolean | null; flags: number | string | null };
+type OwnedIoEvent = OwnedDescriptor & {
+  op: "open" | "close" | "fsync" | "rename" | "link"; targetRole?: string;
+  ok: boolean; code: string | null; syscall: string | null;
+};
 const h = vi.hoisted(() => {
   const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "archive-sync-recovery-owned-")));
   const owner = fs.lstatSync(root);
   return { root, ownerDev: owner.dev, ownerIno: owner.ino, appData: path.join(root, "device"),
     objects: new Map<string, Buffer>(), requests: [] as Array<{ method: string; url: string }>,
+    descriptors: new Map<number, OwnedDescriptor>(), tracing: false, events: [] as OwnedIoEvent[],
     opened: [] as string[], fault: null as null | ((op: string, from: string, to?: string) => void) };
 });
 vi.mock("node:fs", async (original) => {
-  const actual = await original<typeof import("node:fs")>();
+  const actual = await original<typeof import("node:fs")>(), path = await import("node:path");
+  const owned = (file: string) => { const rel = path.relative(path.toNamespacedPath(h.root), path.toNamespacedPath(path.resolve(file))); return rel === "" || rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel); };
+  const role = (file: string): string => {
+    const name = path.basename(file), parent = path.basename(path.dirname(file));
+    if (file === h.root) return "capability-root";
+    if (file === h.appData) return "app-data";
+    if (name === "Default") return "default";
+    if (name.startsWith(".sqlite-localstorage-backup-")) return "transaction";
+    if (parent.startsWith(".sqlite-localstorage-backup-")) return name === "pending.json" ? "pending" : name === "recovery-required.json" ? "transaction-recovery" : name === "old" ? "transaction-old" : name === "new" ? "transaction-new" : "transaction-material";
+    if (name === "sync-recovery") return "recovery-root";
+    if (parent === "sync-recovery") return "external-recovery";
+    if (name === "profile-data-revisions") return "revision-root";
+    if (parent === "Default" && /^LocalStorage(?:-(?:wal|shm|journal))?$/.test(name)) return "live-sqlite";
+    return "other";
+  };
+  // Record real results, including failed opens and file-vs-directory fsync.
+  // No platform spoofing, error suppression, or fabricated durability success.
+  const observe = <T>(op: OwnedIoEvent["op"], entry: (OwnedDescriptor & { targetRole?: string }) | undefined, action: () => T): T => {
+    try {
+      const value = action();
+      if (h.tracing && entry) h.events.push({ ...entry, op, ok: true, code: null, syscall: null });
+      return value;
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException;
+      if (h.tracing && entry) h.events.push({ ...entry, op, ok: false, code: failure?.code ?? null, syscall: failure?.syscall ?? null });
+      throw error;
+    }
+  };
+  const move = (op: "rename" | "link", from: any, to: any) => observe(op,
+    owned(String(from)) || owned(String(to)) ? { role: role(String(from)), targetRole: role(String(to)), directory: null, flags: null } : undefined,
+    () => { h.fault?.(op, String(from), String(to)); return op === "rename" ? actual.renameSync(from, to) : actual.linkSync(from, to); });
   return { ...actual,
-    openSync: (file: any, flags: any, mode?: any) => { h.opened.push(String(file)); h.fault?.("open", String(file)); return actual.openSync(file, flags, mode); },
-    renameSync: (from: any, to: any) => { h.fault?.("rename", String(from), String(to)); return actual.renameSync(from, to); },
-    linkSync: (from: any, to: any) => { h.fault?.("link", String(from), String(to)); return actual.linkSync(from, to); },
+    openSync: (file: any, flags: any, mode?: any) => {
+      h.opened.push(String(file));
+      const entry: OwnedDescriptor | undefined = owned(String(file)) ? { role: role(String(file)), directory: null, flags } : undefined;
+      return observe("open", entry, () => {
+        h.fault?.("open", String(file)); const fd = actual.openSync(file, flags, mode);
+        if (entry) { h.descriptors.set(fd, entry); entry.directory = actual.fstatSync(fd).isDirectory(); }
+        return fd;
+      });
+    },
+    closeSync: (fd: number) => observe("close", h.descriptors.get(fd), () => { actual.closeSync(fd); h.descriptors.delete(fd); }),
+    fsyncSync: (fd: number) => observe("fsync", h.descriptors.get(fd), () => actual.fsyncSync(fd)),
+    renameSync: (from: any, to: any) => move("rename", from, to),
+    linkSync: (from: any, to: any) => move("link", from, to),
   };
 });
 vi.mock("electron", () => ({
@@ -38,7 +84,7 @@ vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({ runtimeCookie
 import { syncService } from "../../src/main/services/sync-service.js";
 import { exportProfileArchive, importProfileArchive } from "../../src/main/services/profile-archive.js";
 import { getConfig, getConfigPath, getProfileMeta, getProfilesDir, reloadConfig, saveConfig, setSyncConfig } from "../../src/main/services/config-manager.js";
-import { writeZipArchive, readZipEntries, extractZipEntry, type ZipFileEntry, type ZipDirEntry } from "../../src/main/services/zip-writer.js";
+import { writeZipArchive, readZipEntries, extractZipEntry, syncArchiveDirectory, type ZipFileEntry, type ZipDirEntry } from "../../src/main/services/zip-writer.js";
 import { isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
 
 const ID = "ab_archive_sync_recovery";
@@ -55,6 +101,21 @@ const backupRoots = (id = ID) => fs.readdirSync(defaultDir(id)).filter((name) =>
 function assertOwner(): void {
   const stat = fs.lstatSync(h.root);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== h.ownerDev || stat.ino !== h.ownerIno) throw new Error("Unowned archive/sync fixture");
+}
+function printOwnedIo(phase: string, directoryConfirmed: boolean | null, events: OwnedIoEvent[]): void {
+  const failures = events.filter((event) => !event.ok);
+  console.info("[archive-sync-recovery-owned]", JSON.stringify({ phase, directoryConfirmed,
+    opens: events.filter((event) => event.op === "open" && event.ok).length,
+    closes: events.filter((event) => event.op === "close" && event.ok).length,
+    descriptors: h.descriptors.size, failures: failures.length,
+    fileFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === false).length,
+    directoryFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === true).length,
+    liveSqliteMoves: events.filter((event) => ["rename", "link"].includes(event.op) && (event.role === "live-sqlite" || event.targetRole === "live-sqlite")).length,
+  }));
+  for (const [index, event] of failures.entries()) console.info("[archive-sync-recovery-owned]", JSON.stringify({
+    phase, failure: index + 1, op: event.op, role: event.role, directory: event.directory,
+    flags: event.flags, code: event.code, syscall: event.syscall,
+  }));
 }
 function sqliteBytes(value: string): { main: Buffer; wal: Buffer } {
   const dir = fs.mkdtempSync(path.join(h.root, "sqlite-generator-")), file = path.join(dir, "LocalStorage");
@@ -208,7 +269,8 @@ function setPending(entries: TestZipEntry[], backup: string, edit: (pending: any
 }
 
 beforeEach(() => {
-  assertOwner(); h.fault = null; h.opened = []; h.objects.clear(); h.requests = [];
+  assertOwner(); expect(h.descriptors.size, "owned descriptors must not outlive a case").toBe(0);
+  h.tracing = false; h.events = []; h.fault = null; h.opened = []; h.objects.clear(); h.requests = [];
   fs.rmSync(h.appData, { recursive: true, force: true }); fs.mkdirSync(h.appData, { mode: 0o700 });
   reloadConfig();
   const cfg = structuredClone(getConfig());
@@ -228,17 +290,129 @@ beforeEach(() => {
 });
 afterEach(() => {
   h.fault = null;
-  for (const id of Object.keys(getConfig().browserProfiles)) expect(isRestoreLocked(id)).toBe(false);
+  const leaked = h.descriptors.size, traced = h.tracing;
+  h.tracing = false;
+  let cleanupFailures = 0;
+  for (const fd of [...h.descriptors.keys()]) {
+    try { fs.closeSync(fd); } catch { cleanupFailures++; }
+  }
   vi.unstubAllGlobals(); vi.restoreAllMocks();
+  expect(leaked, "owned descriptor leak before cleanup").toBe(0);
+  expect(cleanupFailures, "owned descriptor cleanup failures").toBe(0);
+  if (traced) {
+    expect(h.events.filter((event) => event.op === "close" && !event.ok)).toHaveLength(0);
+    expect(h.events.filter((event) => event.op === "open" && event.ok).length)
+      .toBe(h.events.filter((event) => event.op === "close" && event.ok).length);
+  }
+  for (const id of Object.keys(getConfig().browserProfiles)) expect(isRestoreLocked(id)).toBe(false);
 });
 afterAll(() => { assertOwner(); fs.rmSync(h.root, { recursive: true }); });
 
 describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
-  it("imports a real completed SQLite replacement under a new ID without blocking the next real sync push", async () => {
+  it("requires native directory durability before SQLite replacement and archive round-trip", async () => {
+    h.tracing = true;
+    const diagnostics = { transactionJournalErrors: 0, externalReceiptErrors: 0, unexpectedErrors: 0, revisionWarnings: 0, unexpectedWarnings: 0 };
+    vi.spyOn(console, "error").mockImplementation((label: unknown) => {
+      if (label === "[sync] SQLite transaction recovery journal not confirmed durable:") diagnostics.transactionJournalErrors++;
+      else if (label === "[sync] SQLite recovery receipt not confirmed durable; transaction pending marker retained:") diagnostics.externalReceiptErrors++;
+      else diagnostics.unexpectedErrors++;
+    });
+    vi.spyOn(console, "warn").mockImplementation((label: unknown) => {
+      if (typeof label === "string" && label.startsWith("[profile-data-revision] Windows directory fsync is unsupported;")) diagnostics.revisionWarnings++;
+      else diagnostics.unexpectedWarnings++;
+    });
+    // Probe only this owned root. A failed open/file flush or another errno is
+    // not permission to take the unsupported-directory conservation branch.
+    let directoryConfirmed: boolean | null = null;
+    try { directoryConfirmed = syncArchiveDirectory(h.root); }
+    finally { printOwnedIo("capability", directoryConfirmed, h.events); }
+    const probeIo = [...h.events];
+    expect(probeIo.map((event) => event.op)).toEqual(["open", "fsync", "close"]);
+    expect(probeIo.every((event) => event.role === "capability-root" && event.directory === true)).toBe(true);
+    expect(probeIo.map((event) => event.ok)).toEqual([true, directoryConfirmed, true]);
+    expect(h.descriptors.size).toBe(0);
+    if (!directoryConfirmed) {
+      expect(process.platform).toBe("win32");
+      expect(probeIo.filter((event) => !event.ok).map(({ op, code, syscall }) => ({ op, code, syscall })))
+        .toEqual([{ op: "fsync", code: "EPERM", syscall: "fsync" }]);
+    }
     installSqlite(sqliteBytes("published-new-business-row"));
-    const pushed = await syncService.push(undefined, true); expect(pushed.success, pushed.message).toBe(true);
+    const pushStart = h.events.length;
+    const pushed = await syncService.push(undefined, true);
+    const pushIo = h.events.slice(pushStart);
+    printOwnedIo("initial-push", directoryConfirmed, pushIo);
+    expect(pushIo.filter((event) => !event.ok).map(({ op, role, directory, code, syscall }) => ({ op, role, directory, code, syscall })))
+      .toEqual(directoryConfirmed ? [] : [{ op: "fsync", role: "app-data", directory: true, code: "EPERM", syscall: "fsync" }]);
+    expect(pushed.success, pushed.message).toBe(true);
     const old = sqliteBytes("unique-old-rescue-row-中文"); installSqlite(old);
-    const pulled = await syncService.pull(undefined, { strategy: "remote" }); expect(pulled.success, pulled.message).toBe(true);
+    const configBefore = fs.readFileSync(getConfigPath()), memoryBefore = JSON.stringify(getConfig());
+    const baselineBefore = JSON.stringify(getConfig().browserProfiles[ID].syncBaseline);
+    expect(getConfig().browserProfiles[ID].syncBaseline?.snapshotId === pushed.operationId).toBe(true);
+    const remoteBefore = new Map([...h.objects].map(([key, bytes]) => [key, Buffer.from(bytes)]));
+    const putsBefore = h.requests.filter((request) => request.method === "PUT").length, pullStart = h.events.length;
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    const pullIo = h.events.slice(pullStart);
+    printOwnedIo("replacement-pull", directoryConfirmed, pullIo);
+    console.info("[archive-sync-recovery-owned]", JSON.stringify({ phase: "replacement-result", directoryConfirmed,
+      success: pulled.success, outcome: pulled.outcome, code: pulled.code ?? null,
+      localCommit: pulled.localCommit, remoteCommit: pulled.remoteCommit, ...diagnostics }));
+    if (!directoryConfirmed) {
+      expect(pulled).toMatchObject({ success: false, outcome: "recovery-required", code: "LOCAL_STORAGE_RECOVERY_REQUIRED", localCommit: "partial", remoteCommit: "none" });
+      expect(pulled.message).toBe("SQLite localStorage publication/compensation is incomplete; old/new material retained for recovery");
+      // Revision invalidation may precede publication. The first transaction
+      // flush then fails before staging/live moves; Default compensation fails
+      // next, followed by both attempted recovery-journal directory flushes.
+      expect(pullIo.filter((event) => !event.ok).map(({ op, role, directory, code, syscall }) => ({ op, role, directory, code, syscall })))
+        .toEqual(["app-data", "revision-root", "transaction", "default", "transaction", "recovery-root"].map((role) => ({
+          op: "fsync", role, directory: true, code: "EPERM", syscall: "fsync",
+        })));
+      for (const role of ["pending", "transaction-recovery", "external-recovery"]) {
+        expect(pullIo.filter((event) => event.op === "fsync" && event.role === role).map(({ ok, directory, flags }) => ({ ok, directory, flags })))
+          .toEqual([{ ok: true, directory: false, flags: "wx" }]);
+      }
+      expect(diagnostics).toEqual({ transactionJournalErrors: 1, externalReceiptErrors: 1, unexpectedErrors: 0, revisionWarnings: 2, unexpectedWarnings: 0 });
+      expect(pullIo.filter((event) => ["rename", "link"].includes(event.op) &&
+        (event.role === "live-sqlite" || event.targetRole === "live-sqlite" || event.targetRole === "transaction-new"))).toHaveLength(0);
+      expect(pulled.items?.filter((item) => item.scope === "localStorage" && item.state === "failed")).toHaveLength(1);
+      expect(pulled.items?.filter((item) => item.scope === "config")).toHaveLength(0);
+      const [backup] = backupRoots(); expect(backupRoots()).toHaveLength(1);
+      const transaction = path.join(defaultDir(), backup);
+      expect(fs.readdirSync(transaction).sort()).toEqual(["old", "pending.json", "recovery-required.json"]);
+      expect(fs.readdirSync(path.join(transaction, "old"))).toEqual([]);
+      expect(fs.existsSync(path.join(transaction, "published.json"))).toBe(false);
+      expect(fs.existsSync(path.join(transaction, "new"))).toBe(false);
+      expect(fs.existsSync(path.join(h.appData, "sync-recovery", ID + ".localStorage.json"))).toBe(true);
+      expect(pulled.recovery?.map((entry) => ({ resource: entry.resource, receiptConfirmed: entry.receiptPath !== undefined })))
+        .toEqual([{ resource: "localStorage", receiptConfirmed: false }]);
+      const assertUnchanged = () => {
+        expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage")).equals(old.main)).toBe(true);
+        expect(fs.readFileSync(path.join(defaultDir(), "LocalStorage-wal")).equals(old.wal)).toBe(true);
+        expect(fs.readFileSync(getConfigPath()).equals(configBefore)).toBe(true);
+        expect(JSON.stringify(getConfig()) === memoryBefore).toBe(true);
+        expect(JSON.stringify(getConfig().browserProfiles[ID].syncBaseline) === baselineBefore).toBe(true);
+        expect(h.objects.size).toBe(remoteBefore.size);
+        expect([...remoteBefore].every(([key, bytes]) => h.objects.get(key)?.equals(bytes))).toBe(true);
+        expect(h.requests.filter((request) => request.method === "PUT")).toHaveLength(putsBefore);
+      };
+      assertUnchanged(); assertBusiness(defaultDir(), "unique-old-rescue-row-中文");
+      const beforeRetries = JSON.stringify(tree(h.appData)), retryStart = h.events.length;
+      const retriedPull = await syncService.pull(undefined, { strategy: "remote" });
+      const retriedPush = await syncService.push(undefined, true);
+      for (const retry of [retriedPull, retriedPush]) expect(retry).toMatchObject({
+        success: false, outcome: "recovery-required", code: "LOCAL_STORAGE_RECOVERY_REQUIRED", localCommit: "none", remoteCommit: "none",
+      });
+      expect(h.events.slice(retryStart).filter((event) => ["rename", "link", "fsync"].includes(event.op))).toHaveLength(0);
+      expect(JSON.stringify(tree(h.appData)) === beforeRetries).toBe(true);
+      await expectRejectedExport("native unconfirmed SQLite directory durability");
+      reloadConfig(); assertUnchanged(); assertBusiness(defaultDir(), "unique-old-rescue-row-中文");
+      expect(h.descriptors.size).toBe(0);
+      return;
+    }
+    expect(diagnostics).toEqual({ transactionJournalErrors: 0, externalReceiptErrors: 0, unexpectedErrors: 0, revisionWarnings: 0, unexpectedWarnings: 0 });
+    expect(pullIo.filter((event) => !event.ok)).toHaveLength(0);
+    expect(pullIo.filter((event) => ["rename", "link"].includes(event.op) && (event.role === "live-sqlite" || event.targetRole === "live-sqlite"))
+      .map((event) => event.op)).toEqual(["rename", "rename", "link", "link"]);
+    expect(pulled.success, pulled.message).toBe(true);
     const [backup] = backupRoots(); expect(backupRoots()).toHaveLength(1);
     const transaction = path.join(defaultDir(), backup);
     expect(fs.readdirSync(transaction).sort()).toEqual(["new", "old", "pending.json", "published.json"]);
@@ -284,6 +458,8 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
       assertBusiness(defaultDir(id), "published-new-business-row");
       expect(tree(path.join(profileDir(id), HISTORY))).toEqual(historyBefore);
     }
+    expect(diagnostics).toEqual({ transactionJournalErrors: 0, externalReceiptErrors: 0, unexpectedErrors: 0, revisionWarnings: 0, unexpectedWarnings: 0 });
+    expect(h.descriptors.size).toBe(0);
   });
 
   it("refuses a real failed SQLite publication/compensation on export and old-ZIP import without touching any rescue or prior ZIP", async () => {
