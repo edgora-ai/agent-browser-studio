@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt } from "node:crypto";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import type { BrowserEngine } from "../../types.js";
 import {
   ensureArchiveDirectory, extractZipArchive, extractZipEntry, isPathInside, MAX_ZIP_ENTRIES,
@@ -260,7 +261,25 @@ function temporaryPath(relative: string, engine: BrowserEngine): boolean {
   const caches = ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "GraphiteDawnCache", "GrShaderCache", "ShaderCache"];
   return caches.includes(parts[0]) || parts.length >= 2 && /^(?:Default|Profile [0-9]+|Guest Profile|System Profile)$/.test(parts[0]) && caches.includes(parts[1]);
 }
-function visitFile(file: string, expected: fs.Stats, guard: FullProfileGuard, signal?: AbortSignal, consume?: (chunk: Buffer, position: number) => void): string {
+type Traversal<T> = Generator<void, T, void>;
+function drain<T>(steps: Traversal<T>): T {
+  try {
+    for (;;) { const step = steps.next(); if (step.done) return step.value; }
+  } finally { steps.return(undefined as never); }
+}
+/** Yield only at the shared core's bounded checkpoints. Its very next operation
+ * is the original synchronous guard, before any further I/O or successful return.
+ * Closing a suspended iterator also closes its pinned fd and clears owned bytes. */
+async function drainCooperatively<T>(steps: Traversal<T>): Promise<T> {
+  try {
+    for (;;) {
+      const step = steps.next();
+      if (step.done) return step.value;
+      await nextTurn();
+    }
+  } finally { steps.return(undefined as never); }
+}
+function* visitFileSteps(file: string, expected: fs.Stats, guard: FullProfileGuard, signal?: AbortSignal, consume?: (chunk: Buffer, position: number) => void): Traversal<string> {
   check(guard, signal); ensureArchiveDirectory(path.dirname(file)); regular(file, expected);
   if (!sameSnapshot(fs.lstatSync(file), expected)) invalid("Full-profile source changed before read");
   const fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW), hash = createHash("sha256"), chunk = Buffer.allocUnsafe(CHUNK);
@@ -272,21 +291,26 @@ function visitFile(file: string, expected: fs.Stats, guard: FullProfileGuard, si
       const wanted = Math.min(CHUNK, expected.size - position), count = fs.readSync(fd, chunk, 0, wanted, position);
       if (!Number.isInteger(count) || count <= 0 || count > wanted) invalid("Full-profile source short read");
       const data = chunk.subarray(0, count); hash.update(data); consume?.(data, position); position += count;
+      yield;
       check(guard, signal);
     }
     if (fs.readSync(fd, chunk, 0, 1, expected.size) !== 0 || !sameSnapshot(fs.fstatSync(fd), expected) || !sameSnapshot(fs.lstatSync(file), expected)) invalid("Unstable full-profile source");
     check(guard, signal); return hash.digest("hex");
   } finally { chunk.fill(0); fs.closeSync(fd); }
 }
-function scanTree(directory: string, engine: BrowserEngine, guard: FullProfileGuard, signal?: AbortSignal, filterTemporary = false, hashFiles = true): Tree {
+function visitFile(file: string, expected: fs.Stats, guard: FullProfileGuard, signal?: AbortSignal, consume?: (chunk: Buffer, position: number) => void): string {
+  return drain(visitFileSteps(file, expected, guard, signal, consume));
+}
+function* scanTreeSteps(directory: string, engine: BrowserEngine, guard: FullProfileGuard, signal?: AbortSignal, filterTemporary = false, hashFiles = true): Traversal<Tree> {
   check(guard, signal); ensureArchiveDirectory(directory);
   const root = fs.lstatSync(directory), all: Witness[] = [], files: ScannedFile[] = [], directories: string[] = [], names = new Set<string>();
   let bytes = 0;
-  const visit = (current: string, parentRelative: string, omitted: boolean): void => {
+  const visit = function* (current: string, parentRelative: string, omitted: boolean): Traversal<void> {
     check(guard, signal);
     const before = fs.lstatSync(current);
     if (!before.isDirectory() || before.isSymbolicLink()) invalid("Unsafe full-profile source directory");
     for (const name of fs.readdirSync(current).sort()) {
+      yield;
       check(guard, signal);
       const relative = parentRelative ? parentRelative + "/" + name : name;
       validateRelative(relative); rejectRecoveryOrQueue(relative);
@@ -302,21 +326,24 @@ function scanTree(directory: string, engine: BrowserEngine, guard: FullProfileGu
       const skip = omitted || filterTemporary && temporaryPath(relative, engine);
       if (stat.isDirectory()) {
         if (!skip) directories.push(relative);
-        visit(file, relative, skip);
+        yield* visit(file, relative, skip);
       } else if (!skip) {
         bytes += stat.size;
         if (!Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_ZIP_ENTRY_BYTES || bytes > MAX_FULL_PROFILE_EXPANDED_BYTES) invalid("Full-profile expanded size limit exceeded");
-        files.push({ path: relative, size: stat.size, sha256: hashFiles ? visitFile(file, stat, guard, signal) : "", stat });
+        files.push({ path: relative, size: stat.size, sha256: hashFiles ? yield* visitFileSteps(file, stat, guard, signal) : "", stat });
       }
     }
     if (!sameSnapshot(before, fs.lstatSync(current))) invalid("Full-profile directory changed during scan");
     check(guard, signal);
   };
-  visit(directory, "", false);
+  yield* visit(directory, "", false);
   if (!sameSnapshot(root, fs.lstatSync(directory))) invalid("Full-profile root changed during scan");
   all.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
   files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0); directories.sort();
   check(guard, signal); return { root, all, files, directories };
+}
+function scanTree(directory: string, engine: BrowserEngine, guard: FullProfileGuard, signal?: AbortSignal, filterTemporary = false, hashFiles = true): Tree {
+  return drain(scanTreeSteps(directory, engine, guard, signal, filterTemporary, hashFiles));
 }
 function assertTreeSnapshot(before: Tree, after: Tree, ignoreRootMetadata = false): void {
   if (!(ignoreRootMetadata ? sameIdentity(before.root, after.root) : sameSnapshot(before.root, after.root)) || before.all.length !== after.all.length ||
@@ -455,12 +482,15 @@ async function deriveKey(passphrase: string, salt: Buffer, guard: FullProfileGua
   } catch (cause) { key?.fill(0); throw cause; }
   finally { input.fill(0); }
 }
-function readOwnedFile(file: string, limit: number, guard: FullProfileGuard, signal?: AbortSignal): Buffer {
+function* readOwnedFileSteps(file: string, limit: number, guard: FullProfileGuard, signal?: AbortSignal): Traversal<Buffer> {
   const stat = fs.lstatSync(file); regular(file, stat);
   if (stat.size > limit) invalid("Full-profile object size limit exceeded");
   const bytes = Buffer.alloc(stat.size);
-  try { visitFile(file, stat, guard, signal, (chunk, position) => chunk.copy(bytes, position)); return bytes; }
-  catch (cause) { bytes.fill(0); throw cause; }
+  let complete = false;
+  try {
+    yield* visitFileSteps(file, stat, guard, signal, (chunk, position) => chunk.copy(bytes, position));
+    complete = true; return bytes;
+  } finally { if (!complete) bytes.fill(0); }
 }
 
 /** Cold, readonly capture. The caller owns restore/runtime/config guards and the
@@ -473,7 +503,9 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
   if (!validIdentity(id as unknown as Record<string, unknown>)) invalid("Invalid full-profile capture identity");
   const source = ensureArchiveDirectory(profileDir), staging = ensureArchiveDirectory(stagingDir);
   if (isPathInside(staging, source)) invalid("Full-profile staging must be outside the source profile");
-  const before = scanTree(source, id.engine, guard, signal, true);
+  const before = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true));
+  // Even an empty traversal settles asynchronously; recheck its caller's turn.
+  check(guard, signal);
   const extraCopies: FullProfileExtraEntry[] = [];
   let workspace: OwnedDirectory | undefined, zip: Buffer | undefined, key: Buffer | undefined, result: { body: Buffer; descriptor: FullProfileArtifact } | undefined, error: unknown;
   try {
@@ -505,7 +537,8 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     const written = await guardedAwait(() => writeZipArchive(archive, entries), guard, signal);
     if (written.warnings?.some((warning) => warning !== "Directory fsync is unsupported on Windows; only file durability was verified.")) invalid("Full-profile ZIP publication/cleanup was not verified: " + written.warnings.join("; "));
     assertOwner(workspace);
-    zip = readOwnedFile(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal);
+    zip = await drainCooperatively(readOwnedFileSteps(archive, MAX_FULL_PROFILE_BODY_BYTES - PREFIX_BYTES - TAG_BYTES, guard, signal));
+    check(guard, signal);
     inspectZip(zip, id, guard, signal, true);
     const salt = randomBytes(16), iv = randomBytes(12);
     const header: Header = { ...id, cipher: "aes-256-gcm", kdf: KDF, salt: salt.toString("hex"), iv: iv.toString("hex") };
@@ -513,7 +546,8 @@ export async function captureFullProfile(options: CaptureFullProfileOptions): Pr
     if (headerBytes.length > MAX_HEADER_BYTES) invalid("Full-profile encryption header size limit exceeded");
     MAGIC.copy(prefix); prefix.writeUInt32BE(headerBytes.length, MAGIC.length);
     key = await deriveKey(passphrase, salt, guard, signal);
-    assertTreeSnapshot(before, scanTree(source, id.engine, guard, signal, true));
+    const after = await drainCooperatively(scanTreeSteps(source, id.engine, guard, signal, true));
+    check(guard, signal); assertTreeSnapshot(before, after);
     const cipher = createCipheriv("aes-256-gcm", key, iv); cipher.setAAD(Buffer.concat([prefix, headerBytes]));
     const encrypted = cipher.update(zip), final = cipher.final();
     const body = Buffer.concat([prefix, headerBytes, encrypted, final, cipher.getAuthTag()]);
@@ -585,12 +619,14 @@ export async function prepareFullProfile(options: PrepareFullProfileOptions): Pr
     });
     check(guard, signal); assertOwner(workspace);
     const directory = path.join(workspace.directory, "contents", "profile");
-    const tree = scanTree(directory, descriptor.engine, guard, signal);
+    const tree = await drainCooperatively(scanTreeSteps(directory, descriptor.engine, guard, signal));
+    check(guard, signal);
     assertMembers(tree, manifest.files, manifest.directories);
     const extraDirectory = manifest.extraEntries.length ? path.join(workspace.directory, "contents", "extras") : undefined;
     let extraOwner: fs.Stats | undefined;
     if (extraDirectory) {
-      const extraTree = scanTree(extraDirectory, descriptor.engine, guard, signal);
+      const extraTree = await drainCooperatively(scanTreeSteps(extraDirectory, descriptor.engine, guard, signal));
+      check(guard, signal);
       assertMembers(extraTree, manifest.extraEntries, extraDirectories(manifest.extraEntries)); extraOwner = extraTree.root;
     }
     // Neither of these transport files is part of prepared.directory.

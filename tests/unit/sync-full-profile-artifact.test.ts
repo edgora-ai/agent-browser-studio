@@ -94,6 +94,20 @@ type Bundle = Awaited<ReturnType<typeof simpleBundle>>;
 function prepare(bundle: Pick<Bundle, "body" | "descriptor" | "options">, overrides: Partial<Parameters<typeof prepareFullProfile>[0]> = {}) {
   return prepareFullProfile({ body: bundle.body, descriptor: bundle.descriptor, stagingDir: bundle.options.stagingDir, passphrase: PASSPHRASE, dirId: ID, engine: bundle.options.engine, guard, ...overrides });
 }
+// Capture now yields during its initial scan too. Anchor ZIP/cleanup faults to
+// the actual owned ZIP write, rather than assuming the first turn is that phase.
+function onOwnedZipWrite(stagingDir: string, action: () => void) {
+  const open = fsMutable.openSync, fault = vi.fn(action);
+  let scheduled = false;
+  vi.spyOn(fsMutable, "openSync").mockImplementation((file, flags, mode) => {
+    const fd = open(file, flags, mode), name = String(file);
+    if (!scheduled && name.startsWith(stagingDir + path.sep) && path.basename(name).startsWith(".abs-profile-archive-")) {
+      scheduled = true; setImmediate(fault);
+    }
+    return fd;
+  });
+  syncBuiltinESMExports(); return fault;
+}
 function descriptorFor(body: Buffer, previous: FullProfileArtifact): FullProfileArtifact {
   const sha256 = digest(body); return { ...previous, sha256, key: `full-profile-v1-${sha256}.bin`, size: body.length };
 }
@@ -362,8 +376,9 @@ describe("full-profile cold-source and owned-path safety", () => {
   });
   it.each(["changed-file", "added-file"])("detects %s while ZIP writing yields, rather than returning an incomplete snapshot", async (kind) => {
     const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", Buffer.alloc(128 * 1024, 7));
-    setImmediate(() => put(options.profileDir, kind === "changed-file" ? "safe" : "added", "new-source-state"));
+    const mutation = onOwnedZipWrite(options.stagingDir, () => put(options.profileDir, kind === "changed-file" ? "safe" : "added", "new-source-state"));
     await expect(captureFullProfile(options)).rejects.toThrow(/changed|unstable/i);
+    expect(mutation).toHaveBeenCalledTimes(1);
     expect(fs.readFileSync(path.join(options.profileDir, kind === "changed-file" ? "safe" : "added"), "utf8")).toBe("new-source-state");
     expect(fs.readdirSync(options.stagingDir)).toEqual([]);
   });
@@ -384,14 +399,16 @@ describe("full-profile cold-source and owned-path safety", () => {
   });
   it("retains the original failure and a real cleanup failure, rather than claiming success", async () => {
     const root = tmp(), options = captureOptions(root); put(options.profileDir, "safe", "data");
-    let running = false; setImmediate(() => { running = true; });
+    let running = false, cleanupFailures = 0;
+    const runtimeChange = onOwnedZipWrite(options.stagingDir, () => { running = true; });
     const original = fs.rmSync;
     vi.spyOn(fsMutable, "rmSync").mockImplementation((file, opts) => {
-      if (String(file).includes("full-profile-capture-")) throw Object.assign(new Error("SYNTHETIC_CLEANUP_EIO"), { code: "EIO" });
+      if (String(file).includes("full-profile-capture-")) { cleanupFailures++; throw Object.assign(new Error("SYNTHETIC_CLEANUP_EIO"), { code: "EIO" }); }
       return original(file, opts);
     });
     syncBuiltinESMExports();
     await expect(captureFullProfile({ ...options, guard: () => { if (running) throw new Error("ORIGINAL_RUNTIME_FAILURE"); } })).rejects.toThrow(/ORIGINAL_RUNTIME_FAILURE.*cleanup failed.*SYNTHETIC_CLEANUP_EIO/);
+    expect(runtimeChange).toHaveBeenCalledTimes(1); expect(cleanupFailures).toBe(1);
     expect(fs.readdirSync(options.stagingDir).some((name) => name.startsWith("full-profile-capture-"))).toBe(true);
     expect(fs.readFileSync(path.join(options.profileDir, "safe"), "utf8")).toBe("data");
   });
