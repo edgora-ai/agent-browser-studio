@@ -39,10 +39,33 @@ describe("source-build Node runtime policy", () => {
       "      - name: Cold-profile directory ancestry regressions",
       "        timeout-minutes: 5",
       "        run: npx vitest run tests/unit/created-directory-ancestry.test.ts tests/unit/webrtc-preferences.test.ts --bail=1 --maxWorkers=1 --reporter=default",
-      "      - name: Unit + smoke tests",
     ].join("\n"));
+    expect(windows.indexOf("Cold-profile directory ancestry regressions")).toBeLessThan(windows.indexOf("Unit + smoke tests"));
     expect(windows).toContain("run: npx vitest run tests/unit tests/smoke --bail=1 --reporter=default --reporter=hanging-process");
     expect(windows).toContain("run: npx vitest run --coverage tests/unit tests/smoke --bail=1");
+  });
+
+  it("bounds native recovery diagnostics without suppressing failures or replacing full gates", () => {
+    const windows = source(".github/workflows/ci.yml").split(/^  checks-windows:\n/m)[1]?.split(/^  [\w-]+:/m)[0] ?? "";
+    const diagnostic = windows.split("      - name: Native recovery unit diagnostics\n")[1]?.split("\n      - ")[0] ?? "";
+    expect(diagnostic).toContain("        timeout-minutes: 15");
+    expect(diagnostic).not.toMatch(/continue-on-error|\bif:/);
+    const command = diagnostic.split("        run: >-\n")[1]?.trim().split("\n").map((line) => line.trim()).join(" ");
+    expect(command).toBe([
+      "npx vitest run",
+      "tests/unit/profile-archive-sync-recovery.test.ts",
+      "tests/unit/sync-sqlite-local-storage.test.ts",
+      "tests/unit/sync-history-transport.test.ts",
+      "tests/unit/sync-restore-safety.test.ts",
+      "tests/unit/profile-archive-safety.test.ts",
+      "tests/unit/profile-archive.test.ts",
+      "tests/unit/full-profile-config-durability.test.ts",
+      "--bail=0 --maxWorkers=1 --reporter=default --reporter=hanging-process",
+    ].join(" "));
+    const gates = ["Cold-profile directory ancestry regressions", "Native recovery unit diagnostics", "Unit + smoke tests", "Coverage (unit + smoke, threshold gated)"];
+    for (let index = 1; index < gates.length; index++) {
+      expect(windows.indexOf(gates[index - 1])).toBeLessThan(windows.indexOf(gates[index]));
+    }
   });
 
   it.each([
