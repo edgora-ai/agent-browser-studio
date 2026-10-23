@@ -30,7 +30,9 @@ Two limits are deliberate and stated in the dialog:
 
 ## 1. Install and run
 
-Requirements today: **macOS on Apple Silicon**, Node.js 22.16+, and an independently built Chromium placed in the managed cache.
+Requirements today: **macOS on Apple Silicon**, Node.js 22.23.4+, and an independently built Chromium placed in the managed cache.
+
+This source-build patch floor avoids inconsistent path/fd volume identities reported by older Windows Node.js runtimes; storage identity guards remain strict.
 
 ```bash
 git clone https://github.com/edgora-ai/agent-browser-studio.git

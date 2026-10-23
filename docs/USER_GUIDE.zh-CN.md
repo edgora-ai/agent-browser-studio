@@ -30,7 +30,9 @@ Agent Browser Studio 是一个本地桌面控制台：在自研补丁版 Chromiu
 
 ## 1. 安装与运行
 
-当前要求：**Apple Silicon macOS**、Node.js 22.16+，以及放入受管缓存的独立构建 Chromium。
+当前要求：**Apple Silicon macOS**、Node.js 22.23.4+，以及放入受管缓存的独立构建 Chromium。
+
+此源码构建补丁版本下限用于避开旧版 Windows Node.js 运行时报告的路径与文件描述符（fd）卷标识不一致问题；存储身份校验仍保持严格。
 
 ```bash
 git clone https://github.com/edgora-ai/agent-browser-studio.git

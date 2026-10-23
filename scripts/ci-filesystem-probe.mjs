@@ -18,6 +18,7 @@ if (process.platform === "win32" && process.env.LOCALAPPDATA) {
 }
 const fields = stat => Object.fromEntries(["dev", "ino", "size", "mode", "nlink", "uid", "gid", "mtimeMs", "ctimeMs", "birthtimeMs"].map(key => [key, stat[key]]));
 const identity = stat => Object.fromEntries(["dev", "ino", "mtimeNs", "ctimeNs"].map(key => [key, String(stat[key])]));
+const incompatible = [];
 for (const { label, directory } of roots) {
   const root = fs.mkdtempSync(path.join(directory, "metadata-probe-"));
   const owner = fs.lstatSync(root), file = path.join(root, "owned.bin");
@@ -43,8 +44,11 @@ for (const { label, directory } of roots) {
       pathAfter: fields(fs.lstatSync(file)), beforeBig, openedBig, directorySync,
       firstCreated: typeof first === "string" ? path.relative(root, first) : null,
       expectedFirstCreated: path.relative(root, path.dirname(created)),
-      mkdirBoundaryEquivalent: typeof first === "string" && path.relative(first, path.dirname(created)) === "" };
+      mkdirBoundaryEquivalent: typeof first === "string" && path.relative(first, path.dirname(created)) === "",
+      normalizedMkdirBoundaryEquivalent: typeof first === "string" && path.relative(path.toNamespacedPath(first), path.toNamespacedPath(path.dirname(created))) === "" };
     console.log("::notice title=Owned filesystem metadata::" + JSON.stringify(facts));
+    if (["dev", "ino", "size"].some(key => before[key] !== opened[key] || before[key] !== after[key] || before[key] !== facts.pathAfter[key]) ||
+        beforeBig.dev !== openedBig.dev || beforeBig.ino !== openedBig.ino) incompatible.push(label);
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
     const current = fs.lstatSync(root);
@@ -52,3 +56,4 @@ for (const { label, directory } of roots) {
     fs.rmSync(root, { recursive: true });
   }
 }
+if (incompatible.length) throw new Error("Path/descriptor identity is inconsistent on the supported CI runtime: " + incompatible.join(", "));
