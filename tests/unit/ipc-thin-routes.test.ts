@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const h = vi.hoisted(() => {
   const fs = require("node:fs"); const path = require("node:path"); const { EventEmitter } = require("node:events");
-  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "ipc-thin-"));
+  const root = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "ipc-thin-"));
   delete process.env.AGENT_BROWSER_CHROMIUM_BINARY_PATH;
   const forbidden = vi.fn((...args: unknown[]) => { throw new Error(`Undeclared native capability: ${String(args[0])}`); });
   const state = { serverError: false, trusted: true };
@@ -20,10 +21,6 @@ const h = vi.hoisted(() => {
   }
   return { root, handlers: new Map<string, (...args: any[]) => any>(), forbidden, state, Server,
     openPath: vi.fn(async () => ""), openExternal: vi.fn(async () => undefined), quit: vi.fn(),
-    exec: vi.fn((command: string, _options: any, callback: any) => {
-      if (command !== "df -k .") return forbidden(command);
-      callback(null, "Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 1000000 200000 800000 20% /fixture\n", "");
-    }),
   };
 });
 vi.mock("electron", () => ({
@@ -34,8 +31,13 @@ vi.mock("electron", () => ({
   shell: { openPath: h.openPath, openExternal: h.openExternal },
   screen: { getPrimaryDisplay: h.forbidden }, clipboard: { writeText: h.forbidden }, dialog: {},
 }));
+// Observe real statfs results instead of inventing shell output/capacity.
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return { ...actual, statfs: vi.fn(actual.statfs) };
+});
 vi.mock("node:child_process", async (original) => ({ ...await original<typeof import("node:child_process")>(),
-  exec: h.exec, execFile: h.forbidden, execSync: h.forbidden, spawn: h.forbidden, spawnSync: h.forbidden,
+  exec: h.forbidden, execFile: h.forbidden, execSync: h.forbidden, spawn: h.forbidden, spawnSync: h.forbidden, fork: h.forbidden,
   execFileSync: (file: string) => file === "ps" || file === "/bin/ps" ? "" : h.forbidden(file),
 }));
 vi.mock("node:http", async (original) => {
@@ -78,6 +80,7 @@ for (const register of [registerAppHandlers, registerApiHandlers, registerMcpHan
 const PROFILE = "ab_ipc_thin";
 const invoke = (channel: string, ...args: any[]) => h.handlers.get(channel)!({ sender: { id: 3 } }, ...args);
 const disk = () => JSON.parse(fs.readFileSync(getConfigPath(), "utf8"));
+const statfs = vi.mocked(fsPromises.statfs);
 function role(value: "owner" | "viewer") {
   const cfg = structuredClone(getConfig()); cfg.team = { name: "IPC workspace", ownerDeviceId: cfg.deviceId!, enabled: true, updatedAt: 1,
     members: [{ deviceId: cfg.deviceId!, name: "IPC device", role: value, addedAt: 1 }] }; saveConfig(cfg);
@@ -88,6 +91,7 @@ beforeEach(async () => {
   const cfg = structuredClone(getConfig()); cfg.browserProfiles[PROFILE] = { name: "Thin fixture", fingerprintSeed: 12345, fingerprintMode: "off", proxyMode: "none" } as any; saveConfig(cfg);
   configureObservability({ dir: path.join(h.root, "logs"), enabled: true }); resetObservabilityForTest();
   h.state.serverError = false; h.state.trusted = true; h.forbidden.mockClear(); h.openExternal.mockClear(); h.openPath.mockClear(); h.quit.mockClear();
+  statfs.mockReset().mockImplementation(fs.promises.statfs);
   vi.stubGlobal("fetch", h.forbidden);
 });
 afterEach(async () => { stopScheduler(); await stopRestApiServer(); await stopMcpServer(); closeAgentDb(); closeJobDb(); vi.unstubAllGlobals(); });
@@ -202,15 +206,44 @@ describe("real thin IPC routes and isolated durable state", () => {
     expect(h.forbidden).not.toHaveBeenCalled();
   });
 
-  it("storage cache deletion changes real files while preserving non-cache data", async () => {
+  it("storage queries the owned filesystem and deletes only real cache files", async () => {
     const cache = path.join(getProfilesDir(), PROFILE, "Cache"); fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, "data"), "cached bytes");
-    fs.writeFileSync(path.join(getProfilesDir(), PROFILE, "keep"), "persistent");
-    expect(await invoke("storage:available-disk")).toBe(800000 * 1024);
-    expect(await invoke("storage:info")).toMatchObject({ profiles: [expect.objectContaining({ dirId: PROFILE })] });
+    const keep = path.join(getProfilesDir(), PROFILE, "keep"); fs.writeFileSync(keep, "persistent");
+    expect(fs.readFileSync(path.join(cache, "data"), "utf8")).toBe("cached bytes");
+    expect(fs.readFileSync(keep, "utf8")).toBe("persistent");
+    const available = await invoke("storage:available-disk");
+    expect(statfs).toHaveBeenCalledExactlyOnceWith(getProfilesDir(), { bigint: true });
+    const availableSnapshot = await statfs.mock.results[0].value as fs.BigIntStatsFs;
+    expect(available).toBe(Number(availableSnapshot.bavail * availableSnapshot.bsize));
+    const info = await invoke("storage:info");
+    expect(statfs).toHaveBeenCalledTimes(2);
+    expect(statfs).toHaveBeenLastCalledWith(getProfilesDir(), { bigint: true });
+    const infoSnapshot = await statfs.mock.results[1].value as fs.BigIntStatsFs;
+    expect(info).toMatchObject({
+      profiles: [expect.objectContaining({ dirId: PROFILE, sizeBytes: Buffer.byteLength("cached bytespersistent") })],
+      totalProfileBytes: Buffer.byteLength("cached bytespersistent"),
+      availableDiskBytes: Number(infoSnapshot.bavail * infoSnapshot.bsize),
+      diskUsagePercent: Math.round(Number(infoSnapshot.blocks - infoSnapshot.bavail) / Number(infoSnapshot.blocks) * 100),
+    });
     expect(await invoke("storage:clear-cache", PROFILE)).toEqual({ freed: Buffer.byteLength("cached bytes") });
-    expect(fs.existsSync(cache)).toBe(false); expect(fs.readFileSync(path.join(getProfilesDir(), PROFILE, "keep"), "utf8")).toBe("persistent");
+    expect(fs.existsSync(cache)).toBe(false); expect(fs.readFileSync(keep, "utf8")).toBe("persistent");
     expect(await invoke("storage:clear-cache")).toEqual({ freed: 0 });
+    expect(await invoke("storage:info")).toMatchObject({ totalProfileBytes: Buffer.byteLength("persistent") });
     await expect(invoke("storage:clear-cache", "../escape")).rejects.toThrow();
+    expect(h.forbidden).not.toHaveBeenCalled();
+  });
+
+  it("storage IPC rejects unavailable capacity without fake numbers or persistent-file changes", async () => {
+    const profile = path.join(getProfilesDir(), PROFILE); fs.mkdirSync(profile, { recursive: true });
+    const keep = path.join(profile, "keep"); fs.writeFileSync(keep, "persistent");
+    const error = Object.assign(new Error("fixture statfs unsupported"), { code: "ENOTSUP" });
+    statfs.mockRejectedValue(error);
+    await expect(invoke("storage:available-disk")).rejects.toBe(error);
+    await expect(invoke("storage:info")).rejects.toBe(error);
+    expect(statfs).toHaveBeenCalledTimes(2);
+    for (const args of statfs.mock.calls) expect(args).toEqual([getProfilesDir(), { bigint: true }]);
+    expect(fs.readFileSync(keep, "utf8")).toBe("persistent");
+    expect(h.forbidden).not.toHaveBeenCalled();
   });
 
   it("data exports return isolated facts and explicitly refuse unknown scopes", async () => {
@@ -270,11 +303,11 @@ describe("real thin IPC routes and isolated durable state", () => {
   });
 
   it("automation job cancellation and notification read state reach real SQLite", async () => {
-    const job = enqueueJob({ ruleId: "fixture-rule", ruleName: "IPC job", source: "manual" });
+    const job = enqueueJob({ ruleId: "fixture-rule", ruleName: "IPC job", source: "test" });
     expect((await invoke("automation:jobs"))[0].id).toBe(job.id); expect(await invoke("automation:job-get", job.id)).toMatchObject({ id: job.id });
     expect(await invoke("automation:job-cancel", job.id)).toEqual({ success: true }); closeJobDb();
     const direct = new DatabaseSync(path.join(h.root, "jobs.sqlite"), { readOnly: true });
-    try { expect(direct.prepare("SELECT status FROM jobs WHERE id=?").get(job.id)).toMatchObject({ status: "cancelled" }); } finally { direct.close(); }
+    try { expect(direct.prepare("SELECT status, source FROM jobs WHERE id=?").get(job.id)).toMatchObject({ status: "cancelled", source: "test" }); } finally { direct.close(); }
     expect(await invoke("automation:job-get", job.id)).toMatchObject({ status: "cancelled" });
     expect(await invoke("automation:job-cancel", "missing")).toEqual({ success: false });
     const notification = recordNotification({ dedupKey: "ipc-notification", jobId: job.id, ruleId: "fixture-rule", kind: "failed", now: Date.now(), delivered: false });
