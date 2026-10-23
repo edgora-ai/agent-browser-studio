@@ -1,6 +1,6 @@
 // Renderer event regressions, plus real backend readback for supported IDs.
 // The filesystem fault matrix remains in f09-profile-trash.test.ts.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -12,9 +12,21 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
   screen: { getPrimaryDisplay: () => ({ scaleFactor: 1 }) },
 }));
+// The owned fixtures have no browser processes. Host discovery (including
+// Windows WMIC/CIM availability) is not evidence about these synthetic IDs.
+// Isolate only that boundary; keep lifecycle refusal and all storage paths real.
+const discovery = vi.hoisted(() => ({
+  findBrowserByProfileSync: vi.fn<typeof import("../../src/main/services/process-discovery.js").findBrowserByProfileSync>(() => null),
+}));
+vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/main/services/process-discovery.js")>(),
+  findBrowserByProfileSync: discovery.findBrowserByProfileSync,
+}));
 import { getConfig, getProfileMeta, reloadConfig } from "../../src/main/services/config-manager.js";
 import { listBrowserProfiles, listTrashedProfiles, purgeTrashedProfile, restoreTrashedProfile, trashBrowserProfile } from "../../src/main/services/browser-manager.js";
 import { validateDirId } from "../../src/main/services/utils.js";
+
+beforeEach(() => { discovery.findBrowserByProfileSync.mockReset().mockReturnValue(null); });
 
 afterAll(() => {
   if (path.dirname(STORAGE_ROOT) !== os.tmpdir() || !path.basename(STORAGE_ROOT).startsWith("studio-f09-renderer-")) {
@@ -277,7 +289,7 @@ async function retainedUndo(h: ReturnType<typeof harness>, ids = [ID]): Promise<
   h.confirmations.at(-1)!.onOk();
   await flush();
   const success = h.helpers.toast.mock.calls.at(-1)!;
-  expect(success[1]).toBe("success");
+  expect(success[1], JSON.stringify(success)).toBe("success");
   expect(success[2]).toMatchObject({ ttlMs: 12000, action: { label: "Undo" } });
   // Batch delete refreshes on success; measure only subsequent restore effects.
   h.api.browser.list.mockClear();
@@ -476,6 +488,55 @@ for (const id of ["toString", "valueOf", "hasOwnProperty", ID]) {
     expect(h.api.profile.trashPurge).toHaveBeenCalledWith(id);
     readback(false, false);
     expect(JSON.parse(fs.readFileSync(index, "utf8"))).toEqual([]);
+  });
+}
+
+for (const running of [false, true]) {
+  it(`refuses renderer deletion with ${running ? "an unverified running owner" : "unavailable discovery"} and conserves persisted data`, async () => {
+    const id = running ? "f09_refused_running" : "f09_refused_unknown";
+    getConfig();
+    const config = path.join(STORAGE_ROOT, "config.json"), index = path.join(STORAGE_ROOT, "trash", "index.json");
+    const live = path.join(STORAGE_ROOT, "profiles", id, "Default", "sentinel.txt");
+    const trash = path.join(STORAGE_ROOT, "trash", "profiles", id, "Default", "sentinel.txt");
+    const meta = { name: id, engine: "chromium", note: "Synthetic runtime refusal" };
+    fs.mkdirSync(path.dirname(trash), { recursive: true });
+    fs.writeFileSync(trash, `F09-refused-${id}`);
+    fs.writeFileSync(index, JSON.stringify([{ dirId: id, name: id, deletedAt: Date.now(), meta }]));
+    expect(restoreTrashedProfile(id)).toBe(true);
+    const savedConfig = fs.readFileSync(config, "utf8"), savedIndex = fs.readFileSync(index, "utf8");
+    const h = harness();
+    h.api.profile.trash.mockImplementation(async (id) => ({ success: trashBrowserProfile(id) }));
+    if (running) {
+      // Unknown ownership blocks deletion without adopting a fake PID (or
+      // probing a real process on a subsequent status/readback).
+      discovery.findBrowserByProfileSync.mockReturnValueOnce({ pid: 1234, cdpPort: 0, unknown: true });
+    } else {
+      discovery.findBrowserByProfileSync.mockImplementationOnce(() => {
+        throw Object.assign(new Error("Synthetic process discovery unavailable"), { code: "PROCESS_DISCOVERY_UNAVAILABLE" });
+      });
+    }
+    h.agentBrowser.delProfile(id);
+    h.confirmations[0].onOk(); await flush();
+    expect(discovery.findBrowserByProfileSync).toHaveBeenCalledExactlyOnceWith(id, path.join(STORAGE_ROOT, "profiles", id), { strict: true });
+    expect(h.api.profile.trash).toHaveBeenCalledExactlyOnceWith(id);
+    expect(h.helpers.toast).toHaveBeenCalledTimes(1);
+    expect(h.helpers.toast).toHaveBeenLastCalledWith("Could not delete profile", "error", {
+      detail: `${id}: ${running ? "Cannot delete profile while managed Chromium is running" : "Cannot move profile to trash: runtime state is unknown. Stop it normally and retry after exit is confirmed."}`,
+      ttlMs: 0,
+    });
+    expect(h.card.getAttribute("aria-busy")).toBe("false");
+    expect(h.checkbox.checked).toBe(true);
+    expect(h.agentBrowser.loadTab).not.toHaveBeenCalled();
+    expect(h.api.browser.list).not.toHaveBeenCalled();
+    expect(h.api.profile.trashList).not.toHaveBeenCalled();
+    expect(fs.readFileSync(config, "utf8")).toBe(savedConfig);
+    expect(fs.readFileSync(index, "utf8")).toBe(savedIndex);
+    expect(fs.readFileSync(live, "utf8")).toBe(`F09-refused-${id}`);
+    expect(fs.existsSync(trash)).toBe(false);
+    reloadConfig();
+    expect(getProfileMeta(id)).toEqual(expect.objectContaining(meta));
+    expect(listBrowserProfiles().some((profile) => profile.dirId === id)).toBe(true);
+    expect(listTrashedProfiles().some((entry) => entry.dirId === id)).toBe(false);
   });
 }
 
