@@ -1,25 +1,35 @@
-import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
-import * as os from "node:os";
+
+const environment = vi.hoisted(() => {
+  const fs = require("node:fs"); const path = require("node:path"); const os = require("node:os");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-test-async-")));
+  const owner = fs.lstatSync(root, { bigint: true });
+  return { root, home: path.join(root, "app"), assertOwned: () => {
+    const current = fs.lstatSync(root, { bigint: true });
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== owner.dev || current.ino !== owner.ino) {
+      throw new Error("Async profile fixture root changed");
+    }
+  } };
+});
 
 // Synthetic stopped profiles have no owned running browser. Keep discovery and
 // SQLite execution at controlled boundaries; no host command is needed here.
 const subprocess = vi.hoisted(() => ({
   sqlite: vi.fn(),
-  diskSpace: vi.fn((command: string, _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
-    expect(command).toBe(process.platform === "win32" ? "wmic logicaldisk get size,freespace,deviceid" : "df -k .");
-    callback(null, process.platform === "win32"
-      ? "FreeSpace Size DeviceID\n10485760 20971520 C:\n"
-      : "Filesystem 1K-blocks Used Available Use% Mounted on\nowned 20971520 10485760 10485760 50% /\n");
-  }),
   forbidden: vi.fn(() => { throw new Error("Unexpected subprocess execution"); }),
 }));
 vi.mock("node:child_process", () => ({
-  exec: subprocess.diskSpace,
+  exec: subprocess.forbidden, fork: subprocess.forbidden,
   execFileSync: subprocess.sqlite, execFile: subprocess.forbidden,
   execSync: subprocess.forbidden, spawn: subprocess.forbidden, spawnSync: subprocess.forbidden,
 }));
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return { ...actual, statfs: vi.fn(actual.statfs) };
+});
 vi.mock("../../src/main/services/process-discovery.js", () => ({
   // Loading the real dependency from a hoisted factory can re-enter the
   // profile/browser import graph before this fixture is initialized.
@@ -31,21 +41,25 @@ vi.mock("../../src/main/services/process-discovery.js", () => ({
 }));
 
 // 1. Mock Electron app before importing managers
-vi.mock("electron", () => {
-  const path = require("node:path");
-  const os = require("node:os");
-  const TEST_HOME = path.join(os.tmpdir(), "agent-browser-test-home-async");
-  return {
-    app: {
-      getPath: (name: string) => {
-        if (name === "home" || name === "userData") return TEST_HOME;
-        return "/tmp";
-      }
+vi.mock("electron", () => ({
+  app: {
+    getPath: (name: string) => {
+      if (name === "home" || name === "userData") return environment.home;
+      if (name === "temp") return environment.root;
+      throw new Error(`Unexpected Electron path request: ${name}`);
     }
-  };
-});
+  }
+}));
 
-const TEST_HOME = require("node:path").join(require("node:os").tmpdir(), "agent-browser-test-home-async");
+const TEST_HOME = environment.home;
+function clearOwnedHome() {
+  environment.assertOwned();
+  if (fs.existsSync(TEST_HOME)) {
+    const home = fs.lstatSync(TEST_HOME);
+    if (!home.isDirectory() || home.isSymbolicLink()) throw new Error("Async profile fixture home changed");
+    fs.rmSync(TEST_HOME, { recursive: true });
+  }
+}
 
 // Import the services under test
 import {
@@ -63,27 +77,32 @@ import {
 import { storageMonitor } from "../../src/main/services/storage-monitor.js";
 import { getProfilesDir } from "../../src/main/services/config-manager.js";
 
+const statfs = vi.mocked(fsPromises.statfs);
 describe("Asynchronous Profile & Storage Monitor Operations", () => {
   beforeEach(async () => {
     subprocess.sqlite.mockReset();
     subprocess.sqlite.mockImplementation(() => { throw new Error("Unexpected SQLite execution"); });
-    subprocess.diskSpace.mockClear();
+    statfs.mockReset().mockImplementation(fs.promises.statfs);
     subprocess.forbidden.mockClear();
-    // Clear and create directories
-    if (fs.existsSync(TEST_HOME)) {
-      fs.rmSync(TEST_HOME, { recursive: true, force: true });
+    clearOwnedHome();
+    const profilesDir = getProfilesDir();
+    const relative = path.relative(TEST_HOME, profilesDir);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error("Async profiles directory escaped the owned fixture home");
     }
-    fs.mkdirSync(getProfilesDir(), { recursive: true });
+    fs.mkdirSync(profilesDir, { recursive: true });
   });
 
   afterEach(async () => {
     try {
       expect(subprocess.forbidden).not.toHaveBeenCalled();
     } finally {
-      if (fs.existsSync(TEST_HOME)) {
-        fs.rmSync(TEST_HOME, { recursive: true, force: true });
-      }
+      clearOwnedHome();
     }
+  });
+  afterAll(() => {
+    environment.assertOwned();
+    fs.rmSync(environment.root, { recursive: true });
   });
 
   it("should create, list, info, and delete managed Chromium profiles asynchronously", async () => {
@@ -146,26 +165,41 @@ describe("Asynchronous Profile & Storage Monitor Operations", () => {
   });
 
   it("storageMonitor should query info and clear cache asynchronously", async () => {
-    // 1. Setup profile with some mock cache files
-    const dirId = "cb_test_profile";
+    const { dirId } = createBrowserProfile({ name: "StorageTest", fingerprintSeed: 12345 });
     const profilePath = path.join(getProfilesDir(), dirId);
     const cachePath = path.join(profilePath, "Cache");
+    const cacheData = "some cached data here";
+    const persistentData = "persistent fixture data";
+    const keep = path.join(profilePath, "keep");
     fs.mkdirSync(cachePath, { recursive: true });
-    fs.writeFileSync(path.join(cachePath, "data_0"), "some cached data here"); // 22 bytes
+    fs.writeFileSync(path.join(cachePath, "data_0"), cacheData);
+    fs.writeFileSync(keep, persistentData);
+    expect(fs.readFileSync(path.join(cachePath, "data_0"), "utf8")).toBe(cacheData);
+    expect(fs.readFileSync(keep, "utf8")).toBe(persistentData);
 
-    // We need config entry for storage monitor to list it
-    const { createBrowserProfile: createCP } = await import("../../src/main/services/browser-manager.js");
-    createCP({ name: "StorageTest", fingerprintSeed: 12345 });
-
-    // 2. Query storage info
     const info = await storageMonitor.getInfo();
-    expect(info).toBeDefined();
-    expect(info.totalProfileBytes).toBeGreaterThanOrEqual(0);
-    expect(subprocess.diskSpace).toHaveBeenCalledTimes(2); // Available and total disk queries.
+    expect(info.profiles).toHaveLength(1);
+    expect(info.profiles[0]).toMatchObject({ dirId, name: "StorageTest" });
+    expect(info.totalProfileBytes).toBe(info.profiles[0].sizeBytes);
+    expect(info.totalProfileBytes).toBeGreaterThanOrEqual(Buffer.byteLength(cacheData + persistentData));
+    // Observe the one native snapshot actually used, not a later moving sample.
+    expect(statfs).toHaveBeenCalledExactlyOnceWith(getProfilesDir(), { bigint: true });
+    const snapshot = await statfs.mock.results[0].value as fs.BigIntStatsFs;
+    const available = Number(snapshot.bavail * snapshot.bsize);
+    const total = Number(snapshot.blocks * snapshot.bsize);
+    expect(info.availableDiskBytes).toBe(available);
+    expect(info.diskUsagePercent).toBe(Math.round(((total - available) / total) * 100));
 
-    // 3. Clear cache
-    const clearResult = await storageMonitor.clearCache(dirId);
-    expect(clearResult.freed).toBeGreaterThanOrEqual(0);
+    expect(await storageMonitor.clearCache(dirId)).toEqual({ freed: Buffer.byteLength(cacheData) });
+    expect(fs.existsSync(cachePath)).toBe(false);
+    expect(fs.readFileSync(keep, "utf8")).toBe(persistentData);
+    const after = await storageMonitor.getInfo();
+    expect(after.totalProfileBytes).toBe(info.totalProfileBytes - Buffer.byteLength(cacheData));
+    expect(after.profiles.find(profile => profile.dirId === dirId)).toMatchObject({
+      name: "StorageTest", sizeBytes: info.profiles[0].sizeBytes - Buffer.byteLength(cacheData),
+    });
+    expect(statfs).toHaveBeenCalledTimes(2);
+    expect(statfs).toHaveBeenLastCalledWith(getProfilesDir(), { bigint: true });
   });
 });
 

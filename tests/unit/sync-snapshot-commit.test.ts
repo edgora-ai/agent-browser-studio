@@ -6,15 +6,20 @@ import * as zlib from "node:zlib";
 import { createHash } from "node:crypto";
 
 const h = vi.hoisted(() => ({
-  root: "", failConfigCommit: false, unreadableRemote: false, running: false,
+  root: "", failConfigCommit: false, configCommitFaultHits: 0, unreadableRemote: false, running: false,
+  configCommitTarget: (root: string, join: (...parts: string[]) => string) => join(root, "config.json"),
   objects: new Map<string, Buffer>(), requests: [] as Array<{ method: string; url: string }>,
   onPut: null as null | ((url: string, body: Buffer) => Promise<"reject" | "lost" | void>),
   snapshot: vi.fn(), legacyExport: vi.fn(),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  const { join } = await import("node:path");
   return { ...actual, renameSync: (from: any, to: any) => {
-    if (h.failConfigCommit && String(to) === `${h.root}/config.json`) throw Object.assign(new Error("EACCES: synthetic config commit failure"), { code: "EACCES" });
+    if (h.failConfigCommit && String(to) === h.configCommitTarget(h.root, join)) {
+      h.configCommitFaultHits++;
+      throw Object.assign(new Error("EACCES: synthetic config commit failure"), { code: "EACCES" });
+    }
     return actual.renameSync(from, to);
   } };
 });
@@ -84,6 +89,7 @@ function cleanup(): void {
 
 beforeEach(() => {
   h.failConfigCommit = false;
+  h.configCommitFaultHits = 0;
   h.unreadableRemote = false;
   h.running = false;
   h.onPut = null;
@@ -324,11 +330,18 @@ describe("sync publishes a frozen snapshot, not the latest local draft", () => {
   });
 
   it("does not mutate the live config object when saving the local published baseline fails", async () => {
-    const before = fs.readFileSync(getConfigPath());
+    // Exercise the same fault-target constructor for both path dialects without
+    // filesystem access or simulated native durability capabilities.
+    expect(h.configCommitTarget("C:\\synthetic-owned-config-root", path.win32.join)).toBe("C:\\synthetic-owned-config-root\\config.json");
+    expect(h.configCommitTarget("/synthetic-owned-config-root", path.posix.join)).toBe("/synthetic-owned-config-root/config.json");
+    const before = fs.readFileSync(getConfigPath()), liveBefore = getConfig();
+    expect(h.configCommitFaultHits).toBe(0);
     h.failConfigCommit = true;
     const result = await syncService.push();
+    expect(h.configCommitFaultHits).toBe(1);
     expect(result).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", localCommit: "none" });
     expect(hash(fs.readFileSync(getConfigPath()))).toBe(hash(before));
+    expect(getConfig()).toBe(liveBefore);
     expect(getConfig().browserProfiles[ID].syncedAt).toBeUndefined();
     expect(getConfig().browserProfiles[ID].syncBaseline).toBeUndefined();
     expect(remoteConfig().browserProfiles[ID].name).toBe("before");
