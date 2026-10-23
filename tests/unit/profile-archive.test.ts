@@ -26,7 +26,7 @@ vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) =
 import { createBrowserProfile, deleteBrowserProfile } from "../../src/main/services/browser-manager.js";
 import { exportProfileArchive, importProfileArchive, exportProfileArchives, importProfileArchives } from "../../src/main/services/profile-archive.js";
 import { getProfilesDir, getProfileMeta, getConfig, getConfigPath, reloadConfig, saveConfig, setProfileMeta } from "../../src/main/services/config-manager.js";
-import { writeZipArchive, readZipEntries, extractZipEntry } from "../../src/main/services/zip-writer.js";
+import { writeZipArchive, readZipEntries, extractZipEntry, syncArchiveDirectory } from "../../src/main/services/zip-writer.js";
 import { getProfileDataRevision } from "../../src/main/services/profile-data-revision.js";
 
 const ARCHIVES = path.join(TEST_ROOT, "exports");
@@ -45,6 +45,16 @@ function archiveMeta(zipPath: string): any {
 
 function diskProfile(dirId: string): any {
   return JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).browserProfiles[dirId];
+}
+
+function expectedImportDirectoryWarnings(dirId: string): string[] {
+  // Observe both owned directories, just as import does; do not assume every
+  // Windows filesystem rejects fsync, or turn open/other fsync errors into warnings.
+  const profileSynced = syncArchiveDirectory(profileDir(dirId));
+  const rootSynced = syncArchiveDirectory(getProfilesDir());
+  return profileSynced && rootSynced ? [] : [
+    "Directory fsync is unsupported on Windows; imported files were synced, but directory durability is not guaranteed.",
+  ];
 }
 
 describe("profile archive export/import", () => {
@@ -288,7 +298,10 @@ describe("profile archive export/import", () => {
       },
     })) }]);
     const imported = importProfileArchive(zipPath);
-    expect(imported.warnings).toEqual([expect.stringMatching(/fonts directory.*not included/i)]);
+    expect(imported.warnings).toEqual([
+      "Custom fonts directory is device-local and not included in this backup; configure a local fonts directory before launching.",
+      ...expectedImportDirectoryWarnings(imported.dirId),
+    ]);
     const disk = diskProfile(imported.dirId);
     expect(disk).toMatchObject({ name: "Legacy", drm: false, renderScaleMode: "native", appUrl: null, fontsDir: null });
     for (const field of ["syncedAt", "syncedHash", "lock", "secretKey"]) expect(disk).not.toHaveProperty(field);
@@ -372,8 +385,10 @@ describe("profile archive export/import", () => {
       name: "Referenced", fingerprintSeed: 12345, extensions: { [installedId]: true, [missingId]: true },
     } })) }]);
     const imp = importProfileArchive(zipPath);
-    expect(imp.warnings).toHaveLength(1);
-    expect(imp.warnings[0]).toContain(missingId);
+    expect(imp.warnings).toEqual([
+      `Extension ${missingId} package is not included in this backup; install it in the private repository before launching.`,
+      ...expectedImportDirectoryWarnings(imp.dirId),
+    ]);
     const stored = diskProfile(imp.dirId);
     expect(stored.extensions).toEqual({ [installedId]: true, [missingId]: true });
     expect(JSON.parse(fs.readFileSync(getConfigPath(), "utf8")).extensionRepository).toHaveProperty(installedId);
@@ -385,10 +400,11 @@ describe("profile archive export/import", () => {
     // manifest must trigger the same warning as a missing extension ID.
     fs.rmSync(path.join(unpackedPath, "manifest.json"));
     const stale = importProfileArchive(zipPath);
-    expect(stale.warnings).toHaveLength(2);
-    expect(stale.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining(installedId), expect.stringContaining(missingId),
-    ]));
+    expect(stale.warnings).toEqual([
+      `Extension ${installedId} package is not included in this backup; install it in the private repository before launching.`,
+      `Extension ${missingId} package is not included in this backup; install it in the private repository before launching.`,
+      ...expectedImportDirectoryWarnings(stale.dirId),
+    ]);
     expect(diskProfile(stale.dirId).extensions).toEqual(stored.extensions);
   });
 

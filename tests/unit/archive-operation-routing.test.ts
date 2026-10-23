@@ -20,6 +20,7 @@ const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "archive-oper
 const A = "ab_archive_one";
 const B = "ab_archive_two";
 const TOKEN = "synthetic-archive-routing-token";
+const WINDOWS_DIRECTORY_WARNING = "Directory fsync is unsupported on Windows; only file durability was verified.";
 const compiled = new Map<string, string>();
 const forbidden: string[] = [];
 const proof = {
@@ -516,14 +517,18 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
 
   it.each(["ipc", "rest"])("preserves actual post-publication ZIP warnings through %s", async (transport) => {
     const f = await fixture(); const file = path.join(f.out, "warning.zip");
+    // Observe this owned directory before arming the fault; Windows support is
+    // a capability, not permission to accept arbitrary additional warnings.
+    const directoryWarnings = f.zip.syncArchiveDirectory(f.out) ? [] : [WINDOWS_DIRECTORY_WARNING];
+    const faultHits = proof.realPostPublishWarnings;
     f.faults.warnAfterPublication = true; f.faults.published = false;
     const result = transport === "ipc" ? await f.api.profile.exportArchive(A, file)
       : (await f.request("POST", `/api/profiles/${A}/export`, { destPath: file })).body;
     expect(result.success).toBe(true);
     expect(f.trace.services).toHaveLength(1);
     const actualWarnings = f.trace.services[0].result.warnings;
-    expect(actualWarnings).toHaveLength(1);
-    expect(actualWarnings[0]).toMatch(/published.*durability.*EIO/i);
+    expect(actualWarnings).toEqual([...directoryWarnings, expect.stringMatching(/published.*durability.*EIO/i)]);
+    expect(proof.realPostPublishWarnings - faultHits).toBe(1);
     expect(f.readEntry(file, "sentinel.txt").toString()).toContain(A);
     expect(result.warnings, "caller stripped the real committed-warning receipt").toEqual(actualWarnings);
   });
@@ -727,11 +732,17 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
   });
 
   it("shows a committed single-export warning rather than a pure green success", async () => {
-    const f = await fixture(); f.faults.warnAfterPublication = true; f.faults.published = false;
+    const f = await fixture();
+    const directoryWarnings = f.zip.syncArchiveDirectory(f.out) ? [] : [WINDOWS_DIRECTORY_WARNING];
+    const faultHits = proof.realPostPublishWarnings;
+    f.faults.warnAfterPublication = true; f.faults.published = false;
     const result = await f.agent.exportProfileArchive(A);
     await f.settle();
     expect(result).toMatchObject({ success: true, outcome: "completed" });
-    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings).toEqual([...directoryWarnings, expect.stringMatching(/published.*durability.*EIO/i)]);
+    expect(proof.realPostPublishWarnings - faultHits).toBe(1);
+    expect(f.trace.services).toHaveLength(1);
+    expect(result.warnings).toEqual(f.trace.services[0].result.warnings);
     expect(f.readEntry(result.filePath, "sentinel.txt").toString()).toContain(A);
     expect(f.toasts).toEqual([expect.objectContaining({ level: "warning", text: expect.stringContaining("EIO") })]);
   });
