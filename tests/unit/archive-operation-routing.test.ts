@@ -698,6 +698,7 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
 
   it("dedupes the returned UI promise and completion toast while retaining exactly one slow notice", async () => {
     const f = await fixture(); f.native.saveDeferred = deferred<any>();
+    const directoryWarnings = f.zip.syncArchiveDirectory(f.out) ? [] : [WINDOWS_DIRECTORY_WARNING];
     const first = f.agent.exportProfileArchive(A);
     const second = f.agent.exportProfileArchive(A);
     expect(first).toBeTypeOf("object"); expect(first.then).toBeTypeOf("function");
@@ -713,10 +714,21 @@ describe("archive caller-seam regressions (original behavioral REDs)", () => {
     expect(f.agent.ipc.isBusy(f.trace.rendererKeys[0])).toBe(true);
     f.native.saveDeferred.resolve({ canceled: false, filePath: f.native.savePath });
     await f.settle();
-    expect(await first).toMatchObject({ success: true });
-    expect(f.toasts.filter((toast) => toast.level === "success")).toHaveLength(1);
-    expect(f.toasts.filter((toast) => toast.level === "error")).toHaveLength(0);
+    const result = await first;
+    expect(result).toMatchObject({ success: true, outcome: "completed" });
+    expect(result.warnings).toEqual(directoryWarnings.length ? directoryWarnings : undefined);
+    expect(f.trace.services).toHaveLength(1);
+    expect(result.warnings).toEqual(f.trace.services[0].result.warnings);
+    const completion = "Exported backup: " + result.filePath + (directoryWarnings.length
+      ? `. ${directoryWarnings.length} warning(s): ${directoryWarnings.join("; ")}` : "");
+    expect(f.toasts).toEqual([
+      { level: "warning", text: expect.stringMatching(/Still processing/) },
+      { level: directoryWarnings.length ? "warning" : "success", text: completion },
+    ]);
+    expect(f.readEntry(result.filePath, "sentinel.txt").toString()).toContain(A);
     expect(f.agent.ipc.isBusy(f.trace.rendererKeys[0])).toBe(false);
+    f.clock.advance(30_000); await flush();
+    expect(f.toasts).toHaveLength(2);
   });
 
   it("retains the ordinary non-archive 15-second hard timeout", async () => {
