@@ -2,13 +2,34 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-const h = vi.hoisted(() => ({ failRename: false, failFsync: false }));
+const h = vi.hoisted(() => ({ failRename: false, failFsync: false,
+  mkdirFirstSpelling: "native" as "native" | "trailing-separator" | "dot-segment" | "unrelated",
+  firstCreated: "", directorySyncs: [] as string[],
+}));
 vi.mock("node:fs", async original => {
   const actual = await original<typeof import("node:fs")>();
   return { ...actual,
+    mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
+      const first = actual.mkdirSync(...args);
+      if (!first || h.mkdirFirstSpelling === "native") return first;
+      h.firstCreated = first;
+      if (h.mkdirFirstSpelling === "trailing-separator") return first + path.sep;
+      if (h.mkdirFirstSpelling === "dot-segment") return first + path.sep + ".";
+      return path.join(first, "unrelated");
+    },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { if (h.failRename) throw Object.assign(new Error("synthetic EIO"), { code: "EIO" }); return actual.renameSync(...args); },
     fsyncSync: (...args: Parameters<typeof actual.fsyncSync>) => { if (h.failFsync) throw Object.assign(new Error("synthetic EIO"), { code: "EIO", syscall: "fsync" }); return actual.fsyncSync(...args); },
   };
+});
+vi.mock("../../src/main/services/zip-writer.js", async original => {
+  const actual = await original<typeof import("../../src/main/services/zip-writer.js")>();
+  return { ...actual, syncArchiveDirectory: (directory: string) => {
+    h.directorySyncs.push(directory);
+    // Bound a regressed ancestry walk before it can escape this fixture or
+    // block the worker at the filesystem root (test timeouts cannot preempt it).
+    if (h.firstCreated && !actual.isPathInside(directory, path.dirname(h.firstCreated))) throw new Error("Directory sync escaped the created ancestry");
+    return actual.syncArchiveDirectory(directory);
+  } };
 });
 import { applyChromiumWebRtcPreferences, validateChromiumWebRtcPreferences } from "../../src/main/services/browser/webrtc-preferences.js";
 import { resolveChromiumWebRtcRoutingPolicy } from "../../src/main/services/browser/webrtc-policy.js";
@@ -18,6 +39,7 @@ const strict = (fingerprintMode: "managed" | "off" = "managed") => resolveChromi
 const read = () => JSON.parse(fs.readFileSync(file, "utf8"));
 beforeEach(() => {
   h.failRename = false; h.failFsync = false;
+  h.mkdirFirstSpelling = "native"; h.firstCreated = ""; h.directorySyncs = [];
   for (const name of fs.readdirSync(root)) fs.rmSync(path.join(root, name), { recursive: true, force: true });
   fs.mkdirSync(path.join(profile, "Default"), { recursive: true });
 });
@@ -51,6 +73,18 @@ describe("Chrome-consumed WebRTC profile preferences", () => {
     const fresh = path.join(root, "fresh", "profile");
     applyChromiumWebRtcPreferences(fresh, strict());
     expect(JSON.parse(fs.readFileSync(path.join(fresh, "Default", "Preferences"), "utf8")).webrtc.ip_handling_policy).toBe("disable_non_proxied_udp");
+  });
+  it.each(["trailing-separator", "dot-segment"] as const)("bounds directory syncing when recursive mkdir returns an equivalent %s spelling", spelling => {
+    h.mkdirFirstSpelling = spelling;
+    const freshRoot = path.join(root, "fresh"), fresh = path.join(freshRoot, "profile");
+    expect(applyChromiumWebRtcPreferences(fresh, strict())).toMatchObject({ changed: true, readbackVerified: true });
+    expect(h.directorySyncs).toEqual([freshRoot, root, fresh, path.join(fresh, "Default")]);
+    expect(JSON.parse(fs.readFileSync(path.join(fresh, "Default", "Preferences"), "utf8")).webrtc.ip_handling_policy).toBe("disable_non_proxied_udp");
+  });
+  it("rejects a recursive mkdir result outside the created ancestry before syncing it", () => {
+    h.mkdirFirstSpelling = "unrelated";
+    expect(() => applyChromiumWebRtcPreferences(path.join(root, "fresh", "profile"), strict())).toThrow(/could not be validated/);
+    expect(h.directorySyncs).toEqual([]);
   });
   it.each(["{", "[]", "null", '{"webrtc":false}', '{"webrtc":[]}'])("refuses malformed preferences without discarding other data: %s", bytes => {
     fs.writeFileSync(file, bytes);
