@@ -1,6 +1,8 @@
 // CI-only observations from newly created synthetic files, never app/user data.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import { gunzipSync } from "node:zlib";
 
 if (process.env.GITHUB_ACTIONS !== "true" || !process.env.RUNNER_TEMP || !process.env.TMPDIR) {
   throw new Error("This diagnostic requires the owned CI temporary directory");
@@ -19,6 +21,34 @@ if (process.platform === "win32" && process.env.LOCALAPPDATA) {
 const fields = stat => Object.fromEntries(["dev", "ino", "size", "mode", "nlink", "uid", "gid", "mtimeMs", "ctimeMs", "birthtimeMs"].map(key => [key, stat[key]]));
 const identity = stat => Object.fromEntries(["dev", "ino", "mtimeNs", "ctimeNs"].map(key => [key, String(stat[key])]));
 const incompatible = [];
+function inspectTarClient(root) {
+  const source = path.join(root, "tar-source"), output = path.join(root, "tar-output");
+  fs.mkdirSync(source, { mode: 0o700 }); fs.mkdirSync(output, { mode: 0o700 });
+  const payload = Buffer.from("owned native tar fixture\n");
+  fs.writeFileSync(path.join(source, "owned.txt"), payload, { flag: "wx", mode: 0o600 });
+  const options = { cwd: output, timeout: 5000, maxBuffer: 16 * 1024, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
+  const version = spawnSync("tar", ["--version"], options);
+  const variants = [true, false].map((noXattrs) => {
+    const archive = noXattrs ? "with-no-xattrs.tgz" : "without-no-xattrs.tgz";
+    // A relative archive argument cannot be parsed as a remote host/drive.
+    // Only the invented source directory is read; no app files or links exist.
+    const result = spawnSync("tar", [...(noXattrs ? ["--no-xattrs"] : []), "--format", "ustar", "-czf", archive, "-C", source, "--exclude", "LOCK", "."], options);
+    let payloadReadbackFound = false, verificationError = null;
+    if (result.status === 0) {
+      try {
+        const file = path.join(output, archive), stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 64 * 1024) throw new Error("Invalid owned tar output");
+        const bytes = gunzipSync(fs.readFileSync(file), { maxOutputLength: 64 * 1024 });
+        payloadReadbackFound = bytes.includes(payload) && bytes.includes(Buffer.from("owned.txt"));
+      } catch (error) { verificationError = error.code || "INVALID_OUTPUT"; }
+    }
+    return { noXattrs, archiveArgument: "relative", status: result.status, signal: result.signal,
+      errorCode: result.error?.code || null, optionRejected: /unknown option|unrecognized option|unsupported option|option.*not supported/i.test(result.stderr || ""), payloadReadbackFound, verificationError };
+  });
+  console.log("::notice title=Owned tar client::" + JSON.stringify({ probe: "owned-tar-client", node: process.version,
+    versionStatus: version.status, versionErrorCode: version.error?.code || null,
+    version: (version.stdout || "").split(/\r?\n/)[0].slice(0, 160), variants }));
+}
 for (const { label, directory } of roots) {
   const root = fs.mkdtempSync(path.join(directory, "metadata-probe-"));
   const owner = fs.lstatSync(root), file = path.join(root, "owned.bin");
@@ -52,6 +82,7 @@ for (const { label, directory } of roots) {
     console.log("::notice title=Owned filesystem metadata::" + JSON.stringify(facts));
     if (["dev", "ino", "size"].some(key => before[key] !== opened[key] || before[key] !== after[key] || before[key] !== facts.pathAfter[key]) ||
         beforeBig.dev !== openedBig.dev || beforeBig.ino !== openedBig.ino) incompatible.push(label);
+    if (label === "runner-temp") inspectTarClient(root);
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
     const current = fs.lstatSync(root);

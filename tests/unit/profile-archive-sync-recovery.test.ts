@@ -102,20 +102,26 @@ function assertOwner(): void {
   const stat = fs.lstatSync(h.root);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== h.ownerDev || stat.ino !== h.ownerIno) throw new Error("Unowned archive/sync fixture");
 }
+function printOwnedObservation(value: Record<string, unknown>): void {
+  const text = JSON.stringify(value);
+  if (process.env.GITHUB_ACTIONS === "true") {
+    process.stdout.write("::notice title=Owned recovery filesystem::" + text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A") + "\n");
+  } else console.info("[archive-sync-recovery-owned]", text);
+}
 function printOwnedIo(phase: string, directoryConfirmed: boolean | null, events: OwnedIoEvent[]): void {
   const failures = events.filter((event) => !event.ok);
-  console.info("[archive-sync-recovery-owned]", JSON.stringify({ phase, directoryConfirmed,
+  printOwnedObservation({ phase, directoryConfirmed,
     opens: events.filter((event) => event.op === "open" && event.ok).length,
     closes: events.filter((event) => event.op === "close" && event.ok).length,
     descriptors: h.descriptors.size, failures: failures.length,
     fileFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === false).length,
     directoryFlushFailures: failures.filter((event) => event.op === "fsync" && event.directory === true).length,
     liveSqliteMoves: events.filter((event) => ["rename", "link"].includes(event.op) && (event.role === "live-sqlite" || event.targetRole === "live-sqlite")).length,
-  }));
-  for (const [index, event] of failures.entries()) console.info("[archive-sync-recovery-owned]", JSON.stringify({
+  });
+  for (const [index, event] of failures.entries()) printOwnedObservation({
     phase, failure: index + 1, op: event.op, role: event.role, directory: event.directory,
     flags: event.flags, code: event.code, syscall: event.syscall,
-  }));
+  });
 }
 function sqliteBytes(value: string): { main: Buffer; wal: Buffer } {
   const dir = fs.mkdtempSync(path.join(h.root, "sqlite-generator-")), file = path.join(dir, "LocalStorage");
@@ -353,9 +359,9 @@ describe("profile archive sync recovery boundary", { timeout: 30_000 }, () => {
     const pulled = await syncService.pull(undefined, { strategy: "remote" });
     const pullIo = h.events.slice(pullStart);
     printOwnedIo("replacement-pull", directoryConfirmed, pullIo);
-    console.info("[archive-sync-recovery-owned]", JSON.stringify({ phase: "replacement-result", directoryConfirmed,
+    printOwnedObservation({ phase: "replacement-result", directoryConfirmed,
       success: pulled.success, outcome: pulled.outcome, code: pulled.code ?? null,
-      localCommit: pulled.localCommit, remoteCommit: pulled.remoteCommit, ...diagnostics }));
+      localCommit: pulled.localCommit, remoteCommit: pulled.remoteCommit, ...diagnostics });
     if (!directoryConfirmed) {
       expect(pulled).toMatchObject({ success: false, outcome: "recovery-required", code: "LOCAL_STORAGE_RECOVERY_REQUIRED", localCommit: "partial", remoteCommit: "none" });
       expect(pulled.message).toBe("SQLite localStorage publication/compensation is incomplete; old/new material retained for recovery");
