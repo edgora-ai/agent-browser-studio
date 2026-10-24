@@ -772,11 +772,13 @@ async function pushFullProfileSnapshot(sync: SyncConfig, force: boolean, signal?
       preferences[id] = profilePreferencesSnapshot(capturePreferences(id));
       const meta = snapshot.browserProfiles[id], proxyName = fullProfileProxyName(meta, initial.defaultProxy);
       const proxy = proxyName ? initial.proxies[proxyName] : undefined;
+      // Usernames are literal config strings, including v2:/os1: prefixes.
+      // Only the proxy password is a stored vault value.
       const item = await captureFullProfileTransfer({ profileDir: resolveProfileDir(id), stagingDir: root, dirId: id,
         engine: historyEngine(meta), snapshotId: operation.operationId, sourcePlatform: process.platform,
         browserVersion: typeof meta.browserVersion === "string" ? meta.browserVersion : undefined,
         passphrase, guard, signal, environment: { profileHash: profileContentHash(meta, profilePreferencesSnapshot(null)),
-          ...(proxy && proxyName ? { proxy: { name: proxyName, publicHash: fullProfileProxyHash(proxy), username: decryptSecretOr(proxy.username || "", ""), password: decryptSecretOr(proxy.password || "", "") } } : {}) } });
+          ...(proxy && proxyName ? { proxy: { name: proxyName, publicHash: fullProfileProxyHash(proxy), username: proxy.username || "", password: decryptSecretOr(proxy.password || "", "") } } : {}) } });
       guard(); total += item.body.length;
       if (total > 1024 * 1024 * 1024) throw fullProfileError("FULL_PROFILE_SIZE_LIMIT", "Complete snapshot exceeds its aggregate byte limit; no partial browser snapshot was published");
       captured.push({ id, body: item.body, descriptor: item.descriptor });
@@ -907,7 +909,8 @@ async function pullFullProfileSnapshot(sync: SyncConfig, signal?: AbortSignal, o
         const remoteProxy = remote.proxies[proxy.name];
         if (fullProfileProxyName(remote.browserProfiles[id], remote.defaultProxy) !== proxy.name || !Object.hasOwn(remote.proxies, proxy.name) || !remoteProxy || fullProfileProxyHash(remoteProxy) !== proxy.publicHash) throw fullProfileError("FULL_PROFILE_PROXY_MISMATCH", "Linked proxy settings do not match their encrypted credentials");
         const { encryptLiteralSecret } = await import("./secrets.js");
-        remote.proxies[proxy.name] = { ...remoteProxy, username: encryptLiteralSecret(proxy.username), password: encryptLiteralSecret(proxy.password) };
+        // Match normal proxy storage: literal username, receiver-vault password.
+        remote.proxies[proxy.name] = { ...remoteProxy, username: proxy.username, password: encryptLiteralSecret(proxy.password) };
         credentialProxyNames.add(proxy.name);
       }
       prepared.push({ id, value });

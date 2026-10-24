@@ -8,6 +8,7 @@ import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { createHash, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { writeNativeProxyAuthFile } from "../../src/main/services/native-proxy-auth.js";
 
 const h = vi.hoisted(() => {
   const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
@@ -42,6 +43,13 @@ const ID = "ab_complete_profile", CONFIG_KEY = "agent-browser-studio-config.json
 const PLATFORM = process.platform === "darwin" ? "darwin" : "linux";
 const PASSWORD = Buffer.from("owned-complete-native-login-λ"), OLD_PASSWORD = Buffer.from("owned-old-receiver-password"), COOKIE = Buffer.from("owned-complete-native-cookie"), HOST = ".complete.synthetic.invalid";
 const PROXY_SECRET = "owned-complete-proxy-password", PROXY_USER = "owned-complete-proxy-user", HISTORY_URL = "https://complete.synthetic.invalid/wal-history";
+const proxyUsernames = [
+  { label: "ordinary", username: PROXY_USER, localUsername: "owned-local-proxy-user" },
+  { label: "Unicode", username: "owned-代理-δοκιμή-λ", localUsername: "owned-本地-代理-λ" },
+  { label: "colon", username: "owned:user:session", localUsername: "owned:local:user:session" },
+  { label: "v2 literal", username: "v2:owned-literal-proxy-user", localUsername: "v2:owned-local-proxy-user" },
+  { label: "os1 literal", username: "os1:owned-literal-proxy-user", localUsername: "os1:owned-local-proxy-user" },
+];
 const QUEUED_COOKIE_VALUE = "owned-external-queued-cookie-would-override-remote";
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 type Hook = null | ((key: string, body?: Buffer) => Buffer | number | void);
@@ -83,7 +91,9 @@ async function resetDevice(name: string, options: { selected?: boolean; phrase?:
   // Explicit per-instance plan: no process env/global backend override, no OS
   // adapter, no legacy keychain lookup. The real file backend creates its key.
   const plan = secrets.planSecretStorage({ userDataDir: h.device, platform: "darwin", trustedMacSignature: false, environment: {} }); secrets.initializeSecretStorage(plan);
-  expect(secrets.getSecretStorageBackend()).toBe("file"); expect(fs.statSync(plan.keyPath).mode & 0o777).toBe(0o600); config.reloadConfig();
+  expect(secrets.getSecretStorageBackend()).toBe("file");
+  if (process.platform !== "win32") expect(fs.statSync(plan.keyPath).mode & 0o777).toBe(0o600);
+  config.reloadConfig();
   const cfg = structuredClone(config.getConfig()); cfg.deviceId = name; cfg.browserProfiles = {}; cfg.proxies = {}; cfg.accounts = []; cfg.extensionRepository = {}; cfg.team = undefined;
   cfg.sync = { enabled: true, endpoint: fixture.endpoint, bucket: BUCKET, accessKey: "owned-s3-access", secretKey: secrets.encryptSecret("owned-s3-secret") }; config.saveConfig(cfg);
   config.setSyncConfig({ custodyConsent: true, fullProfileConsent: true, fullProfilePassphrase: options.phrase ?? phrase, includeFullProfile: options.selected !== false });
@@ -93,9 +103,15 @@ function profileRoot(): string { return path.join(config.getProfilesDir(), ID); 
 function put(root: string, relative: string, body: Buffer): void { const file = path.join(root, relative); fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, body, { mode: 0o600 }); }
 function context(relativePath = "Default/Login Data", cookies = false): CredentialCryptoContext { return { identity: identityForManagedProfile("chromium", PLATFORM, ID), relativePath, table: cookies ? "cookies" : "logins", column: cookies ? "encrypted_value" : "password_value", rowId: "1", databaseVersion: cookies ? 24 : 43, ...(cookies ? { cookieHost: HOST } : {}) }; }
 const persistent = ["Default/IndexedDB/https_complete.synthetic.invalid_0.indexeddb.leveldb/000003.log", "Default/Service Worker/CacheStorage/owned/body", "Default/Service Worker/ScriptCache/script", "Default/Session Storage/000003.log", "Default/Sessions/Session_123", "Default/Local Storage/leveldb/000003.log", "Default/blob_storage/owned/blob"];
-async function seedProfile(old = false): Promise<void> {
-  const cfg = structuredClone(config.getConfig()); cfg.browserProfiles[ID] = { name: old ? "Old receiver" : "Owned complete source", engine: "chromium", fingerprintSeed: old ? 9 : 42, updatedAt: old ? 1 : 100, proxyMode: "named", proxyName: PROXY };
-  cfg.proxies[PROXY] = { type: "http", host: "proxy.complete.synthetic.invalid", port: 8080, username: secrets.encryptSecret(old ? "old-proxy-user" : PROXY_USER), password: secrets.encryptSecret(old ? "old-proxy-secret" : PROXY_SECRET) }; config.saveConfig(cfg);
+async function seedProfile(old = false, proxyUsername = old ? "old-proxy-user" : PROXY_USER): Promise<void> {
+  const cfg = structuredClone(config.getConfig()); cfg.browserProfiles[ID] = { name: old ? "Old receiver" : "Owned complete source", engine: "chromium", fingerprintSeed: old ? 9 : 42, updatedAt: old ? 1 : 100, proxyMode: "named", proxyName: PROXY }; config.saveConfig(cfg);
+  // Use the ordinary proxy entry point: usernames are literal, and production
+  // normalization encrypts the supplied password under this owned device key.
+  const proxy = { type: "http" as const, host: "proxy.complete.synthetic.invalid", port: 8080, username: proxyUsername, password: old ? "old-proxy-secret" : PROXY_SECRET };
+  if (config.getProxy(PROXY)) config.updateProxy(PROXY, proxy); else config.addProxy(PROXY, proxy);
+  expect(config.getProxySecret(PROXY)?.username === proxyUsername).toBe(true);
+  const storedProxy = JSON.parse(fs.readFileSync(config.getConfigPath(), "utf8")).proxies[PROXY];
+  expect(storedProxy.username === proxyUsername && secrets.isEncrypted(storedProxy.password)).toBe(true);
   const root = profileRoot(); fs.mkdirSync(path.join(root, "Default/Network"), { recursive: true, mode: 0o700 });
   const adapter = createBasicChromiumAdapter(identityForManagedProfile("chromium", PLATFORM, ID));
   try {
@@ -124,8 +140,8 @@ function safeFailure(result: { code?: string; message?: string }): string {
   for (const secret of [phrase, PROXY_SECRET, PROXY_USER, PASSWORD.toString(), OLD_PASSWORD.toString(), COOKIE.toString(), QUEUED_COOKIE_VALUE, h.root]) if (secret) text = text.replaceAll(secret, "[redacted]");
   return String(result.code ?? "UNCONFIRMED") + ": " + text.replace(/[A-Za-z0-9+/=_-]{32,}/g, "[opaque]").slice(0, 400);
 }
-async function publish(): Promise<any> {
-  await seedProfile(); const result = await service.syncService.push(undefined, true); expect(result.success, safeFailure(result)).toBe(true);
+async function publish(proxyUsername = PROXY_USER): Promise<any> {
+  await seedProfile(false, proxyUsername); const result = await service.syncService.push(undefined, true); expect(result.success, safeFailure(result)).toBe(true);
   const document = payload(); expect(document.artifactVersion).toBe(4); const artifact = fullArtifact(document); expect(artifact.dirId).toBe(ID); expect(artifact.engine).toBe("chromium"); expect(artifact.snapshotId).toBe(document.snapshotId); return document;
 }
 async function assertNative(root = profileRoot()): Promise<void> {
@@ -138,6 +154,38 @@ async function assertNative(root = profileRoot()): Promise<void> {
     const history = new DatabaseSync(path.join(root, "Default/History"), { readOnly: true }); try { expect(Boolean(history.prepare("SELECT u.url FROM urls u JOIN visits v ON v.url=u.id WHERE u.url=?").get(HISTORY_URL))).toBe(true); } finally { history.close(); }
     const local = new DatabaseSync(path.join(root, "Default/LocalStorage"), { readOnly: true }); try { const row = local.prepare("SELECT value FROM ItemTable WHERE key=?").get("owned-complete-key"); expect(Boolean(row)).toBe(true); expect(Buffer.from(row!.value as Uint8Array).toString("utf16le") === "owned-complete-local-value").toBe(true); } finally { local.close(); }
   } finally { adapter.dispose?.(); }
+}
+/** Read the actual config file, reload through production normalization, look up
+ * the linked proxy by both name and profile, then read the real auth handoff.
+ * This stops at the owned credential file: no browser or proxy is contacted. */
+async function assertProxyHandoff(username: string, password: string): Promise<string> {
+  const bytes = fs.readFileSync(config.getConfigPath()), disk = JSON.parse(bytes.toString("utf8"));
+  config.reloadConfig();
+  const named = config.getProxySecret(PROXY), resolved = config.resolveProfileProxySecret(ID);
+  expect(Boolean(named)).toBe(true); expect(resolved.mode).toBe("named"); expect(resolved.name).toBe(PROXY); expect(Boolean(resolved.config)).toBe(true);
+  const proxy = resolved.config!;
+  const auth = writeNativeProxyAuthFile({ host: proxy.host, port: proxy.port, username: proxy.username || "", password: proxy.password || "" }, h.caseRoot);
+  try {
+    const file = fs.lstatSync(auth.filePath), handedOff = JSON.parse(fs.readFileSync(auth.filePath, "utf8"));
+    expect(file.isFile() && !file.isSymbolicLink() && file.nlink === 1).toBe(true);
+    expect(path.relative(h.caseRoot, auth.filePath).startsWith("..")).toBe(false);
+    if (process.platform !== "win32") {
+      expect(file.mode & 0o777).toBe(0o600); expect(fs.statSync(path.dirname(auth.filePath)).mode & 0o777).toBe(0o700);
+    }
+    // Check the real downstream output first, not a manually decrypted username.
+    expect(handedOff.username === username, "native proxy-auth handoff must preserve the literal username").toBe(true);
+    expect(handedOff.password === password).toBe(true); expect(handedOff.host === proxy.host && handedOff.port === proxy.port).toBe(true);
+  } finally { auth.cleanup(); }
+  expect(fs.existsSync(auth.filePath)).toBe(false);
+  expect(disk.proxies[PROXY].username === username).toBe(true);
+  expect(typeof disk.proxies[PROXY].password === "string" && secrets.isEncrypted(disk.proxies[PROXY].password)).toBe(true);
+  expect(bytes.includes(Buffer.from(password))).toBe(false);
+  expect(secrets.decryptSecretOr(disk.proxies[PROXY].password) === password).toBe(true);
+  expect(config.getConfig().proxies[PROXY].password === disk.proxies[PROXY].password).toBe(true);
+  expect(named!.username === username && named!.password === password).toBe(true);
+  expect(config.getProxy(PROXY)?.username === username).toBe(true);
+  expect(config.getProxyList().some(entry => entry.name === PROXY && entry.config.username === username)).toBe(true);
+  return disk.proxies[PROXY].password;
 }
 function oldReceiver() { return { profile: inventory(profileRoot()), configHash: sha(fs.readFileSync(config.getConfigPath())), remote: sha(fixture.objects.get(CONFIG_KEY)!) }; }
 function assertOld(before: ReturnType<typeof oldReceiver>, compareConfig = true): void { sameTree(profileRoot(), before.profile); if (compareConfig) expect(sha(fs.readFileSync(config.getConfigPath())) === before.configHash).toBe(true); expect(sha(fixture.objects.get(CONFIG_KEY)!) === before.remote).toBe(true); }
@@ -194,6 +242,44 @@ afterEach(async () => {
 afterAll(() => { assertRoot(); fs.rmSync(h.root, { recursive: true }); });
 
 describe.skipIf(!["darwin", "linux"].includes(process.platform))("complete profile production transport with independent device vaults", () => {
+  describe("linked proxy credential contract", () => {
+    const cases = proxyUsernames.flatMap(entry => (["new-proxy", "remote-wins", "local-wins"] as const).map(decision => ({ ...entry, decision })));
+    it.each(cases)("$decision preserves the $label username through persisted restore and native auth", async ({ username, localUsername, decision }) => {
+      const sourceKey = fs.readFileSync(path.join(h.device, ".secret-vault-key"));
+      try {
+        await publish(username);
+        const sourceCipher = JSON.parse(fs.readFileSync(config.getConfigPath(), "utf8")).proxies[PROXY].password;
+        await resetDevice("proxy-contract-receiver");
+        const receiverKey = fs.readFileSync(path.join(h.device, ".secret-vault-key"));
+        try { expect(sourceKey.equals(receiverKey)).toBe(false); } finally { receiverKey.fill(0); }
+        let previousCipher: string | undefined;
+        if (decision !== "new-proxy") {
+          await seedProfile(true, localUsername);
+          previousCipher = JSON.parse(fs.readFileSync(config.getConfigPath(), "utf8")).proxies[PROXY].password;
+        } else expect(config.getProxy(PROXY)).toBeNull();
+        let sourceCipherRefused = false;
+        try { secrets.decryptSecretOr(sourceCipher); } catch { sourceCipherRefused = true; }
+        expect(sourceCipherRefused).toBe(true);
+        // Restore the remote profile in every case, but respect a per-proxy
+        // local decision rather than silently replacing its existing identity.
+        const resolutions = decision === "local-wins" ? { ["proxies:" + PROXY]: "local" as const } : undefined;
+        const result = await service.syncService.pull(undefined, { strategy: "remote", resolutions });
+        expect(result.success, safeFailure(result)).toBe(true);
+        const keptLocal = decision === "local-wins";
+        const stored = await assertProxyHandoff(keptLocal ? localUsername : username, keptLocal ? "old-proxy-secret" : PROXY_SECRET);
+        if (keptLocal) expect(stored === previousCipher).toBe(true);
+        else expect(stored === sourceCipher).toBe(false);
+        await assertNative(); assertFreshAcquireReady();
+      } finally { sourceKey.fill(0); }
+    });
+    it("does not decrypt a valid vault-shaped literal username as guessed legacy storage", async () => {
+      const username = secrets.encryptLiteralSecret("owned-value-that-is-not-the-proxy-username");
+      await publish(username); await resetDevice("vault-shaped-username-receiver");
+      const result = await service.syncService.pull(undefined, { strategy: "remote" });
+      expect(result.success, safeFailure(result)).toBe(true);
+      await assertProxyHandoff(username, PROXY_SECRET);
+    });
+  });
   it("pushes encrypted v4 artifacts through independent PUT+GET and restores passwords/Cookies/IDB/SW/sessions/history plus old receiver backup", async () => {
     const sourceDevice = h.device, sourceKey = fs.readFileSync(path.join(sourceDevice, ".secret-vault-key"));
     try {
@@ -218,7 +304,7 @@ describe.skipIf(!["darwin", "linux"].includes(process.platform))("complete profi
       await assertNative(); for (const relative of persistent) expect(fs.readFileSync(path.join(profileRoot(), relative)).equals(Buffer.from("source-record:" + relative))).toBe(true);
       expect(fs.existsSync(path.join(profileRoot(), "receiver-only.bin"))).toBe(false); expect(Boolean(backupFor(old))).toBe(true); sameTree(backupFor(old)!, old);
       expect([...inventory(profileRoot()).keys()].some(name => /environment\.bin|\.credentials-|\.credential-publish-|\.full-profile-manifest/.test(name))).toBe(false);
-      expect(secrets.decryptSecretOr(config.getConfig().proxies[PROXY].password ?? "") === PROXY_SECRET).toBe(true); expect(secrets.decryptSecretOr(config.getConfig().proxies[PROXY].username ?? "") === PROXY_USER).toBe(true);
+      expect(secrets.decryptSecretOr(config.getConfig().proxies[PROXY].password ?? "") === PROXY_SECRET).toBe(true); expect(config.getConfig().proxies[PROXY].username === PROXY_USER).toBe(true);
       expect(secrets.decryptSecretOr(config.getConfig().sync.fullProfilePassphrase ?? "") === phrase).toBe(true); expect(fs.readFileSync(config.getConfigPath()).includes(Buffer.from(PROXY_SECRET))).toBe(false); expect(fs.readFileSync(config.getConfigPath()).includes(Buffer.from(phrase))).toBe(false);
       sameTree(originalSourceRoot, sourceTree); config.reloadConfig(); await assertNative(); expect(sha(fixture.objects.get(CONFIG_KEY)!) === sha(Buffer.from(JSON.stringify(document)))).toBe(true);
       expect(markerBeforeMove).toBe(1); expect(markerAtConfigCommit).toBe(1); assertFreshAcquireReady();
@@ -403,5 +489,15 @@ describe.skipIf(!["darwin", "linux"].includes(process.platform))("complete profi
     const document = await publish(); document.artifactVersion = 3; delete document.fullProfiles; fixture.objects.set(CONFIG_KEY, Buffer.from(JSON.stringify(document)));
     await resetDevice("legacy-v3-receiver"); await seedProfile(true); const before = oldReceiver(), result = await service.syncService.pull(undefined, { strategy: "remote" });
     expect(result.success).toBe(false); expect(result.code).toBe("FULL_PROFILE_SNAPSHOT_REQUIRED"); assertOld(before);
+  });
+});
+
+// Portable local configuration boundary only. This does not turn an unsupported
+// Windows full-profile backend/directory durability result into a restore pass.
+describe("local proxy configuration contract without native browser restoration", () => {
+  it.each(proxyUsernames)("stores, reloads and hands off the $label username literally", async ({ username }) => {
+    config.addProxy(PROXY, { type: "http", host: "proxy.complete.synthetic.invalid", port: 8080, username, password: secrets.encryptLiteralSecret(PROXY_SECRET) });
+    config.setProfileMeta(ID, { name: "Owned local proxy contract", engine: "chromium", proxyMode: "named", proxyName: PROXY });
+    await assertProxyHandoff(username, PROXY_SECRET);
   });
 });
