@@ -223,14 +223,14 @@ describe("Firefox strict queued imports and generation-pinned completion", () =>
   });
 
   it.each(["different-bytes", "same-bytes"] as const)("does not clear a replacement queue with %s after completing an older import", async (kind) => {
-    const { conn } = await owned(); queued(); const originalInode = fs.statSync(file).ino;
+    const { conn } = await owned(); queued(); const originalInode = fs.statSync(file, { bigint: true }).ino;
     let release!: () => void;
     onSet = (socket, request) => { release = () => stored(socket, request); };
     const pending = apply().then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const replacement = kind === "same-bytes" ? [COOKIE] : [SECOND];
     const bytes = queued(replacement);
-    expect(fs.statSync(file).ino).not.toBe(originalInode);
+    expect(fs.statSync(file, { bigint: true }).ino).not.toBe(originalInode);
     release();
     expect((await bounded(pending)).error).toMatchObject({ message: "COOKIE_QUEUE_CHANGED" });
     expect(writes()).toHaveLength(1); expect(jar.has(COOKIE.name)).toBe(true);
