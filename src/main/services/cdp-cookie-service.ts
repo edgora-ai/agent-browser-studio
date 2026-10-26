@@ -8,6 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { getAppDataDir, getProfilesDir } from "./config-manager.js";
 import { findCdpPortSync } from "./process-discovery.js";
 import { validateDirId } from "./utils.js";
+import { normalizeCookiePartitionKey } from "./cookie-partition.js";
 import type { CookieInfo } from "../types.js";
 
 /** Only a validated native response (including []) is authoritative. Reasons
@@ -46,16 +47,17 @@ export const cdpCookieService = {
 
   /** Apply and clear queued cookies for a running profile. */
   async applyQueuedImports(dirId: string, target?: CdpCookieImportTarget): Promise<number> {
-    const pending = readQueuedCookieImports(dirId, target ? { strict: true } : undefined);
+    const snapshot = readQueuedCookieImportSnapshot(dirId);
+    const pending = [...snapshot.cookies];
     if (!pending.length || (target && !target.isCurrent())) return 0;
     const imported = target
       ? await this.importCookies(dirId, pending, undefined, target)
       : await this.importCookies(dirId, pending);
-    // Clear only the same queued data on the same native instance. Partial
-    // application retains the full queue for an explicit follow-up attempt.
-    if (imported === pending.length && (!target || target.isCurrent()) &&
-        JSON.stringify(readQueuedCookieImports(dirId, target ? { strict: true } : undefined)) === JSON.stringify(pending)) {
-      clearQueuedCookieImports(dirId);
+    // Clear only the captured queue generation on the same native instance.
+    // Partial imports and replaced queues retain all pending data; a generation
+    // mismatch does not change the successful native import count.
+    if (imported === pending.length && (!target || target.isCurrent())) {
+      clearQueuedCookieImportsIfUnchanged(dirId, snapshot);
     }
     return imported;
   },
@@ -90,18 +92,23 @@ export const cdpCookieService = {
     assertCdpNotAborted(signal);
     validateDirId(dirId);
     if (target && !target.isCurrent()) return 0;
+    // Preflight the entire batch before opening a connection. Unsupported
+    // partition data must not produce a partly imported/unpartitioned batch.
+    const normalized = normalizeCookieImportBatch(cookies, "COOKIE_IMPORT_INVALID");
     // Fresh launch already owns its exact port; a cached process-table sample
     // must not make a just-started browser appear unavailable to its importer.
     const port = target ? target.port : findCdpPort(dirId);
     if (!Number.isInteger(port) || (port as number) < 1 || (port as number) > 65535) return 0;
-    return cdpSetCookies(port as number, cookies, signal, target?.isCurrent);
+    return cdpSetCookies(port as number, normalized, signal, target?.isCurrent);
   },
 
   /** Set a single cookie via CDP. Only works when Chrome IS running. */
   async setCookie(dirId: string, cookie: CookieInfo): Promise<boolean> {
+    const normalized = normalizeCookieForQueue(cookie);
+    if (!normalized) throw new Error("COOKIE_IMPORT_INVALID");
     const port = findCdpPort(dirId);
     if (!port) return false;
-    return cdpSetCookie(port, cookie);
+    return cdpSetCookie(port, normalized);
   },
 
   /** Delete matching cookies via CDP. Only works when Chrome IS running. */
@@ -240,11 +247,19 @@ async function withCdpClient<T>(port: number, timeoutMs: number, run: (send: (me
   });
 }
 
+function cookiePartitionKey(cookie: { partitionKey?: unknown; partitionKeyOpaque?: unknown }) {
+  if (cookie.partitionKeyOpaque !== undefined && cookie.partitionKeyOpaque !== false) {
+    throw new Error("COOKIE_PARTITION_KEY_INVALID");
+  }
+  return normalizeCookiePartitionKey(cookie.partitionKey);
+}
+
 function cdpCookieToCookieInfo(c: any): CookieInfo {
   let sameSite = -1;
   if (c.sameSite === "Strict") sameSite = 2;
   else if (c.sameSite === "Lax") sameSite = 1;
   else if (c.sameSite === "None") sameSite = 0;
+  const partitionKey = cookiePartitionKey(c);
   return {
     domain: c.domain || "",
     name: c.name || "",
@@ -254,6 +269,7 @@ function cdpCookieToCookieInfo(c: any): CookieInfo {
     secure: !!c.secure,
     httpOnly: !!c.httpOnly,
     sameSite,
+    ...(partitionKey === undefined ? {} : { partitionKey }),
   };
 }
 
@@ -262,6 +278,7 @@ function cookieInfoToCdpParams(c: CookieInfo): Record<string, any> {
   const host = c.domain.startsWith(".") ? c.domain.slice(1) : c.domain;
   const pathPart = c.path || "/";
   const sameSite = c.sameSite === 2 ? "Strict" : c.sameSite === 1 ? "Lax" : c.sameSite === 0 ? "None" : undefined;
+  const partitionKey = cookiePartitionKey(c);
   return {
     url: `${protocol}://${host}${pathPart}`,
     name: c.name,
@@ -272,6 +289,7 @@ function cookieInfoToCdpParams(c: CookieInfo): Record<string, any> {
     httpOnly: c.httpOnly,
     ...(sameSite ? { sameSite } : {}),
     ...(c.expires && c.expires > 0 ? { expires: Math.floor(c.expires) } : {}),
+    ...(partitionKey === undefined ? {} : { partitionKey }),
   };
 }
 
@@ -290,7 +308,8 @@ function parseCdpCookies(result: unknown): CookieInfo[] | null {
         (cookie.session !== undefined && typeof cookie.session !== "boolean") ||
         (cookie.size !== undefined && (typeof cookie.size !== "number" || !Number.isSafeInteger(cookie.size) || cookie.size < 0))) return null;
   }
-  return result.cookies.map(cdpCookieToCookieInfo);
+  try { return result.cookies.map(cdpCookieToCookieInfo); }
+  catch { return null; } // Invalid/opaque partition identity is unavailable, never unpartitioned.
 }
 
 /** Unlike withCdpClient's legacy mutation result, this reads raw response
@@ -554,7 +573,7 @@ export function clearQueuedCookieImportsIfUnchanged(dirId: string, snapshot: Que
 export function writeQueuedCookieImports(dirId: string, cookies: CookieInfo[]): void {
   const filePath = pendingCookiePath(dirId);
   const dir = path.dirname(filePath);
-  const normalized = cookies.map(normalizeCookieForQueue).filter(Boolean) as CookieInfo[];
+  const normalized = normalizeCookieImportBatch(cookies, "COOKIE_QUEUE_INVALID");
   assertQueuePathSafe(filePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const temporary = `${filePath}.${randomUUID()}.tmp`;
@@ -586,23 +605,36 @@ export function clearQueuedCookieImports(dirId: string): void {
   } catch (error) { console.error(`[cdp] failed to clear queued cookies for ${dirId}:`, error); }
 }
 
+function normalizeCookieImportBatch(cookies: CookieInfo[], errorCode: "COOKIE_QUEUE_INVALID" | "COOKIE_IMPORT_INVALID"): CookieInfo[] {
+  if (!Array.isArray(cookies)) throw new Error(errorCode);
+  // Array.from also visits sparse entries. Never filter malformed Cookies out
+  // of a write plan or publish [] in place of a rejected nonempty queue.
+  const normalized = Array.from(cookies, normalizeCookieForQueue);
+  if (normalized.some(cookie => cookie === null)) throw new Error(errorCode);
+  return normalized as CookieInfo[];
+}
+
 export function normalizeCookieForQueue(cookie: any): CookieInfo | null {
-  if (!cookie || typeof cookie !== "object") return null;
+  if (!cookie || typeof cookie !== "object" || Array.isArray(cookie)) return null;
   if (typeof cookie.domain !== "string" || typeof cookie.name !== "string" || typeof cookie.value !== "string") return null;
-  if (cookie.domain.length === 0 || cookie.domain.length > 255 || cookie.name.length === 0 || cookie.name.length > 255 || cookie.value.length > 4096) return null;
+  if (cookie.domain.length === 0 || cookie.domain.length > 255 || cookie.name.length > 255 || cookie.value.length > 4096) return null;
   if (!/^\.?[A-Za-z0-9*_-]+(?:\.[A-Za-z0-9*_-]+)*$/.test(cookie.domain) || /[\x00-\x1f\x7f;=\s]/.test(cookie.name) || /\x00/.test(cookie.value)) return null;
-  const pathValue = typeof cookie.path === "string" && cookie.path.startsWith("/") && cookie.path.length <= 1024 ? cookie.path : "/";
-  const expires = Number.isFinite(cookie.expires) && cookie.expires > 0 ? Math.floor(cookie.expires) : null;
-  const sameSite = cookie.sameSite === 0 || cookie.sameSite === 1 || cookie.sameSite === 2 ? cookie.sameSite : -1;
+  if (cookie.path !== undefined && (typeof cookie.path !== "string" || !cookie.path.startsWith("/") || cookie.path.length > 1024 || /[\x00-\x1f\x7f]/.test(cookie.path))) return null;
+  if (cookie.expires !== undefined && cookie.expires !== null && (typeof cookie.expires !== "number" || !Number.isFinite(cookie.expires))) return null;
+  if (cookie.sameSite !== undefined && ![-1, 0, 1, 2].includes(cookie.sameSite)) return null;
+  if (cookie.secure !== undefined && typeof cookie.secure !== "boolean" || cookie.httpOnly !== undefined && typeof cookie.httpOnly !== "boolean") return null;
+  const partitionKey = cookiePartitionKey(cookie);
+  const expires = typeof cookie.expires === "number" && cookie.expires > 0 ? Math.floor(cookie.expires) : null;
   return {
     domain: cookie.domain,
     name: cookie.name,
     value: cookie.value,
-    path: pathValue,
+    path: cookie.path ?? "/",
     expires,
-    secure: Boolean(cookie.secure),
-    httpOnly: Boolean(cookie.httpOnly),
-    sameSite,
+    secure: cookie.secure ?? false,
+    httpOnly: cookie.httpOnly ?? false,
+    sameSite: cookie.sameSite ?? -1,
+    ...(partitionKey === undefined ? {} : { partitionKey }),
   };
 }
 

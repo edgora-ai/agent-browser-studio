@@ -1,11 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import * as fs from "node:fs";
+import fsMutable from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import { performance } from "node:perf_hooks";
 
 const fixture = vi.hoisted(() => {
   const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
-  return { root: fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-discovery-owned-")) };
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agent-browser-discovery-owned-")));
+  fs.chmodSync(root, 0o700);
+  return { root, owner: fs.lstatSync(root) };
+});
+// Discovery providers below are injected. Any accidental native command or
+// protocol connection must fail, not inspect the host or contact a browser.
+vi.mock("node:child_process", () => {
+  const blocked = () => { throw new Error("Unfenced native command in owned discovery fixture"); };
+  return { exec: blocked, execSync: blocked, execFile: blocked, execFileSync: blocked, spawn: blocked, spawnSync: blocked, fork: blocked };
+});
+vi.mock("ws", () => {
+  const blocked = () => { throw new Error("Unfenced WebSocket in owned discovery fixture"); };
+  return { default: blocked, WebSocket: blocked, WebSocketServer: blocked };
 });
 const TEST_USER_DATA = fixture.root;
 vi.mock("electron", () => ({
@@ -25,11 +41,20 @@ import {
 import { getProfilesDir } from "../../src/main/services/config-manager.js";
 import { statusBrowser } from "../../src/main/services/browser/lifecycle.js";
 import { runningProcesses } from "../../src/main/services/browser/runtime-table.js";
-import { assertProfileTransferStopped } from "../../src/main/services/profile-restore-lock.js";
+import { acquireRestoreLock, assertProfileTransferStopped, isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
+import { cdpCookieService } from "../../src/main/services/cdp-cookie-service.js";
+import { captureFullProfile, prepareFullProfile, type CaptureFullProfileOptions } from "../../src/main/services/sync/full-profile-artifact.js";
 
+function assertFixtureOwner(): void {
+  const current = fs.lstatSync(fixture.root);
+  if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== fixture.owner.dev || current.ino !== fixture.owner.ino ||
+      path.dirname(fixture.root) !== fs.realpathSync(os.tmpdir()) || !path.basename(fixture.root).startsWith("agent-browser-discovery-owned-")) {
+    throw new Error("Owned discovery fixture changed");
+  }
+}
 afterAll(() => {
-  if (path.dirname(fixture.root) !== os.tmpdir() || !path.basename(fixture.root).startsWith("agent-browser-discovery-owned-")) throw new Error("Unsafe discovery fixture cleanup");
-  fs.rmSync(fixture.root, { recursive: true, force: true });
+  assertFixtureOwner();
+  fs.rmSync(fixture.root, { recursive: true });
 });
 
 describe("process-discovery", () => {
@@ -37,6 +62,7 @@ describe("process-discovery", () => {
   const expectedResolved = path.resolve(expectedDir);
 
   beforeEach(() => {
+    assertFixtureOwner();
     runningProcesses.clear();
     for (const name of fs.readdirSync(fixture.root)) fs.rmSync(path.join(fixture.root, name), { recursive: true, force: true });
     vi.spyOn(process, "kill").mockReturnValue(true);
@@ -47,6 +73,8 @@ describe("process-discovery", () => {
     __resetProcessDiscoveryExecForTest();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    assertFixtureOwner();
   });
 
   it("parses chromium ps lines with --user-data-dir and --remote-debugging-port", () => {
@@ -241,5 +269,116 @@ describe("process-discovery", () => {
     vi.stubGlobal("process", { ...process, platform: "win32" } as any);
     expect(findBrowserByProfileSync("ab_test123", expectedDir)).toEqual({ pid: 222, cdpPort: 5556 });
     expect(stub).toHaveBeenCalled();
+  });
+
+  describe("owned-guard-cost: actual cold transfer gate with injected providers", () => {
+    const CHUNK = 64 * 1024, turns = new Set<ReturnType<typeof setImmediate>>();
+    const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+    function nextOwnedTurn(action: () => void): void {
+      const turn = setImmediate(() => { turns.delete(turn); action(); }); turns.add(turn);
+    }
+    function coldProfile(size: number) {
+      const id = "ab_guard_cost_" + size, directory = path.join(getProfilesDir(), id), stage = path.join(fixture.root, "stage-" + size);
+      for (const root of [directory, stage]) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      const bytes = Buffer.alloc(size, 0x61), marker = Buffer.from("owned-guard-cost=searchable-byte-readback");
+      if (size > CHUNK) marker.copy(bytes, 3 * CHUNK);
+      const file = path.join(directory, "state.bin"); fs.writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
+      return { id, directory, stage, bytes, marker, file };
+    }
+    function observeOwnedIO(source: string, onFirstRead: () => void) {
+      const open = fsMutable.openSync, read = fsMutable.readSync, close = fsMutable.closeSync;
+      const fds = new Map<number, number>(), buffers: Buffer[] = [], chunks: Array<{ position: number; bytes: number }> = [];
+      let serial = 0, selected: number | undefined, opened = 0, closed = 0;
+      const openSpy = vi.spyOn(fsMutable, "openSync").mockImplementation(((...args: Parameters<typeof open>) => {
+        if (typeof args[0] !== "string" || !path.resolve(args[0]).startsWith(fixture.root + path.sep)) throw new Error("Foreign open refused in owned guard fixture");
+        const fd = open(...args), current = ++serial; fds.set(fd, current); opened++;
+        const readOnly = typeof args[1] === "number" ? (args[1] & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) === 0 : args[1] === "r";
+        if (selected === undefined && args[0] === source && readOnly) selected = current;
+        return fd;
+      }) as typeof open);
+      const readSpy = vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: any[]) => {
+        const count = Reflect.apply(read, fsMutable, args);
+        if (fds.get(args[0]) === selected && selected !== undefined && count > 0) {
+          chunks.push({ position: args[4], bytes: count }); buffers.push(args[1]);
+          if (chunks.length === 1) onFirstRead();
+        }
+        return count;
+      }) as typeof read);
+      const closeSpy = vi.spyOn(fsMutable, "closeSync").mockImplementation(fd => { close(fd); if (fds.delete(fd)) closed++; });
+      syncBuiltinESMExports();
+      return { chunks, assertClosed() {
+        expect(opened).toBeGreaterThan(0); expect(closed).toBe(opened); expect(fds.size).toBe(0);
+        for (const buffer of buffers) expect(buffer.every(byte => byte === 0)).toBe(true);
+      }, restore() { openSpy.mockRestore(); readSpy.mockRestore(); closeSpy.mockRestore(); syncBuiltinESMExports(); } };
+    }
+    function stoppedGate(id: string, unavailable: () => boolean = () => false) {
+      const providers: string[] = []; let guards = 0;
+      __setProcessDiscoveryExecForTest({ execFileSync: ((command: string, args: string[]) => {
+        if (!["ps", "wmic", "tasklist", "powershell.exe"].includes(command) || !Array.isArray(args)) throw new Error("Unexpected synthetic provider");
+        providers.push(command);
+        if (unavailable()) throw Object.assign(new Error("Synthetic process table unavailable"), { code: "EACCES" });
+        return command === "wmic" ? "Node,CommandLine,ProcessId\n" : command === "powershell.exe" ? "[]" : "";
+      }) as any });
+      const guard = () => {
+        guards++;
+        // The production runtime branch, not a cheap vi.fn or a cached stopped
+        // conclusion. Its providers are synthetic; this is NOT native ps timing.
+        assertProfileTransferStopped(id, () => statusBrowser(id), () => cdpCookieService.hasRunningChrome(id), { engine: "chromium" });
+      };
+      return { guard, providers, get guards() { return guards; } };
+    }
+    function options(f: ReturnType<typeof coldProfile>, guard: () => void, signal?: AbortSignal): CaptureFullProfileOptions {
+      return { profileDir: f.directory, stagingDir: f.stage, dirId: f.id, engine: "chromium", snapshotId: "owned-guard-cost-snapshot",
+        passphrase: "owned guard cost migration phrase", sourcePlatform: process.platform, guard, signal };
+    }
+    beforeEach(() => vi.stubGlobal("fetch", () => { throw new Error("Unfenced network in owned guard fixture"); }));
+    afterEach(() => { for (const turn of turns) clearImmediate(turn); turns.clear(); });
+
+    it("measures provider repetition for 1B and 262161B without inventing a UI latency budget", async () => {
+      const measurements: Array<{ bytes: number; guards: number; providers: number; commands: Record<string, number>; firstScanChunks: number; firstTurnChunks: number; heartbeatTicks: number; maxHeartbeatGapMs: number; elapsedMs: number }> = [];
+      for (const size of [1, 4 * CHUNK + 17]) {
+        const f = coldProfile(size), gate = stoppedGate(f.id); let firstTurnChunks = 0;
+        const io = observeOwnedIO(f.file, () => nextOwnedTurn(() => { firstTurnChunks = io.chunks.length; }));
+        const release = acquireRestoreLock(f.id), started = performance.now();
+        let lastBeat = started, maxGap = 0, heartbeatTicks = 0, timer: ReturnType<typeof setTimeout>;
+        const beat = () => { const now = performance.now(); maxGap = Math.max(maxGap, now - lastBeat); lastBeat = now; heartbeatTicks++; timer = setTimeout(beat, 0); };
+        timer = setTimeout(beat, 0);
+        try {
+          const bundle = await captureFullProfile(options(f, gate.guard)), ended = performance.now();
+          clearTimeout(timer); maxGap = Math.max(maxGap, ended - lastBeat);
+          const providers = gate.providers.length, guards = gate.guards;
+          expect(providers).toBe(guards * (process.platform === "win32" ? 4 : 2));
+          expect(firstTurnChunks).toBe(1); expect(io.chunks).toHaveLength(Math.ceil(size / CHUNK));
+          measurements.push({ bytes: size, guards, providers, commands: gate.providers.reduce<Record<string, number>>((counts, command) => { counts[command] = (counts[command] || 0) + 1; return counts; }, {}),
+            firstScanChunks: io.chunks.length, firstTurnChunks, heartbeatTicks, maxHeartbeatGapMs: Number(maxGap.toFixed(3)), elapsedMs: Number((ended - started).toFixed(3)) });
+          expect(bundle.descriptor.sha256).toBe(sha(bundle.body)); expect(bundle.descriptor.size).toBe(bundle.body.length);
+          const prepared = await prepareFullProfile({ ...options(f, gate.guard), ...bundle });
+          const member = prepared.manifest.files.find(item => item.path === "state.bin");
+          expect(member).toMatchObject({ size, sha256: sha(f.bytes) });
+          const readback = fs.readFileSync(path.join(prepared.directory, "state.bin"));
+          expect(readback).toEqual(f.bytes); if (size > CHUNK) expect(readback.includes(f.marker)).toBe(true);
+          expect(fs.readFileSync(f.file)).toEqual(f.bytes); expect(runningProcesses.size).toBe(0); expect(isRestoreLocked(f.id)).toBe(true);
+        } finally { clearTimeout(timer); try { release(); io.assertClosed(); } finally { io.restore(); } }
+        expect(isRestoreLocked(f.id)).toBe(false);
+      }
+      expect(measurements[1].guards).toBeGreaterThan(measurements[0].guards);
+      expect(measurements[1].providers).toBeGreaterThan(measurements[0].providers);
+      console.info("owned-guard-cost " + JSON.stringify({ scope: "runtime-guard branch; injected providers, no native process timings or UI budget", platform: process.platform, measurements }));
+    });
+
+    it.each(["cancel", "unknown"] as const)("rechecks %s after the first cooperative source chunk while retaining caller ownership", async mode => {
+      const f = coldProfile(4 * CHUNK + 17), controller = new AbortController(); let unavailable = false, readsAtChange = 0;
+      const gate = stoppedGate(f.id, () => unavailable);
+      const io = observeOwnedIO(f.file, () => nextOwnedTurn(() => { readsAtChange = io.chunks.length; if (mode === "cancel") controller.abort(); else unavailable = true; }));
+      const release = acquireRestoreLock(f.id);
+      try {
+        await expect(captureFullProfile(options(f, gate.guard, controller.signal))).rejects.toMatchObject({ code: mode === "cancel" ? "ABORT_ERR" : "PROFILE_STOP_REQUIRED" });
+        expect(readsAtChange).toBe(1); expect(io.chunks).toEqual([{ position: 0, bytes: CHUNK }]);
+        expect(fs.readdirSync(f.stage)).toEqual([]); expect(fs.readFileSync(f.file)).toEqual(f.bytes);
+        expect(sha(fs.readFileSync(f.file))).toBe(sha(f.bytes)); expect(fs.readFileSync(f.file).includes(f.marker)).toBe(true);
+        expect(isRestoreLocked(f.id)).toBe(true); expect(runningProcesses.size).toBe(0);
+      } finally { try { release(); io.assertClosed(); } finally { io.restore(); } }
+      expect(isRestoreLocked(f.id)).toBe(false);
+    });
   });
 });

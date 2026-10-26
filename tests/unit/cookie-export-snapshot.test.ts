@@ -18,8 +18,10 @@ const fixture = await vi.hoisted(async () => {
     moduleUnavailable: false, statusError: false, discoveryError: false,
     socketMode: "open" as "open" | "error" | "close" | "hold" | "throw",
     cdpResult: { cookies: [] } as unknown, bidiResult: { cookies: [] } as unknown,
+    modelCdpJar: false, cdpJar: new Map<string, Record<string, unknown>>(),
     responses: new Map<string, { error?: unknown; result?: unknown; omitResult?: boolean; raw?: string }>(),
     holds: new Set<string>(), sendsThrow: new Set<string>(), setResults: [] as boolean[],
+    heldRequests: [] as Array<{ socket: any; request: { id: number; method: string; params: any } }>,
     calls: [] as Array<{ url: string; method: string; params: any }>,
     fetchCalls: [] as Array<{ url: string; signal?: AbortSignal }>,
     sockets: [] as any[], abortOnConstruct: null as null | (() => void),
@@ -62,15 +64,37 @@ vi.mock("ws", async () => {
       const request = JSON.parse(text);
       fixture.calls.push({ url: this.url, method: request.method, params: request.params });
       if (fixture.sendsThrow.has(request.method)) throw new Error("synthetic-cookie-value--must-not-enter-reason");
-      if (fixture.holds.has(request.method)) return;
+      if (fixture.holds.has(request.method)) {
+        fixture.heldRequests.push({ socket: this, request });
+        return;
+      }
       const override = fixture.responses.get(request.method);
       let response: Record<string, unknown>;
       if (override?.error !== undefined) response = { id: request.id, error: override.error, message: "synthetic-cookie-value--must-not-enter-reason" };
       else if (override?.omitResult) response = { id: request.id };
       else if (override) response = { id: request.id, result: override.result };
-      else if (request.method === "Network.getAllCookies") response = { id: request.id, result: fixture.cdpResult };
+      else if (request.method === "Network.getAllCookies") response = { id: request.id,
+        result: fixture.modelCdpJar ? { cookies: [...fixture.cdpJar.values()] } : fixture.cdpResult };
       else if (request.method === "storage.getCookies") response = { id: request.id, result: fixture.bidiResult };
-      else if (request.method === "Network.setCookie") response = { id: request.id, result: { success: fixture.setResults.shift() ?? true } };
+      else if (request.method === "Network.setCookie") {
+        const success = fixture.setResults.shift() ?? true;
+        if (success && fixture.modelCdpJar) {
+          const params = request.params, domain = params.domain ?? new URL(params.url).hostname;
+          const partitionKey = params.partitionKey === undefined ? undefined : { ...params.partitionKey };
+          // This is an explicit identity model, not a native-browser claim. A
+          // count-only success can overwrite one unpartitioned Cookie repeatedly.
+          const identity = JSON.stringify([domain, params.name, params.path,
+            partitionKey ? [partitionKey.topLevelSite, partitionKey.hasCrossSiteAncestor] : null]);
+          fixture.cdpJar.set(identity, {
+            domain, name: params.name, value: params.value, path: params.path,
+            expires: params.expires ?? -1, session: params.expires === undefined,
+            secure: params.secure, httpOnly: params.httpOnly, size: 64,
+            ...(params.sameSite === undefined ? {} : { sameSite: params.sameSite }),
+            ...(partitionKey === undefined ? {} : { partitionKey }),
+          });
+        }
+        response = { id: request.id, result: { success } };
+      }
       else if (request.method === "storage.setCookie") response = { id: request.id, result: (fixture.setResults.shift() ?? true) ? { partitionKey: { userContext: "default" } } : {} };
       else response = { id: request.id, result: {} };
       queueMicrotask(() => { if (!this.closed) this.emit("message", Buffer.from(override?.raw ?? JSON.stringify(response))); });
@@ -140,7 +164,8 @@ beforeEach(async () => {
   fixture.running = true; fixture.cdpPort = fixture.port; fixture.bidiPort = fixture.port;
   fixture.discovery = "pages"; fixture.moduleUnavailable = false; fixture.statusError = false; fixture.discoveryError = false;
   fixture.socketMode = "open"; fixture.cdpResult = { cookies: [] }; fixture.bidiResult = { cookies: [] };
-  fixture.responses.clear(); fixture.holds.clear(); fixture.sendsThrow.clear(); fixture.setResults = [];
+  fixture.modelCdpJar = false; fixture.cdpJar.clear();
+  fixture.responses.clear(); fixture.holds.clear(); fixture.sendsThrow.clear(); fixture.setResults = []; fixture.heldRequests = [];
   fixture.calls = []; fixture.fetchCalls = []; fixture.sockets = []; fixture.abortOnConstruct = null; fixture.findCalls = [];
   vi.spyOn(console, "error").mockImplementation(() => undefined);
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -451,6 +476,244 @@ describe("cookie export snapshot availability", () => {
   });
 });
 
+describe("portable Cookie identity through protocol frames and owned queue files", () => {
+  type Partition = { topLevelSite: string; hasCrossSiteAncestor: boolean };
+  function partitionedCookies(): Array<CookieInfo & { partitionKey: Partition }> {
+    return ["https://owned-a.invalid", "https://owned-b.invalid"].flatMap((topLevelSite, site) =>
+      [false, true].map(hasCrossSiteAncestor => ({ ...EXPECTED, sameSite: 0,
+        value: `${CANARY}-${site}-${Number(hasCrossSiteAncestor)}`,
+        partitionKey: { topLevelSite, hasCrossSiteAncestor } })));
+  }
+  const queueFile = (id = CHROMIUM) => path.join(fixture.appData, "pending-cookie-imports", `${id}.json`);
+  function rawQueue(id: string, cookies: unknown[]): Buffer {
+    const file = queueFile(id);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, JSON.stringify(cookies), { encoding: "utf8", mode: 0o600 });
+    const bytes = fs.readFileSync(file);
+    expect(JSON.parse(bytes.toString("utf8"))).toEqual(cookies);
+    return bytes;
+  }
+  const invalidPartitions: Array<{ label: string; fields: Record<string, unknown> }> = [
+    { label: "null key", fields: { partitionKey: null } },
+    { label: "array key", fields: { partitionKey: [] } },
+    { label: "missing ancestor", fields: { partitionKey: { topLevelSite: "https://owned-a.invalid" } } },
+    { label: "nonboolean ancestor", fields: { partitionKey: { topLevelSite: "https://owned-a.invalid", hasCrossSiteAncestor: "false" } } },
+    { label: "opaque flag", fields: { partitionKeyOpaque: true } },
+    { label: "opaque site", fields: { partitionKey: { topLevelSite: "null", hasCrossSiteAncestor: false } } },
+    { label: "unsupported scheme", fields: { partitionKey: { topLevelSite: `data:text/plain,${CANARY}`, hasCrossSiteAncestor: false } } },
+    { label: "credential-bearing site", fields: { partitionKey: { topLevelSite: `https://${CANARY}@owned-a.invalid`, hasCrossSiteAncestor: false } } },
+    { label: "site with path", fields: { partitionKey: { topLevelSite: `https://owned-a.invalid/${CANARY}`, hasCrossSiteAncestor: false } } },
+    { label: "site with query", fields: { partitionKey: { topLevelSite: `https://owned-a.invalid?key=${CANARY}`, hasCrossSiteAncestor: false } } },
+    { label: "unknown key member", fields: { partitionKey: { topLevelSite: "https://owned-a.invalid", hasCrossSiteAncestor: false, opaque: true } } },
+  ];
+
+  it("preserves both CDP partition dimensions through export, disk reload and receiver jar readback", async () => {
+    const expected = partitionedCookies();
+    // Two genuinely different schemeful sites, not two subdomains of one site.
+    // All four Cookies have the SAME domain/name/path; each dimension matters.
+    fixture.cdpResult = { cookies: expected.map(cookie => ({ ...CDP_COOKIE, ...cookie, sameSite: "None" })) };
+    const source = await snapshot("chromium");
+    expect(source).toEqual({ state: "available", cookies: expected });
+    if (source.state !== "available") throw new Error("Owned partition export unavailable");
+    cdp.writeQueuedCookieImports(CHROMIUM, source.cookies);
+    const file = queueFile();
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(expected);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual(expected);
+    vi.resetModules();
+    const fresh = await import("../../src/main/services/cdp-cookie-service.js");
+    expect(fresh.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual(expected);
+    fixture.modelCdpJar = true;
+    expect(await fresh.cdpCookieService.applyQueuedImports(CHROMIUM, { port: fixture.port, isCurrent: () => true })).toBe(4);
+    const writes = fixture.calls.filter(call => call.method === "Network.setCookie");
+    expect(writes.map(call => call.params.partitionKey)).toEqual(expected.map(cookie => cookie.partitionKey));
+    expect(fixture.cdpJar.size, "Four acknowledged writes must not collapse into one receiver identity").toBe(4);
+    expect(await fresh.cdpCookieService.exportCookiesSnapshot(CHROMIUM)).toEqual({ state: "available", cookies: expected });
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("round-trips nonpartitioned empty-name and unspecified-SameSite cookies without inventing a partition", async () => {
+    const expected = [EXPECTED, { ...EXPECTED, name: "", sameSite: -1, expires: null }];
+    fixture.cdpResult = { cookies: [{ ...CDP_COOKIE, partitionKeyOpaque: false },
+      { ...CDP_COOKIE, name: "", sameSite: undefined, expires: -1, session: true }] };
+    const source = await snapshot("chromium");
+    expect(source).toEqual({ state: "available", cookies: expected });
+    if (source.state !== "available") throw new Error("Owned nameless export unavailable");
+    cdp.writeQueuedCookieImports(CHROMIUM, source.cookies);
+    const file = queueFile();
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(expected);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual(expected);
+    vi.resetModules();
+    const fresh = await import("../../src/main/services/cdp-cookie-service.js");
+    expect(fresh.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual(expected);
+    fixture.modelCdpJar = true;
+    expect(await fresh.cdpCookieService.applyQueuedImports(CHROMIUM, { port: fixture.port, isCurrent: () => true })).toBe(2);
+    const writes = fixture.calls.filter(call => call.method === "Network.setCookie");
+    expect(writes).toHaveLength(2);
+    expect(writes.every(call => !Object.hasOwn(call.params, "partitionKey"))).toBe(true);
+    expect(writes[1].params).toMatchObject({ name: "", value: CANARY });
+    expect(writes[1].params).not.toHaveProperty("sameSite");
+    expect(writes[1].params).not.toHaveProperty("expires");
+    expect(fixture.cdpJar.size).toBe(2);
+    expect(await fresh.cdpCookieService.exportCookiesSnapshot(CHROMIUM)).toEqual({ state: "available", cookies: expected });
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("copies partition identity without aliasing the source object", () => {
+    const input = partitionedCookies()[0], expected = structuredClone(input);
+    const normalized = cdp.normalizeCookieForQueue(input);
+    expect(normalized).toEqual(expected);
+    input.partitionKey.topLevelSite = "https://owned-b.invalid";
+    input.partitionKey.hasCrossSiteAncestor = true;
+    expect(normalized).toEqual(expected);
+  });
+
+  it.each(invalidPartitions)("rejects $label partition metadata as unavailable instead of exporting an unpartitioned Cookie", async ({ fields }) => {
+    cdp.writeQueuedCookieImports(CHROMIUM, [EXPECTED]);
+    const before = fs.readFileSync(queueFile());
+    fixture.cdpResult = { cookies: [CDP_COOKIE, { ...CDP_COOKIE, ...fields }] };
+    unavailable(await snapshot("chromium"));
+    expect(fs.readFileSync(queueFile())).toEqual(before);
+    expect(fixture.calls.filter(call => call.method === "Network.setCookie")).toEqual([]);
+  });
+
+  it.each(invalidPartitions)("rejects $label partition writes without replacing the existing queue generation", ({ fields }) => {
+    cdp.writeQueuedCookieImports(CHROMIUM, [EXPECTED]);
+    const file = queueFile(), before = fs.readFileSync(file);
+    expect(() => cdp.writeQueuedCookieImports(CHROMIUM, [{ ...EXPECTED, ...fields }])).toThrow(/^COOKIE_PARTITION_KEY_INVALID$/);
+    expect(fs.readFileSync(file)).toEqual(before);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual([EXPECTED]);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+  });
+
+  it.each(invalidPartitions)("retains $label raw partition queues without dispatching unpartitioned CDP writes", async ({ fields }) => {
+    // Model an older/external producer, not a valid writer that should reject
+    // this input. One valid leading Cookie must not be partially dispatched.
+    const before = rawQueue(CHROMIUM, [EXPECTED, { ...EXPECTED, ...fields }]);
+    await expect(cdp.cdpCookieService.applyQueuedImports(CHROMIUM, { port: fixture.port, isCurrent: () => true })).rejects.toThrow(/^COOKIE_QUEUE_UNREADABLE$/);
+    expect(fixture.calls.filter(call => call.method === "Network.setCookie")).toEqual([]);
+    expect(fs.readFileSync(queueFile())).toEqual(before);
+    expect(() => cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toThrow(/^COOKIE_QUEUE_UNREADABLE$/);
+  });
+
+  it.each([
+    { label: "name type", fields: { name: 17 } },
+    { label: "name size", fields: { name: "n".repeat(256) } },
+    { label: "value size", fields: { value: "v".repeat(4097) } },
+    { label: "domain", fields: { domain: "../unsafe" } },
+    { label: "SameSite range", fields: { sameSite: 3 } },
+    { label: "secure type", fields: { secure: "true" } },
+    { label: "HttpOnly type", fields: { httpOnly: 1 } },
+  ])("rejects invalid $label queue fields rather than silently discarding or coercing them", ({ fields }) => {
+    cdp.writeQueuedCookieImports(CHROMIUM, [EXPECTED]);
+    const file = queueFile(), before = fs.readFileSync(file);
+    expect(() => cdp.writeQueuedCookieImports(CHROMIUM, [{ ...EXPECTED, ...fields } as unknown as CookieInfo])).toThrow(/^COOKIE_QUEUE_INVALID$/);
+    expect(fs.readFileSync(file)).toEqual(before);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual([EXPECTED]);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+  });
+
+  it("omits domain for host-only __Host- Cookies through queued CDP frames", async () => {
+    const cookie = { ...EXPECTED, domain: "owned-host.invalid", name: "__Host-owned_sid" };
+    cdp.writeQueuedCookieImports(CHROMIUM, [cookie]);
+    expect(JSON.parse(fs.readFileSync(queueFile(), "utf8"))).toEqual([cookie]);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([cookie]);
+    fixture.modelCdpJar = true;
+    expect(await cdp.cdpCookieService.applyQueuedImports(CHROMIUM, { port: fixture.port, isCurrent: () => true })).toBe(1);
+    const writes = fixture.calls.filter(call => call.method === "Network.setCookie");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].params).toMatchObject({ url: "https://owned-host.invalid/", name: cookie.name,
+      value: cookie.value, path: "/", secure: true, httpOnly: true });
+    expect(writes[0].params).not.toHaveProperty("domain");
+    expect(await cdp.cdpCookieService.exportCookiesSnapshot(CHROMIUM)).toEqual({ state: "available", cookies: [cookie] });
+    expect(fs.existsSync(queueFile())).toBe(false);
+  });
+
+  it("retains leading-dot domain scope even for rejected __Host- Cookie CDP frames", async () => {
+    const domain = ".owned-domain.invalid";
+    const pending = [{ ...EXPECTED, domain, name: "owned_domain_sid" },
+      { ...EXPECTED, domain, name: "__Host-owned_invalid_domain" }];
+    cdp.writeQueuedCookieImports(CHROMIUM, pending);
+    const before = fs.readFileSync(queueFile());
+    expect(JSON.parse(before.toString("utf8"))).toEqual(pending);
+    fixture.modelCdpJar = true;
+    fixture.setResults = [true, false];
+    expect(await cdp.cdpCookieService.applyQueuedImports(CHROMIUM, { port: fixture.port, isCurrent: () => true })).toBe(1);
+    const writes = fixture.calls.filter(call => call.method === "Network.setCookie");
+    expect(writes.map(call => call.params.domain)).toEqual([domain, domain]);
+    expect(writes.map(call => call.params.name)).toEqual(pending.map(cookie => cookie.name));
+    expect(await cdp.cdpCookieService.exportCookiesSnapshot(CHROMIUM)).toEqual({ state: "available", cookies: [pending[0]] });
+    expect(fs.readFileSync(queueFile())).toEqual(before);
+    expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual(pending);
+  });
+
+  it("rejects unpartitioned Firefox unspecified SameSite in a mixed direct batch without writes or queue changes", async () => {
+    const pending = [EXPECTED, { ...EXPECTED, name: "unspecified", sameSite: -1 }];
+    expect(pending.every(cookie => !Object.hasOwn(cookie, "partitionKey"))).toBe(true);
+    const before = rawQueue(FIREFOX, pending);
+    expect(cdp.readQueuedCookieImports(FIREFOX, { strict: true })).toEqual(pending);
+    const conn = await nativeBidi.connectBidi(`ws://127.0.0.1:${fixture.port}/session`);
+    nativeBidi.registerFirefoxSession(fixture.port, conn);
+    const { runningProcesses } = await import("../../src/main/services/browser/runtime-table.js");
+    runningProcesses.set(FIREFOX, { pid: 720001, process: { pid: 720001, exitCode: null, signalCode: null, killed: false },
+      port: fixture.port, lastActivityAt: 0, engine: "firefox", bidiConn: conn });
+    try {
+      const error = await bidi.firefoxCookieService.importCookies(FIREFOX, pending).then(() => undefined, error => error);
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toBe("FIREFOX_COOKIE_SAMESITE_UNSPECIFIED_UNSUPPORTED");
+      expect(fixture.calls.filter(call => call.method === "storage.setCookie")).toEqual([]);
+      expect(fs.readFileSync(queueFile(FIREFOX))).toEqual(before);
+      expect(cdp.readQueuedCookieImports(FIREFOX, { strict: true })).toEqual(pending);
+      expect(nativeBidi.getRegisteredFirefoxSession(fixture.port)).toBe(conn);
+      expect(conn.closed).toBe(false);
+    } finally { nativeBidi.dropFirefoxSession(fixture.port); conn.close(); runningProcesses.delete(FIREFOX); }
+  });
+
+  it("rejects unpartitioned Firefox unspecified SameSite in a mixed queued batch without writes or queue changes", async () => {
+    const pending = [EXPECTED, { ...EXPECTED, name: "unspecified", sameSite: -1 }];
+    expect(pending.every(cookie => !Object.hasOwn(cookie, "partitionKey"))).toBe(true);
+    const before = rawQueue(FIREFOX, pending);
+    expect(cdp.readQueuedCookieImports(FIREFOX, { strict: true })).toEqual(pending);
+    const conn = await nativeBidi.connectBidi(`ws://127.0.0.1:${fixture.port}/session`);
+    nativeBidi.registerFirefoxSession(fixture.port, conn);
+    const { runningProcesses } = await import("../../src/main/services/browser/runtime-table.js");
+    runningProcesses.set(FIREFOX, { pid: 720001, process: { pid: 720001, exitCode: null, signalCode: null, killed: false },
+      port: fixture.port, lastActivityAt: 0, engine: "firefox", bidiConn: conn });
+    try {
+      const error = await bidi.firefoxCookieService.applyQueuedImports(FIREFOX).then(() => undefined, error => error);
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toBe("FIREFOX_COOKIE_SAMESITE_UNSPECIFIED_UNSUPPORTED");
+      expect(fixture.calls.filter(call => call.method === "storage.setCookie")).toEqual([]);
+      expect(fs.readFileSync(queueFile(FIREFOX))).toEqual(before);
+      expect(cdp.readQueuedCookieImports(FIREFOX, { strict: true })).toEqual(pending);
+      expect(nativeBidi.getRegisteredFirefoxSession(fixture.port)).toBe(conn);
+      expect(conn.closed).toBe(false);
+    } finally { nativeBidi.dropFirefoxSession(fixture.port); conn.close(); runningProcesses.delete(FIREFOX); }
+  });
+
+  it.each([false, true])("rejects unsupported Firefox CDP partitions before any native write and retains the queue, ancestor=%s", async hasCrossSiteAncestor => {
+    const pending = [EXPECTED, { ...EXPECTED, sameSite: 0, value: `${CANARY}-partitioned`,
+      partitionKey: { topLevelSite: "https://owned-a.invalid", hasCrossSiteAncestor } }];
+    const before = rawQueue(FIREFOX, pending);
+    const conn = await nativeBidi.connectBidi(`ws://127.0.0.1:${fixture.port}/session`);
+    nativeBidi.registerFirefoxSession(fixture.port, conn);
+    const { runningProcesses } = await import("../../src/main/services/browser/runtime-table.js");
+    runningProcesses.set(FIREFOX, { pid: 720001, process: { pid: 720001, exitCode: null, signalCode: null, killed: false },
+      port: fixture.port, lastActivityAt: 0, engine: "firefox", bidiConn: conn });
+    try {
+      const directError = await bidi.firefoxCookieService.importCookies(FIREFOX, pending).then(() => undefined, error => error);
+      const queuedError = await bidi.firefoxCookieService.applyQueuedImports(FIREFOX).then(() => undefined, error => error);
+      expect(fixture.calls.filter(call => call.method === "storage.setCookie")).toEqual([]);
+      expect(directError).toBeInstanceOf(Error); expect(directError?.message).toBe("FIREFOX_COOKIE_PARTITION_UNSUPPORTED");
+      expect(queuedError).toBeInstanceOf(Error); expect(queuedError?.message).toBe("FIREFOX_COOKIE_PARTITION_UNSUPPORTED");
+      expect(fs.readFileSync(queueFile(FIREFOX))).toEqual(before);
+      expect(JSON.parse(fs.readFileSync(queueFile(FIREFOX), "utf8"))).toEqual(pending);
+      expect(cdp.readQueuedCookieImports(FIREFOX, { strict: true })).toEqual(pending);
+      expect(nativeBidi.getRegisteredFirefoxSession(fixture.port)).toBe(conn);
+      expect(conn.closed).toBe(false);
+    } finally { nativeBidi.dropFirefoxSession(fixture.port); conn.close(); runningProcesses.delete(FIREFOX); }
+  });
+});
+
 describe("snapshot addition leaves coordinator cookie queue semantics intact", () => {
   it("round-trips normalized queue bytes through direct disk read, module reload and profile-ID lookup", async () => {
     const pending = [EXPECTED, { ...EXPECTED, name: "theme", value: "synthetic-theme" }];
@@ -623,6 +886,99 @@ describe("snapshot addition leaves coordinator cookie queue semantics intact", (
     expect(cdp.normalizeCookieForQueue({ ...EXPECTED, value: 17 })).toBeNull();
     expect(cdp.normalizeCookieForQueue({ ...EXPECTED, domain: "../unsafe" })).toBeNull();
     expect(cdp.normalizeCookieForQueue({ ...EXPECTED, name: "bad;name" })).toBeNull();
+  });
+});
+
+describe("CDP queued imports retain same-value replacement generations", () => {
+  const queueFile = () => path.join(fixture.appData, "pending-cookie-imports", `${CHROMIUM}.json`);
+  const generation = (file: string) => {
+    const stat = fs.lstatSync(file, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino, size: stat.size, mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs };
+  };
+  async function heldPinnedImport() {
+    cdp.writeQueuedCookieImports(CHROMIUM, [EXPECTED]);
+    const file = queueFile(), bytes = fs.readFileSync(file), before = generation(file);
+    expect(JSON.parse(bytes.toString("utf8"))).toEqual([EXPECTED]);
+    fixture.cdpPort = null; fixture.discoveryError = true;
+    fixture.holds.add("Network.setCookie");
+    const target = { port: fixture.port, isCurrent: vi.fn(() => true) };
+    // Attach both settlement handlers before the held command can finish, so a
+    // failed assertion cannot leave an unhandled importer rejection behind.
+    const completed = cdp.cdpCookieService.applyQueuedImports(CHROMIUM, target).then(
+      count => ({ count }), error => ({ error }));
+    try { await until(() => fixture.heldRequests.some(({ request }) => request.method === "Network.setCookie")); }
+    catch (error) {
+      for (const socket of fixture.sockets) socket.close();
+      await bounded(completed); throw error;
+    }
+    const held = fixture.heldRequests.find(({ request }) => request.method === "Network.setCookie");
+    if (!held) throw new Error("Owned CDP setCookie did not reach its held reply");
+    expect(held.socket.url).toBe(`ws://127.0.0.1:${target.port}/devtools/page/fixture`);
+    expect(held.request.params).toMatchObject({ domain: EXPECTED.domain, name: EXPECTED.name, value: EXPECTED.value });
+    let released = false;
+    return { file, bytes, before, target, completed, release: () => {
+      if (released) return;
+      released = true;
+      // Reply to the actual captured request ID, not a guessed command ordinal.
+      held.socket.emit("message", Buffer.from(JSON.stringify({ id: held.request.id, result: { success: true } })));
+    } };
+  }
+  function expectPinnedSingleWrite(target: { port: number; isCurrent: ReturnType<typeof vi.fn> }) {
+    expect(fixture.findCalls).toEqual([]);
+    expect(target.isCurrent).toHaveBeenCalled();
+    expect(target.isCurrent.mock.results.every(result => result.type === "return" && result.value === true)).toBe(true);
+    expect(fixture.fetchCalls.map(({ url }) => url)).toEqual([`http://127.0.0.1:${target.port}/json`]);
+    expect(fixture.calls.map(({ method }) => method)).toEqual(["Network.enable", "Network.setCookie"]);
+    expect(fixture.sockets).toHaveLength(1); expect(fixture.sockets[0].closed).toBe(true);
+  }
+
+  it("retains an atomic same-value replacement queue generation after a held pinned CDP write", async () => {
+    const h = await heldPinnedImport();
+    try {
+      cdp.writeQueuedCookieImports(CHROMIUM, [EXPECTED]);
+      const replacement = fs.readFileSync(h.file), next = generation(h.file);
+      expect(next.ino).not.toBe(h.before.ino); expect(replacement).toEqual(h.bytes);
+      expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+      h.release(); expect(await bounded(h.completed)).toEqual({ count: 1 });
+      expectPinnedSingleWrite(h.target);
+      expect(fs.existsSync(h.file), "An old importer must not consume the same-value new inode").toBe(true);
+      expect(generation(h.file)).toEqual(next); expect(fs.readFileSync(h.file)).toEqual(replacement);
+      vi.resetModules(); const fresh = await import("../../src/main/services/cdp-cookie-service.js");
+      expect(fresh.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+    } finally { h.release(); await bounded(h.completed); }
+  });
+
+  it("retains an in-place raw-byte rewrite with equal normalized Cookies after a held pinned CDP write", async () => {
+    const h = await heldPinnedImport();
+    try {
+      const replacement = Buffer.from(JSON.stringify([EXPECTED], null, 2) + "\n", "utf8");
+      fs.writeFileSync(h.file, replacement);
+      const next = generation(h.file);
+      expect(next.dev).toBe(h.before.dev); expect(next.ino).toBe(h.before.ino);
+      expect(replacement).not.toEqual(h.bytes); expect(next.size).not.toBe(h.before.size);
+      expect(JSON.parse(replacement.toString("utf8"))).toEqual([EXPECTED]);
+      expect(cdp.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+      h.release(); expect(await bounded(h.completed)).toEqual({ count: 1 });
+      expectPinnedSingleWrite(h.target);
+      expect(fs.existsSync(h.file), "Normalized Cookie equality must not erase a raw-byte queue rewrite").toBe(true);
+      expect(generation(h.file)).toEqual(next); expect(fs.readFileSync(h.file)).toEqual(replacement);
+      vi.resetModules(); const fresh = await import("../../src/main/services/cdp-cookie-service.js");
+      expect(fresh.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([EXPECTED]);
+      expect(fs.readFileSync(h.file)).toEqual(replacement);
+    } finally { h.release(); await bounded(h.completed); }
+  });
+
+  it("clears only an unchanged queue generation after a held pinned CDP write completes", async () => {
+    const h = await heldPinnedImport();
+    try {
+      expect(generation(h.file)).toEqual(h.before); expect(fs.readFileSync(h.file)).toEqual(h.bytes);
+      h.release(); expect(await bounded(h.completed)).toEqual({ count: 1 });
+      expectPinnedSingleWrite(h.target);
+      expect(fs.existsSync(h.file)).toBe(false);
+      vi.resetModules(); const fresh = await import("../../src/main/services/cdp-cookie-service.js");
+      expect(fresh.readQueuedCookieImports(CHROMIUM, { strict: true })).toEqual([]);
+      expect(fs.readdirSync(path.dirname(h.file))).not.toContain(`${CHROMIUM}.json`);
+    } finally { h.release(); await bounded(h.completed); }
   });
 });
 

@@ -237,6 +237,131 @@ describe("separate full environment migration consent and write-only passphrase"
   });
 });
 
+describe("unsaved full migration scope and passphrase dispatch guards", () => {
+  const PHRASE = "  synthetic unsaved migration phrase  ";
+  const scenarios = ["enable-full", "disable-full", "new-passphrase"] as const;
+  function savedScope(h: ReturnType<typeof harness>, full: boolean) {
+    Object.assign(h.status(), { includeFullProfile: full, fullProfileConsentAt: full ? 1 : null,
+      fullProfilePassphraseSet: full, includeHistory: full, historyConsentAt: full ? 1 : null });
+  }
+  async function ready(h: ReturnType<typeof harness>, full: boolean) {
+    savedScope(h, full); await h.ab.loadSyncConfig(); await flush(); await h.ab.loadSyncDiff();
+  }
+  function run(h: ReturnType<typeof harness>, kind: "push" | "pull") { return h.ab[kind === "push" ? "syncPush" : "syncPull"](); }
+  function expectSaveFirst(h: ReturnType<typeof harness>, locale: "en-US" | "zh-CN" = "en-US") {
+    expect(h.ab.helpers.toast.mock.calls.some((call: any[]) =>
+      (locale === "zh-CN" ? /先.*保存|保存.*后/ : /save.*(?:first|before)|(?:first|before).*save/i).test(String(call[0])) &&
+      (call[1] === "warning" || call[1] === "error"))).toBe(true);
+    expect(JSON.stringify(h.ab.helpers.toast.mock.calls)).not.toContain(PHRASE);
+  }
+  function expectNoWrites(h: ReturnType<typeof harness>) {
+    expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.api.sync.pull).not.toHaveBeenCalled();
+    expect(h.api.sync.configure).not.toHaveBeenCalled(); expect(h.api.app.reloadConfig).not.toHaveBeenCalled();
+  }
+  for (const locale of ["en-US", "zh-CN"] as const) for (const kind of ["push", "pull"] as const) {
+    it.each(scenarios)(`${locale} ${kind} keeps the %s draft and requires Save instead of dispatching the old scope or passphrase`, async scenario => {
+      const h = harness(locale); await ready(h, scenario !== "enable-full");
+      const full = h.elements["sync-full-profile-consent"], input = h.elements["sync-full-profile-passphrase"];
+      if (scenario === "new-passphrase") { input.value = PHRASE; input.emit("input"); }
+      else { full.checked = scenario === "enable-full"; full.emit("change"); }
+      h.entries()[0].value = "remote";
+      const entries = h.entries().slice(), draft = { full: full.checked, phrase: input.value,
+        history: h.elements["sync-include-history"].checked, historyConsent: h.elements["sync-history-consent"].checked };
+      const reads = { preview: h.api.sync.preview.mock.calls.length, diff: h.api.sync.previewDiff.mock.calls.length };
+      await run(h, kind); await flush();
+      expectNoWrites(h); expectSaveFirst(h, locale);
+      expect({ full: full.checked, phrase: input.value, history: h.elements["sync-include-history"].checked,
+        historyConsent: h.elements["sync-history-consent"].checked }).toEqual(draft);
+      expect(h.entries()).toEqual(entries); expect(h.entries()[0].value).toBe("remote");
+      expect(h.api.sync.preview).toHaveBeenCalledTimes(reads.preview); expect(h.api.sync.previewDiff).toHaveBeenCalledTimes(reads.diff);
+      expect(h.ab.confirmAsync).not.toHaveBeenCalled();
+      expect(h.buttons.syncPush.disabled).toBe(false); expect(h.buttons.syncPull.disabled).toBe(false); expect(h.buttons.syncSave.disabled).toBe(false);
+    });
+  }
+  for (const kind of ["push", "pull"] as const) {
+    it.each([false, true])(`${kind} keeps the ordinary unchanged saved full=%s flow without auto-save or scope expansion`, async full => {
+      const h = harness(); await ready(h, full); await run(h, kind); await flush();
+      expect(h.api.sync[kind]).toHaveBeenCalledTimes(1); expect(h.api.sync.configure).not.toHaveBeenCalled();
+      const opts = h.api.sync[kind].mock.calls[0][0]; expect(opts.comparisonToken).toEqual(TOKEN_A); expect(opts.history).toBe(full);
+      expect(opts).not.toHaveProperty("fullProfileConsent"); expect(opts).not.toHaveProperty("fullProfilePassphrase");
+      expect(h.elements["sync-full-profile-consent"].checked).toBe(full);
+      if (kind === "pull") expect(opts.strategy).toBe(full ? "remote" : "local");
+    });
+    it.each([false, true])(`${kind} resumes only after successful Save and a fresh comparison using the actually saved full=%s scope`, async full => {
+      const h = harness(); await ready(h, !full);
+      h.elements["sync-full-profile-consent"].checked = full; h.elements["sync-full-profile-consent"].emit("change");
+      if (full) h.elements["sync-full-profile-passphrase"].value = PHRASE;
+      await run(h, kind); await flush(); expectNoWrites(h);
+      let submitted: any;
+      h.api.sync.configure.mockImplementationOnce(async config => {
+        submitted = structuredClone(config);
+        Object.assign(h.status(), { includeFullProfile: config.includeFullProfile, fullProfileConsentAt: config.fullProfileConsent ? 2 : null,
+          fullProfilePassphraseSet: full, includeHistory: config.includeHistory, historyConsentAt: config.historyConsent ? 2 : null });
+        return result({ operationId: "manual-configure" });
+      });
+      await h.ab.syncSave(); await flush();
+      expect(h.api.sync.configure).toHaveBeenCalledTimes(1); expect(submitted.includeFullProfile).toBe(full);
+      expect(submitted.fullProfileConsent).toBe(full);
+      if (full) expect(submitted.fullProfilePassphrase).toBe(PHRASE);
+      expect(h.elements["sync-full-profile-passphrase"].value).toBe("");
+      expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.api.sync.pull).not.toHaveBeenCalled();
+      h.api.sync.previewDiff.mockResolvedValue(comparison(TOKEN_B)); await h.ab.loadSyncDiff();
+      await run(h, kind); await flush();
+      expect(h.api.sync[kind]).toHaveBeenCalledTimes(1);
+      expect(h.api.sync[kind].mock.calls[0][0]).toMatchObject({ comparisonToken: TOKEN_B, history: submitted.includeHistory });
+      if (kind === "pull") expect(h.api.sync.pull.mock.calls[0][0].strategy).toBe(full ? "remote" : "local");
+      expect(JSON.stringify([h.api.sync.push.mock.calls, h.api.sync.pull.mock.calls])).not.toContain(PHRASE);
+      expect(h.api.sync.configure).toHaveBeenCalledTimes(1);
+    });
+    it(`${kind} accepts a replacement passphrase only via explicit successful Save, never through Push/Pull options`, async () => {
+      const h = harness(); await ready(h, true);
+      const input = h.elements["sync-full-profile-passphrase"]; input.value = PHRASE; input.emit("input");
+      await run(h, kind); await flush(); expectNoWrites(h); expect(input.value).toBe(PHRASE);
+      let submitted: any;
+      h.api.sync.configure.mockImplementationOnce(async config => {
+        submitted = structuredClone(config); h.status().fullProfilePassphraseSet = true;
+        return result({ operationId: "manual-configure" });
+      });
+      await h.ab.syncSave(); await flush(); expect(submitted.fullProfilePassphrase).toBe(PHRASE); expect(input.value).toBe("");
+      expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.api.sync.pull).not.toHaveBeenCalled();
+      h.api.sync.previewDiff.mockResolvedValue(comparison(TOKEN_B)); await h.ab.loadSyncDiff(); await run(h, kind); await flush();
+      expect(h.api.sync[kind]).toHaveBeenCalledTimes(1); expect(h.api.sync[kind].mock.calls[0][0].comparisonToken).toEqual(TOKEN_B);
+      expect(JSON.stringify([h.api.sync.push.mock.calls, h.api.sync.pull.mock.calls])).not.toContain(PHRASE);
+    });
+    it(`${kind} still blocks a newer typed passphrase after an older Save succeeds without erasing the new draft`, async () => {
+      const h = harness(); await ready(h, true);
+      const input = h.elements["sync-full-profile-passphrase"], reply = deferred<any>();
+      input.value = "synthetic submitted migration phrase"; h.api.sync.configure.mockReturnValueOnce(reply.promise);
+      const save = h.ab.syncSave(); await flush(); input.value = PHRASE; input.emit("input");
+      reply.resolve(result({ operationId: "manual-configure" })); await save; await flush();
+      expect(input.value).toBe(PHRASE); expect(h.api.sync.configure).toHaveBeenCalledTimes(1);
+      await h.ab.loadSyncDiff(); await run(h, kind); await flush();
+      expect(h.api.sync.push).not.toHaveBeenCalled(); expect(h.api.sync.pull).not.toHaveBeenCalled();
+      expect(h.api.sync.configure).toHaveBeenCalledTimes(1); expect(input.value).toBe(PHRASE); expectSaveFirst(h);
+    });
+    it(`${kind} rechecks unsaved full scope and passphrase changes after awaited preview before dispatch`, async () => {
+      const h = harness(); await ready(h, true);
+      const reply = deferred<any>(); h.api.sync.preview.mockReturnValueOnce(reply.promise);
+      const pending = run(h, kind); await flush();
+      h.elements["sync-full-profile-consent"].checked = false; h.elements["sync-full-profile-consent"].emit("change");
+      h.elements["sync-full-profile-passphrase"].value = PHRASE; h.elements["sync-full-profile-passphrase"].emit("input");
+      reply.resolve({ configured: true, profiles: 1, runningProfiles: [] }); await pending; await flush();
+      expectNoWrites(h); expectSaveFirst(h);
+      expect(h.elements["sync-full-profile-consent"].checked).toBe(false); expect(h.elements["sync-full-profile-passphrase"].value).toBe(PHRASE);
+    });
+    it(`${kind} does not treat a pending confirmation as Save consent for a newly changed full scope`, async () => {
+      const h = harness(); await ready(h, true);
+      if (kind === "push") h.api.sync.previewDiff.mockResolvedValue({ ...comparison(), pushWarnings: ["Synthetic remote removal warning"] });
+      else h.setPreview({ configured: true, profiles: 1, runningProfiles: ["profile-a"] });
+      const confirmation = deferred<boolean>(); h.ab.confirmAsync.mockReturnValueOnce(confirmation.promise);
+      const pending = run(h, kind); await flush(); expect(h.ab.confirmAsync).toHaveBeenCalledTimes(1);
+      h.elements["sync-full-profile-consent"].checked = false; h.elements["sync-full-profile-consent"].emit("change");
+      confirmation.resolve(true); await pending; await flush();
+      expectNoWrites(h); expectSaveFirst(h); expect(h.elements["sync-full-profile-consent"].checked).toBe(false);
+    });
+  }
+});
+
 describe("full migration download defaults and zero-selection receipts", () => {
   it("keeps limited legacy Pull local but defaults configured full migration to remote with inherited per-item choices", async () => {
     const limited = harness(); await limited.ab.loadSyncConfig(); expect(limited.elements["sync-merge-strategy"].value).toBe("local");
@@ -456,6 +581,61 @@ describe("draft preservation and exact viewed comparison token", () => {
     expect(h.ab.helpers.toast.mock.calls.some((call: any[]) => /compare again|new comparison/i.test(String(call[0])))).toBe(true);
     if (kind === "pull") { await h.ab.syncPull(); await flush(); expect(h.api.sync.pull).toHaveBeenCalledTimes(1); }
   });
+});
+
+describe("limited browser-data source and capture-time receipts", () => {
+  const CAPTURE = Date.UTC(2020, 0, 2, 3, 4, 5), OLD_CAPTURE = Date.UTC(2019, 1, 3, 4, 5, 6);
+  const PUBLICATION = Date.UTC(2024, 2, 4, 5, 6, 7), NOW = Date.UTC(2032, 3, 5, 6, 7, 8);
+  const sources = [
+    { source: "captured", capturedAt: CAPTURE }, { source: "preserved", capturedAt: OLD_CAPTURE },
+    { source: "absent", capturedAt: null }, { source: "unavailable", capturedAt: null }, { source: "unknown", capturedAt: null },
+  ] as const;
+  const labels = {
+    "en-US": { captured: "Freshly captured", preserved: "Previous snapshot preserved", absent: "Source confirmed absent", unavailable: "Source unavailable", unknown: "Source unknown" },
+    "zh-CN": { captured: "本次已采集", preserved: "保留之前的快照", absent: "已确认源不存在", unavailable: "源不可用", unknown: "来源未知" },
+  };
+  function timeTexts(at: number) { const date = new Date(at); return [escape(date.toLocaleString()), date.toISOString()]; }
+  function expectNoInventedCapture(body: string) {
+    for (const at of [PUBLICATION, NOW]) for (const text of timeTexts(at)) expect(body).not.toContain(text);
+  }
+  function expectLimitedScope(body: string, locale: "en-US" | "zh-CN") {
+    expect(body).toMatch(locale === "zh-CN" ? /有限.*Cookie.*LocalStorage/ : /limited.*Cookie.*LocalStorage/i);
+    expect(body).toContain("IndexedDB"); expect(body).toContain("Service Worker");
+    expect(body).toMatch(locale === "zh-CN" ? /会话/ : /session/i);
+    expect(body).toMatch(locale === "zh-CN" ? /保存密码|保存的密码/ : /saved browser passwords/i);
+    expect(body).toMatch(locale === "zh-CN" ? /未覆盖|不包含/ : /not covered|does not cover|excludes/i);
+  }
+  for (const locale of ["en-US", "zh-CN"] as const) for (const scope of ["cookies", "localStorage"] as const) {
+    it.each(sources)(`${locale} ${scope} renders $source provenance and the actual capture time without expanding limited scope`, async ({ source, capturedAt }) => {
+      vi.useFakeTimers(); vi.setSystemTime(NOW);
+      const h = harness(locale); await h.ab.loadSyncConfig(); await flush(); await h.ab.loadSyncDiff();
+      const incomplete = source === "preserved" || source === "unavailable";
+      h.api.sync.pull.mockResolvedValueOnce(result({ success: !incomplete, outcome: incomplete ? "partial" : "complete", browserBackupIncomplete: incomplete,
+        message: "owned browser-data receipt", items: [{ scope, id: "profile-a",
+          state: source === "unavailable" ? "skipped" : source === "absent" ? "preserved" : scope === "cookies" ? "queued" : "applied",
+          required: source !== "absent", count: source === "absent" || source === "unavailable" ? 0 : 1,
+          ...(source === "preserved" ? { code: scope === "cookies" ? "COOKIE_SOURCE_PRESERVED" : "LOCAL_STORAGE_SOURCE_PRESERVED" } : {}),
+          browserData: { version: 1, source, capturedAt, snapshotId: "owned-browser-snapshot", snapshotAt: PUBLICATION } }] }));
+      await h.ab.syncPull(); await flush(); const body = h.renderedResult();
+      expect(body).toContain(labels[locale][source]); expectLimitedScope(body, locale); expectNoInventedCapture(body);
+      if (capturedAt === null) expect(body).toContain(locale === "zh-CN" ? "采集时间未知" : "Capture time unknown");
+      else expect(timeTexts(capturedAt).some(text => body.includes(text))).toBe(true);
+      if (source === "preserved" || source === "unavailable" || source === "unknown") expect(body).not.toContain("health-text-good");
+      expect(h.elements["sync-full-profile-consent"].checked).toBe(false);
+      expect(h.api.sync.configure).not.toHaveBeenCalled(); expect(h.api.sync.push).not.toHaveBeenCalled();
+      expect(h.api.sync.pull).toHaveBeenCalledTimes(1);
+    });
+    it(`${locale} legacy ${scope} without provenance remains unknown and never invents capture time from publication or now`, async () => {
+      vi.useFakeTimers(); vi.setSystemTime(NOW);
+      const h = harness(locale); await h.ab.loadSyncConfig(); await flush(); await h.ab.loadSyncDiff();
+      h.api.sync.pull.mockResolvedValueOnce(result({ timestamp: PUBLICATION, message: "owned legacy receipt",
+        items: [{ scope, id: "profile-a", state: "applied", count: 1 }] }));
+      await h.ab.syncPull(); await flush(); const body = h.renderedResult();
+      expect(body).toContain(labels[locale].unknown); expect(body).toContain(locale === "zh-CN" ? "采集时间未知" : "Capture time unknown");
+      expectLimitedScope(body, locale); expectNoInventedCapture(body); expect(body).not.toContain("health-text-good");
+      expect(h.elements["sync-full-profile-consent"].checked).toBe(false); expect(h.api.sync.configure).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe("typed result facts and long operation ownership", () => {
@@ -690,7 +870,9 @@ describe("truthful Compare scope and effective mirrored translations", () => {
     ...["none", "committed", "partial", "unknown"].map((suffix) => `sync.result.commit.${suffix}`),
     ...["applied", "uploaded", "queued", "preserved", "skipped", "failed", "unknown"].map((suffix) => `sync.result.item.${suffix}`),
     ...["config", "profiles", "cookies", "localStorage", "preferences", "extensions", "history", "fullProfile", "credentials", "sidecar", "baseline"].map((suffix) => `sync.result.scope.${suffix}`),
-    ...["consent", "notice", "passphrase", "passphrase-help", "required", "selected", "limited", "pull-strategy", "selection-required", "cookie-queue-pending", "cookie-queue-unavailable"].map((suffix) => `sync.full-profile.${suffix}`),
+    ...["consent", "notice", "passphrase", "passphrase-help", "required", "selected", "limited", "pull-strategy", "selection-required", "cookie-queue-pending", "cookie-queue-unavailable", "unsaved"].map((suffix) => `sync.full-profile.${suffix}`),
+    ...["captured", "preserved", "absent", "unavailable", "unknown"].map((suffix) => `sync.browser-data.source.${suffix}`),
+    "sync.browser-data.limited", "sync.browser-data.captured-at", "sync.browser-data.capture-unknown",
     "profile.sync.local-changes", "profile.sync.unknown", "profile.sync.baseline-at", "profile.sync.proof-scope", "profile.edit.baseline-changed",
     ...["match", "changed", "none", "legacy", "invalid", "target-changed", "target-unavailable", "preferences-unavailable", "content-unavailable", "unknown"].map((suffix) => `profile.sync.reason.${suffix}`),
     ...["export.title", "export.batch-title", "import.title", "import.batch-title", "filter.backup", "replace.title", "replace.message", "replace.detail", "replace.confirm", "cancel", "pending", "export.warning-count", "batch.warning-count"].map((suffix) => `archive.${suffix}`),

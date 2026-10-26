@@ -251,9 +251,12 @@ async function executeMcpTool(name: string, args: any): Promise<any> {
       if (!args || typeof args !== "object" || Array.isArray(args) || args.history !== undefined && typeof args.history !== "boolean") return { success: false, code: "INVALID_HISTORY_SCOPE", error: "History scope must be a boolean" };
       if (name === "agent_browser_sync_push") return args.history === undefined ? syncService.push(undefined, args.force === true, args.comparisonToken)
         : syncService.push(undefined, args.force === true, args.comparisonToken, { history: args.history });
+      // Preserve omission so limited/full sync keep their own service defaults.
+      const strategy = args.strategy === undefined ? undefined
+        : args.strategy === "remote" || args.strategy === "newest" ? args.strategy : "local";
       const resolutions: Record<string, "local" | "remote" | "newest"> = {};
       for (const [key, value] of Object.entries(args.resolutions || {})) if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
-      return syncService.pull(undefined, { strategy: args.strategy === "remote" || args.strategy === "newest" ? args.strategy : "local", resolutions, comparisonToken: args.comparisonToken,
+      return syncService.pull(undefined, { strategy, resolutions, comparisonToken: args.comparisonToken,
         ...(args.history === undefined ? {} : { history: args.history }) });
     }
     case "agent_browser_list_profiles": {

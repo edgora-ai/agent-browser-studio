@@ -1494,7 +1494,9 @@ async function handleRequest(req: http.IncomingMessage, url: URL): Promise<JsonR
   if (method === "POST" && p === "/api/sync/pull") {
     const opts = await readJsonObject(req);
     try {
-      const strategy = opts?.strategy === "remote" || opts?.strategy === "newest" ? opts.strategy : "local";
+      // Let the selected sync scope choose its default when none was supplied.
+      const strategy = opts?.strategy === undefined ? undefined
+        : opts.strategy === "remote" || opts.strategy === "newest" ? opts.strategy : "local";
       const resolutions: Record<string, "local" | "remote" | "newest"> = {};
       for (const [key, value] of Object.entries(opts?.resolutions || {})) {
         if (value === "local" || value === "remote" || value === "newest") resolutions[key] = value;
@@ -2118,7 +2120,7 @@ function buildOpenApi(): any {
       "/api/sync/pull": {
         post: {
           summary: "Pull + merge remote config (global or per-entry conflict strategy)",
-          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Select History/Places explicitly; never invent visits from legacy/config-only backups" }, comparisonToken: { type: "object", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } }, strategy: { type: "string", enum: ["local", "remote", "newest"], default: "local", description: "Default conflict resolution for id-keyed entries (profiles/proxies/accounts). local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { history: { type: "boolean", description: "Select History/Places explicitly; never invent visits from legacy/config-only backups" }, comparisonToken: { type: "object", required: ["targetId", "localHash", "remoteHash"], properties: { targetId: { type: "string" }, localHash: { type: "string" }, remoteHash: { type: "string" } } }, strategy: { type: "string", enum: ["local", "remote", "newest"], description: "Omission follows the saved scope: local for limited sync, remote for full migration. Explicit local = keep local, remote = adopt remote, newest = adopt newer updatedAt/syncedAt; this does not enable or authorize a different data scope." }, resolutions: { type: "object", additionalProperties: { type: "string", enum: ["local", "remote", "newest"] }, description: "Per-entry overrides keyed as <section>:<id>, e.g. profiles:ab_xyz, proxies:default, accounts:user @ https://a.com. Wins over the global strategy for that entry." } } } } } },
           description: "Member+ when team RBAC is enabled. comparisonToken from preview-diff may be supplied to reject stale decisions before changing data.",
           responses: { ...ok("Pull result with merge summary and commit facts"), "403": { description: "Team role denied" }, "409": { description: "Busy, stale comparison, partial/unconfirmed commit or recovery required; inspect result before retrying" } },
         },

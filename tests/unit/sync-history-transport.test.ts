@@ -10,6 +10,13 @@ import * as vm from "node:vm";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import type { SyncResult } from "../../src/main/types.js";
+
+vi.mock("node:child_process", () => {
+  const blocked = () => { throw new Error("Unfenced process work in owned history fixture"); };
+  return { exec: blocked, execSync: blocked, execFile: blocked, execFileSync: blocked, spawn: blocked, spawnSync: blocked, fork: blocked };
+});
 
 type IoFailure = { code?: string; syscall?: string };
 type HistoryIoTrace = {
@@ -470,7 +477,7 @@ function changeHistoryPermission(kind: "consent" | "target" | "role"): void {
   if (kind === "consent") { setSyncConfig({ historyConsent: false }); return; }
   if (kind === "target") { setSyncConfig({ bucket: "changed-history-fixture" }); return; }
   const cfg = structuredClone(getConfig());
-  cfg.team = { workspaceId: "synthetic-history-team", name: "Synthetic team", ownerDeviceId: "synthetic-other-owner", createdAt: 1, updatedAt: 1, enabled: true,
+  cfg.team = { name: "Synthetic team", ownerDeviceId: "synthetic-other-owner", updatedAt: 1, enabled: true,
     members: [{ deviceId: cfg.deviceId!, name: "Synthetic local", role: "viewer", addedAt: 1 }] };
   saveConfig(cfg);
 }
@@ -645,6 +652,186 @@ describe("independent history semantic state", () => {
     expect(getConfig().browserProfiles[ID].syncBaseline).toBeDefined(); expect(getConfig().browserProfiles[ID].historySyncBaseline).toBeUndefined();
     expect(await syncService.historyState(ID)).toMatchObject({ status: "unselected", coverage: "unselected" });
     expect(fs.existsSync(livePath("chromium"))).toBe(false);
+  });
+});
+
+describe("owned-history-lease: historyState and synchronization share cold-profile ownership", () => {
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve));
+  function observe<T>(pending: Promise<T>) {
+    const state: { settled: boolean; value?: T; error?: unknown } = { settled: false };
+    const done = pending.then(value => { state.value = value; state.settled = true; }, error => { state.error = error; state.settled = true; });
+    return { state, done };
+  }
+  interface HeldChecker {
+    worker: Worker;
+    file: string;
+    stage: string;
+    stageOwner: fs.Stats;
+    reported: Promise<any>;
+    exit: Promise<number>;
+    exited: boolean;
+    terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
+    events: string[];
+    release(): Promise<number>;
+  }
+  async function holdOwnedChecker() {
+    const actual = await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
+    let held: HeldChecker | undefined, resolveCreated!: (value: HeldChecker) => void;
+    const created = new Promise<HeldChecker>(resolve => { resolveCreated = resolve; }), workers: Promise<number>[] = [];
+    function checkedFile(options: WorkerOptions): { file: string; stage: string } {
+      const file: unknown = options.workerData?.file;
+      if (typeof file !== "string") throw new Error("Owned checker file missing");
+      const relative = path.relative(getProfilesDir(), file), first = relative.split(path.sep)[0];
+      if (path.isAbsolute(relative) || relative.startsWith("..") || !first.startsWith(".sync-pull-stage-")) throw new Error("Foreign checker file refused");
+      const info = fs.lstatSync(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.dev !== h.owner.dev || info.size > 1024 * 1024) throw new Error("Unsafe owned checker input");
+      return { file, stage: path.join(getProfilesDir(), first) };
+    }
+    h.checkerFactory = (source: string, options: WorkerOptions) => {
+      const location = checkedFile(options);
+      if (held || !isRestoreLocked(ID)) {
+        const worker = new actual.Worker(source, options);
+        workers.push(new Promise<number>(resolve => worker.once("exit", resolve))); return worker;
+      }
+      // Run the ORIGINAL SQLite checker in a real owned Worker. Only its port
+      // close is held after its real report/DB close; message is NOT exit. The
+      // termination barrier applies only after a report, never to failed startup.
+      const worker = new actual.Worker(`
+const ownedLeasePort = require('node:worker_threads').parentPort;
+const ownedLeaseClose = ownedLeasePort.close.bind(ownedLeasePort);
+ownedLeasePort.close = () => undefined;
+ownedLeasePort.on('message', value => { if (value === 'owned-history-lease-release') ownedLeaseClose(); });
+${source}`, options);
+      const nativeTerminate = worker.terminate.bind(worker), events: string[] = [];
+      let reported = false, released = false, resolveReport!: (value: any) => void, rejectReport!: (error: Error) => void;
+      const report = new Promise<any>((resolve, reject) => { resolveReport = resolve; rejectReport = reject; });
+      const exit = new Promise<number>(resolve => worker.once("exit", code => {
+        events.push("exit"); if (held) held.exited = true;
+        if (!reported) rejectReport(new Error("Owned checker exited before its report")); resolve(code);
+      }));
+      workers.push(exit);
+      worker.once("message", message => { reported = true; events.push("message"); resolveReport(message); });
+      worker.once("error", error => rejectReport(error));
+      const terminate = vi.fn<() => Promise<number>>(() => { events.push("terminate-requested"); return reported ? exit : nativeTerminate(); });
+      vi.spyOn(worker, "terminate").mockImplementation(terminate);
+      held = { worker, ...location, stageOwner: fs.lstatSync(location.stage), reported: report, exit, exited: false, terminate, events,
+        release() { if (!released && !held!.exited) { released = true; events.push("release"); worker.postMessage("owned-history-lease-release"); } return exit; } };
+      resolveCreated(held); return worker;
+    };
+    return { created, get held() { return held; }, async close() {
+      try { if (held) await held.release(); await Promise.all(workers); }
+      finally { h.checkerFactory = null; }
+    } };
+  }
+  async function waitForHeld<T>(barrier: Awaited<ReturnType<typeof holdOwnedChecker>>, pending: ReturnType<typeof observe<T>>): Promise<HeldChecker> {
+    const held = await Promise.race([barrier.created, pending.done.then(() => { throw new Error("Operation settled before owning the checker"); })]);
+    expect(await held.reported).toMatchObject({ ok: true });
+    await turn(); expect(held.exited).toBe(false); expect(held.worker.threadId).toBeGreaterThan(0); expect(pending.state.settled).toBe(false);
+    return held;
+  }
+  function leaseWitness(held: HeldChecker) {
+    const file = path.join(h.device, "locks", ID + ".restore.lock"), info = fs.lstatSync(file), bytes = fs.readFileSync(file);
+    const matches = [...h.io!.fds].filter(([, opened]) => opened === file);
+    expect(matches).toHaveLength(1); const fd = matches[0][0];
+    expect(info.isFile() && !info.isSymbolicLink() && info.nlink === 1).toBe(true);
+    expect(JSON.parse(bytes.toString())).toMatchObject({ pid: process.pid, dirId: ID });
+    const pinned = fs.fstatSync(fd); expect([pinned.dev, pinned.ino]).toEqual([info.dev, info.ino]);
+    expect(held.stageOwner.isDirectory() && !held.stageOwner.isSymbolicLink()).toBe(true);
+    return { file, bytes, info, fd };
+  }
+  function assertHeld(held: HeldChecker, lease: ReturnType<typeof leaseWitness>): void {
+    owner(); expect(held.exited).toBe(false); expect(held.worker.threadId).toBeGreaterThan(0);
+    expect(isRestoreLocked(ID)).toBe(true); expect(fs.readFileSync(lease.file)).toEqual(lease.bytes);
+    const pinned = fs.fstatSync(lease.fd), current = fs.lstatSync(lease.file), stage = fs.lstatSync(held.stage);
+    expect([pinned.dev, pinned.ino, current.dev, current.ino]).toEqual([lease.info.dev, lease.info.ino, lease.info.dev, lease.info.ino]);
+    expect(h.io!.fds.get(lease.fd)).toBe(lease.file);
+    expect([stage.dev, stage.ino]).toEqual([held.stageOwner.dev, held.stageOwner.ino]); expect(stage.isSymbolicLink()).toBe(false);
+    expect(fs.lstatSync(held.file).isFile()).toBe(true);
+  }
+  function assertReleased(held: HeldChecker, lease: ReturnType<typeof leaseWitness>): void {
+    expect(held.exited).toBe(true); expect(held.worker.threadId).toBe(-1);
+    expect(held.events.indexOf("exit")).toBeGreaterThan(held.events.indexOf("release"));
+    expect(fs.lstatSync(lease.file, { throwIfNoEntry: false })).toBeUndefined();
+    expect(fs.lstatSync(held.stage, { throwIfNoEntry: false })).toBeUndefined(); expect(isRestoreLocked(ID)).toBe(false);
+    expect([...h.io!.fds.values()]).not.toContain(lease.file); expect(h.io!.fds.size).toBe(0); expect(h.io!.closed).toBe(h.io!.opened);
+  }
+  function assertStoredAndSearchable(observed: ReturnType<typeof observeHistoryRestore>, engine: Engine): void {
+    expectReceiverConserved(observed);
+    const root = fs.mkdtempSync(path.join(h.root, "lease-sql-readback-")), info = fs.lstatSync(root), file = path.join(root, path.basename(relative(engine)));
+    try {
+      fs.writeFileSync(file, observed.files.get(livePath(engine))!);
+      const wal = observed.files.get(livePath(engine) + "-wal"); if (wal) fs.writeFileSync(file + "-wal", wal);
+      assertRows(file, engine);
+    } finally {
+      const current = fs.lstatSync(root);
+      if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino) throw new Error("Lease SQL readback owner changed");
+      fs.rmSync(root, { recursive: true });
+    }
+    reloadConfig(); expectReceiverConserved(observed);
+    expect(Object.entries(getConfig().browserProfiles).find(([id]) => id === ID)?.[1]).toEqual(observed.config.browserProfiles[ID]);
+  }
+  beforeEach(() => {
+    const nativeFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      if (url.origin !== fixture.endpoint || url.hostname !== "127.0.0.1") throw new Error("Foreign history transport refused");
+      return nativeFetch(input, init);
+    }) as typeof fetch);
+    vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid !== process.pid || signal !== 0) throw new Error("Foreign PID/signal refused in owned history fixture");
+      return true; // Only this test process's ordinary restore-lease liveness.
+    }) as typeof process.kill);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  describe.each(["chromium", "firefox"] as const)("%s historyState holds its original lease", engine => {
+    it.each(["cancel", "unknown"] as const)("preserves disk and rejects push/pull contention through %s until actual checker exit", async mode => {
+      await publish(engine); const observed = observeHistoryRestore(engine), controller = new AbortController(), barrier = await holdOwnedChecker();
+      const pending = observe(syncService.historyState(ID, controller.signal)); let held: HeldChecker | undefined;
+      try {
+        held = await waitForHeld(barrier, pending); const lease = leaseWitness(held);
+        expect(syncService.getStatus().operation.active).toBeNull(); assertHeld(held, lease);
+        for (const kind of ["push", "pull"] as const) {
+          const result = kind === "push" ? await syncService.push(undefined, true, undefined, { history: true })
+            : await syncService.pull(undefined, { strategy: "remote", history: true });
+          expect(result).toMatchObject({ success: false, localCommit: "none", remoteCommit: "none" });
+          expect(result.message).toMatch(/Restore already in progress/); expect(syncService.getStatus().operation.active).toBeNull();
+          assertHeld(held, lease); expectReceiverConserved(observed);
+        }
+        if (mode === "cancel") controller.abort(); else h.unknownRunning = true;
+        await turn(); expect(held.terminate).toHaveBeenCalledTimes(mode === "cancel" ? 1 : 0);
+        expect(pending.state.settled).toBe(false); assertHeld(held, lease); expectReceiverConserved(observed);
+        expect(await held.release()).toBe(0); await pending.done;
+        if (mode === "cancel") { expect(pending.state.error).toBeInstanceOf(Error); expect(pending.state.value).toBeUndefined(); }
+        else { expect(pending.state.error).toBeUndefined(); expect(pending.state.value).toMatchObject({ status: "unknown", reason: "history-read-or-runtime-unconfirmed" }); }
+        assertReleased(held, lease); assertStoredAndSearchable(observed, engine);
+        h.unknownRunning = false; h.checkerFactory = null;
+        expect(await syncService.historyState(ID)).toMatchObject({ status: "synced", reason: "history-baseline-match" });
+        assertStoredAndSearchable(observed, engine);
+        console.info("owned-history-lease " + JSON.stringify({ owner: "historyState", engine, mode, events: held.events, realWorkerExit: true, sameIdRetry: "synced" }));
+      } finally { try { await barrier.close(); } finally { await pending.done; } }
+    });
+  });
+
+  it.each(["push", "pull"] as const)("a held %s rejects historyState without releasing another owner's lease or operation", async kind => {
+    await publish(); const observed = observeHistoryRestore("chromium"), controller = new AbortController(), barrier = await holdOwnedChecker();
+    const pending = observe(kind === "push" ? syncService.push(controller.signal, true, undefined, { history: true })
+      : syncService.pull(controller.signal, { strategy: "remote", history: true }));
+    try {
+      const held = await waitForHeld(barrier, pending), lease = leaseWitness(held), active = syncService.getStatus().operation.active;
+      expect(active?.kind).toBe(kind); assertHeld(held, lease);
+      await expect(syncService.historyState(ID)).rejects.toThrow(/Restore already in progress/);
+      expect(syncService.getStatus().operation.active).toEqual(active); assertHeld(held, lease); expectReceiverConserved(observed);
+      controller.abort(); await turn(); expect(held.terminate).toHaveBeenCalledOnce();
+      expect(pending.state.settled).toBe(false); expect(syncService.getStatus().operation.active).toEqual(active); assertHeld(held, lease);
+      expect(await held.release()).toBe(0); await pending.done;
+      const result = pending.state.value ?? (pending.state.error as { syncResult?: SyncResult })?.syncResult;
+      expect(result).toMatchObject({ success: false, code: "SYNC_CANCELLED", localCommit: "none", remoteCommit: "none" });
+      expect(syncService.getStatus().operation.active).toBeNull(); assertReleased(held, lease); assertStoredAndSearchable(observed, "chromium");
+      h.checkerFactory = null; expect(await syncService.historyState(ID)).toMatchObject({ status: "synced", reason: "history-baseline-match" });
+      assertStoredAndSearchable(observed, "chromium");
+      console.info("owned-history-lease " + JSON.stringify({ owner: kind, contender: "historyState", events: held.events, realWorkerExit: true, sameIdRetry: "synced" }));
+    } finally { try { await barrier.close(); } finally { await pending.done; } }
   });
 });
 

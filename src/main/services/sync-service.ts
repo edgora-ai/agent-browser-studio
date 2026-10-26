@@ -10,6 +10,7 @@ import { DEFAULT_SYNC_LIMITS } from "./sync/limits.js";
 import type { ArtifactHandler } from "./sync/artifacts/interface.js";
 import { runtimeCookieOps } from "./bidi-cookie-service.js";
 import { writeQueuedCookieImports, readQueuedCookieImports, normalizeCookieForQueue } from "./cdp-cookie-service.js";
+import { normalizeCookiePartitionKey } from "./cookie-partition.js";
 import { acquireRestoreLock, isRestoreLocked, assertProfileTransferStopped, beginFullProfileRecovery, finishFullProfileRecovery, type FullProfileRecoveryTicket } from "./profile-restore-lock.js";
 import { markProfileDataChanging } from "./profile-data-revision.js";
 import { decryptSecretOr } from "./secrets.js";
@@ -21,6 +22,7 @@ import { tMain } from "./main-i18n.js";
 import type { SyncConfig, MgmtConfig, CookieInfo, ProxyConfig, SyncResult, SyncItemResult, SyncComparisonToken, SyncProfileRuntimeEffect } from "../types.js";
 import { SyncOperationResult } from "./sync/operation-result.js";
 import { beginSyncOperation, getSyncOperationState } from "./sync/operation-state.js";
+import { withSyncBidiMutationSettlement } from "./sync/bidi-mutation-settlement.js";
 import { createProfileSyncBaseline, getProfileSyncTarget, parseProfileSyncBaseline, profileContentHash, profilePreferencesSnapshot, profileHistoryCoverage, readProfileHistorySyncState } from "./sync/profile-state.js";
 import type { ProfilePreferencesSnapshot, ExtensionRepositoryEntry } from "../types.js";
 import { PORTABLE_PROFILE_FIELDS, parseHistoryCoverage } from "./profile-portability.js";
@@ -167,6 +169,7 @@ export const syncService = {
     const sync = structuredClone(getSyncConfig());
     let stageRoot: string | undefined;
     let finalResult: SyncResult | undefined;
+    let browserBackupIncomplete = false;
     const createdProfileIds = new Set<string>();
     if (!sync.endpoint || !sync.bucket) {
       return { success: false, message: "Endpoint and bucket required" };
@@ -246,7 +249,8 @@ export const syncService = {
       );
 
       stageRoot = createPullStagingRoot();
-      type PullArtifacts = { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer; history?: PreparedHistory; historyCoverage?: HistoryCoverage };
+      type PullArtifacts = { cookies?: CookieInfo[]; localStorage?: PreparedLocalStorage; preferences?: Buffer; history?: PreparedHistory; historyCoverage?: HistoryCoverage;
+        cookieCoverage: NonNullable<SyncItemResult["browserData"]>; localStorageCoverage: NonNullable<SyncItemResult["browserData"]> };
       const prepared = new Map<string, PullArtifacts>();
       let aggregateHistoryBytes = 0;
       let aggregateCookies = 0;
@@ -259,7 +263,9 @@ export const syncService = {
         assertSelectedProfileUnchanged(profileSnapshot, getConfig().browserProfiles || {}, dirId);
         assertProfilePathsSafe(dirId);
         assertLocalStorageRestorable(dirId);
-        const item: PullArtifacts = { historyCoverage: remoteHistory[dirId] };
+        const item: PullArtifacts = { historyCoverage: remoteHistory[dirId],
+          cookieCoverage: readBrowserDataCoverage(payload, "cookies", dirId),
+          localStorageCoverage: readBrowserDataCoverage(payload, "localStorage", dirId) };
         if (Object.hasOwn(payload.cookies || {}, dirId)) {
           item.cookies = parseCookieBlob(payload.cookies[dirId]);
           aggregateCookies += item.cookies.length;
@@ -382,16 +388,32 @@ export const syncService = {
               }
             }
           }
+          for (const [scope, coverage, present] of [
+            ["cookies", artifacts.cookieCoverage, artifacts.cookies !== undefined],
+            ["localStorage", artifacts.localStorageCoverage, artifacts.localStorage !== undefined],
+          ] as const) {
+            if (coverage.source === "preserved" || coverage.source === "unavailable") {
+              browserBackupIncomplete = true;
+              operation.warnings.push(`${scope} for ${dirId} was ${coverage.source === "preserved" ? "restored from a preserved previous snapshot, not freshly captured" : "unavailable at the source; no browser data was restored"}. Login state is not verified.`);
+            } else if (coverage.source === "unknown") {
+              operation.warnings.push(`Legacy ${scope} source and capture time for ${dirId} are unknown; login state is not verified.`);
+            }
+            if (!present) operation.add({ scope, id: dirId, state: coverage.source === "absent" ? "preserved" : "skipped",
+              required: coverage.source === "unavailable", count: 0, ...browserDataReceipt(scope, coverage) });
+          }
           if (artifacts.cookies) {
             const list = artifacts.cookies;
             if (!list.length) {
-              operation.add({ scope: "cookies", id: dirId, state: "preserved", count: 0, code: "EMPTY_COOKIE_SNAPSHOT", message: "Empty snapshot; merge import does not delete existing cookies" });
+              operation.add({ scope: "cookies", id: dirId, state: "preserved", count: 0, ...browserDataReceipt("cookies", artifacts.cookieCoverage),
+                code: artifacts.cookieCoverage.source === "captured" ? "EMPTY_COOKIE_SNAPSHOT" : browserDataReceipt("cookies", artifacts.cookieCoverage).code,
+                message: "Empty snapshot; merge import does not delete existing cookies" });
             } else if (runtimeCookieOps.hasRunningBrowser(dirId)) {
               if (!allowRunningPartial) assertProfileTransferStopped(dirId, () => statusBrowser(dirId), () => runtimeCookieOps.hasRunningBrowser(dirId), { engine: getConfig().browserProfiles?.[dirId]?.engine });
               const previousCommit = operation.localCommit;
               operation.localCommit = "unknown";
               runtimeEffect.liveCookiesUnconfirmed = true;
-              pendingRuntimeImport = runtimeCookieOps.importCookies(dirId, list, combineAbortSignals(signal, 30000));
+              pendingRuntimeImport = withSyncBidiMutationSettlement(dirId,
+                () => runtimeCookieOps.importCookies(dirId, list, combineAbortSignals(signal, 30000)));
               const n = await withTimeout(pendingRuntimeImport, 30000, signal);
               if (n === null || !Number.isInteger(n) || n < 0 || n > list.length) {
                 operation.add({ scope: "cookies", id: dirId, state: "unknown", code: "COOKIE_IMPORT_UNCONFIRMED" });
@@ -399,7 +421,7 @@ export const syncService = {
               }
               operation.localCommit = previousCommit;
               runtimeEffect.liveCookiesUnconfirmed = false;
-              operation.add({ scope: "cookies", id: dirId, state: "applied", count: n });
+              operation.add({ scope: "cookies", id: dirId, state: "applied", count: n, ...browserDataReceipt("cookies", artifacts.cookieCoverage) });
               runtimeEffect.liveCookiesApplied += n;
               importedCookies += n;
               if (n !== list.length) {
@@ -413,7 +435,7 @@ export const syncService = {
                 writeQueuedCookieImports(dirId, list);
                 if (operation.localCommit === "none") operation.localCommit = "partial";
                 if (JSON.stringify(readQueuedCookieImports(dirId)) !== JSON.stringify(list)) throw new Error("Cookie queue readback mismatch after publication");
-                operation.add({ scope: "cookies", id: dirId, state: "queued", count: list.length });
+                operation.add({ scope: "cookies", id: dirId, state: "queued", count: list.length, ...browserDataReceipt("cookies", artifacts.cookieCoverage) });
                 runtimeEffect.queuedCookies += list.length;
                 queuedCookies += list.length;
               } catch (error) {
@@ -432,7 +454,9 @@ export const syncService = {
               } else {
                 try {
                   const restored = importLocalStorage(dirId, artifacts.localStorage, operation.operationId, signal);
-                  operation.add({ scope: "localStorage", id: dirId, state: restored.imported ? "applied" : "skipped", bytes: restored.bytesWritten, code: restored.imported ? undefined : "EMPTY_LOCAL_STORAGE_ARCHIVE" });
+                  operation.add({ scope: "localStorage", id: dirId, state: restored.imported ? "applied" : "skipped", bytes: restored.bytesWritten,
+                    ...browserDataReceipt("localStorage", artifacts.localStorageCoverage),
+                    ...(restored.imported ? {} : { code: "EMPTY_LOCAL_STORAGE_ARCHIVE" }) });
                   if (restored.imported) importedLs++;
                   if (restored.backupDir) operation.warnings.push(`Previous LocalStorage copy retained for runtime validation: ${restored.backupDir}`);
                 } catch (error) {
@@ -566,6 +590,12 @@ export const syncService = {
      if (adopted.length) parts.push(adopted.join(", ") + " merged (remote adopted)");
 
       finalResult = operation.complete(`Pulled from ${new Date(pullTimestamp).toISOString()}${parts.length ? " (" + parts.join(", ") + ")" : ""}`);
+      if (browserBackupIncomplete) {
+        finalResult.browserBackupIncomplete = true;
+        finalResult.success = false;
+        finalResult.outcome = "partial";
+        finalResult.message += ". Browser backup incomplete: preserved or unavailable source data is not a fresh login-state restore.";
+      }
       return finalResult;
     } catch (e: any) {
       if (e?.code === "PROFILE_STOP_REQUIRED") {
@@ -597,6 +627,7 @@ export const syncService = {
         }
       }
       finalResult = operation.failure(e, signal?.aborted);
+      if (browserBackupIncomplete) finalResult.browserBackupIncomplete = true;
       if (signal?.aborted) { e.syncResult = finalResult; throw e; }
       return finalResult;
     } finally {
@@ -2137,6 +2168,39 @@ function gunzipBase64Field(value: unknown, maxCompressedBytes: number, maxOutput
   return zlib.gunzipSync(compressed, { maxOutputLength: maxOutputBytes });
 }
 
+type BrowserDataCoverage = NonNullable<SyncItemResult["browserData"]>;
+function readBrowserDataCoverage(payload: any, scope: "cookies" | "localStorage", id: string): BrowserDataCoverage {
+  const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const epoch = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : null;
+  const base = { version: 1 as const,
+    snapshotId: typeof payload.snapshotId === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(payload.snapshotId) ? payload.snapshotId : null,
+    snapshotAt: epoch(payload.timestamp) };
+  // Older envelopes did not record origin coverage. Their publication time is
+  // not a substitute for a Cookie or LocalStorage capture time.
+  if (!Object.hasOwn(payload, "artifactSources")) return { ...base, source: "unknown", capturedAt: null };
+  const invalid = (): never => { throw Object.assign(new Error("Browser-data source coverage is invalid or contradicts its snapshot"), { code: "SYNC_BROWSER_DATA_COVERAGE_INVALID" }); };
+  if (!record(payload.artifactSources) || !record(payload.artifactSources[scope]) || !Object.hasOwn(payload.artifactSources[scope], id)) return invalid();
+  const source = payload.artifactSources[scope][id];
+  if (source !== "captured" && source !== "preserved" && source !== "unavailable" && source !== "absent") return invalid();
+  if (source === "absent" && scope !== "localStorage") return invalid();
+  const present = Object.hasOwn(payload[scope] || {}, id);
+  if (present !== (source === "captured" || source === "preserved")) return invalid();
+  let capturedAt: number | null = null;
+  if (Object.hasOwn(payload, "artifactCapturedAt")) {
+    if (!record(payload.artifactCapturedAt) || !record(payload.artifactCapturedAt[scope])) return invalid();
+    const value = payload.artifactCapturedAt[scope][id];
+    if (value !== undefined && value !== null) {
+      capturedAt = epoch(value);
+      if (capturedAt === null || source === "absent" || source === "unavailable") return invalid();
+    }
+  }
+  return { ...base, source, capturedAt };
+}
+function browserDataReceipt(scope: "cookies" | "localStorage", coverage: BrowserDataCoverage): Pick<SyncItemResult, "browserData" | "code"> {
+  const prefix = scope === "cookies" ? "COOKIE" : "LOCAL_STORAGE";
+  return { browserData: coverage, code: coverage.source === "captured" ? undefined : `${prefix}_SOURCE_${coverage.source.toUpperCase()}` };
+}
+
 function parseCookieBlob(value: unknown): CookieInfo[] {
   const parsed = JSON.parse(gunzipBase64Field(value, MAX_COOKIES_GZIP_BYTES, MAX_COOKIES_JSON_BYTES, "cookies").toString());
   if (!Array.isArray(parsed)) throw new Error("cookies must be an array");
@@ -2157,13 +2221,15 @@ function isValidCookieBlob(value: unknown): value is string {
 function normalizeCookieForSync(cookie: any): CookieInfo {
   if (!cookie || typeof cookie !== "object" || Array.isArray(cookie)) throw new Error("invalid cookie entry");
   const domain = boundedCookieText(cookie.domain, 255, "domain");
-  const name = boundedCookieText(cookie.name, 255, "name");
+  const name = boundedCookieText(cookie.name, 255, "name", true);
   const value = boundedCookieText(cookie.value === undefined ? "" : cookie.value, 4096, "value", true);
   const cookiePath = boundedCookieText(cookie.path === undefined ? "/" : cookie.path, 1024, "path");
   for (const flag of ["secure", "httpOnly"]) {
     if (cookie[flag] !== undefined && typeof cookie[flag] !== "boolean") throw new Error(`invalid cookie ${flag}`);
   }
-  if (cookie.sameSite !== undefined && (!Number.isInteger(cookie.sameSite) || cookie.sameSite < 0 || cookie.sameSite > 2)) throw new Error("invalid cookie sameSite");
+  if (cookie.sameSite !== undefined && (!Number.isInteger(cookie.sameSite) || cookie.sameSite < -1 || cookie.sameSite > 2)) throw new Error("invalid cookie sameSite");
+  if (cookie.partitionKeyOpaque !== undefined && cookie.partitionKeyOpaque !== false) throw Object.assign(new Error("Opaque Cookie partitions cannot be synchronized losslessly"), { code: "COOKIE_PARTITION_KEY_INVALID" });
+  const partitionKey = normalizeCookiePartitionKey(cookie.partitionKey);
   const expires = cookie.expires === null || cookie.expires === undefined ? null : cookie.expires;
   if (expires !== null && (typeof expires !== "number" || !Number.isFinite(expires) || expires < -1 || expires > 4102444800)) throw new Error("invalid cookie expiry");
   const normalized = normalizeCookieForQueue({
@@ -2174,7 +2240,8 @@ function normalizeCookieForSync(cookie: any): CookieInfo {
     expires,
     secure: cookie.secure ?? false,
     httpOnly: cookie.httpOnly ?? false,
-    sameSite: cookie.sameSite ?? 0,
+    sameSite: cookie.sameSite ?? -1,
+    ...(partitionKey === undefined ? {} : { partitionKey }),
   });
   if (!normalized) throw new Error("Cookie cannot be represented safely in the import queue");
   return normalized;

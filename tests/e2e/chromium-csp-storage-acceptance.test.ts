@@ -22,7 +22,7 @@ import type { BrowserProfileMeta } from "../../src/main/types.js";
 const OPTED_IN = process.env.ABS_CHROMIUM_CSP_STORAGE_ACCEPTANCE === "1";
 const REPO = path.resolve(__dirname, "..", "..");
 const LOOPBACK = "127.0.0.1"; // Explicit owned HTTP/proxy fixture, always listen(0).
-const GIB = 1024 ** 3, MIN_FREE = 6 * GIB, AGGREGATE_CAP = GIB;
+const GIB = 1024 ** 3, MIN_FREE = 6 * GIB, AGGREGATE_CAP = 2 * GIB;
 const JSON_CAP = 2 * 1024 ** 2, EVENT_CAP = 256 * 1024, FILE_CAP = 16 * 1024 ** 2;
 // Source-guided positive boundary: 8Mi ASCII code units account for 16MiB
 // UTF-16 value bytes. The selected executable still has to demonstrate it.

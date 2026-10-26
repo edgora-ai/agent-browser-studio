@@ -19,7 +19,7 @@ const h = vi.hoisted(() => {
     objects: new Map<string, Buffer>(), requests: [] as Array<{ method: string; url: string }>,
     effects: null as null | Array<{ op: string; file: string; to?: string }>,
     ownedStages: new Set<string>(),
-    fdPaths: new Map<number, string>(), snapshot: vi.fn(), importCookies: vi.fn(),
+    fdPaths: new Map<number, string>(), snapshot: vi.fn(), importCookies: vi.fn(), running: false,
   };
 });
 
@@ -40,7 +40,7 @@ vi.mock("../../src/main/services/process-discovery.js", async (importOriginal) =
   getRunningProcessesAsync: async () => [],
 }));
 vi.mock("../../src/main/services/bidi-cookie-service.js", () => ({
-  runtimeCookieOps: { hasRunningBrowser: () => false, exportCookiesSnapshot: h.snapshot,
+  runtimeCookieOps: { hasRunningBrowser: () => h.running, exportCookiesSnapshot: h.snapshot,
     exportCookies: async () => [], importCookies: h.importCookies },
   firefoxCookieService: { applyQueuedImports: async () => 0 },
 }));
@@ -106,6 +106,7 @@ import { PORTABLE_PROFILE_FIELDS } from "../../src/main/services/profile-portabi
 import { listBrowserProfiles } from "../../src/main/services/browser-manager.js";
 import { getProfileInfo } from "../../src/main/services/profile-manager.js";
 import { isRestoreLocked } from "../../src/main/services/profile-restore-lock.js";
+import { readQueuedCookieImports } from "../../src/main/services/cdp-cookie-service.js";
 
 const ID = "ab_protocol_roundtrip";
 const OTHER = "ab_protocol_unrelated";
@@ -272,7 +273,7 @@ function seedReceiver(): void {
 }
 
 beforeEach(() => {
-  h.effects = null; h.ownedStages.clear(); h.objects.clear(); h.requests = [];
+  h.effects = null; h.ownedStages.clear(); h.objects.clear(); h.requests = []; h.running = false;
   h.snapshot.mockReset().mockResolvedValue({ state: "available", cookies: [] });
   h.importCookies.mockReset().mockResolvedValue(0);
   vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -345,6 +346,157 @@ describe("new sync protocol actual push to fresh receiver roundtrip", () => {
     reloadConfig();
     expect(getProfileMeta(ID)?.fontsDir).toBe(localFonts);
     await assertBothEntrances("synced", published.uploaded.syncBaseline);
+  });
+});
+
+describe("S3 browser-data source coverage on a fresh receiver", () => {
+  it("keeps an actually published unavailable Cookie source incomplete after pull and reload", async () => {
+    seedProfile({ ...completePortable(), platform: "macos" }, null, SOURCE_PREFS);
+    h.snapshot.mockResolvedValue({ state: "unavailable", reason: "not-running" });
+    const pushed = await syncService.push(undefined, true);
+    expect(pushed).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    const document = payload(), published = remoteConfig(document).browserProfiles[ID];
+    expect(document.artifactSources.cookies[ID]).toBe("unavailable");
+    expect(document.cookies).not.toHaveProperty(ID);
+    const frozen = Buffer.from(h.objects.get(MAIN)!);
+
+    resetDevice("synthetic-unavailable-cookie-receiver");
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled).toMatchObject({ success: false, outcome: "partial", localCommit: "committed", browserBackupIncomplete: true });
+    expect(pulled.items).toContainEqual(expect.objectContaining({ scope: "cookies", id: ID, state: "skipped", required: true,
+      code: "COOKIE_SOURCE_UNAVAILABLE", browserData: { version: 1, source: "unavailable", capturedAt: null,
+        snapshotId: document.snapshotId, snapshotAt: document.timestamp } }));
+    expect(fs.existsSync(queuePath())).toBe(false);
+    expect(disk().browserProfiles[ID].name).toBe(published.name);
+    reloadConfig();
+    expect(getProfileMeta(ID)?.name).toBe(published.name);
+    expect(h.objects.get(MAIN)).toEqual(frozen);
+  });
+
+  it("restores retained Cookie bytes without calling their old capture a fresh complete backup", async () => {
+    h.snapshot.mockResolvedValue({ state: "available", cookies: [REMOTE_COOKIE] });
+    const first = await publish();
+    vi.mocked(Date.now).mockReturnValue(NOW + 10_000);
+    h.snapshot.mockResolvedValue({ state: "unavailable", reason: "not-running" });
+    const pushed = await syncService.push(undefined, true);
+    expect(pushed).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    const document = payload();
+    expect(document.cookies[ID]).toBe(first.document.cookies[ID]);
+    expect(document.artifactSources.cookies[ID]).toBe("preserved");
+    expect(document.artifactCapturedAt.cookies[ID]).toBe(NOW);
+
+    resetDevice("synthetic-retained-cookie-receiver");
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled).toMatchObject({ success: false, outcome: "partial", localCommit: "committed", browserBackupIncomplete: true });
+    expect(pulled.items).toContainEqual(expect.objectContaining({ scope: "cookies", id: ID, state: "queued", count: 1,
+      code: "COOKIE_SOURCE_PRESERVED", browserData: { version: 1, source: "preserved", capturedAt: NOW,
+        snapshotId: document.snapshotId, snapshotAt: NOW + 10_000 } }));
+    expect(JSON.parse(fs.readFileSync(queuePath(), "utf8"))).toEqual([REMOTE_COOKIE]);
+    expect(readQueuedCookieImports(ID).find((cookie) => cookie.domain === REMOTE_COOKIE.domain && cookie.name === REMOTE_COOKIE.name)).toEqual(REMOTE_COOKIE);
+    reloadConfig();
+    expect(getProfileMeta(ID)?.name).toBe("Protocol sender");
+    expect(readQueuedCookieImports(ID)).toEqual([REMOTE_COOKIE]);
+    expect(pulled.warnings?.join(" ")).toMatch(/not freshly captured|previous.*snapshot|preserved/i);
+  });
+
+  it("retains LocalStorage source time and incomplete status across real producer publication and restore", async () => {
+    seedProfile({ ...completePortable(), platform: "macos" }, null, SOURCE_PREFS);
+    const storage = path.join(getProfilesDir(), ID, "Default", "Local Storage", "leveldb");
+    fs.mkdirSync(storage, { recursive: true });
+    fs.writeFileSync(path.join(storage, "CURRENT"), "MANIFEST-000001\n");
+    fs.writeFileSync(path.join(storage, "MANIFEST-000001"), "owned-retained-storage-token");
+    expect((await syncService.push(undefined, true)).success).toBe(true);
+    const first = payload();
+    vi.mocked(Date.now).mockReturnValue(NOW + 20_000);
+    h.running = true;
+    const pushed = await syncService.push(undefined, true);
+    expect(pushed).toMatchObject({ success: false, outcome: "partial", remoteCommit: "committed", browserBackupIncomplete: true });
+    const document = payload();
+    expect(document.localStorage[ID]).toBe(first.localStorage[ID]);
+    expect(document.artifactSources.localStorage[ID]).toBe("preserved");
+    expect(document.artifactCapturedAt.localStorage[ID]).toBe(NOW);
+
+    h.running = false;
+    resetDevice("synthetic-retained-local-storage-receiver");
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled).toMatchObject({ success: false, outcome: "partial", localCommit: "committed", browserBackupIncomplete: true });
+    expect(pulled.items).toContainEqual(expect.objectContaining({ scope: "localStorage", id: ID, state: "applied",
+      code: "LOCAL_STORAGE_SOURCE_PRESERVED", browserData: { version: 1, source: "preserved", capturedAt: NOW,
+        snapshotId: document.snapshotId, snapshotAt: NOW + 20_000 } }));
+    const restored = path.join(getProfilesDir(), ID, "Default", "Local Storage", "leveldb");
+    expect(fs.readFileSync(path.join(restored, "CURRENT"), "utf8")).toBe("MANIFEST-000001\n");
+    expect(fs.readFileSync(path.join(restored, "MANIFEST-000001"), "utf8")).toBe("owned-retained-storage-token");
+    reloadConfig();
+    expect(getProfileMeta(ID)?.name).toBe("Protocol sender");
+    expect(fs.readdirSync(restored).find((name) => name === "MANIFEST-000001")).toBe("MANIFEST-000001");
+  });
+
+  it.each([
+    { label: "unspecified SameSite", cookie: { ...REMOTE_COOKIE, sameSite: -1 } },
+    { label: "a valid empty Cookie name", cookie: { ...REMOTE_COOKIE, name: "", sameSite: 1 } },
+  ])("roundtrips $label through actual publication, receiver queue bytes and reload", async ({ cookie }) => {
+    h.snapshot.mockResolvedValue({ state: "available", cookies: [cookie] });
+    const published = await publish();
+    expect(JSON.parse(zlib.gunzipSync(Buffer.from(published.document.cookies[ID], "base64")).toString())).toEqual([cookie]);
+    resetDevice("synthetic-valid-cookie-receiver");
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled.success, pulled.message).toBe(true);
+    expect(JSON.parse(fs.readFileSync(queuePath(), "utf8"))).toEqual([cookie]);
+    reloadConfig();
+    expect(readQueuedCookieImports(ID).find((entry) => entry.domain === cookie.domain && entry.name === cookie.name)).toEqual(cookie);
+  });
+
+  it("preserves partition identity through the actual S3 envelope and receiver queue", async () => {
+    const cookies = [
+      { ...REMOTE_COOKIE, secure: true, value: "owned-partition-a", partitionKey: { topLevelSite: "https://owned-a.invalid", hasCrossSiteAncestor: false } },
+      { ...REMOTE_COOKIE, secure: true, value: "owned-partition-b", partitionKey: { topLevelSite: "https://owned-b.invalid", hasCrossSiteAncestor: true } },
+    ];
+    h.snapshot.mockResolvedValue({ state: "available", cookies });
+    const published = await publish();
+    expect(JSON.parse(zlib.gunzipSync(Buffer.from(published.document.cookies[ID], "base64")).toString())).toEqual(cookies);
+    resetDevice("synthetic-partitioned-cookie-receiver");
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled.success, pulled.message).toBe(true);
+    expect(JSON.parse(fs.readFileSync(queuePath(), "utf8"))).toEqual(cookies);
+    reloadConfig();
+    expect(readQueuedCookieImports(ID)).toEqual(cookies);
+    for (const cookie of cookies) expect(readQueuedCookieImports(ID).find((entry) => entry.value === cookie.value)).toEqual(cookie);
+  });
+
+  it.each([
+    { label: "captured Cookie without bytes", mutate: (document: any) => { delete document.cookies[ID]; } },
+    { label: "unavailable Cookie with bytes", mutate: (document: any) => { document.artifactSources.cookies[ID] = "unavailable"; document.artifactCapturedAt.cookies[ID] = null; } },
+    { label: "preserved Cookie without bytes", mutate: (document: any) => { document.artifactSources.cookies[ID] = "preserved"; delete document.cookies[ID]; } },
+    { label: "unknown supplied source", mutate: (document: any) => { document.artifactSources.cookies[ID] = "fresh-enough"; } },
+    { label: "invalid supplied capture time", mutate: (document: any) => { document.artifactCapturedAt.cookies[ID] = "not-a-time"; } },
+  ])("rejects $label before changing any receiver profile, queue or config", async ({ mutate }) => {
+    await publish();
+    const document = payload(); mutate(document); storePayload(document);
+    resetDevice("synthetic-contradictory-coverage-receiver"); seedReceiver();
+    const before = protectedSnapshot(); h.effects = [];
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    const mutations = h.effects.filter((effect) => critical(effect.file) || effect.to && critical(effect.to));
+    h.effects = null;
+    expect(pulled).toMatchObject({ success: false, localCommit: "none", code: "SYNC_BROWSER_DATA_COVERAGE_INVALID" });
+    expect(mutations).toEqual([]);
+    expect(protectedSnapshot()).toEqual(before);
+    reloadConfig();
+    expect(getProfileMeta(ID)?.name).toBe("Receiver unchanged");
+    expect(readQueuedCookieImports(ID)).toEqual([LOCAL_COOKIE]);
+  });
+
+  it("reports legacy source and time as unknown instead of backfilling them from publication or now", async () => {
+    h.snapshot.mockResolvedValue({ state: "available", cookies: [REMOTE_COOKIE] });
+    await publish();
+    const document = payload(); delete document.artifactSources; delete document.artifactCapturedAt; storePayload(document);
+    resetDevice("synthetic-legacy-coverage-receiver");
+    vi.mocked(Date.now).mockReturnValue(NOW + 30_000);
+    const pulled = await syncService.pull(undefined, { strategy: "remote" });
+    expect(pulled.items).toContainEqual(expect.objectContaining({ scope: "cookies", id: ID, state: "queued",
+      browserData: { version: 1, source: "unknown", capturedAt: null, snapshotId: document.snapshotId, snapshotAt: NOW } }));
+    expect(pulled.warnings?.join(" ")).toMatch(/legacy|source.*unknown|not verified/i);
+    expect(JSON.parse(fs.readFileSync(queuePath(), "utf8"))).toEqual([REMOTE_COOKIE]);
+    reloadConfig(); expect(readQueuedCookieImports(ID)).toEqual([REMOTE_COOKIE]);
   });
 });
 

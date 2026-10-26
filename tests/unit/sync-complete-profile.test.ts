@@ -299,7 +299,7 @@ describe.skipIf(!["darwin", "linux"].includes(process.platform))("complete profi
         if (op === "rename" && from === live && to?.startsWith(live + ".full-profile-backup-") && fs.existsSync(recoveryReceiptPath())) markerBeforeMove++;
         if (op === "rename" && to === configFile && from.startsWith(configFile + ".tmp-") && fs.existsSync(recoveryReceiptPath())) markerAtConfigCommit++;
       };
-      const pulled = await service.syncService.pull(undefined, { strategy: "remote" }); h.fault = null; expect(pulled.success, safeFailure(pulled)).toBe(true);
+      const pulled = await service.syncService.pull(); h.fault = null; expect(pulled.success, safeFailure(pulled)).toBe(true);
       expect(pulled.items?.some(item => item.scope === "fullProfile" && item.id === ID && item.state === "applied")).toBe(true);
       await assertNative(); for (const relative of persistent) expect(fs.readFileSync(path.join(profileRoot(), relative)).equals(Buffer.from("source-record:" + relative))).toBe(true);
       expect(fs.existsSync(path.join(profileRoot(), "receiver-only.bin"))).toBe(false); expect(Boolean(backupFor(old))).toBe(true); sameTree(backupFor(old)!, old);
