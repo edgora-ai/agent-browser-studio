@@ -753,9 +753,24 @@ export function restorePreparedFullProfile(options: { prepared: PreparedFullProf
   const syncParent = (): void => {
     if (!syncArchiveDirectory(parent) && !warnings.length) warnings.push("Directory fsync is unsupported on Windows; file durability was verified, directory durability is not guaranteed.");
   };
-  const guarded = (): void => {
+  const guarded: FullProfileGuard = (): void => {
     try { check(guard); } catch (cause) { guardChanged = true; throw cause; }
   };
+  if (guard.runSynchronous !== undefined) {
+    guarded.runSynchronous = <T>(action: () => T): T => {
+      let actionFailed = false;
+      try {
+        return synchronousSlice(guard, () => {
+          try { return action(); } catch (cause) { actionFailed = true; throw cause; }
+        });
+      } catch (cause) {
+        // Executor admission/exit can lose its lease independently of check().
+        // A file I/O error inside the action must still permit safe rollback.
+        if (!actionFailed) guardChanged = true;
+        throw cause;
+      }
+    };
+  }
   const assertParent = (): void => {
     ensureArchiveDirectory(parent);
     if (!sameIdentity(fs.lstatSync(parent), parentOwner)) invalid("Full-profile restore parent changed");

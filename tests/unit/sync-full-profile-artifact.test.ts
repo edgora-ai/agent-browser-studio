@@ -415,6 +415,75 @@ describe("full-profile cold-source and owned-path safety", () => {
 });
 
 describe("full-profile staged replacement, rollback and local conversion", () => {
+  it("preserves synchronous read slices through restore and rollback without scoping publication renames", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);
+    put(target, "old.txt", "original-target"); const previous = readAll(target);
+    let depth = 0, installedReadSlices = 0;
+    const scoped = Object.assign(() => guard(), {
+      runSynchronous<T>(action: () => T): T {
+        if (fs.existsSync(target) && fs.existsSync(target + ".previous")) installedReadSlices++;
+        depth++; try { return action(); } finally { depth--; }
+      },
+    });
+    const rename = fsMutable.renameSync, renameDepths: number[] = [];
+    vi.spyOn(fsMutable, "renameSync").mockImplementation((from, to) => { renameDepths.push(depth); return rename(from, to); });
+    syncBuiltinESMExports();
+    const restored = restorePreparedFullProfile({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped });
+    expect(installedReadSlices).toBeGreaterThan(0);
+    expect(fs.readFileSync(path.join(target, "safe.txt"), "utf8")).toBe("SYNTHETIC_PRIVATE_STATE");
+    restored.rollback(); expect(readAll(target)).toEqual(previous);
+    expect(fs.readFileSync(path.join(restored.rollbackDir!, "safe.txt"), "utf8")).toBe("SYNTHETIC_PRIVATE_STATE");
+    expect(renameDepths.length).toBeGreaterThanOrEqual(4); expect(renameDepths.every(value => value === 0)).toBe(true); expect(depth).toBe(0);
+  });
+  it("retains both copies when a synchronous executor loses its lease after an installed read", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);
+    put(target, "old.txt", "original-target"); let rejected = false;
+    const scoped = Object.assign(() => guard(), {
+      runSynchronous<T>(action: () => T): T {
+        const result = action();
+        if (!rejected && fs.existsSync(target) && fs.existsSync(target + ".previous")) { rejected = true; throw new Error("OWNED_SLICE_LEASE_CHANGED"); }
+        return result;
+      },
+    });
+    expect(() => restorePreparedFullProfile({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped })).toThrow(/guard changed/);
+    expect(rejected).toBe(true);
+    expect(fs.readFileSync(path.join(target, "safe.txt"), "utf8")).toBe("SYNTHETIC_PRIVATE_STATE");
+    expect(fs.readFileSync(path.join(target + ".previous", "old.txt"), "utf8")).toBe("original-target");
+  });
+  it("checks runtime again outside a read slice before any live-directory publication", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);
+    put(target, "old.txt", "original-target"); const previous = readAll(target); let running = false;
+    const scoped = Object.assign(() => { if (running) throw new Error("RUNTIME_CHANGED_AFTER_READ_SLICE"); }, {
+      runSynchronous<T>(action: () => T): T {
+        const result = action();
+        if (fs.readdirSync(path.dirname(target)).some(name => name.includes(".full-profile-stage-"))) running = true;
+        return result;
+      },
+    });
+    const rename = vi.spyOn(fsMutable, "renameSync"); syncBuiltinESMExports();
+    expect(() => restorePreparedFullProfile({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped })).toThrow(/guard changed/);
+    expect(running).toBe(true); expect(rename).not.toHaveBeenCalled(); expect(readAll(target)).toEqual(previous);
+    expect(fs.existsSync(target + ".previous")).toBe(false);
+  });
+  it("does not misclassify a scoped file-read error as a changed guard or skip safe rollback", async () => {
+    const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);
+    put(target, "old.txt", "original-target"); const previous = readAll(target); let injected = false, depth = 0, failedReadDepth = -1;
+    const scoped = Object.assign(() => guard(), {
+      runSynchronous<T>(action: () => T): T { depth++; try { return action(); } finally { depth--; } },
+    });
+    const read = fsMutable.readSync;
+    vi.spyOn(fsMutable, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+      if (!injected && fs.existsSync(target) && fs.existsSync(target + ".previous")) {
+        injected = true; failedReadDepth = depth; throw Object.assign(new Error("SYNTHETIC_SCOPED_READ_EIO"), { code: "EIO" });
+      }
+      return Reflect.apply(read, fsMutable, args);
+    }) as typeof read);
+    syncBuiltinESMExports();
+    expect(() => restorePreparedFullProfile({ prepared: incoming, profileDir: target, backupSuffix: ".previous", guard: scoped })).toThrow("SYNTHETIC_SCOPED_READ_EIO");
+    expect(injected).toBe(true); expect(failedReadDepth).toBeGreaterThan(0); expect(depth).toBe(0);
+    expect(readAll(target)).toEqual(previous); expect(fs.existsSync(target + ".previous")).toBe(false);
+    expect(fs.readdirSync(path.dirname(target))).toEqual([ID]);
+  });
   it("keeps both source and original target, swaps from the same parent, and rolls back without erasing the incoming copy", async () => {
     const bundle = await simpleBundle(), incoming = await prepare(bundle), target = liveTarget(bundle.root);
     put(target, "old.txt", "original-target-data"); const old = readAll(target), source = readAll(bundle.options.profileDir);
